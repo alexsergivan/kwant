@@ -138,6 +138,7 @@ pub async fn cancel_chat(
             val.get("session_id")
                 .or_else(|| val.get("channel_id"))
                 .or_else(|| val.get("team_id"))
+                .or_else(|| val.get("kwant_id"))
                 .and_then(|s| s.as_str())
                 .map(|s| s.to_string())
         } else {
@@ -150,6 +151,10 @@ pub async fn cancel_chat(
     if let Some(session_id) = maybe_session_id {
         if let Some(token) = tokens.remove(&session_id) {
             token.cancel();
+        } else {
+            for (_, token) in tokens.drain() {
+                token.cancel();
+            }
         }
     } else {
         for (_, token) in tokens.drain() {
@@ -404,6 +409,9 @@ pub async fn send_chat(
         if let Some(cid) = &payload.channel_id {
             tokens.insert(cid.clone(), cancel_token.clone());
         }
+        if let Some(kid) = &payload.kwant_id {
+            tokens.insert(kid.clone(), cancel_token.clone());
+        }
         if let Some(ref team) = target_team {
             tokens.insert(team.id.clone(), cancel_token.clone());
             tokens.insert(team.name.clone(), cancel_token.clone());
@@ -608,11 +616,9 @@ pub async fn send_chat(
                         }
                     }
 
-                    if !cancel_token_clone.is_cancelled() {
-                        let _ = event_broadcast.send(RuntimeEvent::DiscussionCompleted {
-                            total_turns: turns,
-                        });
-                    }
+                    let _ = event_broadcast.send(RuntimeEvent::DiscussionCompleted {
+                        total_turns: turns,
+                    });
 
                     let mut tokens = active_cancellations.lock().await;
                     tokens.remove(&session_id_clone);

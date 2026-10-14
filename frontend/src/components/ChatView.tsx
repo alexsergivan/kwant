@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu } from 'lucide-react';
+import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -15,6 +15,14 @@ export interface ChatMessage {
   tokens_used?: number;
 }
 
+export interface DiscussionState {
+  inProgress: boolean;
+  teamName?: string;
+  currentSpeaker?: string;
+  currentTurn?: number;
+  totalTurns?: number;
+}
+
 export interface ChatViewProps {
   title: string;
   subtitle: string;
@@ -27,6 +35,8 @@ export interface ChatViewProps {
   onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
+  discussionState?: DiscussionState;
+  onCancelDiscussion?: () => void;
 }
 
 export const renderFormattedText = (text: string): React.ReactNode => {
@@ -59,6 +69,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onResolveApproval,
   kwants: kwantsProp,
   teams: teamsProp,
+  discussionState,
+  onCancelDiscussion,
 }) => {
   const [inputVal, setInputVal] = useState('');
   const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
@@ -256,12 +268,47 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {isStreaming && !discussionState?.inProgress && onCancelDiscussion && (
+            <button
+              type="button"
+              onClick={onCancelDiscussion}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 transition-colors shadow-sm cursor-pointer"
+              title="Stop generation"
+            >
+              <Square size={10} fill="currentColor" />
+              <span>Stop</span>
+            </button>
+          )}
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-sky-400 bg-sky-500/10 border border-sky-500/20 shadow-sm">
             <Cpu size={13} />
             <span>Laya Auto-Fleet</span>
           </div>
         </div>
       </div>
+
+      {/* Discussion In-Flight Banner */}
+      {discussionState?.inProgress && (
+        <div className="px-6 pt-3 select-none flex-shrink-0">
+          <div className="flex items-center justify-between px-4 py-2 bg-sky-950/40 border border-sky-800/40 rounded-xl mb-3 text-xs">
+            <div className="flex items-center gap-2 text-sky-200">
+              <Users size={14} className="text-sky-400 animate-pulse" />
+              <span>
+                Team Discussion: <strong>{discussionState.currentSpeaker || 'Team member'}</strong> speaking (Turn {discussionState.currentTurn || 1} of {discussionState.totalTurns || 1})
+              </span>
+            </div>
+            {onCancelDiscussion && (
+              <button
+                type="button"
+                onClick={onCancelDiscussion}
+                className="flex items-center gap-1 px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded border border-red-500/30 transition-colors cursor-pointer"
+              >
+                <Square size={11} fill="currentColor" />
+                <span>Stop Discussion</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Messages Stream */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6">
@@ -348,13 +395,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {/* Live Streaming Assistant Message */}
         {isStreaming && (
           <div className="flex items-start gap-3.5 max-w-4xl">
-            <ModernAvatar role={title} name={title} size={34} />
+            <ModernAvatar
+              role={discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : title}
+              name={discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : title}
+              size={34}
+            />
             <div className="flex flex-col items-start min-w-0 max-w-2xl">
               <div className="flex items-center gap-2 mb-1 text-[11px] text-zinc-400 font-medium">
-                <span className="text-zinc-200">{title}</span>
+                <span className="text-zinc-200">
+                  {discussionState?.inProgress && discussionState.currentSpeaker
+                    ? discussionState.currentSpeaker
+                    : title}
+                </span>
                 <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
                   <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
-                  Generating...
+                  {discussionState?.inProgress ? 'Speaking...' : 'Generating...'}
                 </span>
               </div>
 
@@ -440,17 +495,28 @@ export const ChatView: React.FC<ChatViewProps> = ({
             className="flex-1 bg-transparent px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-40 leading-relaxed font-sans"
           />
 
-          <button
-            type="submit"
-            disabled={!inputVal.trim() || isStreaming}
-            className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 ${
-              inputVal.trim() && !isStreaming
-                ? 'bg-sky-500 text-white hover:bg-sky-400 shadow-sm'
-                : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
-            }`}
-          >
-            <ArrowUp size={16} strokeWidth={2.4} />
-          </button>
+          {isStreaming ? (
+            <button
+              type="button"
+              onClick={onCancelDiscussion}
+              className="w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 shadow-sm cursor-pointer"
+              title={discussionState?.inProgress ? 'Stop Discussion' : 'Stop generation'}
+            >
+              <Square size={12} fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!inputVal.trim()}
+              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 ${
+                inputVal.trim()
+                  ? 'bg-sky-500 text-white hover:bg-sky-400 shadow-sm'
+                  : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+              }`}
+            >
+              <ArrowUp size={16} strokeWidth={2.4} />
+            </button>
+          )}
         </form>
       </div>
     </div>

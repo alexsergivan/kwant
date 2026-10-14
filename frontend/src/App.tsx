@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { Sidebar, Kwant, Channel, Team } from './components/Sidebar';
-import { ChatView, ChatMessage } from './components/ChatView';
+import { ChatView, ChatMessage, DiscussionState } from './components/ChatView';
 import { PendingApproval } from './components/ModernApprovalCard';
 import { SettingsModal } from './components/SettingsModal';
 import { NewAgentModal } from './components/NewAgentModal';
@@ -19,6 +19,8 @@ export const App: React.FC = () => {
   const [streamingText, setStreamingText] = useState('');
   const [streamingThinking, setStreamingThinking] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [discussionState, setDiscussionState] = useState<DiscussionState>({ inProgress: false });
+  const discussionInProgressRef = useRef(false);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [tokensUsed, setTokensUsed] = useState(0);
 
@@ -113,13 +115,32 @@ export const App: React.FC = () => {
             });
             playSfx('alert');
             break;
-          case 'TurnComplete':
-            playSfx('coin');
-            setIsStreaming(false);
+          case 'discussion_started':
+          case 'DiscussionStarted':
+            discussionInProgressRef.current = true;
+            setDiscussionState({
+              inProgress: true,
+              teamName: event.data?.team_name,
+              totalTurns: event.data?.total_turns,
+              currentSpeaker: event.data?.speakers?.[0],
+              currentTurn: 1,
+            });
+            setIsStreaming(true);
+            playSfx('alert');
+            break;
+          case 'discussion_turn_started':
+          case 'DiscussionTurnStarted':
+            discussionInProgressRef.current = true;
+            setDiscussionState((prev) => ({
+              ...prev,
+              inProgress: true,
+              currentSpeaker: event.data?.speaker_name,
+              currentTurn: event.data?.turn_index,
+              totalTurns: event.data?.total_turns ?? prev.totalTurns,
+            }));
+            setIsStreaming(true);
             setStreamingText('');
             setStreamingThinking('');
-            setTokensUsed((prev) => prev + (event.data.tokens || 0));
-            // Refresh messages
             if (selectedId) {
               fetch(`/api/channels/${selectedId}/messages`)
                 .then((r) => r.json())
@@ -127,7 +148,40 @@ export const App: React.FC = () => {
                 .catch(() => {});
             }
             break;
+          case 'discussion_completed':
+          case 'DiscussionCompleted':
+            discussionInProgressRef.current = false;
+            setDiscussionState({ inProgress: false });
+            setIsStreaming(false);
+            setStreamingText('');
+            setStreamingThinking('');
+            playSfx('coin');
+            if (selectedId) {
+              fetch(`/api/channels/${selectedId}/messages`)
+                .then((r) => r.json())
+                .then((msgs) => setMessages(msgs))
+                .catch(() => {});
+            }
+            break;
+          case 'TurnComplete':
+            playSfx('coin');
+            setStreamingText('');
+            setStreamingThinking('');
+            setTokensUsed((prev) => prev + (event.data?.tokens || 0));
+            // Refresh messages
+            if (selectedId) {
+              fetch(`/api/channels/${selectedId}/messages`)
+                .then((r) => r.json())
+                .then((msgs) => setMessages(msgs))
+                .catch(() => {});
+            }
+            if (!discussionInProgressRef.current) {
+              setIsStreaming(false);
+            }
+            break;
           case 'Error':
+            discussionInProgressRef.current = false;
+            setDiscussionState({ inProgress: false });
             setIsStreaming(false);
             setStreamingText('');
             break;
@@ -142,7 +196,36 @@ export const App: React.FC = () => {
     };
   }, [selectedId]);
 
+  const handleCancelDiscussion = async () => {
+    try {
+      await fetch('/api/chat/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channel_id: isChannel ? selectedId : null,
+          kwant_id: !isChannel ? selectedId : null,
+          team_id: selectedTeamId || null,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed cancelling chat/discussion:', err);
+    }
+    discussionInProgressRef.current = false;
+    setDiscussionState({ inProgress: false });
+    setIsStreaming(false);
+    setStreamingText('');
+    setStreamingThinking('');
+    if (selectedId) {
+      fetch(`/api/channels/${selectedId}/messages`)
+        .then((r) => r.json())
+        .then((msgs) => setMessages(msgs))
+        .catch(() => {});
+    }
+  };
+
   const handleSendMessage = async (text: string) => {
+    discussionInProgressRef.current = false;
+    setDiscussionState({ inProgress: false });
     setIsStreaming(true);
     setStreamingText('');
     setStreamingThinking('');
@@ -384,6 +467,8 @@ export const App: React.FC = () => {
           onResolveApproval={handleResolveApproval}
           kwants={kwants}
           teams={teams}
+          discussionState={discussionState}
+          onCancelDiscussion={handleCancelDiscussion}
         />
       </div>
 
