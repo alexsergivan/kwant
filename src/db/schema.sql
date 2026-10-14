@@ -51,3 +51,15 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS teams (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    icon TEXT NOT NULL DEFAULT 'users',
+    lead_kwant_id TEXT NOT NULL,
+    member_kwants TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(lead_kwant_id) REFERENCES kwants(id)
+);
+

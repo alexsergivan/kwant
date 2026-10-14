@@ -73,3 +73,42 @@ async fn test_db_init_and_crud() {
     let updated = db.get_approval(&app.id).await.unwrap().unwrap();
     assert_eq!(updated.status, "allowed");
 }
+
+#[tokio::test]
+async fn test_team_crud_and_seed() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db = Database::init(temp_dir.path()).await.unwrap();
+
+    let teams = db.list_teams().await.unwrap();
+    assert!(!teams.is_empty(), "Default seed team should exist");
+    assert_eq!(teams[0].name, "core-engineering");
+
+    let kwants = db.list_kwants().await.unwrap();
+    let new_team = NewTeam {
+        name: "infra-sec".into(),
+        description: Some("Security and cloud infrastructure".into()),
+        icon: Some("shield".into()),
+        lead_kwant_id: kwants[0].id.clone(),
+        member_kwants: vec![kwants[0].id.clone(), kwants[1].id.clone()],
+    };
+    let created = db.create_team(&new_team).await.unwrap();
+    assert_eq!(created.name, "infra-sec");
+
+    let fetched = db.get_team_by_name("infra-sec").await.unwrap();
+    assert!(fetched.is_some());
+    assert_eq!(fetched.unwrap().id, created.id);
+
+    let by_id = db.get_team(&created.id).await.unwrap();
+    assert!(by_id.is_some());
+    assert_eq!(by_id.unwrap().name, "infra-sec");
+
+    let channels = db.list_channels().await.unwrap();
+    assert!(channels.iter().any(|c| c.name == "team-infra-sec"));
+    assert!(channels.iter().any(|c| c.name == "team-core-engineering"));
+
+    let deleted = db.delete_team(&created.id).await.unwrap();
+    assert!(deleted);
+    let after_delete = db.get_team(&created.id).await.unwrap();
+    assert!(after_delete.is_none());
+}
+

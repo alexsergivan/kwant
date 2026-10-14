@@ -109,8 +109,30 @@ impl Database {
             let _ = sqlx::query("UPDATE kwants SET name = 'DevOps', title = 'Systems & Security Engineer', avatar_sprite = 'devops', persona_prompt = 'You are the DevOps Engineer, specializing in shell commands, server infrastructure, containerization, security policies, and automation.' WHERE name IN ('TerminalKnight', 'DevOps') AND persona_prompt LIKE '%TerminalKnight%'").execute(&self.pool).await;
         }
 
+        // Seed default team if none exists
+        let team_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM teams")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or((0,));
+
+        if team_count.0 == 0 {
+            let kwants = self.list_kwants().await?;
+            if let Some(lead) = kwants.iter().find(|k| k.name == "Architect").or_else(|| kwants.first()) {
+                let member_ids: Vec<String> = kwants.iter().map(|k| k.id.clone()).collect();
+                let default_team = NewTeam {
+                    name: "core-engineering".into(),
+                    description: Some("Core architectural, engineering, and infrastructure team".into()),
+                    icon: Some("users".into()),
+                    lead_kwant_id: lead.id.clone(),
+                    member_kwants: member_ids,
+                };
+                self.create_team(&default_team).await?;
+            }
+        }
+
         Ok(())
     }
+
 
     // Kwants CRUD
     pub async fn create_kwant(&self, input: &NewKwant) -> Result<Kwant, DbError> {
@@ -305,4 +327,76 @@ impl Database {
         .await?;
         Ok(())
     }
+
+    // Teams CRUD
+    pub async fn create_team(&self, input: &NewTeam) -> Result<Team, DbError> {
+        let id = Uuid::new_v4().to_string();
+        let icon = input.icon.as_deref().unwrap_or("users");
+        let members_json = serde_json::to_string(&input.member_kwants)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO teams (id, name, description, icon, lead_kwant_id, member_kwants)
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(&input.name)
+        .bind(&input.description)
+        .bind(icon)
+        .bind(&input.lead_kwant_id)
+        .bind(&members_json)
+        .execute(&self.pool)
+        .await?;
+
+        // Auto-create a team channel team-{name} if it doesn't already exist
+        let channel_name = format!("team-{}", input.name);
+        let channels = self.list_channels().await?;
+        if !channels.iter().any(|c| c.name == channel_name) {
+            let chan = NewChannel {
+                name: channel_name,
+                description: input.description.clone(),
+                lead_kwant_id: input.lead_kwant_id.clone(),
+                member_kwants: input.member_kwants.clone(),
+                routing_mode: "auto".into(),
+            };
+            self.create_channel(&chan).await?;
+        }
+
+        self.get_team(&id)
+            .await?
+            .ok_or_else(|| DbError::Sqlx(sqlx::Error::RowNotFound))
+    }
+
+    pub async fn list_teams(&self) -> Result<Vec<Team>, DbError> {
+        let rows = sqlx::query_as::<_, Team>("SELECT * FROM teams ORDER BY created_at ASC")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_team(&self, id: &str) -> Result<Option<Team>, DbError> {
+        let row = sqlx::query_as::<_, Team>("SELECT * FROM teams WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row)
+    }
+
+    pub async fn get_team_by_name(&self, name: &str) -> Result<Option<Team>, DbError> {
+        let row = sqlx::query_as::<_, Team>("SELECT * FROM teams WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row)
+    }
+
+    pub async fn delete_team(&self, id: &str) -> Result<bool, DbError> {
+        let res = sqlx::query("DELETE FROM teams WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
 }
+

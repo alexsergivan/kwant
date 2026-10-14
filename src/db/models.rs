@@ -92,3 +92,24 @@ pub struct NewApproval {
     pub tool_name: String,
     pub parameters: serde_json::Value,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Team {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub icon: String,
+    pub lead_kwant_id: String,
+    pub member_kwants: String, // JSON array string
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewTeam {
+    pub name: String,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+    pub lead_kwant_id: String,
+    pub member_kwants: Vec<String>,
+}
+
