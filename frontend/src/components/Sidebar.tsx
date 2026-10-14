@@ -1,4 +1,5 @@
-import { Hash, Plus, CheckCircle2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { Hash, Plus, CheckCircle2, Users, ChevronDown } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 
 export interface Kwant {
@@ -20,25 +21,67 @@ export interface Channel {
   routing_mode: string;
 }
 
-interface SidebarProps {
+export interface Team {
+  id: string;
+  name: string;
+  description?: string;
+  icon: string;
+  lead_kwant_id: string;
+  member_kwants: string[];
+}
+
+export interface SidebarProps {
   kwants: Kwant[];
   channels: Channel[];
+  teams: Team[];
   selectedId: string;
   isChannel: boolean;
+  selectedTeamId?: string | null;
   onSelectKwant: (kwant: Kwant) => void;
   onSelectChannel: (channel: Channel) => void;
+  onSelectTeam: (team: Team) => void;
   onSummonKwant: () => void;
+  onCreateTeam: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   kwants,
   channels,
+  teams = [],
   selectedId,
   isChannel,
+  selectedTeamId,
   onSelectKwant,
   onSelectChannel,
+  onSelectTeam,
   onSummonKwant,
+  onCreateTeam,
 }) => {
+  const [teamsOpen, setTeamsOpen] = useState(true);
+
+  // Channels to display: hide auto-created team channels to avoid duplication with Teams section
+  const displayChannels = channels.filter(
+    (c) => !teams.some((t) => c.name === `team-${t.name}`)
+  );
+
+  const isTeamActive = (team: Team) => {
+    if (selectedTeamId !== undefined && selectedTeamId !== null) {
+      return selectedTeamId === team.id;
+    }
+    return (
+      (isChannel && selectedId === team.id) ||
+      channels.some((c) => c.id === selectedId && c.name === `team-${team.name}`)
+    );
+  };
+
+  const isChannelActive = (c: Channel) => {
+    if (!isChannel) return false;
+    if (selectedTeamId && teams.some((t) => t.id === selectedTeamId)) {
+      return false;
+    }
+    return selectedId === c.id;
+  };
+
   return (
     <aside className="w-64 border-r border-zinc-800/80 bg-zinc-900/40 flex flex-col h-full select-none flex-shrink-0">
       {/* Top Header & New Agent Action */}
@@ -60,8 +103,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             Channels
           </div>
           <div className="mt-1 space-y-0.5">
-            {channels.map((c) => {
-              const active = isChannel && selectedId === c.id;
+            {displayChannels.map((c) => {
+              const active = isChannelActive(c);
               return (
                 <button
                   key={c.id}
@@ -78,6 +121,79 @@ export const Sidebar: React.FC<SidebarProps> = ({
               );
             })}
           </div>
+        </div>
+
+        {/* Teams Section */}
+        <div>
+          <div className="px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+            <button
+              type="button"
+              onClick={() => setTeamsOpen(!teamsOpen)}
+              className="flex items-center gap-1 hover:text-zinc-300 transition-colors"
+            >
+              <ChevronDown
+                size={12}
+                className={`transition-transform duration-150 ${teamsOpen ? '' : '-rotate-90'}`}
+              />
+              <span>Teams ({teams.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={onCreateTeam}
+              className="flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20 transition-all normal-case tracking-normal"
+              title="Create New Team"
+            >
+              <Plus size={11} />
+              <span>New Team</span>
+            </button>
+          </div>
+
+          {teamsOpen && (
+            <div className="mt-1 space-y-0.5">
+              {teams.map((t) => {
+                const active = isTeamActive(t);
+                const memberCount = Array.isArray(t.member_kwants)
+                  ? t.member_kwants.length
+                  : typeof t.member_kwants === 'string'
+                  ? (JSON.parse(t.member_kwants || '[]') as string[]).length
+                  : 0;
+
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => onSelectTeam(t)}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left group ${
+                      active
+                        ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50'
+                        : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Users
+                        size={14}
+                        className={active ? 'text-sky-400' : 'text-zinc-500 group-hover:text-zinc-400'}
+                      />
+                      <span className="truncate">@{t.name}</span>
+                    </div>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono flex-shrink-0 ${
+                        active
+                          ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                          : 'bg-zinc-800/80 text-zinc-400 border border-zinc-800'
+                      }`}
+                    >
+                      {memberCount} {memberCount === 1 ? 'member' : 'members'}
+                    </span>
+                  </button>
+                );
+              })}
+              {teams.length === 0 && (
+                <div className="px-2.5 py-1.5 text-[11px] text-zinc-500 italic">
+                  No teams yet. Click + New Team to create.
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* AI Agents Fleet Section */}
