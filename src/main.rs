@@ -1,5 +1,12 @@
 use clap::{Parser, Subcommand};
-use kwnt::config::Config;
+use kwnt::{
+    broker::PermissionBroker,
+    config::Config,
+    db::Database,
+    router::LayaRouter,
+    server::{create_router, AppState},
+    tools::ToolRunner,
+};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -41,7 +48,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     match cli.command {
-        Some(Commands::Serve { host, port, data_dir, laya_url }) => {
+        Some(Commands::Serve {
+            host,
+            port,
+            data_dir,
+            laya_url,
+        }) => {
             if let Some(h) = host {
                 config.host = h;
             }
@@ -55,6 +67,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.laya_url = l;
             }
 
+            let db = Database::init(&config.data_dir).await?;
+            let tools = ToolRunner::new(config.data_dir.join("workspace"));
+            let broker = PermissionBroker::new();
+            let router = LayaRouter::new(config.laya_url.clone());
+
+            let state = AppState::new(config.clone(), db, tools, broker, router);
+            let app = create_router(state);
+
+            let addr = format!("{}:{}", config.host, config.port);
+            let listener = tokio::net::TcpListener::bind(&addr).await?;
+
             tracing::info!(
                 host = %config.host,
                 port = config.port,
@@ -63,9 +86,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Starting Kwants engine..."
             );
             println!(
-                "🕹️ Kwants 8-Bit AI Agent Platform listening at http://{}:{}",
-                config.host, config.port
+                "🕹️ Kwants 8-Bit AI Agent Platform listening at http://{}",
+                addr
             );
+
+            axum::serve(listener, app).await?;
         }
         None => {
             println!("🕹️ Kwants: 8-Bit AI Agent Platform in Rust");
