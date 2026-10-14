@@ -21,6 +21,8 @@ export const App: React.FC = () => {
   const [isStreaming, setIsStreaming] = useState(false);
   const [discussionState, setDiscussionState] = useState<DiscussionState>({ inProgress: false });
   const discussionInProgressRef = useRef(false);
+  const kwantsRef = useRef<Kwant[]>(kwants);
+  kwantsRef.current = kwants;
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [tokensUsed, setTokensUsed] = useState(0);
 
@@ -116,18 +118,22 @@ export const App: React.FC = () => {
             playSfx('alert');
             break;
           case 'discussion_started':
-          case 'DiscussionStarted':
+          case 'DiscussionStarted': {
             discussionInProgressRef.current = true;
+            const initialSpeakerId = event.data?.speakers?.[0];
+            const initialSpeakerName =
+              kwantsRef.current.find((k) => k.id === initialSpeakerId)?.name || initialSpeakerId;
             setDiscussionState({
               inProgress: true,
               teamName: event.data?.team_name,
               totalTurns: event.data?.total_turns,
-              currentSpeaker: event.data?.speakers?.[0],
+              currentSpeaker: initialSpeakerName,
               currentTurn: 1,
             });
             setIsStreaming(true);
             playSfx('alert');
             break;
+          }
           case 'discussion_turn_started':
           case 'DiscussionTurnStarted':
             discussionInProgressRef.current = true;

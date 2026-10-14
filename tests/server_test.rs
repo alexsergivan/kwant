@@ -230,3 +230,54 @@ async fn test_chat_routing_with_team_mention_and_cancellation() {
     assert_eq!(cancel_resp.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn test_cancel_chat_with_null_fields_only_cancels_target_kwant() {
+    use tokio_util::sync::CancellationToken;
+
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config::default();
+    let tools = ToolRunner::new(tmp.path().join("workspace"));
+    let broker = PermissionBroker::new();
+    let router = LayaRouter::new(config.laya_url.clone());
+
+    let state = AppState::new(config, db, tools, broker, router);
+    let app = create_router(state.clone());
+
+    // Insert two distinct tokens in active_cancellations
+    let target_token = CancellationToken::new();
+    let other_token = CancellationToken::new();
+    {
+        let mut tokens = state.active_cancellations.lock().await;
+        tokens.insert("test-kwant".to_string(), target_token.clone());
+        tokens.insert("other-session".to_string(), other_token.clone());
+    }
+
+    // Cancel with payload containing null channel_id and team_id, but specific kwant_id
+    let cancel_body = json!({
+        "channel_id": null,
+        "kwant_id": "test-kwant",
+        "team_id": null
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat/cancel")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&cancel_body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Target token must be cancelled
+    assert!(target_token.is_cancelled(), "Target kwant token should be cancelled");
+
+    // Other token must NOT be cancelled (no global drain!)
+    assert!(!other_token.is_cancelled(), "Other session token must NOT be cancelled by targeted cancellation");
+
+    // active_cancellations map must still contain other_token and not test-kwant
+    let tokens = state.active_cancellations.lock().await;
+    assert!(!tokens.contains_key("test-kwant"));
+    assert!(tokens.contains_key("other-session"));
+}
+
+

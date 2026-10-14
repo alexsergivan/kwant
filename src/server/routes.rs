@@ -128,22 +128,23 @@ pub async fn delete_team(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CancelPayload {
+    pub session_id: Option<String>,
+    pub channel_id: Option<String>,
+    pub team_id: Option<String>,
+    pub kwant_id: Option<String>,
+}
+
 pub async fn cancel_chat(
     State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mut tokens = state.active_cancellations.lock().await;
     let maybe_session_id = if !body.is_empty() {
-        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&body) {
-            val.get("session_id")
-                .or_else(|| val.get("channel_id"))
-                .or_else(|| val.get("team_id"))
-                .or_else(|| val.get("kwant_id"))
-                .and_then(|s| s.as_str())
-                .map(|s| s.to_string())
-        } else {
-            None
-        }
+        serde_json::from_slice::<CancelPayload>(&body)
+            .ok()
+            .and_then(|p| p.session_id.or(p.channel_id).or(p.team_id).or(p.kwant_id))
     } else {
         None
     };
@@ -151,10 +152,6 @@ pub async fn cancel_chat(
     if let Some(session_id) = maybe_session_id {
         if let Some(token) = tokens.remove(&session_id) {
             token.cancel();
-        } else {
-            for (_, token) in tokens.drain() {
-                token.cancel();
-            }
         }
     } else {
         for (_, token) in tokens.drain() {
@@ -201,13 +198,14 @@ fn execute_single_turn(
     cancel_token: CancellationToken,
     session_id: String,
     team_keys: Option<(String, String)>,
+    kwant_id: Option<String>,
 ) {
     let event_broadcast = state.event_sender.clone();
     let db = state.db.clone();
     let router = state.router.clone();
     let active_cancellations = state.active_cancellations.clone();
     let channel_id = payload.channel_id.clone();
-    let kwant_id = payload.kwant_id.clone();
+    let kwant_id = kwant_id.or_else(|| payload.kwant_id.clone());
     let prompt = payload.prompt.clone();
 
     tokio::spawn(async move {
@@ -300,6 +298,9 @@ fn execute_single_turn(
         tokens.remove(&session_id);
         if let Some(cid) = &channel_id {
             tokens.remove(cid);
+        }
+        if let Some(kid) = &kwant_id {
+            tokens.remove(kid);
         }
         if let Some((team_id, team_name)) = &team_keys {
             tokens.remove(team_id);
@@ -448,6 +449,7 @@ pub async fn send_chat(
                     target_kwant.name, target_kwant.title, reason
                 )));
 
+                let kwant_id_cleanup = payload.kwant_id.clone();
                 execute_single_turn(
                     state.clone(),
                     target_kwant.clone(),
@@ -455,6 +457,7 @@ pub async fn send_chat(
                     cancel_token,
                     session_id,
                     Some((team.id.clone(), team.name.clone())),
+                    kwant_id_cleanup,
                 );
 
                 Ok(Json(json!({
@@ -503,7 +506,7 @@ pub async fn send_chat(
                         plan: plan_clone.clone(),
                     });
 
-                    let mut previous_turn_output: Option<(String, String)> = None;
+                    let mut cumulative_transcript: Vec<(String, String)> = Vec::new();
 
                     for (turn_idx, speaker_id) in speakers_clone.iter().enumerate() {
                         if cancel_token_clone.is_cancelled() {
@@ -518,13 +521,19 @@ pub async fn send_chat(
                             }
                         };
 
-                        let speaker_prompt = if let Some((prev_name, prev_text)) = &previous_turn_output {
-                            format!(
-                                "Original query: {}\n\nPrevious response from {}:\n{}\n\nPlease provide your analysis, critique, or next steps according to the discussion plan.",
-                                prompt, prev_name, prev_text
-                            )
-                        } else {
+                        let speaker_prompt = if cumulative_transcript.is_empty() {
                             prompt.clone()
+                        } else {
+                            let turns_formatted = cumulative_transcript
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, (name, text))| format!("### Turn {} ({})\n{}", idx + 1, name, text))
+                                .collect::<Vec<_>>()
+                                .join("\n\n");
+                            format!(
+                                "Original user query: {}\n\nDiscussion so far:\n{}\n\nPlease provide your analysis, critique, or synthesis according to the discussion plan.",
+                                prompt, turns_formatted
+                            )
                         };
 
                         let _ = event_broadcast.send(RuntimeEvent::DiscussionTurnStarted {
@@ -612,7 +621,7 @@ pub async fn send_chat(
                                 tokens_used: output.tokens_used as i64,
                             };
                             let _ = db.insert_message(&asst_msg).await;
-                            previous_turn_output = Some((speaker.name.clone(), output.text));
+                            cumulative_transcript.push((speaker.name.clone(), output.text));
                         }
                     }
 
@@ -624,6 +633,9 @@ pub async fn send_chat(
                     tokens.remove(&session_id_clone);
                     if let Some(cid) = &channel_id {
                         tokens.remove(cid);
+                    }
+                    if let Some(kid) = &kwant_id {
+                        tokens.remove(kid);
                     }
                     tokens.remove(&team_clone.id);
                     tokens.remove(&team_clone.name);
@@ -668,6 +680,7 @@ pub async fn send_chat(
         }
         .ok_or(StatusCode::BAD_REQUEST)?;
 
+        let kwant_id_cleanup = payload.kwant_id.clone();
         execute_single_turn(
             state.clone(),
             target_kwant.clone(),
@@ -675,6 +688,7 @@ pub async fn send_chat(
             cancel_token,
             session_id,
             None,
+            kwant_id_cleanup,
         );
 
         Ok(Json(json!({
