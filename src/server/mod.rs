@@ -58,6 +58,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/chat/send", post(routes::send_chat))
         .route("/api/approvals/:id/resolve", post(routes::resolve_approval))
         .route("/api/events", get(sse::sse_handler))
+        .fallback(crate::embedded::static_handler)
         .layer(cors)
         .with_state(state)
 }
