@@ -1,8 +1,12 @@
 pub mod fallback;
 pub mod laya;
+pub mod tags;
+pub mod team;
 
 pub use fallback::heuristic_fallback;
 pub use laya::LayaRouter;
+pub use tags::{parse_mentions, parse_mentions_with_lookup, TagMention};
+pub use team::{heuristic_team_decision, parse_laya_team_answers, TeamDecision};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

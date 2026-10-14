@@ -1,4 +1,5 @@
-use kwnt::router::{parse_laya_response, LayaRouter};
+use kwnt::db::models::{Kwant, Team};
+use kwnt::router::{parse_laya_response, parse_mentions, LayaRouter, TagMention, TeamDecision};
 use serde_json::json;
 
 #[tokio::test]
@@ -91,3 +92,67 @@ fn test_parse_laya_success_response() {
     assert_eq!(decision.confidence, 0.94);
     assert!(!decision.is_fallback);
 }
+
+#[test]
+fn test_parse_mentions_kwant_and_team() {
+    let input = "Hey @Architect and @core-engineering, please review this PR.";
+    let mentions = parse_mentions(input);
+    assert_eq!(mentions.len(), 2);
+    assert!(matches!(&mentions[0], TagMention::Kwant(name) if name == "Architect"));
+    assert!(matches!(&mentions[1], TagMention::Team(name) if name == "core-engineering"));
+}
+
+#[tokio::test]
+async fn test_team_orchestration_heuristic_fallback() {
+    let router = LayaRouter::new("http://127.0.0.1:9999/unreachable".into());
+    let team = Team {
+        id: "team-1".into(),
+        name: "core-engineering".into(),
+        description: Some("Architecture & DevOps".into()),
+        icon: "users".into(),
+        lead_kwant_id: "kwant-1".into(),
+        member_kwants: "[\"kwant-1\", \"kwant-2\"]".into(),
+        created_at: None,
+    };
+    let members = vec![
+        Kwant {
+            id: "kwant-1".into(),
+            name: "Architect".into(),
+            title: "Systems Architect".into(),
+            persona_prompt: "Architecture".into(),
+            avatar_sprite: "architect".into(),
+            driver_type: "api".into(),
+            preferred_model: "auto".into(),
+            temperature: 0.7,
+            max_tokens: 4096,
+            level: 1,
+            turns_completed: 0,
+            created_at: None,
+        },
+        Kwant {
+            id: "kwant-2".into(),
+            name: "DevOps".into(),
+            title: "DevOps Engineer".into(),
+            persona_prompt: "DevOps".into(),
+            avatar_sprite: "devops".into(),
+            driver_type: "api".into(),
+            preferred_model: "auto".into(),
+            temperature: 0.7,
+            max_tokens: 4096,
+            level: 1,
+            turns_completed: 0,
+            created_at: None,
+        },
+    ];
+
+    // For complex question, fallback should trigger multi-turn discussion
+    let decision = router.route_team_query("Architectural overhaul and cluster migration tradeoff analysis", &team, &members).await;
+    match decision {
+        TeamDecision::Discuss { speakers, turns, .. } => {
+            assert!(turns >= 2);
+            assert_eq!(speakers.len(), turns);
+        }
+        _ => panic!("Expected discuss decision"),
+    }
+}
+

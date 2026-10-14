@@ -6,7 +6,7 @@ use std::time::Duration;
 #[derive(Clone, Debug)]
 pub struct LayaRouter {
     pub base_url: String,
-    client: Client,
+    pub(crate) client: Client,
 }
 
 impl LayaRouter {
