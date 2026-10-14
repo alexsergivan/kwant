@@ -80,12 +80,19 @@ impl Driver for ApiDriver {
             }
             messages.push(json!({"role": "user", "content": input.prompt}));
 
+            let effort = input.effort_level.as_deref().unwrap_or("medium");
+            let max_tokens = match effort {
+                "low" => 512,
+                "high" => 4096,
+                _ => input.kwant.max_tokens,
+            };
+
             let body = json!({
                 "model": target_model,
                 "messages": messages,
                 "stream": false, // Non-stream fallback when parsing simple JSON or stream
                 "temperature": input.kwant.temperature,
-                "max_tokens": input.kwant.max_tokens,
+                "max_tokens": max_tokens,
             });
 
             let mut req = self.client.post(&url).json(&body);
@@ -115,7 +122,7 @@ impl Driver for ApiDriver {
 
                         return Ok(TurnOutput {
                             text,
-                            reasoning: None,
+                            reasoning: Some(format!("Model: {} [Effort: {}]", target_model, effort)),
                             tokens_used: tokens,
                         });
                     }
@@ -129,25 +136,25 @@ impl Driver for ApiDriver {
             }
         }
 
-        // Offline / Sandbox Mode: Emulate retro 8-bit agent reply with typing effect
+        // Offline / Sandbox Mode: Inform user that no API key was configured
         let _ = event_tx
             .send(RuntimeEvent::ThinkingDelta(format!(
-                "[{}] Channeling mana via {}...",
+                "[{}] Searching mana link for {}...",
                 input.kwant.name, target_model
             )))
             .await;
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         let response_text = format!(
-            "⚔️ [{}] \"Quest acknowledged! I have received your command: '{}'. Ready for action.\"",
-            input.kwant.name, input.prompt
+            "⚔️ [{}] \"No active API key or CLI connection detected for '{}'. Please enter your API key in ⚙️ Settings or authenticate your local CLI (claude / grok / codex). Received command: '{}'\"",
+            input.kwant.name, target_model, input.prompt
         );
 
         // Stream tokens in chunks
         for word in response_text.split(' ') {
             let chunk = format!("{} ", word);
             let _ = event_tx.send(RuntimeEvent::TextDelta(chunk)).await;
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::time::sleep(Duration::from_millis(15)).await;
         }
 
         let tokens = response_text.len() / 4 + 10;
@@ -162,7 +169,7 @@ impl Driver for ApiDriver {
 
         Ok(TurnOutput {
             text: response_text,
-            reasoning: Some(format!("Model: {}", target_model)),
+            reasoning: Some(format!("Model: {} (Unauthenticated)", target_model)),
             tokens_used: tokens,
         })
     }

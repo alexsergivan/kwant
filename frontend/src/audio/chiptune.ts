@@ -45,82 +45,78 @@ export function playSfx(type: SfxType) {
       case 'click': {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(400, now);
-        osc.frequency.exponentialRampToValueAtTime(120, now + 0.03);
-        gain.gain.setValueAtTime(0.12, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.03);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.exponentialRampToValueAtTime(200, now + 0.02);
+        gain.gain.setValueAtTime(0.04, now);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.02);
         osc.connect(gain);
         gain.connect(ctx.destination);
         osc.start(now);
-        osc.stop(now + 0.03);
+        osc.stop(now + 0.02);
         break;
       }
 
       case 'blip': {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(880, now);
-        gain.gain.setValueAtTime(0.06, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(480, now);
+        gain.gain.setValueAtTime(0.02, now);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.015);
         osc.connect(gain);
         gain.connect(ctx.destination);
         osc.start(now);
-        osc.stop(now + 0.04);
+        osc.stop(now + 0.015);
         break;
       }
 
       case 'coin': {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(987.77, now); // B5
-        osc.frequency.setValueAtTime(1318.51, now + 0.08); // E6
-        gain.gain.setValueAtTime(0.15, now);
-        gain.gain.setValueAtTime(0.15, now + 0.08);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now);
-        osc.stop(now + 0.28);
+        const freqs = [523.25, 659.25];
+        freqs.forEach((freq, idx) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, now + idx * 0.06);
+          gain.gain.setValueAtTime(0.04, now + idx * 0.06);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.06 + 0.15);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + idx * 0.06);
+          osc.stop(now + idx * 0.06 + 0.15);
+        });
         break;
       }
 
       case 'alert': {
-        // 8-bit battle / approval needed siren
-        for (let i = 0; i < 2; i++) {
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.type = 'sawtooth';
-          const t = now + i * 0.12;
-          osc.frequency.setValueAtTime(440, t);
-          osc.frequency.setValueAtTime(880, t + 0.06);
-          gain.gain.setValueAtTime(0.18, t);
-          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.start(t);
-          osc.stop(t + 0.11);
-        }
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(800, now);
+        osc.frequency.setValueAtTime(1000, now + 0.08);
+        gain.gain.setValueAtTime(0.05, now);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.2);
         break;
       }
 
       case 'fanfare': {
-        // Victory fanfare arpeggio: G4, C5, E5, G5
-        const notes = [392.00, 523.25, 659.25, 783.99];
+        const notes = [440, 554.37, 659.25, 880];
         notes.forEach((freq, idx) => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
-          osc.type = 'square';
-          const t = now + idx * 0.09;
+          osc.type = 'sine';
+          const t = now + idx * 0.05;
           osc.frequency.setValueAtTime(freq, t);
-          gain.gain.setValueAtTime(0.16, t);
-          gain.gain.exponentialRampToValueAtTime(0.001, t + (idx === 3 ? 0.35 : 0.08));
+          gain.gain.setValueAtTime(0.03, t);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.start(t);
-          osc.stop(t + (idx === 3 ? 0.35 : 0.08));
+          osc.stop(t + 0.12);
         });
         break;
       }

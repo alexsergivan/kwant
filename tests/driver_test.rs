@@ -82,6 +82,7 @@ async fn test_mock_driver_streaming() {
         prompt: "Cast fireball".into(),
         history: vec![],
         model_override: None,
+        effort_level: None,
     };
 
     let handle = tokio::spawn(async move {

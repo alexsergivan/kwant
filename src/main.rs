@@ -10,7 +10,7 @@ use kwnt::{
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "kwnt", author, version, about = "Kwants: 8-Bit AI Agent Platform in Rust")]
+#[command(name = "kwnt", author, version, about = "Kwants: Multi-Agent AI Platform in Rust")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -21,7 +21,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Start the Kwants HTTP/SSE server and embedded 8-bit arcade UI
+    /// Start the Kwants HTTP/SSE server and embedded web UI
     Serve {
         #[arg(long, help = "Server host interface to bind")]
         host: Option<String>,
@@ -86,14 +86,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Starting Kwants engine..."
             );
             println!(
-                "🕹️ Kwants 8-Bit AI Agent Platform listening at http://{}",
+                "⚡ Kwants Multi-Agent AI Platform listening at http://{}",
                 addr
             );
 
             axum::serve(listener, app).await?;
         }
         None => {
-            println!("🕹️ Kwants: 8-Bit AI Agent Platform in Rust");
+            println!("⚡ Kwants: Multi-Agent AI Platform in Rust");
             println!("Run `kwnt serve` to start the server, or `kwnt --help` for options.");
         }
     }

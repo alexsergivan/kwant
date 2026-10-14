@@ -15,7 +15,7 @@ pub async fn web_fetch(args: &Value) -> Result<Value, ToolError> {
 
     let resp = client
         .get(url)
-        .header("User-Agent", "KwantsBot/1.0 (8-bit-Agent-Platform)")
+        .header("User-Agent", "KwantsBot/1.0 (Multi-Agent-Platform)")
         .send()
         .await
         .map_err(|e| ToolError::Execution(format!("Web request failed: {}", e)))?;

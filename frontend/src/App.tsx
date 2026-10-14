@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { HudBar } from './components/HudBar';
-import { KwantSidebar, Kwant, Channel } from './components/KwantSidebar';
-import { DialogueWindow, ChatMessage } from './components/DialogueWindow';
-import { PendingApproval } from './components/ApprovalCard';
+import { AppHeader } from './components/AppHeader';
+import { Sidebar, Kwant, Channel } from './components/Sidebar';
+import { ChatView, ChatMessage } from './components/ChatView';
+import { PendingApproval } from './components/ModernApprovalCard';
+import { SettingsModal } from './components/SettingsModal';
+import { NewAgentModal } from './components/NewAgentModal';
 import { playSfx } from './audio/chiptune';
 
 export const App: React.FC = () => {
-  const [crtEnabled, setCrtEnabled] = useState(true);
   const [kwants, setKwants] = useState<Kwant[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
@@ -18,13 +19,9 @@ export const App: React.FC = () => {
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [tokensUsed, setTokensUsed] = useState(0);
 
-  // Summon Modal state
-  const [isSummonOpen, setIsSummonOpen] = useState(false);
-  const [newKwantName, setNewKwantName] = useState('');
-  const [newKwantTitle, setNewKwantTitle] = useState('');
-  const [newKwantSprite, setNewKwantSprite] = useState('cyber_mage');
-  const [newKwantPrompt, setNewKwantPrompt] = useState('');
-  const [newKwantModel, setNewKwantModel] = useState('auto');
+  // Modals state
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
 
   // Load initial Kwants and Channels
   useEffect(() => {
@@ -90,6 +87,7 @@ export const App: React.FC = () => {
               tool_name: event.data.tool_name,
               details: event.data.details,
             });
+            playSfx('alert');
             break;
           case 'TurnComplete':
             playSfx('coin');
@@ -168,21 +166,24 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleCreateKwant = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newKwantName.trim()) return;
-
+  const handleCreateAgent = async (agentData: {
+    name: string;
+    title: string;
+    persona_prompt: string;
+    avatar_sprite: string;
+    preferred_model: string;
+  }) => {
     try {
       const res = await fetch('/api/kwants', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: newKwantName,
-          title: newKwantTitle || 'Apprentice Kwant',
-          persona_prompt: newKwantPrompt || 'You are an eager 8-bit AI agent ready to assist.',
-          avatar_sprite: newKwantSprite,
+          name: agentData.name,
+          title: agentData.title,
+          persona_prompt: agentData.persona_prompt,
+          avatar_sprite: agentData.avatar_sprite,
           driver_type: 'api',
-          preferred_model: newKwantModel,
+          preferred_model: agentData.preferred_model,
         }),
       });
 
@@ -191,15 +192,11 @@ export const App: React.FC = () => {
         setKwants((prev) => [...prev, created]);
         setSelectedId(created.id);
         setIsChannel(false);
-        setIsSummonOpen(false);
+        setIsNewAgentOpen(false);
         playSfx('fanfare');
-        // Reset form
-        setNewKwantName('');
-        setNewKwantTitle('');
-        setNewKwantPrompt('');
       }
     } catch (err) {
-      console.error('Failed creating Kwant:', err);
+      console.error('Failed creating Agent:', err);
     }
   };
 
@@ -207,19 +204,17 @@ export const App: React.FC = () => {
   const currentKwant = !isChannel ? kwants.find((k) => k.id === selectedId) : null;
 
   return (
-    <div className={`h-screen w-screen flex flex-col overflow-hidden ${crtEnabled ? 'crt-overlay' : ''}`}>
-      {/* Top Arcade HUD */}
-      <HudBar
-        crtEnabled={crtEnabled}
-        onToggleCrt={() => setCrtEnabled(!crtEnabled)}
+    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden font-sans">
+      {/* Modern App Header */}
+      <AppHeader
+        onOpenSettings={() => setIsSettingsOpen(true)}
         tokensUsed={tokensUsed}
         activeModel={currentKwant?.preferred_model || 'auto'}
-        isLayaOnline={true}
       />
 
-      {/* Main Game Shell */}
+      {/* Main Workspace Shell */}
       <div className="flex-1 flex overflow-hidden">
-        <KwantSidebar
+        <Sidebar
           kwants={kwants}
           channels={channels}
           selectedId={selectedId}
@@ -235,17 +230,17 @@ export const App: React.FC = () => {
             playSfx('click');
           }}
           onSummonKwant={() => {
-            setIsSummonOpen(true);
-            playSfx('coin');
+            setIsNewAgentOpen(true);
+            playSfx('click');
           }}
         />
 
-        <DialogueWindow
-          title={isChannel ? `#${currentChannel?.name || 'guild'}` : currentKwant?.name || 'Kwant'}
+        <ChatView
+          title={isChannel ? `#${currentChannel?.name || 'general'}` : currentKwant?.name || 'Agent'}
           subtitle={
             isChannel
-              ? currentChannel?.description || 'Guild party room'
-              : `${currentKwant?.title || 'Agent'} [Model: ${currentKwant?.preferred_model || 'auto'}]`
+              ? currentChannel?.description || 'Team collaboration room'
+              : `${currentKwant?.title || 'Specialist'} [Laya Auto-Fleet]`
           }
           messages={messages}
           streamingText={streamingText}
@@ -257,100 +252,18 @@ export const App: React.FC = () => {
         />
       </div>
 
-      {/* Summon Kwant Modal */}
-      {isSummonOpen && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
-          <div className="pixel-box-amber p-5 max-w-md w-full bg-arcade-panel">
-            <div className="flex items-center justify-between border-b-2 border-arcade-amber pb-2 mb-4">
-              <h3 className="font-pixel text-xs text-arcade-amber">⚔️ SUMMON NEW KWANT</h3>
-              <button
-                onClick={() => setIsSummonOpen(false)}
-                className="text-zinc-400 hover:text-white font-pixel text-xs"
-              >
-                [X]
-              </button>
-            </div>
+      {/* New Agent Modal */}
+      <NewAgentModal
+        isOpen={isNewAgentOpen}
+        onClose={() => setIsNewAgentOpen(false)}
+        onCreateAgent={handleCreateAgent}
+      />
 
-            <form onSubmit={handleCreateKwant} className="space-y-3 font-retro text-xs">
-              <div>
-                <label className="block text-zinc-400 font-pixel text-[9px] mb-1">NAME</label>
-                <input
-                  type="text"
-                  required
-                  value={newKwantName}
-                  onChange={(e) => setNewKwantName(e.target.value)}
-                  placeholder="e.g. ChronoMage"
-                  className="w-full bg-black border border-zinc-700 px-2 py-1.5 text-arcade-cyan focus:outline-none focus:border-arcade-cyan"
-                />
-              </div>
-
-              <div>
-                <label className="block text-zinc-400 font-pixel text-[9px] mb-1">TITLE</label>
-                <input
-                  type="text"
-                  value={newKwantTitle}
-                  onChange={(e) => setNewKwantTitle(e.target.value)}
-                  placeholder="e.g. Master of Time and Space"
-                  className="w-full bg-black border border-zinc-700 px-2 py-1.5 text-zinc-200 focus:outline-none focus:border-arcade-cyan"
-                />
-              </div>
-
-              <div>
-                <label className="block text-zinc-400 font-pixel text-[9px] mb-1">8-BIT SPRITE</label>
-                <select
-                  value={newKwantSprite}
-                  onChange={(e) => setNewKwantSprite(e.target.value)}
-                  className="w-full bg-black border border-zinc-700 px-2 py-1.5 text-arcade-amber focus:outline-none"
-                >
-                  <option value="cyber_mage">Cyber Mage (Sorcerer)</option>
-                  <option value="pixel_ninja">Pixel Ninja (Assassin)</option>
-                  <option value="terminal_knight">Terminal Knight (Paladin)</option>
-                  <option value="glitch_rogue">Glitch Rogue (Scout)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-zinc-400 font-pixel text-[9px] mb-1">MODEL ROUTE</label>
-                <select
-                  value={newKwantModel}
-                  onChange={(e) => setNewKwantModel(e.target.value)}
-                  className="w-full bg-black border border-zinc-700 px-2 py-1.5 text-arcade-amber focus:outline-none"
-                >
-                  <option value="auto">Auto (Laya 33ms Decision Router)</option>
-                  <option value="grok">xAI Grok (Fast & Witty)</option>
-                  <option value="claude">Anthropic Claude (Architecture)</option>
-                  <option value="codex">OpenAI Codex / GPT (Coding)</option>
-                  <option value="local_ollama">Local Ollama (Private)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-zinc-400 font-pixel text-[9px] mb-1">PERSONA / SYSTEM PROMPT</label>
-                <textarea
-                  rows={3}
-                  value={newKwantPrompt}
-                  onChange={(e) => setNewKwantPrompt(e.target.value)}
-                  placeholder="You are an 8-bit AI agent specialized in..."
-                  className="w-full bg-black border border-zinc-700 px-2 py-1.5 text-zinc-200 focus:outline-none focus:border-arcade-cyan resize-none"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsSummonOpen(false)}
-                  className="pixel-btn pixel-btn-dark text-[9px]"
-                >
-                  CANCEL
-                </button>
-                <button type="submit" className="pixel-btn pixel-btn-amber text-[9px]">
-                  ✨ SUMMON
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
     </div>
   );
 };

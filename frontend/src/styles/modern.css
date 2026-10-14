@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    border-color: theme('colors.zinc.800');
+  }
+
+  body {
+    background-color: theme('colors.zinc.950');
+    color: theme('colors.zinc.100');
+    font-family: theme('fontFamily.sans');
+  }
+}
+
+/* Sleek minimalist scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: theme('colors.zinc.800');
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: theme('colors.zinc.700');
+}
+
+/* Subtle typing cursor */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.cursor-blink {
+  animation: blink 0.9s infinite;
+}
+
+/* Markdown styling */
+.prose pre {
+  background-color: theme('colors.zinc.900') !important;
+  border: 1px solid theme('colors.zinc.800') !important;
+  border-radius: 0.5rem !important;
+  padding: 0.85rem !important;
+}
+
+.prose code {
+  color: theme('colors.sky.300') !important;
+  font-family: theme('fontFamily.mono') !important;
+}

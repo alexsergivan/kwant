@@ -7,28 +7,18 @@ export default {
   theme: {
     extend: {
       colors: {
-        arcade: {
-          dark: '#0d0c13',
-          panel: '#181622',
-          border: '#2c283e',
-          amber: '#fca311',
-          cyan: '#00f5d4',
-          magenta: '#f72585',
-          green: '#38b000',
-          muted: '#8b8a9e',
-        }
+        brand: {
+          50: '#f0f9ff',
+          100: '#e0f2fe',
+          400: '#38bdf8',
+          500: '#0ea5e9',
+          600: '#0284c7',
+        },
       },
       fontFamily: {
-        pixel: ['"Press Start 2P"', 'monospace'],
-        retro: ['"Silkscreen"', 'monospace'],
-        terminal: ['"VT323"', 'monospace'],
+        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'monospace'],
       },
-      boxShadow: {
-        'pixel': '3px 3px 0px 0px #000000',
-        'pixel-sm': '2px 2px 0px 0px #000000',
-        'pixel-amber': '3px 3px 0px 0px #fca311',
-        'pixel-cyan': '3px 3px 0px 0px #00f5d4',
-      }
     },
   },
   plugins: [],

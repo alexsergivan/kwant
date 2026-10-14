@@ -1,4 +1,4 @@
-use super::{fallback::heuristic_fallback, RouteDecision, RouterError};
+use super::{RouteDecision, RouterError};
 use reqwest::Client;
 use serde_json::json;
 use std::time::Duration;
@@ -22,6 +22,34 @@ impl LayaRouter {
     /// Routes a prompt to the optimal model using Laya (/v1/systemone),
     /// falling back gracefully to local heuristics if Laya is unreachable.
     pub async fn route_prompt(&self, prompt: &str, context: &str) -> Result<RouteDecision, RouterError> {
+        self.route_prompt_with_models(prompt, context, &[]).await
+    }
+
+    /// Routes a prompt dynamically choosing from the detected available models and determining needed effort.
+    pub async fn route_prompt_with_models(
+        &self,
+        prompt: &str,
+        context: &str,
+        available: &[crate::drivers::ModelDescriptor],
+    ) -> Result<RouteDecision, RouterError> {
+        let mut criteria = serde_json::Map::new();
+        let candidate_models: Vec<String> = if available.is_empty() {
+            vec!["grok".into(), "claude".into(), "codex".into(), "local_ollama".into()]
+        } else {
+            available.iter().map(|m| m.id.clone()).collect()
+        };
+
+        if available.is_empty() {
+            criteria.insert("grok".into(), serde_json::json!("fast technical reasoning, witty banter, quick coding solutions"));
+            criteria.insert("claude".into(), serde_json::json!("deep architecture, multi-file refactoring, long complex analysis"));
+            criteria.insert("codex".into(), serde_json::json!("direct code generation, standard algorithms, regex, JSON transforms"));
+            criteria.insert("local_ollama".into(), serde_json::json!("private data, offline tasks, zero API cost"));
+        } else {
+            for m in available {
+                criteria.insert(m.id.clone(), serde_json::Value::String(m.capability_desc.clone()));
+            }
+        }
+
         let payload = json!({
             "state": {
                 "prompt": prompt,
@@ -30,12 +58,16 @@ impl LayaRouter {
             "questions": {
                 "model_selection": {
                     "type": "choice",
-                    "instructions": "Which model is best suited for this task?",
+                    "instructions": "Which available model is best suited for this task?",
+                    "criteria": criteria
+                },
+                "effort_level": {
+                    "type": "choice",
+                    "instructions": "What reasoning effort / compute depth is needed for this task?",
                     "criteria": {
-                        "grok": "fast technical reasoning, witty banter, quick coding solutions",
-                        "claude": "deep architecture, multi-file refactoring, long complex analysis",
-                        "codex": "direct code generation, standard algorithms, regex, JSON transforms",
-                        "local_ollama": "private data, offline tasks, zero API cost"
+                        "low": "quick answers, greetings, short definitions, simple edits",
+                        "medium": "standard coding, explanations, moderate feature implementation",
+                        "high": "deep architecture, difficult bug root cause analysis, complex refactoring"
                     }
                 }
             }
@@ -51,21 +83,21 @@ impl LayaRouter {
                             return Ok(decision);
                         }
                         tracing::warn!("Laya response missing expected fields, using fallback");
-                        Ok(heuristic_fallback(prompt, context))
+                        Ok(crate::router::fallback::heuristic_fallback_with_models(prompt, context, &candidate_models))
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to parse Laya response body, using fallback");
-                        Ok(heuristic_fallback(prompt, context))
+                        Ok(crate::router::fallback::heuristic_fallback_with_models(prompt, context, &candidate_models))
                     }
                 }
             }
             Ok(resp) => {
                 tracing::warn!(status = %resp.status(), "Laya service returned error, using fallback");
-                Ok(heuristic_fallback(prompt, context))
+                Ok(crate::router::fallback::heuristic_fallback_with_models(prompt, context, &candidate_models))
             }
             Err(e) => {
                 tracing::debug!(error = %e, "Laya service unreachable, using fallback");
-                Ok(heuristic_fallback(prompt, context))
+                Ok(crate::router::fallback::heuristic_fallback_with_models(prompt, context, &candidate_models))
             }
         }
     }

@@ -1,18 +1,18 @@
-# 🕹️ KWNTS: 8-Bit AI Agent Platform in Rust
+# ⚡ KWNTS: Multi-Agent AI Platform in Rust
 
 > Inspired by **Grok Bot** & **OpenMausBot**. Built with **Rust**, **Axum**, and **Laya**.
 
-Kwants is a high-performance, self-hosted AI agent platform packaged as a **single, standalone 10 MB binary** with an embedded retro 8-bit arcade Web UI and SQLite storage. Every agent is a **Kwant**—a specialized autonomous companion with its own personality, 8-bit sprite, stats (HP, MP/Mana context gauge, Level), model provider, and developer abilities.
+Kwants is a high-performance, self-hosted multi-agent AI platform packaged as a **single, standalone binary** with an embedded sleek dark-mode Web UI and SQLite storage. Every agent is a **Kwant**—a specialized autonomous companion with its own persona (`Architect`, `TechLead`, `DevOps`), model provider routing, and developer capabilities.
 
 ---
 
 ## ⚡ Key Highlights
 
-- **Single-Binary Zero-Dependency Deploy**: No Node.js or Docker required in production. One compiled native binary (`kwnt`) serves both the Tokio/Axum asynchronous engine and the embedded 8-bit React web application in under 25 MB of RAM on your laptop or a VPS.
-- **Sub-50ms Intelligent Routing with Laya**: By default, task-based model selection queries [convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya) over its Jev-compatible `/v1/systemone` API in ~33ms, with seamless offline heuristic fallback.
+- **Single-Binary Zero-Dependency Deploy**: No Node.js or Docker required in production. One compiled native binary (`kwnt`) serves both the Tokio/Axum asynchronous engine and the embedded modern React web application in under 25 MB of RAM on your laptop or a VPS.
+- **Sub-50ms Intelligent Routing with Laya**: By default, task-based model selection queries [convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya) over its `/v1/systemone` API in ~33ms, with seamless offline heuristic fallback and dynamic effort-level selection.
 - **Hybrid Driver Fleet**: Run direct cloud & local APIs (xAI Grok, Anthropic Claude, OpenAI, OpenRouter, local Ollama) or supervise host CLI agents (`claude`, `codex`, `grok` CLIs).
-- **Human-in-the-Loop RPG Permission Broker**: Risky operations (shell execution, file writes) trigger retro RPG encounter cards: `[ALLOW ONCE]`, `[ALWAYS ALLOW]`, `[DENY]`.
-- **Authentic 8-Bit Arcade Aesthetics**: Pixel fonts (*Press Start 2P*, *Silkscreen*), toggleable CRT scanlines, animated pixel avatars, and procedural chiptune sound effects synthesized in pure code via the **Web Audio API** (zero audio files needed).
+- **Human-in-the-Loop Permission Broker**: Security-critical operations (shell execution, workspace file edits) require user approval via modern security cards: `[Allow Once]`, `[Always Allow]`, `[Deny]`.
+- **Sleek Modern Grok Bot Interface**: Dark zinc aesthetics (`zinc-950`), clean typography (`Inter`, `JetBrains Mono`), collapsible reasoning disclosures (`Thought for Xs • Laya [Grok] • Low Effort`), role-based SVG/gradient avatars, and subtle modern micro-interaction click & completion sounds synthesized via the Web Audio API.
 
 ---
 

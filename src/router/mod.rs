@@ -18,6 +18,7 @@ pub enum RouterError {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RouteDecision {
     pub selected_model: String,
+    pub effort_level: String, // "low", "medium", "high"
     pub confidence: f32,
     pub provider_endpoint: Option<String>,
     pub is_fallback: bool,
@@ -35,6 +36,13 @@ pub fn parse_laya_response(data: &serde_json::Value) -> Option<RouteDecision> {
         .map(|f| f as f32)
         .unwrap_or(0.9);
 
+    let effort_level = answers
+        .get("effort_level")
+        .and_then(|e| e.get("choice"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("medium")
+        .to_string();
+
     let provider_endpoint = if choice == "local_ollama" {
         Some("http://localhost:11434/v1".to_string())
     } else {
@@ -43,9 +51,10 @@ pub fn parse_laya_response(data: &serde_json::Value) -> Option<RouteDecision> {
 
     Some(RouteDecision {
         selected_model: choice.to_string(),
+        effort_level: effort_level.clone(),
         confidence,
         provider_endpoint,
         is_fallback: false,
-        reasoning: format!("Laya decision router selected {}", choice),
+        reasoning: format!("Laya decision router selected {} with {} effort", choice, effort_level),
     })
 }

@@ -1,7 +1,7 @@
 use super::AppState;
 use crate::broker::ApprovalDecision;
 use crate::db::models::*;
-use crate::drivers::{create_driver_for_kwant, TurnInput};
+use crate::drivers::{find_cli_binary, resolve_driver_for_model, RuntimeEvent, TurnInput};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -132,17 +132,25 @@ pub async fn send_chat(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // 3. Route model using Laya if kwant preferred_model is "auto"
-    let model_override = if target_kwant.preferred_model == "auto" {
-        let route = state
-            .router
-            .route_prompt(&payload.prompt, "chat")
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        Some(route.selected_model)
-    } else {
-        None
-    };
+    // 3. Automatically detect available models and route via Laya
+    let available_models = crate::drivers::detect_available_models(&state.db).await;
+    let route = state
+        .router
+        .route_prompt_with_models(&payload.prompt, "chat", &available_models)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let target_model = route.selected_model;
+    let effort_level = route.effort_level;
+
+    // Broadcast Laya routing & effort decision to SSE
+    let _ = state.event_sender.send(RuntimeEvent::ThinkingDelta(format!(
+        "🔮 Laya Router: model='{}', effort='{}' ({:.0}% conf) — {}",
+        target_model,
+        effort_level,
+        route.confidence * 100.0,
+        route.reasoning
+    )));
 
     // 4. Load recent conversation history
     let context_id = payload
@@ -157,13 +165,30 @@ pub async fn send_chat(
         .unwrap_or_default();
 
     // 5. Build turn input and driver
-    let driver = create_driver_for_kwant(&target_kwant);
+    let configured_key = if target_model.contains("claude") {
+        state.db.get_setting("anthropic_api_key").await.ok().flatten()
+    } else if target_model.contains("grok") {
+        state.db.get_setting("xai_api_key").await.ok().flatten()
+    } else if target_model.contains("openai") || target_model.contains("codex") || target_model.contains("gpt") {
+        state.db.get_setting("openai_api_key").await.ok().flatten()
+    } else {
+        None
+    };
+
+    let endpoint = if target_model == "local_ollama" {
+        state.db.get_setting("ollama_url").await.ok().flatten()
+    } else {
+        None
+    };
+
+    let driver = resolve_driver_for_model(&target_model, configured_key, endpoint);
     let turn_input = TurnInput {
         thread_id: context_id.to_string(),
         kwant: target_kwant.clone(),
         prompt: payload.prompt.clone(),
         history,
-        model_override,
+        model_override: Some(target_model.clone()),
+        effort_level: Some(effort_level),
     };
 
     // 6. Spawn driver execution in background, feeding events into the SSE event_sender
@@ -191,7 +216,7 @@ pub async fn send_chat(
                 channel_id,
                 direct_kwant_id: kwant_id,
                 sender_role: "kwant".into(),
-                sender_id: target_kwant_clone.id,
+                sender_id: target_kwant_clone.name,
                 text: output.text,
                 reasoning_content: output.reasoning,
                 tool_calls: None,
@@ -239,3 +264,78 @@ pub async fn resolve_approval(
         "status": status_str
     })))
 }
+
+#[derive(Serialize)]
+pub struct SettingsResponse {
+    pub anthropic_api_key: String,
+    pub xai_api_key: String,
+    pub openai_api_key: String,
+    pub ollama_url: String,
+    pub claude_cli_found: bool,
+    pub claude_cli_path: Option<String>,
+    pub grok_cli_found: bool,
+    pub grok_cli_path: Option<String>,
+    pub codex_cli_found: bool,
+    pub codex_cli_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SaveSettingsPayload {
+    pub anthropic_api_key: Option<String>,
+    pub xai_api_key: Option<String>,
+    pub openai_api_key: Option<String>,
+    pub ollama_url: Option<String>,
+}
+
+pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
+    let anthropic = state.db.get_setting("anthropic_api_key").await.unwrap_or(None).unwrap_or_default();
+    let xai = state.db.get_setting("xai_api_key").await.unwrap_or(None).unwrap_or_default();
+    let openai = state.db.get_setting("openai_api_key").await.unwrap_or(None).unwrap_or_default();
+    let ollama = state.db.get_setting("ollama_url").await.unwrap_or(None).unwrap_or_else(|| "http://localhost:11434/v1".to_string());
+
+    let claude_bin = find_cli_binary("claude");
+    let grok_bin = find_cli_binary("grok");
+    let codex_bin = find_cli_binary("codex");
+
+    Ok(Json(SettingsResponse {
+        anthropic_api_key: if anthropic.is_empty() { String::new() } else { "••••••••".into() },
+        xai_api_key: if xai.is_empty() { String::new() } else { "••••••••".into() },
+        openai_api_key: if openai.is_empty() { String::new() } else { "••••••••".into() },
+        ollama_url: ollama,
+        claude_cli_found: claude_bin.is_some(),
+        claude_cli_path: claude_bin,
+        grok_cli_found: grok_bin.is_some(),
+        grok_cli_path: grok_bin,
+        codex_cli_found: codex_bin.is_some(),
+        codex_cli_path: codex_bin,
+    }))
+}
+
+pub async fn save_settings(
+    State(state): State<AppState>,
+    Json(payload): Json<SaveSettingsPayload>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if let Some(key) = payload.anthropic_api_key {
+        if !key.starts_with('•') && !key.is_empty() {
+            let _ = state.db.set_setting("anthropic_api_key", &key).await;
+        }
+    }
+    if let Some(key) = payload.xai_api_key {
+        if !key.starts_with('•') && !key.is_empty() {
+            let _ = state.db.set_setting("xai_api_key", &key).await;
+        }
+    }
+    if let Some(key) = payload.openai_api_key {
+        if !key.starts_with('•') && !key.is_empty() {
+            let _ = state.db.set_setting("openai_api_key", &key).await;
+        }
+    }
+    if let Some(url) = payload.ollama_url {
+        if !url.is_empty() {
+            let _ = state.db.set_setting("ollama_url", &url).await;
+        }
+    }
+
+    Ok(Json(json!({ "status": "saved" })))
+}
+

@@ -2,7 +2,7 @@
 name = "kwnt"
 version = "0.1.0"
 edition = "2021"
-description = "Kwants: 8-Bit AI Agent Platform in Rust"
+description = "Kwants: Multi-Agent AI Platform in Rust"
 
 [lib]
 name = "kwnt"

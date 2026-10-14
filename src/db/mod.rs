@@ -61,26 +61,26 @@ impl Database {
         if count.0 == 0 {
             let starters = vec![
                 NewKwant {
-                    name: "CyberMage".into(),
-                    title: "Arcane Architect".into(),
-                    persona_prompt: "You are CyberMage, an ancient 8-bit digital sorcerer. You specialize in software architecture, clever problem solving, and complex refactoring. Speak with slight retro-game flair.".into(),
-                    avatar_sprite: "cyber_mage".into(),
+                    name: "Architect".into(),
+                    title: "Systems Architect".into(),
+                    persona_prompt: "You are the Architect, an expert in deep systems architecture, software design, and complex multi-file engineering. You give structured, thorough, and highly insightful technical advice.".into(),
+                    avatar_sprite: "architect".into(),
                     driver_type: "api".into(),
                     preferred_model: "auto".into(),
                 },
                 NewKwant {
-                    name: "PixelNinja".into(),
-                    title: "Swift Blade".into(),
-                    persona_prompt: "You are PixelNinja, a swift and precise coding assassin. You write razor-sharp, optimized algorithms, concise functions, and clean tests. You avoid unnecessary fluff.".into(),
-                    avatar_sprite: "pixel_ninja".into(),
+                    name: "TechLead".into(),
+                    title: "Staff Engineer & Prototyper".into(),
+                    persona_prompt: "You are the Tech Lead, a sharp, pragmatic engineer who excels in fast reasoning, rapid prototyping, and clear technical communication.".into(),
+                    avatar_sprite: "tech_lead".into(),
                     driver_type: "api".into(),
                     preferred_model: "auto".into(),
                 },
                 NewKwant {
-                    name: "TerminalKnight".into(),
-                    title: "Guardian of the Shell".into(),
-                    persona_prompt: "You are TerminalKnight, an armored defender of systems, bash commands, and infrastructure. You help automate server setups, review security, and manage files safely.".into(),
-                    avatar_sprite: "terminal_knight".into(),
+                    name: "DevOps".into(),
+                    title: "Systems & Security Engineer".into(),
+                    persona_prompt: "You are the DevOps Engineer, specializing in shell commands, server infrastructure, containerization, security policies, and automation.".into(),
+                    avatar_sprite: "devops".into(),
                     driver_type: "api".into(),
                     preferred_model: "auto".into(),
                 },
@@ -95,13 +95,18 @@ impl Database {
             if let Some(lead) = kwants.first() {
                 let chan = NewChannel {
                     name: "general".into(),
-                    description: Some("The main Guild tavern for all Kwants".into()),
+                    description: Some("Main collaboration hub for all agents".into()),
                     lead_kwant_id: lead.id.clone(),
                     member_kwants: kwants.iter().map(|k| k.id.clone()).collect(),
                     routing_mode: "auto".into(),
                 };
                 self.create_channel(&chan).await?;
             }
+        } else {
+            // Smoothly migrate any legacy starter names and prompts
+            let _ = sqlx::query("UPDATE kwants SET name = 'Architect', title = 'Systems Architect', avatar_sprite = 'architect', persona_prompt = 'You are the Architect, an expert in deep systems architecture, software design, and complex multi-file engineering. You give structured, thorough, and highly insightful technical advice.' WHERE name IN ('CyberMage', 'Architect') AND persona_prompt LIKE '%CyberMage%'").execute(&self.pool).await;
+            let _ = sqlx::query("UPDATE kwants SET name = 'TechLead', title = 'Staff Engineer & Prototyper', avatar_sprite = 'tech_lead', persona_prompt = 'You are the Tech Lead, a sharp, pragmatic engineer who excels in fast reasoning, rapid prototyping, and clear technical communication.' WHERE name IN ('PixelNinja', 'TechLead') AND persona_prompt LIKE '%PixelNinja%'").execute(&self.pool).await;
+            let _ = sqlx::query("UPDATE kwants SET name = 'DevOps', title = 'Systems & Security Engineer', avatar_sprite = 'devops', persona_prompt = 'You are the DevOps Engineer, specializing in shell commands, server infrastructure, containerization, security policies, and automation.' WHERE name IN ('TerminalKnight', 'DevOps') AND persona_prompt LIKE '%TerminalKnight%'").execute(&self.pool).await;
         }
 
         Ok(())
