@@ -195,6 +195,7 @@ fn execute_single_turn(
     payload: SendChatPayload,
     cancel_token: CancellationToken,
     session_id: String,
+    team_keys: Option<(String, String)>,
 ) {
     let event_broadcast = state.event_sender.clone();
     let db = state.db.clone();
@@ -260,6 +261,7 @@ fn execute_single_turn(
             tokio::select! {
                 _ = cancel_token.cancelled() => {
                     cancelled = true;
+                    driver_task.abort();
                     break;
                 }
                 event_opt = driver_rx.recv() => {
@@ -293,6 +295,10 @@ fn execute_single_turn(
         tokens.remove(&session_id);
         if let Some(cid) = &channel_id {
             tokens.remove(cid);
+        }
+        if let Some((team_id, team_name)) = &team_keys {
+            tokens.remove(team_id);
+            tokens.remove(team_name);
         }
     });
 }
@@ -440,6 +446,7 @@ pub async fn send_chat(
                     payload,
                     cancel_token,
                     session_id,
+                    Some((team.id.clone(), team.name.clone())),
                 );
 
                 Ok(Json(json!({
@@ -559,6 +566,7 @@ pub async fn send_chat(
                             tokio::select! {
                                 _ = cancel_token_clone.cancelled() => {
                                     turn_cancelled = true;
+                                    driver_task.abort();
                                     break;
                                 }
                                 event_opt = driver_rx.recv() => {
@@ -582,9 +590,9 @@ pub async fn send_chat(
                         if let Ok(Ok(output)) = driver_task.await {
                             let asst_msg = NewMessage {
                                 channel_id: channel_id.clone(),
-                                direct_kwant_id: kwant_id.clone().or_else(|| Some(speaker.id.clone())),
+                                direct_kwant_id: Some(speaker.id.clone()),
                                 sender_role: "kwant".into(),
-                                sender_id: speaker.id.clone(),
+                                sender_id: speaker.name.clone(),
                                 text: output.text.clone(),
                                 reasoning_content: Some(format!(
                                     "Team Discussion • Turn {} of {} • @{}",
@@ -660,6 +668,7 @@ pub async fn send_chat(
             payload,
             cancel_token,
             session_id,
+            None,
         );
 
         Ok(Json(json!({
