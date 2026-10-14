@@ -24,6 +24,26 @@ pub enum RuntimeEvent {
         tokens: usize,
         duration_ms: u64,
     },
+    #[serde(rename = "discussion_started", alias = "DiscussionStarted")]
+    DiscussionStarted {
+        team_id: String,
+        team_name: String,
+        total_turns: usize,
+        speakers: Vec<String>,
+        plan: Vec<String>,
+    },
+    #[serde(rename = "discussion_turn_started", alias = "DiscussionTurnStarted")]
+    DiscussionTurnStarted {
+        speaker_id: String,
+        speaker_name: String,
+        turn_index: usize,
+        total_turns: usize,
+        prompt: String,
+    },
+    #[serde(rename = "discussion_completed", alias = "DiscussionCompleted")]
+    DiscussionCompleted {
+        total_turns: usize,
+    },
     Error {
         code: String,
         message: String,
