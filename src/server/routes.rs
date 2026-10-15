@@ -262,11 +262,20 @@ fn execute_single_turn(
         let sandbox_target = team_keys
             .as_ref()
             .map(|(id, _)| id.clone())
+            .or_else(|| channel_id.clone())
             .or_else(|| kwant_id.clone())
             .unwrap_or_else(|| target_kwant.id.clone());
 
+        let active_browser_url = if let Some(ctrl) = state.browser_controllers.lock().await.get(&sandbox_target) {
+            ctrl.current_url.lock().await.clone()
+        } else {
+            None
+        };
+
         let mut final_prompt = prompt.clone();
-        if let Some(target_url) = detect_url_in_prompt(&prompt) {
+        let target_url_opt = detect_url_with_context(&prompt, active_browser_url.as_deref());
+
+        if let Some(target_url) = target_url_opt {
             let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
                 "🌐 Navigating Sandbox VM in-container browser to {}...",
                 target_url
@@ -298,6 +307,13 @@ fn execute_single_turn(
                         prompt, target_url, nav.title, preview
                     );
                 }
+            }
+        } else if let Some(ref curr_url) = active_browser_url {
+            if !curr_url.is_empty() && !curr_url.contains("about:blank") && !curr_url.contains("example.com") {
+                final_prompt = format!(
+                    "{}\n\n[Active Sandbox Browser State: The right-panel Sandbox VM browser is currently viewing: {}. Maintain context on this website. Do not suggest or switch to other services like YouTube unless explicitly requested.]",
+                    prompt, curr_url
+                );
             }
         }
 
@@ -340,6 +356,31 @@ fn execute_single_turn(
         if cancelled {
             let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta("⏹️ Cancelled by user".into()));
         } else if let Ok(Ok(output)) = driver_task.await {
+            // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM
+            if let Some(bot_url) = extract_url_from_text(&output.text) {
+                if let Some(ctrl) = get_or_create_browser_controller(&state, &sandbox_target).await {
+                    let curr = ctrl.current_url.lock().await.clone().unwrap_or_default();
+                    if curr != bot_url && !bot_url.contains("localhost") && !bot_url.contains("127.0.0.1") {
+                        if let Ok(nav) = ctrl.navigate(&bot_url).await {
+                            let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
+                                team_id: sandbox_target.clone(),
+                                url: bot_url.clone(),
+                                title: nav.title.clone(),
+                                status_code: nav.status_code,
+                            });
+                            if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
+                                let _ = event_broadcast.send(RuntimeEvent::BrowserScreenshot {
+                                    team_id: sandbox_target.clone(),
+                                    url: bot_url.clone(),
+                                    image_base64: b64,
+                                    timestamp: chrono::Utc::now().to_rfc3339(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
             let asst_msg = NewMessage {
                 channel_id: channel_id.clone(),
                 direct_kwant_id: kwant_id.clone(),
@@ -1162,7 +1203,7 @@ pub struct NavigatePayload {
     pub url: String,
 }
 
-async fn resolve_sandbox_target_info(state: &AppState, target_id: &str) -> Option<(String, PathBuf)> {
+pub async fn resolve_sandbox_target_info(state: &AppState, target_id: &str) -> Option<(String, PathBuf)> {
     if let Ok(Some(team)) = state.db.get_team(target_id).await {
         let ws = team
             .workspace_path
@@ -1171,6 +1212,10 @@ async fn resolve_sandbox_target_info(state: &AppState, target_id: &str) -> Optio
             .map(PathBuf::from)
             .unwrap_or_else(|| state.config.data_dir.join("workspaces").join(&team.name));
         Some((team.name, ws))
+    } else if let Ok(Some(channel)) = state.db.get_channel(target_id).await {
+        let safe_cname = channel.name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
+        let ws = state.config.data_dir.join("workspaces").join(format!("chan-{}", safe_cname));
+        Some((format!("chan-{}", safe_cname), ws))
     } else if let Ok(Some(kwant)) = state.db.get_kwant(target_id).await {
         let safe_kname = kwant.name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
         Some((format!("bot-{}", safe_kname), state.config.data_dir.join("workspaces").join(format!("bot-{}", safe_kname))))
@@ -1187,33 +1232,110 @@ async fn resolve_sandbox_target_info(state: &AppState, target_id: &str) -> Optio
     }
 }
 
-pub fn detect_url_in_prompt(prompt: &str) -> Option<String> {
+const EXCLUDED_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "json", "toml", "yaml", "yml", "md",
+    "txt", "log", "lock", "png", "jpg", "jpeg", "gif", "svg", "css", "html",
+    "sh", "py", "go", "c", "cpp", "h", "java", "kt", "rb", "php", "sql",
+];
+
+pub fn extract_url_from_text(text: &str) -> Option<String> {
+    for word in text.split_whitespace() {
+        let clean = word.trim_matches(|c: char| {
+            !c.is_alphanumeric() && c != '.' && c != '/' && c != ':' && c != '-' && c != '_' && c != '?' && c != '=' && c != '&' && c != '#'
+        });
+        if clean.starts_with("http://") || clean.starts_with("https://") {
+            return Some(clean.to_string());
+        }
+        if !clean.contains('@') && clean.contains('.') && !clean.starts_with('.') && !clean.ends_with('.') {
+            let host_part = clean.split('/').next().unwrap_or("");
+            let parts: Vec<&str> = host_part.split('.').collect();
+            if parts.len() >= 2 {
+                let tld = parts.last().unwrap_or(&"");
+                let tld_lower = tld.to_lowercase();
+                if tld.len() >= 2
+                    && tld.len() <= 12
+                    && tld.chars().all(|c| c.is_ascii_alphabetic())
+                    && !EXCLUDED_EXTENSIONS.contains(&tld_lower.as_str())
+                {
+                    let valid_labels = parts.iter().all(|label| {
+                        !label.is_empty()
+                            && !label.starts_with('-')
+                            && !label.ends_with('-')
+                            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                    });
+                    if valid_labels {
+                        return Some(format!("https://{}", clean));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn detect_url_with_context(prompt: &str, current_url: Option<&str>) -> Option<String> {
     let lower = prompt.to_lowercase();
     let is_browser_request = lower.contains("browser")
         || lower.contains("open ")
         || lower.contains("navigate")
         || lower.contains("go to ")
         || lower.contains("browse ")
+        || lower.contains("visit ")
         || lower.contains("search for ")
+        || lower.contains("look up ")
         || lower.contains("http://")
         || lower.contains("https://");
+
+    if let Some(direct_url) = extract_url_from_text(prompt) {
+        if is_browser_request || prompt.split_whitespace().count() <= 3 {
+            return Some(direct_url);
+        }
+    }
 
     if !is_browser_request {
         return None;
     }
 
-    for word in prompt.split_whitespace() {
-        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '/' && c != ':' && c != '-' && c != '_');
-        if clean.starts_with("http://") || clean.starts_with("https://") {
-            return Some(clean.to_string());
-        }
-        if (clean.contains(".com") || clean.contains(".org") || clean.contains(".net") || clean.contains(".de") || clean.contains(".io") || clean.contains(".ai") || clean.contains(".co"))
-            && !clean.contains('@')
-        {
-            return Some(format!("https://{}", clean));
+    // Relative navigation if active current_url exists
+    if let Some(curr) = current_url {
+        let curr = curr.trim();
+        if (curr.starts_with("http://") || curr.starts_with("https://")) && !curr.contains("about:blank") && !curr.contains("example.com") {
+            let origin = if let Some(idx) = curr[8..].find('/') {
+                &curr[..8 + idx]
+            } else {
+                curr
+            };
+
+            for word in prompt.split_whitespace() {
+                let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '/');
+                if clean.starts_with('/') && clean.len() > 1 {
+                    return Some(format!("{}{}", origin, clean));
+                }
+            }
+
+            if lower.contains("playlist") {
+                return Some(format!("{}/playlists", origin));
+            } else if lower.contains("explore") {
+                return Some(format!("{}/explore", origin));
+            } else if lower.contains("search") && !lower.contains("google") {
+                return Some(format!("{}/search", origin));
+            } else if lower.contains("login") || lower.contains("sign in") {
+                return Some(format!("{}/login", origin));
+            } else if lower.contains("settings") {
+                return Some(format!("{}/settings", origin));
+            } else if lower.contains("about") {
+                return Some(format!("{}/about", origin));
+            } else if lower.contains("home") {
+                return Some(origin.to_string());
+            }
         }
     }
+
     None
+}
+
+pub fn detect_url_in_prompt(prompt: &str) -> Option<String> {
+    detect_url_with_context(prompt, None)
 }
 
 pub async fn get_or_create_browser_controller(

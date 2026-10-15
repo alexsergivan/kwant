@@ -549,5 +549,66 @@ async fn test_sandbox_interactive_control_endpoint() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn test_url_extraction_and_relative_navigation() {
+    use kwnt::server::routes::{detect_url_in_prompt, detect_url_with_context, extract_url_from_text};
+
+    // 1. Modern TLD (.ing) extraction
+    let url = extract_url_from_text("please open booktun.ing for me");
+    assert_eq!(url, Some("https://booktun.ing".to_string()));
+
+    // 2. Code extensions must not be treated as URLs
+    assert_eq!(extract_url_from_text("read src/main.rs"), None);
+    assert_eq!(extract_url_from_text("check file.json"), None);
+
+    // 3. Direct URL in prompt detection
+    assert_eq!(
+        detect_url_in_prompt("open booktun.ing"),
+        Some("https://booktun.ing".to_string())
+    );
+
+    // 4. Relative navigation with active browser context
+    let rel_playlist = detect_url_with_context(
+        "open some playlist page",
+        Some("https://booktun.ing"),
+    );
+    assert_eq!(rel_playlist, Some("https://booktun.ing/playlists".to_string()));
+
+    let rel_path = detect_url_with_context(
+        "navigate to /explore",
+        Some("https://booktun.ing"),
+    );
+    assert_eq!(rel_path, Some("https://booktun.ing/explore".to_string()));
+
+    // 5. Explicit navigation to another site overrides active browser context
+    let override_url = detect_url_with_context(
+        "open youtube.com",
+        Some("https://booktun.ing"),
+    );
+    assert_eq!(override_url, Some("https://youtube.com".to_string()));
+}
+
+#[tokio::test]
+async fn test_channel_sandbox_target_resolution() {
+    use kwnt::server::routes::resolve_sandbox_target_info;
+
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config::default();
+    let tools = ToolRunner::new(tmp.path().join("workspace"));
+    let broker = PermissionBroker::new();
+    let router = LayaRouter::new(config.laya_url.clone());
+    let state = AppState::new(config, db.clone(), tools, broker, router);
+
+    let channels = db.list_channels().await.unwrap();
+    let general_channel = channels.iter().find(|c| c.name == "general").expect("Seeded general channel");
+
+    let resolved = resolve_sandbox_target_info(&state, &general_channel.id).await;
+    assert!(resolved.is_some());
+    let (target_name, ws_path) = resolved.unwrap();
+    assert_eq!(target_name, "chan-general");
+    assert!(ws_path.to_string_lossy().ends_with("workspaces/chan-general"));
+}
+
 
 

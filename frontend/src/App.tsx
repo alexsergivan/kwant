@@ -279,6 +279,8 @@ export const App: React.FC = () => {
               !teamId ||
               currentTid === teamId ||
               teamId === 'default' ||
+              teamId === selectedIdRef.current ||
+              teamId === streamingContextIdRef.current ||
               (k && (k.id === teamId || k.name.toLowerCase() === teamId.toLowerCase())) ||
               (t && (t.id === teamId || t.name.toLowerCase() === teamId.toLowerCase()));
             if (isMatch) {
@@ -300,6 +302,8 @@ export const App: React.FC = () => {
               !teamId ||
               currentTid === teamId ||
               teamId === 'default' ||
+              teamId === selectedIdRef.current ||
+              teamId === streamingContextIdRef.current ||
               (k && (k.id === teamId || k.name.toLowerCase() === teamId.toLowerCase())) ||
               (t && (t.id === teamId || t.name.toLowerCase() === teamId.toLowerCase()));
             if (isMatch) {
@@ -321,6 +325,8 @@ export const App: React.FC = () => {
               !teamId ||
               currentTid === teamId ||
               teamId === 'default' ||
+              teamId === selectedIdRef.current ||
+              teamId === streamingContextIdRef.current ||
               (k && (k.id === teamId || k.name.toLowerCase() === teamId.toLowerCase())) ||
               (t && (t.id === teamId || t.name.toLowerCase() === teamId.toLowerCase()));
             if (isMatch) {

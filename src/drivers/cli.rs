@@ -52,6 +52,33 @@ pub fn find_cli_binary(name: &str) -> Option<String> {
     None
 }
 
+pub fn build_cli_prompt(input: &TurnInput) -> String {
+    if input.history.is_empty() {
+        return input.prompt.clone();
+    }
+
+    let mut parts = Vec::new();
+    parts.push("### Conversation History:".to_string());
+    let recent = if input.history.len() > 10 {
+        &input.history[input.history.len() - 10..]
+    } else {
+        &input.history[..]
+    };
+
+    for msg in recent {
+        let role = match msg.sender_role.as_str() {
+            "user" => "User",
+            "kwant" => "Assistant",
+            "system" => "System",
+            _ => &msg.sender_role,
+        };
+        parts.push(format!("{}: {}", role, msg.text));
+    }
+
+    parts.push(format!("\n### Current User Request:\n{}", input.prompt));
+    parts.join("\n")
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct CliDriver {
     pub cli_binary: Option<String>,
@@ -117,6 +144,7 @@ impl Driver for CliDriver {
             .await;
 
         let system_prompt = input.format_system_prompt();
+        let effective_prompt = build_cli_prompt(&input);
 
         // Prevent CLI tools from spawning desktop browser windows on host
         cmd.env("BROWSER", "none");
@@ -130,7 +158,7 @@ impl Driver for CliDriver {
                     "low" => "low",
                     _ => "medium",
                 };
-                let full_prompt = format!("[System Context: {}]\n\n{}", system_prompt, input.prompt);
+                let full_prompt = format!("[System Context: {}]\n\n{}", system_prompt, effective_prompt);
                 cmd.arg("exec")
                     .arg("--ephemeral")
                     .arg("--skip-git-repo-check")
@@ -145,12 +173,12 @@ impl Driver for CliDriver {
             }
             "grok" => {
                 cmd.arg("--rules").arg(&system_prompt);
-                cmd.arg("-p").arg(&input.prompt);
+                cmd.arg("-p").arg(&effective_prompt);
             }
             _ => {
                 // claude default
                 cmd.arg("--append-system-prompt").arg(&system_prompt);
-                cmd.arg("-p").arg(&input.prompt);
+                cmd.arg("-p").arg(&effective_prompt);
             }
         }
 
@@ -224,5 +252,101 @@ impl Driver for CliDriver {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::models::{Kwant, Message};
+
+    #[test]
+    fn test_build_cli_prompt_with_history() {
+        let kwant = Kwant {
+            id: "k1".into(),
+            name: "Architect".into(),
+            title: "Lead".into(),
+            persona_prompt: "p".into(),
+            avatar_sprite: "s".into(),
+            driver_type: "cli".into(),
+            preferred_model: "grok".into(),
+            temperature: 0.7,
+            max_tokens: 1000,
+            level: 1,
+            turns_completed: 0,
+            created_at: None,
+        };
+        let input = TurnInput {
+            thread_id: "t1".into(),
+            kwant,
+            prompt: "open some playlist page".into(),
+            history: vec![
+                Message {
+                    id: "m1".into(),
+                    channel_id: Some("c1".into()),
+                    direct_kwant_id: None,
+                    sender_role: "user".into(),
+                    sender_id: "Player".into(),
+                    text: "open booktun.ing".into(),
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tokens_used: 10,
+                    created_at: None,
+                },
+                Message {
+                    id: "m2".into(),
+                    channel_id: Some("c1".into()),
+                    direct_kwant_id: None,
+                    sender_role: "kwant".into(),
+                    sender_id: "Architect".into(),
+                    text: "I opened booktun.ing for you.".into(),
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tokens_used: 20,
+                    created_at: None,
+                },
+            ],
+            model_override: None,
+            effort_level: None,
+            team_context: None,
+            workspace_dir: None,
+        };
+
+        let result = build_cli_prompt(&input);
+        assert!(result.contains("### Conversation History:"));
+        assert!(result.contains("User: open booktun.ing"));
+        assert!(result.contains("Assistant: I opened booktun.ing for you."));
+        assert!(result.contains("### Current User Request:\nopen some playlist page"));
+    }
+
+    #[test]
+    fn test_build_cli_prompt_without_history() {
+        let kwant = Kwant {
+            id: "k1".into(),
+            name: "Architect".into(),
+            title: "Lead".into(),
+            persona_prompt: "p".into(),
+            avatar_sprite: "s".into(),
+            driver_type: "cli".into(),
+            preferred_model: "grok".into(),
+            temperature: 0.7,
+            max_tokens: 1000,
+            level: 1,
+            turns_completed: 0,
+            created_at: None,
+        };
+        let input = TurnInput {
+            thread_id: "t1".into(),
+            kwant,
+            prompt: "hello world".into(),
+            history: vec![],
+            model_override: None,
+            effort_level: None,
+            team_context: None,
+            workspace_dir: None,
+        };
+
+        let result = build_cli_prompt(&input);
+        assert_eq!(result, "hello world");
     }
 }
