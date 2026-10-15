@@ -1,5 +1,6 @@
 import React from 'react';
-import { Settings, Volume2, VolumeX, Cpu, Sparkles } from 'lucide-react';
+import { Settings, Volume2, VolumeX, Cpu } from 'lucide-react';
+import { ModernAvatar } from './ModernAvatar';
 import { isSfxMuted, toggleSfxMute, playSfx } from '../audio/chiptune';
 
 interface AppHeaderProps {
@@ -25,10 +26,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       {/* Brand & Fleet status */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2 font-semibold text-sm tracking-tight text-zinc-100">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center text-white shadow-sm">
-            <Sparkles size={16} />
-          </div>
-          <span>Kwants</span>
+          <ModernAvatar role="brand" name="Kwant" size={30} />
+          <span className="text-[15px]">Kwant</span>
         </div>
         <span className="text-[11px] font-medium bg-zinc-800 text-zinc-300 px-2 py-0.5 rounded-full border border-zinc-700/60 hidden sm:inline-block">
           AI Fleet

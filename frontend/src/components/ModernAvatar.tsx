@@ -41,6 +41,7 @@ const hash = (s: string) => {
 };
 
 function pickCreature(role: string, name: string): Creature {
+  if (role === 'brand') return { ...PALETTES.yellow, accessory: 'antenna' };
   const norm = `${role} ${name}`.toLowerCase();
   const rules: Array<[string[], keyof typeof PALETTES, Accessory]> = [
     [['laya'], 'violet', 'crown'],
@@ -172,7 +173,7 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
           Array.from({ length: 16 }, (_, i) => (
             <rect key={`scan-${i}`} x={3.5} y={4.5 + i} width={19} height={0.25} fill={SCAN} />
           ))}
-        <g transform={compact ? 'translate(13 12) scale(1.2) translate(-13 -12)' : undefined}>
+        <g transform={compact ? 'translate(13 13.2) scale(1.2) translate(-13 -12)' : undefined}>
           {renderCreature(creature).filter((r) => framed && !compact || r.key !== 'shadow')}
         </g>
       </svg>
