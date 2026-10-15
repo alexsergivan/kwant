@@ -212,6 +212,7 @@ fn execute_single_turn(
     team_keys: Option<(String, String)>,
     kwant_id: Option<String>,
     team_context: Option<crate::drivers::TeamContext>,
+    workspace_dir: Option<std::path::PathBuf>,
 ) {
     let event_broadcast = state.event_sender.clone();
     let db = state.db.clone();
@@ -266,6 +267,7 @@ fn execute_single_turn(
             model_override: Some(target_model),
             effort_level: Some(effort_level),
             team_context,
+            workspace_dir,
         };
 
         let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -429,7 +431,23 @@ pub async fn send_chat(
         id: t.id.clone(),
         name: t.name.clone(),
         description: t.description.clone(),
+        workspace_path: t.workspace_path.clone(),
+        repo_url: t.repo_url.clone(),
     });
+
+    let workspace_dir = if let Some(ref team) = active_team {
+        Some(
+            crate::tools::resolve_or_prepare_workspace(
+                &state.config.data_dir,
+                &team.name,
+                team.workspace_path.as_deref(),
+                team.repo_url.as_deref(),
+            )
+            .await,
+        )
+    } else {
+        None
+    };
 
     // Insert user message to DB
     let user_msg = NewMessage {
@@ -505,6 +523,7 @@ pub async fn send_chat(
                     Some((team.id.clone(), team.name.clone())),
                     kwant_id_cleanup,
                     active_team_context,
+                    workspace_dir.clone(),
                 );
 
                 Ok(Json(json!({
@@ -537,6 +556,7 @@ pub async fn send_chat(
                 let plan_clone = plan.clone();
                 let cancel_token_clone = cancel_token.clone();
                 let session_id_clone = session_id.clone();
+                let workspace_dir_clone = workspace_dir.clone();
 
                 tokio::spawn(async move {
                     let context_id = channel_id
@@ -622,7 +642,10 @@ pub async fn send_chat(
                                 id: team_clone.id.clone(),
                                 name: team_clone.name.clone(),
                                 description: team_clone.description.clone(),
+                                workspace_path: team_clone.workspace_path.clone(),
+                                repo_url: team_clone.repo_url.clone(),
                             }),
+                            workspace_dir: workspace_dir_clone.clone(),
                         };
 
                         let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -743,6 +766,7 @@ pub async fn send_chat(
             team_keys,
             kwant_id_cleanup,
             active_team_context,
+            workspace_dir,
         );
 
         Ok(Json(json!({

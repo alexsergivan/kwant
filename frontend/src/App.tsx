@@ -369,6 +369,8 @@ export const App: React.FC = () => {
   const handleCreateTeam = async (teamData: {
     name: string;
     description?: string;
+    workspace_path?: string;
+    repo_url?: string;
     lead_kwant_id: string;
     member_kwants: string[];
     icon?: string;
@@ -421,6 +423,8 @@ export const App: React.FC = () => {
     data: {
       name: string;
       description?: string;
+      workspace_path?: string;
+      repo_url?: string;
       lead_kwant_id: string;
       member_kwants: string[];
     }
@@ -571,6 +575,8 @@ export const App: React.FC = () => {
           onCancelDiscussion={handleCancelDiscussion}
           teamMembers={currentTeamMembers}
           teamName={currentTeam?.name}
+          workspacePath={currentTeam?.workspace_path}
+          repoUrl={currentTeam?.repo_url}
           onManageTeam={
             currentTeam
               ? () => {

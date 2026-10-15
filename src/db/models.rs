@@ -101,6 +101,8 @@ pub struct Team {
     pub icon: String,
     pub lead_kwant_id: String,
     pub member_kwants: String, // JSON array string
+    pub workspace_path: Option<String>,
+    pub repo_url: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
 }
 
@@ -111,5 +113,9 @@ pub struct NewTeam {
     pub icon: Option<String>,
     pub lead_kwant_id: String,
     pub member_kwants: Vec<String>,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub repo_url: Option<String>,
 }
 

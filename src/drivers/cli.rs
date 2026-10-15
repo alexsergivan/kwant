@@ -100,6 +100,11 @@ impl Driver for CliDriver {
         };
 
         let mut cmd = Command::new(&bin_path);
+        if let Some(ref dir) = input.workspace_dir {
+            if dir.exists() {
+                cmd.current_dir(dir);
+            }
+        }
         let mut codex_out_file: Option<String> = None;
 
         let effort = input.effort_level.as_deref().unwrap_or("medium");

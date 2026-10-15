@@ -47,6 +47,10 @@ impl Database {
             }
         }
 
+        // Run migrations for newly added columns if existing DB
+        let _ = sqlx::query("ALTER TABLE teams ADD COLUMN workspace_path TEXT;").execute(&pool).await;
+        let _ = sqlx::query("ALTER TABLE teams ADD COLUMN repo_url TEXT;").execute(&pool).await;
+
         let db = Self { pool };
         db.seed_defaults().await?;
 
@@ -125,6 +129,8 @@ impl Database {
                     icon: Some("users".into()),
                     lead_kwant_id: lead.id.clone(),
                     member_kwants: member_ids,
+                    workspace_path: None,
+                    repo_url: None,
                 };
                 self.create_team(&default_team).await?;
             }
@@ -336,8 +342,8 @@ impl Database {
 
         sqlx::query(
             r#"
-            INSERT INTO teams (id, name, description, icon, lead_kwant_id, member_kwants)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO teams (id, name, description, icon, lead_kwant_id, member_kwants, workspace_path, repo_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
@@ -346,6 +352,8 @@ impl Database {
         .bind(icon)
         .bind(&input.lead_kwant_id)
         .bind(&members_json)
+        .bind(&input.workspace_path)
+        .bind(&input.repo_url)
         .execute(&self.pool)
         .await?;
 
@@ -398,7 +406,7 @@ impl Database {
         let res = sqlx::query(
             r#"
             UPDATE teams
-            SET name = ?, description = ?, icon = ?, lead_kwant_id = ?, member_kwants = ?
+            SET name = ?, description = ?, icon = ?, lead_kwant_id = ?, member_kwants = ?, workspace_path = ?, repo_url = ?
             WHERE id = ?
             "#,
         )
@@ -407,6 +415,8 @@ impl Database {
         .bind(icon)
         .bind(&input.lead_kwant_id)
         .bind(&members_json)
+        .bind(&input.workspace_path)
+        .bind(&input.repo_url)
         .bind(id)
         .execute(&self.pool)
         .await?;

@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS teams (
     icon TEXT NOT NULL DEFAULT 'users',
     lead_kwant_id TEXT NOT NULL,
     member_kwants TEXT NOT NULL,
+    workspace_path TEXT,
+    repo_url TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(lead_kwant_id) REFERENCES kwants(id)
 );

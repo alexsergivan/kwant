@@ -36,13 +36,61 @@ impl ToolRunner {
     }
 
     pub async fn execute(&self, tool_name: &str, args: &Value) -> Result<Value, ToolError> {
+        self.execute_in_workspace(&self.workspace_dir, tool_name, args).await
+    }
+
+    pub async fn execute_in_workspace(&self, target_dir: &std::path::Path, tool_name: &str, args: &Value) -> Result<Value, ToolError> {
         match tool_name {
-            "write_file" => file_ops::write_file(&self.workspace_dir, args),
-            "read_file" => file_ops::read_file(&self.workspace_dir, args),
-            "list_dir" => file_ops::list_dir(&self.workspace_dir, args),
-            "execute_shell" => shell::execute_shell(&self.workspace_dir, args).await,
+            "write_file" => file_ops::write_file(target_dir, args),
+            "read_file" => file_ops::read_file(target_dir, args),
+            "list_dir" => file_ops::list_dir(target_dir, args),
+            "execute_shell" => shell::execute_shell(target_dir, args).await,
             "web_fetch" => web::web_fetch(args).await,
             other => Err(ToolError::UnknownTool(other.to_string())),
         }
     }
+}
+
+pub async fn resolve_or_prepare_workspace(
+    base_data_dir: &std::path::Path,
+    team_name: &str,
+    workspace_path: Option<&str>,
+    repo_url: Option<&str>,
+) -> PathBuf {
+    let target_dir = if let Some(ws) = workspace_path.filter(|s| !s.trim().is_empty()) {
+        let trimmed = ws.trim();
+        if trimmed.starts_with("~/") {
+            if let Ok(home) = std::env::var("HOME") {
+                PathBuf::from(home).join(&trimmed[2..])
+            } else {
+                PathBuf::from(trimmed)
+            }
+        } else {
+            PathBuf::from(trimmed)
+        }
+    } else if repo_url.filter(|s| !s.trim().is_empty()).is_some() {
+        base_data_dir.join("workspaces").join(team_name)
+    } else {
+        base_data_dir.join("workspace")
+    };
+
+    if let Some(repo) = repo_url.filter(|s| !s.trim().is_empty()) {
+        let git_dir = target_dir.join(".git");
+        if !git_dir.exists() {
+            let _ = std::fs::create_dir_all(&target_dir);
+            let clone_res = tokio::process::Command::new("git")
+                .arg("clone")
+                .arg(repo.trim())
+                .arg(&target_dir)
+                .output()
+                .await;
+            if let Err(e) = clone_res {
+                tracing::warn!("Failed to run git clone for team {}: {}", team_name, e);
+            }
+        }
+    } else {
+        let _ = std::fs::create_dir_all(&target_dir);
+    }
+
+    target_dir
 }

@@ -317,6 +317,8 @@ mod tests {
             id: "team-1".into(),
             name: "core-engineering".into(),
             description: Some("Architecture & DevOps".into()),
+            workspace_path: None,
+            repo_url: None,
             icon: "users".into(),
             lead_kwant_id: "kwant-1".into(),
             member_kwants: "[\"kwant-1\", \"kwant-2\"]".into(),

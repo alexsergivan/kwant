@@ -29,6 +29,8 @@ pub struct TeamContext {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+    pub workspace_path: Option<String>,
+    pub repo_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +42,7 @@ pub struct TurnInput {
     pub model_override: Option<String>,
     pub effort_level: Option<String>,
     pub team_context: Option<TeamContext>,
+    pub workspace_dir: Option<std::path::PathBuf>,
 }
 
 impl TurnInput {
@@ -50,9 +53,19 @@ impl TurnInput {
         );
         if let Some(ref team) = self.team_context {
             let desc = team.description.as_deref().unwrap_or("General team objectives");
+            let mut ws_info = String::new();
+            if let Some(ref ws) = team.workspace_path {
+                ws_info.push_str(&format!("\nWorkspace: {}", ws));
+            } else if let Some(ref ws) = self.workspace_dir {
+                ws_info.push_str(&format!("\nWorkspace: {}", ws.display()));
+            }
+            if let Some(ref repo) = team.repo_url {
+                ws_info.push_str(&format!("\nGit Repo: {}", repo));
+            }
+
             format!(
-                "{}\n\n[Active Team Alignment: @{}]\nTeam Mission: {}\nAs a member of team @{}, align your tone, recommendations, and analysis with this team's mission and collaborate effectively with fellow team members.",
-                base, team.name, desc, team.name
+                "{}\n\n[Active Team Alignment: @{}]{}\nTeam Mission: {}\nAs a member of team @{}, align your tone, recommendations, and analysis with this team's mission and collaborate effectively with fellow team members.",
+                base, team.name, ws_info, desc, team.name
             )
         } else {
             format!("{}\n\nRespond clearly in character.", base)

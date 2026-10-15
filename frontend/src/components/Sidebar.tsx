@@ -26,6 +26,8 @@ export interface Team {
   id: string;
   name: string;
   description?: string;
+  workspace_path?: string;
+  repo_url?: string;
   icon: string;
   lead_kwant_id: string;
   member_kwants: string[];

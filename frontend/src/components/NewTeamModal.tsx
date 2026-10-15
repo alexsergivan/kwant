@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Users, AlertCircle } from 'lucide-react';
+import { X, Users, AlertCircle, Folder, GitBranch } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { Kwant, Team } from './Sidebar';
 import { playSfx } from '../audio/chiptune';
@@ -11,6 +11,8 @@ export interface NewTeamModalProps {
   onCreateTeam?: (data: {
     name: string;
     description?: string;
+    workspace_path?: string;
+    repo_url?: string;
     lead_kwant_id: string;
     member_kwants: string[];
     icon?: string;
@@ -27,6 +29,9 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
 }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [workspaceType, setWorkspaceType] = useState<'local' | 'repo' | 'default'>('local');
+  const [workspacePath, setWorkspacePath] = useState('');
+  const [repoUrl, setRepoUrl] = useState('');
   const [leadKwantId, setLeadKwantId] = useState('');
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -37,6 +42,9 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
     if (isOpen) {
       setName('');
       setDescription('');
+      setWorkspaceType('local');
+      setWorkspacePath('');
+      setRepoUrl('');
       setError(null);
       if (kwants.length > 0) {
         const defaultLead = kwants[0].id;
@@ -107,6 +115,8 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
     const teamPayload = {
       name: cleanSlug,
       description: description.trim() || undefined,
+      workspace_path: workspaceType === 'local' && workspacePath.trim() ? workspacePath.trim() : undefined,
+      repo_url: workspaceType === 'repo' && repoUrl.trim() ? repoUrl.trim() : undefined,
       lead_kwant_id: leadKwantId,
       member_kwants: finalMembers,
       icon: 'users',
@@ -209,6 +219,95 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
               placeholder="e.g. Core architectural and platform systems"
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
             />
+          </div>
+
+          {/* Team Workspace */}
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1.5">
+              Team Workspace
+            </label>
+            <div className="grid grid-cols-3 gap-1.5 p-1 bg-zinc-950 rounded-lg border border-zinc-800 text-xs mb-2">
+              <button
+                type="button"
+                onClick={() => {
+                  playSfx('click');
+                  setWorkspaceType('local');
+                }}
+                className={`flex items-center justify-center gap-1.5 py-1.5 rounded-md font-medium transition-all ${
+                  workspaceType === 'local'
+                    ? 'bg-zinc-800 text-sky-400 border border-sky-500/30 shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+                }`}
+              >
+                <Folder size={13} />
+                <span>Local Folder</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  playSfx('click');
+                  setWorkspaceType('repo');
+                }}
+                className={`flex items-center justify-center gap-1.5 py-1.5 rounded-md font-medium transition-all ${
+                  workspaceType === 'repo'
+                    ? 'bg-zinc-800 text-sky-400 border border-sky-500/30 shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+                }`}
+              >
+                <GitBranch size={13} />
+                <span>Git Repo</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  playSfx('click');
+                  setWorkspaceType('default');
+                }}
+                className={`flex items-center justify-center gap-1.5 py-1.5 rounded-md font-medium transition-all ${
+                  workspaceType === 'default'
+                    ? 'bg-zinc-800 text-sky-400 border border-sky-500/30 shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900'
+                }`}
+              >
+                <span>Default</span>
+              </button>
+            </div>
+
+            {workspaceType === 'local' && (
+              <div>
+                <input
+                  type="text"
+                  value={workspacePath}
+                  onChange={(e) => setWorkspacePath(e.target.value)}
+                  placeholder="e.g. ~/projects/my-app or /path/to/folder"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors font-mono"
+                />
+                <p className="text-[11px] text-zinc-500 mt-1">
+                  Team members will execute commands and tools directly in this directory.
+                </p>
+              </div>
+            )}
+
+            {workspaceType === 'repo' && (
+              <div>
+                <input
+                  type="text"
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
+                  placeholder="https://github.com/owner/repository.git"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors font-mono"
+                />
+                <p className="text-[11px] text-zinc-500 mt-1">
+                  Repository will be cloned and managed in team workspace directory on first run.
+                </p>
+              </div>
+            )}
+
+            {workspaceType === 'default' && (
+              <p className="text-[11px] text-zinc-500">
+                Uses the default shared workspace directory.
+              </p>
+            )}
           </div>
 
           {/* Lead Kwant */}

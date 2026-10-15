@@ -84,6 +84,7 @@ async fn test_mock_driver_streaming() {
         model_override: None,
         effort_level: None,
         team_context: None,
+        workspace_dir: None,
     };
 
     let handle = tokio::spawn(async move {
@@ -137,6 +138,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         model_override: None,
         effort_level: None,
         team_context: None,
+        workspace_dir: None,
     };
 
     let solo_prompt = input_solo.format_system_prompt();
@@ -156,7 +158,10 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
             id: "team-123".into(),
             name: "core-engineering".into(),
             description: Some("Core architectural, engineering, and infrastructure team".into()),
+            workspace_path: None,
+            repo_url: None,
         }),
+        workspace_dir: None,
     };
 
     let team_prompt = input_team.format_system_prompt();
@@ -164,5 +169,28 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
     assert!(team_prompt.contains("[Active Team Alignment: @core-engineering]"));
     assert!(team_prompt.contains("Team Mission: Core architectural, engineering, and infrastructure team"));
     assert!(team_prompt.contains("align your tone, recommendations, and analysis with this team's mission"));
+
+    // 3. With team context including workspace and repo URL
+    let input_workspace = TurnInput {
+        thread_id: "thread-workspace".into(),
+        kwant: kwant.clone(),
+        prompt: "Check files".into(),
+        history: vec![],
+        model_override: None,
+        effort_level: None,
+        team_context: Some(TeamContext {
+            id: "team-456".into(),
+            name: "app-team".into(),
+            description: Some("App dev".into()),
+            workspace_path: Some("/Users/dev/app".into()),
+            repo_url: Some("https://github.com/org/app".into()),
+        }),
+        workspace_dir: Some(std::path::PathBuf::from("/Users/dev/app")),
+    };
+
+    let ws_prompt = input_workspace.format_system_prompt();
+    assert!(ws_prompt.contains("[Active Team Alignment: @app-team]"));
+    assert!(ws_prompt.contains("Workspace: /Users/dev/app"));
+    assert!(ws_prompt.contains("Git Repo: https://github.com/org/app"));
 }
 

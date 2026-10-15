@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2 } from 'lucide-react';
+import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -40,6 +40,8 @@ export interface ChatViewProps {
   onCancelDiscussion?: () => void;
   teamMembers?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
   teamName?: string;
+  workspacePath?: string;
+  repoUrl?: string;
   onManageTeam?: () => void;
 }
 
@@ -77,6 +79,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onCancelDiscussion,
   teamMembers,
   teamName,
+  workspacePath,
+  repoUrl,
   onManageTeam,
 }) => {
   const [inputVal, setInputVal] = useState('');
@@ -286,6 +290,25 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Active Team Workspace Badge */}
+          {(workspacePath || repoUrl) && (
+            <div
+              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono text-zinc-300 bg-zinc-900 border border-zinc-700/60 max-w-[200px] truncate"
+              title={workspacePath ? `Workspace directory: ${workspacePath}` : `Git Repository: ${repoUrl}`}
+            >
+              {workspacePath ? (
+                <Folder size={12} className="text-amber-400 flex-shrink-0" />
+              ) : (
+                <GitBranch size={12} className="text-emerald-400 flex-shrink-0" />
+              )}
+              <span className="truncate">
+                {workspacePath
+                  ? workspacePath.replace(/^\/Users\/[^/]+/, '~')
+                  : repoUrl?.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')}
+              </span>
+            </div>
+          )}
+
           {teamMembers && teamMembers.length > 0 && (
             <div className="flex items-center gap-2 pl-3 border-l border-zinc-800">
               <div className="flex -space-x-2 overflow-hidden items-center py-0.5">

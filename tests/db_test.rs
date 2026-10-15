@@ -90,6 +90,8 @@ async fn test_team_crud_and_seed() {
         icon: Some("shield".into()),
         lead_kwant_id: kwants[0].id.clone(),
         member_kwants: vec![kwants[0].id.clone(), kwants[1].id.clone()],
+        workspace_path: None,
+        repo_url: None,
     };
     let created = db.create_team(&new_team).await.unwrap();
     assert_eq!(created.name, "infra-sec");
@@ -111,4 +113,39 @@ async fn test_team_crud_and_seed() {
     let after_delete = db.get_team(&created.id).await.unwrap();
     assert!(after_delete.is_none());
 }
+
+#[tokio::test]
+async fn test_team_with_workspace_and_repo() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db = Database::init(temp_dir.path()).await.unwrap();
+
+    let kwants = db.list_kwants().await.unwrap();
+    let new_team = NewTeam {
+        name: "dev-squad".into(),
+        description: Some("Frontend and backend app development".into()),
+        icon: Some("code".into()),
+        lead_kwant_id: kwants[0].id.clone(),
+        member_kwants: vec![kwants[0].id.clone()],
+        workspace_path: Some("/Users/dev/my-project".into()),
+        repo_url: Some("https://github.com/my-org/my-project.git".into()),
+    };
+    let created = db.create_team(&new_team).await.unwrap();
+    assert_eq!(created.workspace_path.as_deref(), Some("/Users/dev/my-project"));
+    assert_eq!(created.repo_url.as_deref(), Some("https://github.com/my-org/my-project.git"));
+
+    // Update team workspace and repo
+    let update_team = NewTeam {
+        name: "dev-squad".into(),
+        description: Some("Updated description".into()),
+        icon: Some("code".into()),
+        lead_kwant_id: kwants[0].id.clone(),
+        member_kwants: vec![kwants[0].id.clone()],
+        workspace_path: Some("/Users/dev/new-location".into()),
+        repo_url: None,
+    };
+    let updated = db.update_team(&created.id, &update_team).await.unwrap().unwrap();
+    assert_eq!(updated.workspace_path.as_deref(), Some("/Users/dev/new-location"));
+    assert_eq!(updated.repo_url, None);
+}
+
 
