@@ -211,6 +211,7 @@ fn execute_single_turn(
     session_id: String,
     team_keys: Option<(String, String)>,
     kwant_id: Option<String>,
+    team_context: Option<crate::drivers::TeamContext>,
 ) {
     let event_broadcast = state.event_sender.clone();
     let db = state.db.clone();
@@ -264,6 +265,7 @@ fn execute_single_turn(
             history,
             model_override: Some(target_model),
             effort_level: Some(effort_level),
+            team_context,
         };
 
         let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -397,6 +399,38 @@ pub async fn send_chat(
         None
     };
 
+    // Also resolve active team context for single Kwants invoked inside team channels
+    let active_team = if let Some(ref t) = target_team {
+        Some(t.clone())
+    } else if let Some(tid) = &payload.team_id {
+        all_teams
+            .iter()
+            .find(|t| &t.id == tid || t.name.eq_ignore_ascii_case(tid))
+            .cloned()
+    } else if let Some(cid) = &payload.channel_id {
+        if let Ok(Some(channel)) = state.db.get_channel(cid).await {
+            if channel.name.starts_with("team-") {
+                let tname = &channel.name[5..];
+                all_teams
+                    .iter()
+                    .find(|t| t.name.eq_ignore_ascii_case(tname))
+                    .cloned()
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let active_team_context = active_team.as_ref().map(|t| crate::drivers::TeamContext {
+        id: t.id.clone(),
+        name: t.name.clone(),
+        description: t.description.clone(),
+    });
+
     // Insert user message to DB
     let user_msg = NewMessage {
         channel_id: payload.channel_id.clone(),
@@ -470,6 +504,7 @@ pub async fn send_chat(
                     session_id,
                     Some((team.id.clone(), team.name.clone())),
                     kwant_id_cleanup,
+                    active_team_context,
                 );
 
                 Ok(Json(json!({
@@ -583,6 +618,11 @@ pub async fn send_chat(
                             history: Vec::new(),
                             model_override: Some(target_model.clone()),
                             effort_level: Some(effort_level),
+                            team_context: Some(crate::drivers::TeamContext {
+                                id: team_clone.id.clone(),
+                                name: team_clone.name.clone(),
+                                description: team_clone.description.clone(),
+                            }),
                         };
 
                         let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -692,6 +732,7 @@ pub async fn send_chat(
         }
         .ok_or(StatusCode::BAD_REQUEST)?;
 
+        let team_keys = active_team.as_ref().map(|t| (t.id.clone(), t.name.clone()));
         let kwant_id_cleanup = payload.kwant_id.clone();
         execute_single_turn(
             state.clone(),
@@ -699,8 +740,9 @@ pub async fn send_chat(
             payload,
             cancel_token,
             session_id,
-            None,
+            team_keys,
             kwant_id_cleanup,
+            active_team_context,
         );
 
         Ok(Json(json!({

@@ -83,6 +83,7 @@ async fn test_mock_driver_streaming() {
         history: vec![],
         model_override: None,
         effort_level: None,
+        team_context: None,
     };
 
     let handle = tokio::spawn(async move {
@@ -107,3 +108,61 @@ async fn test_mock_driver_streaming() {
     let output = handle.await.unwrap();
     assert_eq!(output.tokens_used, 42);
 }
+
+#[test]
+fn test_turn_input_format_system_prompt_with_and_without_team_context() {
+    use kwnt::drivers::TeamContext;
+
+    let kwant = Kwant {
+        id: "k-1".into(),
+        name: "Architect".into(),
+        title: "Systems Architect".into(),
+        persona_prompt: "You design bulletproof distributed architectures.".into(),
+        avatar_sprite: "cyber_mage".into(),
+        driver_type: "api".into(),
+        preferred_model: "claude".into(),
+        temperature: 0.7,
+        max_tokens: 2048,
+        level: 1,
+        turns_completed: 0,
+        created_at: None,
+    };
+
+    // 1. Without team context
+    let input_solo = TurnInput {
+        thread_id: "thread-1".into(),
+        kwant: kwant.clone(),
+        prompt: "Review the system".into(),
+        history: vec![],
+        model_override: None,
+        effort_level: None,
+        team_context: None,
+    };
+
+    let solo_prompt = input_solo.format_system_prompt();
+    assert!(solo_prompt.contains("Systems Architect"));
+    assert!(solo_prompt.contains("bulletproof distributed architectures"));
+    assert!(!solo_prompt.contains("Active Team Alignment"));
+
+    // 2. With team context
+    let input_team = TurnInput {
+        thread_id: "thread-team".into(),
+        kwant: kwant.clone(),
+        prompt: "Review the system".into(),
+        history: vec![],
+        model_override: None,
+        effort_level: None,
+        team_context: Some(TeamContext {
+            id: "team-123".into(),
+            name: "core-engineering".into(),
+            description: Some("Core architectural, engineering, and infrastructure team".into()),
+        }),
+    };
+
+    let team_prompt = input_team.format_system_prompt();
+    assert!(team_prompt.contains("Systems Architect"));
+    assert!(team_prompt.contains("[Active Team Alignment: @core-engineering]"));
+    assert!(team_prompt.contains("Team Mission: Core architectural, engineering, and infrastructure team"));
+    assert!(team_prompt.contains("align your tone, recommendations, and analysis with this team's mission"));
+}
+

@@ -24,6 +24,13 @@ pub enum DriverError {
     Execution(String),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TeamContext {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnInput {
     pub thread_id: String,
@@ -32,6 +39,25 @@ pub struct TurnInput {
     pub history: Vec<Message>,
     pub model_override: Option<String>,
     pub effort_level: Option<String>,
+    pub team_context: Option<TeamContext>,
+}
+
+impl TurnInput {
+    pub fn format_system_prompt(&self) -> String {
+        let base = format!(
+            "{}\n\nYou are {}, {}.",
+            self.kwant.persona_prompt, self.kwant.name, self.kwant.title
+        );
+        if let Some(ref team) = self.team_context {
+            let desc = team.description.as_deref().unwrap_or("General team objectives");
+            format!(
+                "{}\n\n[Active Team Alignment: @{}]\nTeam Mission: {}\nAs a member of team @{}, align your tone, recommendations, and analysis with this team's mission and collaborate effectively with fellow team members.",
+                base, team.name, desc, team.name
+            )
+        } else {
+            format!("{}\n\nRespond clearly in character.", base)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

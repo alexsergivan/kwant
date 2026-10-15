@@ -69,10 +69,7 @@ impl Driver for ApiDriver {
 
         // If target is a real live API endpoint with API key or local Ollama, call HTTP streaming
         if api_key.is_some() || target_model == "local_ollama" {
-            let system_prompt = format!(
-                "{}\n\nYou are {}, {}. Respond clearly in character.",
-                input.kwant.persona_prompt, input.kwant.name, input.kwant.title
-            );
+            let system_prompt = input.format_system_prompt();
 
             let mut messages = vec![json!({"role": "system", "content": system_prompt})];
             for msg in &input.history {

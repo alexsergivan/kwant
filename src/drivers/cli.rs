@@ -111,6 +111,8 @@ impl Driver for CliDriver {
             )))
             .await;
 
+        let system_prompt = input.format_system_prompt();
+
         match self.tool_kind.as_str() {
             "codex" => {
                 let out_file = format!("/tmp/kwnt_codex_{}.txt", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
@@ -118,6 +120,11 @@ impl Driver for CliDriver {
                     "high" => "high",
                     "low" => "low",
                     _ => "medium",
+                };
+                let full_prompt = if input.team_context.is_some() {
+                    format!("[System Context: {}]\n\n{}", system_prompt, input.prompt)
+                } else {
+                    input.prompt.clone()
                 };
                 cmd.arg("exec")
                     .arg("--ephemeral")
@@ -128,14 +135,21 @@ impl Driver for CliDriver {
                     .arg(format!("reasoning_effort=\"{}\"", codex_effort))
                     .arg("-o")
                     .arg(&out_file)
-                    .arg(&input.prompt);
+                    .arg(&full_prompt);
                 codex_out_file = Some(out_file);
             }
             "grok" => {
+                if let Some(ref team) = input.team_context {
+                    let desc = team.description.as_deref().unwrap_or("General team objectives");
+                    cmd.arg("--rules").arg(format!("You are contributing to team @{}: {}", team.name, desc));
+                }
                 cmd.arg("-p").arg(&input.prompt);
             }
             _ => {
                 // claude default
+                if input.team_context.is_some() {
+                    cmd.arg("--append-system-prompt").arg(&system_prompt);
+                }
                 cmd.arg("-p").arg(&input.prompt);
             }
         }
