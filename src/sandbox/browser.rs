@@ -97,6 +97,9 @@ pub enum BrowserError {
     Timeout,
     #[error("Browser is controlled by a person. Retry after control is returned.")]
     HumanControl,
+    /// The browser works, but the page itself could not be loaded (DNS, TLS, refused, ...).
+    #[error("Page could not be loaded: {0}")]
+    Navigation(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -578,7 +581,11 @@ impl BrowserController {
             .send_cdp_command("Page.navigate", json!({ "url": target_url }))
             .await?;
         if let Some(error) = res["errorText"].as_str() {
-            return Err(BrowserError::Protocol(format!("Navigation failed: {}", error)));
+            // Chrome shows its own error page; reflect it in the viewer
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let _ = self.sync_location().await;
+            let _ = self.capture_screenshot().await;
+            return Err(BrowserError::Navigation(error.to_string()));
         }
         *self.last_screenshot.lock().await = None;
 

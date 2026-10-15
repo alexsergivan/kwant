@@ -307,7 +307,8 @@ fn execute_single_turn(
                 target_url
             )));
             if let Some(ctrl) = get_or_create_browser_controller(&state, &sandbox_target).await {
-                if let Ok(nav) = ctrl.navigate(&target_url).await {
+                match ctrl.navigate(&target_url).await {
+                Ok(nav) => {
                     let page_text = ctrl.extract_content().await.unwrap_or_default();
                     let preview = truncate_chars(&page_text, 3000);
                     let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
@@ -329,6 +330,23 @@ fn execute_single_turn(
                         "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel bot browser to {}. Title: \"{}\".\nClickable (topmost first): {}\nPage Content Preview:\n{}\n\nUse this page content to answer the user's request. NEVER attempt to open a desktop browser window.]",
                         prompt, target_url, nav.title, clickable.join(" | "), preview
                     );
+                }
+                Err(crate::sandbox::BrowserError::Navigation(reason)) => {
+                    let shown_url = ctrl.current_url.lock().await.clone().unwrap_or_else(|| target_url.clone());
+                    if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
+                        let _ = event_broadcast.send(RuntimeEvent::BrowserScreenshot {
+                            team_id: sandbox_target.clone(),
+                            url: shown_url,
+                            image_base64: b64,
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        });
+                    }
+                    final_prompt = format!(
+                        "{}\n\n[Sandbox Browser State: Tried to open {} in the right-panel bot browser, but the site could not be reached ({}). The browser itself works fine; do not retry or suggest restarting it. Briefly tell the user the address didn't resolve/load and, if it looks like a typo, suggest the likely intended address.]",
+                        prompt, target_url, reason
+                    );
+                }
+                Err(_) => {}
                 }
             }
         } else if let Some(ref curr_url) = active_browser_url {
@@ -1480,6 +1498,11 @@ fn browser_unavailable() -> (StatusCode, Json<serde_json::Value>) {
 
 fn browser_request_failed(error: crate::sandbox::BrowserError) -> (StatusCode, Json<serde_json::Value>) {
     if matches!(error, crate::sandbox::BrowserError::HumanControl) { return (StatusCode::CONFLICT, Json(json!({"error": error.to_string()}))); }
+    if let crate::sandbox::BrowserError::Navigation(reason) = &error {
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
+            "error": format!("The site could not be reached ({}). The browser is working; check the address.", reason)
+        })));
+    }
     tracing::warn!("Sandbox browser request failed: {}", error);
     (StatusCode::BAD_GATEWAY, Json(json!({
         "error": "The sandbox browser did not respond. Restart the browser and try again."
