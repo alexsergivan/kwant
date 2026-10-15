@@ -103,6 +103,113 @@ impl LayaRouter {
 
         Err("Laya response missing valid team orchestration fields".into())
     }
+
+    /// Picks the single best-suited kwant among channel members to answer a prompt.
+    /// Returns `(kwant_id, reason)`. Falls back to keyword heuristics when Laya is unreachable.
+    pub async fn route_channel_query(
+        &self,
+        prompt: &str,
+        channel_name: &str,
+        lead_kwant_id: &str,
+        members: &[Kwant],
+    ) -> (String, String) {
+        match self.query_laya_for_kwant(prompt, channel_name, members).await {
+            Ok(choice) => choice,
+            Err(e) => {
+                tracing::debug!(error = %e, "Laya channel routing unavailable or failed, using heuristic fallback");
+                let (kwant, reason) = heuristic_pick_kwant(prompt, lead_kwant_id, members)
+                    .map(|(k, r)| (k.id.clone(), r))
+                    .unwrap_or_else(|| (lead_kwant_id.to_string(), "Routed to channel lead".into()));
+                (kwant, reason)
+            }
+        }
+    }
+
+    async fn query_laya_for_kwant(
+        &self,
+        prompt: &str,
+        channel_name: &str,
+        members: &[Kwant],
+    ) -> Result<(String, String), String> {
+        let mut kwant_criteria = serde_json::Map::new();
+        for m in members {
+            let desc = format!("{} ({}): {}", m.name, m.title, m.persona_prompt);
+            kwant_criteria.insert(m.id.clone(), serde_json::Value::String(desc));
+        }
+
+        let payload = json!({
+            "state": {
+                "prompt": prompt,
+                "channel": channel_name
+            },
+            "questions": {
+                "lead_kwant": {
+                    "type": "choice",
+                    "instructions": "Which kwant is best suited to answer this question?",
+                    "criteria": kwant_criteria
+                }
+            }
+        });
+
+        let endpoint = format!("{}/v1/systemone", self.base_url.trim_end_matches('/'));
+        let resp = self
+            .client
+            .post(&endpoint)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Laya HTTP status {}", resp.status()));
+        }
+
+        let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        parse_laya_kwant_choice(&data, members)
+            .ok_or_else(|| "Laya response missing valid kwant choice".into())
+    }
+}
+
+/// Extracts a valid member kwant choice from a Laya `answers.lead_kwant` response.
+pub fn parse_laya_kwant_choice(data: &serde_json::Value, members: &[Kwant]) -> Option<(String, String)> {
+    let choice = data
+        .get("answers")?
+        .get("lead_kwant")?
+        .get("choice")?
+        .as_str()?;
+    let kwant = members.iter().find(|m| m.id == choice || m.name.eq_ignore_ascii_case(choice))?;
+    Some((
+        kwant.id.clone(),
+        format!("Laya picked {} ({}) as the best fit for this question", kwant.name, kwant.title),
+    ))
+}
+
+/// Picks the member with the highest domain-keyword relevance, or the lead when nothing matches.
+pub fn heuristic_pick_kwant<'a>(
+    prompt: &str,
+    lead_kwant_id: &str,
+    members: &'a [Kwant],
+) -> Option<(&'a Kwant, String)> {
+    let (best, score) = members
+        .iter()
+        .map(|m| (m, calculate_kwant_relevance(prompt, m)))
+        .fold(None, |acc: Option<(&Kwant, usize)>, (m, s)| match acc {
+            Some((_, best_s)) if best_s >= s => acc,
+            _ => Some((m, s)),
+        })?;
+
+    if score > 0 {
+        Some((
+            best,
+            format!("Selected {} ({}) based on domain expertise", best.name, best.title),
+        ))
+    } else {
+        let lead = members.iter().find(|m| m.id == lead_kwant_id).unwrap_or(&members[0]);
+        Some((
+            lead,
+            format!("No specialist matched; {} ({}) is taking it as channel lead", lead.name, lead.title),
+        ))
+    }
 }
 
 pub fn parse_laya_team_answers(
@@ -260,26 +367,40 @@ fn is_complex_query(prompt: &str) -> bool {
     false
 }
 
+const STOP_WORDS: &[&str] = &[
+    "the", "and", "for", "you", "your", "are", "with", "this", "that", "what", "how", "can", "please",
+    "from", "into", "about", "have", "has", "was", "were", "will", "would", "should", "could", "our",
+    "who", "why", "when", "where", "which", "they", "them", "then", "than", "there", "here", "all",
+    "any", "not", "but", "out", "use", "using", "does", "did", "its", "it's", "some", "need", "want",
+];
+
 fn calculate_kwant_relevance(prompt: &str, kwant: &Kwant) -> usize {
     let lower_prompt = prompt.to_lowercase();
     let words: Vec<&str> = lower_prompt
         .split(|c: char| !c.is_alphanumeric() && c != '-')
-        .filter(|s| s.len() >= 3)
+        .filter(|s| s.len() >= 3 && !STOP_WORDS.contains(s))
+        .map(|s| if s.len() > 4 { s.strip_suffix('s').unwrap_or(s) } else { s })
         .collect();
 
     let name_lower = kwant.name.to_lowercase();
     let title_lower = kwant.title.to_lowercase();
     let prompt_lower = kwant.persona_prompt.to_lowercase();
 
+    // Short words must match a whole token; longer ones may prefix-match ("container" ~ "containerization")
+    let matches = |text: &str, w: &str| {
+        text.split(|c: char| !c.is_alphanumeric() && c != '-')
+            .any(|tok| tok == w || (w.len() >= 4 && tok.starts_with(w)))
+    };
+
     let mut score = 0;
     for w in words {
-        if name_lower.contains(w) {
+        if matches(&name_lower, w) {
             score += 3;
         }
-        if title_lower.contains(w) {
+        if matches(&title_lower, w) {
             score += 2;
         }
-        if prompt_lower.contains(w) {
+        if matches(&prompt_lower, w) {
             score += 1;
         }
     }
@@ -379,6 +500,26 @@ mod tests {
             }
             _ => panic!("Expected Direct decision to lead"),
         }
+    }
+
+    #[test]
+    fn test_heuristic_pick_kwant_by_expertise_and_lead_fallback() {
+        let (_, members) = make_test_fixture();
+        let (k, _) = heuristic_pick_kwant("check deployment pipeline", "kwant-1", &members).unwrap();
+        assert_eq!(k.id, "kwant-2");
+        let (k, reason) = heuristic_pick_kwant("open google.com", "kwant-1", &members).unwrap();
+        assert_eq!(k.id, "kwant-1");
+        assert!(reason.contains("channel lead"));
+        assert!(heuristic_pick_kwant("hi", "kwant-1", &[]).is_none());
+    }
+
+    #[test]
+    fn test_parse_laya_kwant_choice() {
+        let (_, members) = make_test_fixture();
+        let ok = json!({ "answers": { "lead_kwant": { "choice": "kwant-2" } } });
+        assert_eq!(parse_laya_kwant_choice(&ok, &members).unwrap().0, "kwant-2");
+        let unknown = json!({ "answers": { "lead_kwant": { "choice": "ghost" } } });
+        assert!(parse_laya_kwant_choice(&unknown, &members).is_none());
     }
 
     #[test]

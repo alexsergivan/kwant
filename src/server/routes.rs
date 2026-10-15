@@ -1,7 +1,7 @@
 use super::AppState;
 use crate::broker::ApprovalDecision;
 use crate::db::models::*;
-use crate::drivers::{find_cli_binary, resolve_driver_for_model, RuntimeEvent, TurnInput};
+use crate::drivers::{find_cli_binary, resolve_driver_for_model, RoutingCandidate, RuntimeEvent, TurnInput};
 use crate::router::{parse_mentions_with_lookup, TagMention, TeamDecision};
 use axum::{
     extract::{Path, Query, State},
@@ -202,6 +202,17 @@ async fn get_configured_endpoint(db: &crate::db::Database, target_model: &str) -
     } else {
         None
     }
+}
+
+fn routing_candidates(members: &[Kwant]) -> Vec<RoutingCandidate> {
+    members
+        .iter()
+        .map(|k| RoutingCandidate {
+            id: k.id.clone(),
+            name: k.name.clone(),
+            title: k.title.clone(),
+        })
+        .collect()
 }
 
 fn execute_single_turn(
@@ -578,6 +589,12 @@ pub async fn send_chat(
             members = all_kwants.clone();
         }
 
+        let routing_context_id = payload.channel_id.clone().or_else(|| payload.kwant_id.clone());
+        let _ = state.event_sender.send(RuntimeEvent::RoutingStarted {
+            context_id: routing_context_id.clone(),
+            candidates: routing_candidates(&members),
+        });
+
         let team_decision = state
             .router
             .route_team_query(&payload.prompt, &team, &members)
@@ -591,6 +608,15 @@ pub async fn send_chat(
                     .or_else(|| all_kwants.iter().find(|k| k.id == kwant_id))
                     .unwrap_or(&members[0])
                     .clone();
+
+                let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
+                    context_id: routing_context_id,
+                    kwant_id: target_kwant.id.clone(),
+                    kwant_name: target_kwant.name.clone(),
+                    kwant_title: target_kwant.title.clone(),
+                    reason: reason.clone(),
+                    mode: "direct".into(),
+                });
 
                 let _ = state.event_sender.send(RuntimeEvent::ThinkingDelta(format!(
                     "🔮 Laya Team Router: Routed to {} ({}) — {}",
@@ -622,6 +648,23 @@ pub async fn send_chat(
                 speakers,
                 plan,
             } => {
+                if let Some(lead) = speakers
+                    .first()
+                    .and_then(|sid| all_kwants.iter().find(|k| &k.id == sid))
+                {
+                    let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
+                        context_id: routing_context_id,
+                        kwant_id: lead.id.clone(),
+                        kwant_name: lead.name.clone(),
+                        kwant_title: lead.title.clone(),
+                        reason: format!(
+                            "This needs several perspectives — starting a {}-turn team discussion led by {}",
+                            turns, lead.name
+                        ),
+                        mode: "discuss".into(),
+                    });
+                }
+
                 let _ = state.event_sender.send(RuntimeEvent::ThinkingDelta(format!(
                     "🔮 Laya Team Router: Initiating {}-turn autonomous discussion with @{}",
                     turns, team.name
@@ -865,10 +908,48 @@ pub async fn send_chat(
                 .cloned()
         } else if let Some(cid) = &payload.channel_id {
             if let Ok(Some(channel)) = state.db.get_channel(cid).await {
-                all_kwants
+                let lead = all_kwants
                     .iter()
                     .find(|k| k.id == channel.lead_kwant_id)
-                    .cloned()
+                    .or_else(|| all_kwants.first())
+                    .cloned();
+                // #general is the hub for every agent, including ones created after it was seeded
+                let members: Vec<Kwant> = if channel.name == "general" {
+                    all_kwants.clone()
+                } else {
+                    let member_ids: Vec<String> =
+                        serde_json::from_str(&channel.member_kwants).unwrap_or_default();
+                    member_ids
+                        .iter()
+                        .filter_map(|mid| all_kwants.iter().find(|k| &k.id == mid).cloned())
+                        .collect()
+                };
+
+                if channel.routing_mode == "auto" && members.len() > 1 {
+                    let context_id = payload.channel_id.clone();
+                    let _ = state.event_sender.send(RuntimeEvent::RoutingStarted {
+                        context_id: context_id.clone(),
+                        candidates: routing_candidates(&members),
+                    });
+                    let (chosen_id, reason) = state
+                        .router
+                        .route_channel_query(&payload.prompt, &channel.name, &channel.lead_kwant_id, &members)
+                        .await;
+                    let chosen = members.iter().find(|k| k.id == chosen_id).cloned().or(lead);
+                    if let Some(ref k) = chosen {
+                        let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
+                            context_id,
+                            kwant_id: k.id.clone(),
+                            kwant_name: k.name.clone(),
+                            kwant_title: k.title.clone(),
+                            reason,
+                            mode: "direct".into(),
+                        });
+                    }
+                    chosen
+                } else {
+                    lead
+                }
             } else {
                 all_kwants.first().cloned()
             }

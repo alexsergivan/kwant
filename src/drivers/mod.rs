@@ -4,7 +4,7 @@ pub mod events;
 
 pub use api::ApiDriver;
 pub use cli::{find_cli_binary, CliDriver};
-pub use events::RuntimeEvent;
+pub use events::{RoutingCandidate, RuntimeEvent};
 
 use crate::db::models::{Kwant, Message};
 use async_trait::async_trait;
