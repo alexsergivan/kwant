@@ -300,4 +300,70 @@ async fn test_cancel_chat_with_null_fields_only_cancels_target_kwant() {
     assert!(tokens.contains_key("other-session"));
 }
 
+#[tokio::test]
+async fn test_system_directories_endpoint() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config::default();
+    let tools = ToolRunner::new(tmp.path().join("workspace"));
+    let broker = PermissionBroker::new();
+    let router = LayaRouter::new(config.laya_url.clone());
+
+    let state = AppState::new(config, db, tools, broker, router);
+    let app = create_router(state);
+
+    // Create test subdirectories inside tmp
+    std::fs::create_dir_all(tmp.path().join("project-alpha")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("project-beta")).unwrap();
+    std::fs::write(tmp.path().join("some-file.txt"), "hello").unwrap();
+
+    let uri = format!("/api/system/directories?path={}", tmp.path().display());
+    let req = Request::builder()
+        .uri(&uri)
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let dirs = json["directories"].as_array().expect("directories array");
+    let dir_names: Vec<&str> = dirs.iter().filter_map(|d| d.as_str()).collect();
+
+    assert!(dir_names.contains(&"project-alpha"));
+    assert!(dir_names.contains(&"project-beta"));
+    assert!(!dir_names.contains(&"some-file.txt"), "Files should not be listed as directories");
+    assert!(json["current_path"].is_string());
+    assert!(json["quick_paths"].is_array());
+}
+
+#[tokio::test]
+async fn test_system_select_folder_endpoint() {
+    std::env::set_var("KWNT_TEST_MODE", "1");
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config::default();
+    let tools = ToolRunner::new(tmp.path().join("workspace"));
+    let broker = PermissionBroker::new();
+    let router = LayaRouter::new(config.laya_url.clone());
+
+    let state = AppState::new(config, db, tools, broker, router);
+    let app = create_router(state);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/system/select-folder")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.get("canceled").is_some());
+}
+
 

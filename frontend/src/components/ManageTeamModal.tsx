@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, Users, Trash2, Check, AlertTriangle, ShieldCheck, Folder, GitBranch } from 'lucide-react';
+import { X, Users, Trash2, Check, AlertTriangle, ShieldCheck, Folder, GitBranch, FolderSearch } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { Team, Kwant } from './Sidebar';
+import { FolderBrowserModal } from './FolderBrowserModal';
 import { playSfx } from '../audio/chiptune';
 
 interface ManageTeamModalProps {
@@ -36,12 +37,37 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   const [workspaceType, setWorkspaceType] = useState<'local' | 'repo' | 'default'>('default');
   const [workspacePath, setWorkspacePath] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
+  const [isBrowsing, setIsBrowsing] = useState(false);
+  const [isFolderBrowserOpen, setIsFolderBrowserOpen] = useState(false);
   const [leadKwantId, setLeadKwantId] = useState('');
   const [memberIds, setMemberIds] = useState<string[]>([]);
   const [isDeleting, setIsDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleBrowseFolder = async () => {
+    playSfx('click');
+    setIsBrowsing(true);
+    try {
+      const res = await fetch('/api/system/select-folder', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.path) {
+          setWorkspacePath(data.path);
+          playSfx('coin');
+          return;
+        } else if (data.canceled) {
+          return;
+        }
+      }
+      setIsFolderBrowserOpen(true);
+    } catch {
+      setIsFolderBrowserOpen(true);
+    } finally {
+      setIsBrowsing(false);
+    }
+  };
 
   useEffect(() => {
     if (team) {
@@ -259,15 +285,74 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
             </div>
 
             {workspaceType === 'local' && (
-              <div>
-                <input
-                  type="text"
-                  value={workspacePath}
-                  onChange={(e) => setWorkspacePath(e.target.value)}
-                  placeholder="e.g. ~/projects/my-app or /path/to/folder"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors font-mono"
-                />
-                <p className="text-[11px] text-zinc-500 mt-1">
+              <div className="space-y-2">
+                <div className="flex gap-2 items-center">
+                  <input
+                    type="text"
+                    value={workspacePath}
+                    onChange={(e) => setWorkspacePath(e.target.value)}
+                    placeholder="e.g. ~/projects/my-app or /path/to/folder"
+                    className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleBrowseFolder}
+                    disabled={isBrowsing}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-zinc-200 border border-zinc-700 rounded-lg text-xs font-medium transition-colors shadow-sm cursor-pointer whitespace-nowrap disabled:opacity-50"
+                    title="Open native folder chooser"
+                  >
+                    <Folder size={14} className="text-amber-400" />
+                    <span>{isBrowsing ? 'Selecting...' : 'Browse...'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playSfx('click');
+                      setIsFolderBrowserOpen(true);
+                    }}
+                    className="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded-lg transition-colors cursor-pointer"
+                    title="Explore local directories in-app"
+                  >
+                    <FolderSearch size={14} className="text-sky-400" />
+                  </button>
+                </div>
+
+                {/* Quick Directory Chips */}
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="text-zinc-500">Quick:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playSfx('click');
+                      setWorkspacePath('~/dev/kwnt');
+                    }}
+                    className="px-2 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 font-mono transition-colors"
+                  >
+                    ~/dev/kwnt
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playSfx('click');
+                      setWorkspacePath('~');
+                    }}
+                    className="px-2 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 font-mono transition-colors"
+                  >
+                    ~
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playSfx('click');
+                      setWorkspacePath('~/dev');
+                    }}
+                    className="px-2 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 font-mono transition-colors"
+                  >
+                    ~/dev
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-zinc-500">
                   Team members will execute commands and tools directly in this directory.
                 </p>
               </div>
@@ -405,6 +490,16 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
           </div>
         </form>
       </div>
+
+      <FolderBrowserModal
+        isOpen={isFolderBrowserOpen}
+        initialPath={workspacePath}
+        onClose={() => setIsFolderBrowserOpen(false)}
+        onSelectPath={(p) => {
+          setWorkspacePath(p);
+          playSfx('coin');
+        }}
+      />
     </div>
   );
 };

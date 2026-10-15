@@ -66,6 +66,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/chat/cancel", post(routes::cancel_chat))
         .route("/api/approvals/:id/resolve", post(routes::resolve_approval))
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
+        .route("/api/system/directories", get(routes::list_system_directories))
+        .route("/api/system/select-folder", post(routes::select_folder))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
         .layer(cors)

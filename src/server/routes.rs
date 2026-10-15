@@ -4,11 +4,12 @@ use crate::db::models::*;
 use crate::drivers::{find_cli_binary, resolve_driver_for_model, RuntimeEvent, TurnInput};
 use crate::router::{parse_mentions_with_lookup, TagMention, TeamDecision};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
+use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -881,5 +882,198 @@ pub async fn save_settings(
     }
 
     Ok(Json(json!({ "status": "saved" })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DirectoriesQuery {
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct QuickPath {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DirectoriesResponse {
+    pub current_path: String,
+    pub parent_path: Option<String>,
+    pub directories: Vec<String>,
+    pub quick_paths: Vec<QuickPath>,
+}
+
+pub async fn list_system_directories(
+    Query(query): Query<DirectoriesQuery>,
+) -> Result<Json<DirectoriesResponse>, StatusCode> {
+    let home_dir = std::env::var("HOME").ok().map(PathBuf::from);
+    let current_dir = std::env::current_dir().ok();
+
+    let target_path = if let Some(p) = query.path.filter(|s| !s.trim().is_empty()) {
+        let trimmed = p.trim();
+        if trimmed.starts_with("~/") {
+            if let Some(ref home) = home_dir {
+                home.join(&trimmed[2..])
+            } else {
+                PathBuf::from(trimmed)
+            }
+        } else {
+            PathBuf::from(trimmed)
+        }
+    } else if let Some(ref cur) = current_dir {
+        cur.clone()
+    } else if let Some(ref home) = home_dir {
+        home.clone()
+    } else {
+        PathBuf::from("/")
+    };
+
+    let canonical_target = match target_path.canonicalize() {
+        Ok(c) => c,
+        Err(_) => target_path.clone(),
+    };
+
+    let mut directories = Vec::new();
+    if let Ok(mut entries) = tokio::fs::read_dir(&canonical_target).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Ok(file_type) = entry.file_type().await {
+                if file_type.is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !name.starts_with('.') {
+                        directories.push(name);
+                    }
+                }
+            }
+        }
+    }
+    directories.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+
+    let parent_path = canonical_target.parent().map(|p| p.to_string_lossy().to_string());
+
+    let mut quick_paths = Vec::new();
+    if let Some(ref cur) = current_dir {
+        quick_paths.push(QuickPath {
+            name: "Current Project".into(),
+            path: cur.to_string_lossy().to_string(),
+        });
+    }
+    if let Some(ref home) = home_dir {
+        quick_paths.push(QuickPath {
+            name: "Home (~)".into(),
+            path: home.to_string_lossy().to_string(),
+        });
+        let dev_path = home.join("dev");
+        if dev_path.exists() {
+            quick_paths.push(QuickPath {
+                name: "~/dev".into(),
+                path: dev_path.to_string_lossy().to_string(),
+            });
+        }
+        let projects_path = home.join("projects");
+        if projects_path.exists() {
+            quick_paths.push(QuickPath {
+                name: "~/projects".into(),
+                path: projects_path.to_string_lossy().to_string(),
+            });
+        }
+        let docs_path = home.join("Documents");
+        if docs_path.exists() {
+            quick_paths.push(QuickPath {
+                name: "Documents".into(),
+                path: docs_path.to_string_lossy().to_string(),
+            });
+        }
+    }
+
+    Ok(Json(DirectoriesResponse {
+        current_path: canonical_target.to_string_lossy().to_string(),
+        parent_path,
+        directories,
+        quick_paths,
+    }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SelectFolderResponse {
+    pub path: Option<String>,
+    pub canceled: bool,
+}
+
+pub async fn select_folder() -> Result<Json<SelectFolderResponse>, StatusCode> {
+    if std::env::var("KWNT_TEST_MODE").is_ok() {
+        return Ok(Json(SelectFolderResponse {
+            path: None,
+            canceled: true,
+        }));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let res = tokio::process::Command::new("osascript")
+            .arg("-e")
+            .arg("POSIX path of (choose folder with prompt \"Select Team Workspace Folder:\")")
+            .output()
+            .await;
+
+        match res {
+            Ok(output) if output.status.success() => {
+                let raw = String::from_utf8_lossy(&output.stdout);
+                let path = raw.trim().trim_end_matches('/').to_string();
+                if !path.is_empty() {
+                    return Ok(Json(SelectFolderResponse {
+                        path: Some(path),
+                        canceled: false,
+                    }));
+                }
+            }
+            Ok(output) => {
+                let err = String::from_utf8_lossy(&output.stderr);
+                if err.contains("User canceled") || err.contains("-128") {
+                    return Ok(Json(SelectFolderResponse {
+                        path: None,
+                        canceled: true,
+                    }));
+                }
+                tracing::warn!("osascript folder picker output error: {}", err);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to invoke osascript: {}", e);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let res = tokio::process::Command::new("zenity")
+            .arg("--file-selection")
+            .arg("--directory")
+            .arg("--title=Select Team Workspace Folder")
+            .output()
+            .await;
+
+        if let Ok(output) = res {
+            if output.status.success() {
+                let raw = String::from_utf8_lossy(&output.stdout);
+                let path = raw.trim().trim_end_matches('/').to_string();
+                if !path.is_empty() {
+                    return Ok(Json(SelectFolderResponse {
+                        path: Some(path),
+                        canceled: false,
+                    }));
+                }
+            } else {
+                return Ok(Json(SelectFolderResponse {
+                    path: None,
+                    canceled: true,
+                }));
+            }
+        }
+    }
+
+    // Fallback if native dialog is not supported on platform or headless
+    Ok(Json(SelectFolderResponse {
+        path: None,
+        canceled: false,
+    }))
 }
 
