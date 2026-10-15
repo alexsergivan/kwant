@@ -24,6 +24,8 @@ export const App: React.FC = () => {
   const discussionInProgressRef = useRef(false);
   const kwantsRef = useRef<Kwant[]>(kwants);
   kwantsRef.current = kwants;
+  const activeTeamIdRef = useRef<string | null>(selectedTeamId);
+  activeTeamIdRef.current = selectedTeamId;
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [tokensUsed, setTokensUsed] = useState(0);
 
@@ -197,24 +199,36 @@ export const App: React.FC = () => {
             break;
           case 'browser_navigated':
           case 'BrowserNavigated': {
-            if (event.data?.url) setActiveUrl(event.data.url);
-            if (event.data?.title) setPageTitle(event.data.title);
-            setIsVmPaneOpen(true);
-            playSfx('blip');
+            const teamId = event.data?.team_id;
+            const currentTid = activeTeamIdRef.current;
+            if (!currentTid || !teamId || currentTid === teamId || teamId === 'default') {
+              if (event.data?.url) setActiveUrl(event.data.url);
+              if (event.data?.title) setPageTitle(event.data.title);
+              setIsVmPaneOpen(true);
+              playSfx('blip');
+            }
             break;
           }
           case 'browser_screenshot':
           case 'BrowserScreenshot': {
-            if (event.data?.image_base64) setScreenshotBase64(event.data.image_base64);
-            if (event.data?.url) setActiveUrl(event.data.url);
-            setIsVmPaneOpen(true);
-            playSfx('blip');
+            const teamId = event.data?.team_id;
+            const currentTid = activeTeamIdRef.current;
+            if (!currentTid || !teamId || currentTid === teamId || teamId === 'default') {
+              if (event.data?.image_base64) setScreenshotBase64(event.data.image_base64);
+              if (event.data?.url) setActiveUrl(event.data.url);
+              setIsVmPaneOpen(true);
+              playSfx('blip');
+            }
             break;
           }
           case 'sandbox_status':
           case 'SandboxStatusChanged': {
-            if (typeof event.data?.is_running === 'boolean') {
-              setIsVmRunning(event.data.is_running);
+            const teamId = event.data?.team_id;
+            const currentTid = activeTeamIdRef.current;
+            if (!currentTid || !teamId || currentTid === teamId || teamId === 'default') {
+              if (typeof event.data?.is_running === 'boolean') {
+                setIsVmRunning(event.data.is_running);
+              }
             }
             break;
           }
@@ -543,6 +557,8 @@ export const App: React.FC = () => {
     ? teams.find((t) => `team-${t.name}` === currentChannel.name)
     : null;
 
+  activeTeamIdRef.current = currentTeam?.id || selectedTeamId;
+
   const currentTeamMemberIds: string[] = currentTeam
     ? Array.isArray(currentTeam.member_kwants)
       ? currentTeam.member_kwants
@@ -571,7 +587,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     const tid = currentTeam?.id || selectedTeamId;
     if (!tid) return;
-    fetch(`/api/teams/${tid}/sandbox`)
+    fetch(`/api/sandbox/${tid}/status`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data && typeof data.is_running === 'boolean') {
@@ -585,7 +601,7 @@ export const App: React.FC = () => {
     const tid = currentTeam?.id || selectedTeamId;
     if (!tid) return;
     try {
-      const res = await fetch(`/api/teams/${tid}/browser/screenshot`);
+      const res = await fetch(`/api/sandbox/${tid}/screenshot`);
       if (res.ok) {
         const data = await res.json();
         if (data.image_base64 || data.screenshot) {
@@ -604,7 +620,7 @@ export const App: React.FC = () => {
     const tid = currentTeam?.id || selectedTeamId;
     if (!tid) return;
     try {
-      const res = await fetch(`/api/teams/${tid}/sandbox/restart`, {
+      const res = await fetch(`/api/sandbox/${tid}/restart`, {
         method: 'POST',
       });
       if (res.ok) {
