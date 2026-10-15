@@ -3,6 +3,7 @@ import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, 
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
+import { MarkdownRenderer } from './MarkdownRenderer';
 import { playSfx } from '../audio/chiptune';
 
 export interface ChatMessage {
@@ -364,7 +365,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           return (
             <div
               key={msg.id}
-              className={`flex items-start gap-3.5 max-w-4xl ${isUser ? 'ml-auto flex-row-reverse' : ''}`}
+              className={`flex items-start gap-3.5 w-full max-w-5xl ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''}`}
             >
               <ModernAvatar
                 role={isUser ? 'user' : title}
@@ -372,9 +373,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 size={34}
               />
 
-              <div className={`flex flex-col min-w-0 max-w-2xl ${isUser ? 'items-end' : 'items-start'}`}>
+              <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
                 {/* Header info */}
-                <div className="flex items-center gap-2 mb-1 text-[11px] text-zinc-400 font-medium">
+                <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
                   <span className="text-zinc-200">{displayName}</span>
                   {msg.tokens_used ? (
                     <span className="text-zinc-500 font-mono text-[10px]">({msg.tokens_used} tokens)</span>
@@ -383,18 +384,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
                 {/* Collapsible Reasoning Disclosure */}
                 {msg.reasoning_content && (
-                  <div className="mb-2 w-full">
+                  <div className="mb-2 max-w-full">
                     <button
+                      type="button"
                       onClick={() => toggleThought(msg.id)}
-                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono text-zinc-400 hover:text-zinc-200 bg-zinc-900 border border-zinc-800 transition-colors"
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-mono text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer shadow-sm group"
                     >
-                      <Sparkles size={12} className="text-violet-400" />
-                      <span>{msg.reasoning_content.slice(0, 48)}...</span>
-                      {isThoughtOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                      <Sparkles size={13} className="text-violet-400 group-hover:rotate-12 transition-transform flex-shrink-0" />
+                      <span className="truncate max-w-xs sm:max-w-md">
+                        {msg.reasoning_content.split('\n')[0].replace(/^🔮\s*/, '')}
+                      </span>
+                      {isThoughtOpen ? <ChevronDown size={13} className="text-zinc-500 flex-shrink-0" /> : <ChevronRight size={13} className="text-zinc-500 flex-shrink-0" />}
                     </button>
 
                     {isThoughtOpen && (
-                      <div className="mt-1.5 p-3 rounded-xl bg-zinc-900/90 border border-zinc-800 text-xs font-mono text-zinc-300 whitespace-pre-wrap leading-relaxed shadow-sm">
+                      <div className="mt-1.5 p-3.5 rounded-xl bg-zinc-950/90 border border-zinc-800 text-xs font-mono text-zinc-300 whitespace-pre-wrap leading-relaxed shadow-inner max-h-80 overflow-y-auto">
                         {msg.reasoning_content}
                       </div>
                     )}
@@ -403,30 +407,38 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
                 {/* Message Body Bubble */}
                 <div
-                  className={`p-4 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap break-words ${
+                  className={`p-4 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
                     isUser
-                      ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 shadow-sm'
-                      : 'bg-zinc-900/90 text-zinc-200 rounded-tl-sm border border-zinc-800/90 shadow-sm'
+                      ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl'
+                      : 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80'
                   }`}
                 >
-                  {renderFormattedText(msg.text)}
+                  {isUser ? (
+                    <div className="whitespace-pre-wrap break-words">{renderFormattedText(msg.text)}</div>
+                  ) : (
+                    <MarkdownRenderer content={msg.text} />
+                  )}
                 </div>
 
                 {/* Copy action */}
                 {!isUser && (
-                  <div className="mt-1 flex items-center gap-2 text-zinc-500 text-xs">
+                  <div className="mt-1.5 flex items-center gap-2 text-zinc-500 text-xs">
                     <button
+                      type="button"
                       onClick={() => handleCopy(msg.text, msg.id)}
-                      className="p-1 hover:text-zinc-300 transition-colors flex items-center gap-1"
+                      className="px-2 py-1 rounded-md hover:bg-zinc-900 hover:text-zinc-300 transition-colors flex items-center gap-1.5 text-[11px] cursor-pointer"
                       title="Copy response"
                     >
                       {copiedId === msg.id ? (
                         <>
                           <Check size={12} className="text-emerald-400" />
-                          <span className="text-[10px] text-emerald-400">Copied</span>
+                          <span className="text-emerald-400 font-medium">Copied</span>
                         </>
                       ) : (
-                        <Copy size={12} />
+                        <>
+                          <Copy size={12} />
+                          <span>Copy markdown</span>
+                        </>
                       )}
                     </button>
                   </div>
@@ -438,14 +450,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         {/* Live Streaming Assistant Message */}
         {isStreaming && (
-          <div className="flex items-start gap-3.5 max-w-4xl">
+          <div className="flex items-start gap-3.5 w-full max-w-5xl">
             <ModernAvatar
               role={discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : title}
               name={discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : title}
               size={34}
             />
-            <div className="flex flex-col items-start min-w-0 max-w-2xl">
-              <div className="flex items-center gap-2 mb-1 text-[11px] text-zinc-400 font-medium">
+            <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
+              <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
                 <span className="text-zinc-200">
                   {discussionState?.inProgress && discussionState.currentSpeaker
                     ? discussionState.currentSpeaker
@@ -458,15 +470,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
               </div>
 
               {streamingThinking && (
-                <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs font-mono text-violet-300/90 flex items-center gap-2 animate-pulse">
-                  <Sparkles size={13} className="text-violet-400" />
-                  <span>{streamingThinking}</span>
+                <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs font-mono text-violet-300/90 flex items-center gap-2 animate-pulse max-w-full">
+                  <Sparkles size={13} className="text-violet-400 flex-shrink-0" />
+                  <span className="truncate">{streamingThinking}</span>
                 </div>
               )}
 
-              <div className="p-4 rounded-2xl rounded-tl-sm bg-zinc-900 text-zinc-200 border border-zinc-800 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-sm">
-                {renderFormattedText(streamingText)}
-                <span className="inline-block w-1.5 h-4 bg-sky-400 ml-1 cursor-blink align-middle" />
+              <div className="p-4 sm:p-5 rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full">
+                <MarkdownRenderer content={streamingText} isStreaming={true} />
               </div>
             </div>
           </div>
