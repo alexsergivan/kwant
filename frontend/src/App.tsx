@@ -20,10 +20,23 @@ export const App: React.FC = () => {
   const [streamingText, setStreamingText] = useState('');
   const [streamingThinking, setStreamingThinking] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [streamingContextId, setStreamingContextId] = useState<string | null>(null);
+  const [streamingSpeakerName, setStreamingSpeakerName] = useState<string>('');
+  const streamingContextIdRef = useRef<string | null>(null);
+  const streamingSpeakerNameRef = useRef<string>('');
+  const selectedIdRef = useRef<string>(selectedId);
+  selectedIdRef.current = selectedId;
+  const isChannelRef = useRef<boolean>(isChannel);
+  isChannelRef.current = isChannel;
+  const messagesCacheRef = useRef<Record<string, ChatMessage[]>>({});
   const [discussionState, setDiscussionState] = useState<DiscussionState>({ inProgress: false });
   const discussionInProgressRef = useRef(false);
   const kwantsRef = useRef<Kwant[]>(kwants);
   kwantsRef.current = kwants;
+  const channelsRef = useRef<Channel[]>(channels);
+  channelsRef.current = channels;
+  const teamsRef = useRef<Team[]>(teams);
+  teamsRef.current = teams;
   const activeTeamIdRef = useRef<string | null>(selectedTeamId);
   activeTeamIdRef.current = selectedTeamId;
   const activeSandboxIdRef = useRef<string>('default');
@@ -72,15 +85,21 @@ export const App: React.FC = () => {
         setTeams(normalizedTeams);
 
         if (cRes.length > 0) {
-          setSelectedId(cRes[0].id);
+          const initId = cRes[0].id;
+          setSelectedId(initId);
+          selectedIdRef.current = initId;
           setIsChannel(true);
+          isChannelRef.current = true;
           const matchedTeam = normalizedTeams.find(
             (t) => `team-${t.name}` === cRes[0].name || t.id === cRes[0].id
           );
           setSelectedTeamId(matchedTeam ? matchedTeam.id : null);
         } else if (kRes.length > 0) {
-          setSelectedId(kRes[0].id);
+          const initId = kRes[0].id;
+          setSelectedId(initId);
+          selectedIdRef.current = initId;
           setIsChannel(false);
+          isChannelRef.current = false;
           setSelectedTeamId(null);
         }
       } catch (err) {
@@ -93,14 +112,18 @@ export const App: React.FC = () => {
   // Load messages when selected channel/kwant changes
   useEffect(() => {
     if (!selectedId) return;
+    const currentTargetId = selectedId;
     async function loadMessages() {
       try {
-        const res = await fetch(`/api/channels/${selectedId}/messages`);
+        const res = await fetch(`/api/channels/${currentTargetId}/messages`);
         if (res.ok) {
           const data: ChatMessage[] = await res.json();
-          setMessages(data);
-          const totalTokens = data.reduce((acc, m) => acc + (m.tokens_used || 0), 0);
-          setTokensUsed(totalTokens);
+          messagesCacheRef.current[currentTargetId] = data;
+          if (selectedIdRef.current === currentTargetId) {
+            setMessages(data);
+            const totalTokens = data.reduce((acc, m) => acc + (m.tokens_used || 0), 0);
+            setTokensUsed(totalTokens);
+          }
         }
       } catch (err) {
         console.error('Failed loading messages:', err);
@@ -135,11 +158,25 @@ export const App: React.FC = () => {
           case 'discussion_started':
           case 'DiscussionStarted': {
             discussionInProgressRef.current = true;
+            const teamId = event.data?.team_id;
             const initialSpeakerId = event.data?.speakers?.[0];
             const initialSpeakerName =
               kwantsRef.current.find((k) => k.id === initialSpeakerId)?.name || initialSpeakerId;
+
+            const matchedChannel = channelsRef.current.find(
+              (c) => c.name === `team-${event.data?.team_name}` || c.id === teamId
+            );
+            const contextId = matchedChannel ? matchedChannel.id : (teamId || selectedIdRef.current);
+
+            setStreamingContextId(contextId);
+            streamingContextIdRef.current = contextId;
+            setStreamingSpeakerName(initialSpeakerName);
+            streamingSpeakerNameRef.current = initialSpeakerName;
+
             setDiscussionState({
               inProgress: true,
+              teamId,
+              contextId,
               teamName: event.data?.team_name,
               totalTurns: event.data?.total_turns,
               currentSpeaker: initialSpeakerName,
@@ -150,56 +187,87 @@ export const App: React.FC = () => {
             break;
           }
           case 'discussion_turn_started':
-          case 'DiscussionTurnStarted':
+          case 'DiscussionTurnStarted': {
             discussionInProgressRef.current = true;
+            const spkName = event.data?.speaker_name;
+            setStreamingSpeakerName(spkName);
+            streamingSpeakerNameRef.current = spkName;
             setDiscussionState((prev) => ({
               ...prev,
               inProgress: true,
-              currentSpeaker: event.data?.speaker_name,
+              currentSpeaker: spkName,
               currentTurn: event.data?.turn_index,
               totalTurns: event.data?.total_turns ?? prev.totalTurns,
             }));
             setIsStreaming(true);
             setStreamingText('');
             setStreamingThinking('');
-            if (selectedId) {
-              fetch(`/api/channels/${selectedId}/messages`)
+            const targetId = streamingContextIdRef.current || selectedIdRef.current;
+            if (targetId) {
+              fetch(`/api/channels/${targetId}/messages`)
                 .then((r) => r.json())
-                .then((msgs) => setMessages(msgs))
+                .then((msgs) => {
+                  messagesCacheRef.current[targetId] = msgs;
+                  if (selectedIdRef.current === targetId) {
+                    setMessages(msgs);
+                  }
+                })
                 .catch(() => {});
             }
             break;
+          }
           case 'discussion_completed':
-          case 'DiscussionCompleted':
+          case 'DiscussionCompleted': {
             discussionInProgressRef.current = false;
             setDiscussionState({ inProgress: false });
             setIsStreaming(false);
             setStreamingText('');
             setStreamingThinking('');
+            const targetId = streamingContextIdRef.current || selectedIdRef.current;
+            setStreamingContextId(null);
+            streamingContextIdRef.current = null;
+            setStreamingSpeakerName('');
+            streamingSpeakerNameRef.current = '';
             playSfx('coin');
-            if (selectedId) {
-              fetch(`/api/channels/${selectedId}/messages`)
+            if (targetId) {
+              fetch(`/api/channels/${targetId}/messages`)
                 .then((r) => r.json())
-                .then((msgs) => setMessages(msgs))
+                .then((msgs) => {
+                  messagesCacheRef.current[targetId] = msgs;
+                  if (selectedIdRef.current === targetId) {
+                    setMessages(msgs);
+                  }
+                })
                 .catch(() => {});
             }
             break;
-          case 'TurnComplete':
+          }
+          case 'TurnComplete': {
             playSfx('coin');
             setStreamingText('');
             setStreamingThinking('');
             setTokensUsed((prev) => prev + (event.data?.tokens || 0));
-            // Refresh messages
-            if (selectedId) {
-              fetch(`/api/channels/${selectedId}/messages`)
+            const targetId = streamingContextIdRef.current || selectedIdRef.current;
+            if (targetId) {
+              fetch(`/api/channels/${targetId}/messages`)
                 .then((r) => r.json())
-                .then((msgs) => setMessages(msgs))
+                .then((msgs) => {
+                  messagesCacheRef.current[targetId] = msgs;
+                  if (selectedIdRef.current === targetId) {
+                    setMessages(msgs);
+                  }
+                })
                 .catch(() => {});
             }
             if (!discussionInProgressRef.current) {
               setIsStreaming(false);
+              setStreamingContextId(null);
+              streamingContextIdRef.current = null;
+              setStreamingSpeakerName('');
+              streamingSpeakerNameRef.current = '';
             }
             break;
+          }
           case 'browser_navigated':
           case 'BrowserNavigated': {
             const teamId = event.data?.team_id;
@@ -274,12 +342,18 @@ export const App: React.FC = () => {
             }
             break;
           }
-          case 'Error':
+          case 'Error': {
             discussionInProgressRef.current = false;
             setDiscussionState({ inProgress: false });
             setIsStreaming(false);
+            setStreamingContextId(null);
+            streamingContextIdRef.current = null;
+            setStreamingSpeakerName('');
+            streamingSpeakerNameRef.current = '';
             setStreamingText('');
+            setStreamingThinking('');
             break;
+          }
         }
       } catch (err) {
         console.error('Failed parsing SSE event:', err);
@@ -289,17 +363,18 @@ export const App: React.FC = () => {
     return () => {
       sse.close();
     };
-  }, [selectedId]);
+  }, []);
 
   const handleCancelDiscussion = async () => {
+    const targetId = selectedIdRef.current;
     try {
       await fetch('/api/chat/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          channel_id: isChannel ? selectedId : null,
-          kwant_id: !isChannel ? selectedId : null,
-          team_id: selectedTeamId || null,
+          channel_id: isChannelRef.current ? targetId : null,
+          kwant_id: !isChannelRef.current ? targetId : null,
+          team_id: activeTeamIdRef.current || null,
         }),
       });
     } catch (err) {
@@ -308,20 +383,38 @@ export const App: React.FC = () => {
     discussionInProgressRef.current = false;
     setDiscussionState({ inProgress: false });
     setIsStreaming(false);
+    setStreamingContextId(null);
+    streamingContextIdRef.current = null;
+    setStreamingSpeakerName('');
+    streamingSpeakerNameRef.current = '';
     setStreamingText('');
     setStreamingThinking('');
-    if (selectedId) {
-      fetch(`/api/channels/${selectedId}/messages`)
+    if (targetId) {
+      fetch(`/api/channels/${targetId}/messages`)
         .then((r) => r.json())
-        .then((msgs) => setMessages(msgs))
+        .then((msgs) => {
+          messagesCacheRef.current[targetId] = msgs;
+          if (selectedIdRef.current === targetId) {
+            setMessages(msgs);
+          }
+        })
         .catch(() => {});
     }
   };
 
   const handleSendMessage = async (text: string) => {
+    const targetId = selectedId;
+    const isTargetChannel = isChannel;
+    const targetTeam = selectedTeamId;
+    const speakerName = !isTargetChannel ? (currentKwant?.name || 'Agent') : chatTitle;
+
     discussionInProgressRef.current = false;
     setDiscussionState({ inProgress: false });
     setIsStreaming(true);
+    setStreamingContextId(targetId);
+    streamingContextIdRef.current = targetId;
+    setStreamingSpeakerName(speakerName);
+    streamingSpeakerNameRef.current = speakerName;
     setStreamingText('');
     setStreamingThinking('');
 
@@ -333,16 +426,21 @@ export const App: React.FC = () => {
       sender_id: 'PlayerHero',
       text,
     };
-    setMessages((prev) => [...prev, userMsg]);
+    const cached = messagesCacheRef.current[targetId] || messages;
+    const updated = [...cached, userMsg];
+    messagesCacheRef.current[targetId] = updated;
+    if (selectedIdRef.current === targetId) {
+      setMessages(updated);
+    }
 
     try {
       await fetch('/api/chat/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          channel_id: isChannel ? selectedId : null,
-          kwant_id: !isChannel ? selectedId : null,
-          team_id: selectedTeamId || null,
+          channel_id: isTargetChannel ? targetId : null,
+          kwant_id: !isTargetChannel ? targetId : null,
+          team_id: targetTeam || null,
           prompt: text,
           sender_id: 'PlayerHero',
         }),
@@ -350,6 +448,10 @@ export const App: React.FC = () => {
     } catch (err) {
       console.error('Failed sending chat:', err);
       setIsStreaming(false);
+      setStreamingContextId(null);
+      streamingContextIdRef.current = null;
+      setStreamingSpeakerName('');
+      streamingSpeakerNameRef.current = '';
     }
   };
 
@@ -376,8 +478,16 @@ export const App: React.FC = () => {
     );
     if (targetChannel) {
       setSelectedId(targetChannel.id);
+      selectedIdRef.current = targetChannel.id;
       setIsChannel(true);
+      isChannelRef.current = true;
+      setMessages(messagesCacheRef.current[targetChannel.id] || []);
     } else {
+      setSelectedId(team.id);
+      selectedIdRef.current = team.id;
+      setIsChannel(true);
+      isChannelRef.current = true;
+      setMessages(messagesCacheRef.current[team.id] || []);
       fetch('/api/channels')
         .then((r) => (r.ok ? r.json() : []))
         .then((freshChannels: Channel[]) => {
@@ -387,34 +497,37 @@ export const App: React.FC = () => {
           );
           if (match) {
             setSelectedId(match.id);
+            selectedIdRef.current = match.id;
             setIsChannel(true);
-          } else {
-            setSelectedId(team.id);
-            setIsChannel(true);
+            isChannelRef.current = true;
+            setMessages(messagesCacheRef.current[match.id] || []);
           }
         })
-        .catch(() => {
-          setSelectedId(team.id);
-          setIsChannel(true);
-        });
+        .catch(() => {});
     }
     playSfx('click');
   };
 
   const handleSelectChannel = (channel: Channel) => {
     setSelectedId(channel.id);
+    selectedIdRef.current = channel.id;
     setIsChannel(true);
+    isChannelRef.current = true;
     const matchedTeam = teams.find(
       (t) => `team-${t.name}` === channel.name || t.id === channel.id
     );
     setSelectedTeamId(matchedTeam ? matchedTeam.id : null);
+    setMessages(messagesCacheRef.current[channel.id] || []);
     playSfx('click');
   };
 
   const handleSelectKwant = (kwant: Kwant) => {
     setSelectedId(kwant.id);
+    selectedIdRef.current = kwant.id;
     setIsChannel(false);
+    isChannelRef.current = false;
     setSelectedTeamId(null);
+    setMessages(messagesCacheRef.current[kwant.id] || []);
     playSfx('click');
   };
 
@@ -443,8 +556,12 @@ export const App: React.FC = () => {
         const created: Kwant = await res.json();
         setKwants((prev) => [...prev, created]);
         setSelectedId(created.id);
+        selectedIdRef.current = created.id;
         setIsChannel(false);
+        isChannelRef.current = false;
         setSelectedTeamId(null);
+        messagesCacheRef.current[created.id] = [];
+        setMessages([]);
         setIsNewAgentOpen(false);
         playSfx('fanfare');
       }
@@ -493,7 +610,11 @@ export const App: React.FC = () => {
           );
           if (teamChan) {
             setSelectedId(teamChan.id);
+            selectedIdRef.current = teamChan.id;
             setIsChannel(true);
+            isChannelRef.current = true;
+            messagesCacheRef.current[teamChan.id] = [];
+            setMessages([]);
           }
         }
 
@@ -714,6 +835,13 @@ export const App: React.FC = () => {
     }
   };
 
+  const isCurrentContextStreaming = isStreaming && streamingContextId === selectedId;
+  const isDiscussionActiveHere =
+    discussionState.inProgress &&
+    (discussionState.contextId === selectedId ||
+      discussionState.teamId === selectedTeamId ||
+      (isChannel && currentTeam && discussionState.teamId === currentTeam.id));
+
   return (
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden font-sans">
       {/* Modern App Header */}
@@ -753,15 +881,16 @@ export const App: React.FC = () => {
           title={chatTitle}
           subtitle={chatSubtitle}
           messages={messages}
-          streamingText={streamingText}
-          streamingThinking={streamingThinking}
+          streamingText={isCurrentContextStreaming ? streamingText : ''}
+          streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
           pendingApproval={pendingApproval}
-          isStreaming={isStreaming}
+          isStreaming={isCurrentContextStreaming}
+          streamingSpeakerName={streamingSpeakerName}
           onSendMessage={handleSendMessage}
           onResolveApproval={handleResolveApproval}
           kwants={kwants}
           teams={teams}
-          discussionState={discussionState}
+          discussionState={isDiscussionActiveHere ? discussionState : { inProgress: false }}
           onCancelDiscussion={handleCancelDiscussion}
           teamMembers={currentTeamMembers}
           teamName={activeSandboxName}

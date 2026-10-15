@@ -19,6 +19,8 @@ export interface ChatMessage {
 
 export interface DiscussionState {
   inProgress: boolean;
+  teamId?: string;
+  contextId?: string;
   teamName?: string;
   currentSpeaker?: string;
   currentTurn?: number;
@@ -33,6 +35,7 @@ export interface ChatViewProps {
   streamingThinking: string;
   pendingApproval: PendingApproval | null;
   isStreaming: boolean;
+  streamingSpeakerName?: string;
   onSendMessage: (text: string) => void;
   onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
@@ -83,6 +86,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   streamingThinking,
   pendingApproval,
   isStreaming,
+  streamingSpeakerName,
   onSendMessage,
   onResolveApproval,
   kwants: kwantsProp,
@@ -522,8 +526,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {isStreaming && (
           <div className="flex items-start gap-3.5 w-full max-w-5xl">
             <ModernAvatar
-              role={discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : title}
-              name={discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : title}
+              role={
+                discussionState?.inProgress && discussionState.currentSpeaker
+                  ? discussionState.currentSpeaker
+                  : streamingSpeakerName || title
+              }
+              name={
+                discussionState?.inProgress && discussionState.currentSpeaker
+                  ? discussionState.currentSpeaker
+                  : streamingSpeakerName || title
+              }
               size={34}
             />
             <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
@@ -531,7 +543,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <span className="text-zinc-200">
                   {discussionState?.inProgress && discussionState.currentSpeaker
                     ? discussionState.currentSpeaker
-                    : title}
+                    : streamingSpeakerName || title}
                 </span>
                 <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
                   <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
