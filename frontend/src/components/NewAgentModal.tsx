@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { X, Sparkles, Layers, Code2, Terminal, Shield } from 'lucide-react';
+import { X, Sparkles } from 'lucide-react';
+import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 
 interface NewAgentModalProps {
@@ -93,29 +94,30 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Role Specialty</label>
+            <label className="block text-xs font-medium text-zinc-400 mb-1">Avatar & Role Specialty</label>
             <div className="grid grid-cols-2 gap-2">
               {[
-                { id: 'architect', label: 'Architecture', icon: Layers },
-                { id: 'tech_lead', label: 'Coding & Prototyping', icon: Code2 },
-                { id: 'devops', label: 'DevOps & Shell', icon: Terminal },
-                { id: 'security', label: 'Security & Audit', icon: Shield },
+                { id: 'architect', label: 'Architecture' },
+                { id: 'tech_lead', label: 'Tech Lead / Code' },
+                { id: 'devops', label: 'DevOps & Shell' },
+                { id: 'security', label: 'Security & Audit' },
+                { id: 'fast', label: 'Speed & Logic' },
+                { id: 'default', label: 'General / Droid' },
               ].map((item) => {
-                const Icon = item.icon;
                 const active = roleStyle === item.id;
                 return (
                   <button
                     key={item.id}
                     type="button"
                     onClick={() => setRoleStyle(item.id)}
-                    className={`flex items-center gap-2 p-2 rounded-lg border text-left text-xs transition-all ${
+                    className={`flex items-center gap-2.5 p-2 rounded-xl border text-left text-xs transition-all ${
                       active
-                        ? 'border-sky-500/50 bg-sky-500/10 text-sky-300'
-                        : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700'
+                        ? 'border-sky-500/60 bg-sky-500/10 text-sky-200 shadow-sm'
+                        : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
                     }`}
                   >
-                    <Icon size={14} className={active ? 'text-sky-400' : 'text-zinc-500'} />
-                    <span className="truncate">{item.label}</span>
+                    <ModernAvatar role={item.id} size={24} />
+                    <span className="truncate font-medium">{item.label}</span>
                   </button>
                 );
               })}
