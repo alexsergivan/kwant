@@ -460,4 +460,94 @@ async fn test_sandbox_password_vault_api() {
     assert_eq!(json["passwords"].as_array().unwrap().len(), 0);
 }
 
+#[tokio::test]
+async fn test_sandbox_interactive_control_endpoint() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config::default();
+    let tools = ToolRunner::new(tmp.path().join("workspace"));
+    let broker = PermissionBroker::new();
+    let router = LayaRouter::new(config.laya_url.clone());
+
+    let state = AppState::new(config, db, tools, broker, router);
+    let mut event_rx = state.event_sender.subscribe();
+    let app = create_router(state);
+
+    let team_id = "test-team-interactive";
+
+    // 1. Click interaction
+    let click_payload = json!({
+        "action": "click",
+        "x": 350,
+        "y": 180
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sandbox/{}/interact", team_id))
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&click_payload).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["action"], "click");
+    assert!(json["screenshot"].is_string());
+
+    // Verify SSE event was emitted
+    let ev = event_rx.recv().await.unwrap();
+    match ev {
+        kwnt::drivers::events::RuntimeEvent::BrowserScreenshot { team_id: tid, .. } => {
+            assert_eq!(tid, team_id);
+        }
+        _ => panic!("Expected BrowserScreenshot event"),
+    }
+
+    // 2. Type interaction
+    let type_payload = json!({
+        "action": "type",
+        "text": "admin@kwnt.dev"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sandbox/{}/interact", team_id))
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&type_payload).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 3. Key press interaction
+    let key_payload = json!({
+        "action": "key",
+        "key": "Enter"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sandbox/{}/interact", team_id))
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&key_payload).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 4. Scroll interaction
+    let scroll_payload = json!({
+        "action": "scroll",
+        "x": 640,
+        "y": 400,
+        "delta_y": 120.0
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sandbox/{}/interact", team_id))
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&scroll_payload).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+
 

@@ -1437,6 +1437,80 @@ pub async fn navigate_sandbox(
     })))
 }
 
+#[derive(Deserialize)]
+pub struct InteractPayload {
+    pub action: String,
+    pub x: Option<i64>,
+    pub y: Option<i64>,
+    pub text: Option<String>,
+    pub key: Option<String>,
+    pub code: Option<String>,
+    pub delta_x: Option<f64>,
+    pub delta_y: Option<f64>,
+}
+
+pub async fn interact_sandbox(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+    Json(payload): Json<InteractPayload>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let controller = get_or_create_browser_controller(&state, &team_id).await;
+
+    let (screenshot, current_url) = if let Some(ref ctrl) = controller {
+        let shot_res = match payload.action.as_str() {
+            "click" => {
+                let x = payload.x.unwrap_or(0);
+                let y = payload.y.unwrap_or(0);
+                ctrl.interact_click(x, y).await
+            }
+            "type" => {
+                let text = payload.text.unwrap_or_default();
+                ctrl.interact_type(&text).await
+            }
+            "key" => {
+                let key = payload.key.unwrap_or_default();
+                ctrl.interact_key(&key, payload.code.as_deref()).await
+            }
+            "scroll" => {
+                let x = payload.x.unwrap_or(640);
+                let y = payload.y.unwrap_or(400);
+                let dx = payload.delta_x.unwrap_or(0.0);
+                let dy = payload.delta_y.unwrap_or(100.0);
+                ctrl.interact_scroll(x, y, dx, dy).await
+            }
+            _ => ctrl.capture_screenshot().await,
+        };
+
+        let curr_url = ctrl.current_url.lock().await.clone().unwrap_or_default();
+        let shot = match shot_res {
+            Ok(img) => img,
+            Err(_) => {
+                let lock = ctrl.last_screenshot.lock().await;
+                lock.clone().unwrap_or_else(|| crate::tools::sandbox::PLACEHOLDER_PNG.to_string())
+            }
+        };
+        (shot, curr_url)
+    } else {
+        (crate::tools::sandbox::PLACEHOLDER_PNG.to_string(), String::new())
+    };
+
+    let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
+        team_id: team_id.clone(),
+        url: current_url.clone(),
+        image_base64: screenshot.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+
+    Ok(Json(json!({
+        "status": "ok",
+        "action": payload.action,
+        "team_id": team_id,
+        "url": current_url,
+        "screenshot": screenshot,
+        "image_base64": screenshot
+    })))
+}
+
 pub async fn execute_tool(
     state: &AppState,
     team_id: Option<&str>,

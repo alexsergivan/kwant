@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   X,
   Globe,
@@ -16,6 +16,9 @@ import {
   ShieldCheck,
   Search,
   Lock,
+  MousePointerClick,
+  Keyboard,
+  Loader2,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 
@@ -76,7 +79,25 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const [newPassword, setNewPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const loadPasswords = React.useCallback(async () => {
+  // Interactive Remote Control State
+  const [isControlMode, setIsControlMode] = useState(false);
+  const [isInteracting, setIsInteracting] = useState(false);
+  const [localScreenshot, setLocalScreenshot] = useState<string | null>(null);
+  const [quickTypeText, setQuickTypeText] = useState('');
+  const [clickRipples, setClickRipples] = useState<Array<{ id: number; x: number; y: number }>>([]);
+  const lastWheelTimeRef = useRef<number>(0);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (screenshotBase64) {
+      setLocalScreenshot(screenshotBase64);
+    }
+  }, [screenshotBase64]);
+
+  const currentScreenshot = localScreenshot || screenshotBase64;
+
+  const loadPasswords = useCallback(async () => {
     if (!teamId || teamId === 'default') return;
     try {
       setIsLoadingPasswords(true);
@@ -92,16 +113,16 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     }
   }, [teamId]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     loadPasswords();
   }, [loadPasswords]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     setInputUrl(activeUrl);
   }, [activeUrl]);
 
   // Extract hostname from active URL
-  const activeDomain = React.useMemo(() => {
+  const activeDomain = useMemo(() => {
     if (!activeUrl || activeUrl === 'about:blank') return '';
     try {
       return new URL(activeUrl).hostname.toLowerCase();
@@ -111,7 +132,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   }, [activeUrl]);
 
   // Credentials matching active domain
-  const matchingCreds = React.useMemo(() => {
+  const matchingCreds = useMemo(() => {
     if (!activeDomain) return [];
     return savedPasswords.filter((p) => {
       const d = p.domain.toLowerCase();
@@ -120,7 +141,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   }, [activeDomain, savedPasswords]);
 
   // Filtered credentials in vault
-  const filteredPasswords = React.useMemo(() => {
+  const filteredPasswords = useMemo(() => {
     if (!searchQuery.trim()) return savedPasswords;
     const q = searchQuery.toLowerCase().trim();
     return savedPasswords.filter(
@@ -203,6 +224,112 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     }
   };
 
+  // Dispatch interactive action to backend
+  const sendInteraction = useCallback(
+    async (payload: {
+      action: 'click' | 'type' | 'key' | 'scroll';
+      x?: number;
+      y?: number;
+      text?: string;
+      key?: string;
+      code?: string;
+      delta_x?: number;
+      delta_y?: number;
+    }) => {
+      if (!teamId || teamId === 'default') return;
+      try {
+        setIsInteracting(true);
+        const res = await fetch(`/api/sandbox/${teamId}/interact`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.screenshot) {
+            setLocalScreenshot(data.screenshot);
+          }
+          if (data.url && data.url !== 'about:blank') {
+            setInputUrl(data.url);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to send interaction:', err);
+      } finally {
+        setIsInteracting(false);
+      }
+    },
+    [teamId]
+  );
+
+  // Viewport Click Handler
+  const handleViewportClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isControlMode || !imageRef.current) return;
+    const img = imageRef.current;
+    const rect = img.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+
+    if (clickX < 0 || clickX > rect.width || clickY < 0 || clickY > rect.height) {
+      return;
+    }
+
+    const targetX = Math.round((clickX / rect.width) * 1280);
+    const targetY = Math.round((clickY / rect.height) * 800);
+
+    playSfx('click');
+    const rippleId = Date.now();
+    setClickRipples((prev) => [...prev, { id: rippleId, x: clickX, y: clickY }]);
+    setTimeout(() => {
+      setClickRipples((prev) => prev.filter((r) => r.id !== rippleId));
+    }, 600);
+
+    sendInteraction({ action: 'click', x: targetX, y: targetY });
+  };
+
+  // Viewport Wheel / Scroll Handler
+  const handleViewportWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (!isControlMode || !imageRef.current) return;
+    const now = Date.now();
+    if (now - lastWheelTimeRef.current < 120) return;
+    lastWheelTimeRef.current = now;
+
+    const img = imageRef.current;
+    const rect = img.getBoundingClientRect();
+    const clickX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+    const clickY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+    const targetX = Math.round((clickX / rect.width) * 1280);
+    const targetY = Math.round((clickY / rect.height) * 800);
+
+    sendInteraction({ action: 'scroll', x: targetX, y: targetY, delta_y: e.deltaY });
+  };
+
+  // Viewport Keydown Handler
+  const handleViewportKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!isControlMode) return;
+    const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+    if (targetTag === 'input' || targetTag === 'textarea') return;
+
+    if (['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      e.preventDefault();
+      playSfx('blip');
+      sendInteraction({ action: 'key', key: e.key, code: e.code });
+    } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      playSfx('blip');
+      sendInteraction({ action: 'type', text: e.key });
+    }
+  };
+
+  // Quick Type Submit
+  const handleQuickTypeSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickTypeText.trim()) return;
+    playSfx('coin');
+    sendInteraction({ action: 'type', text: quickTypeText });
+    setQuickTypeText('');
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -221,6 +348,25 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
         </div>
 
         <div className="flex items-center gap-1">
+          {/* Interactive Control Toggle */}
+          <button
+            type="button"
+            onClick={() => {
+              playSfx('click');
+              setIsControlMode((prev) => !prev);
+              if (!isControlMode) setActiveTab('browser');
+            }}
+            title={isControlMode ? 'Exit Control Mode' : 'Take Control of Bot Browser'}
+            className={`p-1.5 rounded-md transition-colors cursor-pointer flex items-center gap-1 ${
+              isControlMode
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm shadow-cyan-500/20 animate-pulse'
+                : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
+            }`}
+          >
+            <MousePointerClick size={13} className={isControlMode ? 'text-cyan-400' : ''} />
+            <span className="text-[10px] font-semibold">{isControlMode ? 'Controlling' : 'Take Control'}</span>
+          </button>
+
           <button
             type="button"
             onClick={() => {
@@ -385,17 +531,81 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
               </div>
             )}
 
+            {/* Interactive Control Mode Banner */}
+            {isControlMode && (
+              <div className="flex items-center justify-between px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-[11px] text-cyan-300 animate-in fade-in duration-150">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+                  <span className="font-medium">Direct Control Active</span>
+                </div>
+                <span className="text-[10px] text-cyan-400/80">Click & type on screen</span>
+              </div>
+            )}
+
+            {/* Quick Type Input Bar (When in Control Mode) */}
+            {isControlMode && (
+              <form
+                onSubmit={handleQuickTypeSubmit}
+                className="flex items-center gap-1.5 p-1 bg-zinc-900 border border-cyan-500/40 rounded-lg text-xs"
+              >
+                <Keyboard size={12} className="text-cyan-400 flex-shrink-0 ml-1" />
+                <input
+                  type="text"
+                  value={quickTypeText}
+                  onChange={(e) => setQuickTypeText(e.target.value)}
+                  placeholder="Type into focused field (e.g. search, input)..."
+                  className="flex-1 bg-transparent text-zinc-100 text-[11px] font-mono focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={!quickTypeText.trim()}
+                  className="px-2 py-0.5 rounded bg-cyan-500 hover:bg-cyan-400 text-zinc-950 font-semibold text-[10px] cursor-pointer disabled:opacity-40"
+                >
+                  Send
+                </button>
+              </form>
+            )}
+
             {/* Viewport Frame */}
-            <div className="flex-1 border border-zinc-800 rounded-xl bg-zinc-950 overflow-hidden flex items-center justify-center relative shadow-inner">
-              {screenshotBase64 ? (
+            <div
+              ref={viewportRef}
+              tabIndex={0}
+              onKeyDown={handleViewportKeyDown}
+              onClick={handleViewportClick}
+              onWheel={handleViewportWheel}
+              className={`flex-1 border rounded-xl bg-zinc-950 overflow-hidden flex items-center justify-center relative shadow-inner focus:outline-none ${
+                isControlMode
+                  ? 'border-cyan-500/60 ring-2 ring-cyan-500/20 cursor-crosshair'
+                  : 'border-zinc-800'
+              }`}
+            >
+              {/* Relaying feedback pill */}
+              {isInteracting && (
+                <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-zinc-950/90 border border-cyan-500/40 text-cyan-300 text-[10px] font-mono flex items-center gap-1.5 z-20 shadow-md">
+                  <Loader2 size={10} className="animate-spin text-cyan-400" />
+                  <span>Relaying...</span>
+                </div>
+              )}
+
+              {/* Click Ripple Animations */}
+              {clickRipples.map((r) => (
+                <span
+                  key={r.id}
+                  style={{ left: r.x, top: r.y }}
+                  className="absolute w-5 h-5 -ml-2.5 -mt-2.5 rounded-full border-2 border-cyan-400 bg-cyan-400/30 animate-ping pointer-events-none z-30"
+                />
+              ))}
+
+              {currentScreenshot ? (
                 <img
+                  ref={imageRef}
                   src={
-                    screenshotBase64.startsWith('data:')
-                      ? screenshotBase64
-                      : `data:image/jpeg;base64,${screenshotBase64}`
+                    currentScreenshot.startsWith('data:')
+                      ? currentScreenshot
+                      : `data:image/jpeg;base64,${currentScreenshot}`
                   }
                   alt="Browser Viewport"
-                  className="w-full h-full object-contain"
+                  className="w-full h-full object-contain pointer-events-auto"
                 />
               ) : (
                 <div className="text-center p-6 text-zinc-600 text-xs">

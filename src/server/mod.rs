@@ -85,6 +85,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sandbox/:team_id/screenshot", get(routes::get_browser_screenshot))
         .route("/api/sandbox/:team_id/restart", post(routes::restart_sandbox))
         .route("/api/sandbox/:team_id/navigate", post(routes::navigate_sandbox))
+        .route("/api/sandbox/:team_id/interact", post(routes::interact_sandbox))
         .route("/api/sandbox/:team_id/passwords", get(routes::get_saved_passwords).post(routes::save_password))
         .route("/api/sandbox/:team_id/passwords/:id", delete(routes::delete_password))
         .route("/api/events", get(sse::sse_handler))

@@ -559,4 +559,88 @@ impl BrowserController {
         let _ = self.capture_screenshot().await;
         Ok(())
     }
+
+    pub async fn interact_click(&self, x: i64, y: i64) -> Result<String, BrowserError> {
+        self.send_cdp_command(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mousePressed",
+                "x": x,
+                "y": y,
+                "button": "left",
+                "clickCount": 1
+            }),
+        )
+        .await?;
+
+        self.send_cdp_command(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mouseReleased",
+                "x": x,
+                "y": y,
+                "button": "left",
+                "clickCount": 1
+            }),
+        )
+        .await?;
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let _ = self.collect_and_save_captured_credentials().await;
+        self.capture_screenshot().await
+    }
+
+    pub async fn interact_type(&self, text: &str) -> Result<String, BrowserError> {
+        self.send_cdp_command(
+            "Input.insertText",
+            json!({ "text": text }),
+        )
+        .await?;
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let _ = self.collect_and_save_captured_credentials().await;
+        self.capture_screenshot().await
+    }
+
+    pub async fn interact_key(&self, key: &str, code: Option<&str>) -> Result<String, BrowserError> {
+        let mut down_params = json!({
+            "type": "rawKeyDown",
+            "key": key
+        });
+        if let Some(c) = code {
+            down_params["code"] = json!(c);
+        }
+        self.send_cdp_command("Input.dispatchKeyEvent", down_params).await?;
+
+        let mut up_params = json!({
+            "type": "keyUp",
+            "key": key
+        });
+        if let Some(c) = code {
+            up_params["code"] = json!(c);
+        }
+        self.send_cdp_command("Input.dispatchKeyEvent", up_params).await?;
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let _ = self.collect_and_save_captured_credentials().await;
+        self.capture_screenshot().await
+    }
+
+    pub async fn interact_scroll(&self, x: i64, y: i64, delta_x: f64, delta_y: f64) -> Result<String, BrowserError> {
+        self.send_cdp_command(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mouseWheel",
+                "x": x,
+                "y": y,
+                "deltaX": delta_x,
+                "deltaY": delta_y
+            }),
+        )
+        .await?;
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        self.capture_screenshot().await
+    }
 }
+

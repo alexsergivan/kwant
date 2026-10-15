@@ -548,3 +548,108 @@ async fn test_browser_credential_vault_lifecycle() {
     let file_content_after = std::fs::read_to_string(&creds_file).unwrap();
     assert!(!file_content_after.contains("dev_user"));
 }
+
+#[tokio::test]
+async fn test_mock_cdp_interactive_control() {
+    let http_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let http_port = http_listener.local_addr().unwrap().port();
+
+    let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_port = ws_listener.local_addr().unwrap().port();
+
+    let recorded_events = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<(String, Value)>::new()));
+    let rec_clone = recorded_events.clone();
+
+    // Spawn HTTP listener for /json/version
+    let _http_handle = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = http_listener.accept().await {
+            let mut buf = vec![0u8; 1024];
+            let n = stream.read(&mut buf).await.unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+
+            if req.contains("/json/version") {
+                let ws_url = format!("ws://127.0.0.1:{}/devtools/page/test", ws_port);
+                let body = json!({
+                    "Browser": "Chrome/120.0.0.0",
+                    "webSocketDebuggerUrl": ws_url
+                })
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.flush().await;
+            }
+        }
+    });
+
+    // Spawn WebSocket listener for CDP commands
+    let _ws_handle = tokio::spawn(async move {
+        while let Ok((stream, _)) = ws_listener.accept().await {
+            let rec = rec_clone.clone();
+            tokio::spawn(async move {
+                if let Ok(mut ws) = accept_async(stream).await {
+                    while let Some(Ok(msg)) = ws.next().await {
+                        if let tokio_tungstenite::tungstenite::Message::Text(txt) = msg {
+                            let parsed: Value = serde_json::from_str(&txt).unwrap();
+                            let id = parsed["id"].as_u64().unwrap();
+                            let method = parsed["method"].as_str().unwrap().to_string();
+                            let params = parsed.get("params").cloned().unwrap_or(Value::Null);
+
+                            {
+                                let mut events = rec.lock().await;
+                                events.push((method.clone(), params));
+                            }
+
+                            let result_val = match method.as_str() {
+                                "Page.captureScreenshot" => json!({ "data": "dGVzdC1pbnRlcmFjdGl2ZS1zY3JlZW4=" }),
+                                _ => json!({}),
+                            };
+
+                            let resp = json!({
+                                "id": id,
+                                "result": result_val
+                            });
+
+                            let _ = ws
+                                .send(tokio_tungstenite::tungstenite::Message::Text(
+                                    resp.to_string().into(),
+                                ))
+                                .await;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let controller = BrowserController::new(http_port);
+
+    // 1. Test click interaction
+    let shot1 = controller.interact_click(450, 220).await.unwrap();
+    assert_eq!(shot1, "dGVzdC1pbnRlcmFjdGl2ZS1zY3JlZW4=");
+
+    // 2. Test typing interaction
+    let shot2 = controller.interact_type("hello kwnt").await.unwrap();
+    assert_eq!(shot2, "dGVzdC1pbnRlcmFjdGl2ZS1zY3JlZW4=");
+
+    // 3. Test key press interaction
+    let shot3 = controller.interact_key("Enter", Some("Enter")).await.unwrap();
+    assert_eq!(shot3, "dGVzdC1pbnRlcmFjdGl2ZS1zY3JlZW4=");
+
+    // 4. Test scroll interaction
+    let shot4 = controller.interact_scroll(450, 220, 0.0, 100.0).await.unwrap();
+    assert_eq!(shot4, "dGVzdC1pbnRlcmFjdGl2ZS1zY3JlZW4=");
+
+    // Verify recorded commands
+    let events = recorded_events.lock().await;
+    let methods: Vec<&str> = events.iter().map(|(m, _)| m.as_str()).collect();
+
+    assert!(methods.contains(&"Input.dispatchMouseEvent"));
+    assert!(methods.contains(&"Input.insertText"));
+    assert!(methods.contains(&"Input.dispatchKeyEvent"));
+    assert!(methods.contains(&"Page.captureScreenshot"));
+}
+
