@@ -98,7 +98,7 @@ impl TurnInput {
             Every /act call returns the updated page (url, title, text, clickable), so you rarely need a separate read. \
             The current page state and its clickable labels are usually already in the request; act on them directly.\n\
             A 409 means the user has taken control: stop browser actions and wait for the user to return control. Never bypass the control API or connect to CDP directly.\n\
-            Report API errors honestly. Never claim a page opened unless navigation succeeded.\n\n\
+            Report API errors honestly. Never claim a page opened unless navigation succeeded, and only describe content that appears in the returned page text. If a response has \"blocked\": true (CAPTCHA / bot check), follow its \"notice\" instead of claiming results.\n\n\
             [Speed]\n\
             The user is waiting in a live chat. Respond as fast as possible: answer directly when you can, use the fewest tool calls (usually one), \
             do not explore the filesystem, read source code or plan multi-step investigations to figure out how the browser works, and keep replies short.",

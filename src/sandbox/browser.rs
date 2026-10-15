@@ -102,6 +102,24 @@ pub enum BrowserError {
     Navigation(String),
 }
 
+/// Recognises CAPTCHA / anti-bot interstitials that replace the requested content.
+pub fn detect_bot_wall(url: &str, title: &str, text: &str) -> Option<&'static str> {
+    let url = url.to_lowercase();
+    let title = title.to_lowercase();
+    let text = text.to_lowercase();
+    if url.contains("google.") && url.contains("/sorry/") || text.contains("unusual traffic from your computer network") {
+        return Some("Google \"unusual traffic\" CAPTCHA");
+    }
+    if title.starts_with("just a moment") || text.contains("checking your browser") || text.contains("checking if the site connection is secure") {
+        return Some("Cloudflare bot check");
+    }
+    let captcha_markers = ["i'm not a robot", "i am not a robot", "are you a robot", "verify you are human", "verifying you are human", "prove you're human", "complete the captcha"];
+    if captcha_markers.iter().any(|m| text.contains(m) || title.contains(m)) || url.contains("captcha") {
+        return Some("CAPTCHA / human verification");
+    }
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NavigationResult {
     pub url: String,
@@ -589,32 +607,24 @@ impl BrowserController {
         }
         *self.last_screenshot.lock().await = None;
 
-        // Extract title
-        let eval_res = self
-            .send_cdp_command(
-                "Runtime.evaluate",
-                json!({ "expression": "document.title", "returnByValue": true }),
-            )
-            .await
-            .ok();
-
-        let title = eval_res
-            .as_ref()
-            .and_then(|r| r["result"]["value"].as_str())
-            .unwrap_or(target_url)
-            .to_string();
-
-        *self.current_url.lock().await = Some(target_url.to_string());
-        *self.current_title.lock().await = Some(title.clone());
+        // Report where the browser actually ended up (redirects, e.g. to a CAPTCHA page)
+        let (url, title) = match self.sync_location().await {
+            Some(loc) => loc,
+            None => {
+                *self.current_url.lock().await = Some(target_url.to_string());
+                *self.current_title.lock().await = Some(target_url.to_string());
+                (target_url.to_string(), target_url.to_string())
+            }
+        };
 
         // Automatically inject autofill and capture hooks
-        let _ = self.inject_autofill_and_capture(target_url).await;
+        let _ = self.inject_autofill_and_capture(&url).await;
 
         // Automatically capture fresh screenshot on navigation
         self.capture_screenshot().await?;
 
         Ok(NavigationResult {
-            url: target_url.to_string(),
+            url,
             title,
             status_code: 200,
         })

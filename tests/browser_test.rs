@@ -89,7 +89,9 @@ async fn test_mock_cdp_controller_lifecycle() {
                                 "Page.captureScreenshot" => json!({ "data": "dGVzdC1zY3JlZW5zaG90" }),
                                 "Runtime.evaluate" => {
                                     let expr = parsed["params"]["expression"].as_str().unwrap();
-                                    if expr == "document.title" {
+                                    if expr == "[location.href, document.title]" {
+                                        json!({ "result": { "type": "object", "value": ["https://kwants.internal/app", "Kwants Sandbox Test"] } })
+                                    } else if expr == "document.title" {
                                         json!({ "result": { "type": "string", "value": "Kwants Sandbox Test" } })
                                     } else if expr.contains("clone.innerText") {
                                         json!({ "result": { "type": "string", "value": "Extracted DOM Content" } })
@@ -653,3 +655,17 @@ async fn test_mock_cdp_interactive_control() {
     assert!(methods.contains(&"Page.captureScreenshot"));
 }
 
+
+#[test]
+fn detects_captcha_and_bot_check_pages() {
+    use kwnt::sandbox::detect_bot_wall;
+    assert!(detect_bot_wall(
+        "https://www.google.com/sorry/index?continue=https://www.google.com/search%3Fq%3Dcat",
+        "https://www.google.com/search?q=cat",
+        "About this page Our systems have detected unusual traffic from your computer network.",
+    )
+    .is_some());
+    assert!(detect_bot_wall("https://example.org/", "Just a moment...", "").is_some());
+    assert!(detect_bot_wall("https://shop.example/", "Shop", "Please verify you are human to continue").is_some());
+    assert!(detect_bot_wall("https://www.bing.com/images/search?q=cat", "cat - Bing images", "Cat pictures, kittens").is_none());
+}

@@ -313,23 +313,30 @@ fn execute_single_turn(
                     let preview = truncate_chars(&page_text, 3000);
                     let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
                         team_id: sandbox_target.clone(),
-                        url: target_url.clone(),
+                        url: nav.url.clone(),
                         title: nav.title.clone(),
                         status_code: nav.status_code,
                     });
                     if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
                         let _ = event_broadcast.send(RuntimeEvent::BrowserScreenshot {
                             team_id: sandbox_target.clone(),
-                            url: target_url.clone(),
+                            url: nav.url.clone(),
                             image_base64: b64,
                             timestamp: chrono::Utc::now().to_rfc3339(),
                         });
                     }
-                    let clickable = ctrl.list_clickables(30).await;
-                    final_prompt = format!(
-                        "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel bot browser to {}. Title: \"{}\".\nClickable (topmost first): {}\nPage Content Preview:\n{}\n\nUse this page content to answer the user's request. NEVER attempt to open a desktop browser window.]",
-                        prompt, target_url, nav.title, clickable.join(" | "), preview
-                    );
+                    final_prompt = if let Some(kind) = crate::sandbox::detect_bot_wall(&nav.url, &nav.title, &page_text) {
+                        format!(
+                            "{}\n\n[Sandbox Browser State: Tried to open {} in the right-panel bot browser. {}]",
+                            prompt, target_url, bot_wall_notice(kind, &nav.url)
+                        )
+                    } else {
+                        let clickable = ctrl.list_clickables(30).await;
+                        format!(
+                            "{}\n\n[Sandbox Browser State: The right-panel bot browser is now on {}. Title: \"{}\".\nClickable (topmost first): {}\nPage Content Preview:\n{}\n\nUse this page content to answer the user's request; only describe what it actually shows. NEVER attempt to open a desktop browser window.]",
+                            prompt, nav.url, nav.title, clickable.join(" | "), preview
+                        )
+                    };
                 }
                 Err(crate::sandbox::BrowserError::Navigation(reason)) => {
                     let shown_url = ctrl.current_url.lock().await.clone().unwrap_or_else(|| target_url.clone());
@@ -415,14 +422,14 @@ fn execute_single_turn(
                         if let Ok(nav) = ctrl.navigate(&bot_url).await {
                             let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
                                 team_id: sandbox_target.clone(),
-                                url: bot_url.clone(),
+                                url: nav.url.clone(),
                                 title: nav.title.clone(),
                                 status_code: nav.status_code,
                             });
                             if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
                                 let _ = event_broadcast.send(RuntimeEvent::BrowserScreenshot {
                                     team_id: sandbox_target.clone(),
-                                    url: bot_url.clone(),
+                                    url: nav.url.clone(),
                                     image_base64: b64,
                                     timestamp: chrono::Utc::now().to_rfc3339(),
                                 });
@@ -783,22 +790,29 @@ pub async fn send_chat(
                                         let preview = truncate_chars(&page_text, 3000);
                                         let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
                                             team_id: team_clone.id.clone(),
-                                            url: target_url.clone(),
+                                            url: nav.url.clone(),
                                             title: nav.title.clone(),
                                             status_code: nav.status_code,
                                         });
                                         if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
                                             let _ = event_broadcast.send(RuntimeEvent::BrowserScreenshot {
                                                 team_id: team_clone.id.clone(),
-                                                url: target_url.clone(),
+                                                url: nav.url.clone(),
                                                 image_base64: b64,
                                                 timestamp: chrono::Utc::now().to_rfc3339(),
                                             });
                                         }
-                                        speaker_prompt = format!(
-                                            "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel bot browser to {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nUse this page content in your discussion analysis. NEVER attempt to open a desktop browser window.]",
-                                            speaker_prompt, target_url, nav.title, preview
-                                        );
+                                        speaker_prompt = if let Some(kind) = crate::sandbox::detect_bot_wall(&nav.url, &nav.title, &page_text) {
+                                            format!(
+                                                "{}\n\n[Sandbox Browser State: Tried to open {}. {}]",
+                                                speaker_prompt, target_url, bot_wall_notice(kind, &nav.url)
+                                            )
+                                        } else {
+                                            format!(
+                                                "{}\n\n[Sandbox Browser State: The right-panel bot browser is now on {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nUse this page content in your discussion analysis; only describe what it actually shows. NEVER attempt to open a desktop browser window.]",
+                                                speaker_prompt, nav.url, nav.title, preview
+                                            )
+                                        };
                                     }
                                 }
                             }
@@ -1572,32 +1586,30 @@ pub async fn navigate_sandbox(
     let ctrl = get_or_create_browser_controller(&state, &team_id).await
         .ok_or_else(browser_unavailable)?;
     let nav = ctrl.navigate(&payload.url).await.map_err(browser_request_failed)?;
-    let title = nav.title;
-    let status_code = nav.status_code;
 
     let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
         team_id: team_id.clone(),
-        url: payload.url.clone(),
-        title: title.clone(),
-        status_code,
+        url: nav.url.clone(),
+        title: nav.title.clone(),
+        status_code: nav.status_code,
     });
 
     if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
         let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
             team_id: team_id.clone(),
-            url: payload.url.clone(),
+            url: nav.url.clone(),
             image_base64: b64,
             timestamp: chrono::Utc::now().to_rfc3339(),
         });
     }
 
-    Ok(Json(json!({
-        "status": "navigated",
-        "team_id": team_id,
-        "url": payload.url,
-        "title": title,
-        "status_code": status_code
-    })))
+    // Return the real page so agents can't mistake a redirect/CAPTCHA for success
+    let mut page = sandbox_page_state(&ctrl).await;
+    page["status"] = json!(if page["blocked"].as_bool() == Some(true) { "blocked" } else { "navigated" });
+    page["team_id"] = json!(team_id);
+    page["requested_url"] = json!(payload.url);
+    page["status_code"] = json!(nav.status_code);
+    Ok(Json(page))
 }
 
 #[derive(Deserialize)]
@@ -1683,12 +1695,29 @@ async fn sandbox_page_state(ctrl: &crate::sandbox::BrowserController) -> serde_j
     };
     let text = ctrl.extract_content().await.unwrap_or_default();
     let clickable = ctrl.list_clickables(40).await;
-    json!({
+    let mut page = json!({
         "url": url,
         "title": title,
         "text": truncate_chars(&text, 2000),
         "clickable": clickable,
-    })
+        "blocked": false,
+    });
+    if let Some(kind) = crate::sandbox::detect_bot_wall(&url, &title, &text) {
+        page["blocked"] = json!(true);
+        page["notice"] = json!(bot_wall_notice(kind, &url));
+    }
+    page
+}
+
+/// Instruction for the agent when a site answers with a CAPTCHA instead of content.
+pub fn bot_wall_notice(kind: &str, url: &str) -> String {
+    format!(
+        "BLOCKED: the site answered with a {} ({}) instead of the requested content. \
+         Do NOT describe results you have not seen. Tell the user plainly that the site blocked the automated browser, then either \
+         retry once on another engine via the browser API and say you switched (web: https://www.bing.com/search?q=<query>, images: https://www.bing.com/images/search?q=<query>), \
+         or offer that they solve the check themselves in the live browser panel.",
+        kind, url
+    )
 }
 
 async fn broadcast_sandbox_screenshot(state: &AppState, team_id: &str, ctrl: &crate::sandbox::BrowserController) {
