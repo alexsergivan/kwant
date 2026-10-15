@@ -54,6 +54,7 @@ export interface ChatViewProps {
   terminalLogs?: TerminalLogEntry[];
   onRefreshVm?: () => void;
   onRestartVm?: () => void;
+  onNavigateVm?: (url: string) => void;
 }
 
 export const renderFormattedText = (text: string): React.ReactNode => {
@@ -102,6 +103,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   terminalLogs = [],
   onRefreshVm,
   onRestartVm,
+  onNavigateVm,
 }) => {
   const [internalIsVmPaneOpen, setInternalIsVmPaneOpen] = useState(false);
   const vmOpen = isVmPaneOpen !== undefined ? isVmPaneOpen : internalIsVmPaneOpen;
@@ -691,6 +693,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       terminalLogs={terminalLogs}
       onRefresh={onRefreshVm}
       onRestartVm={onRestartVm}
+      onNavigate={onNavigateVm}
     />
   </div>
 </div>

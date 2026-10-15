@@ -26,6 +26,9 @@ export const App: React.FC = () => {
   kwantsRef.current = kwants;
   const activeTeamIdRef = useRef<string | null>(selectedTeamId);
   activeTeamIdRef.current = selectedTeamId;
+  const activeSandboxIdRef = useRef<string>('default');
+  const currentKwantRef = useRef<Kwant | null>(null);
+  const currentTeamRef = useRef<Team | null>(null);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [tokensUsed, setTokensUsed] = useState(0);
 
@@ -200,8 +203,17 @@ export const App: React.FC = () => {
           case 'browser_navigated':
           case 'BrowserNavigated': {
             const teamId = event.data?.team_id;
-            const currentTid = activeTeamIdRef.current;
-            if (!currentTid || !teamId || currentTid === teamId || teamId === 'default') {
+            const currentTid = activeSandboxIdRef.current;
+            const k = currentKwantRef.current;
+            const t = currentTeamRef.current;
+            const isMatch =
+              !currentTid ||
+              !teamId ||
+              currentTid === teamId ||
+              teamId === 'default' ||
+              (k && (k.id === teamId || k.name.toLowerCase() === teamId.toLowerCase())) ||
+              (t && (t.id === teamId || t.name.toLowerCase() === teamId.toLowerCase()));
+            if (isMatch) {
               if (event.data?.url) setActiveUrl(event.data.url);
               if (event.data?.title) setPageTitle(event.data.title);
               setIsVmPaneOpen(true);
@@ -212,8 +224,17 @@ export const App: React.FC = () => {
           case 'browser_screenshot':
           case 'BrowserScreenshot': {
             const teamId = event.data?.team_id;
-            const currentTid = activeTeamIdRef.current;
-            if (!currentTid || !teamId || currentTid === teamId || teamId === 'default') {
+            const currentTid = activeSandboxIdRef.current;
+            const k = currentKwantRef.current;
+            const t = currentTeamRef.current;
+            const isMatch =
+              !currentTid ||
+              !teamId ||
+              currentTid === teamId ||
+              teamId === 'default' ||
+              (k && (k.id === teamId || k.name.toLowerCase() === teamId.toLowerCase())) ||
+              (t && (t.id === teamId || t.name.toLowerCase() === teamId.toLowerCase()));
+            if (isMatch) {
               if (event.data?.image_base64) setScreenshotBase64(event.data.image_base64);
               if (event.data?.url) setActiveUrl(event.data.url);
               setIsVmPaneOpen(true);
@@ -224,8 +245,17 @@ export const App: React.FC = () => {
           case 'sandbox_status':
           case 'SandboxStatusChanged': {
             const teamId = event.data?.team_id;
-            const currentTid = activeTeamIdRef.current;
-            if (!currentTid || !teamId || currentTid === teamId || teamId === 'default') {
+            const currentTid = activeSandboxIdRef.current;
+            const k = currentKwantRef.current;
+            const t = currentTeamRef.current;
+            const isMatch =
+              !currentTid ||
+              !teamId ||
+              currentTid === teamId ||
+              teamId === 'default' ||
+              (k && (k.id === teamId || k.name.toLowerCase() === teamId.toLowerCase())) ||
+              (t && (t.id === teamId || t.name.toLowerCase() === teamId.toLowerCase()));
+            if (isMatch) {
               if (typeof event.data?.is_running === 'boolean') {
                 setIsVmRunning(event.data.is_running);
               }
@@ -557,7 +587,13 @@ export const App: React.FC = () => {
     ? teams.find((t) => `team-${t.name}` === currentChannel.name)
     : null;
 
-  activeTeamIdRef.current = currentTeam?.id || selectedTeamId;
+  const activeSandboxId = currentTeam?.id || currentKwant?.id || selectedTeamId || (isChannel ? selectedId : 'default');
+  const activeSandboxName = currentTeam?.name || currentKwant?.name || (isChannel ? currentChannel?.name.replace(/^team-/, '') : 'Sandbox');
+
+  activeTeamIdRef.current = activeSandboxId;
+  activeSandboxIdRef.current = activeSandboxId;
+  currentKwantRef.current = currentKwant || null;
+  currentTeamRef.current = currentTeam || null;
 
   const currentTeamMemberIds: string[] = currentTeam
     ? Array.isArray(currentTeam.member_kwants)
@@ -583,11 +619,12 @@ export const App: React.FC = () => {
     ? `${currentKwant?.title || 'Specialist'} [Laya Auto-Fleet]`
     : currentTeam?.description || currentChannel?.description || 'Team collaboration room';
 
-  // Load container status for active team
+  // Load container status and screenshot for active team or bot
   useEffect(() => {
-    const tid = currentTeam?.id || selectedTeamId;
-    if (!tid) return;
-    fetch(`/api/sandbox/${tid}/status`)
+    const sid = activeSandboxId;
+    if (!sid || sid === 'default') return;
+
+    fetch(`/api/sandbox/${sid}/status`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data && typeof data.is_running === 'boolean') {
@@ -595,13 +632,27 @@ export const App: React.FC = () => {
         }
       })
       .catch(() => {});
-  }, [currentTeam?.id, selectedTeamId]);
+
+    fetch(`/api/sandbox/${sid}/screenshot`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) {
+          if (data.image_base64 || data.screenshot) {
+            setScreenshotBase64(data.image_base64 || data.screenshot);
+          }
+          if (data.url) {
+            setActiveUrl(data.url);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [activeSandboxId]);
 
   const handleRefreshVm = async () => {
-    const tid = currentTeam?.id || selectedTeamId;
-    if (!tid) return;
+    const sid = activeSandboxId;
+    if (!sid || sid === 'default') return;
     try {
-      const res = await fetch(`/api/sandbox/${tid}/screenshot`);
+      const res = await fetch(`/api/sandbox/${sid}/screenshot`);
       if (res.ok) {
         const data = await res.json();
         if (data.image_base64 || data.screenshot) {
@@ -617,25 +668,49 @@ export const App: React.FC = () => {
   };
 
   const handleRestartVm = async () => {
-    const tid = currentTeam?.id || selectedTeamId;
-    if (!tid) return;
+    const sid = activeSandboxId;
+    if (!sid || sid === 'default') return;
     try {
-      const res = await fetch(`/api/sandbox/${tid}/restart`, {
+      const res = await fetch(`/api/sandbox/${sid}/restart`, {
         method: 'POST',
       });
       if (res.ok) {
-        setIsVmRunning(false);
+        setIsVmRunning(true);
         setTerminalLogs((prev) => [
           ...prev,
           {
             command: 'docker restart sandbox',
-            output: 'Sandbox container stopped and reset.',
+            output: `Sandbox container (@${activeSandboxName}) reset and restarted.`,
             timestamp: new Date().toLocaleTimeString(),
           },
         ]);
+        setTimeout(() => {
+          handleRefreshVm();
+        }, 1000);
       }
     } catch (err) {
       console.error('Failed restarting VM:', err);
+    }
+  };
+
+  const handleNavigateVm = async (url: string) => {
+    const sid = activeSandboxId;
+    if (!sid || sid === 'default') return;
+    try {
+      const res = await fetch(`/api/sandbox/${sid}/navigate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) setActiveUrl(data.url);
+        if (data.title) setPageTitle(data.title);
+        setIsVmPaneOpen(true);
+        handleRefreshVm();
+      }
+    } catch (err) {
+      console.error('Failed navigating VM:', err);
     }
   };
 
@@ -689,7 +764,7 @@ export const App: React.FC = () => {
           discussionState={discussionState}
           onCancelDiscussion={handleCancelDiscussion}
           teamMembers={currentTeamMembers}
-          teamName={currentTeam?.name}
+          teamName={activeSandboxName}
           workspacePath={currentTeam?.workspace_path}
           repoUrl={currentTeam?.repo_url}
           onManageTeam={
@@ -709,6 +784,7 @@ export const App: React.FC = () => {
           terminalLogs={terminalLogs}
           onRefreshVm={handleRefreshVm}
           onRestartVm={handleRestartVm}
+          onNavigateVm={handleNavigateVm}
         />
       </div>
 

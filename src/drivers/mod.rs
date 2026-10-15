@@ -51,7 +51,7 @@ impl TurnInput {
             "{}\n\nYou are {}, {}.",
             self.kwant.persona_prompt, self.kwant.name, self.kwant.title
         );
-        if let Some(ref team) = self.team_context {
+        let team_block = if let Some(ref team) = self.team_context {
             let desc = team.description.as_deref().unwrap_or("General team objectives");
             let mut ws_info = String::new();
             if let Some(ref ws) = team.workspace_path {
@@ -64,12 +64,35 @@ impl TurnInput {
             }
 
             format!(
-                "{}\n\n[Active Team Alignment: @{}]{}\nTeam Mission: {}\nAs a member of team @{}, align your tone, recommendations, and analysis with this team's mission and collaborate effectively with fellow team members.",
-                base, team.name, ws_info, desc, team.name
+                "\n\n[Active Team Alignment: @{}]{}\nTeam Mission: {}\nAs a member of team @{}, align your tone, recommendations, and analysis with this team's mission and collaborate effectively with fellow team members.",
+                team.name, ws_info, desc, team.name
             )
         } else {
-            format!("{}\n\nRespond clearly in character.", base)
-        }
+            "\n\nRespond clearly in character.".to_string()
+        };
+
+        let sandbox_target = self
+            .team_context
+            .as_ref()
+            .map(|t| t.id.clone())
+            .unwrap_or_else(|| self.kwant.id.clone());
+
+        let sandbox_rules = format!(
+            "\n\n[Virtual Machine Sandbox & Right-Panel In-Container Browser]\n\
+            You have an isolated Sandbox Virtual Machine with a headless Chromium browser displayed live in the user's right-side UI panel.\n\
+            Sandbox ID: {}\n\
+            Control API Endpoint: http://127.0.0.1:8899/api/sandbox/{}\n\
+            CRITICAL BROWSING INSTRUCTIONS:\n\
+            1. NEVER execute host desktop commands (e.g. `open <url>`, `start <url>`, `xdg-open`) or attempt to launch browser windows on the user's desktop!\n\
+            2. The user wants and expects all web browsing to appear inside the right-side Sandbox VM panel in Kwants.\n\
+            3. To navigate the in-container browser to any webpage or search engine, execute:\n\
+               curl -s -X POST http://127.0.0.1:8899/api/sandbox/{}/navigate -H \"Content-Type: application/json\" -d '{{\"url\":\"<url>\"}}'\n\
+            4. This will instantly render the page in the user's right-side split pane and return the page title and status code.\n\
+            5. To view or extract text from the active page: curl -s http://127.0.0.1:8899/api/sandbox/{}/screenshot",
+            sandbox_target, sandbox_target, sandbox_target, sandbox_target
+        );
+
+        format!("{}{}{}", base, team_block, sandbox_rules)
     }
 }
 

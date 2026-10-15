@@ -114,6 +114,18 @@ impl SandboxManager {
         let port = portpicker::pick_unused_port().unwrap_or(19222);
 
         let ws_str = workspace_dir.to_string_lossy().to_string();
+        // Ensure image exists locally, build if missing
+        let img_check = Command::new("docker")
+            .args(["image", "inspect", "kwnt-sandbox:latest"])
+            .output()
+            .await;
+        if img_check.is_err() || !img_check.unwrap().status.success() {
+            let _ = Command::new("docker")
+                .args(["build", "-t", "kwnt-sandbox:latest", "-f", "docker/sandbox.Dockerfile", "."])
+                .output()
+                .await;
+        }
+
         let port_map = format!("127.0.0.1:{}:9222", port);
 
         let run_res = Command::new("docker")

@@ -69,6 +69,19 @@ impl BrowserController {
             .build()
             .map_err(|e| BrowserError::Http(e.to_string()))?;
 
+        // 1. Try /json/list to get active Page target
+        let list_url = format!("http://127.0.0.1:{}/json/list", self.cdp_port);
+        if let Ok(resp) = client.get(&list_url).send().await {
+            if let Ok(targets) = resp.json::<Vec<Value>>().await {
+                if let Some(page) = targets.into_iter().find(|t| t["type"] == "page") {
+                    if let Some(ws) = page["webSocketDebuggerUrl"].as_str() {
+                        return Ok(ws.to_string());
+                    }
+                }
+            }
+        }
+
+        // 2. Fallback to /json/version
         let url = format!("http://127.0.0.1:{}/json/version", self.cdp_port);
         let resp = client
             .get(&url)

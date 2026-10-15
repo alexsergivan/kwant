@@ -118,6 +118,10 @@ impl Driver for CliDriver {
 
         let system_prompt = input.format_system_prompt();
 
+        // Prevent CLI tools from spawning desktop browser windows on host
+        cmd.env("BROWSER", "none");
+        cmd.env("DISPLAY", "");
+
         match self.tool_kind.as_str() {
             "codex" => {
                 let out_file = format!("/tmp/kwnt_codex_{}.txt", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
@@ -126,11 +130,7 @@ impl Driver for CliDriver {
                     "low" => "low",
                     _ => "medium",
                 };
-                let full_prompt = if input.team_context.is_some() {
-                    format!("[System Context: {}]\n\n{}", system_prompt, input.prompt)
-                } else {
-                    input.prompt.clone()
-                };
+                let full_prompt = format!("[System Context: {}]\n\n{}", system_prompt, input.prompt);
                 cmd.arg("exec")
                     .arg("--ephemeral")
                     .arg("--skip-git-repo-check")
@@ -144,17 +144,12 @@ impl Driver for CliDriver {
                 codex_out_file = Some(out_file);
             }
             "grok" => {
-                if let Some(ref team) = input.team_context {
-                    let desc = team.description.as_deref().unwrap_or("General team objectives");
-                    cmd.arg("--rules").arg(format!("You are contributing to team @{}: {}", team.name, desc));
-                }
+                cmd.arg("--rules").arg(&system_prompt);
                 cmd.arg("-p").arg(&input.prompt);
             }
             _ => {
                 // claude default
-                if input.team_context.is_some() {
-                    cmd.arg("--append-system-prompt").arg(&system_prompt);
-                }
+                cmd.arg("--append-system-prompt").arg(&system_prompt);
                 cmd.arg("-p").arg(&input.prompt);
             }
         }

@@ -19,6 +19,7 @@ export interface VirtualMachinePaneProps {
   terminalLogs?: TerminalLogEntry[];
   onRefresh?: () => void;
   onRestartVm?: () => void;
+  onNavigate?: (url: string) => void;
 }
 
 export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
@@ -32,8 +33,14 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   terminalLogs = [],
   onRefresh,
   onRestartVm,
+  onNavigate,
 }) => {
   const [activeTab, setActiveTab] = useState<'browser' | 'terminal'>('browser');
+  const [inputUrl, setInputUrl] = useState(activeUrl);
+
+  React.useEffect(() => {
+    setInputUrl(activeUrl);
+  }, [activeUrl]);
 
   if (!isOpen) return null;
 
@@ -123,8 +130,19 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
               <Globe size={13} className="text-zinc-400 flex-shrink-0" />
               <input
                 type="text"
-                readOnly
-                value={activeUrl || 'about:blank'}
+                readOnly={!onNavigate}
+                value={inputUrl}
+                onChange={(e) => setInputUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && onNavigate && inputUrl.trim()) {
+                    let target = inputUrl.trim();
+                    if (!target.startsWith('http://') && !target.startsWith('https://')) {
+                      target = `https://${target}`;
+                    }
+                    onNavigate(target);
+                  }
+                }}
+                placeholder="https://..."
                 className="flex-1 bg-transparent text-zinc-200 font-mono text-[11px] truncate focus:outline-none"
               />
               {activeUrl && activeUrl !== 'about:blank' && (

@@ -259,11 +259,53 @@ fn execute_single_turn(
         let configured_key = get_configured_key(&db, &target_model).await;
         let endpoint = get_configured_endpoint(&db, &target_model).await;
 
+        let sandbox_target = team_keys
+            .as_ref()
+            .map(|(id, _)| id.clone())
+            .or_else(|| kwant_id.clone())
+            .unwrap_or_else(|| target_kwant.id.clone());
+
+        let mut final_prompt = prompt.clone();
+        if let Some(target_url) = detect_url_in_prompt(&prompt) {
+            let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
+                "🌐 Navigating Sandbox VM in-container browser to {}...",
+                target_url
+            )));
+            if let Some(ctrl) = get_or_create_browser_controller(&state, &sandbox_target).await {
+                if let Ok(nav) = ctrl.navigate(&target_url).await {
+                    let page_text = ctrl.extract_content().await.unwrap_or_default();
+                    let preview = if page_text.len() > 3000 {
+                        &page_text[..3000]
+                    } else {
+                        &page_text
+                    };
+                    let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
+                        team_id: sandbox_target.clone(),
+                        url: target_url.clone(),
+                        title: nav.title.clone(),
+                        status_code: nav.status_code,
+                    });
+                    if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
+                        let _ = event_broadcast.send(RuntimeEvent::BrowserScreenshot {
+                            team_id: sandbox_target.clone(),
+                            url: target_url.clone(),
+                            image_base64: b64,
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                        });
+                    }
+                    final_prompt = format!(
+                        "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel Sandbox VM browser to {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nUse this page content to answer the user's request. NEVER attempt to open a desktop browser window.]",
+                        prompt, target_url, nav.title, preview
+                    );
+                }
+            }
+        }
+
         let driver = resolve_driver_for_model(&target_model, configured_key, endpoint);
         let turn_input = TurnInput {
             thread_id: context_id,
             kwant: target_kwant.clone(),
-            prompt,
+            prompt: final_prompt,
             history,
             model_override: Some(target_model),
             effort_level: Some(effort_level),
@@ -558,6 +600,7 @@ pub async fn send_chat(
                 let cancel_token_clone = cancel_token.clone();
                 let session_id_clone = session_id.clone();
                 let workspace_dir_clone = workspace_dir.clone();
+                let state_clone = state.clone();
 
                 tokio::spawn(async move {
                     let context_id = channel_id
@@ -589,7 +632,7 @@ pub async fn send_chat(
                             }
                         };
 
-                        let speaker_prompt = if cumulative_transcript.is_empty() {
+                        let mut speaker_prompt = if cumulative_transcript.is_empty() {
                             prompt.clone()
                         } else {
                             let turns_formatted = cumulative_transcript
@@ -603,6 +646,43 @@ pub async fn send_chat(
                                 prompt, turns_formatted
                             )
                         };
+
+                        if turn_idx == 0 {
+                            if let Some(target_url) = detect_url_in_prompt(&prompt) {
+                                let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
+                                    "🌐 Navigating Sandbox VM in-container browser to {}...",
+                                    target_url
+                                )));
+                                if let Some(ctrl) = get_or_create_browser_controller(&state_clone, &team_clone.id).await {
+                                    if let Ok(nav) = ctrl.navigate(&target_url).await {
+                                        let page_text = ctrl.extract_content().await.unwrap_or_default();
+                                        let preview = if page_text.len() > 3000 {
+                                            &page_text[..3000]
+                                        } else {
+                                            &page_text
+                                        };
+                                        let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
+                                            team_id: team_clone.id.clone(),
+                                            url: target_url.clone(),
+                                            title: nav.title.clone(),
+                                            status_code: nav.status_code,
+                                        });
+                                        if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
+                                            let _ = event_broadcast.send(RuntimeEvent::BrowserScreenshot {
+                                                team_id: team_clone.id.clone(),
+                                                url: target_url.clone(),
+                                                image_base64: b64,
+                                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                            });
+                                        }
+                                        speaker_prompt = format!(
+                                            "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel Sandbox VM browser to {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nUse this page content in your discussion analysis. NEVER attempt to open a desktop browser window.]",
+                                            speaker_prompt, target_url, nav.title, preview
+                                        );
+                                    }
+                                }
+                            }
+                        }
 
                         let _ = event_broadcast.send(RuntimeEvent::DiscussionTurnStarted {
                             speaker_id: speaker.id.clone(),
@@ -1082,6 +1162,60 @@ pub struct NavigatePayload {
     pub url: String,
 }
 
+async fn resolve_sandbox_target_info(state: &AppState, target_id: &str) -> Option<(String, PathBuf)> {
+    if let Ok(Some(team)) = state.db.get_team(target_id).await {
+        let ws = team
+            .workspace_path
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| state.config.data_dir.join("workspaces").join(&team.name));
+        Some((team.name, ws))
+    } else if let Ok(Some(kwant)) = state.db.get_kwant(target_id).await {
+        let safe_kname = kwant.name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
+        Some((format!("bot-{}", safe_kname), state.config.data_dir.join("workspaces").join(format!("bot-{}", safe_kname))))
+    } else if let Ok(Some(team)) = state.db.get_team_by_name(target_id).await {
+        let ws = team
+            .workspace_path
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| state.config.data_dir.join("workspaces").join(&team.name));
+        Some((team.name, ws))
+    } else {
+        None
+    }
+}
+
+pub fn detect_url_in_prompt(prompt: &str) -> Option<String> {
+    let lower = prompt.to_lowercase();
+    let is_browser_request = lower.contains("browser")
+        || lower.contains("open ")
+        || lower.contains("navigate")
+        || lower.contains("go to ")
+        || lower.contains("browse ")
+        || lower.contains("search for ")
+        || lower.contains("http://")
+        || lower.contains("https://");
+
+    if !is_browser_request {
+        return None;
+    }
+
+    for word in prompt.split_whitespace() {
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '/' && c != ':' && c != '-' && c != '_');
+        if clean.starts_with("http://") || clean.starts_with("https://") {
+            return Some(clean.to_string());
+        }
+        if (clean.contains(".com") || clean.contains(".org") || clean.contains(".net") || clean.contains(".de") || clean.contains(".io") || clean.contains(".ai") || clean.contains(".co"))
+            && !clean.contains('@')
+        {
+            return Some(format!("https://{}", clean));
+        }
+    }
+    None
+}
+
 pub async fn get_or_create_browser_controller(
     state: &AppState,
     team_id: &str,
@@ -1094,23 +1228,12 @@ pub async fn get_or_create_browser_controller(
     }
 
     if state.sandbox_manager.get_sandbox(team_id).await.is_none() {
-        let team = match state.db.get_team(team_id).await {
-            Ok(Some(t)) => Some(t),
-            _ => state.db.get_team_by_name(team_id).await.ok().flatten(),
-        };
-
-        if let Some(team) = team {
-            if state.sandbox_manager.is_docker_available().await {
-                let ws_dir = team
-                    .workspace_path
-                    .as_deref()
-                    .filter(|s| !s.trim().is_empty())
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| state.config.data_dir.join("workspaces").join(&team.name));
+        if state.sandbox_manager.is_docker_available().await {
+            if let Some((target_name, ws_dir)) = resolve_sandbox_target_info(state, team_id).await {
                 let _ = tokio::fs::create_dir_all(&ws_dir).await;
                 let _ = state
                     .sandbox_manager
-                    .ensure_sandbox_running(team_id, &team.name, &ws_dir)
+                    .ensure_sandbox_running(team_id, &target_name, &ws_dir)
                     .await;
             }
         }
@@ -1210,24 +1333,13 @@ pub async fn restart_sandbox(
         controllers.remove(&team_id);
     }
 
-    let team = match state.db.get_team(&team_id).await {
-        Ok(Some(t)) => Some(t),
-        _ => state.db.get_team_by_name(&team_id).await.ok().flatten(),
-    };
-
-    if let Some(team) = team {
-        if state.sandbox_manager.is_docker_available().await {
-            let ws_dir = team
-                .workspace_path
-                .as_deref()
-                .filter(|s| !s.trim().is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| state.config.data_dir.join("workspaces").join(&team.name));
+    if state.sandbox_manager.is_docker_available().await {
+        if let Some((target_name, ws_dir)) = resolve_sandbox_target_info(&state, &team_id).await {
             let _ = tokio::fs::create_dir_all(&ws_dir).await;
 
             match state
                 .sandbox_manager
-                .ensure_sandbox_running(&team_id, &team.name, &ws_dir)
+                .ensure_sandbox_running(&team_id, &target_name, &ws_dir)
                 .await
             {
                 Ok(active_sb) => {
@@ -1280,7 +1392,7 @@ pub async fn navigate_sandbox(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let controller = get_or_create_browser_controller(&state, &team_id).await;
 
-    let (title, status_code) = if let Some(ctrl) = controller {
+    let (title, status_code) = if let Some(ref ctrl) = controller {
         match ctrl.navigate(&payload.url).await {
             Ok(res) => (res.title, res.status_code),
             Err(e) => {
@@ -1298,6 +1410,17 @@ pub async fn navigate_sandbox(
         title: title.clone(),
         status_code,
     });
+
+    if let Some(ref ctrl) = controller {
+        if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
+            let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
+                team_id: team_id.clone(),
+                url: payload.url.clone(),
+                image_base64: b64,
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            });
+        }
+    }
 
     Ok(Json(json!({
         "status": "navigated",
