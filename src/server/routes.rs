@@ -204,6 +204,18 @@ async fn get_configured_endpoint(db: &crate::db::Database, target_model: &str) -
     }
 }
 
+/// Truncates to at most `max` bytes without splitting a UTF-8 character.
+fn truncate_chars(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 fn routing_candidates(members: &[Kwant]) -> Vec<RoutingCandidate> {
     members
         .iter()
@@ -277,7 +289,10 @@ fn execute_single_turn(
             .or_else(|| kwant_id.clone())
             .unwrap_or_else(|| target_kwant.id.clone());
 
-        let active_browser_url = if let Some(ctrl) = state.browser_controllers.lock().await.get(&sandbox_target) {
+        let active_ctrl = state.browser_controllers.lock().await.get(&sandbox_target).cloned();
+        // The user may have browsed in the live viewer since the last turn; read the real location
+        let active_browser_url = if let Some(ref ctrl) = active_ctrl {
+            let _ = ctrl.sync_location().await;
             ctrl.current_url.lock().await.clone()
         } else {
             None
@@ -294,11 +309,7 @@ fn execute_single_turn(
             if let Some(ctrl) = get_or_create_browser_controller(&state, &sandbox_target).await {
                 if let Ok(nav) = ctrl.navigate(&target_url).await {
                     let page_text = ctrl.extract_content().await.unwrap_or_default();
-                    let preview = if page_text.len() > 3000 {
-                        &page_text[..3000]
-                    } else {
-                        &page_text
-                    };
+                    let preview = truncate_chars(&page_text, 3000);
                     let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
                         team_id: sandbox_target.clone(),
                         url: target_url.clone(),
@@ -321,9 +332,16 @@ fn execute_single_turn(
             }
         } else if let Some(ref curr_url) = active_browser_url {
             if !curr_url.is_empty() && !curr_url.contains("about:blank") && !curr_url.contains("example.com") {
+                let (title, page_text) = match active_ctrl {
+                    Some(ref ctrl) => (
+                        ctrl.current_title.lock().await.clone().unwrap_or_default(),
+                        ctrl.extract_content().await.unwrap_or_default(),
+                    ),
+                    None => (String::new(), String::new()),
+                };
                 final_prompt = format!(
-                    "{}\n\n[Active Sandbox Browser State: The right-panel Sandbox VM browser is currently viewing: {}. Maintain context on this website. Do not suggest or switch to other services like YouTube unless explicitly requested.]",
-                    prompt, curr_url
+                    "{}\n\n[Active Sandbox Browser State: The right-panel Sandbox VM browser (shared live with the user, who may have clicked or typed in it) is currently viewing: {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nMaintain context on this website. Do not suggest or switch to other services like YouTube unless explicitly requested.]",
+                    prompt, curr_url, title, truncate_chars(&page_text, 3000)
                 );
             }
         }
@@ -740,11 +758,7 @@ pub async fn send_chat(
                                 if let Some(ctrl) = get_or_create_browser_controller(&state_clone, &team_clone.id).await {
                                     if let Ok(nav) = ctrl.navigate(&target_url).await {
                                         let page_text = ctrl.extract_content().await.unwrap_or_default();
-                                        let preview = if page_text.len() > 3000 {
-                                            &page_text[..3000]
-                                        } else {
-                                            &page_text
-                                        };
+                                        let preview = truncate_chars(&page_text, 3000);
                                         let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
                                             team_id: team_clone.id.clone(),
                                             url: target_url.clone(),
@@ -1497,7 +1511,18 @@ pub async fn get_browser_screenshot(
     let controller = get_or_create_browser_controller(&state, &team_id).await;
 
     let placeholder = crate::tools::sandbox::PLACEHOLDER_PNG;
-    let (b64, url) = if let Some(ctrl) = controller {
+    let (b64, url, title) = if let Some(ctrl) = controller {
+        let previous_url = ctrl.current_url.lock().await.clone();
+        if let Some((new_url, new_title)) = ctrl.sync_location().await {
+            if previous_url.as_deref() != Some(new_url.as_str()) {
+                let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
+                    team_id: team_id.clone(),
+                    url: new_url,
+                    title: new_title,
+                    status_code: 200,
+                });
+            }
+        }
         let shot = match ctrl.capture_screenshot().await {
             Ok(img) => img,
             Err(_) => {
@@ -1506,9 +1531,10 @@ pub async fn get_browser_screenshot(
             }
         };
         let curr_url = ctrl.current_url.lock().await.clone().unwrap_or_default();
-        (shot, curr_url)
+        let curr_title = ctrl.current_title.lock().await.clone().unwrap_or_default();
+        (shot, curr_url, curr_title)
     } else {
-        (placeholder.to_string(), String::new())
+        (placeholder.to_string(), String::new(), String::new())
     };
 
     let timestamp = chrono::Utc::now().to_rfc3339();
@@ -1516,6 +1542,7 @@ pub async fn get_browser_screenshot(
     Ok(Json(json!({
         "team_id": team_id,
         "url": url,
+        "title": title,
         "image_base64": b64,
         "screenshot": b64,
         "format": "jpeg",

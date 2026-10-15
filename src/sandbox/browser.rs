@@ -560,6 +560,27 @@ impl BrowserController {
         Ok(())
     }
 
+    /// Re-reads the page's real URL and title, since user clicks/keys can navigate
+    /// without going through `navigate()`.
+    pub async fn sync_location(&self) -> Option<(String, String)> {
+        let res = self
+            .send_cdp_command(
+                "Runtime.evaluate",
+                json!({ "expression": "[location.href, document.title]", "returnByValue": true }),
+            )
+            .await
+            .ok()?;
+        let vals = res["result"]["value"].as_array()?;
+        let url = vals.first()?.as_str()?.to_string();
+        let title = vals.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if url.is_empty() {
+            return None;
+        }
+        *self.current_url.lock().await = Some(url.clone());
+        *self.current_title.lock().await = Some(title.clone());
+        Some((url, title))
+    }
+
     pub async fn interact_click(&self, x: i64, y: i64) -> Result<String, BrowserError> {
         self.send_cdp_command(
             "Input.dispatchMouseEvent",
@@ -587,6 +608,7 @@ impl BrowserController {
 
         tokio::time::sleep(Duration::from_millis(150)).await;
         let _ = self.collect_and_save_captured_credentials().await;
+        let _ = self.sync_location().await;
         self.capture_screenshot().await
     }
 
@@ -599,6 +621,7 @@ impl BrowserController {
 
         tokio::time::sleep(Duration::from_millis(150)).await;
         let _ = self.collect_and_save_captured_credentials().await;
+        let _ = self.sync_location().await;
         self.capture_screenshot().await
     }
 
@@ -623,6 +646,7 @@ impl BrowserController {
 
         tokio::time::sleep(Duration::from_millis(150)).await;
         let _ = self.collect_and_save_captured_credentials().await;
+        let _ = self.sync_location().await;
         self.capture_screenshot().await
     }
 
@@ -640,6 +664,7 @@ impl BrowserController {
         .await?;
 
         tokio::time::sleep(Duration::from_millis(150)).await;
+        let _ = self.sync_location().await;
         self.capture_screenshot().await
     }
 }
