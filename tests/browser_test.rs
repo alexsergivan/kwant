@@ -1,6 +1,8 @@
 use futures::{SinkExt, StreamExt};
 use kwnt::sandbox::browser::{BrowserController, BrowserError, NavigationResult};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
@@ -145,6 +147,253 @@ async fn test_mock_cdp_controller_lifecycle() {
 
     // Test type_text
     controller.type_text("input[name=query]", "hello world").await.unwrap();
+
+    http_handle.abort();
+    ws_handle.abort();
+}
+
+#[tokio::test]
+async fn test_mock_cdp_persistent_connection_reuse() {
+    let http_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let http_port = http_listener.local_addr().unwrap().port();
+
+    let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_port = ws_listener.local_addr().unwrap().port();
+
+    let http_handle = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = http_listener.accept().await {
+            let mut buf = vec![0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let ws_url = format!("ws://127.0.0.1:{}/devtools/page/test", ws_port);
+            let body = json!({
+                "Browser": "Chrome/120.0.0.0",
+                "webSocketDebuggerUrl": ws_url
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.flush().await;
+        }
+    });
+
+    let ws_connect_count = Arc::new(AtomicUsize::new(0));
+    let ws_counter_clone = ws_connect_count.clone();
+
+    let ws_handle = tokio::spawn(async move {
+        while let Ok((stream, _)) = ws_listener.accept().await {
+            ws_counter_clone.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                if let Ok(mut ws) = accept_async(stream).await {
+                    while let Some(Ok(msg)) = ws.next().await {
+                        if let tokio_tungstenite::tungstenite::Message::Text(txt) = msg {
+                            let parsed: Value = serde_json::from_str(&txt).unwrap();
+                            let id = parsed["id"].as_u64().unwrap();
+                            let method = parsed["method"].as_str().unwrap();
+
+                            let result_val = match method {
+                                "Page.enable" => json!({}),
+                                "Page.navigate" => json!({ "frameId": "F1" }),
+                                "Page.captureScreenshot" => json!({ "data": "c2NyZWVuc2hvdA==" }),
+                                "Runtime.evaluate" => {
+                                    json!({ "result": { "type": "boolean", "value": true } })
+                                }
+                                _ => json!({}),
+                            };
+
+                            let resp = json!({
+                                "id": id,
+                                "result": result_val
+                            });
+                            let _ = ws
+                                .send(tokio_tungstenite::tungstenite::Message::Text(
+                                    resp.to_string().into(),
+                                ))
+                                .await;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let controller = BrowserController::new(http_port);
+
+    // Perform multiple operations sequentially
+    controller.navigate("https://kwants.internal").await.unwrap();
+    controller.capture_screenshot().await.unwrap();
+    controller.extract_content().await.unwrap();
+    controller.click("#btn").await.unwrap();
+    controller.type_text("#input", "value").await.unwrap();
+
+    // Verify only 1 WebSocket connection was established across all operations
+    assert_eq!(
+        ws_connect_count.load(Ordering::SeqCst),
+        1,
+        "WebSocket connection must be reused persistently across commands"
+    );
+
+    http_handle.abort();
+    ws_handle.abort();
+}
+
+#[tokio::test]
+async fn test_mock_cdp_string_escaping_multiline_and_quotes() {
+    let http_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let http_port = http_listener.local_addr().unwrap().port();
+
+    let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_port = ws_listener.local_addr().unwrap().port();
+
+    let http_handle = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = http_listener.accept().await {
+            let mut buf = vec![0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let ws_url = format!("ws://127.0.0.1:{}/devtools/page/test", ws_port);
+            let body = json!({
+                "Browser": "Chrome/120.0.0.0",
+                "webSocketDebuggerUrl": ws_url
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.flush().await;
+        }
+    });
+
+    let received_expression = Arc::new(tokio::sync::Mutex::new(String::new()));
+    let expr_clone = received_expression.clone();
+
+    let ws_handle = tokio::spawn(async move {
+        while let Ok((stream, _)) = ws_listener.accept().await {
+            let expr_receiver = expr_clone.clone();
+            tokio::spawn(async move {
+                if let Ok(mut ws) = accept_async(stream).await {
+                    while let Some(Ok(msg)) = ws.next().await {
+                        if let tokio_tungstenite::tungstenite::Message::Text(txt) = msg {
+                            let parsed: Value = serde_json::from_str(&txt).unwrap();
+                            let id = parsed["id"].as_u64().unwrap();
+                            let method = parsed["method"].as_str().unwrap();
+
+                            if method == "Runtime.evaluate" {
+                                let expr = parsed["params"]["expression"].as_str().unwrap();
+                                *expr_receiver.lock().await = expr.to_string();
+                            }
+
+                            let resp = json!({
+                                "id": id,
+                                "result": {
+                                    "result": { "type": "boolean", "value": true },
+                                    "data": "c2NyZWVuc2hvdA=="
+                                }
+                            });
+                            let _ = ws
+                                .send(tokio_tungstenite::tungstenite::Message::Text(
+                                    resp.to_string().into(),
+                                ))
+                                .await;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let controller = BrowserController::new(http_port);
+
+    // Multiline string with double quotes, single quotes, backslashes, and special characters
+    let complex_text = "Line 1\nLine 2 with \"double quotes\", 'single quotes', and backslashes \\path\\to\\dir.";
+    let complex_selector = "textarea[data-test='user\"input']";
+
+    controller.type_text(complex_selector, complex_text).await.unwrap();
+
+    let recorded_expr = received_expression.lock().await.clone();
+    // Verify JSON-escaped string literal is present in JS expression
+    assert!(
+        recorded_expr.contains(r#""textarea[data-test='user\"input']""#),
+        "Selector should be safely JSON encoded in JS expression: {}",
+        recorded_expr
+    );
+    assert!(
+        recorded_expr.contains(r#""Line 1\nLine 2 with \"double quotes\", 'single quotes', and backslashes \\path\\to\\dir.""#),
+        "Text should be safely JSON encoded in JS expression: {}",
+        recorded_expr
+    );
+
+    http_handle.abort();
+    ws_handle.abort();
+}
+
+#[tokio::test]
+async fn test_mock_cdp_click_element_not_found() {
+    let http_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let http_port = http_listener.local_addr().unwrap().port();
+
+    let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_port = ws_listener.local_addr().unwrap().port();
+
+    let http_handle = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = http_listener.accept().await {
+            let mut buf = vec![0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let ws_url = format!("ws://127.0.0.1:{}/devtools/page/test", ws_port);
+            let body = json!({
+                "Browser": "Chrome/120.0.0.0",
+                "webSocketDebuggerUrl": ws_url
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.flush().await;
+        }
+    });
+
+    let ws_handle = tokio::spawn(async move {
+        while let Ok((stream, _)) = ws_listener.accept().await {
+            tokio::spawn(async move {
+                if let Ok(mut ws) = accept_async(stream).await {
+                    while let Some(Ok(msg)) = ws.next().await {
+                        if let tokio_tungstenite::tungstenite::Message::Text(txt) = msg {
+                            let parsed: Value = serde_json::from_str(&txt).unwrap();
+                            let id = parsed["id"].as_u64().unwrap();
+                            // Return false to simulate element not found in DOM
+                            let resp = json!({
+                                "id": id,
+                                "result": {
+                                    "result": { "type": "boolean", "value": false }
+                                }
+                            });
+                            let _ = ws
+                                .send(tokio_tungstenite::tungstenite::Message::Text(
+                                    resp.to_string().into(),
+                                ))
+                                .await;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let controller = BrowserController::new(http_port);
+    let res = controller.click("#nonexistent-button").await;
+    match res {
+        Err(BrowserError::Protocol(msg)) => {
+            assert!(msg.contains("Element not found for selector"));
+        }
+        other => panic!("Expected Element not found Protocol error, got {:?}", other),
+    }
 
     http_handle.abort();
     ws_handle.abort();
