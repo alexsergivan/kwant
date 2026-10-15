@@ -324,24 +324,26 @@ fn execute_single_turn(
                             timestamp: chrono::Utc::now().to_rfc3339(),
                         });
                     }
+                    let clickable = ctrl.list_clickables(30).await;
                     final_prompt = format!(
-                        "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel Sandbox VM browser to {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nUse this page content to answer the user's request. NEVER attempt to open a desktop browser window.]",
-                        prompt, target_url, nav.title, preview
+                        "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel Sandbox VM browser to {}. Title: \"{}\".\nClickable (topmost first): {}\nPage Content Preview:\n{}\n\nUse this page content to answer the user's request. NEVER attempt to open a desktop browser window.]",
+                        prompt, target_url, nav.title, clickable.join(" | "), preview
                     );
                 }
             }
         } else if let Some(ref curr_url) = active_browser_url {
             if !curr_url.is_empty() && !curr_url.contains("about:blank") && !curr_url.contains("example.com") {
-                let (title, page_text) = match active_ctrl {
+                let (title, page_text, clickable) = match active_ctrl {
                     Some(ref ctrl) => (
                         ctrl.current_title.lock().await.clone().unwrap_or_default(),
                         ctrl.extract_content().await.unwrap_or_default(),
+                        ctrl.list_clickables(30).await,
                     ),
-                    None => (String::new(), String::new()),
+                    None => (String::new(), String::new(), Vec::new()),
                 };
                 final_prompt = format!(
-                    "{}\n\n[Active Sandbox Browser State: The right-panel Sandbox VM browser (shared live with the user, who may have clicked or typed in it) is currently viewing: {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nMaintain context on this website. Do not suggest or switch to other services like YouTube unless explicitly requested.]",
-                    prompt, curr_url, title, truncate_chars(&page_text, 3000)
+                    "{}\n\n[Active Sandbox Browser State: The right-panel Sandbox VM browser (shared live with the user, who may have clicked or typed in it) is currently viewing: {}. Title: \"{}\".\nClickable (topmost first, e.g. dialog buttons): {}\nPage Content Preview:\n{}\n\nMaintain context on this website. Do not suggest or switch to other services like YouTube unless explicitly requested.]",
+                    prompt, curr_url, title, clickable.join(" | "), truncate_chars(&page_text, 3000)
                 );
             }
         }
@@ -356,6 +358,7 @@ fn execute_single_turn(
             effort_level: Some(effort_level),
             team_context,
             workspace_dir,
+            sandbox_id: Some(sandbox_target.clone()),
         };
 
         let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -825,6 +828,7 @@ pub async fn send_chat(
                                 repo_url: team_clone.repo_url.clone(),
                             }),
                             workspace_dir: workspace_dir_clone.clone(),
+                            sandbox_id: Some(team_clone.id.clone()),
                         };
 
                         let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -1739,6 +1743,103 @@ pub async fn interact_sandbox(
         "screenshot": screenshot,
         "image_base64": screenshot
     })))
+}
+
+/// Compact, text-only page state for agents (no base64 image to wade through).
+async fn sandbox_page_state(ctrl: &crate::sandbox::browser::BrowserController) -> serde_json::Value {
+    let (url, title) = match ctrl.sync_location().await {
+        Some(loc) => loc,
+        None => (
+            ctrl.current_url.lock().await.clone().unwrap_or_default(),
+            ctrl.current_title.lock().await.clone().unwrap_or_default(),
+        ),
+    };
+    let text = ctrl.extract_content().await.unwrap_or_default();
+    let clickable = ctrl.list_clickables(40).await;
+    json!({
+        "url": url,
+        "title": title,
+        "text": truncate_chars(&text, 2000),
+        "clickable": clickable,
+    })
+}
+
+async fn broadcast_sandbox_screenshot(state: &AppState, team_id: &str, ctrl: &crate::sandbox::browser::BrowserController) {
+    if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
+        let url = ctrl.current_url.lock().await.clone().unwrap_or_default();
+        let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
+            team_id: team_id.to_string(),
+            url,
+            image_base64: b64,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
+    }
+}
+
+pub async fn get_sandbox_page(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctrl = get_or_create_browser_controller(&state, &team_id)
+        .await
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(Json(sandbox_page_state(&ctrl).await))
+}
+
+/// Agent-facing action endpoint: performs one action and returns the resulting page state,
+/// so an agent can act and answer without extra round-trips.
+pub async fn act_sandbox(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+    Json(payload): Json<InteractPayload>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let ctrl = get_or_create_browser_controller(&state, &team_id)
+        .await
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let text = payload.text.clone().unwrap_or_default();
+    let result: Result<String, String> = match payload.action.as_str() {
+        "click_text" | "click" if !text.is_empty() => ctrl
+            .click_text(&text)
+            .await
+            .map(|label| format!("clicked \"{}\"", label))
+            .map_err(|e| e.to_string()),
+        "type" => ctrl
+            .interact_type(&text)
+            .await
+            .map(|_| format!("typed {} chars", text.chars().count()))
+            .map_err(|e| e.to_string()),
+        "key" => {
+            let key = payload.key.clone().unwrap_or_else(|| "Enter".into());
+            ctrl.interact_key(&key, payload.code.as_deref())
+                .await
+                .map(|_| format!("pressed {}", key))
+                .map_err(|e| e.to_string())
+        }
+        "scroll" => ctrl
+            .interact_scroll(640, 400, 0.0, payload.delta_y.unwrap_or(600.0))
+            .await
+            .map(|_| "scrolled".to_string())
+            .map_err(|e| e.to_string()),
+        other => Err(format!(
+            "Unknown action \"{}\". Use click_text (with text), type (with text), key (with key) or scroll (with delta_y).",
+            other
+        )),
+    };
+    broadcast_sandbox_screenshot(&state, &team_id, &ctrl).await;
+    let mut page = sandbox_page_state(&ctrl).await;
+    match result {
+        Ok(done) => page["result"] = json!(done),
+        Err(err) => page["error"] = json!(err),
+    }
+    if let Some(url) = page["url"].as_str() {
+        let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
+            team_id: team_id.clone(),
+            url: url.to_string(),
+            title: page["title"].as_str().unwrap_or("").to_string(),
+            status_code: 200,
+        });
+    }
+    Ok(Json(page))
 }
 
 pub async fn execute_tool(

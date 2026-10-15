@@ -7,7 +7,25 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+static CLI_BINARY_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<String>>>> =
+    std::sync::OnceLock::new();
+
+/// Cached lookup: resolving binaries spawns `which`, and this runs on every chat turn.
 pub fn find_cli_binary(name: &str) -> Option<String> {
+    let cache = CLI_BINARY_CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().ok().and_then(|c| c.get(name).cloned()) {
+        if hit.as_deref().map_or(true, |p| Path::new(p).exists()) {
+            return hit;
+        }
+    }
+    let found = find_cli_binary_uncached(name);
+    if let Ok(mut c) = cache.lock() {
+        c.insert(name.to_string(), found.clone());
+    }
+    found
+}
+
+fn find_cli_binary_uncached(name: &str) -> Option<String> {
     // 1. Try standard which command
     if let Ok(output) = std::process::Command::new("which").arg(name).output() {
         if output.status.success() {
@@ -172,11 +190,27 @@ impl Driver for CliDriver {
                 codex_out_file = Some(out_file);
             }
             "grok" => {
+                let grok_effort = match effort {
+                    "high" => "high",
+                    "low" => "low",
+                    _ => "medium",
+                };
+                // Without an explicit effort grok uses the user's default (often xhigh), which is far too slow for chat
+                cmd.arg("--reasoning-effort").arg(grok_effort);
+                cmd.arg("--no-plan").arg("--no-subagents");
                 cmd.arg("--rules").arg(&system_prompt);
                 cmd.arg("-p").arg(&effective_prompt);
             }
             _ => {
                 // claude default
+                let claude_effort = match effort {
+                    "high" => "high",
+                    "low" => "low",
+                    _ => "medium",
+                };
+                cmd.arg("--effort").arg(claude_effort);
+                // Skip starting the user's personal MCP servers on every chat turn
+                cmd.arg("--strict-mcp-config");
                 cmd.arg("--append-system-prompt").arg(&system_prompt);
                 cmd.arg("-p").arg(&effective_prompt);
             }
@@ -310,6 +344,7 @@ mod tests {
             effort_level: None,
             team_context: None,
             workspace_dir: None,
+            sandbox_id: None,
         };
 
         let result = build_cli_prompt(&input);
@@ -344,6 +379,7 @@ mod tests {
             effort_level: None,
             team_context: None,
             workspace_dir: None,
+            sandbox_id: None,
         };
 
         let result = build_cli_prompt(&input);

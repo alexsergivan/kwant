@@ -84,6 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let tools = ToolRunner::new(config.data_dir.join("workspace"));
             let broker = PermissionBroker::new();
             let router = LayaRouter::new(config.laya_url.clone());
+            kwnt::drivers::set_api_port(config.port);
 
             let state = AppState::new(config.clone(), db, tools, broker, router);
             let app = create_router(state);

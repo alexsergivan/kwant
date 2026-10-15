@@ -43,6 +43,20 @@ pub struct TurnInput {
     pub effort_level: Option<String>,
     pub team_context: Option<TeamContext>,
     pub workspace_dir: Option<std::path::PathBuf>,
+    /// Sandbox whose browser is shown to the user for this conversation (team, channel or kwant).
+    #[serde(default)]
+    pub sandbox_id: Option<String>,
+}
+
+static API_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
+
+/// Records the port the HTTP server listens on, so agents get working sandbox API URLs.
+pub fn set_api_port(port: u16) {
+    let _ = API_PORT.set(port);
+}
+
+fn api_port() -> u16 {
+    *API_PORT.get().unwrap_or(&8899)
 }
 
 impl TurnInput {
@@ -72,24 +86,32 @@ impl TurnInput {
         };
 
         let sandbox_target = self
-            .team_context
-            .as_ref()
-            .map(|t| t.id.clone())
+            .sandbox_id
+            .clone()
+            .or_else(|| self.team_context.as_ref().map(|t| t.id.clone()))
             .unwrap_or_else(|| self.kwant.id.clone());
 
+        let api = format!("http://127.0.0.1:{}/api/sandbox/{}", api_port(), sandbox_target);
         let sandbox_rules = format!(
             "\n\n[Virtual Machine Sandbox & Right-Panel In-Container Browser]\n\
-            You have an isolated Sandbox Virtual Machine with a headless Chromium browser displayed live in the user's right-side UI panel.\n\
-            Sandbox ID: {}\n\
-            Control API Endpoint: http://127.0.0.1:8899/api/sandbox/{}\n\
+            You have an isolated Sandbox Virtual Machine with a headless Chromium browser displayed live in the user's right-side UI panel. The user can browse in it too.\n\
+            Sandbox ID: {sandbox}\n\
             CRITICAL BROWSING INSTRUCTIONS:\n\
             1. NEVER execute host desktop commands (e.g. `open <url>`, `start <url>`, `xdg-open`) or attempt to launch browser windows on the user's desktop!\n\
-            2. The user wants and expects all web browsing to appear inside the right-side Sandbox VM panel in Kwants.\n\
-            3. To navigate the in-container browser to any webpage or search engine, execute:\n\
-               curl -s -X POST http://127.0.0.1:8899/api/sandbox/{}/navigate -H \"Content-Type: application/json\" -d '{{\"url\":\"<url>\"}}'\n\
-            4. This will instantly render the page in the user's right-side split pane and return the page title and status code.\n\
-            5. To view or extract text from the active page: curl -s http://127.0.0.1:8899/api/sandbox/{}/screenshot",
-            sandbox_target, sandbox_target, sandbox_target, sandbox_target
+            2. All web browsing must happen inside the right-side Sandbox browser, using ONLY these commands (the full API, do not search for more):\n\
+               - Open a page: curl -s -X POST {api}/navigate -H 'Content-Type: application/json' -d '{{\"url\":\"<url>\"}}'\n\
+               - Read the page (url, title, text, clickable labels): curl -s {api}/page\n\
+               - Click a button/link/field by its visible label: curl -s -X POST {api}/act -H 'Content-Type: application/json' -d '{{\"action\":\"click_text\",\"text\":\"<label>\"}}'\n\
+               - Type into the focused field: curl -s -X POST {api}/act -H 'Content-Type: application/json' -d '{{\"action\":\"type\",\"text\":\"<text>\"}}'\n\
+               - Press a key: curl -s -X POST {api}/act -H 'Content-Type: application/json' -d '{{\"action\":\"key\",\"key\":\"Enter\"}}'\n\
+               - Scroll: curl -s -X POST {api}/act -H 'Content-Type: application/json' -d '{{\"action\":\"scroll\",\"delta_y\":600}}'\n\
+               Every /act call returns the updated page (url, title, text, clickable), so you rarely need a separate read.\n\
+            3. The current page state and its clickable labels are usually already in the request. Act on them directly.\n\n\
+            [Speed]\n\
+            The user is waiting in a live chat. Respond as fast as possible: answer directly when you can, use the fewest tool calls (usually one), \
+            do not explore the filesystem, read source code or plan multi-step investigations to figure out how the browser works, and keep replies short.",
+            sandbox = sandbox_target,
+            api = api,
         );
 
         format!("{}{}{}", base, team_block, sandbox_rules)
@@ -116,7 +138,12 @@ pub async fn detect_available_models(db: &crate::db::Database) -> Vec<ModelDescr
         available.push(ModelDescriptor {
             id: "claude".into(),
             display_name: "Claude 3.5 Sonnet".into(),
-            capability_desc: "deep architecture, multi-file refactoring, long complex analysis".into(),
+            capability_desc: if claude_key.is_none() {
+                "fastest local replies (~3s): everyday questions, quick answers, plus deep architecture and complex analysis"
+            } else {
+                "deep architecture, multi-file refactoring, long complex analysis"
+            }
+            .into(),
             is_cli: claude_key.is_none() && claude_cli.is_some(),
         });
     }
@@ -129,7 +156,12 @@ pub async fn detect_available_models(db: &crate::db::Database) -> Vec<ModelDescr
         available.push(ModelDescriptor {
             id: "grok".into(),
             display_name: "xAI Grok-2".into(),
-            capability_desc: "fast technical reasoning, witty banter, quick coding solutions".into(),
+            capability_desc: if grok_key.is_none() {
+                "witty banter and technical reasoning; slow local CLI (10s+ per reply), avoid for quick questions"
+            } else {
+                "fast technical reasoning, witty banter, quick coding solutions"
+            }
+            .into(),
             is_cli: grok_key.is_none() && grok_cli.is_some(),
         });
     }

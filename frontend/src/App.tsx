@@ -31,6 +31,7 @@ export const App: React.FC = () => {
   const messagesCacheRef = useRef<Record<string, ChatMessage[]>>({});
   const [discussionState, setDiscussionState] = useState<DiscussionState>({ inProgress: false });
   const [routingState, setRoutingState] = useState<RoutingState | null>(null);
+  const routingStartedAtRef = useRef<number>(0);
   const discussionInProgressRef = useRef(false);
   const kwantsRef = useRef<Kwant[]>(kwants);
   kwantsRef.current = kwants;
@@ -153,6 +154,7 @@ export const App: React.FC = () => {
             const ctx = event.data?.context_id;
             const targetId = streamingContextIdRef.current;
             if (ctx && targetId && ctx !== targetId) break;
+            routingStartedAtRef.current = Date.now();
             setRoutingState({
               phase: 'deciding',
               contextId: ctx || targetId || undefined,
@@ -168,7 +170,10 @@ export const App: React.FC = () => {
             const targetId = streamingContextIdRef.current;
             if (ctx && targetId && ctx !== targetId) break;
             const name: string = event.data?.kwant_name;
-            setRoutingState((prev) => ({
+            const startedAt = routingStartedAtRef.current;
+            const applyDecision = () => {
+            if (routingStartedAtRef.current !== startedAt) return;
+            setRoutingState((prev) => (startedAt && !prev) ? prev : ({
               phase: 'decided',
               contextId: ctx || targetId || undefined,
               candidates: prev?.candidates || [],
@@ -183,6 +188,11 @@ export const App: React.FC = () => {
               streamingSpeakerNameRef.current = name;
             }
             playSfx('blip');
+            };
+            // Keep Laya's "deciding" visible briefly so instant heuristic routing doesn't just flash.
+            const remaining = 700 - (Date.now() - startedAt);
+            if (startedAt && remaining > 0) setTimeout(applyDecision, remaining);
+            else applyDecision();
             break;
           }
           case 'ApprovalRequired':
