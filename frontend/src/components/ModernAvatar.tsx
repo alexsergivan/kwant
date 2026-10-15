@@ -8,6 +8,138 @@ interface ModernAvatarProps {
   className?: string;
 }
 
+type Accessory = 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor' | 'none';
+
+interface Creature {
+  body: string;
+  shade: string;
+  light: string;
+  accent: string;
+  accessory: Accessory;
+}
+
+const FRAME = '#4a3f8a';
+const PANEL = '#15112e';
+const SCAN = '#0d0a1f';
+const INK = '#1b1033';
+const BLUSH = '#ff6b81';
+
+const PALETTES: Record<string, Omit<Creature, 'accessory'>> = {
+  yellow: { body: '#fdc934', shade: '#d98a1f', light: '#fff0a0', accent: '#5ce1ff' },
+  green: { body: '#3ccf6e', shade: '#1f8f4c', light: '#a8f5bf', accent: '#c6ff6b' },
+  pink: { body: '#ff7eb6', shade: '#c9487f', light: '#ffd0e4', accent: '#ffe066' },
+  cyan: { body: '#5ce1ff', shade: '#2a92c9', light: '#d2f7ff', accent: '#ff6b81' },
+  violet: { body: '#a98bff', shade: '#6d4fd6', light: '#e1d6ff', accent: '#ffd23f' },
+  orange: { body: '#ff9f43', shade: '#c4621c', light: '#ffd9a8', accent: '#5ce1ff' },
+  blue: { body: '#6d9bff', shade: '#3c5fcf', light: '#cddcff', accent: '#ff7eb6' },
+};
+
+const hash = (s: string) => {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+};
+
+function pickCreature(role: string, name: string): Creature {
+  const norm = `${role} ${name}`.toLowerCase();
+  const rules: Array<[string[], keyof typeof PALETTES, Accessory]> = [
+    [['laya'], 'violet', 'crown'],
+    [['user', 'player', 'hero', 'you'], 'blue', 'ears'],
+    [['architect', 'cyber_mage', 'mage'], 'violet', 'horns'],
+    [['tech', 'ninja', 'pixel', 'lead'], 'cyan', 'visor'],
+    [['devops', 'terminal', 'knight', 'shell', 'infra'], 'green', 'spikes'],
+    [['security', 'shield', 'guard'], 'orange', 'ears'],
+    [['fast', 'grok', 'zap', 'speed'], 'pink', 'sprout'],
+  ];
+  for (const [keys, palette, accessory] of rules) {
+    if (keys.some((k) => norm.includes(k))) return { ...PALETTES[palette], accessory };
+  }
+  // Unknown roles still get a stable, distinct creature per name
+  const palettes = Object.keys(PALETTES);
+  const accessories: Accessory[] = ['antenna', 'spikes', 'ears', 'horns', 'sprout', 'antenna'];
+  const h = hash(name || role);
+  return {
+    ...PALETTES[palettes[h % palettes.length]],
+    accessory: accessories[Math.floor(h / 7) % accessories.length],
+  };
+}
+
+const px = (x: number, y: number, w: number, h: number, fill: string, key?: string) => (
+  <rect key={key ?? `${x}-${y}-${w}-${h}-${fill}`} x={x} y={y} width={w} height={h} fill={fill} />
+);
+
+// Stepped octagon frame, as unions of rects
+const FRAME_FILL: Array<[number, number, number, number]> = [
+  [6, 2, 14, 22],
+  [4, 3, 18, 20],
+  [3, 4, 20, 18],
+  [2, 6, 22, 14],
+];
+
+function renderAccessory(c: Creature) {
+  switch (c.accessory) {
+    case 'antenna':
+      return [px(15, 6, 1, 1, INK), px(15, 3, 2, 2, c.accent), px(15, 3, 1, 1, '#ffffff')];
+    case 'spikes':
+      return [
+        px(10, 5, 1, 2, c.body), px(13, 4, 1, 3, c.body), px(16, 5, 1, 2, c.body),
+        px(6, 10, 1, 1, c.shade), px(6, 13, 1, 1, c.shade), px(19, 10, 1, 1, c.shade), px(19, 13, 1, 1, c.shade),
+        px(13, 4, 1, 1, c.light),
+      ];
+    case 'ears':
+      return [px(8, 5, 2, 3, c.body), px(16, 5, 2, 3, c.shade), px(8, 6, 1, 1, BLUSH), px(17, 6, 1, 1, BLUSH)];
+    case 'horns':
+      return [px(8, 5, 1, 2, c.accent), px(9, 6, 1, 1, c.accent), px(17, 5, 1, 2, c.accent), px(16, 6, 1, 1, c.accent)];
+    case 'sprout':
+      return [px(13, 5, 1, 2, '#3ccf6e'), px(14, 4, 2, 1, '#3ccf6e'), px(11, 4, 2, 1, '#1f8f4c')];
+    case 'crown':
+      return [
+        px(10, 5, 6, 2, c.accent), px(10, 4, 1, 1, c.accent), px(12, 3, 2, 2, c.accent), px(15, 4, 1, 1, c.accent),
+        px(12, 5, 2, 1, BLUSH),
+      ];
+    case 'visor':
+      // Headphones
+      return [px(9, 5, 8, 1, c.accent), px(8, 6, 1, 3, c.accent), px(17, 6, 1, 3, c.accent), px(6, 10, 2, 3, c.accent), px(18, 10, 2, 3, c.accent)];
+    default:
+      return [];
+  }
+}
+
+function renderCreature(c: Creature) {
+  return [
+    // Ground shadow
+    px(7, 20, 12, 1, '#261d4a', 'shadow'),
+    ...renderAccessory(c),
+    // Body
+    px(9, 7, 8, 1, c.body, 'b1'),
+    px(8, 8, 10, 1, c.body, 'b2'),
+    px(7, 9, 12, 7, c.body, 'b3'),
+    px(8, 16, 10, 1, c.body, 'b4'),
+    px(9, 17, 8, 1, c.shade, 'b5'),
+    // Shading and highlight
+    px(18, 9, 1, 7, c.shade, 's1'),
+    px(17, 16, 1, 1, c.shade, 's2'),
+    px(7, 15, 1, 1, c.shade, 's3'),
+    px(8, 16, 1, 1, c.shade, 's4'),
+    px(10, 8, 2, 1, c.light, 'h1'),
+    px(9, 9, 1, 1, c.light, 'h2'),
+    // Eyes
+    px(10, 10, 2, 3, INK, 'e1'),
+    px(14, 10, 2, 3, INK, 'e2'),
+    px(10, 10, 1, 1, '#f5f2ff', 'e3'),
+    px(14, 10, 1, 1, '#f5f2ff', 'e4'),
+    // Blush and smile
+    px(8, 13, 2, 1, BLUSH, 'k1'),
+    px(16, 13, 2, 1, BLUSH, 'k2'),
+    px(11, 14, 1, 1, INK, 'm1'),
+    px(14, 14, 1, 1, INK, 'm2'),
+    px(12, 15, 2, 1, INK, 'm3'),
+    // Feet
+    px(9, 18, 2, 1, INK, 'f1'),
+    px(15, 18, 2, 1, INK, 'f2'),
+  ];
+}
+
 export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   role = 'default',
   name = '',
@@ -15,239 +147,38 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   isOnline,
   className = '',
 }) => {
-  const norm = (role + ' ' + name).toLowerCase();
-
-  // Determine avatar type and theme border/bg
-  let type: 'user' | 'architect' | 'techlead' | 'devops' | 'security' | 'fast' | 'bot' = 'bot';
-  let borderClass = 'border-zinc-700/60';
-
-  if (norm.includes('user') || norm.includes('player') || norm.includes('hero')) {
-    type = 'user';
-    borderClass = 'border-indigo-500/40 shadow-indigo-500/10';
-  } else if (norm.includes('architect') || norm.includes('cyber_mage') || norm.includes('mage')) {
-    type = 'architect';
-    borderClass = 'border-violet-500/40 shadow-violet-500/10';
-  } else if (norm.includes('tech') || norm.includes('ninja') || norm.includes('pixel') || norm.includes('lead')) {
-    type = 'techlead';
-    borderClass = 'border-sky-500/40 shadow-sky-500/10';
-  } else if (norm.includes('devops') || norm.includes('terminal') || norm.includes('knight') || norm.includes('shell') || norm.includes('infra')) {
-    type = 'devops';
-    borderClass = 'border-emerald-500/40 shadow-emerald-500/10';
-  } else if (norm.includes('security') || norm.includes('shield') || norm.includes('guard')) {
-    type = 'security';
-    borderClass = 'border-amber-500/40 shadow-amber-500/10';
-  } else if (norm.includes('fast') || norm.includes('grok') || norm.includes('zap') || norm.includes('speed')) {
-    type = 'fast';
-    borderClass = 'border-rose-500/40 shadow-rose-500/10';
-  }
-
-  // 16x16 Pixel Art SVG Sprite Renderer
-  const renderPixelSprite = () => {
-    switch (type) {
-      case 'architect':
-        return (
-          <svg
-            viewBox="0 0 16 16"
-            className="w-full h-full"
-            style={{ imageRendering: 'pixelated', shapeRendering: 'crispEdges' }}
-          >
-            {/* Background */}
-            <rect width="16" height="16" fill="#1b102e" />
-            {/* Sorcerer Hat & Crest */}
-            <rect x="6" y="1" width="4" height="2" fill="#7b2cbf" />
-            <rect x="5" y="3" width="6" height="2" fill="#9d4edd" />
-            <rect x="3" y="5" width="10" height="1" fill="#f72585" />
-            <rect x="7" y="2" width="2" height="1" fill="#e0aaff" />
-            {/* Face & Glowing Visor */}
-            <rect x="5" y="6" width="6" height="4" fill="#ffd166" />
-            <rect x="6" y="7" width="2" height="1" fill="#00f5d4" />
-            <rect x="9" y="7" width="2" height="1" fill="#00f5d4" />
-            <rect x="7" y="8" width="2" height="1" fill="#c77dff" />
-            {/* Robe */}
-            <rect x="4" y="10" width="8" height="5" fill="#3c096c" />
-            <rect x="6" y="10" width="4" height="5" fill="#5a189a" />
-            {/* Staff with Energy Orb */}
-            <rect x="13" y="3" width="1" height="12" fill="#b5179e" />
-            <rect x="12" y="2" width="3" height="2" fill="#00f5d4" />
-            <rect x="13" y="2" width="1" height="1" fill="#ffffff" />
-          </svg>
-        );
-
-      case 'techlead':
-        return (
-          <svg
-            viewBox="0 0 16 16"
-            className="w-full h-full"
-            style={{ imageRendering: 'pixelated', shapeRendering: 'crispEdges' }}
-          >
-            {/* Background */}
-            <rect width="16" height="16" fill="#0e1726" />
-            {/* Cyber Ninja Hood */}
-            <rect x="4" y="2" width="8" height="5" fill="#1f2937" />
-            <rect x="5" y="1" width="6" height="1" fill="#374151" />
-            {/* Mask & Eyes */}
-            <rect x="4" y="5" width="8" height="3" fill="#111827" />
-            <rect x="5" y="5" width="6" height="2" fill="#ffd166" />
-            <rect x="6" y="5" width="2" height="1" fill="#ef233c" />
-            <rect x="9" y="5" width="2" height="1" fill="#ef233c" />
-            {/* Torso & Tech Armor */}
-            <rect x="4" y="8" width="8" height="7" fill="#1f2937" />
-            <rect x="6" y="8" width="4" height="3" fill="#0284c7" />
-            <rect x="7" y="11" width="2" height="4" fill="#38bdf8" />
-            {/* Cyber Katana on back */}
-            <rect x="2" y="2" width="1" height="12" fill="#e2e8f0" />
-            <rect x="1" y="11" width="3" height="2" fill="#f59e0b" />
-          </svg>
-        );
-
-      case 'devops':
-        return (
-          <svg
-            viewBox="0 0 16 16"
-            className="w-full h-full"
-            style={{ imageRendering: 'pixelated', shapeRendering: 'crispEdges' }}
-          >
-            {/* Background */}
-            <rect width="16" height="16" fill="#061e17" />
-            {/* CRT Terminal Helmet */}
-            <rect x="3" y="2" width="10" height="7" fill="#334155" />
-            <rect x="4" y="3" width="8" height="5" fill="#022c22" />
-            {/* Phosphor Green Console Screen (>_) */}
-            <rect x="5" y="4" width="1" height="1" fill="#10b981" />
-            <rect x="6" y="5" width="1" height="1" fill="#10b981" />
-            <rect x="5" y="6" width="1" height="1" fill="#10b981" />
-            <rect x="8" y="6" width="3" height="1" fill="#34d399" />
-            {/* Armored Chassis */}
-            <rect x="4" y="9" width="8" height="6" fill="#475569" />
-            <rect x="6" y="10" width="4" height="4" fill="#f59e0b" />
-            <rect x="7" y="11" width="2" height="2" fill="#fbbf24" />
-            {/* Server Shield with Status LED */}
-            <rect x="1" y="6" width="2" height="8" fill="#64748b" />
-            <rect x="1" y="7" width="1" height="1" fill="#34d399" />
-            <rect x="1" y="9" width="1" height="1" fill="#f59e0b" />
-          </svg>
-        );
-
-      case 'security':
-        return (
-          <svg
-            viewBox="0 0 16 16"
-            className="w-full h-full"
-            style={{ imageRendering: 'pixelated', shapeRendering: 'crispEdges' }}
-          >
-            {/* Background */}
-            <rect width="16" height="16" fill="#201505" />
-            {/* Sentinel Helm */}
-            <rect x="4" y="2" width="8" height="6" fill="#d97706" />
-            <rect x="6" y="1" width="4" height="2" fill="#fbbf24" />
-            {/* Visor & Optic Sensor */}
-            <rect x="5" y="4" width="6" height="2" fill="#451a03" />
-            <rect x="7" y="4" width="2" height="2" fill="#38bdf8" />
-            <rect x="8" y="4" width="1" height="1" fill="#ffffff" />
-            {/* Golden Aegis Armor */}
-            <rect x="4" y="8" width="8" height="7" fill="#b45309" />
-            <rect x="6" y="9" width="4" height="5" fill="#f59e0b" />
-            {/* Firewall Cross on Chest */}
-            <rect x="7" y="10" width="2" height="3" fill="#ef4444" />
-            <rect x="6" y="11" width="4" height="1" fill="#ef4444" />
-          </svg>
-        );
-
-      case 'fast':
-        return (
-          <svg
-            viewBox="0 0 16 16"
-            className="w-full h-full"
-            style={{ imageRendering: 'pixelated', shapeRendering: 'crispEdges' }}
-          >
-            {/* Background */}
-            <rect width="16" height="16" fill="#240716" />
-            {/* Spiked Neon Hair */}
-            <rect x="4" y="1" width="2" height="3" fill="#f43f5e" />
-            <rect x="7" y="1" width="2" height="4" fill="#fb7185" />
-            <rect x="10" y="2" width="2" height="3" fill="#f43f5e" />
-            {/* Headset & Visor */}
-            <rect x="3" y="4" width="1" height="4" fill="#38bdf8" />
-            <rect x="12" y="4" width="1" height="4" fill="#38bdf8" />
-            <rect x="4" y="4" width="8" height="4" fill="#ffd166" />
-            <rect x="5" y="5" width="6" height="2" fill="#06b6d4" />
-            <rect x="6" y="5" width="4" height="1" fill="#ffffff" />
-            {/* Cyber Jacket with Lightning Bolt */}
-            <rect x="4" y="8" width="8" height="7" fill="#be123c" />
-            <rect x="7" y="9" width="2" height="2" fill="#facc15" />
-            <rect x="6" y="11" width="2" height="2" fill="#facc15" />
-            <rect x="7" y="12" width="2" height="2" fill="#facc15" />
-          </svg>
-        );
-
-      case 'user':
-        return (
-          <svg
-            viewBox="0 0 16 16"
-            className="w-full h-full"
-            style={{ imageRendering: 'pixelated', shapeRendering: 'crispEdges' }}
-          >
-            {/* Background */}
-            <rect width="16" height="16" fill="#111827" />
-            {/* Hair */}
-            <rect x="4" y="2" width="8" height="3" fill="#854d0e" />
-            {/* Neon Headband */}
-            <rect x="4" y="5" width="8" height="1" fill="#ec4899" />
-            <rect x="12" y="6" width="2" height="2" fill="#ec4899" />
-            {/* Face & Eyes */}
-            <rect x="4" y="6" width="8" height="4" fill="#fde047" />
-            <rect x="6" y="7" width="1" height="1" fill="#0f172a" />
-            <rect x="9" y="7" width="1" height="1" fill="#0f172a" />
-            {/* Cyber Bomber Jacket */}
-            <rect x="4" y="10" width="8" height="5" fill="#3b82f6" />
-            <rect x="6" y="10" width="4" height="5" fill="#ffffff" />
-            <rect x="7" y="11" width="2" height="4" fill="#f59e0b" />
-          </svg>
-        );
-
-      default:
-        // Autonomous Droid / Bot
-        return (
-          <svg
-            viewBox="0 0 16 16"
-            className="w-full h-full"
-            style={{ imageRendering: 'pixelated', shapeRendering: 'crispEdges' }}
-          >
-            {/* Background */}
-            <rect width="16" height="16" fill="#18181b" />
-            {/* Antenna */}
-            <rect x="7" y="1" width="2" height="2" fill="#71717a" />
-            <rect x="7" y="1" width="2" height="1" fill="#ef4444" />
-            {/* Head Chassis */}
-            <rect x="4" y="3" width="8" height="7" fill="#3f3f46" />
-            {/* Square Glowing Eyes */}
-            <rect x="5" y="5" width="2" height="2" fill="#38bdf8" />
-            <rect x="9" y="5" width="2" height="2" fill="#38bdf8" />
-            {/* Speaker Mouth */}
-            <rect x="6" y="8" width="4" height="1" fill="#18181b" />
-            {/* Body Chassis with Dual Status LEDs */}
-            <rect x="4" y="10" width="8" height="5" fill="#27272a" />
-            <rect x="6" y="11" width="1" height="1" fill="#10b981" />
-            <rect x="9" y="11" width="1" height="1" fill="#f59e0b" />
-            <rect x="6" y="13" width="4" height="1" fill="#3b82f6" />
-          </svg>
-        );
-    }
-  };
+  const creature = pickCreature(role, name);
+  // At tiny sizes the frame would dominate, so zoom in on the creature alone
+  const framed = size > 20;
+  // Small framed avatars enlarge the creature so it stays readable
+  const compact = framed && size < 48;
 
   return (
     <div
       className={`relative inline-flex flex-shrink-0 select-none ${className}`}
       style={{ width: size, height: size }}
+      title={name || undefined}
     >
-      <div
-        className={`w-full h-full rounded-xl overflow-hidden shadow-sm border ${borderClass} flex items-center justify-center`}
+      <svg
+        viewBox={framed ? '0 0 26 26' : '5 2.5 16 17'}
+        className="w-full h-full"
+        style={{ imageRendering: 'pixelated', shapeRendering: 'crispEdges' }}
+        aria-hidden="true"
       >
-        {renderPixelSprite()}
-      </div>
+        {framed && FRAME_FILL.map(([x, y, w, h]) => px(x - 1, y - 1, w + 2, h + 2, FRAME, `fo-${x}-${y}`))}
+        {framed && FRAME_FILL.map(([x, y, w, h]) => px(x, y, w, h, PANEL, `fi-${x}-${y}`))}
+        {/* Hide scanlines at small sizes, where they'd just muddy the colors */}
+        {size >= 28 &&
+          Array.from({ length: 16 }, (_, i) => (
+            <rect key={`scan-${i}`} x={3.5} y={4.5 + i} width={19} height={0.25} fill={SCAN} />
+          ))}
+        <g transform={compact ? 'translate(13 12) scale(1.2) translate(-13 -12)' : undefined}>
+          {renderCreature(creature).filter((r) => framed && !compact || r.key !== 'shadow')}
+        </g>
+      </svg>
       {isOnline !== undefined && (
         <span
-          className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-zinc-950 ${
+          className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-zinc-950 ${
             isOnline ? 'bg-emerald-400' : 'bg-zinc-600'
           }`}
         />
