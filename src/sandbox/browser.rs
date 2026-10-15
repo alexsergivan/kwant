@@ -14,6 +14,77 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// `function(needle)` evaluated in the page. Collects visible interactive elements (incl. open
+/// shadow roots and same-origin iframes), topmost first. With a needle, picks the best label match
+/// and either returns its viewport center (when nothing covers it) or clicks it directly.
+const CLICKABLES_JS: &str = r#"function (needle) {
+  var SEL = 'button,a[href],[role=button],[role=link],[role=menuitem],[role=tab],[role=checkbox],[role=option],input,textarea,select,summary,label,[onclick]';
+  var items = [];
+  function clean(s) { return (s || '').replace(/\s+/g, ' ').trim().slice(0, 80); }
+  function labelOf(el) {
+    var tag = el.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+      var t = (el.type || '').toLowerCase();
+      if (t === 'submit' || t === 'button') return clean(el.value);
+      if (t === 'hidden') return '';
+      var name = clean(el.getAttribute('aria-label') || el.placeholder || el.name || el.id);
+      return name ? name + ' (' + (t === 'checkbox' || t === 'radio' ? t : 'field') + ')' : '';
+    }
+    return clean(el.innerText || el.getAttribute('aria-label') || el.title || el.value);
+  }
+  function walk(root, ox, oy) {
+    var all;
+    try { all = root.querySelectorAll('*'); } catch (e) { return; }
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.shadowRoot) walk(el.shadowRoot, ox, oy);
+      if (el.tagName === 'IFRAME') {
+        try { var d = el.contentDocument; if (d) { var fr = el.getBoundingClientRect(); walk(d, ox + fr.left, oy + fr.top); } } catch (e) {}
+        continue;
+      }
+      if (!el.matches(SEL)) continue;
+      var r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) continue;
+      var cs = getComputedStyle(el);
+      if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) === 0) continue;
+      var label = labelOf(el);
+      if (!label) continue;
+      var lx = r.left + r.width / 2, ly = r.top + r.height / 2;
+      var x = ox + lx, y = oy + ly;
+      var inView = x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight;
+      var onTop = false;
+      if (inView) {
+        var hit = root.elementFromPoint ? root.elementFromPoint(lx, ly) : null;
+        onTop = !hit || hit === el || el.contains(hit) || hit.contains(el);
+      }
+      items.push({ label: label, x: Math.round(x), y: Math.round(y), inView: inView, onTop: onTop, el: el });
+    }
+  }
+  walk(document, 0, 0);
+  items.sort(function (a, b) { return (b.onTop - a.onTop) || (b.inView - a.inView); });
+  var match = null;
+  if (needle) {
+    var n = clean(needle).toLowerCase(), best = 0;
+    for (var j = 0; j < items.length; j++) {
+      var l = items[j].label.toLowerCase();
+      var s = l === n ? 3 : l.indexOf(n) === 0 ? 2 : l.indexOf(n) >= 0 ? 1 : 0;
+      if (s > best) { best = s; match = items[j]; }
+    }
+    if (match) {
+      var m = match.el;
+      if (!match.onTop) {
+        m.scrollIntoView({ block: 'center' });
+        if (typeof m.focus === 'function') m.focus();
+        m.click();
+        match = { label: match.label, clicked: true };
+      } else {
+        match = { label: match.label, x: match.x, y: match.y, clicked: false };
+      }
+    }
+  }
+  return { items: items.map(function (i) { return { label: i.label, onTop: i.onTop }; }), match: match };
+}"#;
+
 #[derive(Error, Debug)]
 pub enum BrowserError {
     #[error("HTTP error connecting to CDP: {0}")]
@@ -630,6 +701,94 @@ impl BrowserController {
         Ok(())
     }
 
+    /// Re-reads the page's real URL and title, since user clicks/keys can navigate
+    /// without going through `navigate()`.
+    pub async fn sync_location(&self) -> Option<(String, String)> {
+        let res = self
+            .send_cdp_command(
+                "Runtime.evaluate",
+                json!({ "expression": "[location.href, document.title]", "returnByValue": true }),
+            )
+            .await
+            .ok()?;
+        let vals = res["result"]["value"].as_array()?;
+        let url = vals.first()?.as_str()?.to_string();
+        let title = vals.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if url.is_empty() {
+            return None;
+        }
+        *self.current_url.lock().await = Some(url.clone());
+        *self.current_title.lock().await = Some(title.clone());
+        Some((url, title))
+    }
+
+    /// Labels of visible interactive elements, topmost (e.g. modal buttons) first.
+    pub async fn list_clickables(&self, limit: usize) -> Vec<String> {
+        let expression = format!("({})(null)", CLICKABLES_JS);
+        let Ok(res) = self
+            .send_cdp_command(
+                "Runtime.evaluate",
+                json!({ "expression": expression, "returnByValue": true }),
+            )
+            .await
+        else {
+            return Vec::new();
+        };
+        let mut labels: Vec<String> = Vec::new();
+        if let Some(items) = res["result"]["value"]["items"].as_array() {
+            for item in items {
+                if let Some(label) = item["label"].as_str() {
+                    if !labels.iter().any(|l| l == label) {
+                        labels.push(label.to_string());
+                    }
+                }
+                if labels.len() >= limit {
+                    break;
+                }
+            }
+        }
+        labels
+    }
+
+    /// Clicks the visible element whose label best matches `text` (exact > prefix > contains,
+    /// topmost first). Returns the clicked label, or an error listing the available ones.
+    pub async fn click_text(&self, text: &str) -> Result<String, BrowserError> {
+        let needle = serde_json::to_string(text).map_err(|e| BrowserError::Protocol(e.to_string()))?;
+        let expression = format!("({})({})", CLICKABLES_JS, needle);
+        let res = self
+            .send_cdp_command(
+                "Runtime.evaluate",
+                json!({ "expression": expression, "returnByValue": true }),
+            )
+            .await?;
+        let value = &res["result"]["value"];
+        let Some(label) = value["match"]["label"].as_str().map(str::to_string) else {
+            let options: Vec<&str> = value["items"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|i| i["label"].as_str()).take(25).collect())
+                .unwrap_or_default();
+            return Err(BrowserError::Protocol(format!(
+                "No clickable element matching \"{}\". Visible options: {}",
+                text,
+                options.join(" | ")
+            )));
+        };
+        if value["match"]["clicked"].as_bool() == Some(true) {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = self.sync_location().await;
+            let _ = self.capture_screenshot().await;
+        } else {
+            let x = value["match"]["x"].as_i64().unwrap_or(0);
+            let y = value["match"]["y"].as_i64().unwrap_or(0);
+            self.interact_click(x, y).await?;
+            // Give navigations/animations triggered by the click a moment to settle
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let _ = self.sync_location().await;
+            let _ = self.capture_screenshot().await;
+        }
+        Ok(label)
+    }
+
     pub async fn interact_click(&self, x: i64, y: i64) -> Result<String, BrowserError> {
         self.send_cdp_command(
             "Input.dispatchMouseEvent",
@@ -657,6 +816,7 @@ impl BrowserController {
 
         tokio::time::sleep(Duration::from_millis(150)).await;
         let _ = self.collect_and_save_captured_credentials().await;
+        let _ = self.sync_location().await;
         self.capture_screenshot().await
     }
 
@@ -669,6 +829,7 @@ impl BrowserController {
 
         tokio::time::sleep(Duration::from_millis(150)).await;
         let _ = self.collect_and_save_captured_credentials().await;
+        let _ = self.sync_location().await;
         self.capture_screenshot().await
     }
 
@@ -693,6 +854,7 @@ impl BrowserController {
 
         tokio::time::sleep(Duration::from_millis(150)).await;
         let _ = self.collect_and_save_captured_credentials().await;
+        let _ = self.sync_location().await;
         self.capture_screenshot().await
     }
 
@@ -710,6 +872,7 @@ impl BrowserController {
         .await?;
 
         tokio::time::sleep(Duration::from_millis(150)).await;
+        let _ = self.sync_location().await;
         self.capture_screenshot().await
     }
 }

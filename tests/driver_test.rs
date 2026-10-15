@@ -86,6 +86,7 @@ async fn test_mock_driver_streaming() {
         effort_level: None,
         team_context: None,
         workspace_dir: None,
+        sandbox_id: None,
     };
 
     let handle = tokio::spawn(async move {
@@ -141,6 +142,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         effort_level: None,
         team_context: None,
         workspace_dir: None,
+        sandbox_id: None,
     };
 
     let solo_prompt = input_solo.format_system_prompt();
@@ -169,6 +171,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
             repo_url: None,
         }),
         workspace_dir: None,
+        sandbox_id: None,
     };
 
     let team_prompt = input_team.format_system_prompt();
@@ -194,6 +197,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
             repo_url: Some("https://github.com/org/app".into()),
         }),
         workspace_dir: Some(std::path::PathBuf::from("/Users/dev/app")),
+        sandbox_id: None,
     };
 
     let ws_prompt = input_workspace.format_system_prompt();

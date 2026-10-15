@@ -4,7 +4,7 @@ pub mod events;
 
 pub use api::ApiDriver;
 pub use cli::{find_cli_binary, CliDriver};
-pub use events::RuntimeEvent;
+pub use events::{RoutingCandidate, RuntimeEvent};
 
 use crate::db::models::{Kwant, Message};
 use async_trait::async_trait;
@@ -45,6 +45,9 @@ pub struct TurnInput {
     pub workspace_dir: Option<std::path::PathBuf>,
     #[serde(default)]
     pub browser_api_url: Option<String>,
+    /// Sandbox whose browser is shown to the user for this conversation (team, channel or kwant).
+    #[serde(default)]
+    pub sandbox_id: Option<String>,
 }
 
 impl TurnInput {
@@ -73,16 +76,33 @@ impl TurnInput {
             "\n\nRespond clearly in character.".to_string()
         };
 
-        let browser_api = self.browser_api_url.clone().unwrap_or_else(|| {
-            format!("http://127.0.0.1:{}/api/sandbox/{}", crate::config::DEFAULT_PORT, self.thread_id)
+        let sandbox_target = self
+            .sandbox_id
+            .clone()
+            .or_else(|| self.team_context.as_ref().map(|t| t.id.clone()))
+            .unwrap_or_else(|| self.kwant.id.clone());
+        let api = self.browser_api_url.clone().unwrap_or_else(|| {
+            format!("http://127.0.0.1:{}/api/sandbox/{}", crate::config::DEFAULT_PORT, sandbox_target)
         });
         let sandbox_rules = format!(
-            "\n\n[Bot Browser]\nYour browser session is displayed in the user's right panel. Shell execution uses a separate container.\n\
-            Browser API: {browser_api}\n\
-            Never open a host desktop browser. To navigate, use curl -sS --fail-with-body -X POST '{browser_api}/navigate' -H 'Content-Type: application/json' -d '{{\"url\":\"<url>\"}}'.\n\
-            To inspect the current view: curl -sS --fail-with-body '{browser_api}/screenshot'.\n\
+            "\n\n[Bot Browser]\n\
+            Your browser session is displayed live in the user's right panel; the user can browse in it too. Shell execution uses a separate container.\n\
+            Browser API: {api}\n\
+            Never open a host desktop browser (no `open <url>`, `xdg-open`, etc.). Use ONLY these commands (the full API, do not search for more):\n\
+            - Open a page: curl -sS -X POST '{api}/navigate' -H 'Content-Type: application/json' -d '{{\"url\":\"<url>\"}}'\n\
+            - Read the page (url, title, text, clickable labels): curl -sS '{api}/page'\n\
+            - Click a button/link/field by its visible label: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"click_text\",\"text\":\"<label>\"}}'\n\
+            - Type into the focused field: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"type\",\"text\":\"<text>\"}}'\n\
+            - Press a key: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"key\",\"key\":\"Enter\"}}'\n\
+            - Scroll: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"scroll\",\"delta_y\":600}}'\n\
+            Every /act call returns the updated page (url, title, text, clickable), so you rarely need a separate read. \
+            The current page state and its clickable labels are usually already in the request; act on them directly.\n\
             A 409 means the user has taken control: stop browser actions and wait for the user to return control. Never bypass the control API or connect to CDP directly.\n\
-            Report API errors honestly. Never claim a page opened unless navigation succeeded."
+            Report API errors honestly. Never claim a page opened unless navigation succeeded.\n\n\
+            [Speed]\n\
+            The user is waiting in a live chat. Respond as fast as possible: answer directly when you can, use the fewest tool calls (usually one), \
+            do not explore the filesystem, read source code or plan multi-step investigations to figure out how the browser works, and keep replies short.",
+            api = api,
         );
 
         format!("{}{}{}", base, team_block, sandbox_rules)
@@ -109,7 +129,12 @@ pub async fn detect_available_models(db: &crate::db::Database) -> Vec<ModelDescr
         available.push(ModelDescriptor {
             id: "claude".into(),
             display_name: "Claude 3.5 Sonnet".into(),
-            capability_desc: "deep architecture, multi-file refactoring, long complex analysis".into(),
+            capability_desc: if claude_key.is_none() {
+                "fastest local replies (~3s): everyday questions, quick answers, plus deep architecture and complex analysis"
+            } else {
+                "deep architecture, multi-file refactoring, long complex analysis"
+            }
+            .into(),
             is_cli: claude_key.is_none() && claude_cli.is_some(),
         });
     }
@@ -122,7 +147,12 @@ pub async fn detect_available_models(db: &crate::db::Database) -> Vec<ModelDescr
         available.push(ModelDescriptor {
             id: "grok".into(),
             display_name: "xAI Grok-2".into(),
-            capability_desc: "fast technical reasoning, witty banter, quick coding solutions".into(),
+            capability_desc: if grok_key.is_none() {
+                "witty banter and technical reasoning; slow local CLI (10s+ per reply), avoid for quick questions"
+            } else {
+                "fast technical reasoning, witty banter, quick coding solutions"
+            }
+            .into(),
             is_cli: grok_key.is_none() && grok_cli.is_some(),
         });
     }

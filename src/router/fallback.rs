@@ -111,11 +111,11 @@ pub fn heuristic_fallback_with_models(
         }
     }
 
-    // 4. Default fast & general
-    let selected = if is_available("grok") {
-        "grok"
-    } else if is_available("claude") {
+    // 4. Default fast & general — ordered by measured CLI latency (claude ~3s, codex ~7s, grok 10s+)
+    let selected = if is_available("claude") {
         "claude"
+    } else if is_available("grok") {
+        "grok"
     } else if is_available("codex") {
         "codex"
     } else if !available_models.is_empty() {

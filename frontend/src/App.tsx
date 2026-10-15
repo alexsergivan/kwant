@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { Sidebar, Kwant, Channel, Team } from './components/Sidebar';
-import { ChatView, ChatMessage, DiscussionState } from './components/ChatView';
+import { ChatView, ChatMessage, DiscussionState, RoutingState } from './components/ChatView';
 import { PendingApproval } from './components/ModernApprovalCard';
 import { SettingsModal } from './components/SettingsModal';
 import { NewAgentModal } from './components/NewAgentModal';
@@ -30,6 +30,8 @@ export const App: React.FC = () => {
   isChannelRef.current = isChannel;
   const messagesCacheRef = useRef<Record<string, ChatMessage[]>>({});
   const [discussionState, setDiscussionState] = useState<DiscussionState>({ inProgress: false });
+  const [routingState, setRoutingState] = useState<RoutingState | null>(null);
+  const routingStartedAtRef = useRef<number>(0);
   const discussionInProgressRef = useRef(false);
   const kwantsRef = useRef<Kwant[]>(kwants);
   kwantsRef.current = kwants;
@@ -148,6 +150,52 @@ export const App: React.FC = () => {
           case 'ThinkingDelta':
             setStreamingThinking(event.data);
             break;
+          case 'routing_started':
+          case 'RoutingStarted': {
+            const ctx = event.data?.context_id;
+            const targetId = streamingContextIdRef.current;
+            if (ctx && targetId && ctx !== targetId) break;
+            routingStartedAtRef.current = Date.now();
+            setRoutingState({
+              phase: 'deciding',
+              contextId: ctx || targetId || undefined,
+              candidates: event.data?.candidates || [],
+            });
+            setStreamingSpeakerName('Laya');
+            streamingSpeakerNameRef.current = 'Laya';
+            break;
+          }
+          case 'routing_decided':
+          case 'RoutingDecided': {
+            const ctx = event.data?.context_id;
+            const targetId = streamingContextIdRef.current;
+            if (ctx && targetId && ctx !== targetId) break;
+            const name: string = event.data?.kwant_name;
+            const startedAt = routingStartedAtRef.current;
+            const applyDecision = () => {
+            if (routingStartedAtRef.current !== startedAt) return;
+            setRoutingState((prev) => (startedAt && !prev) ? prev : ({
+              phase: 'decided',
+              contextId: ctx || targetId || undefined,
+              candidates: prev?.candidates || [],
+              kwantId: event.data?.kwant_id,
+              kwantName: name,
+              kwantTitle: event.data?.kwant_title,
+              reason: event.data?.reason,
+              mode: event.data?.mode,
+            }));
+            if (name) {
+              setStreamingSpeakerName(name);
+              streamingSpeakerNameRef.current = name;
+            }
+            playSfx('blip');
+            };
+            // Keep Laya's "deciding" visible briefly so instant heuristic routing doesn't just flash.
+            const remaining = 700 - (Date.now() - startedAt);
+            if (startedAt && remaining > 0) setTimeout(applyDecision, remaining);
+            else applyDecision();
+            break;
+          }
           case 'ApprovalRequired':
             setPendingApproval({
               id: event.data.id,
@@ -221,6 +269,7 @@ export const App: React.FC = () => {
           case 'DiscussionCompleted': {
             discussionInProgressRef.current = false;
             setDiscussionState({ inProgress: false });
+            setRoutingState(null);
             setIsStreaming(false);
             setStreamingText('');
             setStreamingThinking('');
@@ -261,6 +310,7 @@ export const App: React.FC = () => {
                 .catch(() => {});
             }
             if (!discussionInProgressRef.current) {
+              setRoutingState(null);
               setIsStreaming(false);
               setStreamingContextId(null);
               streamingContextIdRef.current = null;
@@ -354,6 +404,7 @@ export const App: React.FC = () => {
           case 'Error': {
             discussionInProgressRef.current = false;
             setDiscussionState({ inProgress: false });
+            setRoutingState(null);
             setIsStreaming(false);
             setStreamingContextId(null);
             streamingContextIdRef.current = null;
@@ -391,6 +442,7 @@ export const App: React.FC = () => {
     }
     discussionInProgressRef.current = false;
     setDiscussionState({ inProgress: false });
+    setRoutingState(null);
     setIsStreaming(false);
     setStreamingContextId(null);
     streamingContextIdRef.current = null;
@@ -419,6 +471,7 @@ export const App: React.FC = () => {
 
     discussionInProgressRef.current = false;
     setDiscussionState({ inProgress: false });
+    setRoutingState(null);
     setIsStreaming(true);
     setStreamingContextId(targetId);
     streamingContextIdRef.current = targetId;
@@ -456,6 +509,7 @@ export const App: React.FC = () => {
       });
     } catch (err) {
       console.error('Failed sending chat:', err);
+      setRoutingState(null);
       setIsStreaming(false);
       setStreamingContextId(null);
       streamingContextIdRef.current = null;
@@ -930,6 +984,7 @@ export const App: React.FC = () => {
           kwants={kwants}
           teams={teams}
           discussionState={isDiscussionActiveHere ? discussionState : { inProgress: false }}
+          routingState={isCurrentContextStreaming ? routingState : null}
           onCancelDiscussion={handleCancelDiscussion}
           teamMembers={currentTeamMembers}
           teamId={activeSandboxId}

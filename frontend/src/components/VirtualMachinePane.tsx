@@ -488,13 +488,13 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 </button>
               )}
 
-              {activeUrl && activeUrl !== 'about:blank' && (
+              {teamId && teamId !== 'default' && (
                 <a
-                  href={activeUrl}
+                  href={`/sandbox/${encodeURIComponent(teamId)}`}
                   target="_blank"
-                  rel="noopener noreferrer"
+                  rel="noopener"
                   className="text-zinc-400 hover:text-sky-400 p-0.5 flex-shrink-0"
-                  title="Open in new window"
+                  title="Open the live sandbox browser in a new tab (shared with your agents)"
                 >
                   <ExternalLink size={12} />
                 </a>

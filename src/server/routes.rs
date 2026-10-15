@@ -1,7 +1,7 @@
 use super::AppState;
 use crate::broker::ApprovalDecision;
 use crate::db::models::*;
-use crate::drivers::{find_cli_binary, resolve_driver_for_model, RuntimeEvent, TurnInput};
+use crate::drivers::{find_cli_binary, resolve_driver_for_model, RoutingCandidate, RuntimeEvent, TurnInput};
 use crate::router::{parse_mentions_with_lookup, TagMention, TeamDecision};
 use axum::{
     extract::{Path, Query, State},
@@ -204,6 +204,29 @@ async fn get_configured_endpoint(db: &crate::db::Database, target_model: &str) -
     }
 }
 
+/// Truncates to at most `max` bytes without splitting a UTF-8 character.
+fn truncate_chars(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+fn routing_candidates(members: &[Kwant]) -> Vec<RoutingCandidate> {
+    members
+        .iter()
+        .map(|k| RoutingCandidate {
+            id: k.id.clone(),
+            name: k.name.clone(),
+            title: k.title.clone(),
+        })
+        .collect()
+}
+
 fn execute_single_turn(
     state: AppState,
     target_kwant: Kwant,
@@ -266,7 +289,10 @@ fn execute_single_turn(
             .or_else(|| kwant_id.clone())
             .unwrap_or_else(|| target_kwant.id.clone());
 
-        let active_browser_url = if let Some(ctrl) = state.browser_controllers.lock().await.get(&sandbox_target) {
+        let active_ctrl = state.browser_controllers.lock().await.get(&sandbox_target).cloned();
+        // The user may have browsed in the live viewer since the last turn; read the real location
+        let active_browser_url = if let Some(ref ctrl) = active_ctrl {
+            let _ = ctrl.sync_location().await;
             ctrl.current_url.lock().await.clone()
         } else {
             None
@@ -283,11 +309,7 @@ fn execute_single_turn(
             if let Some(ctrl) = get_or_create_browser_controller(&state, &sandbox_target).await {
                 if let Ok(nav) = ctrl.navigate(&target_url).await {
                     let page_text = ctrl.extract_content().await.unwrap_or_default();
-                    let preview = if page_text.len() > 3000 {
-                        &page_text[..3000]
-                    } else {
-                        &page_text
-                    };
+                    let preview = truncate_chars(&page_text, 3000);
                     let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
                         team_id: sandbox_target.clone(),
                         url: target_url.clone(),
@@ -302,17 +324,26 @@ fn execute_single_turn(
                             timestamp: chrono::Utc::now().to_rfc3339(),
                         });
                     }
+                    let clickable = ctrl.list_clickables(30).await;
                     final_prompt = format!(
-                        "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel bot browser to {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nUse this page content to answer the user's request. NEVER attempt to open a desktop browser window.]",
-                        prompt, target_url, nav.title, preview
+                        "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel bot browser to {}. Title: \"{}\".\nClickable (topmost first): {}\nPage Content Preview:\n{}\n\nUse this page content to answer the user's request. NEVER attempt to open a desktop browser window.]",
+                        prompt, target_url, nav.title, clickable.join(" | "), preview
                     );
                 }
             }
         } else if let Some(ref curr_url) = active_browser_url {
             if !curr_url.is_empty() && !curr_url.contains("about:blank") && !curr_url.contains("example.com") {
+                let (title, page_text, clickable) = match active_ctrl {
+                    Some(ref ctrl) => (
+                        ctrl.current_title.lock().await.clone().unwrap_or_default(),
+                        ctrl.extract_content().await.unwrap_or_default(),
+                        ctrl.list_clickables(30).await,
+                    ),
+                    None => (String::new(), String::new(), Vec::new()),
+                };
                 final_prompt = format!(
-                    "{}\n\n[Active Sandbox Browser State: The right-panel bot browser is currently viewing: {}. Maintain context on this website. Do not suggest or switch to other services like YouTube unless explicitly requested.]",
-                    prompt, curr_url
+                    "{}\n\n[Active Sandbox Browser State: The right-panel bot browser (shared live with the user, who may have clicked or typed in it) is currently viewing: {}. Title: \"{}\".\nClickable (topmost first, e.g. dialog buttons): {}\nPage Content Preview:\n{}\n\nMaintain context on this website. Do not suggest or switch to other services like YouTube unless explicitly requested.]",
+                    prompt, curr_url, title, clickable.join(" | "), truncate_chars(&page_text, 3000)
                 );
             }
         }
@@ -328,6 +359,7 @@ fn execute_single_turn(
             effort_level: Some(effort_level),
             team_context,
             workspace_dir,
+            sandbox_id: Some(sandbox_target.clone()),
         };
 
         let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -579,6 +611,12 @@ pub async fn send_chat(
             members = all_kwants.clone();
         }
 
+        let routing_context_id = payload.channel_id.clone().or_else(|| payload.kwant_id.clone());
+        let _ = state.event_sender.send(RuntimeEvent::RoutingStarted {
+            context_id: routing_context_id.clone(),
+            candidates: routing_candidates(&members),
+        });
+
         let team_decision = state
             .router
             .route_team_query(&payload.prompt, &team, &members)
@@ -592,6 +630,15 @@ pub async fn send_chat(
                     .or_else(|| all_kwants.iter().find(|k| k.id == kwant_id))
                     .unwrap_or(&members[0])
                     .clone();
+
+                let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
+                    context_id: routing_context_id,
+                    kwant_id: target_kwant.id.clone(),
+                    kwant_name: target_kwant.name.clone(),
+                    kwant_title: target_kwant.title.clone(),
+                    reason: reason.clone(),
+                    mode: "direct".into(),
+                });
 
                 let _ = state.event_sender.send(RuntimeEvent::ThinkingDelta(format!(
                     "🔮 Laya Team Router: Routed to {} ({}) — {}",
@@ -623,6 +670,23 @@ pub async fn send_chat(
                 speakers,
                 plan,
             } => {
+                if let Some(lead) = speakers
+                    .first()
+                    .and_then(|sid| all_kwants.iter().find(|k| &k.id == sid))
+                {
+                    let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
+                        context_id: routing_context_id,
+                        kwant_id: lead.id.clone(),
+                        kwant_name: lead.name.clone(),
+                        kwant_title: lead.title.clone(),
+                        reason: format!(
+                            "This needs several perspectives — starting a {}-turn team discussion led by {}",
+                            turns, lead.name
+                        ),
+                        mode: "discuss".into(),
+                    });
+                }
+
                 let _ = state.event_sender.send(RuntimeEvent::ThinkingDelta(format!(
                     "🔮 Laya Team Router: Initiating {}-turn autonomous discussion with @{}",
                     turns, team.name
@@ -698,11 +762,7 @@ pub async fn send_chat(
                                 if let Some(ctrl) = get_or_create_browser_controller(&state_clone, &team_clone.id).await {
                                     if let Ok(nav) = ctrl.navigate(&target_url).await {
                                         let page_text = ctrl.extract_content().await.unwrap_or_default();
-                                        let preview = if page_text.len() > 3000 {
-                                            &page_text[..3000]
-                                        } else {
-                                            &page_text
-                                        };
+                                        let preview = truncate_chars(&page_text, 3000);
                                         let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
                                             team_id: team_clone.id.clone(),
                                             url: target_url.clone(),
@@ -770,6 +830,7 @@ pub async fn send_chat(
                                 repo_url: team_clone.repo_url.clone(),
                             }),
                             workspace_dir: workspace_dir_clone.clone(),
+                            sandbox_id: Some(team_clone.id.clone()),
                         };
 
                         let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -867,10 +928,48 @@ pub async fn send_chat(
                 .cloned()
         } else if let Some(cid) = &payload.channel_id {
             if let Ok(Some(channel)) = state.db.get_channel(cid).await {
-                all_kwants
+                let lead = all_kwants
                     .iter()
                     .find(|k| k.id == channel.lead_kwant_id)
-                    .cloned()
+                    .or_else(|| all_kwants.first())
+                    .cloned();
+                // #general is the hub for every agent, including ones created after it was seeded
+                let members: Vec<Kwant> = if channel.name == "general" {
+                    all_kwants.clone()
+                } else {
+                    let member_ids: Vec<String> =
+                        serde_json::from_str(&channel.member_kwants).unwrap_or_default();
+                    member_ids
+                        .iter()
+                        .filter_map(|mid| all_kwants.iter().find(|k| &k.id == mid).cloned())
+                        .collect()
+                };
+
+                if channel.routing_mode == "auto" && members.len() > 1 {
+                    let context_id = payload.channel_id.clone();
+                    let _ = state.event_sender.send(RuntimeEvent::RoutingStarted {
+                        context_id: context_id.clone(),
+                        candidates: routing_candidates(&members),
+                    });
+                    let (chosen_id, reason) = state
+                        .router
+                        .route_channel_query(&payload.prompt, &channel.name, &channel.lead_kwant_id, &members)
+                        .await;
+                    let chosen = members.iter().find(|k| k.id == chosen_id).cloned().or(lead);
+                    if let Some(ref k) = chosen {
+                        let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
+                            context_id,
+                            kwant_id: k.id.clone(),
+                            kwant_name: k.name.clone(),
+                            kwant_title: k.title.clone(),
+                            reason,
+                            mode: "direct".into(),
+                        });
+                    }
+                    chosen
+                } else {
+                    lead
+                }
             } else {
                 all_kwants.first().cloned()
             }
@@ -1393,14 +1492,28 @@ pub async fn get_browser_screenshot(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = get_or_create_browser_controller(&state, &team_id).await
         .ok_or_else(browser_unavailable)?;
+    // The user may have navigated in the live viewer; keep url/title (and other viewers) in sync
+    let previous_url = ctrl.current_url.lock().await.clone();
+    if let Some((new_url, new_title)) = ctrl.sync_location().await {
+        if previous_url.as_deref() != Some(new_url.as_str()) {
+            let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
+                team_id: team_id.clone(),
+                url: new_url,
+                title: new_title,
+                status_code: 200,
+            });
+        }
+    }
     let b64 = ctrl.capture_screenshot().await.map_err(browser_request_failed)?;
     let url = ctrl.current_url.lock().await.clone().unwrap_or_default();
+    let title = ctrl.current_title.lock().await.clone().unwrap_or_default();
 
     let timestamp = chrono::Utc::now().to_rfc3339();
 
     Ok(Json(json!({
         "team_id": team_id,
         "url": url,
+        "title": title,
         "image_base64": b64,
         "screenshot": b64,
         "format": "jpeg",
@@ -1534,6 +1647,104 @@ pub async fn interact_sandbox(
         "screenshot": screenshot,
         "image_base64": screenshot
     })))
+}
+
+/// Compact, text-only page state for agents (no base64 image to wade through).
+async fn sandbox_page_state(ctrl: &crate::sandbox::BrowserController) -> serde_json::Value {
+    let (url, title) = match ctrl.sync_location().await {
+        Some(loc) => loc,
+        None => (
+            ctrl.current_url.lock().await.clone().unwrap_or_default(),
+            ctrl.current_title.lock().await.clone().unwrap_or_default(),
+        ),
+    };
+    let text = ctrl.extract_content().await.unwrap_or_default();
+    let clickable = ctrl.list_clickables(40).await;
+    json!({
+        "url": url,
+        "title": title,
+        "text": truncate_chars(&text, 2000),
+        "clickable": clickable,
+    })
+}
+
+async fn broadcast_sandbox_screenshot(state: &AppState, team_id: &str, ctrl: &crate::sandbox::BrowserController) {
+    if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
+        let url = ctrl.current_url.lock().await.clone().unwrap_or_default();
+        let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
+            team_id: team_id.to_string(),
+            url,
+            image_base64: b64,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
+    }
+}
+
+pub async fn get_sandbox_page(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let ctrl = get_or_create_browser_controller(&state, &team_id)
+        .await
+        .ok_or_else(browser_unavailable)?;
+    Ok(Json(sandbox_page_state(&ctrl).await))
+}
+
+/// Agent-facing action endpoint: performs one action and returns the resulting page state,
+/// so an agent can act and answer without extra round-trips.
+pub async fn act_sandbox(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+    Json(payload): Json<InteractPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let ctrl = get_or_create_browser_controller(&state, &team_id)
+        .await
+        .ok_or_else(browser_unavailable)?;
+    let _permit = ctrl.control.try_read().map_err(|_| browser_request_failed(crate::sandbox::BrowserError::HumanControl))?;
+    let text = payload.text.clone().unwrap_or_default();
+    let result: Result<String, String> = match payload.action.as_str() {
+        "click_text" | "click" if !text.is_empty() => ctrl
+            .click_text(&text)
+            .await
+            .map(|label| format!("clicked \"{}\"", label))
+            .map_err(|e| e.to_string()),
+        "type" => ctrl
+            .interact_type(&text)
+            .await
+            .map(|_| format!("typed {} chars", text.chars().count()))
+            .map_err(|e| e.to_string()),
+        "key" => {
+            let key = payload.key.clone().unwrap_or_else(|| "Enter".into());
+            ctrl.interact_key(&key, payload.code.as_deref())
+                .await
+                .map(|_| format!("pressed {}", key))
+                .map_err(|e| e.to_string())
+        }
+        "scroll" => ctrl
+            .interact_scroll(640, 400, 0.0, payload.delta_y.unwrap_or(600.0))
+            .await
+            .map(|_| "scrolled".to_string())
+            .map_err(|e| e.to_string()),
+        other => Err(format!(
+            "Unknown action \"{}\". Use click_text (with text), type (with text), key (with key) or scroll (with delta_y).",
+            other
+        )),
+    };
+    broadcast_sandbox_screenshot(&state, &team_id, &ctrl).await;
+    let mut page = sandbox_page_state(&ctrl).await;
+    match result {
+        Ok(done) => page["result"] = json!(done),
+        Err(err) => page["error"] = json!(err),
+    }
+    if let Some(url) = page["url"].as_str() {
+        let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
+            team_id: team_id.clone(),
+            url: url.to_string(),
+            title: page["title"].as_str().unwrap_or("").to_string(),
+            status_code: 200,
+        });
+    }
+    Ok(Json(page))
 }
 
 pub async fn execute_tool(

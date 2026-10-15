@@ -64,8 +64,30 @@ pub enum RuntimeEvent {
         container_name: String,
         is_running: bool,
     },
+    #[serde(rename = "routing_started", alias = "RoutingStarted")]
+    RoutingStarted {
+        context_id: Option<String>,
+        candidates: Vec<RoutingCandidate>,
+    },
+    #[serde(rename = "routing_decided", alias = "RoutingDecided")]
+    RoutingDecided {
+        context_id: Option<String>,
+        kwant_id: String,
+        kwant_name: String,
+        kwant_title: String,
+        reason: String,
+        /// "direct" for a single responder, "discuss" for a multi-turn team discussion.
+        mode: String,
+    },
     Error {
         code: String,
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RoutingCandidate {
+    pub id: String,
+    pub name: String,
+    pub title: String,
 }

@@ -27,6 +27,23 @@ export interface DiscussionState {
   totalTurns?: number;
 }
 
+export interface RoutingCandidate {
+  id: string;
+  name: string;
+  title: string;
+}
+
+export interface RoutingState {
+  phase: 'deciding' | 'decided';
+  contextId?: string;
+  candidates: RoutingCandidate[];
+  kwantId?: string;
+  kwantName?: string;
+  kwantTitle?: string;
+  reason?: string;
+  mode?: 'direct' | 'discuss' | string;
+}
+
 export interface ChatViewProps {
   title: string;
   subtitle: string;
@@ -41,6 +58,7 @@ export interface ChatViewProps {
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
   discussionState?: DiscussionState;
+  routingState?: RoutingState | null;
   onCancelDiscussion?: () => void;
   teamMembers?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
   teamId?: string;
@@ -80,6 +98,76 @@ export const renderFormattedText = (text: string): React.ReactNode => {
   });
 };
 
+const LayaRoutingCard: React.FC<{ routing: RoutingState }> = ({ routing }) => {
+  const deciding = routing.phase === 'deciding';
+  const isDiscuss = routing.mode === 'discuss';
+
+  return (
+    <div className="flex items-start gap-3.5 w-full max-w-5xl" aria-live="polite">
+      <div className="w-[34px] h-[34px] flex-shrink-0 rounded-full bg-violet-500/15 border border-violet-500/40 flex items-center justify-center shadow-sm shadow-violet-500/10">
+        <Sparkles size={16} className={`text-violet-300 ${deciding ? 'animate-pulse' : ''}`} />
+      </div>
+      <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
+        <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
+          <span className="text-zinc-200">Laya</span>
+          <span className="text-zinc-500">· router</span>
+        </div>
+        <div className="px-4 py-3 rounded-2xl rounded-tl-sm bg-violet-950/20 border border-violet-500/20 text-sm text-zinc-200 shadow-sm w-full">
+          {deciding ? (
+            <div className="flex items-center gap-2">
+              <span>Choosing who's best to answer your question</span>
+              <span className="inline-flex gap-0.5" aria-hidden="true">
+                {[0, 1, 2].map((i) => (
+                  <span
+                    key={i}
+                    className="w-1 h-1 rounded-full bg-violet-300 animate-bounce"
+                    style={{ animationDelay: `${i * 150}ms` }}
+                  />
+                ))}
+              </span>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-0.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span>{isDiscuss ? 'Starting a team discussion led by' : 'Sending your question to'}</span>
+                <span className="font-semibold text-violet-200">{routing.kwantName}</span>
+                {routing.kwantTitle && <span className="text-zinc-400 text-xs">({routing.kwantTitle})</span>}
+              </div>
+              {routing.reason && <span className="text-xs text-zinc-400">{routing.reason}</span>}
+            </div>
+          )}
+
+          {routing.candidates.length > 0 && (
+            <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
+              {routing.candidates.map((c, i) => {
+                const chosen = !deciding && c.id === routing.kwantId;
+                return (
+                  <div
+                    key={c.id}
+                    title={`${c.name} — ${c.title}`}
+                    className={`flex items-center gap-1.5 pl-0.5 pr-2.5 py-0.5 rounded-full border text-[11px] transition-all duration-300 ${
+                      chosen
+                        ? 'border-violet-400/60 bg-violet-500/20 text-violet-100 scale-105'
+                        : deciding
+                          ? 'border-zinc-700/60 bg-zinc-900/60 text-zinc-300 animate-pulse'
+                          : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 opacity-50'
+                    }`}
+                    style={deciding ? { animationDelay: `${i * 200}ms` } : undefined}
+                  >
+                    <ModernAvatar role={c.name} name={c.name} size={18} />
+                    <span>{c.name}</span>
+                    {chosen && <Check size={11} className="text-violet-300" />}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const ChatView: React.FC<ChatViewProps> = ({
   title,
   subtitle,
@@ -94,6 +182,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   kwants: kwantsProp,
   teams: teamsProp,
   discussionState,
+  routingState,
   onCancelDiscussion,
   teamMembers,
   teamId,
@@ -246,7 +335,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamingText, streamingThinking, pendingApproval]);
+  }, [messages, streamingText, streamingThinking, pendingApproval, routingState]);
 
   const toggleThought = (id: string) => {
     setOpenThoughts((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -526,8 +615,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
           );
         })}
 
+        {/* Laya routing: which agent will answer */}
+        {isStreaming && routingState && !discussionState?.inProgress && (
+          <LayaRoutingCard routing={routingState} />
+        )}
+
         {/* Live Streaming Assistant Message */}
-        {isStreaming && (
+        {isStreaming && routingState?.phase !== 'deciding' && (
           <div className="flex items-start gap-3.5 w-full max-w-5xl">
             <ModernAvatar
               role={
