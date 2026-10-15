@@ -32,6 +32,22 @@ pub struct RouteDecision {
     pub reasoning: String,
 }
 
+/// A bot's pinned model (anything other than "auto") always wins; Laya still decides the effort.
+pub fn apply_preferred_model(mut route: RouteDecision, preferred_model: &str) -> RouteDecision {
+    let pinned = preferred_model.trim();
+    if pinned.is_empty() || pinned.eq_ignore_ascii_case("auto") {
+        return route;
+    }
+    route.reasoning = format!(
+        "Model pinned to '{}' in the bot's settings; effort={} (Laya suggested '{}')",
+        pinned, route.effort_level, route.selected_model
+    );
+    route.selected_model = pinned.to_string();
+    route.confidence = 1.0;
+    route.provider_endpoint = None;
+    route
+}
+
 /// Parses a successful response from Laya /v1/systemone into a RouteDecision
 pub fn parse_laya_response(data: &serde_json::Value) -> Option<RouteDecision> {
     let answers = data.get("answers")?;

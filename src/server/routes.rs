@@ -259,6 +259,7 @@ fn execute_single_turn(
                 reasoning: "Fallback routing".into(),
             },
         };
+        let route = crate::router::apply_preferred_model(route, &target_kwant.preferred_model);
 
         let target_model = route.selected_model;
         let effort_level = route.effort_level;
@@ -838,6 +839,7 @@ pub async fn send_chat(
                                 is_fallback: true,
                                 reasoning: "Fallback routing".into(),
                             });
+                        let route = crate::router::apply_preferred_model(route, &speaker.preferred_model);
 
                         let target_model = route.selected_model;
                         let effort_level = route.effort_level;

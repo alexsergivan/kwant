@@ -158,3 +158,25 @@ async fn test_team_orchestration_heuristic_fallback() {
     }
 }
 
+
+#[test]
+fn pinned_preferred_model_overrides_laya_but_keeps_effort() {
+    use kwnt::router::{apply_preferred_model, RouteDecision};
+    let laya = || RouteDecision {
+        selected_model: "claude".into(),
+        effort_level: "high".into(),
+        confidence: 0.7,
+        provider_endpoint: None,
+        is_fallback: false,
+        reasoning: "laya".into(),
+    };
+
+    let pinned = apply_preferred_model(laya(), "grok");
+    assert_eq!(pinned.selected_model, "grok");
+    assert_eq!(pinned.effort_level, "high");
+    assert!(pinned.reasoning.contains("pinned"));
+
+    for unpinned in ["auto", "AUTO", "", "  "] {
+        assert_eq!(apply_preferred_model(laya(), unpinned).selected_model, "claude");
+    }
+}
