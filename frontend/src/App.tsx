@@ -33,6 +33,14 @@ export const App: React.FC = () => {
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
 
+  // Virtual Machine & Live Browser state
+  const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
+  const [activeUrl, setActiveUrl] = useState('');
+  const [pageTitle, setPageTitle] = useState('');
+  const [screenshotBase64, setScreenshotBase64] = useState<string | null>(null);
+  const [isVmRunning, setIsVmRunning] = useState(true);
+  const [terminalLogs, setTerminalLogs] = useState<Array<{ command: string; output: string; timestamp?: string }>>([]);
+
   // Load initial Kwants, Channels, and Teams
   useEffect(() => {
     async function loadInitialData() {
@@ -187,6 +195,41 @@ export const App: React.FC = () => {
               setIsStreaming(false);
             }
             break;
+          case 'browser_navigated':
+          case 'BrowserNavigated': {
+            if (event.data?.url) setActiveUrl(event.data.url);
+            if (event.data?.title) setPageTitle(event.data.title);
+            setIsVmPaneOpen(true);
+            playSfx('blip');
+            break;
+          }
+          case 'browser_screenshot':
+          case 'BrowserScreenshot': {
+            if (event.data?.image_base64) setScreenshotBase64(event.data.image_base64);
+            if (event.data?.url) setActiveUrl(event.data.url);
+            setIsVmPaneOpen(true);
+            playSfx('blip');
+            break;
+          }
+          case 'sandbox_status':
+          case 'SandboxStatusChanged': {
+            if (typeof event.data?.is_running === 'boolean') {
+              setIsVmRunning(event.data.is_running);
+            }
+            break;
+          }
+          case 'ToolCallCompleted': {
+            const result = event.data?.result;
+            if (result && typeof result === 'object' && ('command' in result || 'stdout' in result)) {
+              const cmd = result.command || 'bash';
+              const output = result.stdout || result.stderr || JSON.stringify(result);
+              setTerminalLogs((prev) => [
+                ...prev,
+                { command: cmd, output, timestamp: new Date().toLocaleTimeString() },
+              ]);
+            }
+            break;
+          }
           case 'Error':
             discussionInProgressRef.current = false;
             setDiscussionState({ inProgress: false });
@@ -524,6 +567,62 @@ export const App: React.FC = () => {
     ? `${currentKwant?.title || 'Specialist'} [Laya Auto-Fleet]`
     : currentTeam?.description || currentChannel?.description || 'Team collaboration room';
 
+  // Load container status for active team
+  useEffect(() => {
+    const tid = currentTeam?.id || selectedTeamId;
+    if (!tid) return;
+    fetch(`/api/teams/${tid}/sandbox`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data && typeof data.is_running === 'boolean') {
+          setIsVmRunning(data.is_running);
+        }
+      })
+      .catch(() => {});
+  }, [currentTeam?.id, selectedTeamId]);
+
+  const handleRefreshVm = async () => {
+    const tid = currentTeam?.id || selectedTeamId;
+    if (!tid) return;
+    try {
+      const res = await fetch(`/api/teams/${tid}/browser/screenshot`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.image_base64 || data.screenshot) {
+          setScreenshotBase64(data.image_base64 || data.screenshot);
+        }
+        if (data.url) {
+          setActiveUrl(data.url);
+        }
+      }
+    } catch (err) {
+      console.error('Failed refreshing VM screenshot:', err);
+    }
+  };
+
+  const handleRestartVm = async () => {
+    const tid = currentTeam?.id || selectedTeamId;
+    if (!tid) return;
+    try {
+      const res = await fetch(`/api/teams/${tid}/sandbox/restart`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        setIsVmRunning(false);
+        setTerminalLogs((prev) => [
+          ...prev,
+          {
+            command: 'docker restart sandbox',
+            output: 'Sandbox container stopped and reset.',
+            timestamp: new Date().toLocaleTimeString(),
+          },
+        ]);
+      }
+    } catch (err) {
+      console.error('Failed restarting VM:', err);
+    }
+  };
+
   return (
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden font-sans">
       {/* Modern App Header */}
@@ -585,6 +684,15 @@ export const App: React.FC = () => {
                 }
               : undefined
           }
+          isVmPaneOpen={isVmPaneOpen}
+          onToggleVmPane={() => setIsVmPaneOpen((prev) => !prev)}
+          activeUrl={activeUrl}
+          pageTitle={pageTitle}
+          screenshotBase64={screenshotBase64}
+          isRunning={isVmRunning}
+          terminalLogs={terminalLogs}
+          onRefreshVm={handleRefreshVm}
+          onRestartVm={handleRestartVm}
         />
       </div>
 

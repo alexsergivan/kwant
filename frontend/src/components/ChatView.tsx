@@ -4,6 +4,7 @@ import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { VirtualMachinePane, TerminalLogEntry } from './VirtualMachinePane';
 import { playSfx } from '../audio/chiptune';
 
 export interface ChatMessage {
@@ -43,6 +44,16 @@ export interface ChatViewProps {
   workspacePath?: string;
   repoUrl?: string;
   onManageTeam?: () => void;
+  // Grok-style Sandbox VM Pane props
+  isVmPaneOpen?: boolean;
+  onToggleVmPane?: () => void;
+  activeUrl?: string;
+  pageTitle?: string;
+  screenshotBase64?: string | null;
+  isRunning?: boolean;
+  terminalLogs?: TerminalLogEntry[];
+  onRefreshVm?: () => void;
+  onRestartVm?: () => void;
 }
 
 export const renderFormattedText = (text: string): React.ReactNode => {
@@ -82,7 +93,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
   workspacePath,
   repoUrl,
   onManageTeam,
+  isVmPaneOpen,
+  onToggleVmPane,
+  activeUrl,
+  pageTitle,
+  screenshotBase64,
+  isRunning = true,
+  terminalLogs = [],
+  onRefreshVm,
+  onRestartVm,
 }) => {
+  const [internalIsVmPaneOpen, setInternalIsVmPaneOpen] = useState(false);
+  const vmOpen = isVmPaneOpen !== undefined ? isVmPaneOpen : internalIsVmPaneOpen;
+  const toggleVm = onToggleVmPane || (() => setInternalIsVmPaneOpen((prev) => !prev));
+
   const [inputVal, setInputVal] = useState('');
   const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -347,6 +371,24 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <span>Stop</span>
             </button>
           )}
+          {/* Sandbox VM & Live Browser Toggle Button */}
+          <button
+            type="button"
+            onClick={() => {
+              playSfx('click');
+              toggleVm();
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border shadow-sm cursor-pointer ${
+              vmOpen
+                ? 'text-sky-300 bg-sky-500/20 border-sky-500/40'
+                : 'text-zinc-300 bg-zinc-900 hover:bg-zinc-800 border-zinc-700/60 hover:text-zinc-100'
+            }`}
+            title="Toggle Sandbox VM & Live Browser Pane"
+          >
+            <span className="text-xs">🖥️</span>
+            <span>Sandbox VM</span>
+          </button>
+
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-sky-400 bg-sky-500/10 border border-sky-500/20 shadow-sm">
             <Cpu size={13} />
             <span>Laya Auto-Fleet</span>
@@ -378,8 +420,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
       )}
 
-      {/* Messages Stream */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6">
+      {/* Main Split Layout: Messages/Input on Left + Virtual Machine Side Drawer on Right */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
+        <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+          {/* Messages Stream */}
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6">
         {messages.map((msg) => {
           const isUser = msg.sender_role === 'user';
           const isThoughtOpen = !!openThoughts[msg.id];
@@ -627,5 +672,27 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </form>
       </div>
     </div>
+
+    {/* Live Grok-style Virtual Machine / Browser Side Pane */}
+    <VirtualMachinePane
+      isOpen={vmOpen}
+      onClose={() => {
+        if (onToggleVmPane) {
+          onToggleVmPane();
+        } else {
+          setInternalIsVmPaneOpen(false);
+        }
+      }}
+      teamName={teamName}
+      activeUrl={activeUrl}
+      pageTitle={pageTitle}
+      screenshotBase64={screenshotBase64}
+      isRunning={isRunning}
+      terminalLogs={terminalLogs}
+      onRefresh={onRefreshVm}
+      onRestartVm={onRestartVm}
+    />
+  </div>
+</div>
   );
 };
