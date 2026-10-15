@@ -26,7 +26,6 @@ pub struct AppState {
     pub broker: PermissionBroker,
     pub router: LayaRouter,
     pub event_sender: broadcast::Sender<RuntimeEvent>,
-    pub event_tx: broadcast::Sender<RuntimeEvent>,
     pub active_cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
     pub sandbox_manager: Arc<SandboxManager>,
     pub browser_controllers: Arc<Mutex<HashMap<String, BrowserController>>>,
@@ -41,7 +40,6 @@ impl AppState {
         router: LayaRouter,
     ) -> Self {
         let (event_sender, _) = broadcast::channel(128);
-        let event_tx = event_sender.clone();
         let sandbox_manager = Arc::new(SandboxManager::new());
         let browser_controllers = Arc::new(Mutex::new(HashMap::new()));
         Self {
@@ -51,7 +49,6 @@ impl AppState {
             broker,
             router,
             event_sender,
-            event_tx,
             active_cancellations: Arc::new(Mutex::new(HashMap::new())),
             sandbox_manager,
             browser_controllers,

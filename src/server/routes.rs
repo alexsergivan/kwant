@@ -1082,6 +1082,26 @@ pub struct NavigatePayload {
     pub url: String,
 }
 
+pub async fn get_or_create_browser_controller(
+    state: &AppState,
+    team_id: &str,
+) -> Option<crate::sandbox::BrowserController> {
+    let mut lock = state.browser_controllers.lock().await;
+    if let Some(ctrl) = lock.get(team_id) {
+        return Some(ctrl.clone());
+    }
+
+    if let Some(active_sb) = state.sandbox_manager.get_sandbox(team_id).await {
+        if active_sb.is_running {
+            let ctrl = crate::sandbox::BrowserController::new(active_sb.cdp_port);
+            lock.insert(team_id.to_string(), ctrl.clone());
+            return Some(ctrl);
+        }
+    }
+
+    None
+}
+
 pub async fn get_sandbox_status(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
@@ -1109,12 +1129,9 @@ pub async fn get_browser_screenshot(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let controller = {
-        let lock = state.browser_controllers.lock().await;
-        lock.get(&team_id).cloned()
-    };
+    let controller = get_or_create_browser_controller(&state, &team_id).await;
 
-    let placeholder = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    let placeholder = crate::tools::sandbox::PLACEHOLDER_PNG;
     let (b64, url) = if let Some(ctrl) = controller {
         let shot = match ctrl.capture_screenshot().await {
             Ok(img) => img,
@@ -1130,12 +1147,6 @@ pub async fn get_browser_screenshot(
     };
 
     let timestamp = chrono::Utc::now().to_rfc3339();
-    let _ = state.event_tx.send(RuntimeEvent::BrowserScreenshot {
-        team_id: team_id.clone(),
-        url: url.clone(),
-        image_base64: b64.clone(),
-        timestamp: timestamp.clone(),
-    });
 
     Ok(Json(json!({
         "team_id": team_id,
@@ -1157,7 +1168,7 @@ pub async fn restart_sandbox(
         controllers.remove(&team_id);
     }
 
-    let _ = state.event_tx.send(RuntimeEvent::SandboxStatusChanged {
+    let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
         team_id: team_id.clone(),
         container_name: format!("kwnt-sandbox-{}", team_id),
         is_running: false,
@@ -1175,10 +1186,7 @@ pub async fn navigate_sandbox(
     Path(team_id): Path<String>,
     Json(payload): Json<NavigatePayload>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let controller = {
-        let lock = state.browser_controllers.lock().await;
-        lock.get(&team_id).cloned()
-    };
+    let controller = get_or_create_browser_controller(&state, &team_id).await;
 
     let (title, status_code) = if let Some(ctrl) = controller {
         match ctrl.navigate(&payload.url).await {
@@ -1192,7 +1200,7 @@ pub async fn navigate_sandbox(
         (payload.url.clone(), 200)
     };
 
-    let _ = state.event_tx.send(RuntimeEvent::BrowserNavigated {
+    let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
         team_id: team_id.clone(),
         url: payload.url.clone(),
         title: title.clone(),
@@ -1215,8 +1223,7 @@ pub async fn execute_tool(
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, crate::tools::ToolError> {
     let controller = if let Some(tid) = team_id {
-        let lock = state.browser_controllers.lock().await;
-        lock.get(tid).cloned()
+        get_or_create_browser_controller(state, tid).await
     } else {
         None
     };
@@ -1234,7 +1241,7 @@ pub async fn execute_tool(
             let url = args["url"].as_str().unwrap_or_default().to_string();
             let title = result["title"].as_str().unwrap_or(&url).to_string();
             let status_code = result["status_code"].as_u64().unwrap_or(200) as u16;
-            let _ = state.event_tx.send(RuntimeEvent::BrowserNavigated {
+            let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
                 team_id: team_str,
                 url,
                 title,
@@ -1242,10 +1249,21 @@ pub async fn execute_tool(
             });
         }
         "browser_screenshot" => {
-            let url = result["url"].as_str().unwrap_or_default().to_string();
-            let image_base64 = result["image_base64"].as_str().unwrap_or_default().to_string();
-            let timestamp = chrono::Utc::now().to_rfc3339();
-            let _ = state.event_tx.send(RuntimeEvent::BrowserScreenshot {
+            let url = result["url"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("about:blank")
+                .to_string();
+            let image_base64 = result["image_base64"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(crate::tools::sandbox::PLACEHOLDER_PNG)
+                .to_string();
+            let timestamp = result["timestamp"]
+                .as_str()
+                .map(String::from)
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+            let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
                 team_id: team_str,
                 url,
                 image_base64,

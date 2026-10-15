@@ -38,6 +38,9 @@ pub async fn browser_navigate_with_controller(
     }))
 }
 
+pub const PLACEHOLDER_PNG: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
 pub async fn browser_screenshot(args: &Value) -> Result<Value, ToolError> {
     browser_screenshot_with_controller(None, args).await
 }
@@ -46,19 +49,44 @@ pub async fn browser_screenshot_with_controller(
     controller: Option<&BrowserController>,
     _args: &Value,
 ) -> Result<Value, ToolError> {
+    let timestamp = chrono::Utc::now().to_rfc3339();
+
     if let Some(ctrl) = controller {
+        let current_url = {
+            let lock = ctrl.current_url.lock().await;
+            lock.clone().unwrap_or_else(|| "about:blank".to_string())
+        };
+
         if let Ok(b64) = ctrl.capture_screenshot().await {
             return Ok(json!({
                 "status": "captured",
                 "format": "jpeg",
-                "image_base64": b64
+                "url": current_url,
+                "image_base64": b64,
+                "timestamp": timestamp
             }));
         }
+
+        let last_b64 = {
+            let lock = ctrl.last_screenshot.lock().await;
+            lock.clone().unwrap_or_else(|| PLACEHOLDER_PNG.to_string())
+        };
+
+        return Ok(json!({
+            "status": "captured",
+            "format": "jpeg",
+            "url": current_url,
+            "image_base64": last_b64,
+            "timestamp": timestamp
+        }));
     }
 
     Ok(json!({
         "status": "captured",
-        "format": "jpeg"
+        "format": "jpeg",
+        "url": "about:blank",
+        "image_base64": PLACEHOLDER_PNG,
+        "timestamp": timestamp
     }))
 }
 
