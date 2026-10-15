@@ -43,6 +43,14 @@ pub struct BrowserController {
     ws_conn: Arc<Mutex<Option<WsStream>>>,
 }
 
+impl std::fmt::Debug for BrowserController {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrowserController")
+            .field("cdp_port", &self.cdp_port)
+            .finish()
+    }
+}
+
 impl BrowserController {
     pub fn new(cdp_port: u16) -> Self {
         Self {

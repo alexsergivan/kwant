@@ -16,6 +16,9 @@ pub use embedded::{static_handler, Assets};
 pub use router::{
     parse_mentions, LayaRouter, RouteDecision, RouterError, TagMention, TeamDecision,
 };
-pub use sandbox::{ActiveSandbox, SandboxError, SandboxManager, ShellOutput};
+pub use sandbox::{
+    ActiveSandbox, BrowserController, BrowserError, NavigationResult, SandboxError, SandboxManager,
+    ShellOutput,
+};
 pub use server::{create_router, AppState};
 pub use tools::{ToolError, ToolRunner};

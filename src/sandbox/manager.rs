@@ -47,7 +47,7 @@ pub struct ActiveSandbox {
     pub is_running: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SandboxManager {
     sandboxes: Arc<Mutex<HashMap<String, ActiveSandbox>>>,
 }

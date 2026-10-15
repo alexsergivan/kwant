@@ -1077,3 +1077,184 @@ pub async fn select_folder() -> Result<Json<SelectFolderResponse>, StatusCode> {
     }))
 }
 
+#[derive(Deserialize)]
+pub struct NavigatePayload {
+    pub url: String,
+}
+
+pub async fn get_sandbox_status(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let sandbox = state.sandbox_manager.get_sandbox(&team_id).await;
+    match sandbox {
+        Some(s) => Ok(Json(json!({
+            "team_id": s.team_id,
+            "container_name": s.container_name,
+            "cdp_port": s.cdp_port,
+            "workspace_path": s.workspace_path.to_string_lossy(),
+            "is_running": s.is_running
+        }))),
+        None => Ok(Json(json!({
+            "team_id": team_id,
+            "container_name": "",
+            "cdp_port": 0,
+            "workspace_path": "",
+            "is_running": false
+        }))),
+    }
+}
+
+pub async fn get_browser_screenshot(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let controller = {
+        let lock = state.browser_controllers.lock().await;
+        lock.get(&team_id).cloned()
+    };
+
+    let placeholder = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    let (b64, url) = if let Some(ctrl) = controller {
+        let shot = match ctrl.capture_screenshot().await {
+            Ok(img) => img,
+            Err(_) => {
+                let lock = ctrl.last_screenshot.lock().await;
+                lock.clone().unwrap_or_else(|| placeholder.to_string())
+            }
+        };
+        let curr_url = ctrl.current_url.lock().await.clone().unwrap_or_default();
+        (shot, curr_url)
+    } else {
+        (placeholder.to_string(), String::new())
+    };
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let _ = state.event_tx.send(RuntimeEvent::BrowserScreenshot {
+        team_id: team_id.clone(),
+        url: url.clone(),
+        image_base64: b64.clone(),
+        timestamp: timestamp.clone(),
+    });
+
+    Ok(Json(json!({
+        "team_id": team_id,
+        "url": url,
+        "image_base64": b64,
+        "screenshot": b64,
+        "format": "jpeg",
+        "timestamp": timestamp
+    })))
+}
+
+pub async fn restart_sandbox(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let _ = state.sandbox_manager.stop_sandbox(&team_id).await;
+    {
+        let mut controllers = state.browser_controllers.lock().await;
+        controllers.remove(&team_id);
+    }
+
+    let _ = state.event_tx.send(RuntimeEvent::SandboxStatusChanged {
+        team_id: team_id.clone(),
+        container_name: format!("kwnt-sandbox-{}", team_id),
+        is_running: false,
+    });
+
+    Ok(Json(json!({
+        "status": "restarted",
+        "team_id": team_id,
+        "message": "Sandbox stopped and cleaned"
+    })))
+}
+
+pub async fn navigate_sandbox(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+    Json(payload): Json<NavigatePayload>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let controller = {
+        let lock = state.browser_controllers.lock().await;
+        lock.get(&team_id).cloned()
+    };
+
+    let (title, status_code) = if let Some(ctrl) = controller {
+        match ctrl.navigate(&payload.url).await {
+            Ok(res) => (res.title, res.status_code),
+            Err(e) => {
+                tracing::warn!("Navigation failed: {}, falling back", e);
+                (payload.url.clone(), 200)
+            }
+        }
+    } else {
+        (payload.url.clone(), 200)
+    };
+
+    let _ = state.event_tx.send(RuntimeEvent::BrowserNavigated {
+        team_id: team_id.clone(),
+        url: payload.url.clone(),
+        title: title.clone(),
+        status_code,
+    });
+
+    Ok(Json(json!({
+        "status": "navigated",
+        "team_id": team_id,
+        "url": payload.url,
+        "title": title,
+        "status_code": status_code
+    })))
+}
+
+pub async fn execute_tool(
+    state: &AppState,
+    team_id: Option<&str>,
+    tool_name: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, crate::tools::ToolError> {
+    let controller = if let Some(tid) = team_id {
+        let lock = state.browser_controllers.lock().await;
+        lock.get(tid).cloned()
+    } else {
+        None
+    };
+
+    let runner = match controller {
+        Some(ctrl) => state.tools.clone().with_browser(ctrl),
+        None => state.tools.clone(),
+    };
+
+    let result = runner.execute(tool_name, args).await?;
+
+    let team_str = team_id.unwrap_or("default").to_string();
+    match tool_name {
+        "browser_navigate" => {
+            let url = args["url"].as_str().unwrap_or_default().to_string();
+            let title = result["title"].as_str().unwrap_or(&url).to_string();
+            let status_code = result["status_code"].as_u64().unwrap_or(200) as u16;
+            let _ = state.event_tx.send(RuntimeEvent::BrowserNavigated {
+                team_id: team_str,
+                url,
+                title,
+                status_code,
+            });
+        }
+        "browser_screenshot" => {
+            let url = result["url"].as_str().unwrap_or_default().to_string();
+            let image_base64 = result["image_base64"].as_str().unwrap_or_default().to_string();
+            let timestamp = chrono::Utc::now().to_rfc3339();
+            let _ = state.event_tx.send(RuntimeEvent::BrowserScreenshot {
+                team_id: team_str,
+                url,
+                image_base64,
+                timestamp,
+            });
+        }
+        _ => {}
+    }
+
+    Ok(result)
+}
+

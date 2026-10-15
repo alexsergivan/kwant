@@ -44,6 +44,26 @@ pub enum RuntimeEvent {
     DiscussionCompleted {
         total_turns: usize,
     },
+    #[serde(rename = "browser_navigated", alias = "BrowserNavigated")]
+    BrowserNavigated {
+        team_id: String,
+        url: String,
+        title: String,
+        status_code: u16,
+    },
+    #[serde(rename = "browser_screenshot", alias = "BrowserScreenshot")]
+    BrowserScreenshot {
+        team_id: String,
+        url: String,
+        image_base64: String,
+        timestamp: String,
+    },
+    #[serde(rename = "sandbox_status", alias = "SandboxStatusChanged")]
+    SandboxStatusChanged {
+        team_id: String,
+        container_name: String,
+        is_running: bool,
+    },
     Error {
         code: String,
         message: String,

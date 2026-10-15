@@ -6,6 +6,7 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::drivers::events::RuntimeEvent;
 use crate::router::LayaRouter;
+use crate::sandbox::{BrowserController, SandboxManager};
 use crate::tools::ToolRunner;
 use axum::{
     routing::{get, post},
@@ -25,7 +26,10 @@ pub struct AppState {
     pub broker: PermissionBroker,
     pub router: LayaRouter,
     pub event_sender: broadcast::Sender<RuntimeEvent>,
+    pub event_tx: broadcast::Sender<RuntimeEvent>,
     pub active_cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    pub sandbox_manager: Arc<SandboxManager>,
+    pub browser_controllers: Arc<Mutex<HashMap<String, BrowserController>>>,
 }
 
 impl AppState {
@@ -37,15 +41,27 @@ impl AppState {
         router: LayaRouter,
     ) -> Self {
         let (event_sender, _) = broadcast::channel(128);
+        let event_tx = event_sender.clone();
+        let sandbox_manager = Arc::new(SandboxManager::new());
+        let browser_controllers = Arc::new(Mutex::new(HashMap::new()));
         Self {
             config,
             db,
-            tools,
+            tools: tools.with_sandbox(sandbox_manager.clone()),
             broker,
             router,
             event_sender,
+            event_tx,
             active_cancellations: Arc::new(Mutex::new(HashMap::new())),
+            sandbox_manager,
+            browser_controllers,
         }
+    }
+
+    pub fn with_sandbox_manager(mut self, manager: Arc<SandboxManager>) -> Self {
+        self.sandbox_manager = manager.clone();
+        self.tools = self.tools.with_sandbox(manager);
+        self
     }
 }
 
@@ -68,6 +84,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
         .route("/api/system/directories", get(routes::list_system_directories))
         .route("/api/system/select-folder", post(routes::select_folder))
+        .route("/api/sandbox/:team_id/status", get(routes::get_sandbox_status))
+        .route("/api/sandbox/:team_id/screenshot", get(routes::get_browser_screenshot))
+        .route("/api/sandbox/:team_id/restart", post(routes::restart_sandbox))
+        .route("/api/sandbox/:team_id/navigate", post(routes::navigate_sandbox))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
         .layer(cors)

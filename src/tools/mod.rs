@@ -1,9 +1,11 @@
 pub mod file_ops;
+pub mod sandbox;
 pub mod shell;
 pub mod web;
 
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -27,12 +29,28 @@ pub enum ToolError {
 #[derive(Clone, Debug)]
 pub struct ToolRunner {
     pub workspace_dir: PathBuf,
+    pub sandbox_manager: Option<Arc<crate::sandbox::SandboxManager>>,
+    pub browser_controller: Option<crate::sandbox::BrowserController>,
 }
 
 impl ToolRunner {
     pub fn new(workspace_dir: PathBuf) -> Self {
         let _ = std::fs::create_dir_all(&workspace_dir);
-        Self { workspace_dir }
+        Self {
+            workspace_dir,
+            sandbox_manager: None,
+            browser_controller: None,
+        }
+    }
+
+    pub fn with_sandbox(mut self, manager: Arc<crate::sandbox::SandboxManager>) -> Self {
+        self.sandbox_manager = Some(manager);
+        self
+    }
+
+    pub fn with_browser(mut self, controller: crate::sandbox::BrowserController) -> Self {
+        self.browser_controller = Some(controller);
+        self
     }
 
     pub async fn execute(&self, tool_name: &str, args: &Value) -> Result<Value, ToolError> {
@@ -46,6 +64,11 @@ impl ToolRunner {
             "list_dir" => file_ops::list_dir(target_dir, args),
             "execute_shell" => shell::execute_shell(target_dir, args).await,
             "web_fetch" => web::web_fetch(args).await,
+            "browser_navigate" => sandbox::browser_navigate_with_controller(self.browser_controller.as_ref(), args).await,
+            "browser_screenshot" => sandbox::browser_screenshot_with_controller(self.browser_controller.as_ref(), args).await,
+            "browser_extract" => sandbox::browser_extract_with_controller(self.browser_controller.as_ref(), args).await,
+            "browser_click" => sandbox::browser_click_with_controller(self.browser_controller.as_ref(), args).await,
+            "browser_type" => sandbox::browser_type_with_controller(self.browser_controller.as_ref(), args).await,
             other => Err(ToolError::UnknownTool(other.to_string())),
         }
     }
