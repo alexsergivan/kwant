@@ -6,6 +6,7 @@ import { PendingApproval } from './components/ModernApprovalCard';
 import { SettingsModal } from './components/SettingsModal';
 import { NewAgentModal } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
+import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
 
 export const App: React.FC = () => {
@@ -30,6 +31,7 @@ export const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
+  const [editingTeam, setEditingTeam] = useState<Team | null>(null);
 
   // Load initial Kwants, Channels, and Teams
   useEffect(() => {
@@ -414,9 +416,97 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleUpdateTeam = async (
+    id: string,
+    data: {
+      name: string;
+      description?: string;
+      lead_kwant_id: string;
+      member_kwants: string[];
+    }
+  ) => {
+    try {
+      const res = await fetch(`/api/teams/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+
+      if (res.ok) {
+        const updatedRaw = await res.json();
+        const updated: Team = {
+          ...updatedRaw,
+          member_kwants: Array.isArray(updatedRaw.member_kwants)
+            ? updatedRaw.member_kwants
+            : JSON.parse(updatedRaw.member_kwants || '[]'),
+        };
+        setTeams((prev) => prev.map((t) => (t.id === id ? updated : t)));
+
+        // Refresh channels in case team name or description changed
+        const cRes = await fetch('/api/channels');
+        if (cRes.ok) {
+          const freshChannels: Channel[] = await cRes.json();
+          setChannels(freshChannels);
+        }
+
+        setEditingTeam(null);
+        playSfx('fanfare');
+      }
+    } catch (err) {
+      console.error('Failed updating team:', err);
+    }
+  };
+
+  const handleDeleteTeam = async (id: string) => {
+    try {
+      const res = await fetch(`/api/teams/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (res.ok) {
+        setTeams((prev) => prev.filter((t) => t.id !== id));
+        if (selectedTeamId === id) {
+          setSelectedTeamId(null);
+          if (channels.length > 0) {
+            setSelectedId(channels[0].id);
+            setIsChannel(true);
+          }
+        }
+
+        // Refresh channels
+        const cRes = await fetch('/api/channels');
+        if (cRes.ok) {
+          const freshChannels: Channel[] = await cRes.json();
+          setChannels(freshChannels);
+        }
+
+        setEditingTeam(null);
+        playSfx('click');
+      }
+    } catch (err) {
+      console.error('Failed deleting team:', err);
+    }
+  };
+
   const currentChannel = isChannel ? channels.find((c) => c.id === selectedId) : null;
   const currentKwant = !isChannel ? kwants.find((k) => k.id === selectedId) : null;
-  const currentTeam = selectedTeamId ? teams.find((t) => t.id === selectedTeamId) : null;
+  const currentTeam = selectedTeamId
+    ? teams.find((t) => t.id === selectedTeamId)
+    : isChannel && currentChannel?.name.startsWith('team-')
+    ? teams.find((t) => `team-${t.name}` === currentChannel.name)
+    : null;
+
+  const currentTeamMemberIds: string[] = currentTeam
+    ? Array.isArray(currentTeam.member_kwants)
+      ? currentTeam.member_kwants
+      : typeof currentTeam.member_kwants === 'string'
+      ? JSON.parse(currentTeam.member_kwants || '[]')
+      : []
+    : [];
+
+  const currentTeamMembers = currentTeam
+    ? kwants.filter((k) => currentTeamMemberIds.includes(k.id))
+    : [];
 
   const chatTitle = !isChannel
     ? currentKwant?.name || 'Agent'
@@ -451,6 +541,10 @@ export const App: React.FC = () => {
           onSelectKwant={handleSelectKwant}
           onSelectChannel={handleSelectChannel}
           onSelectTeam={handleSelectTeam}
+          onManageTeam={(team) => {
+            setEditingTeam(team);
+            playSfx('click');
+          }}
           onSummonKwant={() => {
             setIsNewAgentOpen(true);
             playSfx('click');
@@ -475,6 +569,16 @@ export const App: React.FC = () => {
           teams={teams}
           discussionState={discussionState}
           onCancelDiscussion={handleCancelDiscussion}
+          teamMembers={currentTeamMembers}
+          teamName={currentTeam?.name}
+          onManageTeam={
+            currentTeam
+              ? () => {
+                  setEditingTeam(currentTeam);
+                  playSfx('click');
+                }
+              : undefined
+          }
         />
       </div>
 
@@ -491,6 +595,16 @@ export const App: React.FC = () => {
         onClose={() => setIsNewTeamOpen(false)}
         kwants={kwants}
         onCreateTeam={handleCreateTeam}
+      />
+
+      {/* Manage Team Modal */}
+      <ManageTeamModal
+        isOpen={!!editingTeam}
+        team={editingTeam}
+        kwants={kwants}
+        onClose={() => setEditingTeam(null)}
+        onUpdateTeam={handleUpdateTeam}
+        onDeleteTeam={handleDeleteTeam}
       />
 
       {/* Settings Modal */}

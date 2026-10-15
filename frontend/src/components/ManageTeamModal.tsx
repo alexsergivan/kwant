@@ -1,0 +1,300 @@
+import React, { useState, useEffect } from 'react';
+import { X, Users, Trash2, Check, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { ModernAvatar } from './ModernAvatar';
+import { Team, Kwant } from './Sidebar';
+import { playSfx } from '../audio/chiptune';
+
+interface ManageTeamModalProps {
+  isOpen: boolean;
+  team: Team | null;
+  kwants: Kwant[];
+  onClose: () => void;
+  onUpdateTeam: (
+    id: string,
+    data: {
+      name: string;
+      description?: string;
+      lead_kwant_id: string;
+      member_kwants: string[];
+    }
+  ) => Promise<void>;
+  onDeleteTeam: (id: string) => Promise<void>;
+}
+
+export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
+  isOpen,
+  team,
+  kwants,
+  onClose,
+  onUpdateTeam,
+  onDeleteTeam,
+}) => {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [leadKwantId, setLeadKwantId] = useState('');
+  const [memberIds, setMemberIds] = useState<string[]>([]);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (team) {
+      setName(team.name);
+      setDescription(team.description || '');
+      setLeadKwantId(team.lead_kwant_id || (kwants[0]?.id ?? ''));
+
+      const parsedMembers: string[] = Array.isArray(team.member_kwants)
+        ? team.member_kwants
+        : typeof team.member_kwants === 'string'
+        ? JSON.parse(team.member_kwants || '[]')
+        : [];
+      setMemberIds(parsedMembers);
+      setConfirmDelete(false);
+      setError(null);
+    }
+  }, [team, kwants, isOpen]);
+
+  if (!isOpen || !team) return null;
+
+  const handleToggleMember = (kwantId: string) => {
+    playSfx('click');
+    if (memberIds.includes(kwantId)) {
+      if (memberIds.length <= 1) {
+        setError('A team must have at least one assigned Kwant.');
+        return;
+      }
+      setError(null);
+      const next = memberIds.filter((id) => id !== kwantId);
+      setMemberIds(next);
+      if (leadKwantId === kwantId && next.length > 0) {
+        setLeadKwantId(next[0]);
+      }
+    } else {
+      setError(null);
+      setMemberIds([...memberIds, kwantId]);
+    }
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    if (!cleanName) {
+      setError('Please provide a valid team name.');
+      return;
+    }
+    if (memberIds.length === 0) {
+      setError('Select at least one member Kwant for this team.');
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      setError(null);
+      await onUpdateTeam(team.id, {
+        name: cleanName,
+        description: description.trim() || undefined,
+        lead_kwant_id: leadKwantId || memberIds[0],
+        member_kwants: memberIds,
+      });
+      playSfx('fanfare');
+      setIsSaving(false);
+      onClose();
+    } catch (err) {
+      setIsSaving(false);
+      setError('Failed to update team. Please try again.');
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      playSfx('click');
+      return;
+    }
+
+    try {
+      setIsDeleting(true);
+      playSfx('click');
+      await onDeleteTeam(team.id);
+      setIsDeleting(false);
+      onClose();
+    } catch (err) {
+      setIsDeleting(false);
+      setError('Failed to delete team.');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full p-6 text-zinc-100 shadow-2xl space-y-5">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+              <Users size={16} />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-100">Manage Team: @{team.name}</h3>
+              <p className="text-[11px] text-zinc-400">Configure team roster, lead kwant, and permissions</p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              playSfx('click');
+              onClose();
+            }}
+            className="p-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
+          >
+            <X size={17} />
+          </button>
+        </div>
+
+        {error && (
+          <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-300 flex items-center gap-2">
+            <AlertTriangle size={14} className="flex-shrink-0 text-rose-400" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSave} className="space-y-4">
+          {/* Team Name */}
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1">Team Handle</label>
+            <div className="relative flex items-center">
+              <span className="absolute left-3 text-zinc-500 text-xs font-mono">@</span>
+              <input
+                type="text"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '-'))}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-7 pr-3 py-2 text-xs text-zinc-100 font-mono focus:border-sky-500 focus:outline-none transition-colors"
+              />
+            </div>
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1">Mission / Purpose</label>
+            <input
+              type="text"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="e.g. Systems architecture, performance & reliability"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
+            />
+          </div>
+
+          {/* Lead Kwant Selector */}
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1">Team Lead</label>
+            <select
+              value={leadKwantId}
+              onChange={(e) => setLeadKwantId(e.target.value)}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none transition-colors"
+            >
+              {kwants
+                .filter((k) => memberIds.includes(k.id))
+                .map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.name} — {k.title}
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          {/* Members Roster Checklist */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-medium text-zinc-400">
+                Team Roster ({memberIds.length}/{kwants.length} Assigned)
+              </label>
+              <span className="text-[11px] text-zinc-500">Click to add/remove</span>
+            </div>
+            <div className="space-y-1.5 max-h-48 overflow-y-auto p-1 bg-zinc-950/60 border border-zinc-800/80 rounded-xl">
+              {kwants.map((k) => {
+                const isMember = memberIds.includes(k.id);
+                const isLead = leadKwantId === k.id;
+                return (
+                  <div
+                    key={k.id}
+                    onClick={() => handleToggleMember(k.id)}
+                    className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${
+                      isMember
+                        ? 'bg-zinc-800/70 border-sky-500/30 text-zinc-100'
+                        : 'bg-zinc-900/30 border-zinc-800/40 text-zinc-400 hover:bg-zinc-800/30 hover:text-zinc-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <ModernAvatar role={k.avatar_sprite} name={k.name} size={28} />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-medium text-zinc-200 truncate">{k.name}</span>
+                          {isLead && (
+                            <span className="text-[9px] font-semibold uppercase px-1 py-0.2 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 flex items-center gap-0.5">
+                              <ShieldCheck size={9} />
+                              Lead
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-zinc-400 truncate">{k.title}</p>
+                      </div>
+                    </div>
+
+                    <div
+                      className={`w-5 h-5 rounded flex items-center justify-center border transition-all ${
+                        isMember
+                          ? 'bg-sky-500 text-white border-sky-400'
+                          : 'border-zinc-700 bg-zinc-900 text-transparent'
+                      }`}
+                    >
+                      <Check size={13} strokeWidth={2.5} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Action Buttons & Danger Zone */}
+          <div className="pt-2 border-t border-zinc-800 flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={isDeleting}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                confirmDelete
+                  ? 'bg-red-600 text-white border-red-500 animate-pulse'
+                  : 'text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border-red-500/20'
+              }`}
+            >
+              <Trash2 size={13} />
+              <span>{confirmDelete ? 'Confirm Delete?' : 'Delete Team'}</span>
+            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  playSfx('click');
+                  onClose();
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSaving}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium bg-sky-500 hover:bg-sky-400 text-white shadow-sm transition-all"
+              >
+                <Check size={14} />
+                <span>{isSaving ? 'Saving...' : 'Save Changes'}</span>
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};

@@ -61,7 +61,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/channels", get(routes::list_channels).post(routes::create_channel))
         .route("/api/channels/:id/messages", get(routes::list_messages))
         .route("/api/teams", get(routes::list_teams).post(routes::create_team))
-        .route("/api/teams/:id", get(routes::get_team).delete(routes::delete_team))
+        .route("/api/teams/:id", get(routes::get_team).put(routes::update_team).delete(routes::delete_team))
         .route("/api/chat/send", post(routes::send_chat))
         .route("/api/chat/cancel", post(routes::cancel_chat))
         .route("/api/approvals/:id/resolve", post(routes::resolve_approval))

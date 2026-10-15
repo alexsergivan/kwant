@@ -113,7 +113,27 @@ async fn test_teams_api_endpoints() {
     let created_team: Team = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(created_team.name, "qa-squad");
 
-    // 4. DELETE /api/teams/:id
+    // 4. PUT /api/teams/:id (Update team)
+    let update_payload = json!({
+        "name": "qa-squad",
+        "description": "Updated QA and reliability team",
+        "icon": "shield",
+        "lead_kwant_id": kwants[1].id,
+        "member_kwants": vec![kwants[1].id.clone()]
+    });
+    let req = Request::builder()
+        .method("PUT")
+        .uri(format!("/api/teams/{}", created_team.id))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&update_payload).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let updated_team: Team = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(updated_team.description.as_deref(), Some("Updated QA and reliability team"));
+
+    // 5. DELETE /api/teams/:id
     let req = Request::builder()
         .method("DELETE")
         .uri(format!("/api/teams/{}", created_team.id))

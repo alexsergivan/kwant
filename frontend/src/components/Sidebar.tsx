@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Hash, Plus, CheckCircle2, Users, ChevronDown } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, Users, ChevronDown, Settings2 } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
+import { playSfx } from '../audio/chiptune';
 
 export interface Kwant {
   id: string;
@@ -40,6 +41,7 @@ export interface SidebarProps {
   onSelectKwant: (kwant: Kwant) => void;
   onSelectChannel: (channel: Channel) => void;
   onSelectTeam: (team: Team) => void;
+  onManageTeam?: (team: Team) => void;
   onSummonKwant: () => void;
   onCreateTeam: () => void;
 }
@@ -54,6 +56,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectKwant,
   onSelectChannel,
   onSelectTeam,
+  onManageTeam,
   onSummonKwant,
   onCreateTeam,
 }) => {
@@ -175,15 +178,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       />
                       <span className="truncate">@{t.name}</span>
                     </div>
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono flex-shrink-0 ${
-                        active
-                          ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
-                          : 'bg-zinc-800/80 text-zinc-400 border border-zinc-800'
-                      }`}
-                    >
-                      {memberCount} {memberCount === 1 ? 'member' : 'members'}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
+                          active
+                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                            : 'bg-zinc-800/80 text-zinc-400 border border-zinc-800'
+                        }`}
+                      >
+                        {memberCount}
+                      </span>
+                      {onManageTeam && (
+                        <div
+                          role="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            playSfx('click');
+                            onManageTeam(t);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:text-zinc-100 hover:bg-zinc-700/60 rounded transition-all text-zinc-400"
+                          title={`Manage Team @${t.name}`}
+                        >
+                          <Settings2 size={12} />
+                        </div>
+                      )}
+                    </div>
                   </button>
                 );
               })}

@@ -391,6 +391,43 @@ impl Database {
         Ok(row)
     }
 
+    pub async fn update_team(&self, id: &str, input: &NewTeam) -> Result<Option<Team>, DbError> {
+        let icon = input.icon.as_deref().unwrap_or("users");
+        let members_json = serde_json::to_string(&input.member_kwants)?;
+
+        let res = sqlx::query(
+            r#"
+            UPDATE teams
+            SET name = ?, description = ?, icon = ?, lead_kwant_id = ?, member_kwants = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(&input.name)
+        .bind(&input.description)
+        .bind(icon)
+        .bind(&input.lead_kwant_id)
+        .bind(&members_json)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+
+        if res.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        // Also update corresponding team channel if it exists
+        let channel_name = format!("team-{}", input.name);
+        let _ = sqlx::query("UPDATE channels SET description = ?, lead_kwant_id = ?, member_kwants = ? WHERE name = ?")
+            .bind(&input.description)
+            .bind(&input.lead_kwant_id)
+            .bind(&members_json)
+            .bind(&channel_name)
+            .execute(&self.pool)
+            .await;
+
+        self.get_team(id).await
+    }
+
     pub async fn delete_team(&self, id: &str) -> Result<bool, DbError> {
         let res = sqlx::query("DELETE FROM teams WHERE id = ?")
             .bind(id)

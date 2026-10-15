@@ -117,6 +117,18 @@ pub async fn get_team(
     }
 }
 
+pub async fn update_team(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<NewTeam>,
+) -> Result<Json<Team>, StatusCode> {
+    match state.db.update_team(&id, &payload).await {
+        Ok(Some(team)) => Ok(Json(team)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
 pub async fn delete_team(
     State(state): State<AppState>,
     Path(id): Path<String>,

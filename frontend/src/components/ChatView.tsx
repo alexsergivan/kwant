@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square } from 'lucide-react';
+import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2 } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -37,6 +37,9 @@ export interface ChatViewProps {
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
   discussionState?: DiscussionState;
   onCancelDiscussion?: () => void;
+  teamMembers?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
+  teamName?: string;
+  onManageTeam?: () => void;
 }
 
 export const renderFormattedText = (text: string): React.ReactNode => {
@@ -71,12 +74,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
   teams: teamsProp,
   discussionState,
   onCancelDiscussion,
+  teamMembers,
+  teamName,
+  onManageTeam,
 }) => {
   const [inputVal, setInputVal] = useState('');
   const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleInsertTag = (tag: string) => {
+    playSfx('click');
+    setInputVal((prev) => {
+      const trimmed = prev.trim();
+      return trimmed ? `${trimmed} ${tag} ` : `${tag} `;
+    });
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  };
 
   // Fallback to fetch kwants and teams if not provided as props
   const [internalKwants, setInternalKwants] = useState<Array<{ id: string; name: string; title: string; avatar_sprite: string }>>([]);
@@ -267,7 +284,34 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <p className="text-[11px] text-zinc-400 truncate max-w-lg mt-0.5">{subtitle}</p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {teamMembers && teamMembers.length > 0 && (
+            <div className="flex items-center gap-2 pl-3 border-l border-zinc-800">
+              <div className="flex -space-x-2 overflow-hidden items-center py-0.5">
+                {teamMembers.map((member) => (
+                  <div
+                    key={member.id}
+                    title={`${member.name} (${member.title})`}
+                    className="inline-block ring-2 ring-zinc-950 rounded-full"
+                  >
+                    <ModernAvatar role={member.avatar_sprite} name={member.name} size={24} />
+                  </div>
+                ))}
+              </div>
+              {onManageTeam && (
+                <button
+                  type="button"
+                  onClick={onManageTeam}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
+                  title="Manage Team members and settings"
+                >
+                  <Settings2 size={12} className="text-zinc-400" />
+                  <span>Manage</span>
+                </button>
+              )}
+            </div>
+          )}
+
           {isStreaming && !discussionState?.inProgress && onCancelDiscussion && (
             <button
               type="button"
@@ -459,6 +503,35 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
       {/* Modern Composer Input Bar */}
       <div className="p-4 border-t border-zinc-800/80 bg-zinc-900/30">
+        {teamMembers && teamMembers.length > 0 && (
+          <div className="max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none">
+            <span className="text-[11px] font-medium text-zinc-500 whitespace-nowrap">Ask:</span>
+            {teamMembers.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => handleInsertTag(`@${m.name}`)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
+                title={`Ask ${m.name}`}
+              >
+                <ModernAvatar role={m.avatar_sprite} name={m.name} size={14} />
+                <span>@{m.name}</span>
+              </button>
+            ))}
+            {teamName && (
+              <button
+                type="button"
+                onClick={() => handleInsertTag(`@${teamName}`)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
+                title={`Ask whole team @${teamName}`}
+              >
+                <Users size={12} className="text-sky-400" />
+                <span>@{teamName} (Team)</span>
+              </button>
+            )}
+          </div>
+        )}
+
         <form
           onSubmit={handleSubmit}
           className="relative max-w-4xl mx-auto flex items-end gap-2 bg-zinc-900 border border-zinc-800 focus-within:border-zinc-700 rounded-2xl p-2 shadow-sm transition-all"
