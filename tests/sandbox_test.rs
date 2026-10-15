@@ -56,3 +56,18 @@ fn test_sandbox_types_serialization_and_errors() {
     let err_timeout = SandboxError::Timeout;
     assert_eq!(format!("{}", err_timeout), "Execution timed out");
 }
+
+#[test]
+fn test_container_naming_format() {
+    let team_name = "Alpha Team & Co";
+    let team_id = "01234567-89ab-cdef-0123-456789abcdef";
+    let safe_name = team_name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
+    let id_suffix = if team_id.len() >= 8 { &team_id[..8] } else { team_id };
+    let container_name = format!("kwnt-sandbox-{}-{}", safe_name, id_suffix);
+    assert_eq!(container_name, "kwnt-sandbox-alpha-team---co-01234567");
+
+    let short_id = "abc";
+    let short_suffix = if short_id.len() >= 8 { &short_id[..8] } else { short_id };
+    let container_name_short = format!("kwnt-sandbox-test-{}", short_suffix);
+    assert_eq!(container_name_short, "kwnt-sandbox-test-abc");
+}

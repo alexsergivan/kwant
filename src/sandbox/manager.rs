@@ -104,7 +104,8 @@ impl SandboxManager {
         }
 
         let safe_name = team_name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
-        let container_name = format!("kwnt-sandbox-{}", safe_name);
+        let id_suffix = if team_id.len() >= 8 { &team_id[..8] } else { team_id };
+        let container_name = format!("kwnt-sandbox-{}-{}", safe_name, id_suffix);
 
         // Remove old container if exists
         let _ = Command::new("docker").args(["rm", "-f", &container_name]).output().await;

@@ -206,3 +206,61 @@ async fn test_lazy_controller_initialization() {
     assert!(kwnt::server::routes::get_or_create_browser_controller(&state, "team-x").await.is_none());
 }
 
+#[tokio::test]
+async fn test_execute_tool_shell_fallback() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config::default();
+    let tools = ToolRunner::new(tmp.path().join("workspace"));
+    let broker = PermissionBroker::new();
+    let router = LayaRouter::new(config.laya_url.clone());
+
+    let state = AppState::new(config, db, tools, broker, router);
+
+    let res = kwnt::server::routes::execute_tool(
+        &state,
+        Some("team-test"),
+        "execute_shell",
+        &json!({ "command": "echo 'sandboxed-fallback'" }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(res["exit_code"], 0);
+    assert!(res["stdout"].as_str().unwrap().contains("sandboxed-fallback"));
+}
+
+#[tokio::test]
+async fn test_restart_sandbox_stopped_when_docker_unavailable() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config::default();
+    let tools = ToolRunner::new(tmp.path().join("workspace"));
+    let broker = PermissionBroker::new();
+    let router = LayaRouter::new(config.laya_url.clone());
+
+    let state = AppState::new(config, db, tools, broker, router);
+    let mut rx = state.event_sender.subscribe();
+
+    let json_res = kwnt::server::routes::restart_sandbox(
+        axum::extract::State(state),
+        axum::extract::Path("team-restarted".to_string()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(json_res.0["status"], "stopped");
+    assert_eq!(json_res.0["is_running"], false);
+    assert_eq!(json_res.0["team_id"], "team-restarted");
+
+    let event = rx.recv().await.unwrap();
+    match event {
+        RuntimeEvent::SandboxStatusChanged { team_id, is_running, container_name } => {
+            assert_eq!(team_id, "team-restarted");
+            assert_eq!(is_running, false);
+            assert!(container_name.contains("team-restarted"));
+        }
+        other => panic!("Expected SandboxStatusChanged, got {:?}", other),
+    }
+}
+

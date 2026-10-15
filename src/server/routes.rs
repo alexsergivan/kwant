@@ -1086,15 +1086,48 @@ pub async fn get_or_create_browser_controller(
     state: &AppState,
     team_id: &str,
 ) -> Option<crate::sandbox::BrowserController> {
-    let mut lock = state.browser_controllers.lock().await;
-    if let Some(ctrl) = lock.get(team_id) {
-        return Some(ctrl.clone());
+    {
+        let lock = state.browser_controllers.lock().await;
+        if let Some(ctrl) = lock.get(team_id) {
+            return Some(ctrl.clone());
+        }
+    }
+
+    if state.sandbox_manager.get_sandbox(team_id).await.is_none() {
+        let team = match state.db.get_team(team_id).await {
+            Ok(Some(t)) => Some(t),
+            _ => state.db.get_team_by_name(team_id).await.ok().flatten(),
+        };
+
+        if let Some(team) = team {
+            if state.sandbox_manager.is_docker_available().await {
+                let ws_dir = team
+                    .workspace_path
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| state.config.data_dir.join("workspaces").join(&team.name));
+                let _ = tokio::fs::create_dir_all(&ws_dir).await;
+                let _ = state
+                    .sandbox_manager
+                    .ensure_sandbox_running(team_id, &team.name, &ws_dir)
+                    .await;
+            }
+        }
     }
 
     if let Some(active_sb) = state.sandbox_manager.get_sandbox(team_id).await {
         if active_sb.is_running {
             let ctrl = crate::sandbox::BrowserController::new(active_sb.cdp_port);
-            lock.insert(team_id.to_string(), ctrl.clone());
+            {
+                let mut lock = state.browser_controllers.lock().await;
+                lock.insert(team_id.to_string(), ctrl.clone());
+            }
+            let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
+                team_id: team_id.to_string(),
+                container_name: active_sb.container_name.clone(),
+                is_running: true,
+            });
             return Some(ctrl);
         }
     }
@@ -1106,6 +1139,9 @@ pub async fn get_sandbox_status(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if state.sandbox_manager.get_sandbox(&team_id).await.is_none() {
+        let _ = get_or_create_browser_controller(&state, &team_id).await;
+    }
     let sandbox = state.sandbox_manager.get_sandbox(&team_id).await;
     match sandbox {
         Some(s) => Ok(Json(json!({
@@ -1162,22 +1198,78 @@ pub async fn restart_sandbox(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    let existing_container_name = state
+        .sandbox_manager
+        .get_sandbox(&team_id)
+        .await
+        .map(|s| s.container_name);
+
     let _ = state.sandbox_manager.stop_sandbox(&team_id).await;
     {
         let mut controllers = state.browser_controllers.lock().await;
         controllers.remove(&team_id);
     }
 
+    let team = match state.db.get_team(&team_id).await {
+        Ok(Some(t)) => Some(t),
+        _ => state.db.get_team_by_name(&team_id).await.ok().flatten(),
+    };
+
+    if let Some(team) = team {
+        if state.sandbox_manager.is_docker_available().await {
+            let ws_dir = team
+                .workspace_path
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| state.config.data_dir.join("workspaces").join(&team.name));
+            let _ = tokio::fs::create_dir_all(&ws_dir).await;
+
+            match state
+                .sandbox_manager
+                .ensure_sandbox_running(&team_id, &team.name, &ws_dir)
+                .await
+            {
+                Ok(active_sb) => {
+                    let ctrl = crate::sandbox::BrowserController::new(active_sb.cdp_port);
+                    {
+                        let mut controllers = state.browser_controllers.lock().await;
+                        controllers.insert(team_id.clone(), ctrl);
+                    }
+                    let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
+                        team_id: team_id.clone(),
+                        container_name: active_sb.container_name.clone(),
+                        is_running: true,
+                    });
+                    return Ok(Json(json!({
+                        "status": "restarted",
+                        "team_id": team_id,
+                        "is_running": true
+                    })));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to restart sandbox for {}: {}", team_id, e);
+                }
+            }
+        }
+    }
+
+    let fallback_container_name = existing_container_name.unwrap_or_else(|| {
+        let safe_name = team_id.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
+        let id_suffix = if team_id.len() >= 8 { &team_id[..8] } else { &team_id };
+        format!("kwnt-sandbox-{}-{}", safe_name, id_suffix)
+    });
+
     let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
         team_id: team_id.clone(),
-        container_name: format!("kwnt-sandbox-{}", team_id),
+        container_name: fallback_container_name,
         is_running: false,
     });
 
     Ok(Json(json!({
-        "status": "restarted",
+        "status": "stopped",
         "team_id": team_id,
-        "message": "Sandbox stopped and cleaned"
+        "is_running": false
     })))
 }
 
@@ -1227,6 +1319,37 @@ pub async fn execute_tool(
     } else {
         None
     };
+
+    if tool_name == "execute_shell" {
+        if let Some(tid) = team_id {
+            if let Some(sandbox) = state.sandbox_manager.get_sandbox(tid).await {
+                if sandbox.is_running {
+                    let cmd_str = args["command"].as_str().unwrap_or("");
+                    match state
+                        .sandbox_manager
+                        .exec_in_sandbox(&sandbox.container_name, cmd_str, 30)
+                        .await
+                    {
+                        Ok(out) => {
+                            return Ok(json!({
+                                "command": out.command,
+                                "stdout": out.stdout,
+                                "stderr": out.stderr,
+                                "exit_code": out.exit_code,
+                                "success": out.success
+                            }));
+                        }
+                        Err(crate::sandbox::SandboxError::DockerUnavailable(_)) => {
+                            // Fallback to standard host runner
+                        }
+                        Err(e) => {
+                            return Err(crate::tools::ToolError::Execution(e.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let runner = match controller {
         Some(ctrl) => state.tools.clone().with_browser(ctrl),

@@ -72,5 +72,3 @@ async fn test_sandbox_e2e_endpoints() {
     assert_eq!(shot_json["team_id"], "test-team");
     assert!(shot_json["screenshot"].is_string());
 }
-
-
