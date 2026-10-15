@@ -893,6 +893,7 @@ export const App: React.FC = () => {
           discussionState={isDiscussionActiveHere ? discussionState : { inProgress: false }}
           onCancelDiscussion={handleCancelDiscussion}
           teamMembers={currentTeamMembers}
+          teamId={activeSandboxId}
           teamName={activeSandboxName}
           workspacePath={currentTeam?.workspace_path}
           repoUrl={currentTeam?.repo_url}

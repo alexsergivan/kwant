@@ -366,4 +366,98 @@ async fn test_system_select_folder_endpoint() {
     assert!(json.get("canceled").is_some());
 }
 
+#[tokio::test]
+async fn test_sandbox_password_vault_api() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config::default();
+    let tools = ToolRunner::new(tmp.path().join("workspace"));
+    let broker = PermissionBroker::new();
+    let router = LayaRouter::new(config.laya_url.clone());
+    let kwants = db.list_kwants().await.unwrap();
+    let team = db
+        .create_team(&kwnt::db::models::NewTeam {
+            name: "test-team-vault".into(),
+            description: Some("Team for vault testing".into()),
+            icon: None,
+            lead_kwant_id: kwants[0].id.clone(),
+            member_kwants: vec![kwants[0].id.clone()],
+            workspace_path: None,
+            repo_url: None,
+        })
+        .await
+        .unwrap();
+    let team_id = team.id;
+
+    let state = AppState::new(config, db, tools, broker, router);
+    let app = create_router(state);
+
+    // 1. Initial list should be empty
+    let req = Request::builder()
+        .uri(format!("/api/sandbox/{}/passwords", team_id))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["passwords"].as_array().unwrap().len(), 0);
+
+    // 2. Save a credential
+    let save_payload = json!({
+        "domain": "example.com",
+        "origin": "https://example.com",
+        "username": "alex",
+        "password": "supersecretpassword"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sandbox/{}/passwords", team_id))
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_vec(&save_payload).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "saved");
+    let cred_id = json["credential"]["id"].as_str().unwrap().to_string();
+    assert_eq!(json["credential"]["username"], "alex");
+
+    // 3. List should now contain 1 item
+    let req = Request::builder()
+        .uri(format!("/api/sandbox/{}/passwords", team_id))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let passwords = json["passwords"].as_array().unwrap();
+    assert_eq!(passwords.len(), 1);
+    assert_eq!(passwords[0]["domain"], "example.com");
+    assert_eq!(passwords[0]["username"], "alex");
+    assert_eq!(passwords[0]["password"], "supersecretpassword");
+
+    // 4. Delete the credential
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/sandbox/{}/passwords/{}", team_id, cred_id))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 5. List should be empty again
+    let req = Request::builder()
+        .uri(format!("/api/sandbox/{}/passwords", team_id))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["passwords"].as_array().unwrap().len(), 0);
+}
+
 

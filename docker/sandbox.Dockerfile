@@ -16,6 +16,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
+# Configure Chromium managed policies for password manager and autofill
+RUN mkdir -p /etc/chromium/policies/managed && \
+    echo '{"PasswordManagerEnabled": true, "AutofillAddressEnabled": true, "AutofillCreditCardEnabled": true, "AutoFillEnabled": true, "CredentialsEnableService": true}' > /etc/chromium/policies/managed/policies.json
+
 WORKDIR /workspace
 
 EXPOSE 9222

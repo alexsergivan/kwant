@@ -43,6 +43,7 @@ export interface ChatViewProps {
   discussionState?: DiscussionState;
   onCancelDiscussion?: () => void;
   teamMembers?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
+  teamId?: string;
   teamName?: string;
   workspacePath?: string;
   repoUrl?: string;
@@ -94,6 +95,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   discussionState,
   onCancelDiscussion,
   teamMembers,
+  teamId,
   teamName,
   workspacePath,
   repoUrl,
@@ -697,6 +699,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           setInternalIsVmPaneOpen(false);
         }
       }}
+      teamId={teamId}
       teamName={teamName}
       activeUrl={activeUrl}
       pageTitle={pageTitle}

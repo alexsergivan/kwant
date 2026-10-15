@@ -491,3 +491,60 @@ async fn test_mock_cdp_protocol_error_response() {
     http_handle.abort();
     ws_handle.abort();
 }
+
+#[tokio::test]
+async fn test_browser_credential_vault_lifecycle() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let ws_path = temp_dir.path().to_path_buf();
+
+    let controller = BrowserController::with_workspace(19222, ws_path.clone());
+    assert_eq!(controller.list_saved_credentials().await.len(), 0);
+
+    // Save first credential
+    let cred1 = controller
+        .save_credential(
+            "github.com",
+            "https://github.com",
+            "dev_user",
+            "secret_pass_123",
+        )
+        .await;
+
+    assert_eq!(cred1.domain, "github.com");
+    assert_eq!(cred1.username, "dev_user");
+    assert_eq!(cred1.password, "secret_pass_123");
+
+    // List credentials
+    let list = controller.list_saved_credentials().await;
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, cred1.id);
+
+    // Get for URL
+    let found = controller
+        .get_credential_for_url("https://github.com/login")
+        .await;
+    assert!(found.is_some());
+    assert_eq!(found.unwrap().username, "dev_user");
+
+    // File was written to disk
+    let creds_file = ws_path.join(".saved_passwords.json");
+    assert!(creds_file.exists());
+    let file_content = std::fs::read_to_string(&creds_file).unwrap();
+    assert!(file_content.contains("dev_user"));
+    assert!(file_content.contains("secret_pass_123"));
+
+    // Reloading a new controller on same workspace loads saved passwords
+    let controller2 = BrowserController::with_workspace(19223, ws_path.clone());
+    let reloaded = controller2.list_saved_credentials().await;
+    assert_eq!(reloaded.len(), 1);
+    assert_eq!(reloaded[0].username, "dev_user");
+
+    // Delete credential
+    let deleted = controller2.delete_saved_credential(&cred1.id).await;
+    assert!(deleted);
+    assert_eq!(controller2.list_saved_credentials().await.len(), 0);
+
+    // File was updated
+    let file_content_after = std::fs::read_to_string(&creds_file).unwrap();
+    assert!(!file_content_after.contains("dev_user"));
+}
