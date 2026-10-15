@@ -66,9 +66,9 @@ async fn test_sandbox_e2e_endpoints() {
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     let shot_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let shot_json: serde_json::Value = serde_json::from_slice(&shot_bytes).unwrap();
-    assert_eq!(shot_json["team_id"], "test-team");
-    assert!(shot_json["screenshot"].is_string());
+    assert!(shot_json["error"].is_string());
+    assert!(shot_json.get("screenshot").is_none());
 }

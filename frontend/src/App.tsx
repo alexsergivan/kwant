@@ -57,6 +57,7 @@ export const App: React.FC = () => {
   const [pageTitle, setPageTitle] = useState('');
   const [screenshotBase64, setScreenshotBase64] = useState<string | null>(null);
   const [isVmRunning, setIsVmRunning] = useState(true);
+  const [browserError, setBrowserError] = useState<string | null>(null);
   const [terminalLogs, setTerminalLogs] = useState<Array<{ command: string; output: string; timestamp?: string }>>([]);
 
   // Load initial Kwants, Channels, and Teams
@@ -307,6 +308,8 @@ export const App: React.FC = () => {
               (k && (k.id === teamId || k.name.toLowerCase() === teamId.toLowerCase())) ||
               (t && (t.id === teamId || t.name.toLowerCase() === teamId.toLowerCase()));
             if (isMatch) {
+              setBrowserError(null);
+              setIsVmRunning(true);
               if (event.data?.image_base64) setScreenshotBase64(event.data.image_base64);
               if (event.data?.url) setActiveUrl(event.data.url);
               setIsVmPaneOpen(true);
@@ -749,21 +752,32 @@ export const App: React.FC = () => {
   // Load container status and screenshot for active team or bot
   useEffect(() => {
     const sid = activeSandboxId;
+    let cancelled = false;
+    setScreenshotBase64(null);
+    setActiveUrl('');
+    setPageTitle('');
+    setBrowserError(null);
     if (!sid || sid === 'default') return;
 
     fetch(`/api/sandbox/${sid}/status`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (data && typeof data.is_running === 'boolean') {
+        if (!cancelled && data && typeof data.is_running === 'boolean') {
           setIsVmRunning(data.is_running);
         }
       })
       .catch(() => {});
 
     fetch(`/api/sandbox/${sid}/screenshot`)
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Could not load the sandbox browser.');
+        return data;
+      })
       .then((data) => {
-        if (data) {
+        if (!cancelled && data) {
+          setIsVmRunning(true);
+          setBrowserError(null);
           if (data.image_base64 || data.screenshot) {
             setScreenshotBase64(data.image_base64 || data.screenshot);
           }
@@ -772,7 +786,13 @@ export const App: React.FC = () => {
           }
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (!cancelled) {
+          setIsVmRunning(false);
+          setBrowserError(err instanceof Error ? err.message : 'Could not reach the sandbox browser.');
+        }
+      });
+    return () => { cancelled = true; };
   }, [activeSandboxId]);
 
   const handleRefreshVm = async () => {
@@ -780,64 +800,77 @@ export const App: React.FC = () => {
     if (!sid || sid === 'default') return;
     try {
       const res = await fetch(`/api/sandbox/${sid}/screenshot`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.image_base64 || data.screenshot) {
-          setScreenshotBase64(data.image_base64 || data.screenshot);
-        }
-        if (data.url) {
-          setActiveUrl(data.url);
-        }
+      const data = await res.json();
+      if (activeSandboxIdRef.current !== sid) return;
+      if (!res.ok) throw new Error(data.error || 'Could not load the sandbox browser.');
+      setBrowserError(null);
+      setIsVmRunning(true);
+      if (data.image_base64 || data.screenshot) {
+        setScreenshotBase64(data.image_base64 || data.screenshot);
+      }
+      if (data.url) {
+        setActiveUrl(data.url);
       }
     } catch (err) {
-      console.error('Failed refreshing VM screenshot:', err);
+      if (activeSandboxIdRef.current !== sid) return;
+      setScreenshotBase64(null);
+      setIsVmRunning(false);
+      setBrowserError(err instanceof Error ? err.message : 'Could not reach the sandbox browser.');
     }
   };
 
   const handleRestartVm = async () => {
     const sid = activeSandboxId;
     if (!sid || sid === 'default') return;
+    setBrowserError(null);
+    setScreenshotBase64(null);
     try {
       const res = await fetch(`/api/sandbox/${sid}/restart`, {
         method: 'POST',
       });
-      if (res.ok) {
-        setIsVmRunning(true);
-        setTerminalLogs((prev) => [
-          ...prev,
-          {
-            command: 'docker restart sandbox',
-            output: `Sandbox container (@${activeSandboxName}) reset and restarted.`,
-            timestamp: new Date().toLocaleTimeString(),
-          },
-        ]);
-        setTimeout(() => {
-          handleRefreshVm();
-        }, 1000);
-      }
+      const data = await res.json();
+      if (activeSandboxIdRef.current !== sid) return;
+      if (!res.ok || !data.is_running) throw new Error(data.error || 'Sandbox could not start. Check Docker and try again.');
+      setIsVmRunning(true);
+      setTerminalLogs((prev) => [
+        ...prev,
+        {
+          command: 'docker restart sandbox',
+          output: `Sandbox container (@${activeSandboxName}) reset and restarted.`,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ]);
+      setTimeout(() => {
+        handleRefreshVm();
+      }, 1000);
     } catch (err) {
-      console.error('Failed restarting VM:', err);
+      if (activeSandboxIdRef.current !== sid) return;
+      setIsVmRunning(false);
+      setBrowserError(err instanceof Error ? err.message : 'Could not restart the sandbox browser.');
     }
   };
 
   const handleNavigateVm = async (url: string) => {
     const sid = activeSandboxId;
     if (!sid || sid === 'default') return;
+    setBrowserError(null);
+    setIsVmPaneOpen(true);
     try {
       const res = await fetch(`/api/sandbox/${sid}/navigate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.url) setActiveUrl(data.url);
-        if (data.title) setPageTitle(data.title);
-        setIsVmPaneOpen(true);
-        handleRefreshVm();
-      }
+      const data = await res.json();
+      if (activeSandboxIdRef.current !== sid) return;
+      if (!res.ok) throw new Error(data.error || 'Browser navigation failed.');
+      if (data.url) setActiveUrl(data.url);
+      if (data.title) setPageTitle(data.title);
+      setIsVmPaneOpen(true);
+      handleRefreshVm();
     } catch (err) {
-      console.error('Failed navigating VM:', err);
+      if (activeSandboxIdRef.current !== sid) return;
+      setBrowserError(err instanceof Error ? err.message : 'Browser navigation failed.');
     }
   };
 
@@ -916,6 +949,7 @@ export const App: React.FC = () => {
           activeUrl={activeUrl}
           pageTitle={pageTitle}
           screenshotBase64={screenshotBase64}
+          browserError={browserError}
           isRunning={isVmRunning}
           terminalLogs={terminalLogs}
           onRefreshVm={handleRefreshVm}

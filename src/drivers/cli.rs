@@ -277,6 +277,7 @@ mod tests {
             created_at: None,
         };
         let input = TurnInput {
+            browser_api_url: None,
             thread_id: "t1".into(),
             kwant,
             prompt: "open some playlist page".into(),
@@ -336,6 +337,7 @@ mod tests {
             created_at: None,
         };
         let input = TurnInput {
+            browser_api_url: None,
             thread_id: "t1".into(),
             kwant,
             prompt: "hello world".into(),

@@ -25,6 +25,8 @@ cargo run -- serve
 ```
 Open your browser to: **http://127.0.0.1:8799**
 
+Bot browsing uses a shared headless Chromium service with live WebSocket frames and separate sessions. Code execution containers start independently. See [browser service and VPS hosting](docs/browser-service.md) for Docker setup, HTTPS proxy configuration, control handoff, and session persistence limits.
+
 ### 2. Build Single Release Binary
 ```bash
 make build

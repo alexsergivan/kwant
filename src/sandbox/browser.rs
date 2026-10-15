@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock, OwnedRwLockWriteGuard};
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -24,6 +24,8 @@ pub enum BrowserError {
     Protocol(String),
     #[error("Operation timed out")]
     Timeout,
+    #[error("Browser is controlled by a person. Retry after control is returned.")]
+    HumanControl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +55,10 @@ pub struct BrowserController {
     pub workspace_dir: Arc<Mutex<Option<std::path::PathBuf>>>,
     msg_id: Arc<AtomicU64>,
     ws_conn: Arc<Mutex<Option<WsStream>>>,
+    endpoint: String,
+    target_id: Option<String>,
+    browser_level: bool,
+    pub control: Arc<RwLock<()>>,
 }
 
 impl std::fmt::Debug for BrowserController {
@@ -74,6 +80,10 @@ impl BrowserController {
             workspace_dir: Arc::new(Mutex::new(None)),
             msg_id: Arc::new(AtomicU64::new(1)),
             ws_conn: Arc::new(Mutex::new(None)),
+            endpoint: format!("http://127.0.0.1:{cdp_port}"),
+            target_id: None,
+            browser_level: false,
+            control: Arc::new(RwLock::new(())),
         }
     }
 
@@ -97,6 +107,10 @@ impl BrowserController {
             workspace_dir: Arc::new(Mutex::new(Some(workspace_dir))),
             msg_id: Arc::new(AtomicU64::new(1)),
             ws_conn: Arc::new(Mutex::new(None)),
+            endpoint: format!("http://127.0.0.1:{cdp_port}"),
+            target_id: None,
+            browser_level: false,
+            control: Arc::new(RwLock::new(())),
         }
     }
 
@@ -113,37 +127,81 @@ impl BrowserController {
         *self.workspace_dir.lock().await = Some(ws);
     }
 
-    async fn get_ws_url(&self) -> Result<String, BrowserError> {
+    pub fn at_endpoint(endpoint: &str, target_id: Option<String>, workspace: Option<std::path::PathBuf>, browser_level: bool) -> Self {
+        let mut ctrl = workspace.map(|ws| Self::with_workspace(0, ws)).unwrap_or_else(|| Self::new(0));
+        ctrl.endpoint = endpoint.trim_end_matches('/').to_string();
+        ctrl.target_id = target_id;
+        ctrl.browser_level = browser_level;
+        ctrl
+    }
+
+    pub async fn take_control(&self) -> Result<OwnedRwLockWriteGuard<()>, BrowserError> {
+        self.control.clone().try_write_owned().map_err(|_| BrowserError::HumanControl)
+    }
+
+    pub fn is_managed_session(&self) -> bool { self.target_id.is_some() }
+
+    pub async fn refresh_location(&self) -> Result<(), BrowserError> {
+        let result = self.send_cdp_command("Runtime.evaluate", json!({
+            "expression": "({url: location.href, title: document.title})", "returnByValue": true
+        })).await?;
+        if let Some(url) = result["result"]["value"]["url"].as_str() {
+            *self.current_url.lock().await = Some(url.to_string());
+        }
+        if let Some(title) = result["result"]["value"]["title"].as_str() {
+            *self.current_title.lock().await = Some(title.to_string());
+        }
+        Ok(())
+    }
+
+    // Chromium advertises its own hostname; the configured endpoint may be a Docker service or proxy.
+    fn reachable_ws_url(&self, advertised: &str) -> Result<String, BrowserError> {
+        if self.cdp_port != 0 { return Ok(advertised.to_string()); } // legacy/test direct endpoints
+        let mut url = reqwest::Url::parse(&self.endpoint).map_err(|e| BrowserError::Protocol(e.to_string()))?;
+        let target = reqwest::Url::parse(advertised).map_err(|e| BrowserError::Protocol(e.to_string()))?;
+        let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
+        url.set_scheme(scheme).map_err(|_| BrowserError::Protocol("Invalid CDP scheme".into()))?;
+        url.set_path(target.path());
+        url.set_query(target.query());
+        Ok(url.to_string())
+    }
+
+    pub async fn get_ws_url(&self) -> Result<String, BrowserError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
             .build()
             .map_err(|e| BrowserError::Http(e.to_string()))?;
 
         // 1. Try /json/list to get active Page target
-        let list_url = format!("http://127.0.0.1:{}/json/list", self.cdp_port);
-        if let Ok(resp) = client.get(&list_url).send().await {
+        let list_url = format!("{}/json/list", self.endpoint);
+        if !self.browser_level {
+        if let Ok(resp) = client.get(&list_url).header(reqwest::header::HOST, "localhost").send().await {
             if let Ok(targets) = resp.json::<Vec<Value>>().await {
-                if let Some(page) = targets.into_iter().find(|t| t["type"] == "page") {
+                if let Some(page) = targets.into_iter().find(|t| t["type"] == "page" &&
+                    self.target_id.as_ref().is_none_or(|id| t["id"] == *id)) {
                     if let Some(ws) = page["webSocketDebuggerUrl"].as_str() {
-                        return Ok(ws.to_string());
+                        return self.reachable_ws_url(ws);
                     }
                 }
             }
         }
+        if self.target_id.is_some() { return Err(BrowserError::Protocol("Browser session no longer exists".into())); }
+        }
 
         // 2. Fallback to /json/version
-        let url = format!("http://127.0.0.1:{}/json/version", self.cdp_port);
+        let url = format!("{}/json/version", self.endpoint);
         let resp = client
             .get(&url)
+            .header(reqwest::header::HOST, "localhost")
             .send()
             .await
             .map_err(|e| BrowserError::Http(e.to_string()))?;
 
         let json: Value = resp.json().await.map_err(|e| BrowserError::Http(e.to_string()))?;
-        json["webSocketDebuggerUrl"]
+        let advertised = json["webSocketDebuggerUrl"]
             .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| BrowserError::Protocol("Missing webSocketDebuggerUrl".into()))
+            .ok_or_else(|| BrowserError::Protocol("Missing webSocketDebuggerUrl".into()))?;
+        self.reachable_ws_url(advertised)
     }
 
     async fn ensure_connected(
@@ -160,7 +218,7 @@ impl BrowserController {
         Ok(())
     }
 
-    async fn send_cdp_command(
+    pub async fn send_cdp_command(
         &self,
         method: &str,
         params: Value,
@@ -307,6 +365,7 @@ impl BrowserController {
     pub async fn persist_credentials_to_disk(&self) {
         let ws_opt = self.workspace_dir.lock().await.clone();
         if let Some(ws) = ws_opt {
+            if tokio::fs::create_dir_all(&ws).await.is_err() { return; }
             let creds = self.saved_credentials.lock().await.clone();
             let creds_file = ws.join(".saved_passwords.json");
             if let Ok(json_str) = serde_json::to_string_pretty(&creds) {
@@ -437,11 +496,20 @@ impl BrowserController {
     }
 
     pub async fn navigate(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
+        let _permit = self.control.try_read().map_err(|_| BrowserError::HumanControl)?;
+        self.navigate_unlocked(target_url).await
+    }
+
+    pub async fn navigate_unlocked(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
         let _ = self.collect_and_save_captured_credentials().await;
         let _ = self.send_cdp_command("Page.enable", json!({})).await;
-        let _res = self
+        let res = self
             .send_cdp_command("Page.navigate", json!({ "url": target_url }))
             .await?;
+        if let Some(error) = res["errorText"].as_str() {
+            return Err(BrowserError::Protocol(format!("Navigation failed: {}", error)));
+        }
+        *self.last_screenshot.lock().await = None;
 
         // Extract title
         let eval_res = self
@@ -465,7 +533,7 @@ impl BrowserController {
         let _ = self.inject_autofill_and_capture(target_url).await;
 
         // Automatically capture fresh screenshot on navigation
-        let _ = self.capture_screenshot().await;
+        self.capture_screenshot().await?;
 
         Ok(NavigationResult {
             url: target_url.to_string(),
@@ -515,6 +583,7 @@ impl BrowserController {
     }
 
     pub async fn click(&self, selector: &str) -> Result<(), BrowserError> {
+        let _permit = self.control.try_read().map_err(|_| BrowserError::HumanControl)?;
         let sel_json = serde_json::to_string(selector)
             .map_err(|e| BrowserError::Protocol(e.to_string()))?;
         let expression = format!(
@@ -537,6 +606,7 @@ impl BrowserController {
     }
 
     pub async fn type_text(&self, selector: &str, text: &str) -> Result<(), BrowserError> {
+        let _permit = self.control.try_read().map_err(|_| BrowserError::HumanControl)?;
         let sel_json = serde_json::to_string(selector)
             .map_err(|e| BrowserError::Protocol(e.to_string()))?;
         let text_json = serde_json::to_string(text)

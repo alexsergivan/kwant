@@ -1,5 +1,6 @@
 pub mod routes;
 pub mod sse;
+pub mod browser_stream;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -29,6 +30,7 @@ pub struct AppState {
     pub active_cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
     pub sandbox_manager: Arc<SandboxManager>,
     pub browser_controllers: Arc<Mutex<HashMap<String, BrowserController>>>,
+    pub browser_service: Arc<crate::sandbox::service::BrowserService>,
 }
 
 impl AppState {
@@ -42,6 +44,7 @@ impl AppState {
         let (event_sender, _) = broadcast::channel(128);
         let sandbox_manager = Arc::new(SandboxManager::new());
         let browser_controllers = Arc::new(Mutex::new(HashMap::new()));
+        let browser_service = Arc::new(crate::sandbox::service::BrowserService::new(config.data_dir.clone(), config.browser_cdp_url.clone()));
         Self {
             config,
             db,
@@ -52,6 +55,7 @@ impl AppState {
             active_cancellations: Arc::new(Mutex::new(HashMap::new())),
             sandbox_manager,
             browser_controllers,
+            browser_service,
         }
     }
 
@@ -86,6 +90,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sandbox/:team_id/restart", post(routes::restart_sandbox))
         .route("/api/sandbox/:team_id/navigate", post(routes::navigate_sandbox))
         .route("/api/sandbox/:team_id/interact", post(routes::interact_sandbox))
+        .route("/api/sandbox/:team_id/stream", get(browser_stream::upgrade))
         .route("/api/sandbox/:team_id/passwords", get(routes::get_saved_passwords).post(routes::save_password))
         .route("/api/sandbox/:team_id/passwords/:id", delete(routes::delete_password))
         .route("/api/events", get(sse::sse_handler))

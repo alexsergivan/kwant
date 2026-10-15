@@ -277,7 +277,7 @@ fn execute_single_turn(
 
         if let Some(target_url) = target_url_opt {
             let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
-                "🌐 Navigating Sandbox VM in-container browser to {}...",
+                "🌐 Navigating bot browser to {}...",
                 target_url
             )));
             if let Some(ctrl) = get_or_create_browser_controller(&state, &sandbox_target).await {
@@ -303,7 +303,7 @@ fn execute_single_turn(
                         });
                     }
                     final_prompt = format!(
-                        "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel Sandbox VM browser to {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nUse this page content to answer the user's request. NEVER attempt to open a desktop browser window.]",
+                        "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel bot browser to {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nUse this page content to answer the user's request. NEVER attempt to open a desktop browser window.]",
                         prompt, target_url, nav.title, preview
                     );
                 }
@@ -311,7 +311,7 @@ fn execute_single_turn(
         } else if let Some(ref curr_url) = active_browser_url {
             if !curr_url.is_empty() && !curr_url.contains("about:blank") && !curr_url.contains("example.com") {
                 final_prompt = format!(
-                    "{}\n\n[Active Sandbox Browser State: The right-panel Sandbox VM browser is currently viewing: {}. Maintain context on this website. Do not suggest or switch to other services like YouTube unless explicitly requested.]",
+                    "{}\n\n[Active Sandbox Browser State: The right-panel bot browser is currently viewing: {}. Maintain context on this website. Do not suggest or switch to other services like YouTube unless explicitly requested.]",
                     prompt, curr_url
                 );
             }
@@ -319,6 +319,7 @@ fn execute_single_turn(
 
         let driver = resolve_driver_for_model(&target_model, configured_key, endpoint);
         let turn_input = TurnInput {
+            browser_api_url: Some(format!("http://127.0.0.1:{}/api/sandbox/{}", state.config.port, sandbox_target)),
             thread_id: context_id,
             kwant: target_kwant.clone(),
             prompt: final_prompt,
@@ -691,7 +692,7 @@ pub async fn send_chat(
                         if turn_idx == 0 {
                             if let Some(target_url) = detect_url_in_prompt(&prompt) {
                                 let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
-                                    "🌐 Navigating Sandbox VM in-container browser to {}...",
+                                    "🌐 Navigating bot browser to {}...",
                                     target_url
                                 )));
                                 if let Some(ctrl) = get_or_create_browser_controller(&state_clone, &team_clone.id).await {
@@ -717,7 +718,7 @@ pub async fn send_chat(
                                             });
                                         }
                                         speaker_prompt = format!(
-                                            "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel Sandbox VM browser to {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nUse this page content in your discussion analysis. NEVER attempt to open a desktop browser window.]",
+                                            "{}\n\n[Sandbox Browser State: Successfully navigated the right-panel bot browser to {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nUse this page content in your discussion analysis. NEVER attempt to open a desktop browser window.]",
                                             speaker_prompt, target_url, nav.title, preview
                                         );
                                     }
@@ -754,6 +755,7 @@ pub async fn send_chat(
 
                         let driver = resolve_driver_for_model(&target_model, configured_key, endpoint);
                         let turn_input = TurnInput {
+                            browser_api_url: Some(format!("http://127.0.0.1:{}/api/sandbox/{}", state_clone.config.port, team_clone.id)),
                             thread_id: context_id.clone(),
                             kwant: speaker.clone(),
                             prompt: speaker_prompt,
@@ -1342,93 +1344,57 @@ pub async fn get_or_create_browser_controller(
     state: &AppState,
     team_id: &str,
 ) -> Option<crate::sandbox::BrowserController> {
-    {
-        let lock = state.browser_controllers.lock().await;
-        if let Some(ctrl) = lock.get(team_id) {
-            return Some(ctrl.clone());
-        }
+    let mut controllers = state.browser_controllers.lock().await;
+    if let Some(ctrl) = controllers.get(team_id) {
+        if !ctrl.is_managed_session() || ctrl.refresh_location().await.is_ok() { return Some(ctrl.clone()); }
+        if ctrl.control.try_write().is_err() { return None; }
+        controllers.remove(team_id);
     }
-
-    if state.sandbox_manager.get_sandbox(team_id).await.is_none() {
-        if state.sandbox_manager.is_docker_available().await {
-            if let Some((target_name, ws_dir)) = resolve_sandbox_target_info(state, team_id).await {
-                let _ = tokio::fs::create_dir_all(&ws_dir).await;
-                let _ = state
-                    .sandbox_manager
-                    .ensure_sandbox_running(team_id, &target_name, &ws_dir)
-                    .await;
-            }
-        }
-    }
-
-    if let Some(active_sb) = state.sandbox_manager.get_sandbox(team_id).await {
-        if active_sb.is_running {
-            let ctrl = crate::sandbox::BrowserController::with_workspace(
-                active_sb.cdp_port,
-                active_sb.workspace_path.clone(),
-            );
-            {
-                let mut lock = state.browser_controllers.lock().await;
-                lock.insert(team_id.to_string(), ctrl.clone());
-            }
+    let (_, workspace) = resolve_sandbox_target_info(state, team_id).await?;
+    match state.browser_service.session(team_id, &workspace).await {
+        Ok(ctrl) => {
+            controllers.insert(team_id.to_string(), ctrl.clone());
             let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
-                team_id: team_id.to_string(),
-                container_name: active_sb.container_name.clone(),
-                is_running: true,
+                team_id: team_id.to_string(), container_name: "browser-service".into(), is_running: true,
             });
-            return Some(ctrl);
+            Some(ctrl)
         }
+        Err(error) => { tracing::warn!("Browser service unavailable: {}", error); None }
     }
-
-    None
 }
 
 pub async fn get_sandbox_status(
-    State(state): State<AppState>,
-    Path(team_id): Path<String>,
+    State(state): State<AppState>, Path(team_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if state.sandbox_manager.get_sandbox(&team_id).await.is_none() {
-        let _ = get_or_create_browser_controller(&state, &team_id).await;
-    }
-    let sandbox = state.sandbox_manager.get_sandbox(&team_id).await;
-    match sandbox {
-        Some(s) => Ok(Json(json!({
-            "team_id": s.team_id,
-            "container_name": s.container_name,
-            "cdp_port": s.cdp_port,
-            "workspace_path": s.workspace_path.to_string_lossy(),
-            "is_running": s.is_running
-        }))),
-        None => Ok(Json(json!({
-            "team_id": team_id,
-            "container_name": "",
-            "cdp_port": 0,
-            "workspace_path": "",
-            "is_running": false
-        }))),
-    }
+    let running = get_or_create_browser_controller(&state, &team_id).await.is_some();
+    let execution = state.sandbox_manager.get_sandbox(&team_id).await;
+    Ok(Json(json!({"team_id":team_id,"is_running":running,"container_name":"browser-service",
+        "execution_running":execution.is_some_and(|s| s.is_running)})))
+}
+
+fn browser_unavailable() -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
+        "error": "Sandbox browser is unavailable. Check that Docker is running, then restart the browser.",
+        "is_running": false
+    })))
+}
+
+fn browser_request_failed(error: crate::sandbox::BrowserError) -> (StatusCode, Json<serde_json::Value>) {
+    if matches!(error, crate::sandbox::BrowserError::HumanControl) { return (StatusCode::CONFLICT, Json(json!({"error": error.to_string()}))); }
+    tracing::warn!("Sandbox browser request failed: {}", error);
+    (StatusCode::BAD_GATEWAY, Json(json!({
+        "error": "The sandbox browser did not respond. Restart the browser and try again."
+    })))
 }
 
 pub async fn get_browser_screenshot(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let controller = get_or_create_browser_controller(&state, &team_id).await;
-
-    let placeholder = crate::tools::sandbox::PLACEHOLDER_PNG;
-    let (b64, url) = if let Some(ctrl) = controller {
-        let shot = match ctrl.capture_screenshot().await {
-            Ok(img) => img,
-            Err(_) => {
-                let lock = ctrl.last_screenshot.lock().await;
-                lock.clone().unwrap_or_else(|| placeholder.to_string())
-            }
-        };
-        let curr_url = ctrl.current_url.lock().await.clone().unwrap_or_default();
-        (shot, curr_url)
-    } else {
-        (placeholder.to_string(), String::new())
-    };
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let ctrl = get_or_create_browser_controller(&state, &team_id).await
+        .ok_or_else(browser_unavailable)?;
+    let b64 = ctrl.capture_screenshot().await.map_err(browser_request_failed)?;
+    let url = ctrl.current_url.lock().await.clone().unwrap_or_default();
 
     let timestamp = chrono::Utc::now().to_rfc3339();
 
@@ -1446,91 +1412,32 @@ pub async fn restart_sandbox(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let existing_container_name = state
-        .sandbox_manager
-        .get_sandbox(&team_id)
-        .await
-        .map(|s| s.container_name);
-
-    let _ = state.sandbox_manager.stop_sandbox(&team_id).await;
     {
         let mut controllers = state.browser_controllers.lock().await;
+        let _guard = if let Some(ctrl) = controllers.get(&team_id) {
+            Some(ctrl.control.clone().try_write_owned().map_err(|_| StatusCode::CONFLICT)?)
+        } else { None };
+        state.browser_service.reset(&team_id).await.map_err(|_| StatusCode::BAD_GATEWAY)?;
         controllers.remove(&team_id);
     }
-
-    if state.sandbox_manager.is_docker_available().await {
-        if let Some((target_name, ws_dir)) = resolve_sandbox_target_info(&state, &team_id).await {
-            let _ = tokio::fs::create_dir_all(&ws_dir).await;
-
-            match state
-                .sandbox_manager
-                .ensure_sandbox_running(&team_id, &target_name, &ws_dir)
-                .await
-            {
-                Ok(active_sb) => {
-                    let ctrl = crate::sandbox::BrowserController::with_workspace(
-                        active_sb.cdp_port,
-                        active_sb.workspace_path.clone(),
-                    );
-                    {
-                        let mut controllers = state.browser_controllers.lock().await;
-                        controllers.insert(team_id.clone(), ctrl);
-                    }
-                    let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
-                        team_id: team_id.clone(),
-                        container_name: active_sb.container_name.clone(),
-                        is_running: true,
-                    });
-                    return Ok(Json(json!({
-                        "status": "restarted",
-                        "team_id": team_id,
-                        "is_running": true
-                    })));
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to restart sandbox for {}: {}", team_id, e);
-                }
-            }
-        }
-    }
-
-    let fallback_container_name = existing_container_name.unwrap_or_else(|| {
-        let safe_name = team_id.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
-        let id_suffix = if team_id.len() >= 8 { &team_id[..8] } else { &team_id };
-        format!("kwnt-sandbox-{}-{}", safe_name, id_suffix)
-    });
-
+    let running = get_or_create_browser_controller(&state, &team_id).await.is_some();
     let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
-        team_id: team_id.clone(),
-        container_name: fallback_container_name,
-        is_running: false,
+        team_id: team_id.clone(), container_name: format!("browser-service-{}", team_id), is_running: running,
     });
-
-    Ok(Json(json!({
-        "status": "stopped",
-        "team_id": team_id,
-        "is_running": false
-    })))
+    Ok(Json(json!({"status":if running {"restarted"} else {"stopped"},"team_id":team_id,"is_running":running,
+        "error":if running {None} else {Some("Browser service unavailable. Check Docker or KWNT_BROWSER_CDP_URL.")} })))
 }
 
 pub async fn navigate_sandbox(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
     Json(payload): Json<NavigatePayload>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let controller = get_or_create_browser_controller(&state, &team_id).await;
-
-    let (title, status_code) = if let Some(ref ctrl) = controller {
-        match ctrl.navigate(&payload.url).await {
-            Ok(res) => (res.title, res.status_code),
-            Err(e) => {
-                tracing::warn!("Navigation failed: {}, falling back", e);
-                (payload.url.clone(), 200)
-            }
-        }
-    } else {
-        (payload.url.clone(), 200)
-    };
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let ctrl = get_or_create_browser_controller(&state, &team_id).await
+        .ok_or_else(browser_unavailable)?;
+    let nav = ctrl.navigate(&payload.url).await.map_err(browser_request_failed)?;
+    let title = nav.title;
+    let status_code = nav.status_code;
 
     let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
         team_id: team_id.clone(),
@@ -1539,15 +1446,13 @@ pub async fn navigate_sandbox(
         status_code,
     });
 
-    if let Some(ref ctrl) = controller {
-        if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
-            let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
-                team_id: team_id.clone(),
-                url: payload.url.clone(),
-                image_base64: b64,
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            });
-        }
+    if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
+        let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
+            team_id: team_id.clone(),
+            url: payload.url.clone(),
+            image_base64: b64,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
     }
 
     Ok(Json(json!({
@@ -1575,46 +1480,44 @@ pub async fn interact_sandbox(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let controller = get_or_create_browser_controller(&state, &team_id).await;
-
-    let (screenshot, current_url) = if let Some(ref ctrl) = controller {
-        let shot_res = match payload.action.as_str() {
-            "click" => {
-                let x = payload.x.unwrap_or(0);
-                let y = payload.y.unwrap_or(0);
-                ctrl.interact_click(x, y).await
-            }
-            "type" => {
-                let text = payload.text.unwrap_or_default();
-                ctrl.interact_type(&text).await
-            }
-            "key" => {
-                let key = payload.key.unwrap_or_default();
-                ctrl.interact_key(&key, payload.code.as_deref()).await
-            }
-            "scroll" => {
-                let x = payload.x.unwrap_or(640);
-                let y = payload.y.unwrap_or(400);
-                let dx = payload.delta_x.unwrap_or(0.0);
-                let dy = payload.delta_y.unwrap_or(100.0);
-                ctrl.interact_scroll(x, y, dx, dy).await
-            }
-            _ => ctrl.capture_screenshot().await,
-        };
-
-        let curr_url = ctrl.current_url.lock().await.clone().unwrap_or_default();
-        let shot = match shot_res {
-            Ok(img) => img,
-            Err(_) => {
-                let lock = ctrl.last_screenshot.lock().await;
-                lock.clone().unwrap_or_else(|| crate::tools::sandbox::PLACEHOLDER_PNG.to_string())
-            }
-        };
-        (shot, curr_url)
-    } else {
-        (crate::tools::sandbox::PLACEHOLDER_PNG.to_string(), String::new())
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let valid = match payload.action.as_str() {
+        "click" | "scroll" => matches!((payload.x, payload.y), (Some(x), Some(y)) if x >= 0 && y >= 0),
+        "type" => payload.text.is_some(),
+        "key" => payload.key.as_ref().is_some_and(|key| !key.is_empty()),
+        _ => false,
     };
+    if !valid {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "Invalid browser action or missing input parameters."
+        }))));
+    }
+
+    let ctrl = get_or_create_browser_controller(&state, &team_id).await.ok_or_else(|| {
+        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
+            "error": "Sandbox browser is unavailable. Check that Docker is running, then restart the browser."
+        })))
+    })?;
+
+    let _permit = ctrl.control.try_read().map_err(|_| (StatusCode::CONFLICT, Json(json!({"error":"Browser is controlled by a person."}))))?;
+    let shot_res = match payload.action.as_str() {
+        "click" => ctrl.interact_click(payload.x.unwrap(), payload.y.unwrap()).await,
+        "type" => ctrl.interact_type(payload.text.as_deref().unwrap()).await,
+        "key" => ctrl.interact_key(payload.key.as_deref().unwrap(), payload.code.as_deref()).await,
+        "scroll" => ctrl.interact_scroll(
+            payload.x.unwrap(), payload.y.unwrap(),
+            payload.delta_x.unwrap_or(0.0), payload.delta_y.unwrap_or(0.0),
+        ).await,
+        _ => unreachable!(),
+    };
+    // Returning an old screenshot as success hides failed input from the user.
+    let screenshot = shot_res.map_err(|error| {
+        tracing::warn!(team_id = %team_id, "Browser interaction failed: {}", error);
+        (StatusCode::BAD_GATEWAY, Json(json!({
+            "error": "Could not control the sandbox browser. Refresh the view or restart the browser and try again."
+        })))
+    })?;
+    let current_url = ctrl.current_url.lock().await.clone().unwrap_or_default();
 
     let _ = state.event_sender.send(RuntimeEvent::BrowserScreenshot {
         team_id: team_id.clone(),
@@ -1639,39 +1542,20 @@ pub async fn execute_tool(
     tool_name: &str,
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, crate::tools::ToolError> {
-    let controller = if let Some(tid) = team_id {
-        get_or_create_browser_controller(state, tid).await
-    } else {
-        None
-    };
+    let controller = if tool_name.starts_with("browser_") {
+        if let Some(tid) = team_id { get_or_create_browser_controller(state, tid).await } else { None }
+    } else { None };
 
     if tool_name == "execute_shell" {
         if let Some(tid) = team_id {
-            if let Some(sandbox) = state.sandbox_manager.get_sandbox(tid).await {
-                if sandbox.is_running {
-                    let cmd_str = args["command"].as_str().unwrap_or("");
-                    match state
-                        .sandbox_manager
-                        .exec_in_sandbox(&sandbox.container_name, cmd_str, 30)
-                        .await
-                    {
-                        Ok(out) => {
-                            return Ok(json!({
-                                "command": out.command,
-                                "stdout": out.stdout,
-                                "stderr": out.stderr,
-                                "exit_code": out.exit_code,
-                                "success": out.success
-                            }));
-                        }
-                        Err(crate::sandbox::SandboxError::DockerUnavailable(_)) => {
-                            // Fallback to standard host runner
-                        }
-                        Err(e) => {
-                            return Err(crate::tools::ToolError::Execution(e.to_string()));
-                        }
-                    }
-                }
+            if let Some((name, workspace)) = resolve_sandbox_target_info(state, tid).await {
+                tokio::fs::create_dir_all(&workspace).await?;
+                let sandbox = state.sandbox_manager.ensure_sandbox_running(tid, &name, &workspace).await
+                    .map_err(|e| crate::tools::ToolError::Execution(e.to_string()))?;
+                let out = state.sandbox_manager.exec_in_sandbox(&sandbox.container_name,
+                    args["command"].as_str().unwrap_or(""), 30).await
+                    .map_err(|e| crate::tools::ToolError::Execution(e.to_string()))?;
+                return Ok(json!({"command":out.command,"stdout":out.stdout,"stderr":out.stderr,"exit_code":out.exit_code,"success":out.success}));
             }
         }
     }

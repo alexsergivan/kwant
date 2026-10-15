@@ -18,7 +18,7 @@ use tower::ServiceExt;
 async fn test_server_health_and_kwants() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -63,7 +63,7 @@ async fn test_server_health_and_kwants() {
 async fn test_teams_api_endpoints() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -156,7 +156,7 @@ async fn test_teams_api_endpoints() {
 async fn test_chat_routing_with_kwant_mention() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -189,7 +189,7 @@ async fn test_chat_routing_with_kwant_mention() {
 async fn test_chat_routing_with_team_mention_and_cancellation() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -256,7 +256,7 @@ async fn test_cancel_chat_with_null_fields_only_cancels_target_kwant() {
 
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -304,7 +304,7 @@ async fn test_cancel_chat_with_null_fields_only_cancels_target_kwant() {
 async fn test_system_directories_endpoint() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -344,7 +344,7 @@ async fn test_system_select_folder_endpoint() {
     std::env::set_var("KWNT_TEST_MODE", "1");
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -370,7 +370,7 @@ async fn test_system_select_folder_endpoint() {
 async fn test_sandbox_password_vault_api() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -462,15 +462,52 @@ async fn test_sandbox_password_vault_api() {
 
 #[tokio::test]
 async fn test_sandbox_interactive_control_endpoint() {
+    use futures::{SinkExt, StreamExt};
+    use std::sync::Arc;
+    use tokio::net::TcpListener;
+    use tokio::sync::Mutex;
+
+    let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_port = ws_listener.local_addr().unwrap().port();
+    let recorded = Arc::new(Mutex::new(Vec::new()));
+    let commands = recorded.clone();
+    let ws_task = tokio::spawn(async move {
+        let (stream, _) = ws_listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        while let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) = ws.next().await {
+            let command: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let result = if command["method"] == "Page.captureScreenshot" {
+                json!({ "data": "fresh-screenshot" })
+            } else {
+                json!({})
+            };
+            let reply = json!({ "id": command["id"], "result": result });
+            commands.lock().await.push(command);
+            ws.send(tokio_tungstenite::tungstenite::Message::Text(reply.to_string().into())).await.unwrap();
+        }
+    });
+    let http_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = http_listener.local_addr().unwrap().port();
+    let cdp_app = axum::Router::new().route("/json/list", axum::routing::get(move || async move {
+        axum::Json(json!([{
+            "type": "page",
+            "webSocketDebuggerUrl": format!("ws://127.0.0.1:{ws_port}/devtools/page/test")
+        }]))
+    }));
+    let http_task = tokio::spawn(async move { axum::serve(http_listener, cdp_app).await.unwrap(); });
+
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
 
     let state = AppState::new(config, db, tools, broker, router);
     let mut event_rx = state.event_sender.subscribe();
+    state.browser_controllers.lock().await.insert(
+        "test-team-interactive".into(), kwnt::sandbox::BrowserController::new(port),
+    );
     let app = create_router(state);
 
     let team_id = "test-team-interactive";
@@ -493,7 +530,7 @@ async fn test_sandbox_interactive_control_endpoint() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "ok");
     assert_eq!(json["action"], "click");
-    assert!(json["screenshot"].is_string());
+    assert_eq!(json["screenshot"], "fresh-screenshot");
 
     // Verify SSE event was emitted
     let ev = event_rx.recv().await.unwrap();
@@ -547,6 +584,79 @@ async fn test_sandbox_interactive_control_endpoint() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+
+    let commands = recorded.lock().await;
+    let mouse_events: Vec<_> = commands.iter().filter(|c| c["method"] == "Input.dispatchMouseEvent").collect();
+    assert_eq!(mouse_events[0]["params"]["type"], "mousePressed");
+    assert_eq!(mouse_events[1]["params"]["type"], "mouseReleased");
+    for event in &mouse_events[..2] {
+        assert_eq!(event["params"]["x"], 350);
+        assert_eq!(event["params"]["y"], 180);
+    }
+    http_task.abort();
+    ws_task.abort();
+}
+
+#[tokio::test]
+async fn test_sandbox_interaction_errors_are_not_reported_as_success() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
+    let state = AppState::new(
+        config.clone(), db, ToolRunner::new(tmp.path().join("workspace")),
+        PermissionBroker::new(), LayaRouter::new(config.laya_url.clone()),
+    );
+    let mut events = state.event_sender.subscribe();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let ctrl = kwnt::sandbox::BrowserController::new(port);
+    *ctrl.last_screenshot.lock().await = Some("stale-image".into());
+    state.browser_controllers.lock().await.insert("broken-browser".into(), ctrl);
+    let app = create_router(state);
+
+    for (team, payload, expected) in [
+        ("missing-browser", json!({"action": "click", "x": 20, "y": 30}), StatusCode::SERVICE_UNAVAILABLE),
+        ("broken-browser", json!({"action": "click", "x": 20, "y": 30}), StatusCode::BAD_GATEWAY),
+        ("missing-browser", json!({"action": "unknown"}), StatusCode::BAD_REQUEST),
+        ("missing-browser", json!({"action": "click"}), StatusCode::BAD_REQUEST),
+        ("missing-browser", json!({"action": "click", "x": -1, "y": 30}), StatusCode::BAD_REQUEST),
+        ("missing-browser", json!({"action": "key", "key": ""}), StatusCode::BAD_REQUEST),
+    ] {
+        let req = Request::builder().method("POST")
+            .uri(format!("/api/sandbox/{team}/interact"))
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string())).unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), expected);
+        let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(body["error"].is_string());
+        assert!(body.get("screenshot").is_none());
+        assert!(events.try_recv().is_err(), "failed input must not broadcast a stale screenshot");
+    }
+    for (team, expected) in [
+        ("missing-browser", StatusCode::SERVICE_UNAVAILABLE),
+        ("broken-browser", StatusCode::BAD_GATEWAY),
+    ] {
+        for endpoint in ["navigate", "screenshot"] {
+            let (method, body) = if endpoint == "navigate" {
+                ("POST", Body::from(json!({"url": "https://example.com"}).to_string()))
+            } else {
+                ("GET", Body::empty())
+            };
+            let req = Request::builder().method(method)
+                .uri(format!("/api/sandbox/{team}/{endpoint}"))
+                .header("content-type", "application/json").body(body).unwrap();
+            let resp = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), expected);
+            let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert!(body["error"].is_string());
+            assert!(body.get("screenshot").is_none());
+            assert!(events.try_recv().is_err());
+        }
+    }
 }
 
 #[tokio::test]
@@ -594,7 +704,7 @@ async fn test_channel_sandbox_target_resolution() {
 
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());

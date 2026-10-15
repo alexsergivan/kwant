@@ -43,6 +43,8 @@ pub struct TurnInput {
     pub effort_level: Option<String>,
     pub team_context: Option<TeamContext>,
     pub workspace_dir: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub browser_api_url: Option<String>,
 }
 
 impl TurnInput {
@@ -71,25 +73,16 @@ impl TurnInput {
             "\n\nRespond clearly in character.".to_string()
         };
 
-        let sandbox_target = self
-            .team_context
-            .as_ref()
-            .map(|t| t.id.clone())
-            .unwrap_or_else(|| self.kwant.id.clone());
-
+        let browser_api = self.browser_api_url.clone().unwrap_or_else(|| {
+            format!("http://127.0.0.1:{}/api/sandbox/{}", crate::config::DEFAULT_PORT, self.thread_id)
+        });
         let sandbox_rules = format!(
-            "\n\n[Virtual Machine Sandbox & Right-Panel In-Container Browser]\n\
-            You have an isolated Sandbox Virtual Machine with a headless Chromium browser displayed live in the user's right-side UI panel.\n\
-            Sandbox ID: {}\n\
-            Control API Endpoint: http://127.0.0.1:8899/api/sandbox/{}\n\
-            CRITICAL BROWSING INSTRUCTIONS:\n\
-            1. NEVER execute host desktop commands (e.g. `open <url>`, `start <url>`, `xdg-open`) or attempt to launch browser windows on the user's desktop!\n\
-            2. The user wants and expects all web browsing to appear inside the right-side Sandbox VM panel in Kwants.\n\
-            3. To navigate the in-container browser to any webpage or search engine, execute:\n\
-               curl -s -X POST http://127.0.0.1:8899/api/sandbox/{}/navigate -H \"Content-Type: application/json\" -d '{{\"url\":\"<url>\"}}'\n\
-            4. This will instantly render the page in the user's right-side split pane and return the page title and status code.\n\
-            5. To view or extract text from the active page: curl -s http://127.0.0.1:8899/api/sandbox/{}/screenshot",
-            sandbox_target, sandbox_target, sandbox_target, sandbox_target
+            "\n\n[Bot Browser]\nYour browser session is displayed in the user's right panel. Shell execution uses a separate container.\n\
+            Browser API: {browser_api}\n\
+            Never open a host desktop browser. To navigate, use curl -sS --fail-with-body -X POST '{browser_api}/navigate' -H 'Content-Type: application/json' -d '{{\"url\":\"<url>\"}}'.\n\
+            To inspect the current view: curl -sS --fail-with-body '{browser_api}/screenshot'.\n\
+            A 409 means the user has taken control: stop browser actions and wait for the user to return control. Never bypass the control API or connect to CDP directly.\n\
+            Report API errors honestly. Never claim a page opened unless navigation succeeded."
         );
 
         format!("{}{}{}", base, team_block, sandbox_rules)

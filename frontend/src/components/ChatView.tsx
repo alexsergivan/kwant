@@ -55,6 +55,7 @@ export interface ChatViewProps {
   pageTitle?: string;
   screenshotBase64?: string | null;
   isRunning?: boolean;
+  browserError?: string | null;
   terminalLogs?: TerminalLogEntry[];
   onRefreshVm?: () => void;
   onRestartVm?: () => void;
@@ -106,6 +107,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   pageTitle,
   screenshotBase64,
   isRunning = true,
+  browserError,
   terminalLogs = [],
   onRefreshVm,
   onRestartVm,
@@ -391,10 +393,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 ? 'text-sky-300 bg-sky-500/20 border-sky-500/40'
                 : 'text-zinc-300 bg-zinc-900 hover:bg-zinc-800 border-zinc-700/60 hover:text-zinc-100'
             }`}
-            title="Toggle Sandbox VM & Live Browser Pane"
+            title="Toggle Bot Browser Pane"
           >
             <span className="text-xs">🖥️</span>
-            <span>Sandbox VM</span>
+            <span>Bot Browser</span>
           </button>
 
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-sky-400 bg-sky-500/10 border border-sky-500/20 shadow-sm">
@@ -691,6 +693,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
     {/* Live Grok-style Virtual Machine / Browser Side Pane */}
     <VirtualMachinePane
+      key={teamId}
       isOpen={vmOpen}
       onClose={() => {
         if (onToggleVmPane) {
@@ -705,6 +708,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       pageTitle={pageTitle}
       screenshotBase64={screenshotBase64}
       isRunning={isRunning}
+      browserError={browserError}
       terminalLogs={terminalLogs}
       onRefresh={onRefreshVm}
       onRestartVm={onRestartVm}

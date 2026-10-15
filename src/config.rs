@@ -64,6 +64,10 @@ pub struct Config {
 
     #[serde(default = "default_fallback_model")]
     pub default_fallback_model: String,
+
+    /// Optional private browser service URL (server-side only).
+    #[serde(default)]
+    pub browser_cdp_url: Option<String>,
 }
 
 impl Default for Config {
@@ -74,6 +78,7 @@ impl Default for Config {
             data_dir: default_data_dir(),
             laya_url: default_laya_url(),
             default_fallback_model: default_fallback_model(),
+            browser_cdp_url: None,
         }
     }
 }
@@ -126,6 +131,9 @@ impl Config {
 
     /// Applies environment variable overrides onto this configuration.
     pub fn apply_env(&mut self) {
+        if let Ok(url) = std::env::var("KWNT_BROWSER_CDP_URL") {
+            self.browser_cdp_url = Some(url);
+        }
         if let Ok(host) = std::env::var("KWNT_HOST").or_else(|_| std::env::var("HOST")) {
             if !host.is_empty() {
                 self.host = host;

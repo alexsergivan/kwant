@@ -22,9 +22,7 @@ async fn test_browser_tools_execution_and_event_serialization() {
 
     // When no sandbox active, browser tools return helpful guidance or fallback
     let res = runner.execute("browser_navigate", &json!({ "url": "https://example.com" })).await;
-    assert!(res.is_ok() || res.is_err());
-    let val = res.unwrap();
-    assert_eq!(val["status"], "navigated");
+    assert!(res.unwrap_err().to_string().contains("unavailable"));
 
     // Verify event serialization
     let event = RuntimeEvent::BrowserNavigated {
@@ -43,20 +41,14 @@ async fn test_all_browser_tools_fallback() {
     let tmp = tempdir().unwrap();
     let runner = ToolRunner::new(tmp.path().to_path_buf());
 
-    let res = runner.execute("browser_screenshot", &json!({})).await.unwrap();
-    assert_eq!(res["status"], "captured");
-    assert_eq!(res["url"], "about:blank");
-    assert!(res["image_base64"].as_str().unwrap().len() > 10);
-    assert!(res.get("timestamp").is_some());
-
-    let res = runner.execute("browser_extract", &json!({})).await.unwrap();
-    assert_eq!(res["status"], "extracted");
-
-    let res = runner.execute("browser_click", &json!({ "selector": "#submit-btn" })).await.unwrap();
-    assert_eq!(res["status"], "clicked");
-
-    let res = runner.execute("browser_type", &json!({ "selector": "#input-box", "text": "hello" })).await.unwrap();
-    assert_eq!(res["status"], "typed");
+    for (tool, args) in [
+        ("browser_screenshot", json!({})),
+        ("browser_extract", json!({})),
+        ("browser_click", json!({"selector": "#submit-btn"})),
+        ("browser_type", json!({"selector": "#input-box", "text": "hello"})),
+    ] {
+        assert!(runner.execute(tool, &args).await.unwrap_err().to_string().contains("unavailable"));
+    }
 }
 
 #[tokio::test]
@@ -85,7 +77,7 @@ async fn test_browser_and_sandbox_events_serialization() {
 async fn test_sandbox_rest_endpoints() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -112,10 +104,11 @@ async fn test_sandbox_rest_endpoints() {
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let val: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert!(val.get("image_base64").is_some() || val.get("screenshot").is_some());
+    assert!(val["error"].is_string());
+    assert!(val.get("image_base64").is_none());
     // Verify no broadcast occurred on read-only GET
     assert!(rx.try_recv().is_err());
 
@@ -141,7 +134,7 @@ async fn test_sandbox_rest_endpoints() {
 async fn test_execute_tool_event_broadcasting() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -149,45 +142,13 @@ async fn test_execute_tool_event_broadcasting() {
     let state = AppState::new(config, db, tools, broker, router);
     let mut rx = state.event_sender.subscribe();
 
-    let res = kwnt::server::routes::execute_tool(
-        &state,
-        Some("team-b"),
-        "browser_navigate",
-        &json!({ "url": "https://example.com" }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(res["status"], "navigated");
-
-    // Check that BrowserNavigated event was broadcast
-    let event = rx.recv().await.unwrap();
-    match event {
-        RuntimeEvent::BrowserNavigated { team_id, url, .. } => {
-            assert_eq!(team_id, "team-b");
-            assert_eq!(url, "https://example.com");
-        }
-        other => panic!("Expected BrowserNavigated, got {:?}", other),
-    }
-
-    // Also test browser_screenshot tool execution event broadcasting
-    let res_shot = kwnt::server::routes::execute_tool(
-        &state,
-        Some("team-b"),
-        "browser_screenshot",
-        &json!({}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(res_shot["status"], "captured");
-
-    let event_shot = rx.recv().await.unwrap();
-    match event_shot {
-        RuntimeEvent::BrowserScreenshot { team_id, url, image_base64, .. } => {
-            assert_eq!(team_id, "team-b");
-            assert_eq!(url, "about:blank");
-            assert!(!image_base64.is_empty());
-        }
-        other => panic!("Expected BrowserScreenshot, got {:?}", other),
+    for (tool, args) in [
+        ("browser_navigate", json!({"url": "https://example.com"})),
+        ("browser_screenshot", json!({})),
+    ] {
+        let result = kwnt::server::routes::execute_tool(&state, Some("team-b"), tool, &args).await;
+        assert!(result.is_err());
+        assert!(rx.try_recv().is_err(), "unavailable browser must not broadcast success");
     }
 }
 
@@ -195,7 +156,7 @@ async fn test_execute_tool_event_broadcasting() {
 async fn test_lazy_controller_initialization() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -210,7 +171,7 @@ async fn test_lazy_controller_initialization() {
 async fn test_execute_tool_shell_fallback() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
@@ -234,7 +195,7 @@ async fn test_execute_tool_shell_fallback() {
 async fn test_restart_sandbox_stopped_when_docker_unavailable() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let config = Config::default();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());

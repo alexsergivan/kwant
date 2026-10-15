@@ -7,14 +7,6 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
-mod portpicker {
-    pub fn pick_unused_port() -> Option<u16> {
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .ok()
-            .and_then(|l| l.local_addr().ok().map(|a| a.port()))
-    }
-}
-
 #[derive(Error, Debug)]
 pub enum SandboxError {
     #[error("Docker is not available on this host: {0}")]
@@ -66,12 +58,14 @@ impl SandboxManager {
     }
 
     pub async fn is_docker_available(&self) -> bool {
-        Command::new("docker")
-            .arg("version")
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        // A stalled daemon must not leave browser controls waiting indefinitely.
+        matches!(
+            timeout(
+                Duration::from_secs(3),
+                Command::new("docker").arg("version").kill_on_drop(true).output(),
+            ).await,
+            Ok(Ok(output)) if output.status.success()
+        )
     }
 
     pub async fn get_sandbox(&self, team_id: &str) -> Option<ActiveSandbox> {
@@ -105,29 +99,22 @@ impl SandboxManager {
 
         let safe_name = team_name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
         let id_suffix = if team_id.len() >= 8 { &team_id[..8] } else { team_id };
-        let container_name = format!("kwnt-sandbox-{}-{}", safe_name, id_suffix);
+        let container_name = format!("kwnt-executor-{}-{}", safe_name, id_suffix);
 
         // Remove old container if exists
         let _ = Command::new("docker").args(["rm", "-f", &container_name]).output().await;
 
-        // Allocate ephemeral port for CDP
-        let port = portpicker::pick_unused_port().unwrap_or(19222);
-
         let ws_str = workspace_dir.to_string_lossy().to_string();
-        // Ensure image exists locally, build if missing
-        let img_check = Command::new("docker")
-            .args(["image", "inspect", "kwnt-sandbox:latest"])
-            .output()
-            .await;
-        if img_check.is_err() || !img_check.unwrap().status.success() {
-            let _ = Command::new("docker")
-                .args(["build", "-t", "kwnt-sandbox:latest", "-f", "docker/sandbox.Dockerfile", "."])
-                .output()
-                .await;
+        if Command::new("docker").args(["image", "inspect", "kwnt-executor:v1"]).output().await
+            .map(|out| !out.status.success()).unwrap_or(true) {
+            let build = std::env::temp_dir().join("kwnt-executor-build");
+            tokio::fs::create_dir_all(&build).await.map_err(|e| SandboxError::StartFailed(e.to_string()))?;
+            tokio::fs::write(build.join("Dockerfile"), include_str!("../../docker/executor.Dockerfile")).await
+                .map_err(|e| SandboxError::StartFailed(e.to_string()))?;
+            let out = Command::new("docker").args(["build", "-t", "kwnt-executor:v1", &build.to_string_lossy()]).output().await
+                .map_err(|e| SandboxError::StartFailed(e.to_string()))?;
+            if !out.status.success() { return Err(SandboxError::StartFailed(String::from_utf8_lossy(&out.stderr).to_string())); }
         }
-
-        let port_map = format!("127.0.0.1:{}:9222", port);
-
         let run_res = Command::new("docker")
             .args([
                 "run",
@@ -136,13 +123,11 @@ impl SandboxManager {
                 &container_name,
                 "--cpus=2.0",
                 "--memory=1536m",
-                "-p",
-                &port_map,
                 "-v",
                 &format!("{}:/workspace:rw", ws_str),
                 "-w",
                 "/workspace",
-                "kwnt-sandbox:latest",
+                "kwnt-executor:v1",
             ])
             .output()
             .await
@@ -156,7 +141,7 @@ impl SandboxManager {
         let active = ActiveSandbox {
             team_id: team_id.to_string(),
             container_name,
-            cdp_port: port,
+            cdp_port: 0,
             workspace_path: workspace_dir.to_path_buf(),
             is_running: true,
         };

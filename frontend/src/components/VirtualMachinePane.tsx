@@ -21,6 +21,8 @@ import {
   Loader2,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
+import { mapBrowserPoint } from '../browserViewport';
+import { useBrowserStream } from '../useBrowserStream';
 
 export interface TerminalLogEntry {
   command: string;
@@ -46,6 +48,7 @@ export interface VirtualMachinePaneProps {
   pageTitle?: string;
   screenshotBase64?: string | null;
   isRunning?: boolean;
+  browserError?: string | null;
   terminalLogs?: TerminalLogEntry[];
   onRefresh?: () => void;
   onRestartVm?: () => void;
@@ -61,6 +64,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   pageTitle = '',
   screenshotBase64,
   isRunning = true,
+  browserError,
   terminalLogs = [],
   onRefresh,
   onRestartVm,
@@ -80,22 +84,20 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Interactive Remote Control State
-  const [isControlMode, setIsControlMode] = useState(false);
-  const [isInteracting, setIsInteracting] = useState(false);
-  const [localScreenshot, setLocalScreenshot] = useState<string | null>(null);
+  const stream = useBrowserStream(teamId, isOpen && activeTab === 'browser');
+  const isControlMode = stream.controlling;
+  const isInteracting = stream.busy;
   const [quickTypeText, setQuickTypeText] = useState('');
   const [clickRipples, setClickRipples] = useState<Array<{ id: number; x: number; y: number }>>([]);
   const lastWheelTimeRef = useRef<number>(0);
   const imageRef = useRef<HTMLImageElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
 
+  const currentScreenshot = stream.frame?.image || screenshotBase64;
+  const controlError = stream.error || (!stream.connected ? browserError : null);
   useEffect(() => {
-    if (screenshotBase64) {
-      setLocalScreenshot(screenshotBase64);
-    }
-  }, [screenshotBase64]);
-
-  const currentScreenshot = localScreenshot || screenshotBase64;
+    if (stream.location?.url) setInputUrl(stream.location.url);
+  }, [stream.location]);
 
   const loadPasswords = useCallback(async () => {
     if (!teamId || teamId === 'default') return;
@@ -226,7 +228,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
   // Dispatch interactive action to backend
   const sendInteraction = useCallback(
-    async (payload: {
+    (payload: {
       action: 'click' | 'type' | 'key' | 'scroll';
       x?: number;
       y?: number;
@@ -236,30 +238,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
       delta_x?: number;
       delta_y?: number;
     }) => {
-      if (!teamId || teamId === 'default') return;
-      try {
-        setIsInteracting(true);
-        const res = await fetch(`/api/sandbox/${teamId}/interact`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.screenshot) {
-            setLocalScreenshot(data.screenshot);
-          }
-          if (data.url && data.url !== 'about:blank') {
-            setInputUrl(data.url);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to send interaction:', err);
-      } finally {
-        setIsInteracting(false);
-      }
+      stream.send({ ...payload, delta_x: payload.delta_x || 0, delta_y: payload.delta_y || 0 }, true);
     },
-    [teamId]
+    [stream.send]
   );
 
   // Viewport Click Handler
@@ -267,24 +248,19 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     if (!isControlMode || !imageRef.current) return;
     const img = imageRef.current;
     const rect = img.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
-
-    if (clickX < 0 || clickX > rect.width || clickY < 0 || clickY > rect.height) {
-      return;
-    }
-
-    const targetX = Math.round((clickX / rect.width) * 1280);
-    const targetY = Math.round((clickY / rect.height) * 800);
+    const point = mapBrowserPoint(e.clientX, e.clientY, rect, img.naturalWidth, img.naturalHeight);
+    if (!point) return;
+    viewportRef.current?.focus({ preventScroll: true });
+    const frame = e.currentTarget.getBoundingClientRect();
 
     playSfx('click');
     const rippleId = Date.now();
-    setClickRipples((prev) => [...prev, { id: rippleId, x: clickX, y: clickY }]);
+    setClickRipples((prev) => [...prev, { id: rippleId, x: e.clientX - frame.left, y: e.clientY - frame.top }]);
     setTimeout(() => {
       setClickRipples((prev) => prev.filter((r) => r.id !== rippleId));
     }, 600);
 
-    sendInteraction({ action: 'click', x: targetX, y: targetY });
+    sendInteraction({ action: 'click', ...point });
   };
 
   // Viewport Wheel / Scroll Handler
@@ -296,12 +272,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
     const img = imageRef.current;
     const rect = img.getBoundingClientRect();
-    const clickX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
-    const clickY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
-    const targetX = Math.round((clickX / rect.width) * 1280);
-    const targetY = Math.round((clickY / rect.height) * 800);
+    const point = mapBrowserPoint(e.clientX, e.clientY, rect, img.naturalWidth, img.naturalHeight);
+    if (!point) return;
 
-    sendInteraction({ action: 'scroll', x: targetX, y: targetY, delta_y: e.deltaY });
+    sendInteraction({ action: 'scroll', ...point, delta_x: e.deltaX, delta_y: e.deltaY });
   };
 
   // Viewport Keydown Handler
@@ -337,13 +311,13 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
       {/* Top Header */}
       <div className="h-14 border-b border-zinc-800 px-4 flex items-center justify-between bg-zinc-900/60">
         <div className="flex items-center gap-2">
-          <div className={`w-2.5 h-2.5 rounded-full ${isRunning ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`} />
+          <div className={`w-2.5 h-2.5 rounded-full ${(stream.connected || isRunning) ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`} />
           <div>
             <div className="text-xs font-semibold text-zinc-100 flex items-center gap-1.5">
-              <span>Sandbox VM</span>
+              <span>Bot Browser</span>
               <span className="text-[10px] font-mono text-zinc-400">(@{teamName})</span>
             </div>
-            <p className="text-[10px] text-zinc-400">Debian 12 • Chromium CDP</p>
+            <p className="text-[10px] text-zinc-400">Live Chromium • Separate code sandbox</p>
           </div>
         </div>
 
@@ -353,9 +327,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             type="button"
             onClick={() => {
               playSfx('click');
-              setIsControlMode((prev) => !prev);
+              stream.send({ action: isControlMode ? 'release_control' : 'take_control' });
               if (!isControlMode) setActiveTab('browser');
             }}
+            disabled={!stream.connected}
             title={isControlMode ? 'Exit Control Mode' : 'Take Control of Bot Browser'}
             className={`p-1.5 rounded-md transition-colors cursor-pointer flex items-center gap-1 ${
               isControlMode
@@ -489,7 +464,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     if (!target.startsWith('http://') && !target.startsWith('https://')) {
                       target = `https://${target}`;
                     }
-                    onNavigate(target);
+                    if (isControlMode) stream.send({ action: 'navigate', url: target }, true);
+                    else onNavigate(target);
                   }
                 }}
                 placeholder="https://..."
@@ -525,9 +501,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
               )}
             </div>
 
-            {pageTitle && (
+            {(stream.location?.title || pageTitle) && (
               <div className="text-[11px] text-zinc-400 truncate px-1 font-medium">
-                {pageTitle}
+                {stream.location?.title || pageTitle}
               </div>
             )}
 
@@ -567,6 +543,11 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             )}
 
             {/* Viewport Frame */}
+            {controlError && (
+              <div role="alert" className="px-2.5 py-2 rounded-lg border border-red-500/30 bg-red-950/40 text-xs text-red-300">
+                {controlError}
+              </div>
+            )}
             <div
               ref={viewportRef}
               tabIndex={0}
@@ -581,7 +562,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             >
               {/* Relaying feedback pill */}
               {isInteracting && (
-                <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-zinc-950/90 border border-cyan-500/40 text-cyan-300 text-[10px] font-mono flex items-center gap-1.5 z-20 shadow-md">
+                <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-zinc-950/90 border border-cyan-500/40 text-cyan-300 text-[10px] font-mono flex items-center gap-1.5 z-20 shadow-md pointer-events-none">
                   <Loader2 size={10} className="animate-spin text-cyan-400" />
                   <span>Relaying...</span>
                 </div>
@@ -598,6 +579,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
               {currentScreenshot ? (
                 <img
+                  key={stream.frame?.id}
                   ref={imageRef}
                   src={
                     currentScreenshot.startsWith('data:')
@@ -605,13 +587,16 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                       : `data:image/jpeg;base64,${currentScreenshot}`
                   }
                   alt="Browser Viewport"
+                  onLoad={() => { if (stream.frame) stream.acknowledgeFrame(stream.frame.id); }}
+                  onError={() => { if (stream.frame) stream.acknowledgeFrame(stream.frame.id); }}
+                  draggable={false}
                   className="w-full h-full object-contain pointer-events-auto"
                 />
               ) : (
                 <div className="text-center p-6 text-zinc-600 text-xs">
                   <Globe size={32} className="mx-auto mb-2 opacity-40 text-zinc-500" />
-                  <p>Browser idle</p>
-                  <p className="text-[10px] text-zinc-500 mt-1">Bot will navigate here when needed</p>
+                  <p>{(stream.connected || isRunning) ? 'Browser idle' : 'Browser unavailable'}</p>
+                  <p className="text-[10px] text-zinc-500 mt-1">{(stream.connected || isRunning) ? 'Enter a URL above to open a page' : 'Start Docker, then use Restart Browser below'}</p>
                 </div>
               )}
             </div>
@@ -883,8 +868,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
       {/* Footer Status */}
       <div className="p-2.5 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] text-zinc-400">
         <div className="flex items-center gap-1.5">
-          <Cpu size={12} className={isRunning ? 'text-emerald-400' : 'text-zinc-500'} />
-          <span>{isRunning ? 'Container Active' : 'Container Inactive'}</span>
+          <Cpu size={12} className={(stream.connected || isRunning) ? 'text-emerald-400' : 'text-zinc-500'} />
+          <span>{(stream.connected || isRunning) ? 'Browser Ready' : 'Browser Offline'}</span>
         </div>
         {onRestartVm && (
           <button
@@ -896,7 +881,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             className="hover:text-zinc-200 text-zinc-400 flex items-center gap-1 transition-colors cursor-pointer"
           >
             <RefreshCw size={11} />
-            <span>Restart VM</span>
+            <span>Restart Browser</span>
           </button>
         )}
       </div>

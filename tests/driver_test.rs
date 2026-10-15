@@ -77,6 +77,7 @@ async fn test_mock_driver_streaming() {
     };
 
     let input = TurnInput {
+            browser_api_url: None,
         thread_id: "thread-1".into(),
         kwant: dummy_kwant,
         prompt: "Cast fireball".into(),
@@ -131,6 +132,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
 
     // 1. Without team context
     let input_solo = TurnInput {
+        browser_api_url: None,
         thread_id: "thread-1".into(),
         kwant: kwant.clone(),
         prompt: "Review the system".into(),
@@ -143,11 +145,16 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
 
     let solo_prompt = input_solo.format_system_prompt();
     assert!(solo_prompt.contains("Systems Architect"));
+    let mut vps_input = input_solo.clone();
+    vps_input.browser_api_url = Some("http://127.0.0.1:9876/api/sandbox/channel-123".into());
+    assert!(vps_input.format_system_prompt().contains("http://127.0.0.1:9876/api/sandbox/channel-123/navigate"));
+    assert!(!vps_input.format_system_prompt().contains("127.0.0.1:8899"));
     assert!(solo_prompt.contains("bulletproof distributed architectures"));
     assert!(!solo_prompt.contains("Active Team Alignment"));
 
     // 2. With team context
     let input_team = TurnInput {
+        browser_api_url: None,
         thread_id: "thread-team".into(),
         kwant: kwant.clone(),
         prompt: "Review the system".into(),
@@ -172,6 +179,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
 
     // 3. With team context including workspace and repo URL
     let input_workspace = TurnInput {
+        browser_api_url: None,
         thread_id: "thread-workspace".into(),
         kwant: kwant.clone(),
         prompt: "Check files".into(),
