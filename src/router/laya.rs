@@ -56,6 +56,22 @@ impl LayaRouter {
             .unwrap_or(false)
     }
 
+    /// Sends a throwaway decision so the first real query doesn't pay the
+    /// model's cold-start cost (which can exceed the 1.5s routing timeout).
+    pub async fn warm_up(&self) {
+        let payload = json!({
+            "state": {"prompt": "hello, can you help me plan a trip?"},
+            "questions": {"warmup": {"type": "choice", "instructions": "Who should answer?",
+                "criteria": {"a": "travel and planning", "b": "software engineering"}}}
+        });
+        let endpoint = format!("{}/v1/systemone", self.base_url.trim_end_matches('/'));
+        for _ in 0..2 {
+            let started = std::time::Instant::now();
+            let res = self.client.post(&endpoint).json(&payload).timeout(Duration::from_secs(60)).send().await;
+            tracing::info!(ok = res.is_ok(), ms = started.elapsed().as_millis() as u64, "Laya warm-up");
+        }
+    }
+
     /// Routes a prompt to the optimal model using Laya (/v1/systemone),
     /// falling back gracefully to local heuristics if Laya is unreachable.
     pub async fn route_prompt(&self, prompt: &str, context: &str) -> Result<RouteDecision, RouterError> {

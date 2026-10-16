@@ -60,6 +60,7 @@ pub fn spawn(router: LayaRouter, opts: SidecarOptions, shutdown: CancellationTok
 async fn supervise(router: LayaRouter, opts: SidecarOptions, shutdown: CancellationToken) {
     if router.is_reachable().await {
         router.set_status(LayaState::External, "Using the Laya service already running", false);
+        router.warm_up().await;
         return monitor_external(router, shutdown).await;
     }
 
@@ -150,6 +151,7 @@ async fn run_until_exit(
                     online = true;
                     tick = tokio::time::interval(Duration::from_secs(15));
                     tracing::info!(url = %router.base_url, "Laya sidecar online");
+                    router.warm_up().await;
                     router.set_status(LayaState::Online, "Model-based routing is active", true);
                 } else if !up && online {
                     router.set_status(LayaState::Starting, "Laya stopped answering; waiting for it", true);
@@ -169,6 +171,7 @@ async fn monitor_external(router: LayaRouter, shutdown: CancellationToken) {
         let current = router.status();
         if up && !current.is_up() {
             router.set_status(LayaState::External, "Using the Laya service already running", false);
+            router.warm_up().await;
         } else if !up && current.is_up() {
             router.set_status(LayaState::Offline, "Laya stopped answering; using keyword routing", false);
         }
