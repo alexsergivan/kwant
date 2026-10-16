@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Plug,
   Terminal,
@@ -19,6 +19,9 @@ import {
   CircleDashed,
   PauseCircle,
   Zap,
+  KeyRound,
+  ShieldCheck,
+  LogOut,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import {
@@ -39,6 +42,9 @@ import {
   saveStatuses,
   toStoredStatus,
   humanizeToolName,
+  serverStatusKind,
+  isSignedIn,
+  readOAuthMessage,
 } from '../mcp';
 
 interface McpServersModalProps {
@@ -65,22 +71,26 @@ const readError = async (res: Response) => {
 };
 
 const StatusPill: React.FC<{ server: McpServer; status?: StoredStatus; testing: boolean }> = ({ server, status, testing }) => {
+  const kind = serverStatusKind(server, status, testing);
   let cls = 'bg-zinc-800/60 text-zinc-400 border-zinc-700/60';
   let icon = <CircleDashed size={11} />;
   let label = 'Not tested yet';
-  if (testing) {
+  if (kind === 'testing') {
     cls = 'bg-sky-500/10 text-sky-300 border-sky-500/20';
     icon = <Loader2 size={11} className="animate-spin" />;
     label = 'Testing…';
-  } else if (!server.enabled) {
-    cls = 'bg-zinc-800/60 text-zinc-400 border-zinc-700/60';
+  } else if (kind === 'paused') {
     icon = <PauseCircle size={11} />;
     label = 'Paused';
-  } else if (status?.ok) {
+  } else if (kind === 'ok' && status) {
     cls = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20';
     icon = <CheckCircle2 size={11} />;
     label = `Working · ${status.tools.length} ${status.tools.length === 1 ? 'tool' : 'tools'}`;
-  } else if (status && !status.ok) {
+  } else if (kind === 'needs_sign_in') {
+    cls = 'bg-amber-500/10 text-amber-300 border-amber-500/25';
+    icon = <KeyRound size={11} />;
+    label = 'Needs sign-in';
+  } else if (kind === 'error') {
     cls = 'bg-rose-500/10 text-rose-300 border-rose-500/20';
     icon = <AlertCircle size={11} />;
     label = 'Couldn’t connect';
@@ -189,27 +199,111 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   const [form, setForm] = useState<McpFormState>(emptyMcpForm());
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Sign-in: the server whose popup is open, sign-in errors per server, and a pending disconnect.
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [oauthErrors, setOauthErrors] = useState<Record<string, string>>({});
+  const [confirmDisconnect, setConfirmDisconnect] = useState<string | null>(null);
+  const popupRef = useRef<Window | null>(null);
+  const popupWatch = useRef<number | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<McpServer[] | null> => {
     try {
       const res = await fetch('/api/mcp/servers');
       if (!res.ok) throw new Error(await readError(res));
-      setServers(await res.json());
+      const list: McpServer[] = await res.json();
+      setServers(list);
       setLoadError(null);
+      return list;
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Could not reach kwnt.');
       setServers((prev) => prev ?? []);
+      return null;
     }
   }, []);
+
+  const stopWatchingPopup = useCallback(() => {
+    if (popupWatch.current !== null) window.clearInterval(popupWatch.current);
+    popupWatch.current = null;
+    popupRef.current = null;
+  }, []);
+
+  const setStatus = useCallback((id: string, status: StoredStatus | null) => {
+    setStatuses((prev) => {
+      const next = { ...prev };
+      if (status) next[id] = status;
+      else delete next[id];
+      saveStatuses(next);
+      return next;
+    });
+  }, []);
+
+  const runTest = useCallback(async (id: string) => {
+    setTesting((t) => ({ ...t, [id]: true }));
+    let result: McpTestResult;
+    try {
+      const res = await fetch(`/api/mcp/servers/${id}/test`, { method: 'POST' });
+      result = res.ok ? await res.json() : { ok: false, error: await readError(res) };
+    } catch {
+      result = { ok: false, error: 'Could not reach kwnt.' };
+    }
+    setTesting((t) => ({ ...t, [id]: false }));
+    setTestResults((r) => ({ ...r, [id]: result }));
+    setStatus(id, toStoredStatus(result, new Date().toISOString()));
+    playSfx(result.ok ? 'coin' : 'alert');
+  }, [setStatus]);
+
+  // Re-tests servers whose last test asked for sign-in but that kwnt now holds a sign-in for.
+  const checkNewSignIns = useCallback(async () => {
+    const stored = loadStatuses();
+    if (!Object.values(stored).some((s) => s.auth_required)) return;
+    const list = await refresh();
+    list?.filter((s) => s.enabled && isSignedIn(s) && stored[s.id]?.auth_required).forEach((s) => runTest(s.id));
+  }, [refresh, runTest]);
 
   useEffect(() => {
     if (!isOpen) return;
     setEditing(null);
     setConfirmDelete(null);
+    setConfirmDisconnect(null);
     setTestResults({});
+    setOauthErrors({});
     setStatuses(loadStatuses());
-    refresh();
-  }, [isOpen, refresh]);
+    // Also catches a sign-in finished elsewhere, like the same-tab fallback when popups are blocked.
+    refresh().then(() => checkNewSignIns());
+  }, [isOpen, refresh, checkNewSignIns]);
+
+  // If a provider cuts the popup's link back to this window, no message arrives: coming back to
+  // this window is the cue to look again.
+  useEffect(() => {
+    if (!isOpen) return;
+    window.addEventListener('focus', checkNewSignIns);
+    return () => window.removeEventListener('focus', checkNewSignIns);
+  }, [isOpen, checkNewSignIns]);
+
+  // The sign-in popup reports back with a postMessage from kwnt's callback page.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onMessage = (event: MessageEvent) => {
+      const msg = readOAuthMessage(event, window.location.origin);
+      if (!msg) return;
+      const id = msg.server_id ?? connecting;
+      stopWatchingPopup();
+      setConnecting(null);
+      if (!id) return;
+      if (msg.ok) {
+        setOauthErrors(({ [id]: _, ...rest }) => rest);
+        refresh();
+        runTest(id);
+      } else {
+        setOauthErrors((e) => ({ ...e, [id]: msg.error || 'Sign-in didn’t finish. Try again.' }));
+        playSfx('alert');
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [isOpen, connecting, refresh, runTest, stopWatchingPopup]);
+
+  useEffect(() => stopWatchingPopup, [stopWatchingPopup]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -224,29 +318,71 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
 
   if (!isOpen) return null;
 
-  const setStatus = (id: string, status: StoredStatus | null) => {
-    setStatuses((prev) => {
-      const next = { ...prev };
-      if (status) next[id] = status;
-      else delete next[id];
-      saveStatuses(next);
-      return next;
-    });
+  const connect = async (server: McpServer) => {
+    playSfx('click');
+    setOauthErrors(({ [server.id]: _, ...rest }) => rest);
+    // Open the window inside the click so popup blockers allow it; the address comes after the fetch.
+    const popup = window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
+    if (popup) {
+      try {
+        popup.document.title = 'Signing in…';
+        popup.document.body.style.cssText = 'background:#18181b;color:#a1a1aa;font:14px system-ui;display:grid;place-items:center;height:100vh;margin:0';
+        popup.document.body.textContent = `Opening sign-in for ${server.name}…`;
+      } catch {
+        // not ours to style; harmless
+      }
+    }
+    setConnecting(server.id);
+    let url: string;
+    try {
+      const res = await fetch(`/api/mcp/servers/${server.id}/oauth/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin: window.location.origin }),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      const body = await res.json();
+      if (typeof body?.authorize_url !== 'string' || !/^https?:\/\//.test(body.authorize_url)) throw new Error('kwnt didn’t return a sign-in page.');
+      url = body.authorize_url;
+    } catch (err) {
+      popup?.close();
+      setConnecting(null);
+      setOauthErrors((e) => ({ ...e, [server.id]: err instanceof Error ? err.message : 'Could not reach kwnt.' }));
+      playSfx('alert');
+      return;
+    }
+    if (!popup || popup.closed) {
+      // Blocked anyway: sign in in this tab. kwnt brings you back to the app afterwards.
+      window.location.assign(url);
+      return;
+    }
+    popup.location.href = url;
+    popup.focus();
+    stopWatchingPopup();
+    popupRef.current = popup;
+    // Closing the window without finishing just stops waiting.
+    popupWatch.current = window.setInterval(() => {
+      if (popupRef.current?.closed) {
+        stopWatchingPopup();
+        setConnecting((c) => (c === server.id ? null : c));
+        checkNewSignIns();
+      }
+    }, 500);
   };
 
-  const runTest = async (id: string) => {
-    setTesting((t) => ({ ...t, [id]: true }));
-    let result: McpTestResult;
-    try {
-      const res = await fetch(`/api/mcp/servers/${id}/test`, { method: 'POST' });
-      result = res.ok ? await res.json() : { ok: false, error: await readError(res) };
-    } catch {
-      result = { ok: false, error: 'Could not reach kwnt.' };
+  const disconnect = async (server: McpServer) => {
+    playSfx('click');
+    setConfirmDisconnect(null);
+    const res = await fetch(`/api/mcp/servers/${server.id}/oauth`, { method: 'DELETE' }).catch(() => null);
+    if (!res || !res.ok) {
+      setLoadError(res ? await readError(res) : 'Could not reach kwnt.');
+      return;
     }
-    setTesting((t) => ({ ...t, [id]: false }));
-    setTestResults((r) => ({ ...r, [id]: result }));
-    setStatus(id, toStoredStatus(result, new Date().toISOString()));
-    playSfx(result.ok ? 'coin' : 'alert');
+    setTestResults(({ [server.id]: _, ...rest }) => rest);
+    setStatus(server.id, null);
+    await refresh();
+    // Shows "Needs sign-in" again if the server requires it.
+    if (server.enabled) runTest(server.id);
   };
 
   const openForm = (target: 'new' | McpServer, preset?: McpFormState) => {
@@ -374,6 +510,10 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     const isTesting = !!testing[server.id];
     const secretCount = Object.keys(server.env).length + Object.keys(server.headers).length;
     const tools = result?.ok ? result.tools ?? [] : status?.ok ? status.tools.map((name) => ({ name })) : [];
+    const kind = serverStatusKind(server, status, isTesting);
+    const signedIn = isSignedIn(server);
+    const isConnecting = connecting === server.id;
+    const oauthError = oauthErrors[server.id];
     return (
       <li
         key={server.id}
@@ -391,6 +531,13 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             <p className="text-[11px] text-zinc-500">
               {server.transport === 'stdio' ? 'Runs a command on this machine' : 'Connects to a URL'}
               {secretCount > 0 && <span> · {secretCount} hidden {secretCount === 1 ? 'secret' : 'secrets'}</span>}
+              {signedIn && (
+                <span className="text-emerald-300/80">
+                  {' · '}
+                  <ShieldCheck size={11} className="inline -mt-px mr-0.5" aria-hidden="true" />
+                  Signed in
+                </span>
+              )}
             </p>
             <p className="text-[11px] font-mono text-zinc-400 truncate" title={serverTarget(server)}>
               {serverTarget(server)}
@@ -408,7 +555,34 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             <ToolChips tools={[]} />
           </div>
         )}
-        {result && !result.ok && (
+        {(kind === 'needs_sign_in' || oauthError) && server.transport === 'http' && server.enabled && (
+          <div className="mt-2.5 ml-12 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] space-y-2">
+            <div className="flex items-start gap-2 text-amber-100/90">
+              <KeyRound size={13} className="flex-shrink-0 mt-px text-amber-400" />
+              <span>
+                {isConnecting
+                  ? 'Waiting for you to approve access in the sign-in window…'
+                  : 'This server asks you to sign in and approve access.'}
+              </span>
+            </div>
+            {oauthError && !isConnecting && (
+              <p role="alert" className="flex items-start gap-1.5 text-rose-300">
+                <AlertCircle size={12} className="flex-shrink-0 mt-px" />
+                <span>{oauthError}</span>
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => connect(server)}
+              disabled={isConnecting}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-60"
+            >
+              {isConnecting ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
+              {isConnecting ? 'Waiting…' : oauthError ? 'Retry' : 'Connect'}
+            </button>
+          </div>
+        )}
+        {result && !result.ok && kind !== 'needs_sign_in' && (
           <div className="mt-2.5 ml-12 p-2.5 rounded-lg bg-rose-500/5 border border-rose-500/20 text-[11px] text-rose-200 space-y-1">
             <p>{result.error || 'The server didn’t answer.'}</p>
             {result.stderr_tail && (
@@ -421,7 +595,25 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         )}
 
         <div className="mt-3 pt-2.5 border-t border-zinc-800/70 flex flex-wrap items-center justify-between gap-2">
-          {confirmDelete === server.id ? (
+          {confirmDisconnect === server.id ? (
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-300">
+              <span>Sign out of {server.name}? Kwants can’t use its tools until you connect again.</span>
+              <button
+                type="button"
+                onClick={() => setConfirmDisconnect(null)}
+                className="px-2.5 py-1 rounded-md font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+              >
+                Stay signed in
+              </button>
+              <button
+                type="button"
+                onClick={() => disconnect(server)}
+                className="px-2.5 py-1 rounded-md font-medium text-white bg-rose-600 hover:bg-rose-500 transition-colors"
+              >
+                Disconnect
+              </button>
+            </div>
+          ) : confirmDelete === server.id ? (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-300">
               <span>Delete {server.name}? Kwants using it lose these tools.</span>
               <button
@@ -464,6 +656,21 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
                   {isTesting ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
                   Test connection
                 </button>
+                {signedIn && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playSfx('click');
+                      setConfirmDelete(null);
+                      setConfirmDisconnect(server.id);
+                    }}
+                    aria-label={`Disconnect ${server.name}`}
+                    title="Disconnect (sign out)"
+                    className="p-1.5 rounded-md text-zinc-400 hover:text-rose-300 hover:bg-rose-500/10 transition-colors"
+                  >
+                    <LogOut size={13} />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => openForm(server)}
@@ -476,6 +683,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
                   type="button"
                   onClick={() => {
                     playSfx('click');
+                    setConfirmDisconnect(null);
                     setConfirmDelete(server.id);
                   }}
                   aria-label={`Delete ${server.name}`}
@@ -649,6 +857,9 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
                 keyLabel="Header name"
                 addLabel="Add header"
               />
+              <p className="mt-1.5 text-[11px] text-zinc-500">
+                Servers that need sign-in (like Notion) don’t need a header. Use <span className="text-zinc-300">Connect</span> on the server after saving.
+              </p>
             </div>
           </>
         )}
