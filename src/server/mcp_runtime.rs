@@ -26,6 +26,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex};
+use tokio_util::sync::CancellationToken;
+
+/// How long `finish_turn` waits for cancelled in-flight calls to release the turn's servers.
+const CLOSE_GRACE: Duration = Duration::from_secs(10);
 
 /// How long a tool call waits for the user before it is denied.
 pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(mcp::APPROVAL_TIMEOUT_SECS);
@@ -43,11 +47,13 @@ pub struct PermissionSession {
     pub cwd: Option<PathBuf>,
     /// The gateway's connections to the kwant's servers, opened on first use.
     gateway: Arc<Mutex<Option<Arc<McpToolSession>>>>,
+    /// Cancelled when the turn ends: calls still waiting (for a card) give up.
+    ended: CancellationToken,
 }
 
 impl PermissionSession {
     pub fn new(kwant_id: String, kwant_name: String, turn_id: String, ctx: McpTurnContext, cwd: Option<PathBuf>) -> Self {
-        Self { kwant_id, kwant_name, turn_id, ctx, cwd, gateway: Default::default() }
+        Self { kwant_id, kwant_name, turn_id, ctx, cwd, gateway: Default::default(), ended: CancellationToken::new() }
     }
 
     fn caller(&self) -> Caller {
@@ -55,10 +61,14 @@ impl PermissionSession {
     }
 
     /// Connects to the kwant's servers once per turn; later requests reuse the connections.
-    async fn tool_session(&self) -> Arc<McpToolSession> {
+    /// `None` once the turn has ended, so a late request can't start servers again.
+    async fn tool_session(&self) -> Option<Arc<McpToolSession>> {
         let mut slot = self.gateway.lock().await;
+        if self.ended.is_cancelled() {
+            return None;
+        }
         if let Some(open) = slot.as_ref() {
-            return open.clone();
+            return Some(open.clone());
         }
         let cwd = self.cwd.as_deref().filter(|d| d.exists());
         let (session, problems) = McpToolSession::open(&self.ctx, cwd).await;
@@ -67,17 +77,40 @@ impl PermissionSession {
         }
         let session = Arc::new(session);
         *slot = Some(session.clone());
-        session
+        Some(session)
     }
 
-    /// Closes the gateway's connections (stdio servers are stopped).
+    /// Ends the turn: calls still waiting give up (their cards are withdrawn), then the
+    /// gateway's connections close (stdio servers are stopped).
     async fn close(&self) {
-        let Some(open) = self.gateway.lock().await.take() else { return };
-        // A call still in flight keeps its reference; its servers stop when that call drops it
-        if let Ok(session) = Arc::try_unwrap(open) {
-            session.shutdown().await;
+        self.ended.cancel();
+        let Some(mut open) = self.gateway.lock().await.take() else { return };
+        // Cancelled calls drop their reference as they unwind
+        let deadline = tokio::time::Instant::now() + CLOSE_GRACE;
+        loop {
+            match Arc::try_unwrap(open) {
+                Ok(session) => return session.shutdown().await,
+                Err(still_shared) if tokio::time::Instant::now() < deadline => {
+                    open = still_shared;
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                // Its servers stop (kill_on_drop) when the last call drops it
+                Err(_) => return tracing::warn!(kwant = %self.kwant_name, "MCP gateway call outlived its turn"),
+            }
         }
     }
+}
+
+/// The record of a call the turn ended under, while it waited for its card.
+fn cancelled_record(id: &str, tool_name: &str, server: &str, tool: &str, arguments: &Value) -> Value {
+    json!({
+        "id": id,
+        "name": tool_name,
+        "server": server,
+        "tool": tool,
+        "arguments": arguments,
+        "status": "cancelled",
+    })
 }
 
 /// Asks the user through the permission broker: stores the ticket, emits `ApprovalRequired`
@@ -94,6 +127,7 @@ struct TicketGuard {
     id: Option<String>,
     broker: PermissionBroker,
     db: Database,
+    events: broadcast::Sender<RuntimeEvent>,
 }
 
 impl Drop for TicketGuard {
@@ -101,10 +135,11 @@ impl Drop for TicketGuard {
         let (Some(id), Ok(handle)) = (self.id.take(), tokio::runtime::Handle::try_current()) else {
             return;
         };
-        let (broker, db) = (self.broker.clone(), self.db.clone());
+        let (broker, db, events) = (self.broker.clone(), self.db.clone(), self.events.clone());
         handle.spawn(async move {
             if broker.cancel(&id).await {
                 let _ = db.update_approval_status(&id, "cancelled").await;
+                let _ = events.send(RuntimeEvent::ApprovalWithdrawn { id });
             }
         });
     }
@@ -149,7 +184,12 @@ impl ToolApprover for BrokerApprover {
                 details: details.clone(),
             })
             .await;
-        let mut guard = TicketGuard { id: Some(ticket.clone()), broker: self.broker.clone(), db: self.db.clone() };
+        let mut guard = TicketGuard {
+            id: Some(ticket.clone()),
+            broker: self.broker.clone(),
+            db: self.db.clone(),
+            events: self.events.clone(),
+        };
         let _ = self.events.send(RuntimeEvent::ApprovalRequired {
             id: ticket.clone(),
             tool_name: req.tool_name.clone(),
@@ -166,8 +206,10 @@ impl ToolApprover for BrokerApprover {
             }
             Ok(Ok(ApprovalDecision::Deny)) | Ok(Err(_)) => false,
             Err(_) => {
-                self.broker.cancel(&ticket).await;
-                let _ = self.db.update_approval_status(&ticket, "expired").await;
+                if self.broker.cancel(&ticket).await {
+                    let _ = self.db.update_approval_status(&ticket, "expired").await;
+                    let _ = self.events.send(RuntimeEvent::ApprovalWithdrawn { id: ticket });
+                }
                 false
             }
         }
@@ -255,19 +297,23 @@ async fn decide(session: &PermissionSession, args: &Value) -> Value {
     let Some((server, tool)) = target else {
         return json!({"behavior": "deny", "message": format!("{tool_name} is not available to this kwant.")});
     };
-    let allowed = session
-        .ctx
-        .approver
-        .approve(ToolApprovalRequest {
-            kwant_id: session.kwant_id.clone(),
-            kwant_name: session.kwant_name.clone(),
-            turn_id: session.turn_id.clone(),
-            tool_name: tool_name.to_string(),
-            server: server.to_string(),
-            tool: tool.to_string(),
-            arguments: input.clone(),
-        })
-        .await;
+    let approval = session.ctx.approver.approve(ToolApprovalRequest {
+        kwant_id: session.kwant_id.clone(),
+        kwant_name: session.kwant_name.clone(),
+        turn_id: session.turn_id.clone(),
+        tool_name: tool_name.to_string(),
+        server: server.to_string(),
+        tool: tool.to_string(),
+        arguments: input.clone(),
+    });
+    // Dropping the approval withdraws its card when the turn ends first
+    let allowed = tokio::select! {
+        allowed = approval => allowed,
+        _ = session.ended.cancelled() => {
+            session.ctx.record(cancelled_record(&tool_use_id, tool_name, server, tool, &input));
+            return json!({"behavior": "deny", "message": "The turn ended before the user answered."});
+        }
+    };
     session.ctx.record(json!({
         "id": tool_use_id,
         "name": tool_name,
@@ -362,15 +408,31 @@ pub async fn gateway_endpoint(State(state): State<AppState>, headers: HeaderMap,
             }),
         ),
         "ping" => rpc_result(id, json!({})),
-        "tools/list" => rpc_result(id, json!({"tools": session.tool_session().await.gateway_tools()})),
+        "tools/list" => match session.tool_session().await {
+            Some(tools) => rpc_result(id, json!({"tools": tools.gateway_tools()})),
+            None => StatusCode::UNAUTHORIZED.into_response(),
+        },
         "tools/call" => {
             let Some(name) = msg["params"]["name"].as_str() else {
                 return rpc_error(id, -32602, "missing tool name");
             };
             let arguments = msg["params"].get("arguments").cloned().unwrap_or_else(|| json!({}));
             let call_id = format!("gw_{}", uuid::Uuid::new_v4().simple());
-            let tools = session.tool_session().await;
-            let outcome = tools.call(&session.caller(), &call_id, &format!("mcp__{name}"), &arguments.to_string()).await;
+            let Some(tools) = session.tool_session().await else {
+                return StatusCode::UNAUTHORIZED.into_response();
+            };
+            let tool_name = format!("mcp__{name}");
+            // Dropping the call withdraws its card (or stops the forwarded call) when the turn ends
+            let (caller, raw_arguments) = (session.caller(), arguments.to_string());
+            let outcome = tokio::select! {
+                outcome = tools.call(&caller, &call_id, &tool_name, &raw_arguments) => outcome,
+                _ = session.ended.cancelled() => {
+                    let (server, tool) = mcp::split_tool_name(&tool_name).unwrap_or(("", name));
+                    session.ctx.record(cancelled_record(&call_id, &tool_name, server, tool, &arguments));
+                    drop(tools);
+                    return rpc_result(id, json!({"content": [{"type": "text", "text": "The turn ended before the call finished."}], "isError": true}));
+                }
+            };
             rpc_result(
                 id,
                 json!({"content": [{"type": "text", "text": outcome.text}], "isError": outcome.status != "ok"}),

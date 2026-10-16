@@ -208,3 +208,94 @@ async fn gateway_calls_wait_for_the_approval_card() {
     client.shutdown().await;
     mcp_runtime::finish_turn(&state, "card-tok").await;
 }
+
+/// Pids of live processes whose environment holds `marker`.
+#[cfg(target_os = "linux")]
+fn processes_with_env(marker: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir("/proc").unwrap().flatten() {
+        let pid = entry.file_name().to_string_lossy().into_owned();
+        if !pid.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let zombie = std::fs::read_to_string(entry.path().join("stat")).map_or(true, |s| s.contains(") Z "));
+        let env = std::fs::read(entry.path().join("environ")).unwrap_or_default();
+        if !zombie && String::from_utf8_lossy(&env).contains(marker) {
+            found.push(pid);
+        }
+    }
+    found
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn ending_the_turn_cancels_a_call_waiting_for_its_card() {
+    let (state, _tmp) = state().await;
+    let base = serve(state.clone()).await;
+    let approver = Arc::new(BrokerApprover {
+        db: state.db.clone(),
+        broker: state.broker.clone(),
+        events: state.event_sender.clone(),
+        timeout: Duration::from_secs(300),
+    });
+    let marker = format!("KWNT_TEST_MARK_{}", uuid::Uuid::new_v4().simple());
+    let mut server = echo_server();
+    server.env.insert(marker.clone(), "1".into());
+    let ctx = McpTurnContext {
+        servers: vec![server],
+        approver,
+        config_dir: std::env::temp_dir(),
+        permission_url: None,
+        gateway: None,
+        max_tool_iterations: 8,
+        records: Default::default(),
+    };
+    state
+        .mcp_sessions
+        .lock()
+        .await
+        .insert("end-tok".into(), PermissionSession::new("k1".into(), "Ada".into(), "t1".into(), ctx.clone(), None));
+    let mut events = state.event_sender.subscribe();
+
+    let client = McpClient::connect(&gateway(&base, Some("end-tok")), None).await.unwrap();
+    let call = tokio::spawn(async move {
+        let out = client.call_tool("echo__echo", json!({"text": "never"})).await;
+        (client, out)
+    });
+    let ticket = loop {
+        match tokio::time::timeout(Duration::from_secs(10), events.recv()).await.unwrap().unwrap() {
+            RuntimeEvent::ApprovalRequired { id, .. } => break id,
+            _ => continue,
+        }
+    };
+    assert_eq!(processes_with_env(&marker).len(), 1, "the echo server runs while the card waits");
+
+    // The turn ends (cancelled) while the card is still up: nothing waits out the 300 s timeout
+    tokio::time::timeout(Duration::from_secs(5), mcp_runtime::finish_turn(&state, "end-tok")).await.expect("finish_turn hung");
+    let (mut client, out) = tokio::time::timeout(Duration::from_secs(5), call).await.unwrap().unwrap();
+    let out = out.unwrap();
+    assert!(out.is_error && out.text.contains("turn ended"), "{out:?}");
+    client.shutdown().await;
+    assert!(processes_with_env(&marker).is_empty(), "echo server outlived the turn");
+
+    // The card is withdrawn, and a late Allow neither runs the tool nor rewrites the ticket
+    let withdrawn = loop {
+        match tokio::time::timeout(Duration::from_secs(5), events.recv()).await.unwrap().unwrap() {
+            RuntimeEvent::ApprovalWithdrawn { id } => break id,
+            _ => continue,
+        }
+    };
+    assert_eq!(withdrawn, ticket);
+    let late = reqwest::Client::new()
+        .post(format!("{base}/api/approvals/{ticket}/resolve"))
+        .json(&json!({"decision": "allow_once"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(late.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(state.db.get_approval(&ticket).await.unwrap().unwrap().status, "cancelled");
+    let records = ctx.take_records();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["status"], "cancelled");
+    assert!(records[0].get("result").is_none());
+}

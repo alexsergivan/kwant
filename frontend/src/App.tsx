@@ -213,6 +213,9 @@ export const App: React.FC = () => {
             });
             playSfx('alert');
             break;
+          case 'ApprovalWithdrawn':
+            setPendingApproval((current) => (current?.id === event.data.id ? null : current));
+            break;
           case 'discussion_started':
           case 'DiscussionStarted': {
             discussionInProgressRef.current = true;
