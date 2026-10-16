@@ -4,6 +4,7 @@ import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar
 import { ChatView, ChatMessage, DiscussionState, RoutingState } from './components/ChatView';
 import { PendingApproval } from './components/ModernApprovalCard';
 import { SettingsModal } from './components/SettingsModal';
+import { McpServersModal } from './components/McpServersModal';
 import { NewAgentModal, AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ManageTeamModal } from './components/ManageTeamModal';
@@ -49,6 +50,7 @@ export const App: React.FC = () => {
 
   // Modals state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
   // Team that a newly created agent should join (set by a team's "Add member")
   const [newAgentTeam, setNewAgentTeam] = useState<Team | null>(null);
@@ -600,12 +602,23 @@ export const App: React.FC = () => {
     playSfx('click');
   };
 
+  const saveKwantMcpServers = async (kwantId: string, serverIds: string[] | undefined): Promise<string | void> => {
+    if (serverIds === undefined) return;
+    const res = await fetch(`/api/kwants/${kwantId}/mcp-servers`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ server_ids: serverIds }),
+    });
+    if (!res.ok) return `Saved, but the tool servers couldn't be updated (HTTP ${res.status}).`;
+  };
+
   const handleUpdateAgent = async (kwant: Kwant, agentData: AgentFormData): Promise<string | void> => {
     try {
+      const { mcp_server_ids, ...kwantData } = agentData;
       const res = await fetch(`/api/kwants/${kwant.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(agentData),
+        body: JSON.stringify(kwantData),
       });
       if (res.status === 409) return `Another agent is already named "${agentData.name}".`;
       if (res.status === 400) return 'Name cannot be empty or contain spaces or @.';
@@ -623,6 +636,8 @@ export const App: React.FC = () => {
         }
         setMessages((prev) => rename(prev));
       }
+      const mcpError = await saveKwantMcpServers(updated.id, mcp_server_ids);
+      if (mcpError) return mcpError;
       playSfx('click');
     } catch (err) {
       console.error('Failed updating Agent:', err);
@@ -649,6 +664,10 @@ export const App: React.FC = () => {
       if (res.ok) {
         const created: Kwant = await res.json();
         setKwants((prev) => [...prev, created]);
+        if (agentData.mcp_server_ids?.length) {
+          const mcpError = await saveKwantMcpServers(created.id, agentData.mcp_server_ids);
+          if (mcpError) console.error(mcpError);
+        }
         setIsNewAgentOpen(false);
         playSfx('fanfare');
         const team = newAgentTeam && (teams.find((t) => t.id === newAgentTeam.id) ?? newAgentTeam);
@@ -1012,6 +1031,7 @@ export const App: React.FC = () => {
       {/* Modern App Header */}
       <AppHeader
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenTools={() => setIsMcpOpen(true)}
         tokensUsed={tokensUsed}
         activeModel={currentKwant?.preferred_model || 'auto'}
       />
@@ -1108,6 +1128,7 @@ export const App: React.FC = () => {
         }}
         joinTeamName={newAgentTeam?.name}
         takenNames={kwants.map((k) => k.name)}
+        onManageServers={() => setIsMcpOpen(true)}
         onSubmit={handleCreateAgent}
       />
 
@@ -1115,6 +1136,8 @@ export const App: React.FC = () => {
       <NewAgentModal
         isOpen={!!editingKwant}
         initial={editingKwant}
+        kwantId={editingKwant?.id}
+        onManageServers={() => setIsMcpOpen(true)}
         onClose={() => setEditingKwant(null)}
         onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
       />
@@ -1141,7 +1164,14 @@ export const App: React.FC = () => {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        onOpenTools={() => {
+          setIsSettingsOpen(false);
+          setIsMcpOpen(true);
+        }}
       />
+
+      {/* MCP tool servers (opened last so it sits above the agent modal) */}
+      <McpServersModal isOpen={isMcpOpen} onClose={() => setIsMcpOpen(false)} />
     </div>
   );
 };

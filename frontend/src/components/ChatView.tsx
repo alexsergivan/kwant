@@ -4,6 +4,7 @@ import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { ToolCallsList } from './ToolCallsList';
 import { VirtualMachinePane, TerminalLogEntry } from './VirtualMachinePane';
 import { playSfx } from '../audio/chiptune';
 import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThreads';
@@ -472,6 +473,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <MarkdownRenderer content={msg.text} />
             )}
           </div>
+
+          {!isUser && msg.tool_calls && <ToolCallsList raw={msg.tool_calls} />}
 
           {/* Copy action */}
           {!isUser && (

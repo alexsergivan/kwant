@@ -1,6 +1,7 @@
 import React from 'react';
-import { ShieldAlert, Check, CheckCheck, X } from 'lucide-react';
+import { ShieldAlert, Check, CheckCheck, X, Plug } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
+import { formatArgs, humanizeToolName, parseMcpToolName } from '../mcp';
 
 export interface PendingApproval {
   id: string;
@@ -13,6 +14,19 @@ interface ModernApprovalCardProps {
   onResolve: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
 }
 
+/** Server/tool/arguments of an MCP approval, or null for other tools. */
+const mcpView = (approval: PendingApproval) => {
+  const d = approval.details ?? {};
+  const fromName = parseMcpToolName(approval.tool_name);
+  if (d.source !== 'mcp' && !fromName) return null;
+  return {
+    server: typeof d.server === 'string' ? d.server : fromName?.server ?? '',
+    tool: typeof d.tool === 'string' ? d.tool : fromName?.tool ?? approval.tool_name,
+    kwant: typeof d.kwant_name === 'string' ? d.kwant_name : null,
+    args: formatArgs(d.arguments),
+  };
+};
+
 export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   approval,
   onResolve,
@@ -21,6 +35,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
     playSfx('click');
     onResolve(approval.id, decision);
   };
+  const mcp = mcpView(approval);
 
   return (
     <div className="my-3 border border-amber-500/30 bg-amber-950/20 rounded-xl p-4 text-zinc-100 max-w-2xl shadow-lg backdrop-blur-sm">
@@ -29,16 +44,41 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         <span>Action Approval Required</span>
       </div>
 
-      <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs font-mono space-y-1 mb-3">
-        <div className="text-zinc-400">
-          <span className="text-sky-400 font-semibold">Tool:</span> {approval.tool_name}
+      {mcp ? (
+        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
+          <p className="text-zinc-300">
+            {mcp.kwant ? <span className="font-medium text-zinc-100">{mcp.kwant}</span> : 'A kwant'} wants to use{' '}
+            <span className="font-medium text-sky-200">{humanizeToolName(mcp.tool)}</span>
+            {mcp.server && (
+              <>
+                {' '}from <span className="inline-flex items-center gap-1 font-medium text-zinc-100"><Plug size={11} className="text-sky-400" />{mcp.server}</span>
+              </>
+            )}
+            .
+          </p>
+          <p className="font-mono text-[11px] text-zinc-500">
+            {mcp.server} · {mcp.tool}
+          </p>
+          {mcp.args ? (
+            <pre className="font-mono text-[11px] text-zinc-300 bg-zinc-950/70 border border-zinc-800 rounded-md p-2 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+              {mcp.args}
+            </pre>
+          ) : (
+            <p className="text-[11px] text-zinc-500">No arguments.</p>
+          )}
         </div>
-        <div className="text-zinc-300 break-all overflow-x-auto max-h-36 py-1">
-          {JSON.stringify(approval.details, null, 2)}
+      ) : (
+        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs font-mono space-y-1 mb-3">
+          <div className="text-zinc-400">
+            <span className="text-sky-400 font-semibold">Tool:</span> {approval.tool_name}
+          </div>
+          <div className="text-zinc-300 break-all overflow-x-auto max-h-36 py-1">
+            {JSON.stringify(approval.details, null, 2)}
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <button
           onClick={() => handleDecision('deny')}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800 hover:bg-zinc-700 transition-colors"
@@ -57,6 +97,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
 
         <button
           onClick={() => handleDecision('always_allow')}
+          title={mcp ? 'Allow this tool for this kwant until kwnt restarts' : undefined}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm"
         >
           <CheckCheck size={14} />

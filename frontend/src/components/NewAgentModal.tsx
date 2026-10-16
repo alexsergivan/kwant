@@ -3,6 +3,7 @@ import { X, Sparkles, Pencil } from 'lucide-react';
 import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
 import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
 import { playSfx } from '../audio/chiptune';
+import { KwantToolsPicker } from './KwantToolsPicker';
 
 export interface AgentFormData {
   name: string;
@@ -11,6 +12,8 @@ export interface AgentFormData {
   soul?: string;
   avatar_sprite: string;
   preferred_model: string;
+  /** MCP servers this kwant may use; undefined when they weren't loaded. */
+  mcp_server_ids?: string[];
 }
 
 const MODEL_OPTIONS = [
@@ -30,6 +33,10 @@ interface NewAgentModalProps {
   takenNames?: string[];
   /** When creating from a team, the team the new agent will join. */
   joinTeamName?: string;
+  /** The agent being edited, to load its tool servers. */
+  kwantId?: string;
+  /** Opens the MCP servers screen. */
+  onManageServers?: () => void;
   /** Resolves to an error message when saving failed. */
   onSubmit: (data: AgentFormData) => Promise<string | void> | void;
 }
@@ -40,6 +47,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   initial,
   takenNames = [],
   joinTeamName,
+  kwantId,
+  onManageServers,
   onSubmit,
 }) => {
   const [name, setName] = useState('');
@@ -52,6 +61,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [presetId, setPresetId] = useState<string | null>(null);
   const [presetGroup, setPresetGroup] = useState<PresetGroup>('tech');
+  const [mcpIds, setMcpIds] = useState<string[] | undefined>(undefined);
   const isEdit = !!initial;
 
   useEffect(() => {
@@ -65,7 +75,14 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setSubmitting(false);
     setError(null);
     setPresetId(null);
-  }, [isOpen, initial]);
+    setMcpIds(kwantId ? undefined : []);
+    if (kwantId) {
+      fetch(`/api/kwants/${kwantId}/mcp-servers`)
+        .then((r) => (r.ok ? r.json() : { server_ids: [] }))
+        .then((d) => setMcpIds(d.server_ids ?? []))
+        .catch(() => setMcpIds([]));
+    }
+  }, [isOpen, initial, kwantId]);
 
   const applyPreset = (preset: AgentPreset | null) => {
     playSfx('click');
@@ -100,6 +117,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
       soul: soul.trim(),
       avatar_sprite: roleStyle,
       preferred_model: model,
+      mcp_server_ids: mcpIds,
     });
 
     setSubmitting(false);
@@ -252,6 +270,10 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               ))}
             </select>
           </div>
+
+          {mcpIds !== undefined && (
+            <KwantToolsPicker model={model} selected={mcpIds} onChange={setMcpIds} onManageServers={onManageServers} />
+          )}
 
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">Persona & Instructions</label>

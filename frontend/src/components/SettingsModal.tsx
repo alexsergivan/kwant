@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Cpu, Key, Globe, X, Sparkles, Check } from 'lucide-react';
+import { Cpu, Key, Globe, X, Sparkles, Check, Plug, ChevronRight } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 
 interface SettingsData {
@@ -18,9 +18,10 @@ interface SettingsData {
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onOpenTools?: () => void;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onOpenTools }) => {
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [anthropicKey, setAnthropicKey] = useState('');
   const [xaiKey, setXaiKey] = useState('');
@@ -77,7 +78,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full p-6 text-zinc-100 shadow-2xl space-y-6">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-6 text-zinc-100 shadow-2xl space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
           <div className="flex items-center gap-2.5">
@@ -143,6 +144,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             </div>
           </div>
         </div>
+
+        {onOpenTools && (
+          <button
+            type="button"
+            onClick={() => {
+              playSfx('click');
+              onOpenTools();
+            }}
+            className="w-full flex items-center gap-3 p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 text-left transition-colors group"
+          >
+            <span className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+              <Plug size={15} />
+            </span>
+            <span className="flex-1">
+              <span className="block text-xs font-medium text-zinc-200">Tools (MCP servers)</span>
+              <span className="block text-[11px] text-zinc-500">Give kwants abilities like files, web pages or GitHub</span>
+            </span>
+            <ChevronRight size={15} className="text-zinc-500 group-hover:text-sky-300" />
+          </button>
+        )}
 
         {/* Cloud API Keys Form */}
         <form onSubmit={handleSave} className="space-y-4">

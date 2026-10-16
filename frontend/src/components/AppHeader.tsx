@@ -1,10 +1,11 @@
 import React from 'react';
-import { Settings, Volume2, VolumeX, Cpu } from 'lucide-react';
+import { Settings, Volume2, VolumeX, Cpu, Plug } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { isSfxMuted, toggleSfxMute, playSfx } from '../audio/chiptune';
 
 interface AppHeaderProps {
   onOpenSettings: () => void;
+  onOpenTools: () => void;
   tokensUsed: number;
   activeModel?: string;
 }
@@ -65,6 +66,7 @@ const layaPill = (status: LayaStatus | null, activeModel: string) => {
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
   onOpenSettings,
+  onOpenTools,
   tokensUsed,
   activeModel = 'auto',
 }) => {
@@ -119,6 +121,20 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           title={sfxMuted ? 'Unmute UI sounds' : 'Mute UI sounds'}
         >
           {sfxMuted ? <VolumeX size={17} /> : <Volume2 size={17} />}
+        </button>
+
+        {/* MCP Tools Button */}
+        <button
+          onClick={() => {
+            playSfx('click');
+            onOpenTools();
+          }}
+          title="Tool servers (MCP) your kwants can use"
+          aria-label="Tools"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-200 bg-zinc-800 hover:bg-zinc-700/80 border border-zinc-700/60 transition-all hover:border-zinc-600 shadow-sm"
+        >
+          <Plug size={14} className="text-sky-400" />
+          <span className="hidden sm:inline">Tools</span>
         </button>
 
         {/* Settings Button */}
