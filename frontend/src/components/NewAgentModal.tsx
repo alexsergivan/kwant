@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { X, Sparkles, Pencil } from 'lucide-react';
+import { X, Sparkles, Pencil, ChevronRight } from 'lucide-react';
 import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
 import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
 import { playSfx } from '../audio/chiptune';
 import { KwantToolsPicker } from './KwantToolsPicker';
 import { McpServer, defaultKwantServerIds } from '../mcp';
+import { ENGINES, Profile, engineOfModel, profileStatus, profilesForEngine } from '../profiles';
 
 export interface AgentFormData {
   name: string;
@@ -15,6 +16,9 @@ export interface AgentFormData {
   preferred_model: string;
   /** MCP servers this kwant may use; undefined when they weren't loaded. */
   mcp_server_ids?: string[];
+  /** Pinned LLM profile; null uses the engine's default. */
+  profile_id?: string | null;
+  profile_failover?: boolean;
 }
 
 const MODEL_OPTIONS = [
@@ -38,6 +42,10 @@ interface NewAgentModalProps {
   kwantId?: string;
   /** Opens the MCP servers screen. */
   onManageServers?: () => void;
+  /** Every LLM profile, for the profile picker. */
+  profiles?: Profile[];
+  /** Opens the LLM profiles screen. */
+  onManageProfiles?: () => void;
   /** Resolves to an error message when saving failed. */
   onSubmit: (data: AgentFormData) => Promise<string | void> | void;
 }
@@ -50,6 +58,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   joinTeamName,
   kwantId,
   onManageServers,
+  profiles = [],
+  onManageProfiles,
   onSubmit,
 }) => {
   const [name, setName] = useState('');
@@ -63,7 +73,11 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [presetId, setPresetId] = useState<string | null>(null);
   const [presetGroup, setPresetGroup] = useState<PresetGroup>('tech');
   const [mcpIds, setMcpIds] = useState<string[] | undefined>(undefined);
+  const [profileId, setProfileId] = useState<string | null>(null);
+  const [failover, setFailover] = useState(true);
   const isEdit = !!initial;
+  const engine = engineOfModel(model);
+  const engineProfiles = profilesForEngine(profiles, engine);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -77,6 +91,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setError(null);
     setPresetId(null);
     setMcpIds(undefined);
+    setProfileId(initial?.profile_id ?? null);
+    setFailover(initial?.profile_failover ?? true);
     let cancelled = false;
     // If a list can't load, the picker stays hidden and nothing is saved: saving an empty
     // list would switch every server off for this kwant.
@@ -131,6 +147,11 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
       avatar_sprite: roleStyle,
       preferred_model: model,
       mcp_server_ids: mcpIds,
+      // A pin only makes sense for one engine; auto and Ollama run on the defaults. Until the
+      // profiles have loaded, the current pin is left alone.
+      profile_id:
+        profiles.length === 0 ? undefined : engine && engineProfiles.some((p) => p.id === profileId) ? profileId : null,
+      profile_failover: failover,
     });
 
     setSubmitting(false);
@@ -283,6 +304,49 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               ))}
             </select>
           </div>
+
+          {engine && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="agent-profile" className="text-xs font-medium text-zinc-400">
+                  Account (LLM profile)
+                </label>
+                {onManageProfiles && (
+                  <button
+                    type="button"
+                    onClick={onManageProfiles}
+                    className="flex items-center gap-0.5 text-[11px] text-zinc-500 hover:text-sky-300 transition-colors"
+                  >
+                    Manage profiles <ChevronRight size={11} />
+                  </button>
+                )}
+              </div>
+              <select
+                id="agent-profile"
+                value={profileId ?? ''}
+                onChange={(e) => setProfileId(e.target.value || null)}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none transition-colors"
+              >
+                <option value="">
+                  {`${ENGINES.find((e) => e.id === engine)?.label} default${
+                    engineProfiles[0]?.is_default ? ` (${engineProfiles[0].name})` : ''
+                  }`}
+                </option>
+                {engineProfiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {`${p.name} · ${profileStatus(p).text}`}
+                  </option>
+                ))}
+                {profileId && !engineProfiles.some((p) => p.id === profileId) && (
+                  <option value={profileId}>Another engine's profile (cleared on save)</option>
+                )}
+              </select>
+              <label className="mt-1.5 flex items-start gap-2 text-[11px] text-zinc-400">
+                <input type="checkbox" checked={failover} onChange={(e) => setFailover(e.target.checked)} className="mt-0.5 accent-sky-500" />
+                <span>Switch to the engine's next profile when this one runs out of usage or is signed out</span>
+              </label>
+            </div>
+          )}
 
           {mcpIds !== undefined && (
             <KwantToolsPicker model={model} selected={mcpIds} onChange={setMcpIds} onManageServers={onManageServers} />

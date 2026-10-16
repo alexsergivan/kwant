@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { ChatView, ChatMessage, DiscussionState, RoutingState } from './components/ChatView';
@@ -8,11 +8,15 @@ import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
+import { Toasts, Toast } from './components/Toasts';
+import { clearAllTurns, turnEnded, turnStarted } from './kwantActivity';
+import { Profile, describeProfileSwitch, profilesApi } from './profiles';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
 const NewAgentModal = lazy(() => import('./components/NewAgentModal').then((m) => ({ default: m.NewAgentModal })));
 const McpServersModal = lazy(() => import('./components/McpServersModal').then((m) => ({ default: m.McpServersModal })));
+const ProfilesModal = lazy(() => import('./components/ProfilesModal').then((m) => ({ default: m.ProfilesModal })));
 
 export const App: React.FC = () => {
   const [kwants, setKwants] = useState<Kwant[]>([]);
@@ -55,6 +59,14 @@ export const App: React.FC = () => {
   // Modals state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
+  const [isProfilesOpen, setIsProfilesOpen] = useState(false);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toastIdRef = useRef(0);
+  const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
+  const refreshProfiles = useCallback(() => {
+    profilesApi.list().then(setProfiles, () => undefined);
+  }, []);
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
   // Team that a newly created agent should join (set by a team's "Add member")
   const [newAgentTeam, setNewAgentTeam] = useState<Team | null>(null);
@@ -119,7 +131,8 @@ export const App: React.FC = () => {
       }
     }
     loadInitialData();
-  }, []);
+    refreshProfiles();
+  }, [refreshProfiles]);
 
   // Load messages when selected channel/kwant changes
   useEffect(() => {
@@ -147,11 +160,38 @@ export const App: React.FC = () => {
   // Connect to SSE stream
   useEffect(() => {
     const sse = new EventSource('/api/events');
+    // After a reconnect a `turn_ended` may have been missed; drop working states rather than spin forever.
+    let dropped = false;
+    sse.onerror = () => {
+      dropped = true;
+    };
+    sse.onopen = () => {
+      if (dropped) clearAllTurns();
+      dropped = false;
+    };
 
     sse.onmessage = (e) => {
       try {
         const event = JSON.parse(e.data);
         switch (event.type) {
+          case 'turn_started':
+          case 'TurnStarted':
+            turnStarted(event.data?.kwant_id, event.data?.context_id);
+            break;
+          case 'turn_ended':
+          case 'TurnEnded':
+            turnEnded(event.data?.kwant_id, event.data?.context_id);
+            break;
+          case 'profile_switched':
+          case 'ProfileSwitched': {
+            const kwantName = kwantsRef.current.find((k) => k.id === event.data?.kwant_id)?.name;
+            const { title, detail } = describeProfileSwitch(event.data, kwantName);
+            const id = ++toastIdRef.current;
+            setToasts((prev) => [...prev.slice(-2), { id, title, detail }]);
+            playSfx('alert');
+            refreshProfiles();
+            break;
+          }
           case 'TextDelta':
             setStreamingText((prev) => prev + event.data);
             playSfx('blip');
@@ -437,8 +477,9 @@ export const App: React.FC = () => {
 
     return () => {
       sse.close();
+      clearAllTurns();
     };
-  }, []);
+  }, [refreshProfiles]);
 
   const handleCancelDiscussion = async () => {
     const targetId = selectedIdRef.current;
@@ -628,7 +669,7 @@ export const App: React.FC = () => {
         body: JSON.stringify(kwantData),
       });
       if (res.status === 409) return `Another agent is already named "${agentData.name}".`;
-      if (res.status === 400) return 'Name cannot be empty or contain spaces or @.';
+      if (res.status === 400) return 'Check the name (no spaces or @) and that the profile belongs to the chosen engine.';
       if (!res.ok) return `Saving failed (HTTP ${res.status}).`;
 
       const updated: Kwant = await res.json();
@@ -665,6 +706,8 @@ export const App: React.FC = () => {
           avatar_sprite: agentData.avatar_sprite,
           driver_type: 'api',
           preferred_model: agentData.preferred_model,
+          ...(agentData.profile_id !== undefined ? { profile_id: agentData.profile_id } : {}),
+          ...(agentData.profile_failover !== undefined ? { profile_failover: agentData.profile_failover } : {}),
         }),
       });
 
@@ -694,7 +737,7 @@ export const App: React.FC = () => {
         return;
       }
       if (res.status === 409) return `Another agent is already named "${agentData.name}".`;
-      if (res.status === 400) return 'Name cannot be empty or contain spaces or @.';
+      if (res.status === 400) return 'Check the name (no spaces or @) and that the profile belongs to the chosen engine.';
       return `Creating failed (HTTP ${res.status}).`;
     } catch (err) {
       console.error('Failed creating Agent:', err);
@@ -896,8 +939,9 @@ export const App: React.FC = () => {
     ? `@${currentChannel.name.replace(/^team-/, '')}`
     : `#${currentChannel?.name || 'general'}`;
 
+  const boundProfile = currentKwant?.profile_id ? profiles.find((p) => p.id === currentKwant.profile_id) : undefined;
   const chatSubtitle = !isChannel
-    ? `${currentKwant?.title || 'Specialist'} [Laya Auto-Fleet]`
+    ? `${currentKwant?.title || 'Specialist'} [Laya Auto-Fleet]${boundProfile ? ` · profile: ${boundProfile.name}` : ''}`
     : currentTeam?.description || currentChannel?.description || 'Team collaboration room';
 
   // Load container status and screenshot for active team or bot
@@ -1025,6 +1069,8 @@ export const App: React.FC = () => {
     }
   };
 
+  const closeProfiles = useCallback(() => setIsProfilesOpen(false), []);
+
   const isCurrentContextStreaming = isStreaming && streamingContextId === selectedId;
   const isDiscussionActiveHere =
     discussionState.inProgress &&
@@ -1135,6 +1181,8 @@ export const App: React.FC = () => {
           }}
           joinTeamName={newAgentTeam?.name}
           takenNames={kwants.map((k) => k.name)}
+          profiles={profiles}
+          onManageProfiles={() => setIsProfilesOpen(true)}
           onManageServers={() => setIsMcpOpen(true)}
           onSubmit={handleCreateAgent}
         />
@@ -1144,6 +1192,8 @@ export const App: React.FC = () => {
           isOpen={!!editingKwant}
           initial={editingKwant}
           kwantId={editingKwant?.id}
+          profiles={profiles}
+          onManageProfiles={() => setIsProfilesOpen(true)}
           onManageServers={() => setIsMcpOpen(true)}
           onClose={() => setEditingKwant(null)}
           onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
@@ -1176,12 +1226,19 @@ export const App: React.FC = () => {
           setIsSettingsOpen(false);
           setIsMcpOpen(true);
         }}
+        onOpenProfiles={() => {
+          setIsSettingsOpen(false);
+          setIsProfilesOpen(true);
+        }}
       />
 
       {/* MCP tool servers (opened last so it sits above the agent modal) */}
       <Suspense fallback={null}>
         <McpServersModal isOpen={isMcpOpen} onClose={() => setIsMcpOpen(false)} kwants={kwants} />
+        <ProfilesModal isOpen={isProfilesOpen} onClose={closeProfiles} onProfilesChanged={setProfiles} />
       </Suspense>
+
+      <Toasts toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 };

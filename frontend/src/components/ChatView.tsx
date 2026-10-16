@@ -544,7 +544,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     title={`${member.name} (${member.title})`}
                     className="inline-block ring-2 ring-zinc-950 rounded-full"
                   >
-                    <ModernAvatar role={member.avatar_sprite} name={member.name} size={24} />
+                    <ModernAvatar role={member.avatar_sprite} name={member.name} size={24} kwantId={member.id} />
                   </div>
                 ))}
               </div>
@@ -779,7 +779,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
                 title={`Ask ${m.name}`}
               >
-                <ModernAvatar role={m.avatar_sprite} name={m.name} size={14} />
+                <ModernAvatar role={m.avatar_sprite} name={m.name} size={14} kwantId={m.id} />
                 <span>@{m.name}</span>
               </button>
             ))}
