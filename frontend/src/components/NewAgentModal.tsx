@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, Sparkles, Pencil } from 'lucide-react';
-import { ModernAvatar } from './ModernAvatar';
+import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
+import { AGENT_PRESETS, AgentPreset, uniqueAgentName } from '../agentPresets';
 import { playSfx } from '../audio/chiptune';
 
 export interface AgentFormData {
@@ -24,6 +25,8 @@ interface NewAgentModalProps {
   onClose: () => void;
   /** When set, the modal edits this agent instead of creating a new one. */
   initial?: AgentFormData | null;
+  /** Names already in use, so presets pick a free one. */
+  takenNames?: string[];
   /** Resolves to an error message when saving failed. */
   onSubmit: (data: AgentFormData) => Promise<string | void> | void;
 }
@@ -32,6 +35,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   isOpen,
   onClose,
   initial,
+  takenNames = [],
   onSubmit,
 }) => {
   const [name, setName] = useState('');
@@ -41,6 +45,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [prompt, setPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [presetId, setPresetId] = useState<string | null>(null);
   const isEdit = !!initial;
 
   useEffect(() => {
@@ -52,7 +57,19 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setPrompt(initial?.persona_prompt ?? '');
     setSubmitting(false);
     setError(null);
+    setPresetId(null);
   }, [isOpen, initial]);
+
+  const applyPreset = (preset: AgentPreset | null) => {
+    playSfx('click');
+    setPresetId(preset?.id ?? null);
+    setError(null);
+    setName(preset ? uniqueAgentName(preset.name, takenNames) : '');
+    setTitle(preset?.title ?? '');
+    setRoleStyle(preset?.avatar_sprite ?? 'architect');
+    setModel(preset?.preferred_model ?? 'auto');
+    setPrompt(preset?.persona_prompt ?? '');
+  };
 
   if (!isOpen) return null;
 
@@ -90,7 +107,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 text-zinc-100 shadow-2xl space-y-5">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-6 text-zinc-100 shadow-2xl space-y-5">
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
@@ -112,6 +129,37 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {!isEdit && (
+            <div>
+              <label className="block text-xs font-medium text-zinc-400 mb-1">Start from a persona</label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[null, ...AGENT_PRESETS].map((preset) => {
+                  const active = (preset?.id ?? null) === presetId;
+                  return (
+                    <button
+                      key={preset?.id ?? 'blank'}
+                      type="button"
+                      onClick={() => applyPreset(preset)}
+                      title={preset ? `${preset.title}: ${preset.persona_prompt}` : 'Start with empty fields'}
+                      className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-left text-[11px] transition-all ${
+                        active
+                          ? 'border-sky-500/60 bg-sky-500/10 text-sky-200'
+                          : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                      }`}
+                    >
+                      {preset ? (
+                        <ModernAvatar role={preset.avatar_sprite} size={18} />
+                      ) : (
+                        <Sparkles size={13} className="mx-0.5 text-zinc-500" />
+                      )}
+                      <span className="truncate font-medium">{preset ? preset.label : 'Blank'}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">Agent Name</label>
             <input
@@ -137,28 +185,21 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
 
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">Avatar & Role Specialty</label>
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                { id: 'architect', label: 'Architecture' },
-                { id: 'tech_lead', label: 'Tech Lead / Code' },
-                { id: 'devops', label: 'DevOps & Shell' },
-                { id: 'security', label: 'Security & Audit' },
-                { id: 'fast', label: 'Speed & Logic' },
-                { id: 'default', label: 'General / Droid' },
-              ].map((item) => {
+            <div className="grid grid-cols-4 gap-1.5">
+              {AVATAR_STYLES.map((item) => {
                 const active = roleStyle === item.id;
                 return (
                   <button
                     key={item.id}
                     type="button"
                     onClick={() => setRoleStyle(item.id)}
-                    className={`flex items-center gap-2.5 p-2 rounded-xl border text-left text-xs transition-all ${
+                    className={`flex flex-col items-center gap-1 py-2 rounded-xl border text-[11px] transition-all ${
                       active
                         ? 'border-sky-500/60 bg-sky-500/10 text-sky-200 shadow-sm'
                         : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
                     }`}
                   >
-                    <ModernAvatar role={item.id} size={24} />
+                    <ModernAvatar role={item.id} size={32} />
                     <span className="truncate font-medium">{item.label}</span>
                   </button>
                 );
@@ -184,7 +225,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">Persona & System Prompt</label>
             <textarea
-              rows={isEdit ? 6 : 3}
+              rows={isEdit || presetId ? 6 : 3}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="Define instructions, personality, tone, and domain expertise..."

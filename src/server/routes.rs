@@ -48,10 +48,24 @@ pub async fn list_kwants(State(state): State<AppState>) -> Result<Json<Vec<Kwant
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+/// Trims the name and rejects names that can't be @mentioned or clash with another kwant.
+async fn validate_kwant_name(state: &AppState, name: &mut String, own_id: Option<&str>) -> Result<(), StatusCode> {
+    *name = name.trim().to_string();
+    if name.is_empty() || name.contains(char::is_whitespace) || name.contains('@') {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let kwants = state.db.list_kwants().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if kwants.iter().any(|k| Some(k.id.as_str()) != own_id && k.name.eq_ignore_ascii_case(name)) {
+        return Err(StatusCode::CONFLICT);
+    }
+    Ok(())
+}
+
 pub async fn create_kwant(
     State(state): State<AppState>,
-    Json(payload): Json<NewKwant>,
+    Json(mut payload): Json<NewKwant>,
 ) -> Result<Json<Kwant>, StatusCode> {
+    validate_kwant_name(&state, &mut payload.name, None).await?;
     state
         .db
         .create_kwant(&payload)
@@ -65,14 +79,7 @@ pub async fn update_kwant(
     Path(id): Path<String>,
     Json(mut payload): Json<UpdateKwant>,
 ) -> Result<Json<Kwant>, StatusCode> {
-    payload.name = payload.name.trim().to_string();
-    if payload.name.is_empty() || payload.name.contains(char::is_whitespace) || payload.name.contains('@') {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let kwants = state.db.list_kwants().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if kwants.iter().any(|k| k.id != id && k.name.eq_ignore_ascii_case(&payload.name)) {
-        return Err(StatusCode::CONFLICT);
-    }
+    validate_kwant_name(&state, &mut payload.name, Some(&id)).await?;
     match state.db.update_kwant(&id, &payload).await {
         Ok(Some(kwant)) => Ok(Json(kwant)),
         Ok(None) => Err(StatusCode::NOT_FOUND),

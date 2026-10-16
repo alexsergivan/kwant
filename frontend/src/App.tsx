@@ -628,13 +628,7 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleCreateAgent = async (agentData: {
-    name: string;
-    title: string;
-    persona_prompt: string;
-    avatar_sprite: string;
-    preferred_model: string;
-  }) => {
+  const handleCreateAgent = async (agentData: AgentFormData): Promise<string | void> => {
     try {
       const res = await fetch('/api/kwants', {
         method: 'POST',
@@ -661,9 +655,14 @@ export const App: React.FC = () => {
         setMessages([]);
         setIsNewAgentOpen(false);
         playSfx('fanfare');
+        return;
       }
+      if (res.status === 409) return `Another agent is already named "${agentData.name}".`;
+      if (res.status === 400) return 'Name cannot be empty or contain spaces or @.';
+      return `Creating failed (HTTP ${res.status}).`;
     } catch (err) {
       console.error('Failed creating Agent:', err);
+      return 'Could not reach the server.';
     }
   };
 
@@ -1092,6 +1091,7 @@ export const App: React.FC = () => {
       <NewAgentModal
         isOpen={isNewAgentOpen}
         onClose={() => setIsNewAgentOpen(false)}
+        takenNames={kwants.map((k) => k.name)}
         onSubmit={handleCreateAgent}
       />
 

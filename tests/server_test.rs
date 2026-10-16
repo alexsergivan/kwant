@@ -722,3 +722,45 @@ async fn test_channel_sandbox_target_resolution() {
 
 
 
+
+#[tokio::test]
+async fn test_kwant_name_validation() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
+    let tools = ToolRunner::new(tmp.path().join("workspace"));
+    let state = AppState::new(config.clone(), db, tools, PermissionBroker::new(), LayaRouter::new(config.laya_url.clone()));
+    let app = create_router(state);
+
+    let send = |method: &str, uri: &str, name: &str| {
+        let body = json!({
+            "name": name, "title": "t", "persona_prompt": "p",
+            "avatar_sprite": "designer", "driver_type": "api", "preferred_model": "auto"
+        });
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    };
+
+    // Seeded "Architect" exists, so a case-insensitive duplicate is rejected
+    let resp = app.clone().oneshot(send("POST", "/api/kwants", "architect")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let resp = app.clone().oneshot(send("POST", "/api/kwants", "Ux Designer")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let resp = app.clone().oneshot(send("POST", "/api/kwants", "  Designer ")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(created["name"], "Designer");
+    let id = created["id"].as_str().unwrap();
+
+    // Keeping its own name is fine; taking another kwant's isn't
+    let resp = app.clone().oneshot(send("PUT", &format!("/api/kwants/{id}"), "Designer")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = app.clone().oneshot(send("PUT", &format!("/api/kwants/{id}"), "TechLead")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}

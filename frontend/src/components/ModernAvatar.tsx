@@ -8,7 +8,9 @@ interface ModernAvatarProps {
   className?: string;
 }
 
-type Accessory = 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor' | 'none';
+type Accessory =
+  | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
+  | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb' | 'none';
 
 interface Creature {
   body: string;
@@ -32,6 +34,45 @@ const PALETTES: Record<string, Omit<Creature, 'accessory'>> = {
   violet: { body: '#a98bff', shade: '#6d4fd6', light: '#e1d6ff', accent: '#ffd23f' },
   orange: { body: '#ff9f43', shade: '#c4621c', light: '#ffd9a8', accent: '#5ce1ff' },
   blue: { body: '#6d9bff', shade: '#3c5fcf', light: '#cddcff', accent: '#ff7eb6' },
+  coral: { body: '#ff8a7a', shade: '#cf5446', light: '#ffd6cf', accent: '#6d4fd6' },
+  teal: { body: '#2fd4b5', shade: '#17917c', light: '#b5f5e8', accent: '#ffd23f' },
+  red: { body: '#ff6b6b', shade: '#c43c4c', light: '#ffc9c9', accent: '#5ce1ff' },
+  gold: { body: '#f7c948', shade: '#c28a14', light: '#fff1b8', accent: '#e5484d' },
+  lilac: { body: '#d49cff', shade: '#9a5fd1', light: '#f1ddff', accent: '#f5f2ff' },
+  mint: { body: '#9be564', shade: '#5e9e33', light: '#e2ffc7', accent: '#ffe066' },
+};
+
+/** Avatar styles an agent can pick; `avatar_sprite` stores the id. */
+export const AVATAR_STYLES: Array<{ id: string; label: string }> = [
+  { id: 'architect', label: 'Architecture' },
+  { id: 'tech_lead', label: 'Tech Lead' },
+  { id: 'devops', label: 'DevOps' },
+  { id: 'security', label: 'Security' },
+  { id: 'fast', label: 'Speed' },
+  { id: 'designer', label: 'Design' },
+  { id: 'data', label: 'Data' },
+  { id: 'qa', label: 'QA' },
+  { id: 'product', label: 'Product' },
+  { id: 'writer', label: 'Writing' },
+  { id: 'research', label: 'Research' },
+  { id: 'default', label: 'Droid' },
+];
+
+const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
+  brand: ['yellow', 'antenna'],
+  laya: ['violet', 'crown'],
+  user: ['blue', 'ears'],
+  architect: ['violet', 'horns'],
+  tech_lead: ['cyan', 'visor'],
+  devops: ['green', 'spikes'],
+  security: ['orange', 'ears'],
+  fast: ['pink', 'sprout'],
+  designer: ['coral', 'beret'],
+  data: ['teal', 'glasses'],
+  qa: ['red', 'goggles'],
+  product: ['gold', 'tie'],
+  writer: ['lilac', 'quill'],
+  research: ['mint', 'bulb'],
 };
 
 const hash = (s: string) => {
@@ -41,7 +82,9 @@ const hash = (s: string) => {
 };
 
 function pickCreature(role: string, name: string): Creature {
-  if (role === 'brand') return { ...PALETTES.yellow, accessory: 'antenna' };
+  // An explicitly chosen style wins over hints in the name
+  const chosen = ROLE_CREATURES[role];
+  if (chosen) return { ...PALETTES[chosen[0]], accessory: chosen[1] };
   const norm = `${role} ${name}`.toLowerCase();
   const rules: Array<[string[], keyof typeof PALETTES, Accessory]> = [
     [['laya'], 'violet', 'crown'],
@@ -51,6 +94,12 @@ function pickCreature(role: string, name: string): Creature {
     [['devops', 'terminal', 'knight', 'shell', 'infra'], 'green', 'spikes'],
     [['security', 'shield', 'guard'], 'orange', 'ears'],
     [['fast', 'grok', 'zap', 'speed'], 'pink', 'sprout'],
+    [['design', 'ux'], 'coral', 'beret'],
+    [['data', 'analyst'], 'teal', 'glasses'],
+    [['qa', 'test'], 'red', 'goggles'],
+    [['product', 'manager'], 'gold', 'tie'],
+    [['writer', 'docs'], 'lilac', 'quill'],
+    [['research', 'scientist'], 'mint', 'bulb'],
   ];
   for (const [keys, palette, accessory] of rules) {
     if (keys.some((k) => norm.includes(k))) return { ...PALETTES[palette], accessory };
@@ -101,6 +150,39 @@ function renderAccessory(c: Creature) {
     case 'visor':
       // Headphones
       return [px(9, 5, 8, 1, c.accent), px(8, 6, 1, 3, c.accent), px(17, 6, 1, 3, c.accent), px(6, 10, 2, 3, c.accent), px(18, 10, 2, 3, c.accent)];
+    case 'beret':
+      return [px(9, 5, 8, 2, c.accent), px(8, 6, 1, 1, c.accent), px(13, 4, 1, 1, c.accent), px(10, 5, 2, 1, '#9a7cff')];
+    case 'quill':
+      return [
+        px(18, 2, 2, 1, '#f5f2ff'), px(17, 3, 3, 1, '#f5f2ff'), px(16, 4, 3, 1, '#f5f2ff'), px(16, 5, 2, 1, '#f5f2ff'),
+        px(19, 2, 1, 1, '#c9c2e8'), px(18, 3, 1, 1, '#8f86b8'), px(17, 4, 1, 1, '#8f86b8'), px(16, 5, 1, 1, '#8f86b8'),
+        px(16, 6, 1, 1, INK),
+      ];
+    case 'bulb':
+      return [
+        px(12, 2, 2, 1, c.accent), px(11, 3, 4, 2, c.accent), px(12, 3, 1, 1, '#ffffff'),
+        px(12, 5, 2, 1, '#8a8aa8'), px(12, 6, 2, 1, INK),
+      ];
+    default:
+      return [];
+  }
+}
+
+// Accessories worn in front of the body (on the face or chest)
+function renderOverlay(c: Creature) {
+  switch (c.accessory) {
+    case 'glasses':
+      return [
+        px(9, 9, 4, 1, c.accent), px(13, 9, 4, 1, c.accent), px(9, 10, 1, 2, c.accent), px(16, 10, 1, 2, c.accent),
+        px(12, 10, 2, 1, c.accent), px(7, 10, 2, 1, c.shade), px(17, 10, 2, 1, c.shade),
+      ];
+    case 'goggles':
+      return [
+        px(7, 8, 12, 1, INK), px(9, 7, 3, 2, c.accent), px(14, 7, 3, 2, c.accent),
+        px(9, 7, 1, 1, '#ffffff'), px(14, 7, 1, 1, '#ffffff'),
+      ];
+    case 'tie':
+      return [px(12, 16, 2, 1, c.accent), px(12, 17, 2, 1, c.accent), px(12, 18, 2, 1, '#a8323a')];
     default:
       return [];
   }
@@ -138,6 +220,7 @@ function renderCreature(c: Creature) {
     // Feet
     px(9, 18, 2, 1, INK, 'f1'),
     px(15, 18, 2, 1, INK, 'f2'),
+    ...renderOverlay(c),
   ];
 }
 
