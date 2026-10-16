@@ -139,7 +139,7 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
   }, [teamId, applyUrl]);
 
   useEffect(() => {
-    document.title = `${title || url || 'Sandbox browser'} · kwnt sandbox`;
+    document.title = `${title || url || 'Sandbox browser'} · Kwant sandbox`;
   }, [title, url]);
 
   const toViewport = (clientX: number, clientY: number) => {

@@ -126,10 +126,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 port = config.port,
                 data_dir = %config.data_dir.display(),
                 laya_url = %config.laya_url,
-                "Starting Kwants engine..."
+                "Starting Kwant..."
             );
             println!(
-                "⚡ Kwants Multi-Agent AI Platform listening at http://{}",
+                "⚡ Kwant: your team of AI agents, listening at http://{}",
                 addr
             );
 
@@ -145,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Teams) => print_teams(&config).await?,
         Some(Commands::Channels) => print_channels(&config).await?,
         None => {
-            println!("⚡ Kwants: Multi-Agent AI Platform in Rust");
+            println!("⚡ Kwant: your team of AI agents");
             println!("Run `kwnt serve` to start the server, or `kwnt --help` for options.");
         }
     }
@@ -168,7 +168,7 @@ fn print_status(config: &Config) {
         format!("{} (absent)", config_path.display())
     };
 
-    println!("Kwants");
+    println!("Kwant");
     println!("  host       {}", config.host);
     println!("  port       {}", config.port);
     println!("  data dir   {}", config.data_dir.display());
@@ -191,7 +191,7 @@ async fn print_agents(config: &Config) -> Result<(), Box<dyn std::error::Error>>
         "NAME", "TITLE", "DRIVER", "MODEL"
     );
     if kwants.is_empty() {
-        println!("(no kwants)");
+        println!("(no agents)");
         return Ok(());
     }
     for kwant in kwants {

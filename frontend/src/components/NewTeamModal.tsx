@@ -126,7 +126,7 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
       return;
     }
     if (selectedMembers.length === 0) {
-      setError('At least one Kwant member must be selected.');
+      setError('Select at least one agent for this team.');
       return;
     }
 
@@ -395,10 +395,10 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
             )}
           </div>
 
-          {/* Lead Kwant */}
+          {/* Lead agent */}
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">
-              Team Lead Kwant
+              Team Lead Agent
             </label>
             <select
               value={leadKwantId}

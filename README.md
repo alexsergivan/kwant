@@ -2,7 +2,7 @@
 
 > Inspired by **Grok Bot** & **OpenMausBot**. Built with **Rust**, **Axum**, and **Laya**.
 
-Kwants is a high-performance, self-hosted multi-agent AI platform packaged as a **single, standalone binary** with an embedded sleek dark-mode Web UI and SQLite storage. Every agent is a **Kwant**—a specialized autonomous companion with its own persona (`Architect`, `TechLead`, `DevOps`), model provider routing, and developer capabilities.
+Kwant is your team of AI agents: a high-performance, self-hosted multi-agent platform packaged as a **single, standalone binary** with an embedded sleek dark-mode Web UI and SQLite storage. Every agent is a specialized autonomous companion with its own persona (`Architect`, `TechLead`, `DevOps`), model provider routing, and developer capabilities.
 
 ---
 
@@ -11,7 +11,7 @@ Kwants is a high-performance, self-hosted multi-agent AI platform packaged as a 
 - **Single-Binary Zero-Dependency Deploy**: No Node.js or Docker required in production. One compiled native binary (`kwnt`) serves both the Tokio/Axum asynchronous engine and the embedded modern React web application in under 25 MB of RAM on your laptop or a VPS.
 - **Sub-50ms Intelligent Routing with Laya**: By default, task-based model selection queries [convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya) over its `/v1/systemone` API in ~33ms, with seamless offline heuristic fallback and dynamic effort-level selection.
 - **Hybrid Driver Fleet**: Run direct cloud & local APIs (xAI Grok, Anthropic Claude, OpenAI, OpenRouter, local Ollama) or supervise host CLI agents (`claude`, `codex`, `grok` CLIs).
-- **Kwant-to-Kwant Handoffs**: Every kwant knows its teammates in the current channel or team. When a reply @mentions a teammate (or `@everyone`), that teammate answers right after in the same chat, up to 4 handoffs per message.
+- **Agent-to-Agent Handoffs**: Every agent knows its teammates in the current channel or team. When a reply @mentions a teammate (or `@everyone`), that teammate answers right after in the same chat, up to 4 handoffs per message.
 - **Moderated Team Discussions**: When a team question needs several perspectives, the lead opens with a short take (or first asks you a clarifying question and waits), teammates respond to each other by name in under ~120 words or pass if they have nothing to add, and the lead closes with one summary. The back-and-forth folds into a collapsible "Team discussed" thread so the chat shows the answer.
 - **Persona Presets & Avatars**: Create agents from ready-made personas grouped into **Tech** (Product, Designer, Frontend, Backend, QA, Security, SRE, Data, Tech Writer) and **Non-tech** (Research, Marketing, Copywriter, Sales, Finance, Legal, Support, People, Coach, Tutor) and **Lifestyle** (Travel Planner, Chef, Fitness Trainer, Event Planner, Home & DIY, Language Partner, Budget Buddy, Wellbeing Companion), or start blank, and pick from twenty-two pixel avatar styles. The chosen avatar always wins over hints in the agent's name.
 - **Agent Souls**: Besides its persona (what it does), every agent has an optional **Soul**: its personality, voice, values, and quirks. The soul is added to the system prompt, so it shapes how the agent speaks. It is not used for routing. Every preset and built-in agent comes with one.
@@ -56,7 +56,7 @@ ssh user@your-vps-ip "kwnt serve --host 0.0.0.0 --port 8799"
 ### Systemd Service (`/etc/systemd/system/kwnt.service`)
 ```ini
 [Unit]
-Description=Kwants 8-Bit AI Agent Platform
+Description=Kwant AI agent platform
 After=network.target
 
 [Service]
@@ -120,13 +120,13 @@ The `laya` image (`docker/laya.Dockerfile`) uses CPU PyTorch and preloads the ch
 
 ## 🎮 The Starter Party
 
-| Kwant | Title | Sprite | Specialty |
+| Agent | Title | Sprite | Specialty |
 |---|---|---|---|
 | **CyberMage** | Arcane Architect | `cyber_mage` | Architecture, refactoring, systems thinking |
 | **PixelNinja** | Swift Blade | `pixel_ninja` | Fast algorithms, clean functions, unit testing |
 | **TerminalKnight** | Guardian of the Shell | `terminal_knight` | Bash scripts, devops, file safety |
 
-You can summon new Kwants with custom personas and sprites via the **+ SUMMON KWANT** button in the UI.
+You can create new agents with custom personas, souls, and avatars via the **New Agent** button in the UI.
 
 ---
 

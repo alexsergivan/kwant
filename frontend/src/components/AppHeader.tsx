@@ -86,8 +86,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <ModernAvatar role="brand" name="Kwant" size={30} />
           <span className="text-[15px]">Kwant</span>
         </div>
-        <span className="text-[11px] font-medium bg-zinc-800 text-zinc-300 px-2 py-0.5 rounded-full border border-zinc-700/60 hidden sm:inline-block">
-          AI Fleet
+        <span className="text-[11px] font-medium text-zinc-500 hidden sm:inline-block">
+          your team of AI agents
         </span>
       </div>
 
