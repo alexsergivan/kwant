@@ -6,6 +6,7 @@ import { MentionPopover, MentionItem } from './MentionPopover';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { VirtualMachinePane, TerminalLogEntry } from './VirtualMachinePane';
 import { playSfx } from '../audio/chiptune';
+import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThreads';
 
 export interface ChatMessage {
   id: string;
@@ -27,8 +28,10 @@ export interface DiscussionState {
   totalTurns?: number;
   /** 'handoff' when kwants pulled each other in with @mentions. */
   kind?: string;
-  /** Who handed the current speaker the turn (handoffs only). */
+  /** Who handed the current speaker the turn. */
   askedBy?: string;
+  /** Team discussion phase of the current turn: 'open', 'reply' or 'summary'. */
+  phase?: string;
 }
 
 export interface RoutingCandidate {
@@ -405,6 +408,97 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   };
 
+  const renderMessage = (msg: ChatMessage) => {
+    const isUser = msg.sender_role === 'user';
+    const isThoughtOpen = !!openThoughts[msg.id];
+    const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
+
+    return (
+      <div
+        key={msg.id}
+        className={`flex items-start gap-3.5 w-full max-w-5xl ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''}`}
+      >
+        <ModernAvatar
+          role={isUser ? 'user' : title}
+          name={displayName}
+          size={34}
+        />
+
+        <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
+          {/* Header info */}
+          <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
+            <span className="text-zinc-200">{displayName}</span>
+            {msg.tokens_used ? (
+              <span className="text-zinc-500 font-mono text-[10px]">({msg.tokens_used} tokens)</span>
+            ) : null}
+          </div>
+
+          {/* Collapsible Reasoning Disclosure */}
+          {msg.reasoning_content && (
+            <div className="mb-2 max-w-full">
+              <button
+                type="button"
+                onClick={() => toggleThought(msg.id)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-mono text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer shadow-sm group"
+              >
+                <Sparkles size={13} className="text-violet-400 group-hover:rotate-12 transition-transform flex-shrink-0" />
+                <span className="truncate max-w-xs sm:max-w-md">
+                  {msg.reasoning_content.split('\n')[0].replace(/^🔮\s*/, '')}
+                </span>
+                {isThoughtOpen ? <ChevronDown size={13} className="text-zinc-500 flex-shrink-0" /> : <ChevronRight size={13} className="text-zinc-500 flex-shrink-0" />}
+              </button>
+
+              {isThoughtOpen && (
+                <div className="mt-1.5 p-3.5 rounded-xl bg-zinc-950/90 border border-zinc-800 text-xs font-mono text-zinc-300 whitespace-pre-wrap leading-relaxed shadow-inner max-h-80 overflow-y-auto">
+                  {msg.reasoning_content}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Message Body Bubble */}
+          <div
+            className={`p-4 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
+              isUser
+                ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl'
+                : 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80'
+            }`}
+          >
+            {isUser ? (
+              <div className="whitespace-pre-wrap break-words">{renderFormattedText(msg.text)}</div>
+            ) : (
+              <MarkdownRenderer content={msg.text} />
+            )}
+          </div>
+
+          {/* Copy action */}
+          {!isUser && (
+            <div className="mt-1.5 flex items-center gap-2 text-zinc-500 text-xs">
+              <button
+                type="button"
+                onClick={() => handleCopy(msg.text, msg.id)}
+                className="px-2 py-1 rounded-md hover:bg-zinc-900 hover:text-zinc-300 transition-colors flex items-center gap-1.5 text-[11px] cursor-pointer"
+                title="Copy response"
+              >
+                {copiedId === msg.id ? (
+                  <>
+                    <Check size={12} className="text-emerald-400" />
+                    <span className="text-emerald-400 font-medium">Copied</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy size={12} />
+                    <span>Copy markdown</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="flex-1 flex flex-col h-full bg-zinc-950 overflow-hidden">
       {/* Channel / Agent Header */}
@@ -512,9 +606,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     {discussionState.askedBy ? <> (asked by {discussionState.askedBy})</> : null}
                     {' '}• {discussionState.currentTurn || 1} of {discussionState.totalTurns || 1}
                   </>
+                ) : discussionState.phase === 'summary' ? (
+                  <>
+                    <strong>{discussionState.currentSpeaker || 'The lead'}</strong> is summarizing the team's answer
+                  </>
                 ) : (
                   <>
-                    Team Discussion: <strong>{discussionState.currentSpeaker || 'Team member'}</strong> speaking (Turn {discussionState.currentTurn || 1} of {discussionState.totalTurns || 1})
+                    Team discussion: <strong>{discussionState.currentSpeaker || 'Team member'}</strong>
+                    {discussionState.phase === 'open'
+                      ? ' is opening'
+                      : discussionState.askedBy
+                        ? <> is answering {discussionState.askedBy}</>
+                        : ' is responding'}
+                    {' '}• turn {discussionState.currentTurn || 1} of {discussionState.totalTurns || 1}
                   </>
                 )}
               </span>
@@ -538,93 +642,32 @@ export const ChatView: React.FC<ChatViewProps> = ({
         <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
           {/* Messages Stream */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6">
-        {messages.map((msg) => {
-          const isUser = msg.sender_role === 'user';
-          const isThoughtOpen = !!openThoughts[msg.id];
-          const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
-
+        {groupDiscussionThreads(messages).map((item) => {
+          if (item.kind === 'message') return renderMessage(item.message);
+          const threadKey = `thread:${item.id}`;
+          const isThreadOpen = !!openThoughts[threadKey];
           return (
-            <div
-              key={msg.id}
-              className={`flex items-start gap-3.5 w-full max-w-5xl ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''}`}
-            >
-              <ModernAvatar
-                role={isUser ? 'user' : title}
-                name={displayName}
-                size={34}
-              />
-
-              <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
-                {/* Header info */}
-                <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
-                  <span className="text-zinc-200">{displayName}</span>
-                  {msg.tokens_used ? (
-                    <span className="text-zinc-500 font-mono text-[10px]">({msg.tokens_used} tokens)</span>
-                  ) : null}
+            <div key={threadKey} className="w-full max-w-5xl">
+              <button
+                type="button"
+                onClick={() => toggleThought(threadKey)}
+                className="ml-[48px] flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer"
+              >
+                {isThreadOpen ? <ChevronDown size={13} className="text-zinc-500" /> : <ChevronRight size={13} className="text-zinc-500" />}
+                <span className="flex -space-x-1.5">
+                  {item.speakers.map((name) => (
+                    <ModernAvatar key={name} role={name} name={name} size={18} />
+                  ))}
+                </span>
+                <span>
+                  Team discussed • {item.turns.length} {item.turns.length === 1 ? 'turn' : 'turns'} • {item.speakers.join(', ')}
+                </span>
+              </button>
+              {isThreadOpen && (
+                <div className="mt-4 ml-[30px] pl-4 border-l border-zinc-800 space-y-6">
+                  {item.turns.map(renderMessage)}
                 </div>
-
-                {/* Collapsible Reasoning Disclosure */}
-                {msg.reasoning_content && (
-                  <div className="mb-2 max-w-full">
-                    <button
-                      type="button"
-                      onClick={() => toggleThought(msg.id)}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-mono text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer shadow-sm group"
-                    >
-                      <Sparkles size={13} className="text-violet-400 group-hover:rotate-12 transition-transform flex-shrink-0" />
-                      <span className="truncate max-w-xs sm:max-w-md">
-                        {msg.reasoning_content.split('\n')[0].replace(/^🔮\s*/, '')}
-                      </span>
-                      {isThoughtOpen ? <ChevronDown size={13} className="text-zinc-500 flex-shrink-0" /> : <ChevronRight size={13} className="text-zinc-500 flex-shrink-0" />}
-                    </button>
-
-                    {isThoughtOpen && (
-                      <div className="mt-1.5 p-3.5 rounded-xl bg-zinc-950/90 border border-zinc-800 text-xs font-mono text-zinc-300 whitespace-pre-wrap leading-relaxed shadow-inner max-h-80 overflow-y-auto">
-                        {msg.reasoning_content}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Message Body Bubble */}
-                <div
-                  className={`p-4 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
-                    isUser
-                      ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl'
-                      : 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80'
-                  }`}
-                >
-                  {isUser ? (
-                    <div className="whitespace-pre-wrap break-words">{renderFormattedText(msg.text)}</div>
-                  ) : (
-                    <MarkdownRenderer content={msg.text} />
-                  )}
-                </div>
-
-                {/* Copy action */}
-                {!isUser && (
-                  <div className="mt-1.5 flex items-center gap-2 text-zinc-500 text-xs">
-                    <button
-                      type="button"
-                      onClick={() => handleCopy(msg.text, msg.id)}
-                      className="px-2 py-1 rounded-md hover:bg-zinc-900 hover:text-zinc-300 transition-colors flex items-center gap-1.5 text-[11px] cursor-pointer"
-                      title="Copy response"
-                    >
-                      {copiedId === msg.id ? (
-                        <>
-                          <Check size={12} className="text-emerald-400" />
-                          <span className="text-emerald-400 font-medium">Copied</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy size={12} />
-                          <span>Copy markdown</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                )}
-              </div>
+              )}
             </div>
           );
         })}
@@ -671,7 +714,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               )}
 
               <div className="p-4 sm:p-5 rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full">
-                <MarkdownRenderer content={streamingText} isStreaming={true} />
+                <MarkdownRenderer content={stripDiscussionMarkers(streamingText)} isStreaming={true} />
               </div>
             </div>
           </div>

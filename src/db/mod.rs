@@ -256,10 +256,13 @@ impl Database {
     pub async fn list_messages(&self, channel_or_kwant_id: &str, limit: i64) -> Result<Vec<Message>, DbError> {
         let rows = sqlx::query_as::<_, Message>(
             r#"
-            SELECT * FROM messages 
-            WHERE channel_id = ? OR direct_kwant_id = ?
-            ORDER BY created_at ASC
-            LIMIT ?
+            SELECT * FROM (
+                SELECT *, rowid AS _seq FROM messages
+                WHERE channel_id = ? OR direct_kwant_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+            )
+            ORDER BY created_at ASC, _seq ASC
             "#,
         )
         .bind(channel_or_kwant_id)

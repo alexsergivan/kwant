@@ -1,3 +1,4 @@
+use super::discussion;
 use super::AppState;
 use crate::broker::ApprovalDecision;
 use crate::db::models::*;
@@ -276,7 +277,7 @@ fn execute_single_turn(
     let prompt = payload.prompt.clone();
 
     tokio::spawn(async move {
-        if let Some(reply) = run_kwant_turn(&scope, &target_kwant, prompt.clone()).await {
+        if let Some(reply) = run_kwant_turn(&scope, &target_kwant, prompt.clone(), TurnOpts::default()).await {
             run_handoffs(&scope, &[target_kwant.id.clone()], &[(target_kwant.clone(), reply)], &prompt).await;
         }
 
@@ -354,10 +355,11 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
             total_turns: total(queue.len(), done + 1),
             prompt: prompt.clone(),
             asked_by: Some(from.clone()),
+            phase: None,
         });
         done += 1;
         spoken.push(kwant.id.clone());
-        match run_kwant_turn(scope, &kwant, prompt).await {
+        match run_kwant_turn(scope, &kwant, prompt, TurnOpts::default()).await {
             Some(reply) => enqueue(&mut queue, &spoken, &kwant, &reply),
             None if scope.cancel_token.is_cancelled() => break,
             None => {}
@@ -367,9 +369,139 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
     let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: done + 1 });
 }
 
+/// Runs a moderated team discussion: the lead opens (or pauses to ask the user), teammates react to
+/// each other briefly or pass, @mentioned teammates join in, and the lead closes with one summary.
+async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, user_prompt: &str) {
+    use std::collections::{HashMap, VecDeque};
+
+    let events = scope.state.event_sender.clone();
+    let Some(lead) = planned.first().cloned() else {
+        return;
+    };
+    let responders: Vec<String> = planned.iter().skip(1).map(|k| k.name.clone()).collect();
+    let mut queue: VecDeque<(Kwant, Option<String>)> = planned.iter().cloned().map(|k| (k, None)).collect();
+
+    let mut plan = vec![format!("{}: opens with a proposal", lead.name)];
+    plan.extend(responders.iter().map(|n| format!("{}: reacts and adds what's missing", n)));
+    plan.push(format!("{}: summary for you", lead.name));
+    let _ = events.send(RuntimeEvent::DiscussionStarted {
+        team_id: team.id.clone(),
+        team_name: team.name.clone(),
+        total_turns: queue.len() + 1,
+        speakers: planned.iter().map(|k| k.id.clone()).collect(),
+        plan,
+        kind: "discussion".into(),
+    });
+
+    let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
+    let mut spoke: HashMap<String, usize> = HashMap::new();
+    let mut contributors: Vec<String> = Vec::new();
+    let mut previous: Option<Kwant> = None;
+    let mut turn = 0;
+    let mut waiting_for_user = false;
+
+    while let Some((kwant, asked_by)) = queue.pop_front() {
+        if scope.cancel_token.is_cancelled() || turn >= discussion::MAX_TURNS {
+            break;
+        }
+        if previous.as_ref().is_some_and(|p| p.id == kwant.id) {
+            continue;
+        }
+        turn += 1;
+        let opening = turn == 1;
+        let prompt = if opening {
+            discussion::opening_prompt(user_prompt, &team.name, &responders)
+        } else {
+            let prev = previous.as_ref().map(|p| p.name.as_str()).unwrap_or(&lead.name);
+            discussion::reply_prompt(user_prompt, &team.name, prev, asked_by.as_deref())
+        };
+        let _ = events.send(RuntimeEvent::DiscussionTurnStarted {
+            speaker_id: kwant.id.clone(),
+            speaker_name: kwant.name.clone(),
+            turn_index: turn,
+            total_turns: turn + queue.len().min(discussion::MAX_TURNS - turn) + 1,
+            prompt: prompt.clone(),
+            asked_by: asked_by.clone(),
+            phase: Some(if opening { "open" } else { "reply" }.into()),
+        });
+        let opts = TurnOpts {
+            label: Some(discussion::turn_label(turn, &team.name)),
+            // Only the opening turn may navigate the bot browser for a URL in the user's message
+            nav_prompt: Some(if opening { user_prompt.to_string() } else { String::new() }),
+            discussion: Some(opening.then(|| discussion::question_label(&kwant.name, &team.name))),
+        };
+        let Some(raw) = run_kwant_turn(scope, &kwant, prompt, opts).await else {
+            if scope.cancel_token.is_cancelled() {
+                break;
+            }
+            continue;
+        };
+        match discussion::parse_reply(&raw) {
+            discussion::Reply::Pass => {
+                let _ = events.send(RuntimeEvent::ThinkingDelta(format!("{} has nothing to add", kwant.name)));
+            }
+            discussion::Reply::AskUser(_) if opening => {
+                waiting_for_user = true;
+                break;
+            }
+            discussion::Reply::AskUser(text) | discussion::Reply::Speak(text) => {
+                *spoke.entry(kwant.id.clone()).or_default() += 1;
+                if !contributors.contains(&kwant.name) {
+                    contributors.push(kwant.name.clone());
+                }
+                for i in crate::router::handoff_targets(&text, &names) {
+                    let k = &scope.teammates[i];
+                    let turns_taken = spoke.get(&k.id).copied().unwrap_or(0);
+                    if k.id != kwant.id
+                        && turns_taken < discussion::MAX_TURNS_PER_KWANT
+                        && !queue.iter().any(|(q, _)| q.id == k.id)
+                    {
+                        queue.push_back((k.clone(), Some(kwant.name.clone())));
+                    }
+                }
+                previous = Some(kwant.clone());
+            }
+        }
+    }
+
+    if !waiting_for_user && !scope.cancel_token.is_cancelled() && contributors.len() >= 2 {
+        turn += 1;
+        let prompt = discussion::summary_prompt(user_prompt, &contributors);
+        let _ = events.send(RuntimeEvent::DiscussionTurnStarted {
+            speaker_id: lead.id.clone(),
+            speaker_name: lead.name.clone(),
+            turn_index: turn,
+            total_turns: turn,
+            prompt: prompt.clone(),
+            asked_by: None,
+            phase: Some("summary".into()),
+        });
+        let opts = TurnOpts {
+            label: Some(discussion::summary_label(&team.name, &contributors)),
+            nav_prompt: Some(String::new()),
+            discussion: None,
+        };
+        run_kwant_turn(scope, &lead, prompt, opts).await;
+    }
+
+    let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: turn });
+}
+
+/// Per-turn tweaks for turns that kwnt drives itself (team discussions).
+#[derive(Default)]
+struct TurnOpts {
+    /// Saved as the message's `reasoning_content` instead of the driver's reasoning.
+    label: Option<String>,
+    /// Text checked for a URL to open in the bot browser; defaults to the prompt.
+    nav_prompt: Option<String>,
+    /// Discussion reply handling: `[PASS]` replies aren't saved; `Some(label)` lets an `[ASK_USER]`
+    /// reply be saved as a question for the user under that label.
+    discussion: Option<Option<String>>,
+}
+
 /// Runs one kwant turn: picks model/effort, syncs the bot browser, streams the reply and saves it.
-/// Returns the reply text, or `None` if the turn was cancelled or failed.
-async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String) -> Option<String> {
+/// Returns the raw reply text, or `None` if the turn was cancelled or failed.
+async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String, opts: TurnOpts) -> Option<String> {
     let state = &scope.state;
     let event_broadcast = state.event_sender.clone();
     let db = state.db.clone();
@@ -433,7 +565,8 @@ async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String)
         };
 
         let mut final_prompt = prompt.clone();
-        let target_url_opt = detect_url_with_context(&prompt, active_browser_url.as_deref());
+        let nav_prompt = opts.nav_prompt.as_deref().unwrap_or(&prompt);
+        let target_url_opt = detect_url_with_context(nav_prompt, active_browser_url.as_deref());
 
         if let Some(target_url) = target_url_opt {
             let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
@@ -579,17 +712,30 @@ async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String)
                 }
             }
 
-            let asst_msg = NewMessage {
-                channel_id: channel_id.clone(),
-                direct_kwant_id: kwant_id.clone(),
-                sender_role: "kwant".into(),
-                sender_id: target_kwant.name.clone(),
-                text: output.text.clone(),
-                reasoning_content: output.reasoning,
-                tool_calls: None,
-                tokens_used: output.tokens_used as i64,
+            let saved = match &opts.discussion {
+                None => Some((output.text.clone(), opts.label.clone().or(output.reasoning))),
+                Some(question_label) => match discussion::parse_reply(&output.text) {
+                    discussion::Reply::Pass => None,
+                    discussion::Reply::AskUser(q) => match question_label {
+                        Some(label) => Some((q, Some(label.clone()))),
+                        None => Some((q, opts.label.clone())),
+                    },
+                    discussion::Reply::Speak(t) => Some((t, opts.label.clone())),
+                },
             };
-            let _ = db.insert_message(&asst_msg).await;
+            if let Some((text, reasoning_content)) = saved {
+                let asst_msg = NewMessage {
+                    channel_id: channel_id.clone(),
+                    direct_kwant_id: kwant_id.clone(),
+                    sender_role: "kwant".into(),
+                    sender_id: target_kwant.name.clone(),
+                    text,
+                    reasoning_content,
+                    tool_calls: None,
+                    tokens_used: output.tokens_used as i64,
+                };
+                let _ = db.insert_message(&asst_msg).await;
+            }
             return Some(output.text);
         }
         None
@@ -864,248 +1010,40 @@ pub async fn send_chat(
                     turns, team.name
                 )));
 
-                let event_broadcast = state.event_sender.clone();
-                let db = state.db.clone();
-                let router = state.router.clone();
-                let channel_id = payload.channel_id.clone();
-                let kwant_id = payload.kwant_id.clone();
-                let prompt = payload.prompt.clone();
-                let active_cancellations = state.active_cancellations.clone();
-                let all_kwants_clone = all_kwants.clone();
-                let members_clone = members.clone();
+                let planned: Vec<Kwant> = speakers
+                    .iter()
+                    .filter_map(|sid| all_kwants.iter().find(|k| &k.id == sid).cloned())
+                    .collect();
+                let scope = TurnScope {
+                    state: state.clone(),
+                    channel_id: payload.channel_id.clone(),
+                    kwant_id: payload.kwant_id.clone(),
+                    team_keys: Some((team.id.clone(), team.name.clone())),
+                    team_context: Some(crate::drivers::TeamContext {
+                        id: team.id.clone(),
+                        name: team.name.clone(),
+                        description: team.description.clone(),
+                        workspace_path: team.workspace_path.clone(),
+                        repo_url: team.repo_url.clone(),
+                    }),
+                    workspace_dir: workspace_dir.clone(),
+                    teammates: members.clone(),
+                    cancel_token: cancel_token.clone(),
+                };
                 let team_clone = team.clone();
-                let speakers_clone = speakers.clone();
-                let plan_clone = plan.clone();
-                let cancel_token_clone = cancel_token.clone();
+                let prompt = payload.prompt.clone();
                 let session_id_clone = session_id.clone();
-                let workspace_dir_clone = workspace_dir.clone();
-                let state_clone = state.clone();
+                let active_cancellations = state.active_cancellations.clone();
 
                 tokio::spawn(async move {
-                    let context_id = channel_id
-                        .as_deref()
-                        .or(kwant_id.as_deref())
-                        .unwrap_or(&team_clone.id)
-                        .to_string();
-
-                    let _ = event_broadcast.send(RuntimeEvent::DiscussionStarted {
-                        team_id: team_clone.id.clone(),
-                        team_name: team_clone.name.clone(),
-                        total_turns: turns,
-                        speakers: speakers_clone.clone(),
-                        plan: plan_clone.clone(),
-                        kind: "discussion".into(),
-                    });
-
-                    let mut cumulative_transcript: Vec<(String, String)> = Vec::new();
-                    let mut replies: Vec<(Kwant, String)> = Vec::new();
-
-                    for (turn_idx, speaker_id) in speakers_clone.iter().enumerate() {
-                        if cancel_token_clone.is_cancelled() {
-                            break;
-                        }
-
-                        let speaker = match all_kwants_clone.iter().find(|k| &k.id == speaker_id) {
-                            Some(k) => k.clone(),
-                            None => {
-                                tracing::warn!("Speaker Kwant ID {} not found", speaker_id);
-                                continue;
-                            }
-                        };
-
-                        let mut speaker_prompt = if cumulative_transcript.is_empty() {
-                            prompt.clone()
-                        } else {
-                            let turns_formatted = cumulative_transcript
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, (name, text))| format!("### Turn {} ({})\n{}", idx + 1, name, text))
-                                .collect::<Vec<_>>()
-                                .join("\n\n");
-                            format!(
-                                "Original user query: {}\n\nDiscussion so far:\n{}\n\nPlease provide your analysis, critique, or synthesis according to the discussion plan.",
-                                prompt, turns_formatted
-                            )
-                        };
-
-                        if turn_idx == 0 {
-                            if let Some(target_url) = detect_url_in_prompt(&prompt) {
-                                let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
-                                    "🌐 Navigating bot browser to {}...",
-                                    target_url
-                                )));
-                                if let Some(ctrl) = get_or_create_browser_controller(&state_clone, &team_clone.id).await {
-                                    if let Ok(nav) = ctrl.navigate(&target_url).await {
-                                        let page_text = ctrl.extract_content().await.unwrap_or_default();
-                                        let preview = truncate_chars(&page_text, 3000);
-                                        let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
-                                            team_id: team_clone.id.clone(),
-                                            url: nav.url.clone(),
-                                            title: nav.title.clone(),
-                                            status_code: nav.status_code,
-                                        });
-                                        if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
-                                            let _ = event_broadcast.send(RuntimeEvent::BrowserScreenshot {
-                                                team_id: team_clone.id.clone(),
-                                                url: nav.url.clone(),
-                                                image_base64: b64,
-                                                timestamp: chrono::Utc::now().to_rfc3339(),
-                                            });
-                                        }
-                                        speaker_prompt = if let Some(kind) = crate::sandbox::detect_bot_wall(&nav.url, &nav.title, &page_text) {
-                                            format!(
-                                                "{}\n\n[Sandbox Browser State: Tried to open {}. {}]",
-                                                speaker_prompt, target_url, bot_wall_notice(kind, &nav.url)
-                                            )
-                                        } else {
-                                            format!(
-                                                "{}\n\n[Sandbox Browser State: The right-panel bot browser is now on {}. Title: \"{}\".\nPage Content Preview:\n{}\n\nUse this page content in your discussion analysis; only describe what it actually shows. NEVER attempt to open a desktop browser window.]",
-                                                speaker_prompt, nav.url, nav.title, preview
-                                            )
-                                        };
-                                    }
-                                }
-                            }
-                        }
-
-                        let _ = event_broadcast.send(RuntimeEvent::DiscussionTurnStarted {
-                            speaker_id: speaker.id.clone(),
-                            speaker_name: speaker.name.clone(),
-                            turn_index: turn_idx + 1,
-                            total_turns: turns,
-                            prompt: speaker_prompt.clone(),
-                            asked_by: None,
-                        });
-
-                        let available_models = crate::drivers::detect_available_models(&db).await;
-                        let route = router
-                            .route_prompt_with_models(&speaker_prompt, "chat", &available_models)
-                            .await
-                            .unwrap_or_else(|_| crate::router::RouteDecision {
-                                selected_model: speaker.preferred_model.clone(),
-                                effort_level: "medium".into(),
-                                confidence: 0.8,
-                                provider_endpoint: None,
-                                is_fallback: true,
-                                reasoning: "Fallback routing".into(),
-                            });
-                        let route = crate::router::apply_preferred_model(route, &speaker.preferred_model);
-
-                        let target_model = route.selected_model;
-                        let effort_level = route.effort_level;
-
-                        let configured_key = get_configured_key(&db, &target_model).await;
-                        let endpoint = get_configured_endpoint(&db, &target_model).await;
-
-                        let driver = resolve_driver_for_model(&target_model, configured_key, endpoint);
-                        let turn_input = TurnInput {
-                            browser_api_url: Some(format!("http://127.0.0.1:{}/api/sandbox/{}", state_clone.config.port, team_clone.id)),
-                            thread_id: context_id.clone(),
-                            kwant: speaker.clone(),
-                            prompt: speaker_prompt,
-                            history: Vec::new(),
-                            model_override: Some(target_model.clone()),
-                            effort_level: Some(effort_level),
-                            team_context: Some(crate::drivers::TeamContext {
-                                id: team_clone.id.clone(),
-                                name: team_clone.name.clone(),
-                                description: team_clone.description.clone(),
-                                workspace_path: team_clone.workspace_path.clone(),
-                                repo_url: team_clone.repo_url.clone(),
-                            }),
-                            workspace_dir: workspace_dir_clone.clone(),
-                            sandbox_id: Some(team_clone.id.clone()),
-                            teammates: members_clone
-                                .iter()
-                                .filter(|k| k.id != speaker.id)
-                                .map(|k| crate::drivers::Teammate { name: k.name.clone(), title: k.title.clone() })
-                                .collect(),
-                        };
-
-                        let (driver_tx, mut driver_rx) = mpsc::channel(32);
-                        let driver_task = tokio::spawn(async move {
-                            driver.stream_turn(turn_input, driver_tx).await
-                        });
-
-                        let mut turn_cancelled = false;
-                        loop {
-                            tokio::select! {
-                                _ = cancel_token_clone.cancelled() => {
-                                    turn_cancelled = true;
-                                    driver_task.abort();
-                                    break;
-                                }
-                                event_opt = driver_rx.recv() => {
-                                    match event_opt {
-                                        Some(event) => {
-                                            let _ = event_broadcast.send(event);
-                                        }
-                                        None => break,
-                                    }
-                                }
-                            }
-                        }
-
-                        if turn_cancelled {
-                            let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(
-                                "⏹️ Discussion stopped by user".into(),
-                            ));
-                            break;
-                        }
-
-                        if let Ok(Ok(output)) = driver_task.await {
-                            let asst_msg = NewMessage {
-                                channel_id: channel_id.clone(),
-                                direct_kwant_id: Some(speaker.id.clone()),
-                                sender_role: "kwant".into(),
-                                sender_id: speaker.name.clone(),
-                                text: output.text.clone(),
-                                reasoning_content: Some(format!(
-                                    "Team Discussion • Turn {} of {} • @{}",
-                                    turn_idx + 1,
-                                    turns,
-                                    team_clone.name
-                                )),
-                                tool_calls: None,
-                                tokens_used: output.tokens_used as i64,
-                            };
-                            let _ = db.insert_message(&asst_msg).await;
-                            replies.push((speaker.clone(), output.text.clone()));
-                            cumulative_transcript.push((speaker.name.clone(), output.text));
-                        }
-                    }
-
-                    let _ = event_broadcast.send(RuntimeEvent::DiscussionCompleted {
-                        total_turns: turns,
-                    });
-
-                    // Teammates outside the planned speakers that the discussion @mentioned get their turn too
-                    if !cancel_token_clone.is_cancelled() {
-                        let scope = TurnScope {
-                            state: state_clone.clone(),
-                            channel_id: channel_id.clone(),
-                            kwant_id: kwant_id.clone(),
-                            team_keys: Some((team_clone.id.clone(), team_clone.name.clone())),
-                            team_context: Some(crate::drivers::TeamContext {
-                                id: team_clone.id.clone(),
-                                name: team_clone.name.clone(),
-                                description: team_clone.description.clone(),
-                                workspace_path: team_clone.workspace_path.clone(),
-                                repo_url: team_clone.repo_url.clone(),
-                            }),
-                            workspace_dir: workspace_dir_clone.clone(),
-                            teammates: members_clone.clone(),
-                            cancel_token: cancel_token_clone.clone(),
-                        };
-                        run_handoffs(&scope, &speakers_clone, &replies, &prompt).await;
-                    }
+                    run_discussion(&scope, &team_clone, planned, &prompt).await;
 
                     let mut tokens = active_cancellations.lock().await;
                     tokens.remove(&session_id_clone);
-                    if let Some(cid) = &channel_id {
+                    if let Some(cid) = &scope.channel_id {
                         tokens.remove(cid);
                     }
-                    if let Some(kid) = &kwant_id {
+                    if let Some(kid) = &scope.kwant_id {
                         tokens.remove(kid);
                     }
                     tokens.remove(&team_clone.id);

@@ -59,6 +59,13 @@ async fn test_db_init_and_crud() {
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].text, "Hello tavern!");
 
+    // A limit keeps the latest messages, still in chronological order
+    for text in ["second", "third"] {
+        db.insert_message(&NewMessage { text: text.into(), ..new_msg.clone() }).await.unwrap();
+    }
+    let latest: Vec<String> = db.list_messages(&chan.id, 2).await.unwrap().into_iter().map(|m| m.text).collect();
+    assert_eq!(latest, vec!["second", "third"]);
+
     // Approvals
     let new_app = NewApproval {
         turn_id: "turn-123".into(),

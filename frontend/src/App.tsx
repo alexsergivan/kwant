@@ -247,6 +247,7 @@ export const App: React.FC = () => {
               inProgress: true,
               currentSpeaker: spkName,
               askedBy: event.data?.asked_by,
+              phase: event.data?.phase,
               currentTurn: event.data?.turn_index,
               totalTurns: event.data?.total_turns ?? prev.totalTurns,
             }));

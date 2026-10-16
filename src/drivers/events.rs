@@ -45,6 +45,9 @@ pub enum RuntimeEvent {
         /// Kwant that handed this speaker the turn with an @mention (handoffs only).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         asked_by: Option<String>,
+        /// "open", "reply" or "summary" for team discussions; None for handoffs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
     },
     #[serde(rename = "discussion_completed", alias = "DiscussionCompleted")]
     DiscussionCompleted {

@@ -1,3 +1,4 @@
+pub mod discussion;
 pub mod routes;
 pub mod sse;
 pub mod browser_stream;
