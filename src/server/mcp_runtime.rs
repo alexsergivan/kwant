@@ -393,11 +393,20 @@ pub async fn gateway_endpoint(State(state): State<AppState>, headers: HeaderMap,
 
 /// `POST /api/mcp/gateway/grok`: the same gateway, with tool names grok accepts (no `__`).
 /// Calls are mapped back to the real tool, so approval cards and records show its usual name.
-pub async fn gateway_grok_endpoint(State(state): State<AppState>, headers: HeaderMap, Json(msg): Json<Value>) -> Response {
+pub async fn gateway_grok_endpoint(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(msg): Json<Value>,
+) -> Response {
     gateway_rpc(&state, &headers, msg, GatewayNaming::Grok).await
 }
 
-async fn gateway_rpc(state: &AppState, headers: &HeaderMap, msg: Value, naming: GatewayNaming) -> Response {
+async fn gateway_rpc(
+    state: &AppState,
+    headers: &HeaderMap,
+    msg: Value,
+    naming: GatewayNaming,
+) -> Response {
     let session = match bearer_token(headers) {
         Some(token) => state.mcp_sessions.lock().await.get(token).cloned(),
         None => None,
@@ -432,7 +441,9 @@ async fn gateway_rpc(state: &AppState, headers: &HeaderMap, msg: Value, naming: 
                 return StatusCode::UNAUTHORIZED.into_response();
             };
             // An unknown grok name stays as given, and the call fails as an unknown tool
-            let tool_name = tools.canonical_name(naming, name).unwrap_or_else(|| name.to_string());
+            let tool_name = tools
+                .canonical_name(naming, name)
+                .unwrap_or_else(|| name.to_string());
             // Dropping the call withdraws its card (or stops the forwarded call) when the turn ends
             let (caller, raw_arguments) = (session.caller(), arguments.to_string());
             let outcome = tokio::select! {

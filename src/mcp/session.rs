@@ -36,7 +36,11 @@ pub enum GatewayNaming {
 fn grok_base_name(server: &str, tool: &str) -> String {
     let mut name = String::with_capacity(server.len() + tool.len() + 1);
     for c in format!("{server}-{tool}").chars() {
-        let c = if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' };
+        let c = if c.is_ascii_alphanumeric() || c == '-' {
+            c
+        } else {
+            '_'
+        };
         if !(c == '_' && name.ends_with('_')) {
             name.push(c);
         }
@@ -48,7 +52,10 @@ fn grok_base_name(server: &str, tool: &str) -> String {
 /// grok name get a `-2`, `-3`, … suffix (first one keeps the plain name), never reusing a name
 /// another tool maps to plainly, so every grok name stands for exactly one tool.
 pub fn grok_tool_names(tools: &[(&str, &str)]) -> Vec<String> {
-    let bases: Vec<String> = tools.iter().map(|(server, tool)| grok_base_name(server, tool)).collect();
+    let bases: Vec<String> = tools
+        .iter()
+        .map(|(server, tool)| grok_base_name(server, tool))
+        .collect();
     let mut taken: std::collections::HashSet<String> = bases.iter().cloned().collect();
     let mut seen = std::collections::HashSet::new();
     bases
@@ -57,7 +64,10 @@ pub fn grok_tool_names(tools: &[(&str, &str)]) -> Vec<String> {
             if seen.insert(base.clone()) {
                 return base;
             }
-            let name = (2..).map(|n| format!("{base}-{n}")).find(|candidate| !taken.contains(candidate)).unwrap();
+            let name = (2..)
+                .map(|n| format!("{base}-{n}"))
+                .find(|candidate| !taken.contains(candidate))
+                .unwrap();
             taken.insert(name.clone());
             name
         })
@@ -113,7 +123,12 @@ impl McpToolSession {
                     for tool in tools {
                         let name = namespaced_tool_name(&server.name, &tool.name);
                         if valid_function_name(&name) {
-                            session.tools.push(OfferedTool { name, server_index: index, tool, grok_name: String::new() });
+                            session.tools.push(OfferedTool {
+                                name,
+                                server_index: index,
+                                tool,
+                                grok_name: String::new(),
+                            });
                         } else {
                             tracing::warn!(server = %server.name, tool = %tool.name, "MCP tool name not usable as a function name; skipped");
                         }
@@ -123,8 +138,16 @@ impl McpToolSession {
                 Err(e) => problems.push(format!("{}: {}", server.name, redact(&e.to_string(), &session.secrets))),
             }
         }
-        let pairs: Vec<(&str, &str)> =
-            session.tools.iter().map(|t| (session.clients[t.server_index].0.as_str(), t.tool.name.as_str())).collect();
+        let pairs: Vec<(&str, &str)> = session
+            .tools
+            .iter()
+            .map(|t| {
+                (
+                    session.clients[t.server_index].0.as_str(),
+                    t.tool.name.as_str(),
+                )
+            })
+            .collect();
         let grok_names = grok_tool_names(&pairs);
         for (tool, grok_name) in session.tools.iter_mut().zip(grok_names) {
             tool.grok_name = grok_name;
@@ -182,7 +205,11 @@ impl McpToolSession {
     pub fn canonical_name(&self, naming: GatewayNaming, gateway_name: &str) -> Option<String> {
         match naming {
             GatewayNaming::Plain => Some(format!("mcp__{gateway_name}")),
-            GatewayNaming::Grok => self.tools.iter().find(|t| t.grok_name == gateway_name).map(|t| t.name.clone()),
+            GatewayNaming::Grok => self
+                .tools
+                .iter()
+                .find(|t| t.grok_name == gateway_name)
+                .map(|t| t.name.clone()),
         }
     }
 
@@ -259,7 +286,11 @@ mod tests {
 
     #[test]
     fn grok_names_have_no_double_underscore() {
-        let names = grok_tool_names(&[("alpha", "alpha_ping"), ("gh", "create__issue"), ("a-b", "x__y___z_")]);
+        let names = grok_tool_names(&[
+            ("alpha", "alpha_ping"),
+            ("gh", "create__issue"),
+            ("a-b", "x__y___z_"),
+        ]);
         assert_eq!(names, ["alpha-alpha_ping", "gh-create_issue", "a-b-x_y_z_"]);
         assert!(names.iter().all(|n| !n.contains("__")));
     }
@@ -268,13 +299,16 @@ mod tests {
     fn grok_name_collisions_get_unique_suffixes() {
         let names = grok_tool_names(&[
             ("a", "b-c"),
-            ("a-b", "c"),     // same base as the first
-            ("gh", "x__y"),   // `gh-x_y`
-            ("gh", "x_y"),    // same base
-            ("gh", "x_y-2"),  // the suffix the previous one would naively get
-            ("a", "b-c"),     // a third `a-b-c`
+            ("a-b", "c"),    // same base as the first
+            ("gh", "x__y"),  // `gh-x_y`
+            ("gh", "x_y"),   // same base
+            ("gh", "x_y-2"), // the suffix the previous one would naively get
+            ("a", "b-c"),    // a third `a-b-c`
         ]);
-        assert_eq!(names, ["a-b-c", "a-b-c-2", "gh-x_y", "gh-x_y-3", "gh-x_y-2", "a-b-c-3"]);
+        assert_eq!(
+            names,
+            ["a-b-c", "a-b-c-2", "gh-x_y", "gh-x_y-3", "gh-x_y-2", "a-b-c-3"]
+        );
         let unique: std::collections::HashSet<_> = names.iter().collect();
         assert_eq!(unique.len(), names.len());
         assert!(names.iter().all(|n| !n.contains("__")));
