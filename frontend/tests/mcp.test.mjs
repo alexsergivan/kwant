@@ -26,6 +26,9 @@ const {
   sanitizeStatuses,
   loadStatuses,
   saveStatuses,
+  serverStatusKind,
+  isSignedIn,
+  readOAuthMessage,
 } = mcp;
 
 test('splits command lines like a README shows them', () => {
@@ -197,4 +200,52 @@ test('old stored statuses with error text are cleaned on load and rewritten', ()
   assert.deepEqual(sanitizeStatuses(null), {});
   assert.deepEqual(sanitizeStatuses([{ ok: true }]), {});
   delete globalThis.localStorage;
+});
+
+test('maps a server and its last test to what the card shows', () => {
+  const http = { enabled: true, transport: 'http' };
+  const stdio = { enabled: true, transport: 'stdio' };
+  assert.equal(serverStatusKind(http, undefined), 'untested');
+  assert.equal(serverStatusKind(http, { ok: true }), 'ok');
+  assert.equal(serverStatusKind(http, { ok: false, auth_required: true }), 'needs_sign_in');
+  assert.equal(serverStatusKind(http, { ok: false }), 'error', 'a URL server that is just down is not a sign-in problem');
+  assert.equal(serverStatusKind(stdio, { ok: false, auth_required: true }), 'error');
+  assert.equal(serverStatusKind(http, { ok: false, auth_required: true }, true), 'testing');
+  assert.equal(serverStatusKind({ ...http, enabled: false }, { ok: false, auth_required: true }), 'paused');
+
+  assert.equal(isSignedIn({ transport: 'http', oauth: { connected: true, expires_at: null } }), true);
+  assert.equal(isSignedIn({ transport: 'http', oauth: { connected: false, expires_at: null } }), false);
+  assert.equal(isSignedIn({ transport: 'http' }), false, 'older servers without the field');
+  assert.equal(isSignedIn({ transport: 'stdio', oauth: { connected: true, expires_at: null } }), false);
+});
+
+test('stored status keeps auth_required, still without error text', () => {
+  const needs = toStoredStatus({ ok: false, auth_required: true, error: 'Sign-in required' }, 't');
+  assert.deepEqual(needs, { ok: false, tools: [], at: 't', auth_required: true });
+  assert.deepEqual(toStoredStatus({ ok: true, auth_required: true, tools: [] }, 't'), { ok: true, tools: [], at: 't' });
+  assert.deepEqual(sanitizeStatuses({ a: { ok: false, tools: [], at: 't', auth_required: true, error: 'x' } }), {
+    a: { ok: false, tools: [], at: 't', auth_required: true },
+  });
+  assert.deepEqual(sanitizeStatuses({ a: { ok: false, tools: [], at: 't', auth_required: 'yes' } }), { a: { ok: false, tools: [], at: 't' } });
+});
+
+test('accepts sign-in results only from this origin and in the expected shape', () => {
+  const origin = 'https://kwnt.example.com';
+  const data = { type: 'kwnt-mcp-oauth', server_id: 's1', ok: true };
+  assert.deepEqual(readOAuthMessage({ origin, data }, origin), { server_id: 's1', ok: true });
+  assert.deepEqual(readOAuthMessage({ origin, data: { ...data, ok: false, error: 'access_denied' } }, origin), {
+    server_id: 's1',
+    ok: false,
+    error: 'access_denied',
+  });
+  assert.deepEqual(readOAuthMessage({ origin, data: { ...data, server_id: null, ok: false } }, origin), { server_id: null, ok: false });
+
+  assert.equal(readOAuthMessage({ origin: 'https://evil.example', data }, origin), null);
+  assert.equal(readOAuthMessage({ origin: 'https://kwnt.example.com:8443', data }, origin), null);
+  assert.equal(readOAuthMessage({ origin: 'null', data }, origin), null);
+  assert.equal(readOAuthMessage({ origin, data: { ...data, type: 'other' } }, origin), null);
+  assert.equal(readOAuthMessage({ origin, data: { ...data, ok: 'true' } }, origin), null);
+  assert.equal(readOAuthMessage({ origin, data: { ...data, server_id: 7 } }, origin), null);
+  assert.equal(readOAuthMessage({ origin, data: 'kwnt-mcp-oauth' }, origin), null);
+  assert.equal(readOAuthMessage({ origin, data: null }, origin), null);
 });

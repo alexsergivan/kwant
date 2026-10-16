@@ -15,6 +15,8 @@ export interface McpServer {
   enabled: boolean;
   timeout_secs: number;
   created_at: string | null;
+  /** Sign-in state for URL servers; never carries tokens. */
+  oauth?: { connected: boolean; expires_at: string | null };
 }
 
 export interface McpTool {
@@ -30,6 +32,8 @@ export interface McpTestResult {
   tools?: McpTool[];
   error?: string;
   stderr_tail?: string;
+  /** The server answered 401 and kwnt has no usable sign-in for it. */
+  auth_required?: boolean;
 }
 
 /** What the API returns in place of every stored secret value. */
@@ -313,12 +317,15 @@ export interface StoredStatus {
   ok: boolean;
   tools: string[];
   at: string;
+  /** Only present (and true) when the last test asked for sign-in. */
+  auth_required?: boolean;
 }
 
-export const toStoredStatus = (result: Pick<McpTestResult, 'ok' | 'tools'>, at: string): StoredStatus => ({
+export const toStoredStatus = (result: Pick<McpTestResult, 'ok' | 'tools' | 'auth_required'>, at: string): StoredStatus => ({
   ok: result.ok === true,
   tools: (result.tools ?? []).map((t) => t.name).filter((n): n is string => typeof n === 'string'),
   at,
+  ...(result.ok !== true && result.auth_required === true ? { auth_required: true } : {}),
 });
 
 /** Keeps only the safe fields of each entry; drops anything malformed (and old `error` text). */
@@ -333,6 +340,7 @@ export const sanitizeStatuses = (raw: unknown): Record<string, StoredStatus> => 
       ok: e.ok,
       tools: Array.isArray(e.tools) ? e.tools.filter((n): n is string => typeof n === 'string') : [],
       at: typeof e.at === 'string' ? e.at : '',
+      ...(e.ok === false && e.auth_required === true ? { auth_required: true } : {}),
     };
   }
   return out;
@@ -362,4 +370,53 @@ export const loadStatuses = (): Record<string, StoredStatus> => {
     }
     return {};
   }
+};
+
+export type ServerStatusKind = 'testing' | 'paused' | 'ok' | 'needs_sign_in' | 'error' | 'untested';
+
+/**
+ * What a server card shows. The live result of a test on this screen wins over the stored one.
+ * "Needs sign-in" comes only from kwnt saying so (a 401 with no usable token): a URL server
+ * that is simply down still reads "Couldn't connect".
+ */
+export const serverStatusKind = (
+  server: Pick<McpServer, 'enabled' | 'transport'>,
+  status: Pick<StoredStatus, 'ok' | 'auth_required'> | undefined,
+  testing = false,
+): ServerStatusKind => {
+  if (testing) return 'testing';
+  if (!server.enabled) return 'paused';
+  if (!status) return 'untested';
+  if (status.ok) return 'ok';
+  if (status.auth_required && server.transport === 'http') return 'needs_sign_in';
+  return 'error';
+};
+
+/** Whether kwnt holds a sign-in for this URL server. */
+export const isSignedIn = (server: Pick<McpServer, 'transport' | 'oauth'>): boolean =>
+  server.transport === 'http' && server.oauth?.connected === true;
+
+export interface OAuthResultMessage {
+  server_id: string | null;
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Reads the message kwnt's sign-in callback page posts to this window. Anything from another
+ * origin, of another type or malformed is ignored (null): only kwnt's own page may report a result.
+ */
+export const readOAuthMessage = (
+  event: { origin: string; data: unknown },
+  expectedOrigin: string,
+): OAuthResultMessage | null => {
+  if (event.origin !== expectedOrigin) return null;
+  const d = event.data as Record<string, unknown> | null;
+  if (!d || typeof d !== 'object' || d.type !== 'kwnt-mcp-oauth' || typeof d.ok !== 'boolean') return null;
+  if (d.server_id !== null && typeof d.server_id !== 'string') return null;
+  return {
+    server_id: d.server_id as string | null,
+    ok: d.ok,
+    ...(typeof d.error === 'string' && d.error ? { error: d.error.slice(0, 300) } : {}),
+  };
 };
