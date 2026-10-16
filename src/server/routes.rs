@@ -21,6 +21,7 @@ pub struct HealthResponse {
     pub app: &'static str,
     pub version: &'static str,
     pub laya_url: String,
+    pub laya: crate::router::sidecar::LayaStatus,
 }
 
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
@@ -29,7 +30,12 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
         app: "kwnt",
         version: env!("CARGO_PKG_VERSION"),
         laya_url: state.config.laya_url.clone(),
+        laya: state.router.status(),
     })
+}
+
+pub async fn laya_status(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.router.status())
 }
 
 pub async fn list_kwants(State(state): State<AppState>) -> Result<Json<Vec<Kwant>>, StatusCode> {

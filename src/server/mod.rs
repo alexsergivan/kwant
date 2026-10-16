@@ -74,6 +74,7 @@ pub fn create_router(state: AppState) -> Router {
 
     Router::new()
         .route("/api/health", get(routes::health))
+        .route("/api/laya/status", get(routes::laya_status))
         .route("/api/kwants", get(routes::list_kwants).post(routes::create_kwant))
         .route("/api/channels", get(routes::list_channels).post(routes::create_channel))
         .route("/api/channels/:id/messages", get(routes::list_messages))

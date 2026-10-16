@@ -1,0 +1,7 @@
+target
+.git
+.superpowers
+frontend/node_modules
+frontend/dist
+**/*.db
+**/*.db-*

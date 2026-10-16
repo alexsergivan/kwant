@@ -61,6 +61,7 @@ ExecStart=/usr/local/bin/kwnt serve --host 0.0.0.0 --port 8799
 Restart=always
 Environment=KWNT_DATA_DIR=/var/lib/kwnt
 Environment=LAYA_URL=http://127.0.0.1:8000
+# kwnt installs and supervises Laya under KWNT_DATA_DIR/laya; set KWNT_LAYA_MANAGED=0 to run your own
 Environment=XAI_API_KEY=your_xai_key_here
 Environment=ANTHROPIC_API_KEY=your_claude_key_here
 
@@ -77,15 +78,38 @@ systemctl enable --now kwnt
 
 ## 🔮 Laya Model Router (`convaiinnovations/laya`)
 
-When a Kwant's model is set to `"auto"` (the default), `kwnt` queries Laya's Jev-compatible non-autoregressive decision model on `/v1/systemone`:
+Laya picks which agent answers in a channel and which model and effort each agent uses when its model is `"auto"`. It runs as a small Python service speaking `/v1/systemone`.
+
+**`kwnt serve` manages Laya for you.** If nothing answers at `laya_url` (default `http://127.0.0.1:8000`), kwnt:
+
+1. installs `laya[serve]==0.4.8` into `~/.kwnt/laya/venv` on first run, using [`uv`](https://docs.astral.sh/uv/) when present (it fetches Python too) or `python3 -m venv` otherwise;
+2. starts `laya-serve` on the configured port, downloading the English checkpoint (~420 MB) into `~/.kwnt/laya/hf` on first start;
+3. restarts it with backoff if it exits, and stops it when kwnt shuts down.
+
+The header shows the router status (green online, amber installing or loading, red offline), and `GET /api/laya/status` returns it with the failure reason. Logs are in `~/.kwnt/laya/laya.log` and `install.log`. While Laya is unavailable, kwnt routes by keyword and says so in the routing card.
+
+| Setting | `config.toml` | Environment | Default |
+|---|---|---|---|
+| Laya URL | `laya_url` | `LAYA_URL` | `http://127.0.0.1:8000` |
+| Manage a local sidecar | `laya_managed` | `KWNT_LAYA_MANAGED=0` to disable, or `kwnt serve --no-laya` | `true` |
+| Checkpoints to preload | `laya_models` | `KWNT_LAYA_MODELS` | `english` |
+| Use an existing `laya-serve` binary | | `KWNT_LAYA_SERVE_BIN` | |
+
+kwnt only starts Laya for loopback URLs. If Laya already answers, for example from Docker, kwnt uses it as is.
+
+**Networks that block Hugging Face.** The first start needs `huggingface.co`. If a proxy blocks it, start kwnt once on an open network, or copy an existing `~/.kwnt/laya/hf` from another machine; after that Laya starts offline.
+
+---
+
+## 🐳 Docker Compose (VPS)
+
+`docker-compose.yml` runs kwnt with a Laya image that has the weights baked in, so the server never downloads them at runtime:
 
 ```bash
-# Start Laya service sidecar (optional)
-pip install "laya[serve]"
-laya-serve --port 8000
+docker compose up -d --build   # UI on http://127.0.0.1:8799
 ```
 
-If Laya is offline, `kwnt` automatically engages a local heuristic router with zero interruption.
+The `laya` image (`docker/laya.Dockerfile`) uses CPU PyTorch and preloads the checkpoints listed in the `LAYA_MODELS` build arg. kwnt runs with `KWNT_LAYA_MANAGED=0` and `LAYA_URL=http://laya:8000`; data persists in the `kwnt-data` volume. Put a TLS reverse proxy in front as described in [browser service and VPS hosting](docs/browser-service.md).
 
 ---
 

@@ -1,12 +1,15 @@
 use super::{RouteDecision, RouterError};
 use reqwest::Client;
 use serde_json::json;
+use super::sidecar::{LayaState, LayaStatus};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub struct LayaRouter {
     pub base_url: String,
     pub(crate) client: Client,
+    status: Arc<RwLock<LayaStatus>>,
 }
 
 impl LayaRouter {
@@ -16,7 +19,30 @@ impl LayaRouter {
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        Self { base_url: normalize_base_url(&base_url), client }
+        let base_url = normalize_base_url(&base_url);
+        let status = Arc::new(RwLock::new(LayaStatus::new(&base_url)));
+        Self { base_url, client, status }
+    }
+
+    pub fn status(&self) -> LayaStatus {
+        self.status.read().map(|s| s.clone()).unwrap_or_else(|_| LayaStatus::new(&self.base_url))
+    }
+
+    pub fn set_status(&self, state: LayaState, detail: &str, managed: bool) {
+        if let Ok(mut s) = self.status.write() {
+            s.state = state;
+            s.detail = detail.to_string();
+            s.managed = managed;
+        }
+    }
+
+    /// Short note appended to routing reasons when Laya could not be asked.
+    pub fn offline_note(&self) -> &'static str {
+        match self.status().state {
+            LayaState::Installing => "Laya is still installing, so this was a keyword match",
+            LayaState::Starting => "Laya is still starting, so this was a keyword match",
+            _ => "Laya is offline, so this was a keyword match",
+        }
     }
 
     /// Returns true when the Laya sidecar answers on its health endpoint.

@@ -1,0 +1,32 @@
+# Kwant + Laya for a VPS:  docker compose up -d --build
+# The UI is bound to localhost; put a TLS reverse proxy in front (see docs/browser-service.md).
+services:
+  laya:
+    build:
+      context: docker
+      dockerfile: laya.Dockerfile
+      args:
+        LAYA_MODELS: english
+    image: kwnt-laya:0.4.8
+    restart: unless-stopped
+
+  kwnt:
+    build:
+      context: .
+      dockerfile: docker/kwnt.Dockerfile
+    image: kwnt:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8799:8799"
+    environment:
+      LAYA_URL: http://laya:8000
+      KWNT_LAYA_MANAGED: "0"
+      # KWNT_BROWSER_CDP_URL: http://browser:9222
+    volumes:
+      - kwnt-data:/data
+    depends_on:
+      laya:
+        condition: service_started
+
+volumes:
+  kwnt-data:

@@ -34,6 +34,14 @@ fn default_laya_url() -> String {
     DEFAULT_LAYA_URL.to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_laya_models() -> String {
+    "english".to_string()
+}
+
 fn default_fallback_model() -> String {
     DEFAULT_FALLBACK_MODEL.to_string()
 }
@@ -62,6 +70,14 @@ pub struct Config {
     #[serde(default = "default_laya_url")]
     pub laya_url: String,
 
+    /// When true, `kwnt serve` installs, starts and supervises a local `laya-serve`.
+    #[serde(default = "default_true")]
+    pub laya_managed: bool,
+
+    /// Laya checkpoints the managed sidecar preloads (comma list).
+    #[serde(default = "default_laya_models")]
+    pub laya_models: String,
+
     #[serde(default = "default_fallback_model")]
     pub default_fallback_model: String,
 
@@ -77,6 +93,8 @@ impl Default for Config {
             port: default_port(),
             data_dir: default_data_dir(),
             laya_url: default_laya_url(),
+            laya_managed: true,
+            laya_models: default_laya_models(),
             default_fallback_model: default_fallback_model(),
             browser_cdp_url: None,
         }
@@ -152,6 +170,14 @@ impl Config {
         if let Ok(url) = std::env::var("LAYA_URL").or_else(|_| std::env::var("KWNT_LAYA_URL")) {
             if !url.is_empty() {
                 self.laya_url = url;
+            }
+        }
+        if let Ok(v) = std::env::var("KWNT_LAYA_MANAGED") {
+            self.laya_managed = !matches!(v.trim().to_lowercase().as_str(), "0" | "false" | "no" | "off");
+        }
+        if let Ok(models) = std::env::var("KWNT_LAYA_MODELS") {
+            if !models.trim().is_empty() {
+                self.laya_models = models.trim().to_string();
             }
         }
         if let Ok(model) = std::env::var("KWNT_DEFAULT_FALLBACK_MODEL")

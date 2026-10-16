@@ -190,3 +190,42 @@ fn laya_base_url_is_normalized() {
     assert_eq!(normalize_base_url("http://127.0.0.1:8000/v1/systemone/"), "http://127.0.0.1:8000");
     assert_eq!(normalize_base_url("http://127.0.0.1:8000/v1"), "http://127.0.0.1:8000");
 }
+
+#[test]
+fn laya_sidecar_only_manages_loopback_urls() {
+    use kwnt::router::sidecar::local_port;
+    assert_eq!(local_port("http://127.0.0.1:8000"), Some(8000));
+    assert_eq!(local_port("http://localhost:9001/"), Some(9001));
+    assert_eq!(local_port("http://[::1]:8000"), Some(8000));
+    assert_eq!(local_port("http://localhost"), Some(80));
+    assert_eq!(local_port("http://laya:8000"), None);
+    assert_eq!(local_port("https://laya.example.com"), None);
+}
+
+#[test]
+fn laya_sidecar_surfaces_the_failure_reason() {
+    use kwnt::router::sidecar::last_error_line;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("laya.log");
+    std::fs::write(
+        &log,
+        "Traceback (most recent call last):\n  File \"x.py\"\nhuggingface_hub.errors.LocalEntryNotFoundError: cannot reach the Hub\n\n",
+    )
+    .unwrap();
+    assert_eq!(
+        last_error_line(&log).unwrap(),
+        "huggingface_hub.errors.LocalEntryNotFoundError: cannot reach the Hub"
+    );
+    assert!(last_error_line(&dir.path().join("missing.log")).is_none());
+}
+
+#[tokio::test]
+async fn laya_status_starts_unknown_and_updates() {
+    use kwnt::router::sidecar::LayaState;
+    let router = LayaRouter::new("http://127.0.0.1:1/v1/systemone".into());
+    assert_eq!(router.base_url, "http://127.0.0.1:1");
+    assert_eq!(router.status().state, LayaState::Unknown);
+    router.set_status(LayaState::Starting, "loading", true);
+    assert_eq!(router.status().state, LayaState::Starting);
+    assert!(router.offline_note().contains("starting"));
+}

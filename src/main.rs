@@ -3,11 +3,15 @@ use kwnt::{
     broker::PermissionBroker,
     config::Config,
     db::Database,
-    router::LayaRouter,
+    router::{
+        sidecar::{self, SidecarOptions},
+        LayaRouter,
+    },
     server::{create_router, AppState},
     tools::ToolRunner,
 };
 use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Parser, Debug)]
 #[command(name = "kwnt", author, version, about = "Kwants: Multi-Agent AI Platform in Rust")]
@@ -35,6 +39,9 @@ pub enum Commands {
 
         #[arg(long, help = "Laya router service URL")]
         laya_url: Option<String>,
+
+        #[arg(long, help = "Do not install or start a local Laya router")]
+        no_laya: bool,
     },
 
     /// Print the resolved config and whether local data files exist
@@ -69,6 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             host,
             port,
             laya_url,
+            no_laya,
         }) => {
             if let Some(h) = host {
                 config.host = h;
@@ -79,18 +87,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(l) = laya_url {
                 config.laya_url = l;
             }
+            if no_laya {
+                config.laya_managed = false;
+            }
 
             let db = Database::init(&config.data_dir).await?;
             let tools = ToolRunner::new(config.data_dir.join("workspace"));
             let broker = PermissionBroker::new();
             let router = LayaRouter::new(config.laya_url.clone());
-            if router.is_reachable().await {
-                println!("🔮 Laya router online at {}", router.base_url);
-            } else {
+            let shutdown = CancellationToken::new();
+            let sidecar = sidecar::spawn(
+                router.clone(),
+                SidecarOptions {
+                    data_dir: config.data_dir.clone(),
+                    managed: config.laya_managed,
+                    models: config.laya_models.clone(),
+                },
+                shutdown.clone(),
+            );
+            if config.laya_managed {
                 println!(
-                    "⚠️  Laya router not reachable at {} — using keyword routing. Start it with `laya-serve` (pip install \"laya[serve]\").",
-                    router.base_url
+                    "🔮 Laya router at {} (managed; logs in {})",
+                    router.base_url,
+                    config.data_dir.join("laya").display()
                 );
+            } else {
+                println!("🔮 Laya router at {} (external)", router.base_url);
             }
 
             let state = AppState::new(config.clone(), db, tools, broker, router);
@@ -111,7 +133,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 addr
             );
 
-            axum::serve(listener, app).await?;
+            tokio::select! {
+                res = axum::serve(listener, app) => res?,
+                _ = shutdown_signal() => println!("Shutting down…"),
+            }
+            shutdown.cancel();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), sidecar).await;
         }
         Some(Commands::Status) => print_status(&config),
         Some(Commands::Agents) => print_agents(&config).await?,
@@ -147,7 +174,12 @@ fn print_status(config: &Config) {
     println!("  data dir   {}", config.data_dir.display());
     println!("  config     {config_label}");
     println!("  database   {db_label}");
-    println!("  laya       {}", config.laya_url);
+    println!(
+        "  laya       {} ({}; models {})",
+        config.laya_url,
+        if config.laya_managed { "managed" } else { "external" },
+        config.laya_models
+    );
     println!("  fallback   {}", config.default_fallback_model);
 }
 
@@ -205,4 +237,22 @@ async fn print_channels(config: &Config) -> Result<(), Box<dyn std::error::Error
         );
     }
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        if let Ok(mut sig) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            sig.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = term => {},
+    }
 }
