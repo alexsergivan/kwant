@@ -174,8 +174,24 @@ Body: `{"server_ids": ["…"]}` (replaces the whole assignment; `[]` clears it).
   and asks for approval (below) before forwarding each call, so codex's own approval is turned
   off for it. Without servers (or for a kwant that opted out) codex gets only the
   `enabled=false` entries: `-c mcp_servers={}` when the user has no servers of their own.
-  `grok` CLI agents do not get MCP servers yet: its config overlay (`GROK_CONFIG_PATH`) cannot
-  add `mcp_servers`, and it has no per-run MCP flag.
+- **CLI agents (`grok`)**: every grok turn runs with a fresh private `GROK_HOME` (mode 0700,
+  under the system temp dir, removed when the turn ends, is cancelled or grok is killed; leftovers
+  older than 24 h are swept on the next turn). Its `config.toml` (0600) holds only the
+  `[models]`/`[model.*]` settings from the user's own config, so user MCP servers, plugins,
+  hooks, permission grants and folder trust don't apply, and the user's `~/.grok` is never
+  written. `GROK_{CLAUDE,CURSOR}_{MCPS,HOOKS}_ENABLED=0` and `GROK_MANAGED_MCPS_ENABLED=0` stop
+  grok importing Claude, Cursor and managed servers and hooks. The login is read in place via
+  `GROK_AUTH_PATH`; if grok says it isn't signed in, the turn is retried once with a 0600 copy of
+  `auth.json` inside the temp home. With servers, the temp config adds kwnt's gateway as its only
+  server, `[mcp_servers.kwnt]` at `POST /api/mcp/gateway/grok`, with
+  `Authorization = "Bearer ${KWNT_MCP_GATEWAY_TOKEN}"` (grok expands it from its env; the token is
+  never in the file or argv) and `shell_environment_policy.exclude` hiding the variable from
+  grok's shell. grok runs with `--allow 'MCPTool(kwnt__*)' --output-format streaming-json`.
+  grok rejects tool names containing `__`, so this endpoint lists tools as `<server>-<tool>`
+  (characters other than letters, digits and `-` become `_`; clashes get `-2`, `-3`, …) and maps
+  calls back; approval cards still show `mcp__<server>__<tool>`. When grok ends without a reply
+  (a tool it needed approval for, no login, an error, a cancel), the turn's reply says why
+  instead of being empty.
 - **API agents** (OpenAI-compatible chat endpoints, incl. Ollama): kwnt connects to the servers,
   offers their tools in the `tools` field, executes `tool_calls` and feeds results back, for at
   most `mcp_max_tool_iterations` model calls per turn (setting or env
