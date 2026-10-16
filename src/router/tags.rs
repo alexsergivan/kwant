@@ -88,9 +88,53 @@ fn is_team_mention(token: &str) -> bool {
         || lower.ends_with("infra")
 }
 
+/// Teammates (as indices into `names`) that `text` hands the turn to with `@Name`,
+/// in order of first mention. `@everyone` / `@all` selects every teammate.
+/// Mentions inside inline code or code fences are ignored.
+pub fn handoff_targets(text: &str, names: &[&str]) -> Vec<usize> {
+    let mut prose = String::with_capacity(text.len());
+    let mut in_code = false;
+    for c in text.chars() {
+        if c == '`' {
+            in_code = !in_code;
+            prose.push(' ');
+        } else if !in_code {
+            prose.push(c);
+        }
+    }
+
+    let mut picked = Vec::new();
+    for mention in parse_mentions_with_lookup(&prose, |_| Some(false)) {
+        let tag = mention.name();
+        if tag.eq_ignore_ascii_case("everyone") || tag.eq_ignore_ascii_case("all") {
+            for i in 0..names.len() {
+                if !picked.contains(&i) {
+                    picked.push(i);
+                }
+            }
+        } else if let Some(i) = names.iter().position(|n| n.eq_ignore_ascii_case(tag)) {
+            if !picked.contains(&i) {
+                picked.push(i);
+            }
+        }
+    }
+    picked
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_handoff_targets() {
+        let names = ["Architect", "TechLead", "DevOps"];
+        assert_eq!(handoff_targets("@techlead and @DevOps, say hi!", &names), vec![1, 2]);
+        assert_eq!(handoff_targets("@DevOps then @devops again", &names), vec![2]);
+        assert_eq!(handoff_targets("hey @everyone", &names), vec![0, 1, 2]);
+        assert_eq!(handoff_targets("email me@TechLead.com or run `@DevOps`", &names), Vec::<usize>::new());
+        assert_eq!(handoff_targets("@Stranger please help", &names), Vec::<usize>::new());
+        assert_eq!(handoff_targets("```\n@Architect\n``` ok @Architect", &names), vec![0]);
+    }
 
     #[test]
     fn test_mention_methods() {

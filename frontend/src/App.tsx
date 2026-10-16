@@ -230,6 +230,7 @@ export const App: React.FC = () => {
               totalTurns: event.data?.total_turns,
               currentSpeaker: initialSpeakerName,
               currentTurn: 1,
+              kind: event.data?.kind,
             });
             setIsStreaming(true);
             playSfx('alert');
@@ -245,6 +246,7 @@ export const App: React.FC = () => {
               ...prev,
               inProgress: true,
               currentSpeaker: spkName,
+              askedBy: event.data?.asked_by,
               currentTurn: event.data?.turn_index,
               totalTurns: event.data?.total_turns ?? prev.totalTurns,
             }));

@@ -48,6 +48,15 @@ pub struct TurnInput {
     /// Sandbox whose browser is shown to the user for this conversation (team, channel or kwant).
     #[serde(default)]
     pub sandbox_id: Option<String>,
+    /// Other kwants in this chat that the speaker can hand the turn to with an @mention.
+    #[serde(default)]
+    pub teammates: Vec<Teammate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Teammate {
+    pub name: String,
+    pub title: String,
 }
 
 impl TurnInput {
@@ -105,7 +114,29 @@ impl TurnInput {
             api = api,
         );
 
-        format!("{}{}{}", base, team_block, sandbox_rules)
+        let teammates_block = if self.teammates.is_empty() {
+            String::new()
+        } else {
+            let list = self
+                .teammates
+                .iter()
+                .map(|t| format!("- @{} ({})", t.name, t.title))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "\n\n[Teammates in this chat]\n{list}\n\
+                These are the only teammates you have. To involve one, mention them as @Name in your reply, or @everyone for all of them \
+                (e.g. \"@{first}, can you take the database part?\"). kwnt hands each mentioned teammate the turn right after you, \
+                and they answer here in the same chat. Only use @ when you actually want that teammate to reply now; \
+                to merely refer to a teammate, write their name without the @. \
+                Never contact anyone else: no other agents, sessions, chats or people through tools, CLIs or APIs. \
+                Never claim you asked or will relay something from a teammate unless you @mentioned them in this reply.",
+                list = list,
+                first = self.teammates[0].name,
+            )
+        };
+
+        format!("{}{}{}{}", base, team_block, teammates_block, sandbox_rules)
     }
 }
 

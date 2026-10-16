@@ -87,6 +87,7 @@ async fn test_mock_driver_streaming() {
         team_context: None,
         workspace_dir: None,
         sandbox_id: None,
+        teammates: vec![],
     };
 
     let handle = tokio::spawn(async move {
@@ -143,6 +144,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         team_context: None,
         workspace_dir: None,
         sandbox_id: None,
+        teammates: vec![],
     };
 
     let solo_prompt = input_solo.format_system_prompt();
@@ -153,6 +155,13 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
     assert!(!vps_input.format_system_prompt().contains("127.0.0.1:8899"));
     assert!(solo_prompt.contains("bulletproof distributed architectures"));
     assert!(!solo_prompt.contains("Active Team Alignment"));
+    assert!(!solo_prompt.contains("[Teammates in this chat]"));
+
+    let mut with_mates = input_solo.clone();
+    with_mates.teammates = vec![kwnt::drivers::Teammate { name: "TechLead".into(), title: "Staff Engineer".into() }];
+    let mates_prompt = with_mates.format_system_prompt();
+    assert!(mates_prompt.contains("- @TechLead (Staff Engineer)"));
+    assert!(mates_prompt.contains("Never contact anyone else"));
 
     // 2. With team context
     let input_team = TurnInput {
@@ -172,6 +181,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         }),
         workspace_dir: None,
         sandbox_id: None,
+        teammates: vec![],
     };
 
     let team_prompt = input_team.format_system_prompt();
@@ -198,6 +208,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         }),
         workspace_dir: Some(std::path::PathBuf::from("/Users/dev/app")),
         sandbox_id: None,
+        teammates: vec![],
     };
 
     let ws_prompt = input_workspace.format_system_prompt();

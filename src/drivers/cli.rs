@@ -86,6 +86,8 @@ pub fn build_cli_prompt(input: &TurnInput) -> String {
     for msg in recent {
         let role = match msg.sender_role.as_str() {
             "user" => "User",
+            // Name the speaker so a kwant can tell its own earlier replies from its teammates'
+            "kwant" if !msg.sender_id.is_empty() && msg.sender_id != input.kwant.name => &msg.sender_id,
             "kwant" => "Assistant",
             "system" => "System",
             _ => &msg.sender_role,
@@ -346,6 +348,7 @@ mod tests {
             team_context: None,
             workspace_dir: None,
             sandbox_id: None,
+            teammates: vec![],
         };
 
         let result = build_cli_prompt(&input);
@@ -382,6 +385,7 @@ mod tests {
             team_context: None,
             workspace_dir: None,
             sandbox_id: None,
+            teammates: vec![],
         };
 
         let result = build_cli_prompt(&input);

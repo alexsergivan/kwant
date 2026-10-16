@@ -25,6 +25,10 @@ export interface DiscussionState {
   currentSpeaker?: string;
   currentTurn?: number;
   totalTurns?: number;
+  /** 'handoff' when kwants pulled each other in with @mentions. */
+  kind?: string;
+  /** Who handed the current speaker the turn (handoffs only). */
+  askedBy?: string;
 }
 
 export interface RoutingCandidate {
@@ -502,7 +506,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <div className="flex items-center gap-2 text-sky-200">
               <Users size={14} className="text-sky-400 animate-pulse" />
               <span>
-                Team Discussion: <strong>{discussionState.currentSpeaker || 'Team member'}</strong> speaking (Turn {discussionState.currentTurn || 1} of {discussionState.totalTurns || 1})
+                {discussionState.kind === 'handoff' ? (
+                  <>
+                    Handoff: <strong>{discussionState.currentSpeaker || 'Teammate'}</strong> is replying
+                    {discussionState.askedBy ? <> (asked by {discussionState.askedBy})</> : null}
+                    {' '}• {discussionState.currentTurn || 1} of {discussionState.totalTurns || 1}
+                  </>
+                ) : (
+                  <>
+                    Team Discussion: <strong>{discussionState.currentSpeaker || 'Team member'}</strong> speaking (Turn {discussionState.currentTurn || 1} of {discussionState.totalTurns || 1})
+                  </>
+                )}
               </span>
             </div>
             {onCancelDiscussion && (

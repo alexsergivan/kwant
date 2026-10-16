@@ -31,6 +31,9 @@ pub enum RuntimeEvent {
         total_turns: usize,
         speakers: Vec<String>,
         plan: Vec<String>,
+        /// "discussion" for a planned team discussion, "handoff" when kwants @mentioned each other.
+        #[serde(default)]
+        kind: String,
     },
     #[serde(rename = "discussion_turn_started", alias = "DiscussionTurnStarted")]
     DiscussionTurnStarted {
@@ -39,6 +42,9 @@ pub enum RuntimeEvent {
         turn_index: usize,
         total_turns: usize,
         prompt: String,
+        /// Kwant that handed this speaker the turn with an @mention (handoffs only).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asked_by: Option<String>,
     },
     #[serde(rename = "discussion_completed", alias = "DiscussionCompleted")]
     DiscussionCompleted {

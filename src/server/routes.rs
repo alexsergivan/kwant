@@ -233,6 +233,23 @@ fn routing_candidates(members: &[Kwant]) -> Vec<RoutingCandidate> {
         .collect()
 }
 
+/// Everything a kwant turn needs besides the speaker and the prompt, shared by handoff turns.
+struct TurnScope {
+    state: AppState,
+    channel_id: Option<String>,
+    kwant_id: Option<String>,
+    team_keys: Option<(String, String)>,
+    team_context: Option<crate::drivers::TeamContext>,
+    workspace_dir: Option<std::path::PathBuf>,
+    /// Kwants in this chat that a speaker may hand the turn to with an @mention.
+    teammates: Vec<Kwant>,
+    cancel_token: CancellationToken,
+}
+
+/// Max follow-up turns kwants may trigger by @mentioning each other for one user message.
+const MAX_HANDOFFS: usize = 4;
+
+#[allow(clippy::too_many_arguments)]
 fn execute_single_turn(
     state: AppState,
     target_kwant: Kwant,
@@ -243,16 +260,126 @@ fn execute_single_turn(
     kwant_id: Option<String>,
     team_context: Option<crate::drivers::TeamContext>,
     workspace_dir: Option<std::path::PathBuf>,
+    teammates: Vec<Kwant>,
 ) {
-    let event_broadcast = state.event_sender.clone();
-    let db = state.db.clone();
-    let router = state.router.clone();
     let active_cancellations = state.active_cancellations.clone();
-    let channel_id = payload.channel_id.clone();
-    let kwant_id = kwant_id.or_else(|| payload.kwant_id.clone());
+    let scope = TurnScope {
+        channel_id: payload.channel_id.clone(),
+        kwant_id: kwant_id.or_else(|| payload.kwant_id.clone()),
+        team_keys,
+        team_context,
+        workspace_dir,
+        teammates,
+        cancel_token,
+        state,
+    };
     let prompt = payload.prompt.clone();
 
     tokio::spawn(async move {
+        if let Some(reply) = run_kwant_turn(&scope, &target_kwant, prompt.clone()).await {
+            run_handoffs(&scope, &[target_kwant.id.clone()], &[(target_kwant.clone(), reply)], &prompt).await;
+        }
+
+        let mut tokens = active_cancellations.lock().await;
+        tokens.remove(&session_id);
+        if let Some(cid) = &scope.channel_id {
+            tokens.remove(cid);
+        }
+        if let Some(kid) = &scope.kwant_id {
+            tokens.remove(kid);
+        }
+        if let Some((team_id, team_name)) = &scope.team_keys {
+            tokens.remove(team_id);
+            tokens.remove(team_name);
+        }
+    });
+}
+
+/// Lets teammates that kwants @mentioned in `replies` answer in turn, so kwants can delegate to each other.
+/// `already_spoken` kwants are not handed the turn again.
+async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(Kwant, String)], user_prompt: &str) {
+    let mut spoken: Vec<String> = already_spoken.to_vec();
+    let mut queue: std::collections::VecDeque<(Kwant, String, String)> = std::collections::VecDeque::new();
+    let enqueue = |queue: &mut std::collections::VecDeque<(Kwant, String, String)>,
+                   spoken: &[String],
+                   from: &Kwant,
+                   text: &str| {
+        let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
+        for i in crate::router::handoff_targets(text, &names) {
+            let k = &scope.teammates[i];
+            if k.id != from.id && !spoken.contains(&k.id) && !queue.iter().any(|(q, _, _)| q.id == k.id) {
+                queue.push_back((k.clone(), from.name.clone(), text.to_string()));
+            }
+        }
+    };
+    for (from, text) in replies {
+        enqueue(&mut queue, &spoken, from, text);
+    }
+    if queue.is_empty() {
+        return;
+    }
+
+    let events = scope.state.event_sender.clone();
+    let context_id = scope
+        .channel_id
+        .clone()
+        .or_else(|| scope.kwant_id.clone())
+        .unwrap_or_else(|| replies[0].0.id.clone());
+    let total = |queue_len: usize, done: usize| (1 + done + queue_len).min(1 + MAX_HANDOFFS);
+    let _ = events.send(RuntimeEvent::DiscussionStarted {
+        team_id: context_id,
+        team_name: scope.team_keys.as_ref().map(|(_, n)| n.clone()).unwrap_or_default(),
+        total_turns: total(queue.len(), 0),
+        speakers: queue.iter().map(|(k, _, _)| k.id.clone()).collect(),
+        plan: queue.iter().map(|(k, from, _)| format!("{}: asked by {}", k.name, from)).collect(),
+        kind: "handoff".into(),
+    });
+
+    let mut done = 0;
+    while let Some((kwant, from, from_text)) = queue.pop_front() {
+        if done >= MAX_HANDOFFS || scope.cancel_token.is_cancelled() {
+            break;
+        }
+        let prompt = format!(
+            "{from} handed this conversation to you by mentioning you.\n\nThe user's original request:\n{user}\n\n{from} wrote:\n{text}\n\n\
+            Reply to the user now with your own part of this, in character. Don't repeat what {from} already said.",
+            from = from,
+            user = user_prompt,
+            text = truncate_chars(&from_text, 4000),
+        );
+        let _ = events.send(RuntimeEvent::DiscussionTurnStarted {
+            speaker_id: kwant.id.clone(),
+            speaker_name: kwant.name.clone(),
+            turn_index: done + 2,
+            total_turns: total(queue.len(), done + 1),
+            prompt: prompt.clone(),
+            asked_by: Some(from.clone()),
+        });
+        done += 1;
+        spoken.push(kwant.id.clone());
+        match run_kwant_turn(scope, &kwant, prompt).await {
+            Some(reply) => enqueue(&mut queue, &spoken, &kwant, &reply),
+            None if scope.cancel_token.is_cancelled() => break,
+            None => {}
+        }
+    }
+
+    let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: done + 1 });
+}
+
+/// Runs one kwant turn: picks model/effort, syncs the bot browser, streams the reply and saves it.
+/// Returns the reply text, or `None` if the turn was cancelled or failed.
+async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String) -> Option<String> {
+    let state = &scope.state;
+    let event_broadcast = state.event_sender.clone();
+    let db = state.db.clone();
+    let router = state.router.clone();
+    let channel_id = scope.channel_id.clone();
+    let kwant_id = scope.kwant_id.clone();
+    let team_keys = &scope.team_keys;
+    let cancel_token = &scope.cancel_token;
+
+    {
         let available_models = crate::drivers::detect_available_models(&db).await;
         let route = match router.route_prompt_with_models(&prompt, "chat", &available_models).await {
             Ok(r) => r,
@@ -389,9 +516,15 @@ fn execute_single_turn(
             history,
             model_override: Some(target_model),
             effort_level: Some(effort_level),
-            team_context,
-            workspace_dir,
+            team_context: scope.team_context.clone(),
+            workspace_dir: scope.workspace_dir.clone(),
             sandbox_id: Some(sandbox_target.clone()),
+            teammates: scope
+                .teammates
+                .iter()
+                .filter(|k| k.id != target_kwant.id)
+                .map(|k| crate::drivers::Teammate { name: k.name.clone(), title: k.title.clone() })
+                .collect(),
         };
 
         let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -451,27 +584,16 @@ fn execute_single_turn(
                 direct_kwant_id: kwant_id.clone(),
                 sender_role: "kwant".into(),
                 sender_id: target_kwant.name.clone(),
-                text: output.text,
+                text: output.text.clone(),
                 reasoning_content: output.reasoning,
                 tool_calls: None,
                 tokens_used: output.tokens_used as i64,
             };
             let _ = db.insert_message(&asst_msg).await;
+            return Some(output.text);
         }
-
-        let mut tokens = active_cancellations.lock().await;
-        tokens.remove(&session_id);
-        if let Some(cid) = &channel_id {
-            tokens.remove(cid);
-        }
-        if let Some(kid) = &kwant_id {
-            tokens.remove(kid);
-        }
-        if let Some((team_id, team_name)) = &team_keys {
-            tokens.remove(team_id);
-            tokens.remove(team_name);
-        }
-    });
+        None
+    }
 }
 
 pub async fn send_chat(
@@ -574,6 +696,23 @@ pub async fn send_chat(
         }
     } else {
         None
+    };
+
+    // Kwants in this chat that a speaker can hand the turn to by @mentioning them
+    let chat_teammates: Vec<Kwant> = if let Some(ref t) = active_team {
+        let ids: Vec<String> = serde_json::from_str(&t.member_kwants).unwrap_or_default();
+        ids.iter().filter_map(|id| all_kwants.iter().find(|k| &k.id == id).cloned()).collect()
+    } else if let Some(cid) = &payload.channel_id {
+        match state.db.get_channel(cid).await {
+            Ok(Some(c)) if c.name == "general" => all_kwants.clone(),
+            Ok(Some(c)) => {
+                let ids: Vec<String> = serde_json::from_str(&c.member_kwants).unwrap_or_default();
+                ids.iter().filter_map(|id| all_kwants.iter().find(|k| &k.id == id).cloned()).collect()
+            }
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
     };
 
     let active_team_context = active_team.as_ref().map(|t| crate::drivers::TeamContext {
@@ -688,6 +827,7 @@ pub async fn send_chat(
                     kwant_id_cleanup,
                     active_team_context,
                     workspace_dir.clone(),
+                    members.clone(),
                 );
 
                 Ok(Json(json!({
@@ -732,6 +872,7 @@ pub async fn send_chat(
                 let prompt = payload.prompt.clone();
                 let active_cancellations = state.active_cancellations.clone();
                 let all_kwants_clone = all_kwants.clone();
+                let members_clone = members.clone();
                 let team_clone = team.clone();
                 let speakers_clone = speakers.clone();
                 let plan_clone = plan.clone();
@@ -753,9 +894,11 @@ pub async fn send_chat(
                         total_turns: turns,
                         speakers: speakers_clone.clone(),
                         plan: plan_clone.clone(),
+                        kind: "discussion".into(),
                     });
 
                     let mut cumulative_transcript: Vec<(String, String)> = Vec::new();
+                    let mut replies: Vec<(Kwant, String)> = Vec::new();
 
                     for (turn_idx, speaker_id) in speakers_clone.iter().enumerate() {
                         if cancel_token_clone.is_cancelled() {
@@ -831,6 +974,7 @@ pub async fn send_chat(
                             turn_index: turn_idx + 1,
                             total_turns: turns,
                             prompt: speaker_prompt.clone(),
+                            asked_by: None,
                         });
 
                         let available_models = crate::drivers::detect_available_models(&db).await;
@@ -871,6 +1015,11 @@ pub async fn send_chat(
                             }),
                             workspace_dir: workspace_dir_clone.clone(),
                             sandbox_id: Some(team_clone.id.clone()),
+                            teammates: members_clone
+                                .iter()
+                                .filter(|k| k.id != speaker.id)
+                                .map(|k| crate::drivers::Teammate { name: k.name.clone(), title: k.title.clone() })
+                                .collect(),
                         };
 
                         let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -921,6 +1070,7 @@ pub async fn send_chat(
                                 tokens_used: output.tokens_used as i64,
                             };
                             let _ = db.insert_message(&asst_msg).await;
+                            replies.push((speaker.clone(), output.text.clone()));
                             cumulative_transcript.push((speaker.name.clone(), output.text));
                         }
                     }
@@ -928,6 +1078,27 @@ pub async fn send_chat(
                     let _ = event_broadcast.send(RuntimeEvent::DiscussionCompleted {
                         total_turns: turns,
                     });
+
+                    // Teammates outside the planned speakers that the discussion @mentioned get their turn too
+                    if !cancel_token_clone.is_cancelled() {
+                        let scope = TurnScope {
+                            state: state_clone.clone(),
+                            channel_id: channel_id.clone(),
+                            kwant_id: kwant_id.clone(),
+                            team_keys: Some((team_clone.id.clone(), team_clone.name.clone())),
+                            team_context: Some(crate::drivers::TeamContext {
+                                id: team_clone.id.clone(),
+                                name: team_clone.name.clone(),
+                                description: team_clone.description.clone(),
+                                workspace_path: team_clone.workspace_path.clone(),
+                                repo_url: team_clone.repo_url.clone(),
+                            }),
+                            workspace_dir: workspace_dir_clone.clone(),
+                            teammates: members_clone.clone(),
+                            cancel_token: cancel_token_clone.clone(),
+                        };
+                        run_handoffs(&scope, &speakers_clone, &replies, &prompt).await;
+                    }
 
                     let mut tokens = active_cancellations.lock().await;
                     tokens.remove(&session_id_clone);
@@ -1030,6 +1201,7 @@ pub async fn send_chat(
             kwant_id_cleanup,
             active_team_context,
             workspace_dir,
+            chat_teammates,
         );
 
         Ok(Json(json!({

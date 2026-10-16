@@ -73,7 +73,14 @@ impl Driver for ApiDriver {
 
             let mut messages = vec![json!({"role": "system", "content": system_prompt})];
             for msg in &input.history {
-                messages.push(json!({"role": msg.sender_role, "content": msg.text}));
+                let (role, content) = match msg.sender_role.as_str() {
+                    "kwant" if msg.sender_id == input.kwant.name => ("assistant", msg.text.clone()),
+                    // Teammates' replies are context from other speakers, not this kwant's own turns
+                    "kwant" => ("user", format!("[{}]: {}", msg.sender_id, msg.text)),
+                    "system" => ("system", msg.text.clone()),
+                    _ => ("user", msg.text.clone()),
+                };
+                messages.push(json!({"role": role, "content": content}));
             }
             messages.push(json!({"role": "user", "content": input.prompt}));
 
