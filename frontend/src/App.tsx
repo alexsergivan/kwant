@@ -732,6 +732,34 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleUpdateTeamMembers = async (team: Team, memberIds: string[]) => {
+    const previous = teams;
+    // Optimistic update so the sidebar reacts instantly
+    setTeams((prev) => prev.map((t) => (t.id === team.id ? { ...t, member_kwants: memberIds } : t)));
+    try {
+      const res = await fetch(`/api/teams/${team.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: team.name,
+          description: team.description,
+          icon: team.icon,
+          workspace_path: team.workspace_path,
+          repo_url: team.repo_url,
+          lead_kwant_id: team.lead_kwant_id,
+          member_kwants: memberIds,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const cRes = await fetch('/api/channels');
+      if (cRes.ok) setChannels(await cRes.json());
+      playSfx('click');
+    } catch (err) {
+      console.error('Failed updating team members:', err);
+      setTeams(previous);
+    }
+  };
+
   const handleDeleteTeam = async (id: string) => {
     try {
       const res = await fetch(`/api/teams/${id}`, {
@@ -956,6 +984,7 @@ export const App: React.FC = () => {
           onSelectKwant={handleSelectKwant}
           onSelectChannel={handleSelectChannel}
           onSelectTeam={handleSelectTeam}
+          onUpdateTeamMembers={handleUpdateTeamMembers}
           onManageTeam={(team) => {
             setEditingTeam(team);
             playSfx('click');
