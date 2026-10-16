@@ -294,6 +294,13 @@ pub struct GatewayAccess {
     pub token: String,
 }
 
+impl GatewayAccess {
+    /// The gateway's grok naming mode (`POST /api/mcp/gateway/grok`): no `__` in tool names.
+    pub fn grok_url(&self) -> String {
+        format!("{}/grok", self.url.trim_end_matches('/'))
+    }
+}
+
 impl std::fmt::Debug for GatewayAccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GatewayAccess").field("url", &self.url).field("token", &"<redacted>").finish()

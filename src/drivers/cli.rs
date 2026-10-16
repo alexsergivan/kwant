@@ -372,7 +372,7 @@ impl CliDriver {
         let gateway = input.mcp.as_ref().and_then(|c| c.gateway.as_ref().map(|g| (c, g)));
         if let Some((ctx, gateway)) = gateway {
             let slowest = ctx.servers.iter().map(|s| s.timeout_secs.max(0) as u64).max().unwrap_or(0);
-            super::grok::add_gateway(&mut config, &gateway.url, slowest);
+            super::grok::add_gateway(&mut config, &gateway.grok_url(), slowest);
             args.push("--allow".into());
             args.push(super::grok::gateway_allow_rule());
         }

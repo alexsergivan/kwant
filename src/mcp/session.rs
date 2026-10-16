@@ -18,6 +18,50 @@ struct OfferedTool {
     name: String,
     server_index: usize,
     tool: McpTool,
+    /// The name grok sees (see [`grok_tool_names`]).
+    grok_name: String,
+}
+
+/// How kwnt's gateway names the tools it offers an agent CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayNaming {
+    /// `<server>__<tool>` (codex).
+    Plain,
+    /// `<server>-<tool>` with no `__` (grok rejects `__` inside an MCP tool name).
+    Grok,
+}
+
+/// grok's name for `<server>`'s `<tool>`: `<server>-<tool>`, every character outside
+/// `[A-Za-z0-9_-]` replaced by `_` and runs of `_` collapsed, so there is never a `__`.
+fn grok_base_name(server: &str, tool: &str) -> String {
+    let mut name = String::with_capacity(server.len() + tool.len() + 1);
+    for c in format!("{server}-{tool}").chars() {
+        let c = if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' };
+        if !(c == '_' && name.ends_with('_')) {
+            name.push(c);
+        }
+    }
+    name
+}
+
+/// grok names for `(server, tool)` pairs, in order. Distinct tools whose names map to the same
+/// grok name get a `-2`, `-3`, … suffix (first one keeps the plain name), never reusing a name
+/// another tool maps to plainly, so every grok name stands for exactly one tool.
+pub fn grok_tool_names(tools: &[(&str, &str)]) -> Vec<String> {
+    let bases: Vec<String> = tools.iter().map(|(server, tool)| grok_base_name(server, tool)).collect();
+    let mut taken: std::collections::HashSet<String> = bases.iter().cloned().collect();
+    let mut seen = std::collections::HashSet::new();
+    bases
+        .into_iter()
+        .map(|base| {
+            if seen.insert(base.clone()) {
+                return base;
+            }
+            let name = (2..).map(|n| format!("{base}-{n}")).find(|candidate| !taken.contains(candidate)).unwrap();
+            taken.insert(name.clone());
+            name
+        })
+        .collect()
 }
 
 /// Who is asking, for approval cards.
@@ -69,7 +113,7 @@ impl McpToolSession {
                     for tool in tools {
                         let name = namespaced_tool_name(&server.name, &tool.name);
                         if valid_function_name(&name) {
-                            session.tools.push(OfferedTool { name, server_index: index, tool });
+                            session.tools.push(OfferedTool { name, server_index: index, tool, grok_name: String::new() });
                         } else {
                             tracing::warn!(server = %server.name, tool = %tool.name, "MCP tool name not usable as a function name; skipped");
                         }
@@ -78,6 +122,12 @@ impl McpToolSession {
                 }
                 Err(e) => problems.push(format!("{}: {}", server.name, redact(&e.to_string(), &session.secrets))),
             }
+        }
+        let pairs: Vec<(&str, &str)> =
+            session.tools.iter().map(|t| (session.clients[t.server_index].0.as_str(), t.tool.name.as_str())).collect();
+        let grok_names = grok_tool_names(&pairs);
+        for (tool, grok_name) in session.tools.iter_mut().zip(grok_names) {
+            tool.grok_name = grok_name;
         }
         (session, problems)
     }
@@ -103,9 +153,10 @@ impl McpToolSession {
             .collect()
     }
 
-    /// The `tools/list` result for kwnt's MCP gateway. Tools are named `<server>__<tool>`, so an
-    /// agent CLI that prefixes `mcp__kwnt__` still shows which server a tool belongs to.
-    pub fn gateway_tools(&self) -> Vec<Value> {
+    /// The `tools/list` result for kwnt's MCP gateway. Tools are named `<server>__<tool>` (or
+    /// grok's `<server>-<tool>`), so an agent CLI that prefixes its own server name still shows
+    /// which server a tool belongs to.
+    pub fn gateway_tools(&self, naming: GatewayNaming) -> Vec<Value> {
         self.tools
             .iter()
             .map(|t| {
@@ -113,13 +164,26 @@ impl McpToolSession {
                 if !schema.is_object() {
                     schema = json!({"type": "object", "properties": {}});
                 }
+                let name = match naming {
+                    GatewayNaming::Plain => t.name.strip_prefix("mcp__").unwrap_or(&t.name),
+                    GatewayNaming::Grok => &t.grok_name,
+                };
                 json!({
-                    "name": t.name.strip_prefix("mcp__").unwrap_or(&t.name),
+                    "name": name,
                     "description": t.tool.description.clone().unwrap_or_default(),
                     "inputSchema": schema,
                 })
             })
             .collect()
+    }
+
+    /// The `mcp__<server>__<tool>` name a gateway tool name stands for; the approval card and
+    /// the call record use it. `None` for a grok name the gateway never offered.
+    pub fn canonical_name(&self, naming: GatewayNaming, gateway_name: &str) -> Option<String> {
+        match naming {
+            GatewayNaming::Plain => Some(format!("mcp__{gateway_name}")),
+            GatewayNaming::Grok => self.tools.iter().find(|t| t.grok_name == gateway_name).map(|t| t.name.clone()),
+        }
     }
 
     /// Runs one model-requested call: approval first, then the MCP call. The record is also
@@ -186,5 +250,33 @@ impl McpToolSession {
         for (_, client) in &mut self.clients {
             client.shutdown().await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grok_names_have_no_double_underscore() {
+        let names = grok_tool_names(&[("alpha", "alpha_ping"), ("gh", "create__issue"), ("a-b", "x__y___z_")]);
+        assert_eq!(names, ["alpha-alpha_ping", "gh-create_issue", "a-b-x_y_z_"]);
+        assert!(names.iter().all(|n| !n.contains("__")));
+    }
+
+    #[test]
+    fn grok_name_collisions_get_unique_suffixes() {
+        let names = grok_tool_names(&[
+            ("a", "b-c"),
+            ("a-b", "c"),     // same base as the first
+            ("gh", "x__y"),   // `gh-x_y`
+            ("gh", "x_y"),    // same base
+            ("gh", "x_y-2"),  // the suffix the previous one would naively get
+            ("a", "b-c"),     // a third `a-b-c`
+        ]);
+        assert_eq!(names, ["a-b-c", "a-b-c-2", "gh-x_y", "gh-x_y-3", "gh-x_y-2", "a-b-c-3"]);
+        let unique: std::collections::HashSet<_> = names.iter().collect();
+        assert_eq!(unique.len(), names.len());
+        assert!(names.iter().all(|n| !n.contains("__")));
     }
 }

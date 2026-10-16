@@ -324,6 +324,11 @@ async fn grok_gets_the_gateway_with_the_token_in_env_only() {
     let config: toml::Table = config_text.parse().unwrap();
     let servers = config["mcp_servers"].as_table().unwrap();
     assert_eq!(
+        servers["kwnt"]["url"].as_str(),
+        Some("http://127.0.0.1:1/api/mcp/gateway/grok"),
+        "grok naming mode"
+    );
+    assert_eq!(
         servers.keys().collect::<Vec<_>>(),
         ["kwnt"],
         "only kwnt's gateway"
