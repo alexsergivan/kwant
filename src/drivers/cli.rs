@@ -182,6 +182,9 @@ pub fn build_cli_prompt(input: &TurnInput) -> String {
 pub struct CliDriver {
     pub cli_binary: Option<String>,
     pub tool_kind: String, // "claude", "codex", "grok"
+    /// The user's grok home to take model settings and login from; `None` means `$GROK_HOME`
+    /// or `~/.grok`. Only read, never written.
+    pub grok_home: Option<std::path::PathBuf>,
 }
 
 impl CliDriver {
@@ -191,7 +194,237 @@ impl CliDriver {
         Self {
             cli_binary: bin,
             tool_kind: kind,
+            grok_home: None,
         }
+    }
+
+    pub fn with_grok_home(mut self, dir: std::path::PathBuf) -> Self {
+        self.grok_home = Some(dir);
+        self
+    }
+}
+
+/// Longest stderr tail kept from a grok run.
+const GROK_STDERR_MAX: usize = 16 * 1024;
+
+/// How a grok run gets the user's login.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GrokAuth {
+    /// `GROK_AUTH_PATH` points at the user's own auth file, which grok reads in place.
+    InPlace,
+    /// A 0600 copy inside the temp home, for a grok that ignores `GROK_AUTH_PATH`.
+    Copied,
+}
+
+/// Everything a grok run needs, shared by the login fallback's retry.
+struct GrokLaunch<'a> {
+    bin_path: &'a str,
+    input: &'a TurnInput,
+    args: Vec<String>,
+    /// The temp home's `config.toml`.
+    config: toml::Table,
+    /// The user's grok login file, if they have one.
+    auth_file: Option<std::path::PathBuf>,
+    /// This turn's gateway token, handed over in grok's env only.
+    gateway_token: Option<String>,
+}
+
+/// What one grok process left behind.
+struct GrokRun {
+    /// The reply text from grok's `text` events.
+    stdout: String,
+    stderr: String,
+    /// grok's `error` events.
+    errors: Vec<String>,
+    stop_reason: Option<String>,
+    /// `None` if grok was killed by a signal.
+    exit_code: Option<i32>,
+}
+
+/// Reads a pipe to the end, keeping at most the last `max` bytes.
+async fn read_tail<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, max: usize) -> String {
+    let mut kept: Vec<u8> = Vec::new();
+    let mut buffer = [0u8; 4096];
+    while let Ok(n) = pipe.read(&mut buffer).await {
+        if n == 0 {
+            break;
+        }
+        kept.extend_from_slice(&buffer[..n]);
+        if kept.len() > max {
+            kept.drain(..kept.len() - max);
+        }
+    }
+    String::from_utf8_lossy(&kept).into_owned()
+}
+
+impl CliDriver {
+    /// One grok run in a fresh private `GROK_HOME` (see [`super::grok`]). The temp home lives
+    /// until this returns or the turn is aborted; either way dropping it removes the directory.
+    async fn run_grok_once(
+        launch: &GrokLaunch<'_>,
+        auth: GrokAuth,
+        event_tx: &mpsc::Sender<RuntimeEvent>,
+    ) -> std::io::Result<GrokRun> {
+        let home = super::grok::GrokHome::create(&std::env::temp_dir(), &launch.config)?;
+        let mut cmd = Command::new(launch.bin_path);
+        if let Some(dir) = launch.input.workspace_dir.as_ref().filter(|d| d.exists()) {
+            cmd.current_dir(dir);
+        }
+        cmd.env("BROWSER", "none");
+        cmd.env("DISPLAY", "");
+        cmd.env("GROK_HOME", &home.path);
+        for (key, value) in super::grok::ISOLATION_ENV {
+            cmd.env(key, value);
+        }
+        for key in super::grok::REMOVED_ENV {
+            cmd.env_remove(key);
+        }
+        match (launch.auth_file.as_deref(), auth) {
+            (Some(file), GrokAuth::InPlace) => {
+                cmd.env("GROK_AUTH_PATH", file);
+            }
+            (Some(file), GrokAuth::Copied) => {
+                home.copy_auth(file)?;
+                cmd.env_remove("GROK_AUTH_PATH");
+            }
+            (None, _) => {}
+        }
+        // Never written to disk: the config's header refers to this variable by name
+        match &launch.gateway_token {
+            Some(token) => cmd.env(crate::mcp::GATEWAY_TOKEN_ENV, token),
+            None => cmd.env_remove(crate::mcp::GATEWAY_TOKEN_ENV),
+        };
+        cmd.args(&launch.args);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // A cancelled turn aborts this task; the CLI must not outlive it
+        cmd.kill_on_drop(true);
+
+        let mut child = cmd.spawn()?;
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+        let read_stdout = async {
+            let mut run = GrokRun {
+                stdout: String::new(),
+                stderr: String::new(),
+                errors: Vec::new(),
+                stop_reason: None,
+                exit_code: None,
+            };
+            let mut parser = super::grok::StreamParser::default();
+            let mut buffer = [0u8; 4096];
+            // Bytes of a UTF-8 character split across reads
+            let mut partial: Vec<u8> = Vec::new();
+            if let Some(mut stdout) = stdout_pipe {
+                loop {
+                    let n = match stdout.read(&mut buffer).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    partial.extend_from_slice(&buffer[..n]);
+                    let valid = match std::str::from_utf8(&partial) {
+                        Ok(_) => partial.len(),
+                        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+                        Err(_) => partial.len(),
+                    };
+                    let chunk = String::from_utf8_lossy(&partial[..valid]).into_owned();
+                    partial.drain(..valid);
+                    for event in parser.push(&chunk) {
+                        Self::apply_grok_event(event, &mut run, event_tx).await;
+                    }
+                }
+            }
+            let rest = String::from_utf8_lossy(&partial).into_owned();
+            for event in parser.push(&rest).into_iter().chain(parser.finish()) {
+                Self::apply_grok_event(event, &mut run, event_tx).await;
+            }
+            run
+        };
+        let read_stderr = async {
+            match stderr_pipe {
+                Some(stderr) => read_tail(stderr, GROK_STDERR_MAX).await,
+                None => String::new(),
+            }
+        };
+        let (mut run, stderr) = tokio::join!(read_stdout, read_stderr);
+        run.exit_code = child.wait().await.ok().and_then(|s| s.code());
+        drop(home);
+        run.stderr = stderr;
+        Ok(run)
+    }
+
+    async fn apply_grok_event(
+        event: super::grok::StreamEvent,
+        run: &mut GrokRun,
+        event_tx: &mpsc::Sender<RuntimeEvent>,
+    ) {
+        match event {
+            super::grok::StreamEvent::Text(text) => {
+                let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
+                run.stdout.push_str(&text);
+            }
+            super::grok::StreamEvent::Error(message) => run.errors.push(message),
+            super::grok::StreamEvent::End { stop_reason } => run.stop_reason = stop_reason,
+        }
+    }
+
+    async fn run_grok(
+        &self,
+        bin_path: &str,
+        input: &TurnInput,
+        mut args: Vec<String>,
+        event_tx: &mpsc::Sender<RuntimeEvent>,
+    ) -> std::io::Result<GrokRun> {
+        let user_home = self.grok_home.clone().or_else(super::grok::user_grok_home);
+        let mut config = user_home
+            .as_ref()
+            .and_then(|h| std::fs::read_to_string(h.join("config.toml")).ok())
+            .map(|text| super::grok::model_settings(&text))
+            .unwrap_or_default();
+        let auth_file = std::env::var_os("GROK_AUTH_PATH")
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| user_home.map(|h| h.join("auth.json")))
+            .filter(|p| p.is_file());
+        let gateway = input
+            .mcp
+            .as_ref()
+            .and_then(|c| c.gateway.as_ref().map(|g| (c, g)));
+        if let Some((ctx, gateway)) = gateway {
+            let slowest = ctx
+                .servers
+                .iter()
+                .map(|s| s.timeout_secs.max(0) as u64)
+                .max()
+                .unwrap_or(0);
+            super::grok::add_gateway(&mut config, &gateway.grok_url(), slowest);
+            args.push("--allow".into());
+            args.push(super::grok::gateway_allow_rule());
+        }
+        args.push("--output-format".into());
+        args.push("streaming-json".into());
+        let gateway_token = gateway.map(|(_, g)| g.token.clone());
+        let launch = GrokLaunch {
+            bin_path,
+            input,
+            args,
+            config,
+            auth_file,
+            gateway_token,
+        };
+        let run = Self::run_grok_once(&launch, GrokAuth::InPlace, event_tx).await?;
+        if launch.auth_file.is_some()
+            && run.stdout.trim().is_empty()
+            && super::grok::not_signed_in(&run.stderr)
+        {
+            // Nothing ran: grok stops before the model when it finds no login
+            tracing::info!(
+                "grok ignored GROK_AUTH_PATH; retrying with a private copy of its login"
+            );
+            return Self::run_grok_once(&launch, GrokAuth::Copied, event_tx).await;
+        }
+        Ok(run)
     }
 }
 
@@ -250,15 +483,6 @@ impl Driver for CliDriver {
         // Prevent CLI tools from spawning desktop browser windows on host
         cmd.env("BROWSER", "none");
         cmd.env("DISPLAY", "");
-
-        if input.mcp.is_some() && self.tool_kind == "grok" {
-            let _ = event_tx
-                .send(RuntimeEvent::ThinkingDelta(format!(
-                    "MCP servers are assigned, but kwnt can't offer MCP tools through the {} CLI yet; running without them.",
-                    self.tool_kind
-                )))
-                .await;
-        }
 
         match self.tool_kind.as_str() {
             "codex" => {
@@ -321,11 +545,74 @@ impl Driver for CliDriver {
                     "low" => "low",
                     _ => "medium",
                 };
-                // Without an explicit effort grok uses the user's default (often xhigh), which is far too slow for chat
-                cmd.arg("--reasoning-effort").arg(grok_effort);
-                cmd.arg("--no-plan").arg("--no-subagents");
-                cmd.arg("--rules").arg(&system_prompt);
-                cmd.arg("-p").arg(&effective_prompt);
+                let args: Vec<String> = vec![
+                    // Without an explicit effort grok uses the user's default (often xhigh), which is far too slow for chat
+                    "--reasoning-effort".into(),
+                    grok_effort.into(),
+                    "--no-plan".into(),
+                    "--no-subagents".into(),
+                    "--rules".into(),
+                    system_prompt.clone(),
+                    "-p".into(),
+                    effective_prompt.clone(),
+                ];
+                let (text, tokens) = match self.run_grok(&bin_path, &input, args, &event_tx).await {
+                    Ok(run) if run.stdout.trim().is_empty() => {
+                        // Never an empty reply: say why grok gave none
+                        let mut secrets = input
+                            .mcp
+                            .as_ref()
+                            .map(|c| c.secret_values())
+                            .unwrap_or_default();
+                        secrets.extend(
+                            input
+                                .mcp
+                                .as_ref()
+                                .and_then(|c| c.gateway.as_ref())
+                                .map(|g| g.token.clone()),
+                        );
+                        let notice = super::grok::empty_reply_notice(
+                            &super::grok::EmptyRun {
+                                stderr: &run.stderr,
+                                errors: &run.errors,
+                                stop_reason: run.stop_reason.as_deref(),
+                                exit_code: run.exit_code,
+                            },
+                            &secrets,
+                        );
+                        tracing::warn!(exit_code = ?run.exit_code, stop_reason = ?run.stop_reason, "grok gave no reply");
+                        let msg = format!("⚠️ [{}] {notice}", input.kwant.name);
+                        let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
+                        (msg, 0)
+                    }
+                    Ok(run) => {
+                        let tokens = run.stdout.len() / 4;
+                        (run.stdout, tokens)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, binary = %bin_path, "grok run failed");
+                        let msg = format!(
+                            "⚠️ [{}] Execution error for CLI `{}`: {}",
+                            input.kwant.name, bin_path, e
+                        );
+                        let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
+                        (msg, 15)
+                    }
+                };
+                let _ = event_tx
+                    .send(RuntimeEvent::TurnComplete {
+                        tokens,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    })
+                    .await;
+                return Ok(TurnOutput {
+                    text,
+                    reasoning: Some(format!(
+                        "Executed via {} CLI ({}) [Effort: {}]",
+                        self.tool_kind, bin_path, effort
+                    )),
+                    tokens_used: tokens,
+                });
             }
             _ => {
                 // claude default

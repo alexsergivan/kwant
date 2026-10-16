@@ -11,7 +11,7 @@ use crate::drivers::events::RuntimeEvent;
 use crate::mcp::{
     self,
     client::PROTOCOL_VERSION,
-    session::{Caller, McpToolSession},
+    session::{Caller, GatewayNaming, McpToolSession},
     GatewayAccess, McpTurnContext, ToolApprovalRequest, ToolApprover,
 };
 use async_trait::async_trait;
@@ -388,7 +388,26 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
 /// stays out of URLs and argv. Every call is approved through the turn's approver (the
 /// approval card) before it is forwarded, and recorded like any other MCP call.
 pub async fn gateway_endpoint(State(state): State<AppState>, headers: HeaderMap, Json(msg): Json<Value>) -> Response {
-    let session = match bearer_token(&headers) {
+    gateway_rpc(&state, &headers, msg, GatewayNaming::Plain).await
+}
+
+/// `POST /api/mcp/gateway/grok`: the same gateway, with tool names grok accepts (no `__`).
+/// Calls are mapped back to the real tool, so approval cards and records show its usual name.
+pub async fn gateway_grok_endpoint(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(msg): Json<Value>,
+) -> Response {
+    gateway_rpc(&state, &headers, msg, GatewayNaming::Grok).await
+}
+
+async fn gateway_rpc(
+    state: &AppState,
+    headers: &HeaderMap,
+    msg: Value,
+    naming: GatewayNaming,
+) -> Response {
+    let session = match bearer_token(headers) {
         Some(token) => state.mcp_sessions.lock().await.get(token).cloned(),
         None => None,
     };
@@ -409,7 +428,7 @@ pub async fn gateway_endpoint(State(state): State<AppState>, headers: HeaderMap,
         ),
         "ping" => rpc_result(id, json!({})),
         "tools/list" => match session.tool_session().await {
-            Some(tools) => rpc_result(id, json!({"tools": tools.gateway_tools()})),
+            Some(tools) => rpc_result(id, json!({"tools": tools.gateway_tools(naming)})),
             None => StatusCode::UNAUTHORIZED.into_response(),
         },
         "tools/call" => {
@@ -421,7 +440,10 @@ pub async fn gateway_endpoint(State(state): State<AppState>, headers: HeaderMap,
             let Some(tools) = session.tool_session().await else {
                 return StatusCode::UNAUTHORIZED.into_response();
             };
-            let tool_name = format!("mcp__{name}");
+            // An unknown grok name stays as given, and the call fails as an unknown tool
+            let tool_name = tools
+                .canonical_name(naming, name)
+                .unwrap_or_else(|| name.to_string());
             // Dropping the call withdraws its card (or stops the forwarded call) when the turn ends
             let (caller, raw_arguments) = (session.caller(), arguments.to_string());
             let outcome = tokio::select! {

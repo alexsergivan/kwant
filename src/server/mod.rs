@@ -118,6 +118,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/kwants/:id/mcp-servers", get(mcp_routes::get_kwant_servers).put(mcp_routes::set_kwant_servers))
         .route("/api/mcp/permission/:token", post(mcp_runtime::permission_endpoint))
         .route("/api/mcp/gateway", post(mcp_runtime::gateway_endpoint))
+        .route("/api/mcp/gateway/grok", post(mcp_runtime::gateway_grok_endpoint))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
         .layer(cors)

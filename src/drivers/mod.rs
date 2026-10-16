@@ -1,6 +1,7 @@
 pub mod api;
 pub mod cli;
 pub mod events;
+pub mod grok;
 
 pub use api::ApiDriver;
 pub use cli::{find_cli_binary, CliDriver};

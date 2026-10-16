@@ -299,3 +299,77 @@ async fn ending_the_turn_cancels_a_call_waiting_for_its_card() {
     assert_eq!(records[0]["status"], "cancelled");
     assert!(records[0].get("result").is_none());
 }
+
+/// Approves everything and remembers what each approval card would have shown.
+struct RecordingApprover(std::sync::Mutex<Vec<kwnt::mcp::ToolApprovalRequest>>);
+
+#[async_trait::async_trait]
+impl ToolApprover for RecordingApprover {
+    async fn approve(&self, request: kwnt::mcp::ToolApprovalRequest) -> bool {
+        self.0.lock().unwrap().push(request);
+        true
+    }
+}
+
+#[tokio::test]
+async fn grok_gateway_names_have_no_double_underscore_and_map_back() {
+    let (state, _tmp) = state().await;
+    let base = serve(state.clone()).await;
+    let approver = Arc::new(RecordingApprover(Default::default()));
+    let ctx = register(&state, "grok-tok", approver.clone()).await;
+
+    let mut grok_gateway = gateway(&base, Some("grok-tok"));
+    grok_gateway.url = Some(format!("{base}/api/mcp/gateway/grok"));
+    let mut client = McpClient::connect(&grok_gateway, None).await.unwrap();
+    let tools = client.list_tools().await.unwrap();
+    let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
+    assert!(
+        names.contains(&"echo-echo") && names.contains(&"echo-add"),
+        "{names:?}"
+    );
+    assert!(names.iter().all(|n| !n.contains("__")), "{names:?}");
+
+    let out = client
+        .call_tool("echo-echo", json!({"text": "hello grok"}))
+        .await
+        .unwrap();
+    assert!(!out.is_error);
+    assert_eq!(out.text, "hello grok");
+    // The plain gateway names aren't valid in grok mode
+    let plain = client
+        .call_tool("echo__echo", json!({"text": "x"}))
+        .await
+        .unwrap();
+    assert!(plain.is_error, "{}", plain.text);
+    client.shutdown().await;
+
+    // The approval card and the record show the real tool name
+    let cards = approver.0.lock().unwrap().clone();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].tool_name, "mcp__echo__echo");
+    assert_eq!(
+        (cards[0].server.as_str(), cards[0].tool.as_str()),
+        ("echo", "echo")
+    );
+    let records = ctx.take_records();
+    assert_eq!(records[0]["name"], "mcp__echo__echo");
+    assert_eq!(records[0]["status"], "ok");
+
+    // The plain gateway is unchanged for codex on the same turn
+    let mut codex = McpClient::connect(&gateway(&base, Some("grok-tok")), None)
+        .await
+        .unwrap();
+    let codex_names: Vec<_> = codex
+        .list_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert!(
+        codex_names.contains(&"echo__echo".to_string()),
+        "{codex_names:?}"
+    );
+    codex.shutdown().await;
+    mcp_runtime::finish_turn(&state, "grok-tok").await;
+}
