@@ -123,6 +123,15 @@ pub fn codex_reserved_name_conflict(ctx: Option<&crate::mcp::McpTurnContext>, us
 /// How long `codex mcp list` may take before the turn is refused.
 const CODEX_MCP_LIST_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// `codex exec` overrides limiting the model's shell commands to codex's "core" env
+/// (PATH, HOME, USER, SHELL...). codex's default passes its whole env, provider key included.
+pub const CODEX_SHELL_POLICY: [&str; 4] = [
+    "-c",
+    "shell_environment_policy.inherit=\"core\"",
+    "-c",
+    "shell_environment_policy.ignore_default_excludes=false",
+];
+
 /// Names of the MCP servers codex would load for this turn, as codex itself resolves them:
 /// `$CODEX_HOME`/`~/.codex` config, its active profile, a trusted project's `.codex/config.toml`
 /// for `cwd`, and system config. The listing holds server env values, so it is never logged.
@@ -382,6 +391,7 @@ impl CliDriver {
             .and_then(|h| std::fs::read_to_string(h.join("config.toml")).ok())
             .map(|text| super::grok::model_settings(&text))
             .unwrap_or_default();
+        super::grok::restrict_shell_env(&mut config);
         let auth_file = std::env::var_os("GROK_AUTH_PATH")
             .filter(|p| !p.is_empty())
             .map(std::path::PathBuf::from)
@@ -527,7 +537,9 @@ impl Driver for CliDriver {
                     // Never the user's own codex servers: codex exec has no hook for kwnt's
                     // approval cards. The kwant's servers come only through kwnt's gateway.
                     .arg("-c")
-                    .arg(codex_mcp_servers(input.mcp.as_ref(), &user_servers));
+                    .arg(codex_mcp_servers(input.mcp.as_ref(), &user_servers))
+                    // The model's shell sees only codex's core env, never kwnt's keys or rc exports
+                    .args(CODEX_SHELL_POLICY);
                 if let Some(gateway) = input.mcp.as_ref().and_then(|c| c.gateway.as_ref()) {
                     cmd.env(crate::mcp::GATEWAY_TOKEN_ENV, &gateway.token);
                     // codex's default shell env policy passes the token on to the model's shell
@@ -733,6 +745,20 @@ impl Driver for CliDriver {
 mod tests {
     use super::*;
     use crate::db::models::{Kwant, Message};
+
+    #[test]
+    fn codex_shell_policy_is_core_only() {
+        let args = CODEX_SHELL_POLICY.join(" ");
+        assert_eq!(
+            args,
+            "-c shell_environment_policy.inherit=\"core\" -c shell_environment_policy.ignore_default_excludes=false"
+        );
+        // Each override must parse as TOML, the way `codex -c key=value` reads it
+        for pair in CODEX_SHELL_POLICY.iter().skip(1).step_by(2) {
+            let table: toml::Table = pair.parse().unwrap();
+            assert!(table.contains_key("shell_environment_policy"), "{pair}");
+        }
+    }
 
     #[test]
     fn test_build_cli_prompt_with_history() {

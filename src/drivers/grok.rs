@@ -255,9 +255,66 @@ pub fn add_gateway(config: &mut toml::Table, url: &str, slowest: u64) {
     let mut servers = toml::Table::new();
     servers.insert(crate::mcp::RESERVED_SERVER_NAME.into(), server.into());
     config.insert("mcp_servers".into(), servers.into());
+    exclude_from_shell(config, token_env);
+}
+
+/// Env names grok's own credentials may come from; hidden from the model's shell.
+const CREDENTIAL_ENV: [&str; 2] = ["XAI_API_KEY", "GROK_AUTH_PATH"];
+
+/// Limits the env the model's shell commands see to grok's "core" set (PATH, HOME, USER,
+/// SHELL, TERM, LANG...). grok's default passes its whole env, and the user's rc-file
+/// exports, to the model. Must run on every launch; the user's own policy was already dropped
+/// by `model_settings`. The `exclude` list is belt-and-braces on top of `core`.
+pub fn restrict_shell_env(config: &mut toml::Table) {
+    let mut names: Vec<String> = CREDENTIAL_ENV.iter().map(|s| s.to_string()).collect();
+    names.extend(provider_env_names(config));
     let mut policy = toml::Table::new();
-    policy.insert("exclude".into(), toml::Value::Array(vec![token_env.into()]));
+    policy.insert("inherit".into(), "core".into());
+    policy.insert("ignore_default_excludes".into(), false.into());
+    policy.insert("exclude".into(), toml::Value::Array(vec![]));
     config.insert("shell_environment_policy".into(), policy.into());
+    for name in names {
+        exclude_from_shell(config, &name);
+    }
+}
+
+/// `env_key` and `env_http_headers` variable names of the kept `[model.*]` tables.
+fn provider_env_names(config: &toml::Table) -> Vec<String> {
+    let Some(models) = config.get("model").and_then(|m| m.as_table()) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for model in models.values().filter_map(|m| m.as_table()) {
+        if let Some(key) = model.get("env_key").and_then(|k| k.as_str()) {
+            names.push(key.to_string());
+        }
+        if let Some(headers) = model.get("env_http_headers").and_then(|h| h.as_table()) {
+            names.extend(
+                headers
+                    .values()
+                    .filter_map(|v| v.as_str())
+                    .map(String::from),
+            );
+        }
+    }
+    names
+}
+
+fn exclude_from_shell(config: &mut toml::Table, name: &str) {
+    let policy = config
+        .entry("shell_environment_policy")
+        .or_insert_with(|| toml::Table::new().into());
+    let Some(policy) = policy.as_table_mut() else {
+        return;
+    };
+    let exclude = policy
+        .entry("exclude")
+        .or_insert_with(|| toml::Value::Array(vec![]));
+    if let Some(list) = exclude.as_array_mut() {
+        if !list.iter().any(|v| v.as_str() == Some(name)) {
+            list.push(name.into());
+        }
+    }
 }
 
 /// The `--allow` rule that lets grok call the gateway's tools without its own (headless,
@@ -396,6 +453,77 @@ allow = ["Bash(*)"]
             Some(330)
         );
         assert_eq!(gateway_allow_rule(), "MCPTool(kwnt__*)");
+    }
+
+    fn exclude_list(config: &toml::Table) -> Vec<&str> {
+        config["shell_environment_policy"]["exclude"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn shell_env_is_core_only_on_every_run() {
+        let user = r#"
+[models]
+default = "corp"
+
+[model.corp]
+base_url = "https://llm.example/v1"
+env_key = "CORP_LLM_KEY"
+env_http_headers = { "X-Org" = "CORP_ORG_ID" }
+
+[shell_environment_policy]
+inherit = "all"
+include_only = ["*"]
+"#;
+        // No gateway: the policy is still written, and the user's own policy is gone
+        let mut config = model_settings(user);
+        restrict_shell_env(&mut config);
+        let text = toml::to_string(&config).unwrap();
+        let parsed: toml::Table = text.parse().unwrap();
+        let policy = parsed["shell_environment_policy"].as_table().unwrap();
+        assert_eq!(policy["inherit"].as_str(), Some("core"), "{text}");
+        assert_eq!(policy["ignore_default_excludes"].as_bool(), Some(false));
+        assert!(!policy.contains_key("include_only"), "{text}");
+        assert_eq!(
+            exclude_list(&parsed),
+            [
+                "XAI_API_KEY",
+                "GROK_AUTH_PATH",
+                "CORP_LLM_KEY",
+                "CORP_ORG_ID"
+            ]
+        );
+
+        // The gateway adds its token without dropping the core policy, once
+        add_gateway(&mut config, "http://x", 0);
+        add_gateway(&mut config, "http://x", 0);
+        assert_eq!(
+            config["shell_environment_policy"]["inherit"].as_str(),
+            Some("core")
+        );
+        assert_eq!(
+            exclude_list(&config),
+            [
+                "XAI_API_KEY",
+                "GROK_AUTH_PATH",
+                "CORP_LLM_KEY",
+                "CORP_ORG_ID",
+                "KWNT_MCP_GATEWAY_TOKEN"
+            ]
+        );
+
+        // No user config at all still gets the policy
+        let mut empty = toml::Table::new();
+        restrict_shell_env(&mut empty);
+        assert_eq!(
+            empty["shell_environment_policy"]["inherit"].as_str(),
+            Some("core")
+        );
+        assert_eq!(exclude_list(&empty), ["XAI_API_KEY", "GROK_AUTH_PATH"]);
     }
 
     #[test]

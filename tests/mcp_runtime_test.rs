@@ -406,7 +406,14 @@ async fn codex_cli_reaches_mcp_only_through_kwnts_gateway() {
     // Without servers (none assigned, or the kwant opted out) codex still gets none of the user's
     let (plain, token, _, _) = fake_agent_run("codex", None, Some(USER_SERVERS)).await;
     assert!(plain.contains(r#"-c mcp_servers={"userdummy"={enabled=false},"user.dot \"q\""={enabled=false}} "#), "{plain}");
-    assert!(!plain.contains("shell_environment_policy"), "{plain}");
+    // The model's shell is limited to core env on every run, gateway or not
+    for run in [&argv, &plain] {
+        assert!(
+            run.contains(r#"-c shell_environment_policy.inherit="core" -c shell_environment_policy.ignore_default_excludes=false "#),
+            "{run}"
+        );
+    }
+    assert!(!plain.contains("shell_environment_policy.set"), "{plain}");
     assert_eq!(token, "unset");
 
     // And with no user servers either, the override is empty, as before
