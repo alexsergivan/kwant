@@ -162,7 +162,10 @@ Body: `{"server_ids": ["…"]}` (replaces the whole assignment; `[]` clears it).
   which servers it would load for the turn (`codex mcp list --json`, run in the turn's working
   directory: user config, profile, trusted-project `.codex/config.toml`, system config) and adds
   `"<name>"={enabled=false}` for each one into the same table, so they are neither offered nor
-  started. If that listing fails, kwnt doesn't run codex for the turn. The turn's token is passed
+  started. If that listing fails, kwnt doesn't run codex for the turn. `kwnt` is reserved here
+  too: a user codex server named `kwnt` is switched off like the others on turns without the
+  gateway, but on a gateway turn the two entries would merge, so kwnt refuses the turn and asks
+  the user to rename that server. The turn's token is passed
   in the `KWNT_MCP_GATEWAY_TOKEN` env variable and sent as `Authorization: Bearer`, never on the
   command line, and blanked for codex's own shell commands
   (`-c shell_environment_policy.set.KWNT_MCP_GATEWAY_TOKEN=""`); other tokens and finished turns

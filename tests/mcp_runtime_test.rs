@@ -332,9 +332,11 @@ async fn claude_cli_gets_mcp_config_without_secrets_in_argv() {
     assert!(plain.contains("--strict-mcp-config") && !plain.contains("--mcp-config") && !plain.contains("permission-prompt"), "{plain}");
 }
 
-/// The servers the fake codex reports for `codex mcp list --json`: a quoted name, and one
-/// named like kwnt's gateway.
-const USER_SERVERS: &str = r#"[{"name":"userdummy","enabled":true},{"name":"user.dot \"q\"","enabled":true},{"name":"kwnt","enabled":true}]"#;
+/// The servers the fake codex reports for `codex mcp list --json`, one with a quoted name.
+const USER_SERVERS: &str = r#"[{"name":"userdummy","enabled":true},{"name":"user.dot \"q\"","enabled":true}]"#;
+/// The same plus a user server named like kwnt's gateway.
+const USER_SERVERS_WITH_KWNT: &str =
+    r#"[{"name":"userdummy","enabled":true},{"name":"user.dot \"q\"","enabled":true},{"name":"kwnt","enabled":true}]"#;
 
 /// Runs a fake codex/grok that logs its argv and whether it got the gateway token env, and
 /// returns (argv, token env, thinking notes, reply). `mcp_list` is what it prints for
@@ -389,7 +391,7 @@ async fn codex_cli_reaches_mcp_only_through_kwnts_gateway() {
     let tmp = tempdir().unwrap();
     let (argv, token, notes, _) =
         fake_agent_run("codex", Some(ctx(tmp.path(), Arc::new(FixedApprover(true)))), Some(USER_SERVERS)).await;
-    // The user's own servers are switched off by (quoted) name; their "kwnt" is overridden, not disabled
+    // The user's own servers are switched off by (quoted) name
     assert!(
         argv.contains(r#"-c mcp_servers={kwnt={url="http://127.0.0.1:1/api/mcp/gateway",bearer_token_env_var="KWNT_MCP_GATEWAY_TOKEN",default_tools_approval_mode="approve",startup_timeout_sec=45,tool_timeout_sec=330},"userdummy"={enabled=false},"user.dot \"q\""={enabled=false}} "#),
         "{argv}"
@@ -410,6 +412,27 @@ async fn codex_cli_reaches_mcp_only_through_kwnts_gateway() {
     // And with no user servers either, the override is empty, as before
     let (bare, _, _, _) = fake_agent_run("codex", None, Some("[]")).await;
     assert!(bare.contains("-c mcp_servers={} "), "{bare}");
+}
+
+/// A user codex server named `kwnt` would merge with the gateway's entry: without a gateway it is
+/// switched off like any other, with one the turn is refused rather than run.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn codex_user_server_named_kwnt_is_disabled_or_refused() {
+    let (plain, token, _, _) = fake_agent_run("codex", None, Some(USER_SERVERS_WITH_KWNT)).await;
+    assert!(
+        plain.contains(r#"-c mcp_servers={"userdummy"={enabled=false},"user.dot \"q\""={enabled=false},"kwnt"={enabled=false}} "#),
+        "{plain}"
+    );
+    assert_eq!(token, "unset");
+
+    let tmp = tempdir().unwrap();
+    let (argv, token, _, reply) =
+        fake_agent_run("codex", Some(ctx(tmp.path(), Arc::new(FixedApprover(true)))), Some(USER_SERVERS_WITH_KWNT)).await;
+    assert_eq!(argv, "", "codex exec ran: {argv}");
+    assert_eq!(token, "", "codex exec got the env: {token}");
+    assert!(reply.contains("MCP server named `kwnt`") && reply.contains("Rename that server"), "{reply}");
+    assert!(!reply.contains("gw-secret-token"), "{reply}");
 }
 
 #[cfg(target_os = "linux")]

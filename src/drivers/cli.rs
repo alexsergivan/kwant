@@ -79,10 +79,14 @@ fn toml_string(value: &str) -> String {
 /// table is merged into codex's config, not swapped in, so the user's servers must be switched
 /// off by name; the names go inside the value because codex's `-c` key path can't quote. The
 /// gateway asks the user before every call, so codex's own approval is turned off for it; its
-/// token is read from an env variable so it never appears in argv.
+/// token is read from an env variable so it never appears in argv. A user server named like the
+/// gateway is switched off like any other when there is no gateway; with one, the turn must be
+/// refused first (see `codex_reserved_name_conflict`), since the two entries would merge.
 pub fn codex_mcp_servers(ctx: Option<&crate::mcp::McpTurnContext>, user_servers: &[String]) -> String {
     let mut entries = Vec::new();
-    if let Some((ctx, gateway)) = ctx.and_then(|c| c.gateway.as_ref().map(|g| (c, g))) {
+    let gateway = ctx.and_then(|c| c.gateway.as_ref().map(|g| (c, g)));
+    let has_gateway = gateway.is_some();
+    if let Some((ctx, gateway)) = gateway {
         let slowest = ctx.servers.iter().map(|s| s.timeout_secs.max(0) as u64).max().unwrap_or(0);
         // The gateway connects to every server on codex's first tools/list
         let startup_secs = (slowest + 15).max(30);
@@ -98,11 +102,22 @@ pub fn codex_mcp_servers(ctx: Option<&crate::mcp::McpTurnContext>, user_servers:
         ));
     }
     for name in user_servers {
-        if name != crate::mcp::RESERVED_SERVER_NAME {
+        if !(has_gateway && name == crate::mcp::RESERVED_SERVER_NAME) {
             entries.push(format!("{}={{enabled=false}}", toml_string(name)));
         }
     }
     format!("mcp_servers={{{}}}", entries.join(","))
+}
+
+/// The message refusing a gateway turn when the user's codex config has its own server named
+/// like kwnt's gateway: `-c` would merge the two entries rather than replace the user's.
+pub fn codex_reserved_name_conflict(ctx: Option<&crate::mcp::McpTurnContext>, user_servers: &[String]) -> Option<String> {
+    let reserved = crate::mcp::RESERVED_SERVER_NAME;
+    (ctx.is_some_and(|c| c.gateway.is_some()) && user_servers.iter().any(|n| n == reserved)).then(|| {
+        format!(
+            "Your codex config has an MCP server named `{reserved}`, which kwnt reserves for its own tools, so it didn't run codex. Rename that server to use MCP tools in kwnt."
+        )
+    })
 }
 
 /// How long `codex mcp list` may take before the turn is refused.
@@ -255,15 +270,22 @@ impl Driver for CliDriver {
                 };
                 let full_prompt = format!("[System Context: {}]\n\n{}", system_prompt, effective_prompt);
                 // Fail closed: without the names, the user's own servers would run with no
-                // approval card (and despite a per-kwant opt-out).
-                let user_servers = match codex_user_mcp_servers(&bin_path, input.workspace_dir.as_deref()).await {
+                // approval card (and despite a per-kwant opt-out). Same for a user server named
+                // like the gateway, which can't be switched off while the gateway uses its name.
+                let listed = codex_user_mcp_servers(&bin_path, input.workspace_dir.as_deref()).await.map_err(|e| {
+                    tracing::warn!(error = %e, "could not list codex's own MCP servers; not running codex");
+                    format!(
+                        "kwnt couldn't check which MCP servers your codex config would start ({e}), so it didn't run codex. Check that `codex mcp list` works."
+                    )
+                });
+                let checked = listed.and_then(|names| match codex_reserved_name_conflict(input.mcp.as_ref(), &names) {
+                    Some(reason) => Err(reason),
+                    None => Ok(names),
+                });
+                let user_servers = match checked {
                     Ok(names) => names,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "could not list codex's own MCP servers; not running codex");
-                        let msg = format!(
-                            "⚠️ [{}] kwnt couldn't check which MCP servers your codex config would start ({e}), so it didn't run codex. Check that `codex mcp list` works.",
-                            input.kwant.name
-                        );
+                    Err(reason) => {
+                        let msg = format!("⚠️ [{}] {reason}", input.kwant.name);
                         let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
                         let _ = event_tx
                             .send(RuntimeEvent::TurnComplete { tokens: 0, duration_ms: start.elapsed().as_millis() as u64 })
