@@ -136,6 +136,101 @@ pub fn not_signed_in(stderr: &str) -> bool {
     stderr.contains("Not signed in")
 }
 
+/// Adds kwnt's gateway as the run's only MCP server. The token is not written: grok expands
+/// `${VAR}` in headers from its own env, and the shell policy hides that variable from the
+/// commands grok runs. `slowest` is the longest timeout among the kwant's servers.
+pub fn add_gateway(config: &mut toml::Table, url: &str, slowest: u64) {
+    let token_env = crate::mcp::GATEWAY_TOKEN_ENV;
+    // The gateway connects to every server on grok's first tools/list
+    let startup_secs = (slowest + 15).max(30);
+    // A call may wait for the user's approval; grok must not give up first
+    let tool_secs = (crate::mcp::APPROVAL_TIMEOUT_SECS + 30).max(slowest);
+    let mut headers = toml::Table::new();
+    headers.insert(
+        "Authorization".into(),
+        format!("Bearer ${{{token_env}}}").into(),
+    );
+    let mut server = toml::Table::new();
+    server.insert("url".into(), url.into());
+    server.insert("headers".into(), headers.into());
+    server.insert("startup_timeout_sec".into(), (startup_secs as i64).into());
+    server.insert("tool_timeout_sec".into(), (tool_secs as i64).into());
+    let mut servers = toml::Table::new();
+    servers.insert(crate::mcp::RESERVED_SERVER_NAME.into(), server.into());
+    config.insert("mcp_servers".into(), servers.into());
+    let mut policy = toml::Table::new();
+    policy.insert("exclude".into(), toml::Value::Array(vec![token_env.into()]));
+    config.insert("shell_environment_policy".into(), policy.into());
+}
+
+/// The `--allow` rule that lets grok call the gateway's tools without its own (headless,
+/// always-refused) approval prompt. kwnt's approval card is shown by the gateway instead.
+pub fn gateway_allow_rule() -> String {
+    format!("MCPTool({}__*)", crate::mcp::RESERVED_SERVER_NAME)
+}
+
+/// One event of grok's `--output-format streaming-json` that kwnt acts on.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamEvent {
+    /// A chunk of the reply.
+    Text(String),
+    /// grok reported an error.
+    Error(String),
+    /// The run ended; `stop_reason` is e.g. `end_turn`, `refusal`, `cancelled`.
+    End { stop_reason: Option<String> },
+}
+
+/// Splits grok's NDJSON output into events. Lines that aren't JSON are passed on as text, so
+/// a grok that ignores `--output-format` still gets its reply through.
+#[derive(Debug, Default)]
+pub struct StreamParser {
+    pending: String,
+}
+
+impl StreamParser {
+    pub fn push(&mut self, chunk: &str) -> Vec<StreamEvent> {
+        self.pending.push_str(chunk);
+        let mut events = Vec::new();
+        while let Some(end) = self.pending.find('\n') {
+            let line: String = self.pending.drain(..=end).collect();
+            events.extend(parse_line(&line));
+        }
+        events
+    }
+
+    /// Whatever is left after the last newline.
+    pub fn finish(&mut self) -> Vec<StreamEvent> {
+        let rest = std::mem::take(&mut self.pending);
+        parse_line(&rest).into_iter().collect()
+    }
+}
+
+fn parse_line(line: &str) -> Option<StreamEvent> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return Some(StreamEvent::Text(line.to_string()));
+    };
+    match value["type"].as_str() {
+        Some("text") => value["data"]
+            .as_str()
+            .map(|t| StreamEvent::Text(t.to_string())),
+        Some("error") => Some(StreamEvent::Error(
+            value["message"]
+                .as_str()
+                .unwrap_or("unknown error")
+                .to_string(),
+        )),
+        Some("end") => Some(StreamEvent::End {
+            stop_reason: value["stopReason"].as_str().map(str::to_string),
+        }),
+        Some(_) => None,
+        None => Some(StreamEvent::Text(line.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +256,88 @@ enabled = true
 [permission]
 allow = ["Bash(*)"]
 "#;
+
+    #[test]
+    fn gateway_config_keeps_the_token_out_of_the_file() {
+        let mut config = model_settings(USER_CONFIG);
+        add_gateway(&mut config, "http://127.0.0.1:7/api/mcp/gateway/grok", 400);
+        let text = toml::to_string(&config).unwrap();
+        let parsed: toml::Table = text.parse().unwrap();
+        let kwnt = &parsed["mcp_servers"]["kwnt"];
+        assert_eq!(
+            parsed["mcp_servers"].as_table().unwrap().len(),
+            1,
+            "only the gateway: {text}"
+        );
+        assert_eq!(
+            kwnt["url"].as_str(),
+            Some("http://127.0.0.1:7/api/mcp/gateway/grok")
+        );
+        assert_eq!(
+            kwnt["headers"]["Authorization"].as_str(),
+            Some("Bearer ${KWNT_MCP_GATEWAY_TOKEN}")
+        );
+        assert_eq!(kwnt["startup_timeout_sec"].as_integer(), Some(415));
+        assert_eq!(kwnt["tool_timeout_sec"].as_integer(), Some(400));
+        assert_eq!(
+            parsed["shell_environment_policy"]["exclude"]
+                .as_array()
+                .unwrap(),
+            &vec![toml::Value::from("KWNT_MCP_GATEWAY_TOKEN")]
+        );
+        assert_eq!(parsed["models"]["default"].as_str(), Some("mock"));
+
+        // Short server timeouts still leave room for the approval wait
+        let mut config = toml::Table::new();
+        add_gateway(&mut config, "http://x", 0);
+        assert_eq!(
+            config["mcp_servers"]["kwnt"]["startup_timeout_sec"].as_integer(),
+            Some(30)
+        );
+        assert_eq!(
+            config["mcp_servers"]["kwnt"]["tool_timeout_sec"].as_integer(),
+            Some(330)
+        );
+        assert_eq!(gateway_allow_rule(), "MCPTool(kwnt__*)");
+    }
+
+    #[test]
+    fn written_gateway_home_never_contains_the_token() {
+        let base = tempfile::tempdir().unwrap();
+        let mut config = model_settings(USER_CONFIG);
+        add_gateway(&mut config, "http://127.0.0.1:7/api/mcp/gateway/grok", 30);
+        let home = GrokHome::create(base.path(), &config).unwrap();
+        let written = std::fs::read_to_string(home.path.join("config.toml")).unwrap();
+        assert!(written.contains("${KWNT_MCP_GATEWAY_TOKEN}"), "{written}");
+        assert!(!written.contains("grokuser"));
+        for entry in std::fs::read_dir(&home.path).unwrap() {
+            assert_eq!(entry.unwrap().file_name(), "config.toml");
+        }
+    }
+
+    #[test]
+    fn parses_streaming_json_across_chunks() {
+        let mut parser = StreamParser::default();
+        let mut events =
+            parser.push("{\"type\":\"available_commands\",\"tools\":[]}\n{\"type\":\"text\",\"da");
+        events.extend(parser.push("ta\":\"Hel\"}\n{\"type\":\"text\",\"data\":\"lo\\n\"}\n"));
+        events.extend(parser.push("{\"type\":\"tool_call\",\"toolCallId\":\"c1\"}\nplain line\n"));
+        events.extend(parser.push("{\"type\":\"error\",\"message\":\"boom\"}\n{\"type\":\"end\",\"stopReason\":\"end_turn\"}"));
+        events.extend(parser.finish());
+        assert_eq!(
+            events,
+            [
+                StreamEvent::Text("Hel".into()),
+                StreamEvent::Text("lo\n".into()),
+                StreamEvent::Text("plain line\n".into()),
+                StreamEvent::Error("boom".into()),
+                StreamEvent::End {
+                    stop_reason: Some("end_turn".into())
+                },
+            ]
+        );
+        assert!(parser.finish().is_empty());
+    }
 
     #[test]
     fn keeps_only_model_settings() {

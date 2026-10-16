@@ -225,12 +225,18 @@ struct GrokLaunch<'a> {
     config: toml::Table,
     /// The user's grok login file, if they have one.
     auth_file: Option<std::path::PathBuf>,
+    /// This turn's gateway token, handed over in grok's env only.
+    gateway_token: Option<String>,
 }
 
 /// What one grok process left behind.
 struct GrokRun {
+    /// The reply text from grok's `text` events.
     stdout: String,
     stderr: String,
+    /// grok's `error` events.
+    errors: Vec<String>,
+    stop_reason: Option<String>,
 }
 
 /// Reads a pipe to the end, keeping at most the last `max` bytes.
@@ -277,6 +283,11 @@ impl CliDriver {
             }
             (None, _) => {}
         }
+        // Never written to disk: the config's header refers to this variable by name
+        match &launch.gateway_token {
+            Some(token) => cmd.env(crate::mcp::GATEWAY_TOKEN_ENV, token),
+            None => cmd.env_remove(crate::mcp::GATEWAY_TOKEN_ENV),
+        };
         cmd.args(&launch.args);
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         // A cancelled turn aborts this task; the CLI must not outlive it
@@ -286,19 +297,35 @@ impl CliDriver {
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
         let read_stdout = async {
-            let mut text = String::new();
-            let mut buffer = [0u8; 1024];
+            let mut run = GrokRun { stdout: String::new(), stderr: String::new(), errors: Vec::new(), stop_reason: None };
+            let mut parser = super::grok::StreamParser::default();
+            let mut buffer = [0u8; 4096];
+            // Bytes of a UTF-8 character split across reads
+            let mut partial: Vec<u8> = Vec::new();
             if let Some(mut stdout) = stdout_pipe {
-                while let Ok(n) = stdout.read(&mut buffer).await {
-                    if n == 0 {
-                        break;
+                loop {
+                    let n = match stdout.read(&mut buffer).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    partial.extend_from_slice(&buffer[..n]);
+                    let valid = match std::str::from_utf8(&partial) {
+                        Ok(_) => partial.len(),
+                        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+                        Err(_) => partial.len(),
+                    };
+                    let chunk = String::from_utf8_lossy(&partial[..valid]).into_owned();
+                    partial.drain(..valid);
+                    for event in parser.push(&chunk) {
+                        Self::apply_grok_event(event, &mut run, event_tx).await;
                     }
-                    let chunk = String::from_utf8_lossy(&buffer[..n]).to_string();
-                    let _ = event_tx.send(RuntimeEvent::TextDelta(chunk.clone())).await;
-                    text.push_str(&chunk);
                 }
             }
-            text
+            let rest = String::from_utf8_lossy(&partial).into_owned();
+            for event in parser.push(&rest).into_iter().chain(parser.finish()) {
+                Self::apply_grok_event(event, &mut run, event_tx).await;
+            }
+            run
         };
         let read_stderr = async {
             match stderr_pipe {
@@ -306,21 +333,33 @@ impl CliDriver {
                 None => String::new(),
             }
         };
-        let (stdout, stderr) = tokio::join!(read_stdout, read_stderr);
+        let (mut run, stderr) = tokio::join!(read_stdout, read_stderr);
         let _ = child.wait().await;
         drop(home);
-        Ok(GrokRun { stdout, stderr })
+        run.stderr = stderr;
+        Ok(run)
+    }
+
+    async fn apply_grok_event(event: super::grok::StreamEvent, run: &mut GrokRun, event_tx: &mpsc::Sender<RuntimeEvent>) {
+        match event {
+            super::grok::StreamEvent::Text(text) => {
+                let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
+                run.stdout.push_str(&text);
+            }
+            super::grok::StreamEvent::Error(message) => run.errors.push(message),
+            super::grok::StreamEvent::End { stop_reason } => run.stop_reason = stop_reason,
+        }
     }
 
     async fn run_grok(
         &self,
         bin_path: &str,
         input: &TurnInput,
-        args: Vec<String>,
+        mut args: Vec<String>,
         event_tx: &mpsc::Sender<RuntimeEvent>,
     ) -> std::io::Result<GrokRun> {
         let user_home = self.grok_home.clone().or_else(super::grok::user_grok_home);
-        let config = user_home
+        let mut config = user_home
             .as_ref()
             .and_then(|h| std::fs::read_to_string(h.join("config.toml")).ok())
             .map(|text| super::grok::model_settings(&text))
@@ -330,7 +369,17 @@ impl CliDriver {
             .map(std::path::PathBuf::from)
             .or_else(|| user_home.map(|h| h.join("auth.json")))
             .filter(|p| p.is_file());
-        let launch = GrokLaunch { bin_path, input, args, config, auth_file };
+        let gateway = input.mcp.as_ref().and_then(|c| c.gateway.as_ref().map(|g| (c, g)));
+        if let Some((ctx, gateway)) = gateway {
+            let slowest = ctx.servers.iter().map(|s| s.timeout_secs.max(0) as u64).max().unwrap_or(0);
+            super::grok::add_gateway(&mut config, &gateway.url, slowest);
+            args.push("--allow".into());
+            args.push(super::grok::gateway_allow_rule());
+        }
+        args.push("--output-format".into());
+        args.push("streaming-json".into());
+        let gateway_token = gateway.map(|(_, g)| g.token.clone());
+        let launch = GrokLaunch { bin_path, input, args, config, auth_file, gateway_token };
         let run = Self::run_grok_once(&launch, GrokAuth::InPlace, event_tx).await?;
         if launch.auth_file.is_some() && run.stdout.trim().is_empty() && super::grok::not_signed_in(&run.stderr) {
             // Nothing ran: grok stops before the model when it finds no login
@@ -396,15 +445,6 @@ impl Driver for CliDriver {
         // Prevent CLI tools from spawning desktop browser windows on host
         cmd.env("BROWSER", "none");
         cmd.env("DISPLAY", "");
-
-        if input.mcp.is_some() && self.tool_kind == "grok" {
-            let _ = event_tx
-                .send(RuntimeEvent::ThinkingDelta(format!(
-                    "MCP servers are assigned, but kwnt can't offer MCP tools through the {} CLI yet; running without them.",
-                    self.tool_kind
-                )))
-                .await;
-        }
 
         match self.tool_kind.as_str() {
             "codex" => {

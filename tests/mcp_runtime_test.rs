@@ -450,12 +450,15 @@ async fn codex_cli_does_not_run_when_its_servers_cannot_be_listed() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn grok_cli_still_runs_without_mcp() {
+async fn grok_cli_reaches_mcp_only_through_kwnts_gateway() {
     let tmp = tempdir().unwrap();
     let (argv, token, notes, _) = fake_agent_run("grok", Some(ctx(tmp.path(), Arc::new(FixedApprover(true)))), Some(USER_SERVERS)).await;
-    assert_eq!(token, "unset");
-    assert!(!argv.contains("gateway"), "{argv}");
-    assert!(notes.iter().any(|n| n.contains("can't offer MCP tools through the grok CLI")), "{notes:?}");
+    assert_eq!(token, "gw-secret-token", "token comes through the env");
+    assert!(argv.contains("--allow MCPTool(kwnt__*) --output-format streaming-json"), "{argv}");
+    for secret in ["gw-secret-token", "sk-very-secret", "hdr-secret", "/usr/bin/true", "mcp.example.test"] {
+        assert!(!argv.contains(secret), "{secret} in argv: {argv}");
+    }
+    assert!(!notes.iter().any(|n| n.contains("can't offer MCP tools")), "{notes:?}");
 }
 
 /// A cancelled turn aborts its driver task; the agent CLI must die with it rather than keep

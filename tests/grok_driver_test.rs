@@ -4,10 +4,13 @@
 
 use kwnt::{
     db::models::Kwant,
+    db::models::McpServer,
     drivers::{events::RuntimeEvent, CliDriver, Driver, TurnInput},
-    mcp::McpTurnContext,
+    mcp::{FixedApprover, GatewayAccess, McpTurnContext},
 };
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
 
 const USER_CONFIG: &str = r#"
@@ -273,4 +276,92 @@ async fn grok_killed_mid_run_still_removes_its_home() {
     let homes = grok.homes();
     assert_eq!(homes.len(), 1);
     assert!(!homes[0].exists());
+}
+
+fn mcp_ctx(dir: &Path) -> McpTurnContext {
+    let server = McpServer {
+        id: "id-echo".into(),
+        name: "echo".into(),
+        transport: "stdio".into(),
+        command: Some("/usr/bin/true".into()),
+        args: vec![],
+        url: None,
+        env: BTreeMap::from([("API_TOKEN".to_string(), "sk-very-secret".to_string())]),
+        headers: BTreeMap::new(),
+        enabled: true,
+        timeout_secs: 30,
+        created_at: None,
+    };
+    McpTurnContext {
+        servers: vec![server],
+        approver: Arc::new(FixedApprover(true)),
+        config_dir: dir.join("mcp"),
+        permission_url: None,
+        gateway: Some(GatewayAccess {
+            url: "http://127.0.0.1:1/api/mcp/gateway".into(),
+            token: "gw-secret-token".into(),
+        }),
+        max_tool_iterations: 8,
+        records: Default::default(),
+    }
+}
+
+#[tokio::test]
+async fn grok_gets_the_gateway_with_the_token_in_env_only() {
+    let grok = FakeGrok::new("echo ok");
+    grok.run(Some(mcp_ctx(grok.dir.path()))).await;
+    let argv = grok.out("argv");
+    let config_text = grok.out("config.toml");
+    let env = grok.out("env");
+    assert!(
+        argv.contains("--allow\nMCPTool(kwnt__*)\n--output-format\nstreaming-json\n"),
+        "{argv}"
+    );
+    assert_eq!(
+        env_value(&env, "KWNT_MCP_GATEWAY_TOKEN").as_deref(),
+        Some("gw-secret-token")
+    );
+    let config: toml::Table = config_text.parse().unwrap();
+    let servers = config["mcp_servers"].as_table().unwrap();
+    assert_eq!(
+        servers.keys().collect::<Vec<_>>(),
+        ["kwnt"],
+        "only kwnt's gateway"
+    );
+    assert_eq!(
+        servers["kwnt"]["headers"]["Authorization"].as_str(),
+        Some("Bearer ${KWNT_MCP_GATEWAY_TOKEN}")
+    );
+    assert_eq!(
+        config["shell_environment_policy"]["exclude"][0].as_str(),
+        Some("KWNT_MCP_GATEWAY_TOKEN")
+    );
+    for secret in ["gw-secret-token", "sk-very-secret", "/usr/bin/true"] {
+        assert!(!argv.contains(secret), "{secret} in argv: {argv}");
+        assert!(
+            !config_text.contains(secret),
+            "{secret} in config: {config_text}"
+        );
+    }
+    assert!(!grok.homes()[0].exists());
+}
+
+#[tokio::test]
+async fn grok_without_tools_gets_no_gateway() {
+    let grok = FakeGrok::new("echo ok");
+    grok.run(None).await;
+    let argv = grok.out("argv");
+    assert!(!argv.contains("--allow"), "{argv}");
+    assert!(argv.contains("--output-format\nstreaming-json\n"), "{argv}");
+    assert_eq!(env_value(&grok.out("env"), "KWNT_MCP_GATEWAY_TOKEN"), None);
+    assert!(!grok.out("config.toml").contains("mcp_servers"));
+}
+
+#[tokio::test]
+async fn grok_reply_comes_from_streaming_json_text_events() {
+    let grok = FakeGrok::new(
+        r#"printf '%s\n' '{"type":"available_commands","tools":[]}' '{"type":"text","data":"Hel"}' '{"type":"tool_call","toolCallId":"c1"}' '{"type":"text","data":"lo ✓"}' '{"type":"end","stopReason":"end_turn"}'"#,
+    );
+    let (reply, _) = grok.run(None).await;
+    assert_eq!(reply, "Hello ✓");
 }
