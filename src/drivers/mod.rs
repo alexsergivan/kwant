@@ -168,6 +168,30 @@ pub struct ModelDescriptor {
     pub is_cli: bool,
 }
 
+/// Ollama server root, whether settings/env give the root, its `/v1` API or the full chat URL.
+pub fn ollama_root(configured: Option<&str>) -> String {
+    let url = configured
+        .map(str::to_string)
+        .or_else(|| std::env::var("OLLAMA_URL").ok())
+        .unwrap_or_else(|| "http://localhost:11434".into());
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix("/chat/completions").unwrap_or(url);
+    url.strip_suffix("/v1").unwrap_or(url).to_string()
+}
+
+/// Model to run for `local_ollama`: `OLLAMA_MODEL` if set, else the first one pulled.
+/// `None` when the server is down or has no models.
+pub async fn first_ollama_model(root: &str) -> Option<String> {
+    if let Ok(m) = std::env::var("OLLAMA_MODEL") {
+        if !m.trim().is_empty() {
+            return Some(m.trim().to_string());
+        }
+    }
+    let client = reqwest::Client::builder().timeout(std::time::Duration::from_millis(500)).build().ok()?;
+    let tags: serde_json::Value = client.get(format!("{root}/api/tags")).send().await.ok()?.json().await.ok()?;
+    tags["models"].as_array()?.first()?["name"].as_str().map(str::to_string)
+}
+
 /// Automatically detects all currently available and functional models on the host
 pub async fn detect_available_models(db: &crate::db::Database) -> Vec<ModelDescriptor> {
     let mut available = Vec::new();
@@ -224,11 +248,11 @@ pub async fn detect_available_models(db: &crate::db::Database) -> Vec<ModelDescr
     // 4. Local Ollama
     let ollama_url = db.get_setting("ollama_url").await.ok().flatten()
         .or_else(|| std::env::var("OLLAMA_URL").ok());
-    let ollama_cli = find_cli_binary("ollama");
-    if ollama_url.is_some() || ollama_cli.is_some() {
+    // Having the binary isn't enough: routing here only works with the server up and a model pulled.
+    if let Some(model) = first_ollama_model(&ollama_root(ollama_url.as_deref())).await {
         available.push(ModelDescriptor {
             id: "local_ollama".into(),
-            display_name: "Local Ollama".into(),
+            display_name: format!("Ollama ({model})"),
             capability_desc: "private data, offline tasks, zero API cost".into(),
             is_cli: false,
         });
@@ -303,7 +327,7 @@ pub fn resolve_driver_for_model(
             return Box::new(CliDriver::new(Some(bin), Some("codex".into())));
         }
     } else if target_model == "local_ollama" {
-        return Box::new(ApiDriver::new(None, Some("http://localhost:11434/v1".into())));
+        return Box::new(ApiDriver::new(None, endpoint));
     }
 
     // 4. Fallback: check if ANY local agent CLI is installed on this host

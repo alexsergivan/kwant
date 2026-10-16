@@ -1,5 +1,51 @@
 use super::RouteDecision;
 
+/// Phrases that reliably mean a question needs careful, multi-step reasoning.
+const DEEP_SIGNALS: &[&str] = &[
+    "architecture", "architectural", "refactor", "complex", "deep", "benchmark", "security", "optimize",
+    "investigate", "root cause", "root-cause", "tradeoff", "trade-off", "monolith", "microservice",
+    "migrat", "postmortem", "post-mortem",
+];
+
+fn has_deep_signal(lower: &str) -> bool {
+    DEEP_SIGNALS.iter().any(|s| lower.contains(s))
+}
+
+/// Greetings, jokes and tiny one-liners never need deep reasoning.
+fn is_trivial(prompt: &str, max_words: usize) -> bool {
+    let lower = prompt.to_lowercase();
+    let first = lower.split(|c: char| !c.is_alphanumeric()).find(|w| !w.is_empty()).unwrap_or("");
+    prompt.split_whitespace().count() <= max_words
+        || matches!(first, "hi" | "hello" | "hey" | "ping" | "thanks" | "thank" | "yo")
+        || lower.starts_with("say ")
+        || lower.contains("joke")
+        || lower.contains("who are you")
+}
+
+/// Keyword-only effort estimate, used when Laya is offline.
+pub fn heuristic_effort(prompt: &str, context: &str) -> &'static str {
+    let combined = format!("{} {}", prompt.to_lowercase(), context.to_lowercase());
+    if has_deep_signal(&combined) || prompt.split_whitespace().count() >= 30 {
+        "high"
+    } else if is_trivial(prompt, 6) {
+        "low"
+    } else {
+        "medium"
+    }
+}
+
+/// Laya's effort answer is a weak signal (it rated greetings "medium" and root-cause or trade-off
+/// questions "low"), so unambiguous keyword signals override it in either direction.
+pub fn blend_effort(prompt: &str, laya_effort: &str) -> String {
+    if has_deep_signal(&prompt.to_lowercase()) {
+        "high".into()
+    } else if is_trivial(prompt, 3) {
+        "low".into()
+    } else {
+        laya_effort.into()
+    }
+}
+
 /// Evaluates a prompt using local keyword scoring heuristics when Laya is offline.
 pub fn heuristic_fallback(prompt: &str, context: &str) -> RouteDecision {
     heuristic_fallback_with_models(prompt, context, &[])
@@ -14,35 +60,8 @@ pub fn heuristic_fallback_with_models(
     let lower_prompt = prompt.to_lowercase();
     let lower_context = context.to_lowercase();
     let combined = format!("{} {}", lower_prompt, lower_context);
-    let word_count = prompt.split_whitespace().count();
 
-    // Determine effort level: low, medium, high
-    let is_high_effort = combined.contains("architecture")
-        || combined.contains("refactor")
-        || combined.contains("complex")
-        || combined.contains("deep")
-        || combined.contains("benchmark")
-        || combined.contains("security")
-        || combined.contains("optimize")
-        || combined.contains("investigate")
-        || word_count >= 30;
-
-    let is_low_effort = word_count <= 6
-        || lower_prompt.starts_with("hi")
-        || lower_prompt.starts_with("hello")
-        || lower_prompt.starts_with("hey")
-        || lower_prompt.starts_with("say ")
-        || lower_prompt.starts_with("ping")
-        || lower_prompt.contains("joke")
-        || lower_prompt.contains("who are you");
-
-    let effort_level = if is_high_effort {
-        "high".to_string()
-    } else if is_low_effort {
-        "low".to_string()
-    } else {
-        "medium".to_string()
-    };
+    let effort_level = heuristic_effort(prompt, context).to_string();
 
     let is_available = |model: &str| -> bool {
         available_models.is_empty() || available_models.iter().any(|m| m == model)

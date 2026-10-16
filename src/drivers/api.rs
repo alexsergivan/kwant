@@ -5,6 +5,22 @@ use serde_json::json;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
+fn is_ollama(model: &str) -> bool {
+    model == "local_ollama" || model.starts_with("ollama/")
+}
+
+/// "local_ollama" is Kwant's routing id, not something Ollama can run; resolve it to a pulled model.
+async fn api_model_name(target_model: &str, url: &str) -> String {
+    if let Some(m) = target_model.strip_prefix("ollama/") {
+        return m.to_string();
+    }
+    if target_model == "local_ollama" {
+        let root = url.trim_end_matches("/v1/chat/completions");
+        return super::first_ollama_model(root).await.unwrap_or_else(|| "llama3.2".into());
+    }
+    target_model.to_string()
+}
+
 #[derive(Clone, Debug)]
 pub struct ApiDriver {
     client: Client,
@@ -22,15 +38,15 @@ impl ApiDriver {
     }
 
     fn resolve_endpoint_and_key(&self, model: &str) -> (String, Option<String>) {
+        if is_ollama(model) {
+            let root = super::ollama_root(self.endpoint.as_deref());
+            return (format!("{root}/v1/chat/completions"), None);
+        }
         if let Some(ep) = &self.endpoint {
             return (ep.clone(), self.api_key.clone());
         }
 
-        if model == "local_ollama" || model.starts_with("ollama/") {
-            let base = std::env::var("OLLAMA_URL")
-                .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
-            (format!("{}/chat/completions", base.trim_end_matches('/')), None)
-        } else if model.contains("claude") {
+        if model.contains("claude") {
             let key = self
                 .api_key
                 .clone()
@@ -68,7 +84,7 @@ impl Driver for ApiDriver {
         let (url, api_key) = self.resolve_endpoint_and_key(target_model);
 
         // If target is a real live API endpoint with API key or local Ollama, call HTTP streaming
-        if api_key.is_some() || target_model == "local_ollama" {
+        if api_key.is_some() || is_ollama(target_model) {
             let system_prompt = input.format_system_prompt();
 
             let mut messages = vec![json!({"role": "system", "content": system_prompt})];
@@ -92,7 +108,7 @@ impl Driver for ApiDriver {
             };
 
             let body = json!({
-                "model": target_model,
+                "model": api_model_name(target_model, &url).await,
                 "messages": messages,
                 "stream": false, // Non-stream fallback when parsing simple JSON or stream
                 "temperature": input.kwant.temperature,

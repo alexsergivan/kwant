@@ -231,3 +231,110 @@ async fn laya_status_starts_unknown_and_updates() {
     assert_eq!(router.status().state, LayaState::Starting);
     assert!(router.offline_note().contains("starting"));
 }
+
+fn agent(id: &str, name: &str, title: &str) -> Kwant {
+    Kwant {
+        id: id.into(),
+        name: name.into(),
+        title: title.into(),
+        persona_prompt: format!("You are {name}. A very long persona that should not reach Laya."),
+        soul: String::new(),
+        avatar_sprite: "architect".into(),
+        driver_type: "api".into(),
+        preferred_model: "auto".into(),
+        temperature: 0.7,
+        max_tokens: 4096,
+        level: 1,
+        turns_completed: 0,
+        created_at: None,
+    }
+}
+
+#[test]
+fn test_laya_agent_options_are_named_and_resolve_back() {
+    let members = vec![
+        agent("uuid-a", "Architect", "Systems Architect"),
+        agent("uuid-b", "Planner", "Travel Planner"),
+        agent("uuid-c", "planner", ""),
+    ];
+    let criteria = kwnt::router::team::kwant_choice_criteria(&members);
+    let keys: Vec<&str> = criteria.keys().map(String::as_str).collect();
+    assert!(keys.contains(&"Architect") && keys.contains(&"Planner") && keys.contains(&"planner #2"));
+    assert_eq!(criteria["Planner"], "Travel Planner");
+    assert_eq!(criteria["planner #2"], "You are planner");
+    assert!(!keys.iter().any(|k| k.starts_with("uuid")));
+
+    let pick = |choice: &str| json!({"answers": {"lead_kwant": {"choice": choice}}});
+    let parse = |choice: &str| kwnt::router::parse_laya_kwant_choice(&pick(choice), &members).map(|(id, _)| id);
+    assert_eq!(parse("Planner").as_deref(), Some("uuid-b"));
+    assert_eq!(parse("planner #2").as_deref(), Some("uuid-c"));
+    assert_eq!(parse("uuid-a").as_deref(), Some("uuid-a"));
+    assert_eq!(parse("Nobody"), None);
+}
+
+#[test]
+fn test_laya_team_discussion_uses_runner_up_as_second_speaker() {
+    let members = vec![
+        agent("a", "Architect", "Systems Architect"),
+        agent("b", "Planner", "Travel Planner"),
+        agent("c", "DevOps", "Systems & Security Engineer"),
+    ];
+    let team = Team {
+        id: "t".into(),
+        name: "core".into(),
+        description: None,
+        workspace_path: None,
+        repo_url: None,
+        icon: "users".into(),
+        lead_kwant_id: "a".into(),
+        member_kwants: "[]".into(),
+        created_at: None,
+    };
+    let data = json!({"answers": {
+        "team_decision": {"choice": "discuss"},
+        "lead_kwant": {"choice": "Architect", "probabilities": {"Architect": 0.5, "Planner": 0.1, "DevOps": 0.4}}
+    }});
+    match kwnt::router::parse_laya_team_answers("Should we migrate to Postgres?", &data, &team, &members) {
+        Some(TeamDecision::Discuss { speakers, .. }) => assert_eq!(speakers, vec!["a", "c"]),
+        other => panic!("expected discussion, got {other:?}"),
+    }
+    let lukewarm = json!({"answers": {
+        "team_decision": {"choice": "discuss", "probabilities": {"discuss": 0.72, "direct": 0.28}},
+        "lead_kwant": {"choice": "Architect"}
+    }});
+    assert!(matches!(
+        kwnt::router::parse_laya_team_answers("hi there", &lukewarm, &team, &members),
+        Some(TeamDecision::Direct { kwant_id, .. }) if kwant_id == "a"
+    ));
+    let direct = json!({"answers": {"team_decision": {"choice": "direct"}, "lead_kwant": {"choice": "DevOps"}}});
+    assert!(matches!(
+        kwnt::router::parse_laya_team_answers("Who owns the deploy?", &direct, &team, &members),
+        Some(TeamDecision::Direct { kwant_id, .. }) if kwant_id == "c"
+    ));
+}
+
+#[test]
+fn test_blend_effort_overrides_only_clear_signals() {
+    use kwnt::router::fallback::blend_effort;
+    assert_eq!(blend_effort("hi there", "medium"), "low");
+    assert_eq!(blend_effort("Tell me a joke about Kubernetes", "medium"), "low");
+    assert_eq!(blend_effort("Should we split our monolith? Compare tradeoffs", "low"), "high");
+    assert_eq!(blend_effort("Postgres latency doubled, find the root cause", "medium"), "high");
+    assert_eq!(blend_effort("Plan a 5-day trip to Lisbon in November", "medium"), "medium");
+    assert_eq!(blend_effort("Plan a 5-day trip to Lisbon in November", "low"), "low");
+    assert_eq!(blend_effort("highlight the key points of this text please", "medium"), "medium");
+}
+
+#[test]
+fn test_ollama_root_accepts_any_configured_form() {
+    use kwnt::drivers::ollama_root;
+    for url in ["http://box:11434", "http://box:11434/", "http://box:11434/v1", "http://box:11434/v1/chat/completions"] {
+        assert_eq!(ollama_root(Some(url)), "http://box:11434");
+    }
+}
+
+#[tokio::test]
+async fn test_ollama_not_offered_when_server_is_down() {
+    std::env::remove_var("OLLAMA_MODEL");
+    assert_eq!(kwnt::drivers::first_ollama_model("http://127.0.0.1:59998").await, None);
+}

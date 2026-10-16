@@ -44,11 +44,7 @@ impl LayaRouter {
         team: &Team,
         members: &[Kwant],
     ) -> Result<TeamDecision, String> {
-        let mut kwant_criteria = serde_json::Map::new();
-        for m in members {
-            let desc = format!("{} ({}): {}", m.name, m.title, m.persona_prompt);
-            kwant_criteria.insert(m.id.clone(), serde_json::Value::String(desc));
-        }
+        let kwant_criteria = kwant_choice_criteria(members);
 
         let payload = json!({
             "state": {
@@ -97,7 +93,7 @@ impl LayaRouter {
         }
 
         // Support standard Laya answers structure
-        if let Some(decision) = parse_laya_team_answers(&data, team, members) {
+        if let Some(decision) = parse_laya_team_answers(prompt, &data, team, members) {
             return Ok(decision);
         }
 
@@ -133,11 +129,7 @@ impl LayaRouter {
         channel_name: &str,
         members: &[Kwant],
     ) -> Result<(String, String), String> {
-        let mut kwant_criteria = serde_json::Map::new();
-        for m in members {
-            let desc = format!("{} ({}): {}", m.name, m.title, m.persona_prompt);
-            kwant_criteria.insert(m.id.clone(), serde_json::Value::String(desc));
-        }
+        let kwant_criteria = kwant_choice_criteria(members);
 
         let payload = json!({
             "state": {
@@ -172,6 +164,50 @@ impl LayaRouter {
     }
 }
 
+/// Laya scores each option by how well its key and description match the prompt. Opaque IDs and
+/// long persona prompts drown that signal (it picked the first agent for almost everything), so
+/// options are keyed by agent name and described by title alone, which measured far more accurate.
+fn choice_keys(members: &[Kwant]) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::with_capacity(members.len());
+    for m in members {
+        let name = m.name.trim();
+        let mut key = name.to_string();
+        let mut n = 2;
+        while keys.iter().any(|k| k.eq_ignore_ascii_case(&key)) {
+            key = format!("{name} #{n}");
+            n += 1;
+        }
+        keys.push(key);
+    }
+    keys
+}
+
+pub fn kwant_choice_criteria(members: &[Kwant]) -> serde_json::Map<String, serde_json::Value> {
+    choice_keys(members)
+        .into_iter()
+        .zip(members)
+        .map(|(key, m)| {
+            let title = m.title.trim();
+            let desc = if title.is_empty() {
+                m.persona_prompt.split(['.', '\n']).next().unwrap_or("").trim().to_string()
+            } else {
+                title.to_string()
+            };
+            (key, serde_json::Value::String(desc))
+        })
+        .collect()
+}
+
+/// Maps Laya's choice (an option key, or an id/name if Laya echoes those) back to a member.
+fn resolve_kwant_choice<'a>(choice: &str, members: &'a [Kwant]) -> Option<&'a Kwant> {
+    let choice = choice.trim();
+    choice_keys(members)
+        .iter()
+        .position(|k| k.eq_ignore_ascii_case(choice))
+        .map(|i| &members[i])
+        .or_else(|| members.iter().find(|m| m.id == choice || m.name.eq_ignore_ascii_case(choice)))
+}
+
 /// Extracts a valid member kwant choice from a Laya `answers.lead_kwant` response.
 pub fn parse_laya_kwant_choice(data: &serde_json::Value, members: &[Kwant]) -> Option<(String, String)> {
     let choice = data
@@ -179,7 +215,7 @@ pub fn parse_laya_kwant_choice(data: &serde_json::Value, members: &[Kwant]) -> O
         .get("lead_kwant")?
         .get("choice")?
         .as_str()?;
-    let kwant = members.iter().find(|m| m.id == choice || m.name.eq_ignore_ascii_case(choice))?;
+    let kwant = resolve_kwant_choice(choice, members)?;
     Some((
         kwant.id.clone(),
         format!("Laya picked {} ({}) as the best fit for this question", kwant.name, kwant.title),
@@ -218,6 +254,7 @@ pub fn heuristic_pick_kwant<'a>(
 }
 
 pub fn parse_laya_team_answers(
+    prompt: &str,
     data: &serde_json::Value,
     team: &Team,
     members: &[Kwant],
@@ -228,16 +265,42 @@ pub fn parse_laya_team_answers(
         .and_then(|td| td.get("choice"))
         .and_then(|c| c.as_str())?;
 
-    let lead_choice = answers
-        .get("lead_kwant")
+    let lead = answers.get("lead_kwant");
+    let lead_kwant = lead
         .and_then(|lk| lk.get("choice"))
         .and_then(|c| c.as_str())
-        .map(|s| s.to_string());
+        .and_then(|c| resolve_kwant_choice(c, members));
+    let first_speaker = lead_kwant.map(|k| k.id.clone()).unwrap_or_else(|| team.lead_kwant_id.clone());
 
-    if choice == "discuss" {
-        let first_speaker = lead_choice.unwrap_or_else(|| team.lead_kwant_id.clone());
-        let second_speaker = members
+    // Laya leans "discuss" for nearly everything (greetings scored ~0.7, real topics 0.75-0.85), so it
+    // only wins outright when very sure; otherwise the prompt itself must look like a discussion.
+    let discuss_probability = answers
+        .get("team_decision")
+        .and_then(|td| td.get("probabilities"))
+        .and_then(|p| p.get("discuss"))
+        .and_then(|p| p.as_f64());
+    let discuss = match discuss_probability {
+        Some(p) => p >= 0.8 || (p >= 0.5 && is_complex_query(prompt)),
+        None => choice == "discuss",
+    };
+
+    if discuss {
+        // Laya's runner-up for the lead role is the best second voice; fall back to any other member.
+        let mut ranked: Vec<(&Kwant, f64)> = lead
+            .and_then(|lk| lk.get("probabilities"))
+            .and_then(|p| p.as_object())
+            .map(|probs| {
+                probs
+                    .iter()
+                    .filter_map(|(k, v)| Some((resolve_kwant_choice(k, members)?, v.as_f64()?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let second_speaker = ranked
             .iter()
+            .map(|(m, _)| *m)
+            .chain(members.iter())
             .find(|m| m.id != first_speaker)
             .map(|m| m.id.clone())
             .unwrap_or_else(|| first_speaker.clone());
@@ -251,10 +314,13 @@ pub fn parse_laya_team_answers(
             plan,
         })
     } else {
-        let kwant_id = lead_choice.unwrap_or_else(|| team.lead_kwant_id.clone());
+        let reason = match lead_kwant {
+            Some(k) => format!("Laya picked {} ({}) as the best fit for this question", k.name, k.title),
+            None => "Routed to the team lead".into(),
+        };
         Some(TeamDecision::Direct {
-            kwant_id,
-            reason: "Laya orchestrator selected specialist for direct response".into(),
+            kwant_id: first_speaker,
+            reason,
         })
     }
 }
@@ -538,7 +604,7 @@ mod tests {
                 "lead_kwant": { "choice": "kwant-2" }
             }
         });
-        let decision = parse_laya_team_answers(&mock_discuss, &team, &members).unwrap();
+        let decision = parse_laya_team_answers("Plan the cluster migration", &mock_discuss, &team, &members).unwrap();
         match decision {
             TeamDecision::Discuss { speakers, turns, .. } => {
                 assert_eq!(turns, 2);

@@ -132,7 +132,12 @@ impl LayaRouter {
             Ok(resp) if resp.status().is_success() => {
                 match resp.json::<serde_json::Value>().await {
                     Ok(data) => {
-                        if let Some(decision) = super::parse_laya_response(&data) {
+                        if let Some(mut decision) = super::parse_laya_response(&data) {
+                            decision.effort_level = super::fallback::blend_effort(prompt, &decision.effort_level);
+                            decision.reasoning = format!(
+                                "Laya decision router selected {} with {} effort",
+                                decision.selected_model, decision.effort_level
+                            );
                             return Ok(decision);
                         }
                         tracing::warn!("Laya response missing expected fields, using fallback");
