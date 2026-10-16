@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Hash, Plus, CheckCircle2, Users, ChevronDown, Settings2, X, Crown, UserPlus } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 
@@ -45,6 +45,7 @@ export interface SidebarProps {
   onSelectTeam: (team: Team) => void;
   onManageTeam?: (team: Team) => void;
   onUpdateTeamMembers?: (team: Team, memberIds: string[]) => void;
+  onEditKwant?: (kwant: Kwant) => void;
   onSummonKwant: () => void;
   onCreateTeam: () => void;
 }
@@ -61,6 +62,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectTeam,
   onManageTeam,
   onUpdateTeamMembers,
+  onEditKwant,
   onSummonKwant,
   onCreateTeam,
 }) => {
@@ -264,6 +266,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             >
                               <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} />
                               <span className="truncate flex-1">{k.name}</span>
+                              {onEditKwant && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onEditKwant(k);
+                                  }}
+                                  className="opacity-0 group-hover/member:opacity-100 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
+                                  title={`Edit ${k.name}`}
+                                >
+                                  <Pencil size={11} />
+                                </button>
+                              )}
                               {isLead ? (
                                 <span className="flex items-center gap-0.5 text-[9px] uppercase tracking-wide text-amber-300/90" title="Team lead">
                                   <Crown size={10} />
@@ -390,10 +405,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {kwants.map((k) => {
               const active = !isChannel && selectedId === k.id;
               return (
-                <button
+                <div
                   key={k.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => onSelectKwant(k)}
-                  className={`w-full flex items-center gap-3 p-2 rounded-xl text-left transition-all ${
+                  onKeyDown={(e) => e.key === 'Enter' && onSelectKwant(k)}
+                  className={`group/fleet w-full flex items-center gap-3 p-2 rounded-xl text-left cursor-pointer transition-all ${
                     active
                       ? 'bg-zinc-800/90 text-zinc-100 shadow-sm border border-zinc-700/60'
                       : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
@@ -408,13 +426,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-1">
                       <span className="text-xs font-semibold text-zinc-200 truncate">{k.name}</span>
+                      {onEditKwant && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onEditKwant(k);
+                          }}
+                          className="ml-auto opacity-0 group-hover/fleet:opacity-100 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
+                          title={`Edit ${k.name}`}
+                        >
+                          <Pencil size={11} />
+                        </button>
+                      )}
                       <span className="text-[10px] text-zinc-500 font-mono uppercase bg-zinc-900 px-1 py-0.2 rounded border border-zinc-800">
                         {k.preferred_model === 'auto' ? 'Laya' : k.preferred_model.split('-')[0]}
                       </span>
                     </div>
                     <p className="text-[11px] text-zinc-400 truncate mt-0.5">{k.title}</p>
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>

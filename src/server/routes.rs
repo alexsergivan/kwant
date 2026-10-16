@@ -60,6 +60,26 @@ pub async fn create_kwant(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+pub async fn update_kwant(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(mut payload): Json<UpdateKwant>,
+) -> Result<Json<Kwant>, StatusCode> {
+    payload.name = payload.name.trim().to_string();
+    if payload.name.is_empty() || payload.name.contains(char::is_whitespace) || payload.name.contains('@') {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let kwants = state.db.list_kwants().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if kwants.iter().any(|k| k.id != id && k.name.eq_ignore_ascii_case(&payload.name)) {
+        return Err(StatusCode::CONFLICT);
+    }
+    match state.db.update_kwant(&id, &payload).await {
+        Ok(Some(kwant)) => Ok(Json(kwant)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
 pub async fn list_channels(State(state): State<AppState>) -> Result<Json<Vec<Channel>>, StatusCode> {
     state
         .db

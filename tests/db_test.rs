@@ -66,6 +66,36 @@ async fn test_db_init_and_crud() {
     let latest: Vec<String> = db.list_messages(&chan.id, 2).await.unwrap().into_iter().map(|m| m.text).collect();
     assert_eq!(latest, vec!["second", "third"]);
 
+    // Editing a kwant renames its past messages too
+    db.insert_message(&NewMessage {
+        sender_role: "kwant".into(),
+        sender_id: kwant.name.clone(),
+        text: "bot reply".into(),
+        ..new_msg.clone()
+    })
+    .await
+    .unwrap();
+    let edited = db
+        .update_kwant(
+            &kwant.id,
+            &UpdateKwant {
+                name: "Renamed".into(),
+                title: "New Title".into(),
+                persona_prompt: "New persona".into(),
+                avatar_sprite: "security".into(),
+                preferred_model: "claude".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((edited.name.as_str(), edited.title.as_str(), edited.preferred_model.as_str()), ("Renamed", "New Title", "claude"));
+    let msgs = db.list_messages(&chan.id, 10).await.unwrap();
+    assert_eq!(msgs.last().unwrap().sender_id, "Renamed");
+    assert!(db.update_kwant("missing", &UpdateKwant {
+        name: "x".into(), title: "".into(), persona_prompt: "".into(), avatar_sprite: "".into(), preferred_model: "auto".into(),
+    }).await.unwrap().is_none());
+
     // Approvals
     let new_app = NewApproval {
         turn_id: "turn-123".into(),

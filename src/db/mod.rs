@@ -179,6 +179,34 @@ impl Database {
         Ok(row)
     }
 
+    /// Updates a kwant's profile. Its past messages follow a rename, since messages store the sender's name.
+    pub async fn update_kwant(&self, id: &str, input: &UpdateKwant) -> Result<Option<Kwant>, DbError> {
+        let Some(existing) = self.get_kwant(id).await? else {
+            return Ok(None);
+        };
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "UPDATE kwants SET name = ?, title = ?, persona_prompt = ?, avatar_sprite = ?, preferred_model = ? WHERE id = ?",
+        )
+        .bind(&input.name)
+        .bind(&input.title)
+        .bind(&input.persona_prompt)
+        .bind(&input.avatar_sprite)
+        .bind(&input.preferred_model)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        if existing.name != input.name {
+            sqlx::query("UPDATE messages SET sender_id = ? WHERE sender_role = 'kwant' AND sender_id = ?")
+                .bind(&input.name)
+                .bind(&existing.name)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        self.get_kwant(id).await
+    }
+
     // Channels CRUD
     pub async fn create_channel(&self, input: &NewChannel) -> Result<Channel, DbError> {
         let id = Uuid::new_v4().to_string();

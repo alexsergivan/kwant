@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch } from 'lucide-react';
+import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch, Pencil } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -73,6 +73,7 @@ export interface ChatViewProps {
   workspacePath?: string;
   repoUrl?: string;
   onManageTeam?: () => void;
+  onEditKwant?: () => void;
   // Grok-style Sandbox VM Pane props
   isVmPaneOpen?: boolean;
   onToggleVmPane?: () => void;
@@ -197,6 +198,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   workspacePath,
   repoUrl,
   onManageTeam,
+  onEditKwant,
   isVmPaneOpen,
   onToggleVmPane,
   activeUrl,
@@ -555,6 +557,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </button>
               )}
             </div>
+          )}
+
+          {onEditKwant && (
+            <button
+              type="button"
+              onClick={onEditKwant}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
+              title={`Edit ${title}'s name, avatar, model and persona`}
+            >
+              <Pencil size={12} className="text-zinc-400" />
+              <span>Edit</span>
+            </button>
           )}
 
           {isStreaming && !discussionState?.inProgress && onCancelDiscussion && (

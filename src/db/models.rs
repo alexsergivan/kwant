@@ -28,6 +28,16 @@ pub struct NewKwant {
     pub preferred_model: String,
 }
 
+/// Editable fields of an existing kwant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateKwant {
+    pub name: String,
+    pub title: String,
+    pub persona_prompt: String,
+    pub avatar_sprite: String,
+    pub preferred_model: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Channel {
     pub id: String,

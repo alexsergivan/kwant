@@ -4,7 +4,7 @@ import { Sidebar, Kwant, Channel, Team } from './components/Sidebar';
 import { ChatView, ChatMessage, DiscussionState, RoutingState } from './components/ChatView';
 import { PendingApproval } from './components/ModernApprovalCard';
 import { SettingsModal } from './components/SettingsModal';
-import { NewAgentModal } from './components/NewAgentModal';
+import { NewAgentModal, AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
@@ -52,6 +52,7 @@ export const App: React.FC = () => {
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
+  const [editingKwant, setEditingKwant] = useState<Kwant | null>(null);
 
   // Virtual Machine & Live Browser state
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
@@ -597,6 +598,36 @@ export const App: React.FC = () => {
     playSfx('click');
   };
 
+  const handleUpdateAgent = async (kwant: Kwant, agentData: AgentFormData): Promise<string | void> => {
+    try {
+      const res = await fetch(`/api/kwants/${kwant.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(agentData),
+      });
+      if (res.status === 409) return `Another agent is already named "${agentData.name}".`;
+      if (res.status === 400) return 'Name cannot be empty or contain spaces or @.';
+      if (!res.ok) return `Saving failed (HTTP ${res.status}).`;
+
+      const updated: Kwant = await res.json();
+      setKwants((prev) => prev.map((k) => (k.id === updated.id ? updated : k)));
+      if (updated.name !== kwant.name) {
+        const rename = (list: ChatMessage[]) =>
+          list.map((m) =>
+            m.sender_role === 'kwant' && m.sender_id === kwant.name ? { ...m, sender_id: updated.name } : m,
+          );
+        for (const key of Object.keys(messagesCacheRef.current)) {
+          messagesCacheRef.current[key] = rename(messagesCacheRef.current[key]);
+        }
+        setMessages((prev) => rename(prev));
+      }
+      playSfx('click');
+    } catch (err) {
+      console.error('Failed updating Agent:', err);
+      return 'Could not reach the server.';
+    }
+  };
+
   const handleCreateAgent = async (agentData: {
     name: string;
     title: string;
@@ -992,6 +1023,10 @@ export const App: React.FC = () => {
             setEditingTeam(team);
             playSfx('click');
           }}
+          onEditKwant={(kwant) => {
+            setEditingKwant(kwant);
+            playSfx('click');
+          }}
           onSummonKwant={() => {
             setIsNewAgentOpen(true);
             playSfx('click');
@@ -1031,6 +1066,14 @@ export const App: React.FC = () => {
                 }
               : undefined
           }
+          onEditKwant={
+            currentKwant
+              ? () => {
+                  setEditingKwant(currentKwant);
+                  playSfx('click');
+                }
+              : undefined
+          }
           isVmPaneOpen={isVmPaneOpen}
           onToggleVmPane={() => setIsVmPaneOpen((prev) => !prev)}
           activeUrl={activeUrl}
@@ -1049,7 +1092,15 @@ export const App: React.FC = () => {
       <NewAgentModal
         isOpen={isNewAgentOpen}
         onClose={() => setIsNewAgentOpen(false)}
-        onCreateAgent={handleCreateAgent}
+        onSubmit={handleCreateAgent}
+      />
+
+      {/* Edit Agent Modal */}
+      <NewAgentModal
+        isOpen={!!editingKwant}
+        initial={editingKwant}
+        onClose={() => setEditingKwant(null)}
+        onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
       />
 
       {/* New Team Modal */}

@@ -11,7 +11,7 @@ use crate::router::LayaRouter;
 use crate::sandbox::{BrowserController, SandboxManager};
 use crate::tools::ToolRunner;
 use axum::{
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use std::collections::HashMap;
@@ -77,6 +77,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/health", get(routes::health))
         .route("/api/laya/status", get(routes::laya_status))
         .route("/api/kwants", get(routes::list_kwants).post(routes::create_kwant))
+        .route("/api/kwants/:id", put(routes::update_kwant))
         .route("/api/channels", get(routes::list_channels).post(routes::create_channel))
         .route("/api/channels/:id/messages", get(routes::list_messages))
         .route("/api/teams", get(routes::list_teams).post(routes::create_team))

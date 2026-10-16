@@ -1,24 +1,38 @@
-import React, { useState } from 'react';
-import { X, Sparkles } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Sparkles, Pencil } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
+
+export interface AgentFormData {
+  name: string;
+  title: string;
+  persona_prompt: string;
+  avatar_sprite: string;
+  preferred_model: string;
+}
+
+const MODEL_OPTIONS = [
+  { id: 'auto', label: 'Auto (Laya 33ms Decision Router - Recommended)' },
+  { id: 'claude', label: 'Anthropic Claude (Deep Architecture)' },
+  { id: 'grok', label: 'xAI Grok (Fast Technical Reasoning)' },
+  { id: 'codex', label: 'OpenAI Codex (Coding & Scripts)' },
+  { id: 'local_ollama', label: 'Local Ollama (Offline / Private)' },
+];
 
 interface NewAgentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreateAgent: (data: {
-    name: string;
-    title: string;
-    persona_prompt: string;
-    avatar_sprite: string;
-    preferred_model: string;
-  }) => void;
+  /** When set, the modal edits this agent instead of creating a new one. */
+  initial?: AgentFormData | null;
+  /** Resolves to an error message when saving failed. */
+  onSubmit: (data: AgentFormData) => Promise<string | void> | void;
 }
 
 export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   isOpen,
   onClose,
-  onCreateAgent,
+  initial,
+  onSubmit,
 }) => {
   const [name, setName] = useState('');
   const [title, setTitle] = useState('');
@@ -26,17 +40,35 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [model, setModel] = useState('auto');
   const [prompt, setPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const isEdit = !!initial;
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setName(initial?.name ?? '');
+    setTitle(initial?.title ?? '');
+    setRoleStyle(initial?.avatar_sprite || 'architect');
+    setModel(initial?.preferred_model || 'auto');
+    setPrompt(initial?.persona_prompt ?? '');
+    setSubmitting(false);
+    setError(null);
+  }, [isOpen, initial]);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+    if (/[\s@]/.test(name.trim())) {
+      setError('Name cannot contain spaces or @ — teammates @mention it.');
+      return;
+    }
 
     setSubmitting(true);
+    setError(null);
     playSfx('click');
 
-    onCreateAgent({
+    const err = await onSubmit({
       name: name.trim(),
       title: title.trim() || 'AI Specialist',
       persona_prompt: prompt.trim() || 'You are an intelligent AI specialist ready to collaborate.',
@@ -45,8 +77,16 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     });
 
     setSubmitting(false);
+    if (err) {
+      setError(err);
+      return;
+    }
     onClose();
   };
+
+  const modelOptions = MODEL_OPTIONS.some((m) => m.id === model)
+    ? MODEL_OPTIONS
+    : [...MODEL_OPTIONS, { id: model, label: model }];
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
@@ -54,9 +94,11 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
-              <Sparkles size={15} />
+              {isEdit ? <Pencil size={14} /> : <Sparkles size={15} />}
             </div>
-            <h3 className="text-sm font-semibold text-zinc-100">Create New AI Agent</h3>
+            <h3 className="text-sm font-semibold text-zinc-100">
+              {isEdit ? `Edit ${initial?.name}` : 'Create New AI Agent'}
+            </h3>
           </div>
           <button
             onClick={() => {
@@ -131,24 +173,32 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               onChange={(e) => setModel(e.target.value)}
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none transition-colors"
             >
-              <option value="auto">Auto (Laya 33ms Decision Router - Recommended)</option>
-              <option value="claude">Anthropic Claude (Deep Architecture)</option>
-              <option value="grok">xAI Grok (Fast Technical Reasoning)</option>
-              <option value="codex">OpenAI Codex (Coding & Scripts)</option>
-              <option value="local_ollama">Local Ollama (Offline / Private)</option>
+              {modelOptions.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
             </select>
           </div>
 
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">Persona & System Prompt</label>
             <textarea
-              rows={3}
+              rows={isEdit ? 6 : 3}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="Define instructions, personality, tone, and domain expertise..."
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none"
             />
           </div>
+
+          {isEdit && initial && name.trim() !== initial.name && (
+            <p className="text-[11px] text-zinc-500">
+              Renaming updates past messages; teammates will need to @mention the new name.
+            </p>
+          )}
+
+          {error && <p className="text-[11px] text-rose-400">{error}</p>}
 
           <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-zinc-800">
             <button
@@ -166,7 +216,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               disabled={submitting || !name.trim()}
               className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50"
             >
-              Create Agent
+              {isEdit ? 'Save Changes' : 'Create Agent'}
             </button>
           </div>
         </form>
