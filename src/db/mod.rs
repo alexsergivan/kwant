@@ -1,4 +1,5 @@
 pub mod models;
+pub mod profiles;
 
 use models::*;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
@@ -78,6 +79,7 @@ impl Database {
         let _ = sqlx::query("ALTER TABLE kwants ADD COLUMN soul TEXT NOT NULL DEFAULT '';").execute(&pool).await;
 
         let db = Self { pool };
+        db.migrate_profiles().await?;
         db.seed_defaults().await?;
 
         Ok(db)

@@ -332,6 +332,8 @@ pub enum StreamEvent {
     Error(String),
     /// The run ended; `stop_reason` is e.g. `end_turn`, `refusal`, `cancelled`.
     End { stop_reason: Option<String> },
+    /// grok called a tool: the turn has had effects, so it must not be retried elsewhere.
+    ToolCall,
 }
 
 /// Splits grok's NDJSON output into events. Lines that aren't JSON are passed on as text, so
@@ -380,6 +382,7 @@ fn parse_line(line: &str) -> Option<StreamEvent> {
         Some("end") => Some(StreamEvent::End {
             stop_reason: value["stopReason"].as_str().map(str::to_string),
         }),
+        Some("tool_call") | Some("tool_call_update") => Some(StreamEvent::ToolCall),
         Some(_) => None,
         None => Some(StreamEvent::Text(line.to_string())),
     }
@@ -554,6 +557,7 @@ include_only = ["*"]
             [
                 StreamEvent::Text("Hel".into()),
                 StreamEvent::Text("lo\n".into()),
+                StreamEvent::ToolCall,
                 StreamEvent::Text("plain line\n".into()),
                 StreamEvent::Error("boom".into()),
                 StreamEvent::End {

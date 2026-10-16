@@ -276,3 +276,69 @@ impl std::fmt::Debug for McpOAuthToken {
             .finish()
     }
 }
+
+/// A kwant plus its LLM profile binding, as the kwant routes return it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KwantView {
+    #[serde(flatten)]
+    pub kwant: Kwant,
+    /// `None` uses the engine's default profile.
+    pub profile_id: Option<String>,
+    /// Whether a turn may move to the engine's next profile when this one is out of quota or signed out.
+    pub profile_failover: bool,
+}
+
+/// One LLM account for an engine. Holds no secret: API keys live in `llm_profile_secrets`.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+pub struct LlmProfile {
+    pub id: String,
+    /// "claude", "codex" or "grok".
+    pub engine: String,
+    pub name: String,
+    /// "system", "cli_home" or "api_key".
+    pub kind: String,
+    /// The CLI config dir of a `cli_home` profile.
+    pub home_dir: Option<String>,
+    pub priority: i64,
+    pub enabled: bool,
+    pub is_default: bool,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewLlmProfile {
+    pub engine: String,
+    pub name: String,
+    pub kind: String,
+    pub home_dir: Option<String>,
+    pub priority: i64,
+    pub enabled: bool,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LlmProfilePatch {
+    pub name: Option<String>,
+    pub priority: Option<i64>,
+    pub enabled: Option<bool>,
+    /// Only `Some(true)` does anything: a profile stops being the default when another becomes it.
+    pub is_default: Option<bool>,
+}
+
+/// Failover state of a profile. `last_error` is a class ("quota", "auth"), never provider text.
+#[derive(Debug, Clone, Default, FromRow, PartialEq)]
+pub struct LlmProfileState {
+    pub profile_id: String,
+    pub limited_until: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+}
+
+/// A stored provider API key. Never prints its value.
+#[derive(Clone)]
+pub struct ProfileKey(pub String);
+
+impl std::fmt::Debug for ProfileKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ProfileKey(<redacted>)")
+    }
+}

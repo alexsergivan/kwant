@@ -126,3 +126,37 @@ CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
 );
+
+-- LLM accounts per engine (claude, codex, grok). kind: system = the CLI's own login or the
+-- Settings key (how kwnt always worked), cli_home = a separate CLI config dir, api_key = a stored key
+CREATE TABLE IF NOT EXISTS llm_profiles (
+    id TEXT PRIMARY KEY,
+    engine TEXT NOT NULL CHECK (engine IN ('claude', 'codex', 'grok')),
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('system', 'cli_home', 'api_key')),
+    home_dir TEXT UNIQUE,
+    priority INTEGER NOT NULL DEFAULT 100,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (engine, name COLLATE NOCASE)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS llm_profiles_one_default ON llm_profiles (engine) WHERE is_default = 1;
+
+-- Write-only API keys. Never serialized, never logged
+CREATE TABLE IF NOT EXISTS llm_profile_secrets (
+    profile_id TEXT PRIMARY KEY,
+    api_key TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(profile_id) REFERENCES llm_profiles(id) ON DELETE CASCADE
+);
+
+-- Failover state: a quota-limited profile is skipped until limited_until. last_error is a class, never provider text
+CREATE TABLE IF NOT EXISTS llm_profile_state (
+    profile_id TEXT PRIMARY KEY,
+    limited_until TIMESTAMP,
+    last_error TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(profile_id) REFERENCES llm_profiles(id) ON DELETE CASCADE
+)

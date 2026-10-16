@@ -27,6 +27,38 @@ pub enum RuntimeEvent {
     TurnComplete {
         tokens: usize,
         duration_ms: u64,
+        /// Kwant whose turn ended; set on the events the server broadcasts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kwant_id: Option<String>,
+        /// Profile that served the turn, when the engine has profiles.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile_id: Option<String>,
+    },
+    /// A kwant started working on a turn (its avatar can show it's busy until `turn_ended`).
+    #[serde(rename = "turn_started", alias = "TurnStarted")]
+    TurnStarted {
+        kwant_id: String,
+        context_id: Option<String>,
+    },
+    /// A kwant's turn is over, however it ended: "completed", "failed" or "cancelled".
+    #[serde(rename = "turn_ended", alias = "TurnEnded")]
+    TurnEnded {
+        kwant_id: String,
+        context_id: Option<String>,
+        outcome: String,
+    },
+    /// A turn moved to another profile of the same engine because the first ran out of quota
+    /// or was signed out. `class` is "quota" or "auth".
+    #[serde(rename = "profile_switched", alias = "ProfileSwitched")]
+    ProfileSwitched {
+        kwant_id: String,
+        from_profile_id: String,
+        from_name: String,
+        to_profile_id: String,
+        to_name: String,
+        class: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_at: Option<chrono::DateTime<chrono::Utc>>,
     },
     #[serde(rename = "discussion_started", alias = "DiscussionStarted")]
     DiscussionStarted {
@@ -95,6 +127,8 @@ pub enum RuntimeEvent {
     Error {
         code: String,
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kwant_id: Option<String>,
     },
 }
 

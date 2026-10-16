@@ -275,11 +275,22 @@ pub async fn detect_available_models(db: &crate::db::Database) -> Vec<ModelDescr
     available
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TurnOutput {
     pub text: String,
     pub reasoning: Option<String>,
     pub tokens_used: usize,
+    /// Set when the provider refused the turn (quota, auth) before the model did anything; the
+    /// driver then emitted no text and no `TurnComplete`, so the turn can move to another profile.
+    #[serde(skip)]
+    pub failure: Option<crate::profiles::ProviderFailure>,
+}
+
+impl TurnOutput {
+    /// A turn the provider refused before anything visible happened.
+    pub fn refused(failure: crate::profiles::ProviderFailure) -> Self {
+        Self { failure: Some(failure), ..Default::default() }
+    }
 }
 
 #[async_trait]

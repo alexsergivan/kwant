@@ -44,6 +44,8 @@ impl Driver for TestDriver {
             .send(RuntimeEvent::TurnComplete {
                 tokens: 42,
                 duration_ms: 120,
+                kwant_id: None,
+                profile_id: None,
             })
             .await
             .unwrap();
@@ -52,6 +54,7 @@ impl Driver for TestDriver {
             text: format!("Player says: {}", input.prompt),
             reasoning: Some("Calculating combo...".into()),
             tokens_used: 42,
+            ..Default::default()
         })
     }
 }
