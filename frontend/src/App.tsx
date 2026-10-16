@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AppHeader } from './components/AppHeader';
-import { Sidebar, Kwant, Channel, Team } from './components/Sidebar';
+import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { ChatView, ChatMessage, DiscussionState, RoutingState } from './components/ChatView';
 import { PendingApproval } from './components/ModernApprovalCard';
 import { SettingsModal } from './components/SettingsModal';
@@ -50,6 +50,8 @@ export const App: React.FC = () => {
   // Modals state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
+  // Team that a newly created agent should join (set by a team's "Add member")
+  const [newAgentTeam, setNewAgentTeam] = useState<Team | null>(null);
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [editingKwant, setEditingKwant] = useState<Kwant | null>(null);
@@ -647,6 +649,16 @@ export const App: React.FC = () => {
       if (res.ok) {
         const created: Kwant = await res.json();
         setKwants((prev) => [...prev, created]);
+        setIsNewAgentOpen(false);
+        playSfx('fanfare');
+        const team = newAgentTeam && (teams.find((t) => t.id === newAgentTeam.id) ?? newAgentTeam);
+        setNewAgentTeam(null);
+        if (team) {
+          const memberIds = memberIdsOf(team);
+          await handleUpdateTeamMembers(team, [...memberIds.filter((id) => id !== created.id), created.id]);
+          handleSelectTeam(team);
+          return;
+        }
         setSelectedId(created.id);
         selectedIdRef.current = created.id;
         setIsChannel(false);
@@ -654,8 +666,6 @@ export const App: React.FC = () => {
         setSelectedTeamId(null);
         messagesCacheRef.current[created.id] = [];
         setMessages([]);
-        setIsNewAgentOpen(false);
-        playSfx('fanfare');
         return;
       }
       if (res.status === 409) return `Another agent is already named "${agentData.name}".`;
@@ -1027,7 +1037,8 @@ export const App: React.FC = () => {
             setEditingKwant(kwant);
             playSfx('click');
           }}
-          onSummonKwant={() => {
+          onSummonKwant={(team) => {
+            setNewAgentTeam(team ?? null);
             setIsNewAgentOpen(true);
             playSfx('click');
           }}
@@ -1091,7 +1102,11 @@ export const App: React.FC = () => {
       {/* New Agent Modal */}
       <NewAgentModal
         isOpen={isNewAgentOpen}
-        onClose={() => setIsNewAgentOpen(false)}
+        onClose={() => {
+          setIsNewAgentOpen(false);
+          setNewAgentTeam(null);
+        }}
+        joinTeamName={newAgentTeam?.name}
         takenNames={kwants.map((k) => k.name)}
         onSubmit={handleCreateAgent}
       />

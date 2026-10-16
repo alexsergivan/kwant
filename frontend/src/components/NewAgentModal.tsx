@@ -28,6 +28,8 @@ interface NewAgentModalProps {
   initial?: AgentFormData | null;
   /** Names already in use, so presets pick a free one. */
   takenNames?: string[];
+  /** When creating from a team, the team the new agent will join. */
+  joinTeamName?: string;
   /** Resolves to an error message when saving failed. */
   onSubmit: (data: AgentFormData) => Promise<string | void> | void;
 }
@@ -37,6 +39,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   onClose,
   initial,
   takenNames = [],
+  joinTeamName,
   onSubmit,
 }) => {
   const [name, setName] = useState('');
@@ -120,7 +123,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               {isEdit ? <Pencil size={14} /> : <Sparkles size={15} />}
             </div>
             <h3 className="text-sm font-semibold text-zinc-100">
-              {isEdit ? `Edit ${initial?.name}` : 'Create New AI Agent'}
+              {isEdit ? `Edit ${initial?.name}` : joinTeamName ? `New Agent for @${joinTeamName}` : 'Create New AI Agent'}
             </h3>
           </div>
           <button
@@ -298,7 +301,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               disabled={submitting || !name.trim()}
               className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50"
             >
-              {isEdit ? 'Save Changes' : 'Create Agent'}
+              {isEdit ? 'Save Changes' : joinTeamName ? 'Create & Add to Team' : 'Create Agent'}
             </button>
           </div>
         </form>

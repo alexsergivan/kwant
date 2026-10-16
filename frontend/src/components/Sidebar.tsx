@@ -47,9 +47,17 @@ export interface SidebarProps {
   onManageTeam?: (team: Team) => void;
   onUpdateTeamMembers?: (team: Team, memberIds: string[]) => void;
   onEditKwant?: (kwant: Kwant) => void;
-  onSummonKwant: () => void;
+  /** Opens the new-agent form; with a team, the new agent joins it. */
+  onSummonKwant: (team?: Team) => void;
   onCreateTeam: () => void;
 }
+
+export const memberIdsOf = (t: Team): string[] =>
+  Array.isArray(t.member_kwants)
+    ? t.member_kwants
+    : typeof t.member_kwants === 'string'
+    ? (JSON.parse(t.member_kwants || '[]') as string[])
+    : [];
 
 export const Sidebar: React.FC<SidebarProps> = ({
   kwants,
@@ -86,13 +94,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       return next;
     });
 
-  const memberIdsOf = (t: Team): string[] =>
-    Array.isArray(t.member_kwants)
-      ? t.member_kwants
-      : typeof t.member_kwants === 'string'
-      ? (JSON.parse(t.member_kwants || '[]') as string[])
-      : [];
-
   // Channels to display: hide auto-created team channels to avoid duplication with Teams section
   const displayChannels = channels.filter(
     (c) => !teams.some((t) => c.name === `team-${t.name}`)
@@ -122,7 +123,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-3 border-b border-zinc-800/60 flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Workspace</span>
         <button
-          onClick={onSummonKwant}
+          onClick={() => onSummonKwant()}
           className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 rounded-md border border-sky-500/20 transition-all"
         >
           <Plus size={13} />
@@ -355,7 +356,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               type="button"
                               onClick={() => {
                                 setAddingTo(null);
-                                onSummonKwant();
+                                onSummonKwant(t);
                               }}
                               className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-[11px] text-sky-400 hover:bg-sky-500/10 border-t border-zinc-800 mt-0.5 pt-1.5"
                             >
