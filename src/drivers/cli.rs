@@ -70,6 +70,32 @@ fn find_cli_binary_uncached(name: &str) -> Option<String> {
     None
 }
 
+fn toml_string(value: &str) -> String {
+    serde_json::Value::String(value.to_string()).to_string()
+}
+
+/// The `mcp_servers` override for `codex exec`: only kwnt's gateway, or nothing. The gateway
+/// asks the user before every call, so codex's own approval is turned off for it; its token is
+/// read from an env variable so it never appears in argv.
+pub fn codex_mcp_servers(ctx: Option<&crate::mcp::McpTurnContext>) -> String {
+    let Some((ctx, gateway)) = ctx.and_then(|c| c.gateway.as_ref().map(|g| (c, g))) else {
+        return "mcp_servers={}".into();
+    };
+    let slowest = ctx.servers.iter().map(|s| s.timeout_secs.max(0) as u64).max().unwrap_or(0);
+    // The gateway connects to every server on codex's first tools/list
+    let startup_secs = (slowest + 15).max(30);
+    // A call may wait for the user's approval; codex must not give up first
+    let tool_secs = (crate::mcp::APPROVAL_TIMEOUT_SECS + 30).max(slowest);
+    format!(
+        "mcp_servers={{{}={{url={},bearer_token_env_var={},default_tools_approval_mode=\"approve\",startup_timeout_sec={},tool_timeout_sec={}}}}}",
+        crate::mcp::RESERVED_SERVER_NAME,
+        toml_string(&gateway.url),
+        toml_string(crate::mcp::GATEWAY_TOKEN_ENV),
+        startup_secs,
+        tool_secs,
+    )
+}
+
 pub fn build_cli_prompt(input: &TurnInput) -> String {
     if input.history.is_empty() {
         return input.prompt.clone();
@@ -172,7 +198,7 @@ impl Driver for CliDriver {
         cmd.env("BROWSER", "none");
         cmd.env("DISPLAY", "");
 
-        if input.mcp.is_some() && matches!(self.tool_kind.as_str(), "codex" | "grok") {
+        if input.mcp.is_some() && self.tool_kind == "grok" {
             let _ = event_tx
                 .send(RuntimeEvent::ThinkingDelta(format!(
                     "MCP servers are assigned, but kwnt can't offer MCP tools through the {} CLI yet; running without them.",
@@ -197,11 +223,14 @@ impl Driver for CliDriver {
                     .arg("never")
                     .arg("-c")
                     .arg(format!("reasoning_effort=\"{}\"", codex_effort))
-                    // codex exec has no hook for kwnt's approval cards, so no MCP servers at all,
-                    // including ones from the user's own config.toml
+                    // Never the user's own config.toml servers: codex exec has no hook for kwnt's
+                    // approval cards. The kwant's servers come only through kwnt's gateway.
                     .arg("-c")
-                    .arg("mcp_servers={}")
-                    .arg("-o")
+                    .arg(codex_mcp_servers(input.mcp.as_ref()));
+                if let Some(gateway) = input.mcp.as_ref().and_then(|c| c.gateway.as_ref()) {
+                    cmd.env(crate::mcp::GATEWAY_TOKEN_ENV, &gateway.token);
+                }
+                cmd.arg("-o")
                     .arg(&out_file)
                     .arg(&full_prompt);
                 codex_out_file = Some(out_file);

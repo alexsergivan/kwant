@@ -155,8 +155,17 @@ Body: `{"server_ids": ["…"]}` (replaces the whole assignment; `[]` clears it).
   (`--permission-prompt-tool mcp__kwnt__approve`, served at `POST /api/mcp/permission/<token>`,
   valid only while that turn runs), so only the kwant's own MCP tools can be approved; claude's
   built-in tools stay denied as before.
-  `codex` and `grok` CLI agents do not get MCP servers yet (no way to route their tool approvals
-  through kwnt); kwnt explicitly disables MCP for codex.
+- **CLI agents (`codex`)**: codex gets exactly one MCP server, kwnt's per-turn gateway
+  (`POST /api/mcp/gateway`), via
+  `-c mcp_servers={kwnt={url=…,bearer_token_env_var="KWNT_MCP_GATEWAY_TOKEN",default_tools_approval_mode="approve",…}}`.
+  The user's own `config.toml` servers are never loaded. The turn's token is passed in the
+  `KWNT_MCP_GATEWAY_TOKEN` env variable and sent as `Authorization: Bearer`, never on the command
+  line; other tokens and finished turns get `401`. The gateway connects to the kwant's servers
+  on first use, lists their tools as `<server>__<tool>` (codex shows them under `mcp__kwnt`),
+  and asks for approval (below) before forwarding each call, so codex's own approval is turned
+  off for it. Without servers codex runs with `-c mcp_servers={}` as before.
+  `grok` CLI agents do not get MCP servers yet: its config overlay (`GROK_CONFIG_PATH`) cannot
+  add `mcp_servers`, and it has no per-run MCP flag.
 - **API agents** (OpenAI-compatible chat endpoints, incl. Ollama): kwnt connects to the servers,
   offers their tools in the `tools` field, executes `tool_calls` and feeds results back, for at
   most `mcp_max_tool_iterations` model calls per turn (setting or env

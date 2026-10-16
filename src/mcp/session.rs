@@ -103,6 +103,25 @@ impl McpToolSession {
             .collect()
     }
 
+    /// The `tools/list` result for kwnt's MCP gateway. Tools are named `<server>__<tool>`, so an
+    /// agent CLI that prefixes `mcp__kwnt__` still shows which server a tool belongs to.
+    pub fn gateway_tools(&self) -> Vec<Value> {
+        self.tools
+            .iter()
+            .map(|t| {
+                let mut schema = t.tool.input_schema.clone();
+                if !schema.is_object() {
+                    schema = json!({"type": "object", "properties": {}});
+                }
+                json!({
+                    "name": t.name.strip_prefix("mcp__").unwrap_or(&t.name),
+                    "description": t.tool.description.clone().unwrap_or_default(),
+                    "inputSchema": schema,
+                })
+            })
+            .collect()
+    }
+
     /// Runs one model-requested call: approval first, then the MCP call. The record is also
     /// appended to the turn's `tool_calls`.
     pub async fn call(&self, caller: &Caller, call_id: &str, name: &str, raw_arguments: &str) -> CallOutcome {

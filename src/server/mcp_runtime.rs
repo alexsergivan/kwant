@@ -1,37 +1,83 @@
 //! MCP at turn time: the broker-backed approver, per-turn context setup, and the small MCP
 //! endpoint the claude CLI calls (`--permission-prompt-tool`) so its MCP tool calls get the same
-//! approval cards as API agents.
+//! approval cards as API agents. Agent CLIs with no permission hook (codex) instead reach the
+//! kwant's servers through kwnt's MCP gateway, which asks for approval before forwarding each call.
 
 use super::AppState;
 use crate::broker::{ApprovalDecision, ApprovalRequest, PermissionBroker};
 use crate::db::models::{Kwant, NewApproval};
 use crate::db::Database;
 use crate::drivers::events::RuntimeEvent;
-use crate::mcp::{self, client::PROTOCOL_VERSION, McpTurnContext, ToolApprovalRequest, ToolApprover};
+use crate::mcp::{
+    self,
+    client::PROTOCOL_VERSION,
+    session::{Caller, McpToolSession},
+    GatewayAccess, McpTurnContext, ToolApprovalRequest, ToolApprover,
+};
 use async_trait::async_trait;
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 
 /// How long a tool call waits for the user before it is denied.
 pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(mcp::APPROVAL_TIMEOUT_SECS);
 /// The tool claude calls for permission decisions: `mcp__kwnt__approve`.
 pub use crate::mcp::PERMISSION_TOOL;
 
-/// A claude CLI turn whose permission prompts kwnt answers.
+/// An agent CLI turn whose permission prompts (claude) or gateway calls (codex) kwnt answers.
 #[derive(Clone)]
 pub struct PermissionSession {
     pub kwant_id: String,
     pub kwant_name: String,
     pub turn_id: String,
     pub ctx: McpTurnContext,
+    /// Working directory for the kwant's stdio servers when the gateway starts them.
+    pub cwd: Option<PathBuf>,
+    /// The gateway's connections to the kwant's servers, opened on first use.
+    gateway: Arc<Mutex<Option<Arc<McpToolSession>>>>,
+}
+
+impl PermissionSession {
+    pub fn new(kwant_id: String, kwant_name: String, turn_id: String, ctx: McpTurnContext, cwd: Option<PathBuf>) -> Self {
+        Self { kwant_id, kwant_name, turn_id, ctx, cwd, gateway: Default::default() }
+    }
+
+    fn caller(&self) -> Caller {
+        Caller { kwant_id: self.kwant_id.clone(), kwant_name: self.kwant_name.clone(), turn_id: self.turn_id.clone() }
+    }
+
+    /// Connects to the kwant's servers once per turn; later requests reuse the connections.
+    async fn tool_session(&self) -> Arc<McpToolSession> {
+        let mut slot = self.gateway.lock().await;
+        if let Some(open) = slot.as_ref() {
+            return open.clone();
+        }
+        let cwd = self.cwd.as_deref().filter(|d| d.exists());
+        let (session, problems) = McpToolSession::open(&self.ctx, cwd).await;
+        for problem in problems {
+            tracing::warn!(kwant = %self.kwant_name, %problem, "MCP gateway could not reach a server");
+        }
+        let session = Arc::new(session);
+        *slot = Some(session.clone());
+        session
+    }
+
+    /// Closes the gateway's connections (stdio servers are stopped).
+    async fn close(&self) {
+        let Some(open) = self.gateway.lock().await.take() else { return };
+        // A call still in flight keeps its reference; its servers stop when that call drops it
+        if let Ok(session) = Arc::try_unwrap(open) {
+            session.shutdown().await;
+        }
+    }
 }
 
 /// Asks the user through the permission broker: stores the ticket, emits `ApprovalRequired`
@@ -147,9 +193,10 @@ fn local_base_url(state: &AppState) -> String {
 }
 
 /// Builds the turn's MCP context when the kwant has enabled servers, and registers the
-/// permission session claude will call. Returns `None` (no behaviour change) otherwise.
-/// Pair with [`finish_turn`].
-pub async fn prepare_turn(state: &AppState, kwant: &Kwant) -> Option<(McpTurnContext, String)> {
+/// session claude's permission prompts and codex's gateway calls reach. Returns `None` (no
+/// behaviour change) otherwise. `cwd` is where the gateway starts stdio servers. Pair with
+/// [`finish_turn`].
+pub async fn prepare_turn(state: &AppState, kwant: &Kwant, cwd: Option<PathBuf>) -> Option<(McpTurnContext, String)> {
     let mut servers = match state.db.list_active_mcp_servers_for_kwant(&kwant.id).await {
         Ok(s) if !s.is_empty() => s,
         Ok(_) => return None,
@@ -172,21 +219,20 @@ pub async fn prepare_turn(state: &AppState, kwant: &Kwant) -> Option<(McpTurnCon
         }),
         config_dir: state.config.data_dir.join("mcp"),
         permission_url: Some(format!("{}/api/mcp/permission/{token}", local_base_url(state))),
+        gateway: Some(GatewayAccess { url: format!("{}/api/mcp/gateway", local_base_url(state)), token: token.clone() }),
         max_tool_iterations: max_tool_iterations(setting),
         records: Default::default(),
     };
-    let session = PermissionSession {
-        kwant_id: kwant.id.clone(),
-        kwant_name: kwant.name.clone(),
-        turn_id: uuid::Uuid::new_v4().to_string(),
-        ctx: ctx.clone(),
-    };
+    let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), uuid::Uuid::new_v4().to_string(), ctx.clone(), cwd);
     state.mcp_sessions.lock().await.insert(token.clone(), session);
     Some((ctx, token))
 }
 
 pub async fn finish_turn(state: &AppState, token: &str) {
-    state.mcp_sessions.lock().await.remove(token);
+    let session = state.mcp_sessions.lock().await.remove(token);
+    if let Some(session) = session {
+        session.close().await;
+    }
 }
 
 fn rpc_result(id: Value, result: Value) -> Response {
@@ -281,6 +327,55 @@ pub async fn permission_endpoint(
             rpc_result(id, json!({"content": [{"type": "text", "text": decision.to_string()}]}))
         }
         "tools/call" => rpc_error(id, -32602, "unknown tool"),
+        _ => rpc_error(id, -32601, "method not found"),
+    }
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    scheme.eq_ignore_ascii_case("bearer").then(|| token.trim()).filter(|t| !t.is_empty())
+}
+
+/// `POST /api/mcp/gateway`: a streamable-HTTP MCP server (JSON responses) that offers the
+/// kwant's servers' tools to an agent CLI. The turn is picked by its bearer token, so the token
+/// stays out of URLs and argv. Every call is approved through the turn's approver (the
+/// approval card) before it is forwarded, and recorded like any other MCP call.
+pub async fn gateway_endpoint(State(state): State<AppState>, headers: HeaderMap, Json(msg): Json<Value>) -> Response {
+    let session = match bearer_token(&headers) {
+        Some(token) => state.mcp_sessions.lock().await.get(token).cloned(),
+        None => None,
+    };
+    let Some(session) = session else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let Some(id) = msg.get("id").cloned() else {
+        return StatusCode::ACCEPTED.into_response(); // notification
+    };
+    match msg["method"].as_str().unwrap_or("") {
+        "initialize" => rpc_result(
+            id,
+            json!({
+                "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or(PROTOCOL_VERSION),
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": mcp::RESERVED_SERVER_NAME, "version": env!("CARGO_PKG_VERSION")},
+            }),
+        ),
+        "ping" => rpc_result(id, json!({})),
+        "tools/list" => rpc_result(id, json!({"tools": session.tool_session().await.gateway_tools()})),
+        "tools/call" => {
+            let Some(name) = msg["params"]["name"].as_str() else {
+                return rpc_error(id, -32602, "missing tool name");
+            };
+            let arguments = msg["params"].get("arguments").cloned().unwrap_or_else(|| json!({}));
+            let call_id = format!("gw_{}", uuid::Uuid::new_v4().simple());
+            let tools = session.tool_session().await;
+            let outcome = tools.call(&session.caller(), &call_id, &format!("mcp__{name}"), &arguments.to_string()).await;
+            rpc_result(
+                id,
+                json!({"content": [{"type": "text", "text": outcome.text}], "isError": outcome.status != "ok"}),
+            )
+        }
         _ => rpc_error(id, -32601, "method not found"),
     }
 }

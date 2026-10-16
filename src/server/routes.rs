@@ -668,7 +668,7 @@ async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String,
         }
 
         let driver = resolve_driver_for_model(&target_model, configured_key, endpoint);
-        let mcp_turn = super::mcp_runtime::prepare_turn(&state, &target_kwant).await;
+        let mcp_turn = super::mcp_runtime::prepare_turn(&state, &target_kwant, scope.workspace_dir.clone()).await;
         let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());
         let turn_input = TurnInput {
             browser_api_url: Some(format!("http://127.0.0.1:{}/api/sandbox/{}", state.config.port, sandbox_target)),

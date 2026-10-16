@@ -6,7 +6,7 @@ use kwnt::{
     db::{models::McpServer, Database},
     db::models::Kwant,
     drivers::{events::RuntimeEvent, CliDriver, Driver, TurnInput},
-    mcp::{cli_config, FixedApprover, McpClient, McpTurnContext, ToolApprovalRequest, ToolApprover},
+    mcp::{cli_config, FixedApprover, GatewayAccess, McpClient, McpTurnContext, ToolApprovalRequest, ToolApprover},
     router::LayaRouter,
     server::{create_router, mcp_runtime::{BrokerApprover, PermissionSession}, AppState},
     tools::ToolRunner,
@@ -46,6 +46,7 @@ fn ctx(dir: &std::path::Path, approver: Arc<dyn ToolApprover>) -> McpTurnContext
         approver,
         config_dir: dir.join("mcp"),
         permission_url: Some("http://127.0.0.1:1/api/mcp/permission/tok".into()),
+        gateway: Some(GatewayAccess { url: "http://127.0.0.1:1/api/mcp/gateway".into(), token: "gw-secret-token".into() }),
         max_tool_iterations: 8,
         records: Default::default(),
     }
@@ -218,7 +219,7 @@ async fn permission_endpoint_answers_claude_prompts_over_http() {
         let c = ctx(tmp.path(), Arc::new(FixedApprover(allow)));
         state.mcp_sessions.lock().await.insert(
             token.into(),
-            PermissionSession { kwant_id: "k1".into(), kwant_name: "Ada".into(), turn_id: "t1".into(), ctx: c },
+            PermissionSession::new("k1".into(), "Ada".into(), "t1".into(), c, None),
         );
     }
 
@@ -331,21 +332,24 @@ async fn claude_cli_gets_mcp_config_without_secrets_in_argv() {
     assert!(plain.contains("--strict-mcp-config") && !plain.contains("--mcp-config") && !plain.contains("permission-prompt"), "{plain}");
 }
 
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn codex_cli_runs_with_mcp_disabled() {
-    let tmp = tempdir().unwrap();
-    // codex prints its answer to an -o file, so this fake logs its argv to a file instead
+/// Runs a fake codex/grok that logs its argv and whether it got the gateway token env, and
+/// returns (argv, token env, thinking notes).
+async fn fake_agent_run(kind: &str, mcp: Option<McpTurnContext>) -> (String, String, Vec<String>) {
     let dir = tempdir().unwrap();
-    let script = dir.path().join("codex");
+    let script = dir.path().join(kind);
     let log = dir.path().join("argv");
-    std::fs::write(&script, format!("#!/bin/sh\necho \"$*\" > {}\n", log.display())).unwrap();
+    let env_log = dir.path().join("env");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\necho \"$*\" > {}\necho \"${{KWNT_MCP_GATEWAY_TOKEN:-unset}}\" > {}\n", log.display(), env_log.display()),
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let driver = CliDriver::new(Some(script.to_string_lossy().into_owned()), Some("codex".into()));
+    let driver = CliDriver::new(Some(script.to_string_lossy().into_owned()), Some(kind.into()));
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let drain = tokio::spawn(async move {
         let mut notes = Vec::new();
@@ -356,9 +360,38 @@ async fn codex_cli_runs_with_mcp_disabled() {
         }
         notes
     });
-    driver.stream_turn(turn(Some(ctx(tmp.path(), Arc::new(FixedApprover(true))))), tx).await.unwrap();
+    driver.stream_turn(turn(mcp), tx).await.unwrap();
     let notes = drain.await.unwrap();
-    let argv = std::fs::read_to_string(&log).unwrap();
-    assert!(argv.contains("-c mcp_servers={}"), "{argv}");
-    assert!(notes.iter().any(|n| n.contains("can't offer MCP tools through the codex CLI")), "{notes:?}");
+    (std::fs::read_to_string(&log).unwrap(), std::fs::read_to_string(&env_log).unwrap().trim().to_string(), notes)
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn codex_cli_reaches_mcp_only_through_kwnts_gateway() {
+    let tmp = tempdir().unwrap();
+    let (argv, token, notes) = fake_agent_run("codex", Some(ctx(tmp.path(), Arc::new(FixedApprover(true))))).await;
+    assert!(
+        argv.contains(r#"-c mcp_servers={kwnt={url="http://127.0.0.1:1/api/mcp/gateway",bearer_token_env_var="KWNT_MCP_GATEWAY_TOKEN",default_tools_approval_mode="approve",startup_timeout_sec=45,tool_timeout_sec=330}}"#),
+        "{argv}"
+    );
+    assert_eq!(token, "gw-secret-token", "token comes through the env");
+    for secret in ["gw-secret-token", "sk-very-secret", "hdr-secret", "/usr/bin/true", "mcp.example.test"] {
+        assert!(!argv.contains(secret), "{secret} in argv: {argv}");
+    }
+    assert!(!notes.iter().any(|n| n.contains("can't offer MCP tools")), "{notes:?}");
+
+    // Without servers codex still gets no MCP servers at all, not even the user's own
+    let (plain, token, _) = fake_agent_run("codex", None).await;
+    assert!(plain.contains("-c mcp_servers={} "), "{plain}");
+    assert_eq!(token, "unset");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn grok_cli_still_runs_without_mcp() {
+    let tmp = tempdir().unwrap();
+    let (argv, token, notes) = fake_agent_run("grok", Some(ctx(tmp.path(), Arc::new(FixedApprover(true))))).await;
+    assert_eq!(token, "unset");
+    assert!(!argv.contains("gateway"), "{argv}");
+    assert!(notes.iter().any(|n| n.contains("can't offer MCP tools through the grok CLI")), "{notes:?}");
 }
