@@ -51,6 +51,9 @@ pub struct TurnInput {
     /// Other kwants in this chat that the speaker can hand the turn to with an @mention.
     #[serde(default)]
     pub teammates: Vec<Teammate>,
+    /// MCP servers, approver and records for this turn; `None` when the kwant has none.
+    #[serde(skip)]
+    pub mcp: Option<crate::mcp::McpTurnContext>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

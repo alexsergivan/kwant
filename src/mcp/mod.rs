@@ -1,6 +1,7 @@
 //! Model Context Protocol support: the server registry's validation and secret masking, a small
 //! MCP client (stdio + streamable HTTP), and the per-turn context drivers use to offer MCP tools.
 
+pub mod cli_config;
 pub mod client;
 pub mod echo_server;
 
@@ -22,6 +23,10 @@ pub const DEFAULT_TIMEOUT_SECS: i64 = 30;
 pub const DEFAULT_MAX_TOOL_ITERATIONS: usize = 8;
 /// Longest tool result kept in a message's `tool_calls` record.
 pub const RECORD_RESULT_MAX_CHARS: usize = 4000;
+/// How long an MCP tool call waits for the user's approval before it is denied.
+pub const APPROVAL_TIMEOUT_SECS: u64 = 300;
+/// kwnt's permission-prompt tool for the claude CLI, called as `mcp__kwnt__approve`.
+pub const PERMISSION_TOOL: &str = "approve";
 
 /// API representation of a server: secrets replaced by [`SECRET_MASK`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

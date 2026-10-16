@@ -89,6 +89,7 @@ async fn test_mock_driver_streaming() {
         workspace_dir: None,
         sandbox_id: None,
         teammates: vec![],
+        mcp: None,
     };
 
     let handle = tokio::spawn(async move {
@@ -147,6 +148,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         workspace_dir: None,
         sandbox_id: None,
         teammates: vec![],
+        mcp: None,
     };
 
     let solo_prompt = input_solo.format_system_prompt();
@@ -195,6 +197,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         workspace_dir: None,
         sandbox_id: None,
         teammates: vec![],
+        mcp: None,
     };
 
     let team_prompt = input_team.format_system_prompt();
@@ -222,6 +225,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         workspace_dir: Some(std::path::PathBuf::from("/Users/dev/app")),
         sandbox_id: None,
         teammates: vec![],
+        mcp: None,
     };
 
     let ws_prompt = input_workspace.format_system_prompt();

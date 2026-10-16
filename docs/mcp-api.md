@@ -94,7 +94,11 @@ Body: `{"server_ids": ["…"]}` (replaces the whole assignment; `[]` clears it).
 - **Tool names** are `mcp__<server>__<tool>`.
 - **CLI agents (`claude`)**: each turn kwnt writes a private config file (mode 0600) under
   `<data_dir>/mcp/` with the kwant's enabled servers and passes it with
-  `--mcp-config <file> --strict-mcp-config`; the file is removed after the turn.
+  `--mcp-config <file> --strict-mcp-config`; the file is removed after the turn. Secrets are
+  only in that file, never on the command line. claude's permission prompts go to kwnt
+  (`--permission-prompt-tool mcp__kwnt__approve`, served at `POST /api/mcp/permission/<token>`,
+  valid only while that turn runs), so only the kwant's own MCP tools can be approved; claude's
+  built-in tools stay denied as before.
   `codex` and `grok` CLI agents do not get MCP servers yet (no way to route their tool approvals
   through kwnt); kwnt explicitly disables MCP for codex.
 - **API agents** (OpenAI-compatible chat endpoints, incl. Ollama): kwnt connects to the servers,
@@ -136,6 +140,10 @@ status `allowed` or `denied` and no `result`.
   runtime a server needs (`node`, `python`, `uvx` …) must be installed by the user, as usual.
 - Stdio servers started by kwnt get a minimal environment (`PATH`, `HOME`, `USER`, `LANG`,
   `TMPDIR`) plus the server's `env`, not kwnt's own environment (which may hold API keys).
+  Stdio servers of a `claude` CLI agent are started by claude itself and inherit claude's
+  environment (and so kwnt's) plus the server's `env`.
+- CLI agents reach kwnt's permission endpoint at `http://127.0.0.1:<port>` (or the configured
+  host when it is a specific address), so the CLI must run on the same machine as kwnt.
 - Registering a stdio server lets the caller run any command as the kwnt user. The kwnt API has no
   authentication of its own: on a VPS keep it bound to `127.0.0.1` or behind an authenticating
   reverse proxy.

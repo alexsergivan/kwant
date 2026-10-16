@@ -153,6 +153,8 @@ impl Driver for CliDriver {
             }
         }
         let mut codex_out_file: Option<String> = None;
+        // Lives until the CLI exits; dropping it deletes the per-turn MCP config file.
+        let mut _mcp_config: Option<crate::mcp::cli_config::ConfigFile> = None;
 
         let effort = input.effort_level.as_deref().unwrap_or("medium");
 
@@ -170,6 +172,15 @@ impl Driver for CliDriver {
         cmd.env("BROWSER", "none");
         cmd.env("DISPLAY", "");
 
+        if input.mcp.is_some() && matches!(self.tool_kind.as_str(), "codex" | "grok") {
+            let _ = event_tx
+                .send(RuntimeEvent::ThinkingDelta(format!(
+                    "MCP servers are assigned, but kwnt can't offer MCP tools through the {} CLI yet; running without them.",
+                    self.tool_kind
+                )))
+                .await;
+        }
+
         match self.tool_kind.as_str() {
             "codex" => {
                 let out_file = format!("/tmp/kwnt_codex_{}.txt", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
@@ -186,6 +197,10 @@ impl Driver for CliDriver {
                     .arg("never")
                     .arg("-c")
                     .arg(format!("reasoning_effort=\"{}\"", codex_effort))
+                    // codex exec has no hook for kwnt's approval cards, so no MCP servers at all,
+                    // including ones from the user's own config.toml
+                    .arg("-c")
+                    .arg("mcp_servers={}")
                     .arg("-o")
                     .arg(&out_file)
                     .arg(&full_prompt);
@@ -213,6 +228,30 @@ impl Driver for CliDriver {
                 cmd.arg("--effort").arg(claude_effort);
                 // Skip starting the user's personal MCP servers on every chat turn
                 cmd.arg("--strict-mcp-config");
+                if let Some(ctx) = &input.mcp {
+                    match crate::mcp::cli_config::write_claude_config(ctx) {
+                        Ok(file) => {
+                            cmd.arg("--mcp-config").arg(&file.path);
+                            cmd.arg("--permission-prompt-tool").arg(format!(
+                                "mcp__{}__{}",
+                                crate::mcp::RESERVED_SERVER_NAME,
+                                crate::mcp::PERMISSION_TOOL
+                            ));
+                            // A tool call may wait for the user's approval; claude must not give up first
+                            let slowest = ctx.servers.iter().map(|s| s.timeout_secs.max(0) as u64).max().unwrap_or(0);
+                            let tool_timeout_ms = (crate::mcp::APPROVAL_TIMEOUT_SECS + 30).max(slowest) * 1000;
+                            cmd.env("MCP_TOOL_TIMEOUT", tool_timeout_ms.to_string());
+                            cmd.env("MCP_TIMEOUT", "30000");
+                            _mcp_config = Some(file);
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "could not write MCP config; running without MCP");
+                            let _ = event_tx
+                                .send(RuntimeEvent::ThinkingDelta("MCP tools are unavailable this turn (config file error).".into()))
+                                .await;
+                        }
+                    }
+                }
                 cmd.arg("--append-system-prompt").arg(&system_prompt);
                 cmd.arg("-p").arg(&effective_prompt);
             }
@@ -350,6 +389,7 @@ mod tests {
             workspace_dir: None,
             sandbox_id: None,
             teammates: vec![],
+            mcp: None,
         };
 
         let result = build_cli_prompt(&input);
@@ -388,6 +428,7 @@ mod tests {
             workspace_dir: None,
             sandbox_id: None,
             teammates: vec![],
+            mcp: None,
         };
 
         let result = build_cli_prompt(&input);

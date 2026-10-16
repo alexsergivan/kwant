@@ -3,6 +3,7 @@ pub mod routes;
 pub mod sse;
 pub mod browser_stream;
 pub mod mcp_routes;
+pub mod mcp_runtime;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -33,6 +34,8 @@ pub struct AppState {
     pub sandbox_manager: Arc<SandboxManager>,
     pub browser_controllers: Arc<Mutex<HashMap<String, BrowserController>>>,
     pub browser_service: Arc<crate::sandbox::service::BrowserService>,
+    /// Live claude CLI turns whose MCP permission prompts kwnt answers, by URL token.
+    pub mcp_sessions: Arc<Mutex<HashMap<String, mcp_runtime::PermissionSession>>>,
 }
 
 impl AppState {
@@ -58,6 +61,7 @@ impl AppState {
             sandbox_manager,
             browser_controllers,
             browser_service,
+            mcp_sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -106,6 +110,7 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/api/mcp/servers/:id/test", post(mcp_routes::test_server))
         .route("/api/kwants/:id/mcp-servers", get(mcp_routes::get_kwant_servers).put(mcp_routes::set_kwant_servers))
+        .route("/api/mcp/permission/:token", post(mcp_runtime::permission_endpoint))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
         .layer(cors)

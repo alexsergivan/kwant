@@ -668,6 +668,8 @@ async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String,
         }
 
         let driver = resolve_driver_for_model(&target_model, configured_key, endpoint);
+        let mcp_turn = super::mcp_runtime::prepare_turn(&state, &target_kwant).await;
+        let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());
         let turn_input = TurnInput {
             browser_api_url: Some(format!("http://127.0.0.1:{}/api/sandbox/{}", state.config.port, sandbox_target)),
             thread_id: context_id,
@@ -685,6 +687,7 @@ async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String,
                 .filter(|k| k.id != target_kwant.id)
                 .map(|k| crate::drivers::Teammate { name: k.name.clone(), title: k.title.clone() })
                 .collect(),
+            mcp: mcp_ctx.clone(),
         };
 
         let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -711,9 +714,15 @@ async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String,
             }
         }
 
+        let driver_result = if cancelled { None } else { Some(driver_task.await) };
+        if let Some((_, token)) = &mcp_turn {
+            super::mcp_runtime::finish_turn(&state, token).await;
+        }
+        let mcp_records = mcp_ctx.map(|c| c.take_records()).filter(|r| !r.is_empty());
+
         if cancelled {
             let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta("⏹️ Cancelled by user".into()));
-        } else if let Ok(Ok(output)) = driver_task.await {
+        } else if let Some(Ok(Ok(output))) = driver_result {
             // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM
             if let Some(bot_url) = extract_url_from_text(&output.text) {
                 if let Some(ctrl) = get_or_create_browser_controller(&state, &sandbox_target).await {
@@ -758,7 +767,7 @@ async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String,
                     sender_id: target_kwant.name.clone(),
                     text,
                     reasoning_content,
-                    tool_calls: None,
+                    tool_calls: mcp_records.map(serde_json::Value::Array),
                     tokens_used: output.tokens_used as i64,
                 };
                 let _ = db.insert_message(&asst_msg).await;
