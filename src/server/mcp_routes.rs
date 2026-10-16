@@ -29,20 +29,34 @@ fn db_err(e: DbError) -> ApiError {
     err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
 }
 
+/// Which kwants have each server off. A read failure shows no opt-outs rather than failing the list.
+async fn opt_outs(state: &AppState) -> std::collections::HashMap<String, Vec<String>> {
+    state.db.list_mcp_kwant_opt_outs().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "could not read MCP kwant opt-outs");
+        Default::default()
+    })
+}
+
 /// The API view of `server`, with its sign-in status.
 async fn view(state: &AppState, server: &McpServer) -> McpServerView {
     let mut view = McpServerView::from(server);
     view.oauth = mcp_oauth::statuses(state).await.remove(&server.id).unwrap_or_default();
+    view.disabled_for_kwants = opt_outs(state).await.remove(&server.id).unwrap_or_default();
     view
 }
 
 pub async fn list_servers(State(state): State<AppState>) -> ApiResult<Vec<McpServerView>> {
     let servers = state.db.list_mcp_servers().await.map_err(db_err)?;
     let mut statuses = mcp_oauth::statuses(&state).await;
+    let mut opt_outs = opt_outs(&state).await;
     Ok(Json(
         servers
             .iter()
-            .map(|s| McpServerView { oauth: statuses.remove(&s.id).unwrap_or_default(), ..McpServerView::from(s) })
+            .map(|s| McpServerView {
+                oauth: statuses.remove(&s.id).unwrap_or_default(),
+                disabled_for_kwants: opt_outs.remove(&s.id).unwrap_or_default(),
+                ..McpServerView::from(s)
+            })
             .collect(),
     ))
 }

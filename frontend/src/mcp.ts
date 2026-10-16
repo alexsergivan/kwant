@@ -17,6 +17,8 @@ export interface McpServer {
   created_at: string | null;
   /** Sign-in state for URL servers; never carries tokens. */
   oauth?: { connected: boolean; expires_at: string | null };
+  /** Kwants that switched this server off, sorted by name. Empty: every kwant gets it. */
+  disabled_for_kwants?: string[];
 }
 
 export interface McpTool {
@@ -420,3 +422,20 @@ export const readOAuthMessage = (
     ...(typeof d.error === 'string' && d.error ? { error: d.error.slice(0, 300) } : {}),
   };
 };
+
+/**
+ * Which kwants a server reaches, for its card. Servers are on for every kwant unless a kwant
+ * switches one off. Ids of kwants this screen doesn't know about are left out of the names.
+ */
+export const kwantUsage = (
+  server: Pick<McpServer, 'disabled_for_kwants'>,
+  kwants: Array<{ id: string; name: string }>,
+): { allKwants: boolean; offFor: string[] } => {
+  const off = server.disabled_for_kwants ?? [];
+  const names = new Map(kwants.map((k) => [k.id, k.name]));
+  const offFor = off.map((id) => names.get(id)).filter((n): n is string => !!n);
+  return { allKwants: offFor.length === 0, offFor };
+};
+
+/** A new kwant starts with every server on, the same as the backend default. */
+export const defaultKwantServerIds = (servers: Array<Pick<McpServer, 'id'>>): string[] => servers.map((s) => s.id);

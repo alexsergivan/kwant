@@ -668,10 +668,9 @@ export const App: React.FC = () => {
       if (res.ok) {
         const created: Kwant = await res.json();
         setKwants((prev) => [...prev, created]);
-        if (agentData.mcp_server_ids?.length) {
-          const mcpError = await saveKwantMcpServers(created.id, agentData.mcp_server_ids);
-          if (mcpError) console.error(mcpError);
-        }
+        // Saved even when empty: switching every server off means none.
+        const mcpError = await saveKwantMcpServers(created.id, agentData.mcp_server_ids);
+        if (mcpError) console.error(mcpError);
         setIsNewAgentOpen(false);
         playSfx('fanfare');
         const team = newAgentTeam && (teams.find((t) => t.id === newAgentTeam.id) ?? newAgentTeam);
@@ -1178,7 +1177,7 @@ export const App: React.FC = () => {
 
       {/* MCP tool servers (opened last so it sits above the agent modal) */}
       <Suspense fallback={null}>
-        <McpServersModal isOpen={isMcpOpen} onClose={() => setIsMcpOpen(false)} />
+        <McpServersModal isOpen={isMcpOpen} onClose={() => setIsMcpOpen(false)} kwants={kwants} />
       </Suspense>
     </div>
   );

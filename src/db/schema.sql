@@ -89,6 +89,16 @@ CREATE TABLE IF NOT EXISTS kwant_mcp_servers (
     FOREIGN KEY(server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
 );
 
+-- Per-kwant opt-outs. Every enabled server is on for every kwant unless a row here turns it off.
+-- kwant_mcp_servers (the old opt-in list) is no longer read, but kept so a rollback finds it intact
+CREATE TABLE IF NOT EXISTS kwant_mcp_disabled (
+    kwant_id TEXT NOT NULL,
+    server_id TEXT NOT NULL,
+    PRIMARY KEY (kwant_id, server_id),
+    FOREIGN KEY(kwant_id) REFERENCES kwants(id) ON DELETE CASCADE,
+    FOREIGN KEY(server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
+);
+
 -- OAuth client registrations (RFC 7591), one per server, redirect URI and authorization server
 CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
     server_id TEXT NOT NULL,
