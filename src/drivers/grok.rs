@@ -136,6 +136,88 @@ pub fn not_signed_in(stderr: &str) -> bool {
     stderr.contains("Not signed in")
 }
 
+/// Longest piece of grok's stderr quoted in a notice.
+const NOTICE_TAIL_CHARS: usize = 600;
+
+/// What a grok run that produced no reply left behind, for [`empty_reply_notice`].
+#[derive(Debug, Default)]
+pub struct EmptyRun<'a> {
+    pub stderr: &'a str,
+    /// grok's `error` events.
+    pub errors: &'a [String],
+    pub stop_reason: Option<&'a str>,
+    /// `None` when grok was killed by a signal or its status is unknown.
+    pub exit_code: Option<i32>,
+}
+
+/// Tools grok refused in headless mode: `permission required: <tool> was not run, …`.
+fn refused_tools(stderr: &str) -> Vec<String> {
+    let mut tools: Vec<String> = Vec::new();
+    for line in stderr.lines() {
+        let Some(rest) = line
+            .split_once("permission required:")
+            .map(|(_, r)| r.trim())
+        else {
+            continue;
+        };
+        let tool = rest
+            .split_once(" was not run")
+            .map_or(rest, |(t, _)| t)
+            .trim()
+            .to_string();
+        if !tool.is_empty() && !tools.contains(&tool) {
+            tools.push(tool);
+        }
+    }
+    tools
+}
+
+/// The message shown instead of an empty reply: why grok gave none, with any quoted output
+/// redacted (`secrets`: the gateway token and the kwant's server secrets) and shortened.
+pub fn empty_reply_notice(run: &EmptyRun<'_>, secrets: &[String]) -> String {
+    let quote = |text: &str| {
+        let text = crate::mcp::redact(text.trim(), secrets);
+        let start = text
+            .char_indices()
+            .rev()
+            .nth(NOTICE_TAIL_CHARS - 1)
+            .map_or(0, |(i, _)| i);
+        if start > 0 {
+            format!("…{}", &text[start..])
+        } else {
+            text
+        }
+    };
+    let refused = refused_tools(run.stderr);
+    if !refused.is_empty() {
+        return format!(
+            "grok stopped without a reply: it needed approval to run {}, and a headless grok run can't ask for it.              kwnt only approves MCP tools assigned to this kwant (through its approval card), not grok's own tools.",
+            refused.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ")
+        );
+    }
+    if not_signed_in(run.stderr) {
+        return "grok isn't signed in on this computer. Run `grok login` (or `grok login --device-code` without a browser), then try again.".into();
+    }
+    if let Some(error) = run.errors.first() {
+        return format!("grok stopped with an error: {}", quote(error));
+    }
+    if run.stop_reason == Some("refusal") {
+        return "grok declined to answer this request.".into();
+    }
+    let ended = match (run.exit_code, run.stop_reason) {
+        (Some(0), Some(reason)) => {
+            format!("grok finished without a reply (stop reason: {reason}).")
+        }
+        (Some(0), None) => "grok finished without a reply.".to_string(),
+        (Some(code), _) => format!("grok exited with code {code} without a reply."),
+        (None, _) => "grok was stopped before it replied.".to_string(),
+    };
+    match run.stderr.trim() {
+        "" => ended,
+        tail => format!("{ended} Its last output:\n{}", quote(tail)),
+    }
+}
+
 /// Adds kwnt's gateway as the run's only MCP server. The token is not written: grok expands
 /// `${VAR}` in headers from its own env, and the shell policy hides that variable from the
 /// commands grok runs. `slowest` is the longest timeout among the kwant's servers.
@@ -337,6 +419,100 @@ allow = ["Bash(*)"]
             ]
         );
         assert!(parser.finish().is_empty());
+    }
+
+    #[test]
+    fn empty_reply_explains_refused_tools() {
+        let stderr = "warn: x\npermission required: run_terminal_cmd was not run, as a headless run cannot ask for approval\npermission required: kwnt__alpha-ping was not run, as a headless run cannot ask for approval\npermission required: run_terminal_cmd was not run, as a headless run cannot ask for approval\n";
+        let notice = empty_reply_notice(
+            &EmptyRun {
+                stderr,
+                exit_code: Some(0),
+                ..Default::default()
+            },
+            &[],
+        );
+        assert!(
+            notice.contains("needed approval to run `run_terminal_cmd`, `kwnt__alpha-ping`,"),
+            "{notice}"
+        );
+    }
+
+    #[test]
+    fn empty_reply_explains_why_and_hides_secrets() {
+        let secrets = ["gw-token-123".to_string(), "sk-server".to_string()];
+        let notice = |run: EmptyRun<'_>| empty_reply_notice(&run, &secrets);
+
+        let login = notice(EmptyRun {
+            stderr:
+                "Not signed in. To authenticate without a browser, run: grok login --device-code",
+            exit_code: Some(1),
+            ..Default::default()
+        });
+        assert!(
+            login.contains("isn't signed in") && login.contains("grok login"),
+            "{login}"
+        );
+
+        let errors = ["upstream said Bearer gw-token-123 is bad".to_string()];
+        let error = notice(EmptyRun {
+            errors: &errors,
+            exit_code: Some(1),
+            ..Default::default()
+        });
+        assert_eq!(
+            error,
+            "grok stopped with an error: upstream said Bearer ******** is bad"
+        );
+
+        let refusal = notice(EmptyRun {
+            stop_reason: Some("refusal"),
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        assert_eq!(refusal, "grok declined to answer this request.");
+
+        assert_eq!(
+            notice(EmptyRun {
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+            "grok finished without a reply."
+        );
+        assert_eq!(
+            notice(EmptyRun {
+                stop_reason: Some("max_turn_requests"),
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+            "grok finished without a reply (stop reason: max_turn_requests)."
+        );
+        assert_eq!(
+            notice(EmptyRun {
+                exit_code: None,
+                ..Default::default()
+            }),
+            "grok was stopped before it replied."
+        );
+
+        let crash = notice(EmptyRun {
+            stderr: "panic: key sk-server leaked\n",
+            exit_code: Some(101),
+            ..Default::default()
+        });
+        assert_eq!(crash, "grok exited with code 101 without a reply. Its last output:\npanic: key ******** leaked");
+
+        let long = format!("{}END", "x".repeat(5000));
+        let tail = notice(EmptyRun {
+            stderr: &long,
+            exit_code: Some(2),
+            ..Default::default()
+        });
+        assert!(
+            tail.ends_with("xxEND") && tail.contains('…') && tail.chars().count() < 700,
+            "{}",
+            tail.len()
+        );
     }
 
     #[test]

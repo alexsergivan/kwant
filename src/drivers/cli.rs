@@ -237,6 +237,8 @@ struct GrokRun {
     /// grok's `error` events.
     errors: Vec<String>,
     stop_reason: Option<String>,
+    /// `None` if grok was killed by a signal.
+    exit_code: Option<i32>,
 }
 
 /// Reads a pipe to the end, keeping at most the last `max` bytes.
@@ -297,7 +299,8 @@ impl CliDriver {
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
         let read_stdout = async {
-            let mut run = GrokRun { stdout: String::new(), stderr: String::new(), errors: Vec::new(), stop_reason: None };
+            let mut run =
+                GrokRun { stdout: String::new(), stderr: String::new(), errors: Vec::new(), stop_reason: None, exit_code: None };
             let mut parser = super::grok::StreamParser::default();
             let mut buffer = [0u8; 4096];
             // Bytes of a UTF-8 character split across reads
@@ -334,7 +337,7 @@ impl CliDriver {
             }
         };
         let (mut run, stderr) = tokio::join!(read_stdout, read_stderr);
-        let _ = child.wait().await;
+        run.exit_code = child.wait().await.ok().and_then(|s| s.code());
         drop(home);
         run.stderr = stderr;
         Ok(run)
@@ -519,6 +522,24 @@ impl Driver for CliDriver {
                     effective_prompt.clone(),
                 ];
                 let (text, tokens) = match self.run_grok(&bin_path, &input, args, &event_tx).await {
+                    Ok(run) if run.stdout.trim().is_empty() => {
+                        // Never an empty reply: say why grok gave none
+                        let mut secrets = input.mcp.as_ref().map(|c| c.secret_values()).unwrap_or_default();
+                        secrets.extend(input.mcp.as_ref().and_then(|c| c.gateway.as_ref()).map(|g| g.token.clone()));
+                        let notice = super::grok::empty_reply_notice(
+                            &super::grok::EmptyRun {
+                                stderr: &run.stderr,
+                                errors: &run.errors,
+                                stop_reason: run.stop_reason.as_deref(),
+                                exit_code: run.exit_code,
+                            },
+                            &secrets,
+                        );
+                        tracing::warn!(exit_code = ?run.exit_code, stop_reason = ?run.stop_reason, "grok gave no reply");
+                        let msg = format!("⚠️ [{}] {notice}", input.kwant.name);
+                        let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
+                        (msg, 0)
+                    }
                     Ok(run) => {
                         let tokens = run.stdout.len() / 4;
                         (run.stdout, tokens)

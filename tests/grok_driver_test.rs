@@ -370,3 +370,26 @@ async fn grok_reply_comes_from_streaming_json_text_events() {
     let (reply, _) = grok.run(None).await;
     assert_eq!(reply, "Hello ✓");
 }
+
+#[tokio::test]
+async fn grok_refusing_a_tool_explains_instead_of_replying_empty() {
+    let grok = FakeGrok::new(
+        r#"echo 'permission required: run_terminal_cmd was not run, as a headless run cannot ask for approval' >&2; printf '%s\n' '{"type":"end","stopReason":"end_turn"}'"#,
+    );
+    let (reply, _) = grok.run(None).await;
+    assert!(
+        reply.contains("needed approval to run `run_terminal_cmd`"),
+        "{reply}"
+    );
+}
+
+#[tokio::test]
+async fn grok_crashing_without_output_reports_its_exit_and_hides_the_token() {
+    let grok = FakeGrok::new(r#"echo "boom: Bearer $KWNT_MCP_GATEWAY_TOKEN" >&2; exit 3"#);
+    let (reply, _) = grok.run(Some(mcp_ctx(grok.dir.path()))).await;
+    assert!(
+        reply.contains("exited with code 3") && reply.contains("boom"),
+        "{reply}"
+    );
+    assert!(!reply.contains("gw-secret-token"), "{reply}");
+}
