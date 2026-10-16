@@ -4,6 +4,7 @@
 pub mod cli_config;
 pub mod client;
 pub mod echo_server;
+pub mod session;
 
 pub use client::{McpClient, McpError, McpTool};
 

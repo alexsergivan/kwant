@@ -1,7 +1,8 @@
 use super::{events::RuntimeEvent, Driver, DriverError, TurnInput, TurnOutput};
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::json;
+use crate::mcp::session::{Caller, McpToolSession};
+use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -19,6 +20,16 @@ async fn api_model_name(target_model: &str, url: &str) -> String {
         return super::first_ollama_model(root).await.unwrap_or_else(|| "llama3.2".into());
     }
     target_model.to_string()
+}
+
+struct ChatRequest<'a> {
+    url: &'a str,
+    api_key: Option<&'a str>,
+    model: &'a str,
+    temperature: f64,
+    max_tokens: i64,
+    /// Model calls allowed this turn; each round of MCP tool calls costs one.
+    max_calls: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -68,6 +79,113 @@ impl ApiDriver {
     }
 }
 
+impl ApiDriver {
+    async fn post_chat(&self, request: &ChatRequest<'_>, body: &Value) -> Result<Value, String> {
+        let mut req = self.client.post(request.url).json(body);
+        if let Some(key) = request.api_key {
+            req = req.header("Authorization", format!("Bearer {}", key));
+        }
+        let resp = req.send().await.map_err(|e| format!("connection failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("API returned {}", resp.status()));
+        }
+        resp.json::<Value>().await.map_err(|e| format!("invalid response: {e}"))
+    }
+
+    /// Calls the model, running any MCP tool calls it asks for and calling it again with the
+    /// results, up to `max_calls` model calls. Returns the final text and tokens used, or
+    /// `None` when the very first call fails (the caller then falls back to the offline reply).
+    async fn chat_loop(
+        &self,
+        request: &ChatRequest<'_>,
+        mut messages: Vec<Value>,
+        session: Option<&McpToolSession>,
+        caller: &Caller,
+        event_tx: &mpsc::Sender<RuntimeEvent>,
+    ) -> Option<(String, usize)> {
+        let tools = session.map(|s| s.openai_tools()).unwrap_or_default();
+        let max_calls = request.max_calls.max(1);
+        let mut tokens = 0usize;
+        for round in 0..max_calls {
+            let mut body = json!({
+                "model": request.model,
+                "messages": messages,
+                "stream": false,
+                "temperature": request.temperature,
+                "max_tokens": request.max_tokens,
+            });
+            if !tools.is_empty() {
+                body["tools"] = json!(tools);
+            }
+            let reply = match self.post_chat(request, &body).await {
+                Ok(v) => v,
+                Err(e) if round == 0 => {
+                    tracing::warn!(error = %e, "API call failed, using arcade emulation");
+                    return None;
+                }
+                Err(e) => return Some((format!("⚠️ The model request failed after running tools: {e}"), tokens)),
+            };
+            tokens += reply["usage"]["total_tokens"].as_u64().unwrap_or(45) as usize;
+            let message = &reply["choices"][0]["message"];
+            let content = message["content"]
+                .as_str()
+                .or_else(|| reply["content"][0]["text"].as_str())
+                .map(str::to_string);
+            let calls = message["tool_calls"].as_array().filter(|c| !c.is_empty());
+
+            let (Some(calls), Some(session)) = (calls, session) else {
+                return Some((content.unwrap_or_else(|| "No response content".into()), tokens));
+            };
+            if round + 1 == max_calls {
+                let note = format!("(Stopped: reached the limit of {max_calls} model calls for MCP tools this turn.)");
+                let text = match content.filter(|c| !c.trim().is_empty()) {
+                    Some(c) => format!("{c}\n\n{note}"),
+                    None => note,
+                };
+                return Some((text, tokens));
+            }
+
+            if let Some(c) = content.as_deref().filter(|c| !c.trim().is_empty()) {
+                let _ = event_tx.send(RuntimeEvent::ThinkingDelta(c.to_string())).await;
+            }
+            let mut assistant = json!({"role": "assistant", "content": content.clone().unwrap_or_default(), "tool_calls": calls});
+            // Some servers return arguments as an object; the API format is a JSON string
+            for call in assistant["tool_calls"].as_array_mut().into_iter().flatten() {
+                if let Some(args) = call["function"].get("arguments").filter(|a| !a.is_string()).cloned() {
+                    call["function"]["arguments"] = json!(args.to_string());
+                }
+                if call["id"].as_str().map_or(true, str::is_empty) {
+                    call["id"] = json!(format!("call_{}", uuid::Uuid::new_v4().simple()));
+                }
+            }
+            let calls = assistant["tool_calls"].as_array().cloned().unwrap_or_default();
+            messages.push(assistant);
+
+            for call in &calls {
+                let id = call["id"].as_str().unwrap_or_default();
+                let name = call["function"]["name"].as_str().unwrap_or_default();
+                let raw_args = call["function"]["arguments"].as_str().unwrap_or("{}");
+                let shown_args = serde_json::from_str::<Value>(raw_args).unwrap_or_else(|_| json!(raw_args));
+                let _ = event_tx
+                    .send(RuntimeEvent::ToolCallPending { id: id.to_string(), name: name.to_string(), args: shown_args })
+                    .await;
+                let outcome = session.call(caller, id, name, raw_args).await;
+                let _ = event_tx
+                    .send(RuntimeEvent::ToolCallCompleted {
+                        id: id.to_string(),
+                        result: json!({
+                            "status": outcome.status,
+                            "content": crate::mcp::truncate_text(&outcome.text, crate::mcp::RECORD_RESULT_MAX_CHARS),
+                        }),
+                    })
+                    .await;
+                messages.push(json!({"role": "tool", "tool_call_id": id, "content": outcome.text}));
+            }
+        }
+        None
+    }
+}
+
 #[async_trait]
 impl Driver for ApiDriver {
     async fn stream_turn(
@@ -107,52 +225,55 @@ impl Driver for ApiDriver {
                 _ => input.kwant.max_tokens,
             };
 
-            let body = json!({
-                "model": api_model_name(target_model, &url).await,
-                "messages": messages,
-                "stream": false, // Non-stream fallback when parsing simple JSON or stream
-                "temperature": input.kwant.temperature,
-                "max_tokens": max_tokens,
-            });
-
-            let mut req = self.client.post(&url).json(&body);
-            if let Some(key) = api_key {
-                req = req.header("Authorization", format!("Bearer {}", key));
+            let model = api_model_name(target_model, &url).await;
+            // The Anthropic Messages API has a different tool format; it is not given MCP tools
+            let mcp = input.mcp.as_ref().filter(|_| !url.ends_with("/v1/messages"));
+            if input.mcp.is_some() && mcp.is_none() {
+                let _ = event_tx
+                    .send(RuntimeEvent::ThinkingDelta("MCP tools aren't offered on the Anthropic API endpoint; running without them.".into()))
+                    .await;
             }
-
-            match req.send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    if let Ok(json_body) = resp.json::<serde_json::Value>().await {
-                        let text = json_body["choices"][0]["message"]["content"]
-                            .as_str()
-                            .or_else(|| json_body["content"][0]["text"].as_str())
-                            .unwrap_or("No response content")
-                            .to_string();
-
-                        let tokens = json_body["usage"]["total_tokens"].as_u64().unwrap_or(45) as usize;
-
-                        let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
-                        let duration = start.elapsed().as_millis() as u64;
-                        let _ = event_tx
-                            .send(RuntimeEvent::TurnComplete {
-                                tokens,
-                                duration_ms: duration,
-                            })
-                            .await;
-
-                        return Ok(TurnOutput {
-                            text,
-                            reasoning: Some(format!("Model: {} [Effort: {}]", target_model, effort)),
-                            tokens_used: tokens,
-                        });
+            let session = match mcp {
+                Some(ctx) => {
+                    let cwd = input.workspace_dir.as_deref().filter(|d| d.exists());
+                    let (session, problems) = McpToolSession::open(ctx, cwd).await;
+                    for problem in problems {
+                        let _ = event_tx.send(RuntimeEvent::ThinkingDelta(format!("MCP server unavailable: {problem}"))).await;
                     }
+                    Some(session)
                 }
-                Ok(resp) => {
-                    tracing::warn!(status = %resp.status(), "API returned non-success, using arcade emulation");
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "API connection failed, using arcade emulation");
-                }
+                None => None,
+            };
+            let request = ChatRequest {
+                url: &url,
+                api_key: api_key.as_deref(),
+                model: &model,
+                temperature: input.kwant.temperature,
+                max_tokens,
+                max_calls: mcp.map(|c| c.max_tool_iterations).unwrap_or(1),
+            };
+            let caller = Caller {
+                kwant_id: input.kwant.id.clone(),
+                kwant_name: input.kwant.name.clone(),
+                turn_id: uuid::Uuid::new_v4().to_string(),
+            };
+            let outcome = self.chat_loop(&request, messages, session.as_ref(), &caller, &event_tx).await;
+            if let Some(session) = session {
+                session.shutdown().await;
+            }
+            if let Some((text, tokens)) = outcome {
+                let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
+                let _ = event_tx
+                    .send(RuntimeEvent::TurnComplete {
+                        tokens,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    })
+                    .await;
+                return Ok(TurnOutput {
+                    text,
+                    reasoning: Some(format!("Model: {} [Effort: {}]", target_model, effort)),
+                    tokens_used: tokens,
+                });
             }
         }
 

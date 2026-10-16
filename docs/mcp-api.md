@@ -119,7 +119,11 @@ Every MCP tool call needs approval through the permission broker, for both agent
 3. Unanswered tickets are denied after 300 s, or when the turn is cancelled.
 
 API agents also emit `ToolCallPending {id, name, args}` before running a call and
-`ToolCallCompleted {id, result}` after it.
+`ToolCallCompleted {id, result: {status, content}}` after it (`content` cut to 4000 characters).
+A server that fails to start is skipped for that turn with a `ThinkingDelta` note; tools whose
+namespaced name is not a valid function name (`^[A-Za-z0-9_-]{1,64}$`) are not offered. When the
+model still asks for tools on its last allowed call, those calls are not run and the reply ends
+with a note about the limit.
 
 ### Recorded tool calls
 
