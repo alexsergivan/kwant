@@ -66,3 +66,25 @@ CREATE TABLE IF NOT EXISTS teams (
     FOREIGN KEY(lead_kwant_id) REFERENCES kwants(id)
 );
 
+
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    transport TEXT NOT NULL,
+    command TEXT,
+    args TEXT NOT NULL DEFAULT '[]',
+    url TEXT,
+    env TEXT NOT NULL DEFAULT '{}',
+    headers TEXT NOT NULL DEFAULT '{}',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    timeout_secs INTEGER NOT NULL DEFAULT 30,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS kwant_mcp_servers (
+    kwant_id TEXT NOT NULL,
+    server_id TEXT NOT NULL,
+    PRIMARY KEY (kwant_id, server_id),
+    FOREIGN KEY(kwant_id) REFERENCES kwants(id) ON DELETE CASCADE,
+    FOREIGN KEY(server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
+);

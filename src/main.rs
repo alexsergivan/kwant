@@ -55,13 +55,22 @@ pub enum Commands {
 
     /// List channels stored in the local database
     Channels,
+
+    /// Run a tiny MCP test server on stdin/stdout (for tests and smoke checks)
+    #[command(hide = true)]
+    McpEchoServer,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+    // Before logging starts: stdout carries the MCP protocol
+    if matches!(cli.command, Some(Commands::McpEchoServer)) {
+        kwnt::mcp::echo_server::run_stdio().await?;
+        return Ok(());
+    }
     tracing_subscriber::fmt::init();
 
-    let cli = Cli::parse();
     let mut config = match cli.config {
         Some(path) => Config::from_file(path)?,
         None => Config::load()?,
@@ -144,6 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Agents) => print_agents(&config).await?,
         Some(Commands::Teams) => print_teams(&config).await?,
         Some(Commands::Channels) => print_channels(&config).await?,
+        Some(Commands::McpEchoServer) => unreachable!("handled before config loading"),
         None => {
             println!("⚡ Kwant: your team of super-intelligent bots (kwants)");
             println!("Run `kwnt serve` to start the server, or `kwnt --help` for options.");

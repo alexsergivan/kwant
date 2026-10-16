@@ -137,3 +137,77 @@ pub struct NewTeam {
     pub repo_url: Option<String>,
 }
 
+
+/// Raw `mcp_servers` row; JSON columns are decoded by [`McpServer::from_row`].
+#[derive(Clone, FromRow)]
+pub struct McpServerRow {
+    pub id: String,
+    pub name: String,
+    pub transport: String,
+    pub command: Option<String>,
+    pub args: String,
+    pub url: Option<String>,
+    pub env: String,
+    pub headers: String,
+    pub enabled: bool,
+    pub timeout_secs: i64,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+/// A registered MCP server, secrets included. Deliberately not `Serialize`: the API returns
+/// `crate::mcp::McpServerView`, which masks `env` and `headers`.
+#[derive(Clone, PartialEq)]
+pub struct McpServer {
+    pub id: String,
+    pub name: String,
+    pub transport: String, // "stdio" | "http"
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub url: Option<String>,
+    pub env: std::collections::BTreeMap<String, String>,
+    pub headers: std::collections::BTreeMap<String, String>,
+    pub enabled: bool,
+    pub timeout_secs: i64,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+impl McpServer {
+    pub fn from_row(row: McpServerRow) -> Self {
+        Self {
+            id: row.id,
+            name: row.name,
+            transport: row.transport,
+            command: row.command,
+            args: serde_json::from_str(&row.args).unwrap_or_default(),
+            url: row.url,
+            env: serde_json::from_str(&row.env).unwrap_or_default(),
+            headers: serde_json::from_str(&row.headers).unwrap_or_default(),
+            enabled: row.enabled,
+            timeout_secs: row.timeout_secs,
+            created_at: row.created_at,
+        }
+    }
+
+    /// Every stored secret value, for redacting text that may echo them.
+    pub fn secret_values(&self) -> Vec<String> {
+        self.env.values().chain(self.headers.values()).cloned().collect()
+    }
+}
+
+/// Never prints secret values.
+impl std::fmt::Debug for McpServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpServer")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("transport", &self.transport)
+            .field("command", &self.command)
+            .field("args", &self.args)
+            .field("url", &self.url)
+            .field("env_keys", &self.env.keys().collect::<Vec<_>>())
+            .field("header_keys", &self.headers.keys().collect::<Vec<_>>())
+            .field("enabled", &self.enabled)
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
+}

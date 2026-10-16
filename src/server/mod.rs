@@ -2,6 +2,7 @@ pub mod discussion;
 pub mod routes;
 pub mod sse;
 pub mod browser_stream;
+pub mod mcp_routes;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -98,6 +99,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sandbox/:team_id/act", post(routes::act_sandbox))
         .route("/api/sandbox/:team_id/passwords", get(routes::get_saved_passwords).post(routes::save_password))
         .route("/api/sandbox/:team_id/passwords/:id", delete(routes::delete_password))
+        .route("/api/mcp/servers", get(mcp_routes::list_servers).post(mcp_routes::create_server))
+        .route(
+            "/api/mcp/servers/:id",
+            get(mcp_routes::get_server).put(mcp_routes::update_server).delete(mcp_routes::delete_server),
+        )
+        .route("/api/mcp/servers/:id/test", post(mcp_routes::test_server))
+        .route("/api/kwants/:id/mcp-servers", get(mcp_routes::get_kwant_servers).put(mcp_routes::set_kwant_servers))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
         .layer(cors)

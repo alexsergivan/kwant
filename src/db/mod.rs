@@ -500,5 +500,125 @@ impl Database {
             .await?;
         Ok(res.rows_affected() > 0)
     }
+
+    // MCP servers
+    pub async fn list_mcp_servers(&self) -> Result<Vec<McpServer>, DbError> {
+        let rows = sqlx::query_as::<_, McpServerRow>("SELECT * FROM mcp_servers ORDER BY name ASC")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().map(McpServer::from_row).collect())
+    }
+
+    pub async fn get_mcp_server(&self, id: &str) -> Result<Option<McpServer>, DbError> {
+        let row = sqlx::query_as::<_, McpServerRow>("SELECT * FROM mcp_servers WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(McpServer::from_row))
+    }
+
+    /// Inserts `server` with a fresh id (any id passed in is ignored).
+    pub async fn create_mcp_server(&self, server: &McpServer) -> Result<McpServer, DbError> {
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO mcp_servers (id, name, transport, command, args, url, env, headers, enabled, timeout_secs) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(&server.name)
+        .bind(&server.transport)
+        .bind(&server.command)
+        .bind(serde_json::to_string(&server.args)?)
+        .bind(&server.url)
+        .bind(serde_json::to_string(&server.env)?)
+        .bind(serde_json::to_string(&server.headers)?)
+        .bind(server.enabled)
+        .bind(server.timeout_secs)
+        .execute(&self.pool)
+        .await?;
+        self.get_mcp_server(&id)
+            .await?
+            .ok_or_else(|| DbError::Sqlx(sqlx::Error::RowNotFound))
+    }
+
+    pub async fn update_mcp_server(&self, server: &McpServer) -> Result<Option<McpServer>, DbError> {
+        let res = sqlx::query(
+            "UPDATE mcp_servers SET name = ?, transport = ?, command = ?, args = ?, url = ?, env = ?, headers = ?, \
+             enabled = ?, timeout_secs = ? WHERE id = ?",
+        )
+        .bind(&server.name)
+        .bind(&server.transport)
+        .bind(&server.command)
+        .bind(serde_json::to_string(&server.args)?)
+        .bind(&server.url)
+        .bind(serde_json::to_string(&server.env)?)
+        .bind(serde_json::to_string(&server.headers)?)
+        .bind(server.enabled)
+        .bind(server.timeout_secs)
+        .bind(&server.id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_mcp_server(&server.id).await
+    }
+
+    /// Deletes the server and its kwant assignments. `foreign_keys` is only set on one pooled
+    /// connection, so the cascade is done here rather than trusted to SQLite.
+    pub async fn delete_mcp_server(&self, id: &str) -> Result<bool, DbError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM kwant_mcp_servers WHERE server_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        let res = sqlx::query("DELETE FROM mcp_servers WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    pub async fn get_kwant_mcp_server_ids(&self, kwant_id: &str) -> Result<Vec<String>, DbError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT a.server_id FROM kwant_mcp_servers a JOIN mcp_servers s ON s.id = a.server_id \
+             WHERE a.kwant_id = ? ORDER BY s.name ASC",
+        )
+        .bind(kwant_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Replaces the kwant's whole assignment. Callers validate that every id exists.
+    pub async fn set_kwant_mcp_servers(&self, kwant_id: &str, server_ids: &[String]) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM kwant_mcp_servers WHERE kwant_id = ?")
+            .bind(kwant_id)
+            .execute(&mut *tx)
+            .await?;
+        for server_id in server_ids {
+            sqlx::query("INSERT OR IGNORE INTO kwant_mcp_servers (kwant_id, server_id) VALUES (?, ?)")
+                .bind(kwant_id)
+                .bind(server_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// The enabled servers assigned to a kwant: what it may use on its next turn.
+    pub async fn list_active_mcp_servers_for_kwant(&self, kwant_id: &str) -> Result<Vec<McpServer>, DbError> {
+        let rows = sqlx::query_as::<_, McpServerRow>(
+            "SELECT s.* FROM mcp_servers s JOIN kwant_mcp_servers a ON a.server_id = s.id \
+             WHERE a.kwant_id = ? AND s.enabled = 1 ORDER BY s.name ASC",
+        )
+        .bind(kwant_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(McpServer::from_row).collect())
+    }
 }
 
