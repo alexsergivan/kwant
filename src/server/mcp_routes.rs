@@ -1,7 +1,7 @@
 //! MCP server registry and per-kwant assignment endpoints. Contract: docs/mcp-api.md.
 
-use super::AppState;
-use crate::db::DbError;
+use super::{mcp_oauth::{self, TokenUse}, AppState};
+use crate::db::{models::McpServer, DbError};
 use crate::mcp::{self, McpClient, McpError, McpServerInput, McpServerView};
 use axum::{
     extract::{Path, State},
@@ -29,14 +29,27 @@ fn db_err(e: DbError) -> ApiError {
     err(StatusCode::INTERNAL_SERVER_ERROR, "database error")
 }
 
+/// The API view of `server`, with its sign-in status.
+async fn view(state: &AppState, server: &McpServer) -> McpServerView {
+    let mut view = McpServerView::from(server);
+    view.oauth = mcp_oauth::statuses(state).await.remove(&server.id).unwrap_or_default();
+    view
+}
+
 pub async fn list_servers(State(state): State<AppState>) -> ApiResult<Vec<McpServerView>> {
     let servers = state.db.list_mcp_servers().await.map_err(db_err)?;
-    Ok(Json(servers.iter().map(McpServerView::from).collect()))
+    let mut statuses = mcp_oauth::statuses(&state).await;
+    Ok(Json(
+        servers
+            .iter()
+            .map(|s| McpServerView { oauth: statuses.remove(&s.id).unwrap_or_default(), ..McpServerView::from(s) })
+            .collect(),
+    ))
 }
 
 pub async fn get_server(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<McpServerView> {
     match state.db.get_mcp_server(&id).await.map_err(db_err)? {
-        Some(s) => Ok(Json(McpServerView::from(&s))),
+        Some(s) => Ok(Json(view(&state, &s).await)),
         None => Err(err(StatusCode::NOT_FOUND, "MCP server not found")),
     }
 }
@@ -59,8 +72,13 @@ pub async fn update_server(
         .map_err(db_err)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "MCP server not found"))?;
     let server = mcp::build_server(input, Some(&existing)).map_err(|m| err(StatusCode::BAD_REQUEST, m))?;
-    match state.db.update_mcp_server(&server).await.map_err(db_err)? {
-        Some(s) => Ok(Json(McpServerView::from(&s))),
+    let updated = state.db.update_mcp_server(&server).await.map_err(db_err)?;
+    if updated.is_some() && (server.url != existing.url || server.transport != existing.transport) {
+        // Tokens and registrations belong to the old address
+        state.db.clear_mcp_oauth(&id).await.map_err(db_err)?;
+    }
+    match updated {
+        Some(s) => Ok(Json(view(&state, &s).await)),
         None => Err(err(StatusCode::NOT_FOUND, "MCP server not found")),
     }
 }
@@ -73,37 +91,60 @@ pub async fn delete_server(State(state): State<AppState>, Path(id): Path<String>
     }
 }
 
-/// Connects with the stored config, lists the tools and disconnects. Errors are redacted.
-pub async fn test_server(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
-    let server = state
-        .db
-        .get_mcp_server(&id)
-        .await
-        .map_err(db_err)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "MCP server not found"))?;
-    let secrets = server.secret_values();
-    let start = Instant::now();
-    let cwd = state.config.data_dir.join("workspace");
-
-    let mut outcome = match McpClient::connect(&server, Some(&cwd)).await {
+/// Connects once and lists the tools.
+async fn try_list(server: &McpServer, cwd: &std::path::Path) -> Result<(Value, Vec<mcp::McpTool>), (McpError, String)> {
+    match McpClient::connect(server, Some(cwd)).await {
         Ok(mut client) => {
             let tools = client.list_tools().await;
             let stderr_tail = client.stderr_tail();
             client.shutdown().await;
-            match tools {
-                Ok(tools) => json!({ "ok": true, "server_info": client.server_info, "tools": tools }),
-                Err(e) => json!({ "ok": false, "error": mcp::redact(&e.to_string(), &secrets),
-                                  "stderr_tail": mcp::redact(&stderr_tail, &secrets) }),
-            }
+            tools.map(|t| (client.server_info.clone(), t)).map_err(|e| (e, stderr_tail))
         }
         Err(e) => {
             let stderr_tail = match e {
                 McpError::Startup { ref stderr_tail, .. } => stderr_tail.clone(),
                 _ => String::new(),
             };
-            json!({ "ok": false, "error": mcp::redact(&e.to_string(), &secrets),
-                    "stderr_tail": mcp::redact(&stderr_tail, &secrets) })
+            Err((e, stderr_tail))
         }
+    }
+}
+
+/// Connects with the stored config (and sign-in), lists the tools and disconnects. Errors are
+/// redacted. A 401 without a usable sign-in answers `auth_required: true`.
+pub async fn test_server(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
+    let stored = state
+        .db
+        .get_mcp_server(&id)
+        .await
+        .map_err(db_err)?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "MCP server not found"))?;
+    let start = Instant::now();
+    let cwd = state.config.data_dir.join("workspace");
+
+    let mut server = stored.clone();
+    let token_use = mcp_oauth::authorize_server(&state, &mut server).await;
+    let mut secrets = server.secret_values();
+    let mut result = try_list(&server, &cwd).await;
+    if token_use == TokenUse::Injected && matches!(result, Err((McpError::Unauthorized { .. }, _))) {
+        // The token was rejected early (revoked, or the server's clock): refresh once
+        if let Some(retry) = mcp_oauth::retry_after_unauthorized(&state, &stored).await {
+            secrets.extend(retry.secret_values());
+            result = try_list(&retry, &cwd).await;
+        }
+    }
+
+    let mut outcome = match result {
+        Ok((server_info, tools)) => json!({ "ok": true, "server_info": server_info, "tools": tools }),
+        Err((McpError::Unauthorized { .. }, _)) if token_use != TokenUse::UserHeader => {
+            if token_use == TokenUse::Injected {
+                // Still rejected after a refresh: the sign-in is no longer valid
+                let _ = state.db.delete_mcp_oauth_token(&id).await;
+            }
+            json!({ "ok": false, "auth_required": true, "error": "Sign-in required" })
+        }
+        Err((e, stderr_tail)) => json!({ "ok": false, "error": mcp::redact(&e.to_string(), &secrets),
+                                         "stderr_tail": mcp::redact(&stderr_tail, &secrets) }),
     };
     outcome["duration_ms"] = json!(start.elapsed().as_millis() as u64);
     Ok(Json(outcome))

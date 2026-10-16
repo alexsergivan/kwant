@@ -564,14 +564,16 @@ impl Database {
         self.get_mcp_server(&server.id).await
     }
 
-    /// Deletes the server and its kwant assignments. `foreign_keys` is only set on one pooled
+    /// Deletes the server, its kwant assignments and its OAuth tokens and registrations. `foreign_keys` is only set on one pooled
     /// connection, so the cascade is done here rather than trusted to SQLite.
     pub async fn delete_mcp_server(&self, id: &str) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM kwant_mcp_servers WHERE server_id = ?")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+        for table in ["kwant_mcp_servers", "mcp_oauth_tokens", "mcp_oauth_clients"] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE server_id = ?"))
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
         let res = sqlx::query("DELETE FROM mcp_servers WHERE id = ?")
             .bind(id)
             .execute(&mut *tx)
@@ -619,6 +621,102 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(McpServer::from_row).collect())
+    }
+    // MCP OAuth
+    pub async fn get_mcp_oauth_token(&self, server_id: &str) -> Result<Option<McpOAuthToken>, DbError> {
+        Ok(sqlx::query_as::<_, McpOAuthToken>(
+            "SELECT server_id, access_token, refresh_token, expires_at, token_endpoint, client_id, client_secret, \
+             auth_method, resource FROM mcp_oauth_tokens WHERE server_id = ?",
+        )
+        .bind(server_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// Token status for every server that has one: `server_id -> expires_at`.
+    pub async fn list_mcp_oauth_expiries(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Option<chrono::DateTime<chrono::Utc>>>, DbError> {
+        let rows: Vec<(String, Option<chrono::DateTime<chrono::Utc>>)> =
+            sqlx::query_as("SELECT server_id, expires_at FROM mcp_oauth_tokens").fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    pub async fn save_mcp_oauth_token(&self, token: &McpOAuthToken) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO mcp_oauth_tokens (server_id, access_token, refresh_token, expires_at, token_endpoint, \
+             client_id, client_secret, auth_method, resource, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP) \
+             ON CONFLICT(server_id) DO UPDATE SET access_token = excluded.access_token, \
+             refresh_token = excluded.refresh_token, expires_at = excluded.expires_at, \
+             token_endpoint = excluded.token_endpoint, client_id = excluded.client_id, \
+             client_secret = excluded.client_secret, auth_method = excluded.auth_method, \
+             resource = excluded.resource, updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(&token.server_id)
+        .bind(&token.access_token)
+        .bind(&token.refresh_token)
+        .bind(token.expires_at)
+        .bind(&token.token_endpoint)
+        .bind(&token.client_id)
+        .bind(&token.client_secret)
+        .bind(&token.auth_method)
+        .bind(&token.resource)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drops the server's tokens. Returns whether there were any.
+    pub async fn delete_mcp_oauth_token(&self, server_id: &str) -> Result<bool, DbError> {
+        let res = sqlx::query("DELETE FROM mcp_oauth_tokens WHERE server_id = ?")
+            .bind(server_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    pub async fn get_mcp_oauth_client(
+        &self,
+        server_id: &str,
+        redirect_uri: &str,
+        issuer: &str,
+    ) -> Result<Option<McpOAuthClient>, DbError> {
+        Ok(sqlx::query_as::<_, McpOAuthClient>(
+            "SELECT server_id, redirect_uri, issuer, client_id, client_secret, auth_method FROM mcp_oauth_clients \
+             WHERE server_id = ? AND redirect_uri = ? AND issuer = ?",
+        )
+        .bind(server_id)
+        .bind(redirect_uri)
+        .bind(issuer)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    pub async fn save_mcp_oauth_client(&self, client: &McpOAuthClient) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO mcp_oauth_clients (server_id, redirect_uri, issuer, client_id, client_secret, auth_method) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&client.server_id)
+        .bind(&client.redirect_uri)
+        .bind(&client.issuer)
+        .bind(&client.client_id)
+        .bind(&client.client_secret)
+        .bind(&client.auth_method)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Forgets tokens and registrations, e.g. when the server's url changes.
+    pub async fn clear_mcp_oauth(&self, server_id: &str) -> Result<(), DbError> {
+        for table in ["mcp_oauth_tokens", "mcp_oauth_clients"] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE server_id = ?"))
+                .bind(server_id)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
     }
 }
 

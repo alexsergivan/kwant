@@ -150,7 +150,7 @@ fn local_base_url(state: &AppState) -> String {
 /// permission session claude will call. Returns `None` (no behaviour change) otherwise.
 /// Pair with [`finish_turn`].
 pub async fn prepare_turn(state: &AppState, kwant: &Kwant) -> Option<(McpTurnContext, String)> {
-    let servers = match state.db.list_active_mcp_servers_for_kwant(&kwant.id).await {
+    let mut servers = match state.db.list_active_mcp_servers_for_kwant(&kwant.id).await {
         Ok(s) if !s.is_empty() => s,
         Ok(_) => return None,
         Err(e) => {
@@ -158,6 +158,8 @@ pub async fn prepare_turn(state: &AppState, kwant: &Kwant) -> Option<(McpTurnCon
             return None;
         }
     };
+    // Signed-in http servers get their (refreshed) access token as a secret header
+    super::mcp_oauth::authorize_servers(state, &mut servers).await;
     let token = uuid::Uuid::new_v4().simple().to_string();
     let setting = state.db.get_setting("mcp_max_tool_iterations").await.ok().flatten();
     let ctx = McpTurnContext {

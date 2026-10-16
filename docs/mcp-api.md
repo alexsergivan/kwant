@@ -20,7 +20,8 @@ All endpoints are JSON. Errors use the status code plus `{"error": "<message>"}`
   "headers": {},
   "enabled": true,
   "timeout_secs": 30,
-  "created_at": "2026-10-16T12:00:00Z"
+  "created_at": "2026-10-16T12:00:00Z",
+  "oauth": { "connected": false, "expires_at": null }
 }
 ```
 
@@ -37,6 +38,7 @@ All endpoints are JSON. Errors use the status code plus `{"error": "<message>"}`
 | `enabled` | bool | Disabled servers are kept but never offered to any kwant. Default `true`. |
 | `timeout_secs` | int | Per-request timeout (initialize, list, call), 1–600. Default `30`. |
 | `created_at` | string \| null | RFC 3339. |
+| `oauth` | object | Read-only sign-in status (see [Sign-in](#sign-in-oauth)): `connected` bool, `expires_at` RFC 3339 or null. Never contains tokens. Always `{"connected": false, …}` for stdio servers. |
 
 ### Secrets
 
@@ -81,6 +83,60 @@ Connects with the stored config (works for disabled servers too), runs `initiali
 ```json
 { "ok": false, "error": "timed out after 30s waiting for initialize", "stderr_tail": "…", "duration_ms": 30004 }
 ```
+
+An http server that answers 401 while kwnt has no usable sign-in (and the user set no
+`Authorization` header of their own) gives:
+
+```json
+{ "ok": false, "auth_required": true, "error": "Sign-in required", "duration_ms": 120 }
+```
+
+## Sign-in (OAuth)
+
+http servers that require sign-in (e.g. `https://mcp.notion.com/mcp`) use the MCP authorization
+spec (2025-06-18): kwnt reads the 401's `WWW-Authenticate: Bearer resource_metadata=…` (or
+`/.well-known/oauth-protected-resource`), then the authorization server's metadata
+(`/.well-known/oauth-authorization-server`, falling back to OpenID discovery), registers itself
+as client `kwnt` (dynamic client registration, RFC 7591), and runs the authorization code flow
+with PKCE S256 and the `resource` parameter (RFC 8707). Authorization-server endpoints must be
+https (plain http only on loopback).
+
+### `POST /api/mcp/servers/:id/oauth/start`
+Body: `{"origin": "https://kwnt.example.com"}`: the browser's `location.origin`. It must be http(s)
+with no path, and its host must equal the request's `Host` or `X-Forwarded-Host`. The callback is
+`<origin>/api/mcp/oauth/callback`, so the same build works on localhost and behind a proxy.
+`200` → `{"authorize_url": "https://…"}`: open it in a popup. `400` bad origin or a stdio server,
+`404` unknown server, `502` discovery or registration failed (`{"error": "…"}`).
+The sign-in must finish within 10 minutes; starting again for the same server replaces the
+earlier attempt. Registrations are reused per server, callback URL and authorization server.
+
+### `GET /api/mcp/oauth/callback?code=…&state=…` (or `?error=…&state=…`)
+Where the provider redirects the popup. kwnt exchanges the code and stores the tokens, then
+returns a small HTML page that runs
+`window.opener.postMessage({type: "kwnt-mcp-oauth", server_id, ok, error?}, location.origin)`
+and closes itself (or goes to `/` when it has no opener). `server_id` is null when the `state`
+is unknown, expired or already used. `error` is a short readable reason.
+
+### `DELETE /api/mcp/servers/:id/oauth`
+Forgets the tokens. `200` → `{"status": "disconnected"}`. `404` unknown server.
+
+### How tokens are used
+- Before every connection (test, API-agent turns, the claude CLI config) kwnt refreshes a
+  token that expires within 60 s and sends `Authorization: Bearer <token>`.
+- A user-set `Authorization` header always wins; kwnt's token is then not sent.
+- If the authorization server rejects a refresh, the token is dropped and the server needs
+  sign-in again. A network failure keeps it (and uses it while it is still valid).
+- On `POST /test`, a 401 despite a token triggers one forced refresh and retry; if that fails
+  too, the token is dropped and the answer is `auth_required`.
+- Tokens are stored in the database like other secrets, never returned or logged, and redacted
+  from tool output and errors. Changing a server's `url` or `transport`, or deleting it, drops
+  its tokens and registrations.
+- The claude CLI gets the current access token in its per-turn config file; a turn longer than
+  the token's lifetime is not refreshed mid-turn.
+
+For local checks, `kwnt mcp-oauth-mock-server [--port 7790] [--expires-in 3600]` runs an
+OAuth-protected mock MCP server at `http://127.0.0.1:<port>/mcp` whose sign-in page has an
+"Allow" link (no credentials).
 
 ### `GET /api/kwants/:id/mcp-servers`
 `200` → `{"server_ids": ["…"]}`. `404` unknown kwant.

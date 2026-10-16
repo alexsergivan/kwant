@@ -35,6 +35,9 @@ pub enum McpError {
     Rpc { code: i64, message: String },
     #[error("transport error: {0}")]
     Transport(String),
+    /// HTTP 401: the server wants a (new) access token. Keeps its `WWW-Authenticate` header.
+    #[error("transport error: HTTP 401 Unauthorized (sign in to this server from the Tools screen)")]
+    Unauthorized { www_authenticate: Option<String> },
     #[error("invalid response: {0}")]
     Protocol(String),
     /// The server failed before the handshake completed; keeps what it wrote to stderr.
@@ -147,6 +150,7 @@ impl McpClient {
         };
         match client.handshake().await {
             Ok(()) => Ok(client),
+            Err(e @ McpError::Unauthorized { .. }) => Err(e),
             Err(e) => {
                 client.shutdown().await;
                 Err(McpError::Startup { message: e.to_string(), stderr_tail: client.stderr_tail() })
@@ -396,6 +400,14 @@ impl McpClient {
         }
         let resp = req.send().await.map_err(|e| McpError::Transport(e.without_url().to_string()))?;
         let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            let www_authenticate = resp
+                .headers()
+                .get(reqwest::header::WWW_AUTHENTICATE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            return Err(McpError::Unauthorized { www_authenticate });
+        }
         if !status.is_success() {
             return Err(McpError::Transport(format!("HTTP {status}")));
         }

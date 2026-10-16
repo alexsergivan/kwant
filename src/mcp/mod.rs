@@ -4,9 +4,12 @@
 pub mod cli_config;
 pub mod client;
 pub mod echo_server;
+pub mod oauth;
+pub mod oauth_mock;
 pub mod session;
 
 pub use client::{McpClient, McpError, McpTool};
+pub use oauth::OAuthStatus;
 
 use crate::db::models::McpServer;
 use async_trait::async_trait;
@@ -43,6 +46,9 @@ pub struct McpServerView {
     pub enabled: bool,
     pub timeout_secs: i64,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// OAuth sign-in status (http servers); filled in by the routes, never contains tokens.
+    #[serde(default)]
+    pub oauth: OAuthStatus,
 }
 
 impl From<&McpServer> for McpServerView {
@@ -60,6 +66,7 @@ impl From<&McpServer> for McpServerView {
             enabled: s.enabled,
             timeout_secs: s.timeout_secs,
             created_at: s.created_at,
+            oauth: OAuthStatus::default(),
         }
     }
 }

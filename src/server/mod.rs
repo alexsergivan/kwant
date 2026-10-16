@@ -2,6 +2,7 @@ pub mod discussion;
 pub mod routes;
 pub mod sse;
 pub mod browser_stream;
+pub mod mcp_oauth;
 pub mod mcp_routes;
 pub mod mcp_runtime;
 
@@ -36,6 +37,7 @@ pub struct AppState {
     pub browser_service: Arc<crate::sandbox::service::BrowserService>,
     /// Live claude CLI turns whose MCP permission prompts kwnt answers, by URL token.
     pub mcp_sessions: Arc<Mutex<HashMap<String, mcp_runtime::PermissionSession>>>,
+    pub mcp_oauth: Arc<mcp_oauth::OAuthState>,
 }
 
 impl AppState {
@@ -62,6 +64,7 @@ impl AppState {
             browser_controllers,
             browser_service,
             mcp_sessions: Arc::new(Mutex::new(HashMap::new())),
+            mcp_oauth: Arc::new(mcp_oauth::OAuthState::default()),
         }
     }
 
@@ -109,6 +112,9 @@ pub fn create_router(state: AppState) -> Router {
             get(mcp_routes::get_server).put(mcp_routes::update_server).delete(mcp_routes::delete_server),
         )
         .route("/api/mcp/servers/:id/test", post(mcp_routes::test_server))
+        .route("/api/mcp/servers/:id/oauth/start", post(mcp_oauth::start))
+        .route("/api/mcp/servers/:id/oauth", delete(mcp_oauth::disconnect))
+        .route("/api/mcp/oauth/callback", get(mcp_oauth::callback))
         .route("/api/kwants/:id/mcp-servers", get(mcp_routes::get_kwant_servers).put(mcp_routes::set_kwant_servers))
         .route("/api/mcp/permission/:token", post(mcp_runtime::permission_endpoint))
         .route("/api/events", get(sse::sse_handler))

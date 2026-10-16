@@ -211,3 +211,68 @@ impl std::fmt::Debug for McpServer {
             .finish()
     }
 }
+
+/// A dynamic client registration with one authorization server, for one redirect URI.
+#[derive(Clone, PartialEq, FromRow)]
+pub struct McpOAuthClient {
+    pub server_id: String,
+    pub redirect_uri: String,
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret: Option<String>,
+    /// Token endpoint auth: "none", "client_secret_post" or "client_secret_basic".
+    pub auth_method: String,
+}
+
+impl std::fmt::Debug for McpOAuthClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpOAuthClient")
+            .field("server_id", &self.server_id)
+            .field("redirect_uri", &self.redirect_uri)
+            .field("issuer", &self.issuer)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &self.client_secret.as_ref().map(|_| "<set>"))
+            .field("auth_method", &self.auth_method)
+            .finish()
+    }
+}
+
+/// OAuth tokens for an http MCP server, with what a refresh needs. Deliberately not `Serialize`;
+/// the API only exposes [`crate::mcp::OAuthStatus`].
+#[derive(Clone, PartialEq, FromRow)]
+pub struct McpOAuthToken {
+    pub server_id: String,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub token_endpoint: String,
+    pub client_id: String,
+    pub client_secret: Option<String>,
+    pub auth_method: String,
+    pub resource: String,
+}
+
+impl McpOAuthToken {
+    pub fn secret_values(&self) -> Vec<String> {
+        [Some(&self.access_token), self.refresh_token.as_ref(), self.client_secret.as_ref()]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect()
+    }
+}
+
+/// Never prints token values.
+impl std::fmt::Debug for McpOAuthToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpOAuthToken")
+            .field("server_id", &self.server_id)
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "<set>"))
+            .field("expires_at", &self.expires_at)
+            .field("token_endpoint", &self.token_endpoint)
+            .field("client_id", &self.client_id)
+            .field("auth_method", &self.auth_method)
+            .field("resource", &self.resource)
+            .finish()
+    }
+}

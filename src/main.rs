@@ -59,6 +59,18 @@ pub enum Commands {
     /// Run a tiny MCP test server on stdin/stdout (for tests and smoke checks)
     #[command(hide = true)]
     McpEchoServer,
+
+    /// Run an OAuth-protected mock MCP server over HTTP (for tests and smoke checks)
+    #[command(hide = true)]
+    McpOauthMockServer {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 7790)]
+        port: u16,
+        /// expires_in of issued access tokens; under 60 makes kwnt refresh on every use
+        #[arg(long, default_value_t = 3600)]
+        expires_in: i64,
+    },
 }
 
 #[tokio::main]
@@ -70,6 +82,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     tracing_subscriber::fmt::init();
+    if let Some(Commands::McpOauthMockServer { host, port, expires_in }) = &cli.command {
+        let listener = tokio::net::TcpListener::bind((host.as_str(), *port)).await?;
+        println!("mock OAuth MCP server: http://{}/mcp", listener.local_addr()?);
+        kwnt::mcp::oauth_mock::serve(listener, kwnt::mcp::oauth_mock::MockOptions { expires_in: *expires_in }).await?;
+        return Ok(());
+    }
 
     let mut config = match cli.config {
         Some(path) => Config::from_file(path)?,
@@ -154,6 +172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Teams) => print_teams(&config).await?,
         Some(Commands::Channels) => print_channels(&config).await?,
         Some(Commands::McpEchoServer) => unreachable!("handled before config loading"),
+        Some(Commands::McpOauthMockServer { .. }) => unreachable!("handled before config loading"),
         None => {
             println!("⚡ Kwant: your team of super-intelligent bots (kwants)");
             println!("Run `kwnt serve` to start the server, or `kwnt --help` for options.");

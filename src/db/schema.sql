@@ -88,3 +88,31 @@ CREATE TABLE IF NOT EXISTS kwant_mcp_servers (
     FOREIGN KEY(kwant_id) REFERENCES kwants(id) ON DELETE CASCADE,
     FOREIGN KEY(server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
 );
+
+-- OAuth client registrations (RFC 7591), one per server, redirect URI and authorization server
+CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+    server_id TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    client_secret TEXT,
+    auth_method TEXT NOT NULL DEFAULT 'none',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (server_id, redirect_uri, issuer),
+    FOREIGN KEY(server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
+);
+
+-- OAuth tokens for http MCP servers, plus what a refresh needs. Secrets: never serialized
+CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+    server_id TEXT PRIMARY KEY,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT,
+    expires_at TIMESTAMP,
+    token_endpoint TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    client_secret TEXT,
+    auth_method TEXT NOT NULL DEFAULT 'none',
+    resource TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
+);
