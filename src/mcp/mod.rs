@@ -31,6 +31,8 @@ pub const RECORD_RESULT_MAX_CHARS: usize = 4000;
 pub const APPROVAL_TIMEOUT_SECS: u64 = 300;
 /// kwnt's permission-prompt tool for the claude CLI, called as `mcp__kwnt__approve`.
 pub const PERMISSION_TOOL: &str = "approve";
+/// Env variable that hands an agent CLI its turn's gateway token (never put in argv).
+pub const GATEWAY_TOKEN_ENV: &str = "KWNT_MCP_GATEWAY_TOKEN";
 
 /// API representation of a server: secrets replaced by [`SECRET_MASK`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -278,9 +280,24 @@ pub struct McpTurnContext {
     pub config_dir: PathBuf,
     /// kwnt's permission-prompt MCP endpoint for this turn (claude CLI only).
     pub permission_url: Option<String>,
+    /// kwnt's MCP gateway for this turn, for agent CLIs that can't route approvals themselves.
+    pub gateway: Option<GatewayAccess>,
     pub max_tool_iterations: usize,
     /// Tool call records for the reply's `tool_calls` field; drivers and the permission endpoint append.
     pub records: Arc<Mutex<Vec<Value>>>,
+}
+
+/// Where an agent CLI reaches this turn's MCP gateway. The token is sent as a bearer token.
+#[derive(Clone)]
+pub struct GatewayAccess {
+    pub url: String,
+    pub token: String,
+}
+
+impl std::fmt::Debug for GatewayAccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayAccess").field("url", &self.url).field("token", &"<redacted>").finish()
+    }
 }
 
 impl McpTurnContext {
@@ -305,6 +322,7 @@ impl std::fmt::Debug for McpTurnContext {
             .field("servers", &self.servers)
             .field("config_dir", &self.config_dir)
             .field("permission_url", &self.permission_url.as_ref().map(|_| "<set>"))
+            .field("gateway", &self.gateway)
             .field("max_tool_iterations", &self.max_tool_iterations)
             .finish()
     }

@@ -63,7 +63,7 @@ async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (St
 
 async fn turn_servers(state: &AppState, kwant_id: &str) -> Vec<String> {
     let kwant = state.db.get_kwant(kwant_id).await.unwrap().unwrap();
-    match mcp_runtime::prepare_turn(state, &kwant).await {
+    match mcp_runtime::prepare_turn(state, &kwant, None).await {
         Some((ctx, token)) => {
             let names = ctx.servers.iter().map(|s| s.name.clone()).collect();
             mcp_runtime::finish_turn(state, &token).await;

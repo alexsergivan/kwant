@@ -6,7 +6,7 @@ use kwnt::{
     db::{models::McpServer, Database},
     db::models::Kwant,
     drivers::{events::RuntimeEvent, CliDriver, Driver, TurnInput},
-    mcp::{cli_config, FixedApprover, McpClient, McpTurnContext, ToolApprovalRequest, ToolApprover},
+    mcp::{cli_config, FixedApprover, GatewayAccess, McpClient, McpTurnContext, ToolApprovalRequest, ToolApprover},
     router::LayaRouter,
     server::{create_router, mcp_runtime::{BrokerApprover, PermissionSession}, AppState},
     tools::ToolRunner,
@@ -46,6 +46,7 @@ fn ctx(dir: &std::path::Path, approver: Arc<dyn ToolApprover>) -> McpTurnContext
         approver,
         config_dir: dir.join("mcp"),
         permission_url: Some("http://127.0.0.1:1/api/mcp/permission/tok".into()),
+        gateway: Some(GatewayAccess { url: "http://127.0.0.1:1/api/mcp/gateway".into(), token: "gw-secret-token".into() }),
         max_tool_iterations: 8,
         records: Default::default(),
     }
@@ -218,7 +219,7 @@ async fn permission_endpoint_answers_claude_prompts_over_http() {
         let c = ctx(tmp.path(), Arc::new(FixedApprover(allow)));
         state.mcp_sessions.lock().await.insert(
             token.into(),
-            PermissionSession { kwant_id: "k1".into(), kwant_name: "Ada".into(), turn_id: "t1".into(), ctx: c },
+            PermissionSession::new("k1".into(), "Ada".into(), "t1".into(), c, None),
         );
     }
 
@@ -331,21 +332,43 @@ async fn claude_cli_gets_mcp_config_without_secrets_in_argv() {
     assert!(plain.contains("--strict-mcp-config") && !plain.contains("--mcp-config") && !plain.contains("permission-prompt"), "{plain}");
 }
 
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn codex_cli_runs_with_mcp_disabled() {
-    let tmp = tempdir().unwrap();
-    // codex prints its answer to an -o file, so this fake logs its argv to a file instead
+/// The servers the fake codex reports for `codex mcp list --json`, one with a quoted name.
+const USER_SERVERS: &str = r#"[{"name":"userdummy","enabled":true},{"name":"user.dot \"q\"","enabled":true}]"#;
+/// The same plus a user server named like kwnt's gateway.
+const USER_SERVERS_WITH_KWNT: &str =
+    r#"[{"name":"userdummy","enabled":true},{"name":"user.dot \"q\"","enabled":true},{"name":"kwnt","enabled":true}]"#;
+
+/// Runs a fake codex/grok that logs its argv and whether it got the gateway token env, and
+/// returns (argv, token env, thinking notes, reply). `mcp_list` is what it prints for
+/// `mcp list --json`; `None` makes that listing fail.
+async fn fake_agent_run(kind: &str, mcp: Option<McpTurnContext>, mcp_list: Option<&str>) -> (String, String, Vec<String>, String) {
     let dir = tempdir().unwrap();
-    let script = dir.path().join("codex");
+    let script = dir.path().join(kind);
     let log = dir.path().join("argv");
-    std::fs::write(&script, format!("#!/bin/sh\necho \"$*\" > {}\n", log.display())).unwrap();
+    let env_log = dir.path().join("env");
+    let list = dir.path().join("list.json");
+    let list_cmd = match mcp_list {
+        Some(json) => {
+            std::fs::write(&list, json).unwrap();
+            format!("cat {}; exit 0", list.display())
+        }
+        None => "exit 3".to_string(),
+    };
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nif [ \"$1 $2 $3\" = \"mcp list --json\" ]; then {list_cmd}; fi\necho \"$*\" > {}\necho \"${{KWNT_MCP_GATEWAY_TOKEN:-unset}}\" > {}\n",
+            log.display(),
+            env_log.display()
+        ),
+    )
+    .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let driver = CliDriver::new(Some(script.to_string_lossy().into_owned()), Some("codex".into()));
+    let driver = CliDriver::new(Some(script.to_string_lossy().into_owned()), Some(kind.into()));
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let drain = tokio::spawn(async move {
         let mut notes = Vec::new();
@@ -356,9 +379,121 @@ async fn codex_cli_runs_with_mcp_disabled() {
         }
         notes
     });
-    driver.stream_turn(turn(Some(ctx(tmp.path(), Arc::new(FixedApprover(true))))), tx).await.unwrap();
+    let out = driver.stream_turn(turn(mcp), tx).await.unwrap();
     let notes = drain.await.unwrap();
-    let argv = std::fs::read_to_string(&log).unwrap();
-    assert!(argv.contains("-c mcp_servers={}"), "{argv}");
-    assert!(notes.iter().any(|n| n.contains("can't offer MCP tools through the codex CLI")), "{notes:?}");
+    let read = |p: &std::path::Path| std::fs::read_to_string(p).unwrap_or_default().trim().to_string();
+    (read(&log), read(&env_log), notes, out.text)
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn codex_cli_reaches_mcp_only_through_kwnts_gateway() {
+    let tmp = tempdir().unwrap();
+    let (argv, token, notes, _) =
+        fake_agent_run("codex", Some(ctx(tmp.path(), Arc::new(FixedApprover(true)))), Some(USER_SERVERS)).await;
+    // The user's own servers are switched off by (quoted) name
+    assert!(
+        argv.contains(r#"-c mcp_servers={kwnt={url="http://127.0.0.1:1/api/mcp/gateway",bearer_token_env_var="KWNT_MCP_GATEWAY_TOKEN",default_tools_approval_mode="approve",startup_timeout_sec=45,tool_timeout_sec=330},"userdummy"={enabled=false},"user.dot \"q\""={enabled=false}} "#),
+        "{argv}"
+    );
+    assert!(argv.contains(r#"-c shell_environment_policy.set.KWNT_MCP_GATEWAY_TOKEN="""#), "token not blanked for codex's shell: {argv}");
+    assert_eq!(token, "gw-secret-token", "token comes through the env");
+    for secret in ["gw-secret-token", "sk-very-secret", "hdr-secret", "/usr/bin/true", "mcp.example.test"] {
+        assert!(!argv.contains(secret), "{secret} in argv: {argv}");
+    }
+    assert!(!notes.iter().any(|n| n.contains("can't offer MCP tools")), "{notes:?}");
+
+    // Without servers (none assigned, or the kwant opted out) codex still gets none of the user's
+    let (plain, token, _, _) = fake_agent_run("codex", None, Some(USER_SERVERS)).await;
+    assert!(plain.contains(r#"-c mcp_servers={"userdummy"={enabled=false},"user.dot \"q\""={enabled=false}} "#), "{plain}");
+    assert!(!plain.contains("shell_environment_policy"), "{plain}");
+    assert_eq!(token, "unset");
+
+    // And with no user servers either, the override is empty, as before
+    let (bare, _, _, _) = fake_agent_run("codex", None, Some("[]")).await;
+    assert!(bare.contains("-c mcp_servers={} "), "{bare}");
+}
+
+/// A user codex server named `kwnt` would merge with the gateway's entry: without a gateway it is
+/// switched off like any other, with one the turn is refused rather than run.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn codex_user_server_named_kwnt_is_disabled_or_refused() {
+    let (plain, token, _, _) = fake_agent_run("codex", None, Some(USER_SERVERS_WITH_KWNT)).await;
+    assert!(
+        plain.contains(r#"-c mcp_servers={"userdummy"={enabled=false},"user.dot \"q\""={enabled=false},"kwnt"={enabled=false}} "#),
+        "{plain}"
+    );
+    assert_eq!(token, "unset");
+
+    let tmp = tempdir().unwrap();
+    let (argv, token, _, reply) =
+        fake_agent_run("codex", Some(ctx(tmp.path(), Arc::new(FixedApprover(true)))), Some(USER_SERVERS_WITH_KWNT)).await;
+    assert_eq!(argv, "", "codex exec ran: {argv}");
+    assert_eq!(token, "", "codex exec got the env: {token}");
+    assert!(reply.contains("MCP server named `kwnt`") && reply.contains("Rename that server"), "{reply}");
+    assert!(!reply.contains("gw-secret-token"), "{reply}");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn codex_cli_does_not_run_when_its_servers_cannot_be_listed() {
+    let tmp = tempdir().unwrap();
+    for mcp in [Some(ctx(tmp.path(), Arc::new(FixedApprover(true)))), None] {
+        for list in [None, Some("not json"), Some(r#"[{"enabled":true}]"#)] {
+            let (argv, _, _, reply) = fake_agent_run("codex", mcp.clone(), list).await;
+            assert_eq!(argv, "", "codex exec ran: {argv}");
+            assert!(reply.contains("didn't run codex"), "{reply}");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn grok_cli_still_runs_without_mcp() {
+    let tmp = tempdir().unwrap();
+    let (argv, token, notes, _) = fake_agent_run("grok", Some(ctx(tmp.path(), Arc::new(FixedApprover(true)))), Some(USER_SERVERS)).await;
+    assert_eq!(token, "unset");
+    assert!(!argv.contains("gateway"), "{argv}");
+    assert!(notes.iter().any(|n| n.contains("can't offer MCP tools through the grok CLI")), "{notes:?}");
+}
+
+/// A cancelled turn aborts its driver task; the agent CLI must die with it rather than keep
+/// running (and keep calling kwnt's gateway).
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn aborting_a_cli_turn_kills_the_cli() {
+    let dir = tempdir().unwrap();
+    let script = dir.path().join("codex");
+    let pid_file = dir.path().join("pid");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\nif [ \"$1\" = mcp ]; then echo '[]'; exit 0; fi\necho $$ > {}\nexec sleep 60\n", pid_file.display()),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let driver = CliDriver::new(Some(script.to_string_lossy().into_owned()), Some("codex".into()));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let task = tokio::spawn(async move { driver.stream_turn(turn(None), tx).await });
+
+    let pid = loop {
+        if let Some(pid) = std::fs::read_to_string(&pid_file).ok().filter(|p| p.ends_with('\n')) {
+            break pid.trim().to_string();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    task.abort();
+    let _ = task.await;
+    let alive = || std::fs::read_to_string(format!("/proc/{pid}/stat")).map_or(false, |s| !s.contains(") Z "));
+    for _ in 0..100 {
+        if !alive() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("codex (pid {pid}) outlived its aborted turn");
 }

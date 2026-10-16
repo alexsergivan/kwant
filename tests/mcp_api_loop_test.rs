@@ -70,6 +70,7 @@ fn ctx(approver: Arc<dyn ToolApprover>, timeout_secs: i64, max: usize) -> McpTur
         approver,
         config_dir: std::env::temp_dir(),
         permission_url: None,
+        gateway: None,
         max_tool_iterations: max,
         records: Default::default(),
     }

@@ -20,6 +20,10 @@ pub enum RuntimeEvent {
         tool_name: String,
         details: Value,
     },
+    /// A pending approval can no longer be answered (its turn ended, or it expired).
+    ApprovalWithdrawn {
+        id: String,
+    },
     TurnComplete {
         tokens: usize,
         duration_ms: u64,

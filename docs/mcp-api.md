@@ -155,8 +155,27 @@ Body: `{"server_ids": ["…"]}` (replaces the whole assignment; `[]` clears it).
   (`--permission-prompt-tool mcp__kwnt__approve`, served at `POST /api/mcp/permission/<token>`,
   valid only while that turn runs), so only the kwant's own MCP tools can be approved; claude's
   built-in tools stay denied as before.
-  `codex` and `grok` CLI agents do not get MCP servers yet (no way to route their tool approvals
-  through kwnt); kwnt explicitly disables MCP for codex.
+- **CLI agents (`codex`)**: codex gets exactly one MCP server, kwnt's per-turn gateway
+  (`POST /api/mcp/gateway`), via
+  `-c mcp_servers={kwnt={url=…,bearer_token_env_var="KWNT_MCP_GATEWAY_TOKEN",default_tools_approval_mode="approve",…}}`.
+  A `-c` table is merged into codex's config rather than replacing it, so kwnt first asks codex
+  which servers it would load for the turn (`codex mcp list --json`, run in the turn's working
+  directory: user config, profile, trusted-project `.codex/config.toml`, system config) and adds
+  `"<name>"={enabled=false}` for each one into the same table, so they are neither offered nor
+  started. If that listing fails, kwnt doesn't run codex for the turn. `kwnt` is reserved here
+  too: a user codex server named `kwnt` is switched off like the others on turns without the
+  gateway, but on a gateway turn the two entries would merge, so kwnt refuses the turn and asks
+  the user to rename that server. The turn's token is passed
+  in the `KWNT_MCP_GATEWAY_TOKEN` env variable and sent as `Authorization: Bearer`, never on the
+  command line, and blanked for codex's own shell commands
+  (`-c shell_environment_policy.set.KWNT_MCP_GATEWAY_TOKEN=""`); other tokens and finished turns
+  get `401`. The gateway connects to the kwant's servers
+  on first use, lists their tools as `<server>__<tool>` (codex shows them under `mcp__kwnt`),
+  and asks for approval (below) before forwarding each call, so codex's own approval is turned
+  off for it. Without servers (or for a kwant that opted out) codex gets only the
+  `enabled=false` entries: `-c mcp_servers={}` when the user has no servers of their own.
+  `grok` CLI agents do not get MCP servers yet: its config overlay (`GROK_CONFIG_PATH`) cannot
+  add `mcp_servers`, and it has no per-run MCP flag.
 - **API agents** (OpenAI-compatible chat endpoints, incl. Ollama): kwnt connects to the servers,
   offers their tools in the `tools` field, executes `tool_calls` and feeds results back, for at
   most `mcp_max_tool_iterations` model calls per turn (setting or env
@@ -172,7 +191,11 @@ Every MCP tool call needs approval through the permission broker, for both agent
 2. The UI resolves it with the existing `POST /api/approvals/:id/resolve`
    `{"decision": "allow_once" | "always_allow" | "deny"}`.
    `always_allow` allows that tool for that kwant until kwnt restarts.
-3. Unanswered tickets are denied after 300 s, or when the turn is cancelled.
+3. Unanswered tickets are denied after 300 s, or when the turn ends or is cancelled; kwnt then
+   emits `{"type":"ApprovalWithdrawn","data":{"id":"<ticket>"}}` so the UI can drop the card.
+   Resolving a withdrawn (or unknown) ticket returns `409` and changes nothing: its tool never
+   runs, and the ticket keeps its `cancelled` or `expired` status. A call the turn ended under is
+   recorded with status `cancelled`.
 
 API agents also emit `ToolCallPending {id, name, args}` before running a call and
 `ToolCallCompleted {id, result: {status, content}}` after it (`content` cut to 4000 characters).

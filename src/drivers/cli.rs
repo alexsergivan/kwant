@@ -2,7 +2,7 @@ use super::{events::RuntimeEvent, Driver, DriverError, TurnInput, TurnOutput};
 use async_trait::async_trait;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -68,6 +68,85 @@ fn find_cli_binary_uncached(name: &str) -> Option<String> {
     }
 
     None
+}
+
+fn toml_string(value: &str) -> String {
+    serde_json::Value::String(value.to_string()).to_string()
+}
+
+/// The `mcp_servers` override for `codex exec`: kwnt's gateway (when the kwant has servers)
+/// and `enabled=false` for every server codex would load from the user's own config. A `-c`
+/// table is merged into codex's config, not swapped in, so the user's servers must be switched
+/// off by name; the names go inside the value because codex's `-c` key path can't quote. The
+/// gateway asks the user before every call, so codex's own approval is turned off for it; its
+/// token is read from an env variable so it never appears in argv. A user server named like the
+/// gateway is switched off like any other when there is no gateway; with one, the turn must be
+/// refused first (see `codex_reserved_name_conflict`), since the two entries would merge.
+pub fn codex_mcp_servers(ctx: Option<&crate::mcp::McpTurnContext>, user_servers: &[String]) -> String {
+    let mut entries = Vec::new();
+    let gateway = ctx.and_then(|c| c.gateway.as_ref().map(|g| (c, g)));
+    let has_gateway = gateway.is_some();
+    if let Some((ctx, gateway)) = gateway {
+        let slowest = ctx.servers.iter().map(|s| s.timeout_secs.max(0) as u64).max().unwrap_or(0);
+        // The gateway connects to every server on codex's first tools/list
+        let startup_secs = (slowest + 15).max(30);
+        // A call may wait for the user's approval; codex must not give up first
+        let tool_secs = (crate::mcp::APPROVAL_TIMEOUT_SECS + 30).max(slowest);
+        entries.push(format!(
+            "{}={{url={},bearer_token_env_var={},default_tools_approval_mode=\"approve\",startup_timeout_sec={},tool_timeout_sec={}}}",
+            crate::mcp::RESERVED_SERVER_NAME,
+            toml_string(&gateway.url),
+            toml_string(crate::mcp::GATEWAY_TOKEN_ENV),
+            startup_secs,
+            tool_secs,
+        ));
+    }
+    for name in user_servers {
+        if !(has_gateway && name == crate::mcp::RESERVED_SERVER_NAME) {
+            entries.push(format!("{}={{enabled=false}}", toml_string(name)));
+        }
+    }
+    format!("mcp_servers={{{}}}", entries.join(","))
+}
+
+/// The message refusing a gateway turn when the user's codex config has its own server named
+/// like kwnt's gateway: `-c` would merge the two entries rather than replace the user's.
+pub fn codex_reserved_name_conflict(ctx: Option<&crate::mcp::McpTurnContext>, user_servers: &[String]) -> Option<String> {
+    let reserved = crate::mcp::RESERVED_SERVER_NAME;
+    (ctx.is_some_and(|c| c.gateway.is_some()) && user_servers.iter().any(|n| n == reserved)).then(|| {
+        format!(
+            "Your codex config has an MCP server named `{reserved}`, which kwnt reserves for its own tools, so it didn't run codex. Rename that server to use MCP tools in kwnt."
+        )
+    })
+}
+
+/// How long `codex mcp list` may take before the turn is refused.
+const CODEX_MCP_LIST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Names of the MCP servers codex would load for this turn, as codex itself resolves them:
+/// `$CODEX_HOME`/`~/.codex` config, its active profile, a trusted project's `.codex/config.toml`
+/// for `cwd`, and system config. The listing holds server env values, so it is never logged.
+pub async fn codex_user_mcp_servers(bin: &str, cwd: Option<&Path>) -> Result<Vec<String>, String> {
+    let mut cmd = Command::new(bin);
+    cmd.args(["mcp", "list", "--json"]);
+    if let Some(dir) = cwd.filter(|d| d.exists()) {
+        cmd.current_dir(dir);
+    }
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    let output = match tokio::time::timeout(CODEX_MCP_LIST_TIMEOUT, cmd.output()).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return Err(format!("could not run `codex mcp list`: {e}")),
+        Err(_) => return Err("`codex mcp list` timed out".into()),
+    };
+    if !output.status.success() {
+        return Err(format!("`codex mcp list` failed ({})", output.status));
+    }
+    let listed: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).map_err(|_| "`codex mcp list --json` returned unexpected output".to_string())?;
+    listed
+        .iter()
+        .map(|s| s["name"].as_str().map(str::to_string).ok_or_else(|| "`codex mcp list --json` entry has no name".to_string()))
+        .collect()
 }
 
 pub fn build_cli_prompt(input: &TurnInput) -> String {
@@ -172,7 +251,7 @@ impl Driver for CliDriver {
         cmd.env("BROWSER", "none");
         cmd.env("DISPLAY", "");
 
-        if input.mcp.is_some() && matches!(self.tool_kind.as_str(), "codex" | "grok") {
+        if input.mcp.is_some() && self.tool_kind == "grok" {
             let _ = event_tx
                 .send(RuntimeEvent::ThinkingDelta(format!(
                     "MCP servers are assigned, but kwnt can't offer MCP tools through the {} CLI yet; running without them.",
@@ -190,6 +269,30 @@ impl Driver for CliDriver {
                     _ => "medium",
                 };
                 let full_prompt = format!("[System Context: {}]\n\n{}", system_prompt, effective_prompt);
+                // Fail closed: without the names, the user's own servers would run with no
+                // approval card (and despite a per-kwant opt-out). Same for a user server named
+                // like the gateway, which can't be switched off while the gateway uses its name.
+                let listed = codex_user_mcp_servers(&bin_path, input.workspace_dir.as_deref()).await.map_err(|e| {
+                    tracing::warn!(error = %e, "could not list codex's own MCP servers; not running codex");
+                    format!(
+                        "kwnt couldn't check which MCP servers your codex config would start ({e}), so it didn't run codex. Check that `codex mcp list` works."
+                    )
+                });
+                let checked = listed.and_then(|names| match codex_reserved_name_conflict(input.mcp.as_ref(), &names) {
+                    Some(reason) => Err(reason),
+                    None => Ok(names),
+                });
+                let user_servers = match checked {
+                    Ok(names) => names,
+                    Err(reason) => {
+                        let msg = format!("⚠️ [{}] {reason}", input.kwant.name);
+                        let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
+                        let _ = event_tx
+                            .send(RuntimeEvent::TurnComplete { tokens: 0, duration_ms: start.elapsed().as_millis() as u64 })
+                            .await;
+                        return Ok(TurnOutput { text: msg, reasoning: None, tokens_used: 0 });
+                    }
+                };
                 cmd.arg("exec")
                     .arg("--ephemeral")
                     .arg("--skip-git-repo-check")
@@ -197,11 +300,17 @@ impl Driver for CliDriver {
                     .arg("never")
                     .arg("-c")
                     .arg(format!("reasoning_effort=\"{}\"", codex_effort))
-                    // codex exec has no hook for kwnt's approval cards, so no MCP servers at all,
-                    // including ones from the user's own config.toml
+                    // Never the user's own codex servers: codex exec has no hook for kwnt's
+                    // approval cards. The kwant's servers come only through kwnt's gateway.
                     .arg("-c")
-                    .arg("mcp_servers={}")
-                    .arg("-o")
+                    .arg(codex_mcp_servers(input.mcp.as_ref(), &user_servers));
+                if let Some(gateway) = input.mcp.as_ref().and_then(|c| c.gateway.as_ref()) {
+                    cmd.env(crate::mcp::GATEWAY_TOKEN_ENV, &gateway.token);
+                    // codex's default shell env policy passes the token on to the model's shell
+                    // commands; blank it there (a `set` entry merges, keeping the user's policy)
+                    cmd.arg("-c").arg(format!("shell_environment_policy.set.{}=\"\"", crate::mcp::GATEWAY_TOKEN_ENV));
+                }
+                cmd.arg("-o")
                     .arg(&out_file)
                     .arg(&full_prompt);
                 codex_out_file = Some(out_file);
@@ -257,16 +366,19 @@ impl Driver for CliDriver {
             }
         }
 
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
+        // codex's reply comes from its -o file; an unread pipe could fill up and stall the CLI
+        cmd.stdin(Stdio::null());
+        cmd.stdout(if codex_out_file.is_some() { Stdio::null() } else { Stdio::piped() });
+        cmd.stderr(Stdio::null());
+        // A cancelled turn aborts this task; the CLI must not outlive it
+        cmd.kill_on_drop(true);
 
         match cmd.spawn() {
             Ok(mut child) => {
-                let mut stdout = child.stdout.take().unwrap();
                 let mut output_str = String::new();
                 let mut buffer = [0u8; 1024];
 
-                if codex_out_file.is_none() {
+                if let Some(mut stdout) = child.stdout.take() {
                     while let Ok(n) = stdout.read(&mut buffer).await {
                         if n == 0 {
                             break;
