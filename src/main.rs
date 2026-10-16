@@ -84,6 +84,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let tools = ToolRunner::new(config.data_dir.join("workspace"));
             let broker = PermissionBroker::new();
             let router = LayaRouter::new(config.laya_url.clone());
+            if router.is_reachable().await {
+                println!("🔮 Laya router online at {}", router.base_url);
+            } else {
+                println!(
+                    "⚠️  Laya router not reachable at {} — using keyword routing. Start it with `laya-serve` (pip install \"laya[serve]\").",
+                    router.base_url
+                );
+            }
 
             let state = AppState::new(config.clone(), db, tools, broker, router);
             let app = create_router(state);

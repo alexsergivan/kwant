@@ -180,3 +180,13 @@ fn pinned_preferred_model_overrides_laya_but_keeps_effort() {
         assert_eq!(apply_preferred_model(laya(), unpinned).selected_model, "claude");
     }
 }
+
+#[test]
+fn laya_base_url_is_normalized() {
+    use kwnt::router::laya::normalize_base_url;
+    assert_eq!(normalize_base_url("http://127.0.0.1:8000"), "http://127.0.0.1:8000");
+    assert_eq!(normalize_base_url("http://127.0.0.1:8000/"), "http://127.0.0.1:8000");
+    assert_eq!(normalize_base_url("http://127.0.0.1:8000/v1/systemone"), "http://127.0.0.1:8000");
+    assert_eq!(normalize_base_url("http://127.0.0.1:8000/v1/systemone/"), "http://127.0.0.1:8000");
+    assert_eq!(normalize_base_url("http://127.0.0.1:8000/v1"), "http://127.0.0.1:8000");
+}

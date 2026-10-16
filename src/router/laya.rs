@@ -16,7 +16,18 @@ impl LayaRouter {
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        Self { base_url, client }
+        Self { base_url: normalize_base_url(&base_url), client }
+    }
+
+    /// Returns true when the Laya sidecar answers on its health endpoint.
+    pub async fn is_reachable(&self) -> bool {
+        self.client
+            .get(format!("{}/health", self.base_url))
+            .timeout(Duration::from_millis(800))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
     }
 
     /// Routes a prompt to the optimal model using Laya (/v1/systemone),
@@ -101,4 +112,17 @@ impl LayaRouter {
             }
         }
     }
+}
+
+/// Accepts either the Laya root (`http://host:8000`) or a full endpoint URL
+/// (`http://host:8000/v1/systemone`) and returns the root, so paths are never doubled.
+pub fn normalize_base_url(url: &str) -> String {
+    let mut base = url.trim().trim_end_matches('/');
+    for suffix in ["/v1/systemone/batch", "/v1/systemone", "/v1"] {
+        if let Some(stripped) = base.strip_suffix(suffix) {
+            base = stripped.trim_end_matches('/');
+            break;
+        }
+    }
+    base.to_string()
 }

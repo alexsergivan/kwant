@@ -116,7 +116,7 @@ impl LayaRouter {
         match self.query_laya_for_kwant(prompt, channel_name, members).await {
             Ok(choice) => choice,
             Err(e) => {
-                tracing::debug!(error = %e, "Laya channel routing unavailable or failed, using heuristic fallback");
+                tracing::warn!(error = %e, url = %self.base_url, "Laya channel routing unavailable, using keyword fallback");
                 let (kwant, reason) = heuristic_pick_kwant(prompt, lead_kwant_id, members)
                     .map(|(k, r)| (k.id.clone(), r))
                     .unwrap_or_else(|| (lead_kwant_id.to_string(), "Routed to channel lead".into()));
@@ -207,7 +207,10 @@ pub fn heuristic_pick_kwant<'a>(
         let lead = members.iter().find(|m| m.id == lead_kwant_id).unwrap_or(&members[0]);
         Some((
             lead,
-            format!("No specialist matched; {} ({}) is taking it as channel lead", lead.name, lead.title),
+            format!(
+                "No agent here lists skills matching this request, so {} ({}) is taking it as channel lead",
+                lead.name, lead.title
+            ),
         ))
     }
 }
