@@ -10,7 +10,8 @@ interface ModernAvatarProps {
 
 type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
-  | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb' | 'none';
+  | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb'
+  | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'none';
 
 interface Creature {
   body: string;
@@ -40,6 +41,10 @@ const PALETTES: Record<string, Omit<Creature, 'accessory'>> = {
   gold: { body: '#f7c948', shade: '#c28a14', light: '#fff1b8', accent: '#e5484d' },
   lilac: { body: '#d49cff', shade: '#9a5fd1', light: '#f1ddff', accent: '#f5f2ff' },
   mint: { body: '#9be564', shade: '#5e9e33', light: '#e2ffc7', accent: '#ffe066' },
+  sky: { body: '#7cc8ff', shade: '#3f8fd1', light: '#d6efff', accent: '#4b44a6' },
+  magenta: { body: '#f06bd8', shade: '#b13a9c', light: '#ffd3f5', accent: '#ffd23f' },
+  slate: { body: '#a3aecf', shade: '#66719a', light: '#e3e8f7', accent: '#e5484d' },
+  amber: { body: '#ffb347', shade: '#c9771a', light: '#ffe2b8', accent: '#3c5fcf' },
 };
 
 /** Avatar styles an agent can pick; `avatar_sprite` stores the id. */
@@ -55,6 +60,10 @@ export const AVATAR_STYLES: Array<{ id: string; label: string }> = [
   { id: 'product', label: 'Product' },
   { id: 'writer', label: 'Writing' },
   { id: 'research', label: 'Research' },
+  { id: 'teacher', label: 'Teacher' },
+  { id: 'marketing', label: 'Marketing' },
+  { id: 'legal', label: 'Legal' },
+  { id: 'coach', label: 'Coach' },
   { id: 'default', label: 'Droid' },
 ];
 
@@ -73,6 +82,10 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
   product: ['gold', 'tie'],
   writer: ['lilac', 'quill'],
   research: ['mint', 'bulb'],
+  teacher: ['sky', 'mortarboard'],
+  marketing: ['magenta', 'star'],
+  legal: ['slate', 'bowtie'],
+  coach: ['amber', 'cap'],
 };
 
 const hash = (s: string) => {
@@ -100,12 +113,17 @@ function pickCreature(role: string, name: string): Creature {
     [['product', 'manager'], 'gold', 'tie'],
     [['writer', 'docs'], 'lilac', 'quill'],
     [['research', 'scientist'], 'mint', 'bulb'],
+    [['teacher', 'tutor'], 'sky', 'mortarboard'],
+    [['marketing'], 'magenta', 'star'],
+    [['legal', 'lawyer'], 'slate', 'bowtie'],
+    [['coach', 'mentor'], 'amber', 'cap'],
   ];
   for (const [keys, palette, accessory] of rules) {
     if (keys.some((k) => norm.includes(k))) return { ...PALETTES[palette], accessory };
   }
   // Unknown roles still get a stable, distinct creature per name
-  const palettes = Object.keys(PALETTES);
+  // Fixed list so adding palettes never recolors existing agents
+  const palettes: Array<keyof typeof PALETTES> = ['yellow', 'green', 'pink', 'cyan', 'violet', 'orange', 'blue'];
   const accessories: Accessory[] = ['antenna', 'spikes', 'ears', 'horns', 'sprout', 'antenna'];
   const h = hash(name || role);
   return {
@@ -163,6 +181,15 @@ function renderAccessory(c: Creature) {
         px(12, 2, 2, 1, c.accent), px(11, 3, 4, 2, c.accent), px(12, 3, 1, 1, '#ffffff'),
         px(12, 5, 2, 1, '#8a8aa8'), px(12, 6, 2, 1, INK),
       ];
+    case 'mortarboard':
+      return [px(8, 5, 10, 1, c.accent), px(10, 4, 6, 1, c.accent), px(12, 3, 2, 1, c.accent), px(10, 6, 6, 1, c.accent), px(17, 6, 1, 3, '#ffd23f')];
+    case 'star':
+      return [
+        px(13, 2, 1, 1, c.accent), px(12, 3, 3, 1, c.accent), px(11, 4, 5, 1, c.accent),
+        px(12, 5, 3, 1, c.accent), px(11, 6, 1, 1, c.accent), px(15, 6, 1, 1, c.accent), px(13, 3, 1, 1, '#ffffff'),
+      ];
+    case 'cap':
+      return [px(9, 5, 8, 2, c.accent), px(10, 4, 6, 1, c.accent), px(5, 6, 4, 1, c.accent), px(12, 4, 2, 1, '#ffffff')];
     default:
       return [];
   }
@@ -181,6 +208,8 @@ function renderOverlay(c: Creature) {
         px(7, 8, 12, 1, INK), px(9, 7, 3, 2, c.accent), px(14, 7, 3, 2, c.accent),
         px(9, 7, 1, 1, '#ffffff'), px(14, 7, 1, 1, '#ffffff'),
       ];
+    case 'bowtie':
+      return [px(10, 16, 2, 2, c.accent), px(14, 16, 2, 2, c.accent), px(12, 16, 2, 1, '#a8323a'), px(12, 17, 2, 1, c.accent)];
     case 'tie':
       return [px(12, 16, 2, 1, c.accent), px(12, 17, 2, 1, c.accent), px(12, 18, 2, 1, '#a8323a')];
     default:

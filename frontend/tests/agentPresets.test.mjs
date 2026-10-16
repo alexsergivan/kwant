@@ -22,9 +22,13 @@ test('picks a free name when the preset name is taken', () => {
 test('presets have mentionable names, distinct ids and real avatar styles', async () => {
   const avatarSource = await load('../src/components/ModernAvatar.tsx');
   const styleIds = Array.from(avatarSource.matchAll(/\{ id: '([a-z_]+)', label:/g), (m) => m[1]);
-  assert.ok(styleIds.length >= 12);
+  assert.ok(styleIds.length >= 16);
   assert.equal(new Set(AGENT_PRESETS.map((p) => p.id)).size, AGENT_PRESETS.length);
+  for (const group of ['tech', 'nontech']) {
+    assert.ok(AGENT_PRESETS.filter((p) => p.group === group).length >= 5, `${group} group is too small`);
+  }
   for (const p of AGENT_PRESETS) {
+    assert.ok(['tech', 'nontech'].includes(p.group), `${p.id} has unknown group ${p.group}`);
     assert.match(p.name, /^[^\s@]+$/, p.name);
     assert.ok(styleIds.includes(p.avatar_sprite), `${p.id} uses unknown avatar ${p.avatar_sprite}`);
     assert.ok(p.persona_prompt.length > 100, `${p.id} persona is too thin`);

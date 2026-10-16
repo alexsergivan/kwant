@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, Sparkles, Pencil } from 'lucide-react';
 import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
-import { AGENT_PRESETS, AgentPreset, uniqueAgentName } from '../agentPresets';
+import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
 import { playSfx } from '../audio/chiptune';
 
 export interface AgentFormData {
@@ -46,6 +46,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [presetId, setPresetId] = useState<string | null>(null);
+  const [presetGroup, setPresetGroup] = useState<PresetGroup>('tech');
   const isEdit = !!initial;
 
   useEffect(() => {
@@ -131,9 +132,30 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
         <form onSubmit={handleSubmit} className="space-y-4">
           {!isEdit && (
             <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1">Start from a persona</label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-medium text-zinc-400">Start from a persona</label>
+                <div className="flex p-0.5 rounded-lg bg-zinc-950 border border-zinc-800" role="tablist">
+                  {PRESET_GROUPS.map((g) => (
+                    <button
+                      key={g.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={presetGroup === g.id}
+                      onClick={() => {
+                        playSfx('click');
+                        setPresetGroup(g.id);
+                      }}
+                      className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium transition-colors ${
+                        presetGroup === g.id ? 'bg-sky-500/15 text-sky-200' : 'text-zinc-500 hover:text-zinc-300'
+                      }`}
+                    >
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="grid grid-cols-3 gap-1.5">
-                {[null, ...AGENT_PRESETS].map((preset) => {
+                {[null, ...AGENT_PRESETS.filter((p) => p.group === presetGroup)].map((preset) => {
                   const active = (preset?.id ?? null) === presetId;
                   return (
                     <button
