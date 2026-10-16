@@ -29,6 +29,8 @@ const {
   serverStatusKind,
   isSignedIn,
   readOAuthMessage,
+  kwantUsage,
+  defaultKwantServerIds,
 } = mcp;
 
 test('splits command lines like a README shows them', () => {
@@ -248,4 +250,30 @@ test('accepts sign-in results only from this origin and in the expected shape', 
   assert.equal(readOAuthMessage({ origin, data: { ...data, server_id: 7 } }, origin), null);
   assert.equal(readOAuthMessage({ origin, data: 'kwnt-mcp-oauth' }, origin), null);
   assert.equal(readOAuthMessage({ origin, data: null }, origin), null);
+});
+
+test('a server card says which kwants use it', () => {
+  const kwants = [
+    { id: 'k1', name: 'Architect' },
+    { id: 'k2', name: 'SmartDataBeast' },
+  ];
+  assert.deepEqual(kwantUsage({ disabled_for_kwants: [] }, kwants), { allKwants: true, offFor: [] });
+  // Older backends leave the field out: that still means every kwant.
+  assert.deepEqual(kwantUsage({}, kwants), { allKwants: true, offFor: [] });
+  // Keeps the backend's name order and names only kwants this screen knows.
+  assert.deepEqual(kwantUsage({ disabled_for_kwants: ['k1', 'k2', 'gone'] }, kwants), {
+    allKwants: false,
+    offFor: ['Architect', 'SmartDataBeast'],
+  });
+});
+
+test('a new kwant starts with every server on, paused ones included', () => {
+  assert.deepEqual(defaultKwantServerIds([]), []);
+  assert.deepEqual(
+    defaultKwantServerIds([
+      { id: 'a', enabled: true },
+      { id: 'b', enabled: false },
+    ]),
+    ['a', 'b'],
+  );
 });

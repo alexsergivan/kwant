@@ -10,7 +10,11 @@ interface KwantToolsPickerProps {
   onManageServers?: () => void;
 }
 
-/** "Tools this kwant can use": one switch per registered MCP server. */
+/**
+ * "Tools this kwant can use": one switch per registered MCP server. Every server is on for every
+ * kwant unless switched off here. A server paused in Tools shows greyed and keeps this kwant's
+ * choice, so turning it back on there restores it.
+ */
 export const KwantToolsPicker: React.FC<KwantToolsPickerProps> = ({ model, selected, onChange, onManageServers }) => {
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [keys, setKeys] = useState<EngineKeys>({ anthropic: false, openai: false, xai: false });
@@ -37,6 +41,7 @@ export const KwantToolsPicker: React.FC<KwantToolsPickerProps> = ({ model, selec
   const support = mcpSupportFor(model, keys);
   const toggle = (id: string) =>
     onChange(selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]);
+  const offCount = servers ? servers.filter((s) => s.enabled && !selected.includes(s.id)).length : 0;
 
   return (
     <div>
@@ -50,6 +55,13 @@ export const KwantToolsPicker: React.FC<KwantToolsPickerProps> = ({ model, selec
           </button>
         )}
       </div>
+
+      {servers && servers.length > 0 && (
+        <p className="mb-1.5 text-[11px] text-zinc-500 leading-snug">
+          Every tool server is on by default, including ones you add later. Switch off any this kwant shouldn’t have
+          {offCount > 0 && <span className="text-zinc-400"> · {offCount} off</span>}.
+        </p>
+      )}
 
       {support.note && (
         <p
@@ -83,20 +95,30 @@ export const KwantToolsPicker: React.FC<KwantToolsPickerProps> = ({ model, selec
       ) : (
         <ul className={`rounded-lg border border-zinc-800 divide-y divide-zinc-800/80 bg-zinc-950/60 ${support.supported ? '' : 'opacity-60'}`}>
           {servers.map((s) => {
-            const on = selected.includes(s.id);
+            const paused = !s.enabled;
+            const on = !paused && selected.includes(s.id);
             return (
               <li key={s.id}>
                 <button
                   type="button"
                   role="switch"
                   aria-checked={on}
+                  aria-disabled={paused || undefined}
+                  disabled={paused}
+                  aria-label={paused ? `${s.name}, paused in Tools` : undefined}
                   onClick={() => toggle(s.id)}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-zinc-900/60 transition-colors"
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
+                    paused ? 'cursor-not-allowed opacity-60' : 'hover:bg-zinc-900/60'
+                  }`}
                 >
                   <span className="text-zinc-500">{s.transport === 'stdio' ? <Terminal size={13} /> : <Globe size={13} />}</span>
                   <span className="flex-1 min-w-0">
                     <span className="block text-xs text-zinc-200 truncate">{s.name}</span>
-                    {!s.enabled && <span className="block text-[10px] text-zinc-500">Paused, so it won’t be offered until it’s turned on</span>}
+                    {paused && (
+                      <span className="block text-[10px] text-zinc-500">
+                        Paused in Tools{selected.includes(s.id) ? '. This kwant gets it once it’s on.' : ''}
+                      </span>
+                    )}
                   </span>
                   <span className={`relative flex-shrink-0 w-8 h-[18px] rounded-full transition-colors ${on ? 'bg-sky-600' : 'bg-zinc-700'}`}>
                     <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white shadow transition-all ${on ? 'left-[16px]' : 'left-0.5'}`} />

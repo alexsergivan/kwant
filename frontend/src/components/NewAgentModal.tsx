@@ -4,6 +4,7 @@ import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
 import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
 import { playSfx } from '../audio/chiptune';
 import { KwantToolsPicker } from './KwantToolsPicker';
+import { McpServer, defaultKwantServerIds } from '../mcp';
 
 export interface AgentFormData {
   name: string;
@@ -75,13 +76,25 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setSubmitting(false);
     setError(null);
     setPresetId(null);
-    setMcpIds(kwantId ? undefined : []);
+    setMcpIds(undefined);
+    let cancelled = false;
+    // If a list can't load, the picker stays hidden and nothing is saved: saving an empty
+    // list would switch every server off for this kwant.
     if (kwantId) {
       fetch(`/api/kwants/${kwantId}/mcp-servers`)
-        .then((r) => (r.ok ? r.json() : { server_ids: [] }))
-        .then((d) => setMcpIds(d.server_ids ?? []))
-        .catch(() => setMcpIds([]));
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((d) => !cancelled && Array.isArray(d.server_ids) && setMcpIds(d.server_ids))
+        .catch(() => undefined);
+    } else {
+      // Every server starts on, like the backend default.
+      fetch('/api/mcp/servers')
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((list: McpServer[]) => !cancelled && setMcpIds(defaultKwantServerIds(list)))
+        .catch(() => undefined);
     }
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen, initial, kwantId]);
 
   const applyPreset = (preset: AgentPreset | null) => {

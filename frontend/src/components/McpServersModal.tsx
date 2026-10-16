@@ -22,9 +22,11 @@ import {
   KeyRound,
   ShieldCheck,
   LogOut,
+  Users,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import {
+  kwantUsage,
   McpServer,
   McpFormState,
   McpTestResult,
@@ -50,6 +52,8 @@ import {
 interface McpServersModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** For "Off for: …" on each card. */
+  kwants?: Array<{ id: string; name: string }>;
 }
 
 const inputCls =
@@ -187,7 +191,7 @@ const ToolChips: React.FC<{ tools: Array<{ name: string; description?: string }>
   );
 };
 
-export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClose }) => {
+export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClose, kwants = [] }) => {
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, StoredStatus>>({});
@@ -474,7 +478,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         <h3 className="text-sm font-semibold text-zinc-100">Give your kwants new abilities</h3>
         <p className="text-xs text-zinc-400 leading-relaxed">
           MCP servers are small add-ons that hand your kwants tools, like reading files, browsing the web or working with GitHub.
-          Add one here, then choose which kwants may use it. They always ask you before using a tool.
+          Add one here and every kwant can use it; switch it off for a kwant in that kwant’s edit screen. They always ask you before using a tool.
         </p>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-left">
@@ -514,6 +518,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     const signedIn = isSignedIn(server);
     const isConnecting = connecting === server.id;
     const oauthError = oauthErrors[server.id];
+    const usage = kwantUsage(server, kwants);
     return (
       <li
         key={server.id}
@@ -542,6 +547,21 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             <p className="text-[11px] font-mono text-zinc-400 truncate" title={serverTarget(server)}>
               {serverTarget(server)}
             </p>
+            {kwants.length > 0 && (
+              <p className="flex items-start gap-1 text-[11px] text-zinc-400">
+                <Users size={11} className="flex-shrink-0 mt-[3px] text-zinc-500" aria-hidden="true" />
+                <span className="min-w-0 break-words">
+                  {usage.allKwants ? (
+                    server.enabled ? 'Used by all kwants' : 'All kwants get it once it’s on'
+                  ) : (
+                    <>
+                      {server.enabled ? 'Off for: ' : 'Once it’s on, off for: '}
+                      <span className="text-zinc-300">{usage.offFor.join(', ')}</span>
+                    </>
+                  )}
+                </span>
+              </p>
+            )}
           </div>
         </div>
 
@@ -712,7 +732,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       <div className="space-y-3">
         <div className="flex items-center justify-between gap-2">
           <p className="text-[11px] text-zinc-500">
-            {servers.length} {servers.length === 1 ? 'server' : 'servers'} · assign them to a kwant from its edit screen
+            {servers.length} {servers.length === 1 ? 'server' : 'servers'}
           </p>
           <button
             type="button"
