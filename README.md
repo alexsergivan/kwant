@@ -2,7 +2,7 @@
 
 > Inspired by **Grok Bot** & **OpenMausBot**. Built with **Rust**, **Axum**, and **Laya**.
 
-Kwant is your team of AI agents: a high-performance, self-hosted multi-agent platform packaged as a **single, standalone binary** with an embedded sleek dark-mode Web UI and SQLite storage. Every agent is a specialized autonomous companion with its own persona (`Architect`, `TechLead`, `DevOps`), model provider routing, and developer capabilities.
+Kwant is your team of super-intelligent bots (kwants): a high-performance, self-hosted multi-agent platform packaged as a **single, standalone binary** with an embedded sleek dark-mode Web UI and SQLite storage. Every agent (a **kwant**) is a specialized autonomous companion with its own persona (`Architect`, `TechLead`, `DevOps`), model provider routing, and developer capabilities.
 
 ---
 

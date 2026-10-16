@@ -87,7 +87,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <span className="text-[15px]">Kwant</span>
         </div>
         <span className="text-[11px] font-medium text-zinc-500 hidden sm:inline-block">
-          your team of AI agents
+          your team of super-intelligent bots (kwants)
         </span>
       </div>
 

@@ -129,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Starting Kwant..."
             );
             println!(
-                "⚡ Kwant: your team of AI agents, listening at http://{}",
+                "⚡ Kwant: your team of super-intelligent bots (kwants), listening at http://{}",
                 addr
             );
 
@@ -145,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Teams) => print_teams(&config).await?,
         Some(Commands::Channels) => print_channels(&config).await?,
         None => {
-            println!("⚡ Kwant: your team of AI agents");
+            println!("⚡ Kwant: your team of super-intelligent bots (kwants)");
             println!("Run `kwnt serve` to start the server, or `kwnt --help` for options.");
         }
     }
