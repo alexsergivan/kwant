@@ -8,6 +8,10 @@ pub struct Kwant {
     pub name: String,
     pub title: String,
     pub persona_prompt: String,
+    /// Personality, voice and values, kept apart from the job description in `persona_prompt`.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub soul: String,
     pub avatar_sprite: String,
     pub driver_type: String,
     pub preferred_model: String,
@@ -23,6 +27,8 @@ pub struct NewKwant {
     pub name: String,
     pub title: String,
     pub persona_prompt: String,
+    #[serde(default)]
+    pub soul: String,
     pub avatar_sprite: String,
     pub driver_type: String,
     pub preferred_model: String,
@@ -34,6 +40,8 @@ pub struct UpdateKwant {
     pub name: String,
     pub title: String,
     pub persona_prompt: String,
+    #[serde(default)]
+    pub soul: String,
     pub avatar_sprite: String,
     pub preferred_model: String,
 }

@@ -23,6 +23,31 @@ pub struct Database {
     pool: Pool<Sqlite>,
 }
 
+/// Built-in kwants: (name, title, persona, soul, avatar).
+const STARTERS: [(&str, &str, &str, &str, &str); 3] = [
+    (
+        "Architect",
+        "Systems Architect",
+        "You are the Architect, an expert in deep systems architecture, software design, and complex multi-file engineering. You give structured, thorough, and highly insightful technical advice.",
+        "Calm, deliberate, and a little philosophical about software. You think in diagrams and long time horizons, value simplicity that survives change, and distrust cleverness. You speak in measured, well-structured sentences, often naming the trade-off before the answer, and you are quietly delighted by a clean abstraction.",
+        "architect",
+    ),
+    (
+        "TechLead",
+        "Staff Engineer & Prototyper",
+        "You are the Tech Lead, a sharp, pragmatic engineer who excels in fast reasoning, rapid prototyping, and clear technical communication.",
+        "Energetic, direct, and allergic to over-engineering. You would rather ship a small working thing today than a perfect plan next month. You keep replies short, use plain words, and are generous with credit to teammates. Your catchphrase-level instinct is \"what is the smallest step that proves it?\"",
+        "tech_lead",
+    ),
+    (
+        "DevOps",
+        "Systems & Security Engineer",
+        "You are the DevOps Engineer, specializing in shell commands, server infrastructure, containerization, security policies, and automation.",
+        "Steady, careful, and unflappable under pressure, like someone who has been paged at 3 a.m. and lived. You value reliability, least privilege, and being able to undo anything. Dry sense of humor; you always say what a command will do before running it and never pretend something is safe when it is not.",
+        "devops",
+    ),
+];
+
 impl Database {
     pub async fn init(data_dir: &Path) -> Result<Self, DbError> {
         std::fs::create_dir_all(data_dir)?;
@@ -50,6 +75,7 @@ impl Database {
         // Run migrations for newly added columns if existing DB
         let _ = sqlx::query("ALTER TABLE teams ADD COLUMN workspace_path TEXT;").execute(&pool).await;
         let _ = sqlx::query("ALTER TABLE teams ADD COLUMN repo_url TEXT;").execute(&pool).await;
+        let _ = sqlx::query("ALTER TABLE kwants ADD COLUMN soul TEXT NOT NULL DEFAULT '';").execute(&pool).await;
 
         let db = Self { pool };
         db.seed_defaults().await?;
@@ -58,37 +84,33 @@ impl Database {
     }
 
     async fn seed_defaults(&self) -> Result<(), DbError> {
+        // Starters seeded before souls existed get one, unless the user has rewritten them
+        for (name, _, persona_prompt, soul, _) in STARTERS {
+            sqlx::query("UPDATE kwants SET soul = ? WHERE name = ? AND persona_prompt = ? AND soul = ''")
+                .bind(soul)
+                .bind(name)
+                .bind(persona_prompt)
+                .execute(&self.pool)
+                .await?;
+        }
+
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM kwants")
             .fetch_one(&self.pool)
             .await?;
 
         if count.0 == 0 {
-            let starters = vec![
-                NewKwant {
-                    name: "Architect".into(),
-                    title: "Systems Architect".into(),
-                    persona_prompt: "You are the Architect, an expert in deep systems architecture, software design, and complex multi-file engineering. You give structured, thorough, and highly insightful technical advice.".into(),
-                    avatar_sprite: "architect".into(),
+            let starters: Vec<NewKwant> = STARTERS
+                .iter()
+                .map(|(name, title, persona_prompt, soul, avatar_sprite)| NewKwant {
+                    name: (*name).into(),
+                    title: (*title).into(),
+                    persona_prompt: (*persona_prompt).into(),
+                    soul: (*soul).into(),
+                    avatar_sprite: (*avatar_sprite).into(),
                     driver_type: "api".into(),
                     preferred_model: "auto".into(),
-                },
-                NewKwant {
-                    name: "TechLead".into(),
-                    title: "Staff Engineer & Prototyper".into(),
-                    persona_prompt: "You are the Tech Lead, a sharp, pragmatic engineer who excels in fast reasoning, rapid prototyping, and clear technical communication.".into(),
-                    avatar_sprite: "tech_lead".into(),
-                    driver_type: "api".into(),
-                    preferred_model: "auto".into(),
-                },
-                NewKwant {
-                    name: "DevOps".into(),
-                    title: "Systems & Security Engineer".into(),
-                    persona_prompt: "You are the DevOps Engineer, specializing in shell commands, server infrastructure, containerization, security policies, and automation.".into(),
-                    avatar_sprite: "devops".into(),
-                    driver_type: "api".into(),
-                    preferred_model: "auto".into(),
-                },
-            ];
+                })
+                .collect();
 
             for starter in starters {
                 self.create_kwant(&starter).await?;
@@ -145,14 +167,15 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         sqlx::query(
             r#"
-            INSERT INTO kwants (id, name, title, persona_prompt, avatar_sprite, driver_type, preferred_model)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO kwants (id, name, title, persona_prompt, soul, avatar_sprite, driver_type, preferred_model)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
         .bind(&input.name)
         .bind(&input.title)
         .bind(&input.persona_prompt)
+        .bind(&input.soul)
         .bind(&input.avatar_sprite)
         .bind(&input.driver_type)
         .bind(&input.preferred_model)
@@ -186,11 +209,12 @@ impl Database {
         };
         let mut tx = self.pool.begin().await?;
         sqlx::query(
-            "UPDATE kwants SET name = ?, title = ?, persona_prompt = ?, avatar_sprite = ?, preferred_model = ? WHERE id = ?",
+            "UPDATE kwants SET name = ?, title = ?, persona_prompt = ?, soul = ?, avatar_sprite = ?, preferred_model = ? WHERE id = ?",
         )
         .bind(&input.name)
         .bind(&input.title)
         .bind(&input.persona_prompt)
+        .bind(&input.soul)
         .bind(&input.avatar_sprite)
         .bind(&input.preferred_model)
         .bind(id)

@@ -66,6 +66,7 @@ async fn test_mock_driver_streaming() {
         name: "CyberMage".into(),
         title: "Arcane".into(),
         persona_prompt: "Wizard".into(),
+        soul: String::new(),
         avatar_sprite: "cyber_mage".into(),
         driver_type: "api".into(),
         preferred_model: "grok".into(),
@@ -122,6 +123,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         name: "Architect".into(),
         title: "Systems Architect".into(),
         persona_prompt: "You design bulletproof distributed architectures.".into(),
+        soul: String::new(),
         avatar_sprite: "cyber_mage".into(),
         driver_type: "api".into(),
         preferred_model: "claude".into(),
@@ -156,6 +158,14 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
     assert!(solo_prompt.contains("bulletproof distributed architectures"));
     assert!(!solo_prompt.contains("Active Team Alignment"));
     assert!(!solo_prompt.contains("[Teammates in this chat]"));
+    assert!(!solo_prompt.contains("Your soul"));
+
+    let mut with_soul = input_solo.clone();
+    with_soul.kwant.soul = "  Calm and wry; loves a good diagram.  ".into();
+    let soul_prompt = with_soul.format_system_prompt();
+    assert!(soul_prompt.contains("Your soul"));
+    assert!(soul_prompt.contains("Calm and wry; loves a good diagram."));
+    assert!(soul_prompt.find("bulletproof").unwrap() < soul_prompt.find("Your soul").unwrap());
 
     let mut with_mates = input_solo.clone();
     with_mates.teammates = vec![kwnt::drivers::Teammate { name: "TechLead".into(), title: "Staff Engineer".into() }];

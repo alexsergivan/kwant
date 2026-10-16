@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS kwants (
     name TEXT NOT NULL,
     title TEXT NOT NULL,
     persona_prompt TEXT NOT NULL,
+    soul TEXT NOT NULL DEFAULT '',
     avatar_sprite TEXT NOT NULL,
     driver_type TEXT NOT NULL DEFAULT 'api',
     preferred_model TEXT NOT NULL DEFAULT 'auto',

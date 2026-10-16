@@ -637,6 +637,7 @@ export const App: React.FC = () => {
           name: agentData.name,
           title: agentData.title,
           persona_prompt: agentData.persona_prompt,
+          soul: agentData.soul ?? '',
           avatar_sprite: agentData.avatar_sprite,
           driver_type: 'api',
           preferred_model: agentData.preferred_model,

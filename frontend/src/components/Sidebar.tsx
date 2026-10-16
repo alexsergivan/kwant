@@ -8,6 +8,7 @@ export interface Kwant {
   name: string;
   title: string;
   persona_prompt: string;
+  soul?: string;
   avatar_sprite: string;
   driver_type: string;
   preferred_model: string;

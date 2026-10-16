@@ -10,6 +10,7 @@ async fn test_db_init_and_crud() {
         name: "PixelMage".into(),
         title: "Arcane Coder".into(),
         persona_prompt: "You are a master 8-bit wizard.".into(),
+        soul: String::new(),
         avatar_sprite: "cyber_mage".into(),
         driver_type: "api".into(),
         preferred_model: "auto".into(),
@@ -82,6 +83,7 @@ async fn test_db_init_and_crud() {
                 name: "Renamed".into(),
                 title: "New Title".into(),
                 persona_prompt: "New persona".into(),
+                soul: "Cheerful and blunt.".into(),
                 avatar_sprite: "security".into(),
                 preferred_model: "claude".into(),
             },
@@ -90,10 +92,11 @@ async fn test_db_init_and_crud() {
         .unwrap()
         .unwrap();
     assert_eq!((edited.name.as_str(), edited.title.as_str(), edited.preferred_model.as_str()), ("Renamed", "New Title", "claude"));
+    assert_eq!(edited.soul, "Cheerful and blunt.");
     let msgs = db.list_messages(&chan.id, 10).await.unwrap();
     assert_eq!(msgs.last().unwrap().sender_id, "Renamed");
     assert!(db.update_kwant("missing", &UpdateKwant {
-        name: "x".into(), title: "".into(), persona_prompt: "".into(), avatar_sprite: "".into(), preferred_model: "auto".into(),
+        name: "x".into(), title: "".into(), persona_prompt: "".into(), soul: String::new(), avatar_sprite: "".into(), preferred_model: "auto".into(),
     }).await.unwrap().is_none());
 
     // Approvals
@@ -186,3 +189,39 @@ async fn test_team_with_workspace_and_repo() {
 }
 
 
+
+#[tokio::test]
+async fn test_starter_souls_seeded_and_user_edits_survive_restart() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let starters = db.list_kwants().await.unwrap();
+    assert_eq!(starters.len(), 3);
+    assert!(starters.iter().all(|k| !k.soul.trim().is_empty()), "every starter has a soul");
+
+    let architect = starters.iter().find(|k| k.name == "Architect").unwrap();
+    db.update_kwant(&architect.id, &UpdateKwant {
+        name: architect.name.clone(),
+        title: architect.title.clone(),
+        persona_prompt: architect.persona_prompt.clone(),
+        soul: String::new(),
+        avatar_sprite: architect.avatar_sprite.clone(),
+        preferred_model: architect.preferred_model.clone(),
+    }).await.unwrap().unwrap();
+    let techlead = starters.iter().find(|k| k.name == "TechLead").unwrap();
+    db.update_kwant(&techlead.id, &UpdateKwant {
+        name: techlead.name.clone(),
+        title: techlead.title.clone(),
+        persona_prompt: "My own persona".into(),
+        soul: String::new(),
+        avatar_sprite: techlead.avatar_sprite.clone(),
+        preferred_model: techlead.preferred_model.clone(),
+    }).await.unwrap().unwrap();
+    drop(db);
+
+    let db = Database::init(tmp.path()).await.unwrap();
+    let after = db.list_kwants().await.unwrap();
+    // An untouched starter without a soul (as in pre-soul databases) gets one back
+    assert!(!after.iter().find(|k| k.name == "Architect").unwrap().soul.is_empty());
+    // A starter whose persona the user rewrote is left alone
+    assert!(after.iter().find(|k| k.name == "TechLead").unwrap().soul.is_empty());
+}

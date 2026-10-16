@@ -11,7 +11,8 @@ interface ModernAvatarProps {
 type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
   | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb'
-  | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'none';
+  | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'sunhat' | 'toque' | 'headband'
+  | 'partyhat' | 'hardhat' | 'flower' | 'none';
 
 interface Creature {
   body: string;
@@ -45,6 +46,12 @@ const PALETTES: Record<string, Omit<Creature, 'accessory'>> = {
   magenta: { body: '#f06bd8', shade: '#b13a9c', light: '#ffd3f5', accent: '#ffd23f' },
   slate: { body: '#a3aecf', shade: '#66719a', light: '#e3e8f7', accent: '#e5484d' },
   amber: { body: '#ffb347', shade: '#c9771a', light: '#ffe2b8', accent: '#3c5fcf' },
+  ocean: { body: '#3fb6c9', shade: '#227b95', light: '#c4f1f7', accent: '#e5484d' },
+  berry: { body: '#e0607e', shade: '#a8324f', light: '#ffc2d0', accent: '#ffffff' },
+  lime: { body: '#c6f04a', shade: '#86b31f', light: '#f0ffc2', accent: '#ff4d6d' },
+  peach: { body: '#ffb894', shade: '#d47a55', light: '#ffe5d6', accent: '#5ce1ff' },
+  steel: { body: '#7fa3b8', shade: '#4d7086', light: '#cfe2ec', accent: '#ffc21a' },
+  blossom: { body: '#f7b3d2', shade: '#c97aa0', light: '#ffe3f0', accent: '#ffffff' },
 };
 
 /** Avatar styles an agent can pick; `avatar_sprite` stores the id. */
@@ -64,6 +71,12 @@ export const AVATAR_STYLES: Array<{ id: string; label: string }> = [
   { id: 'marketing', label: 'Marketing' },
   { id: 'legal', label: 'Legal' },
   { id: 'coach', label: 'Coach' },
+  { id: 'traveler', label: 'Travel' },
+  { id: 'chef', label: 'Chef' },
+  { id: 'fitness', label: 'Fitness' },
+  { id: 'party', label: 'Party' },
+  { id: 'builder', label: 'Builder' },
+  { id: 'zen', label: 'Wellbeing' },
   { id: 'default', label: 'Droid' },
 ];
 
@@ -86,6 +99,12 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
   marketing: ['magenta', 'star'],
   legal: ['slate', 'bowtie'],
   coach: ['amber', 'cap'],
+  traveler: ['ocean', 'sunhat'],
+  chef: ['berry', 'toque'],
+  fitness: ['lime', 'headband'],
+  party: ['peach', 'partyhat'],
+  builder: ['steel', 'hardhat'],
+  zen: ['blossom', 'flower'],
 };
 
 const hash = (s: string) => {
@@ -116,6 +135,12 @@ function pickCreature(role: string, name: string): Creature {
     [['teacher', 'tutor'], 'sky', 'mortarboard'],
     [['marketing'], 'magenta', 'star'],
     [['legal', 'lawyer'], 'slate', 'bowtie'],
+    [['travel', 'trip'], 'ocean', 'sunhat'],
+    [['chef', 'cook', 'recipe'], 'berry', 'toque'],
+    [['fitness', 'workout', 'trainer'], 'lime', 'headband'],
+    [['party', 'event'], 'peach', 'partyhat'],
+    [['diy', 'builder', 'handy'], 'steel', 'hardhat'],
+    [['wellbeing', 'mindful', 'zen'], 'blossom', 'flower'],
     [['coach', 'mentor'], 'amber', 'cap'],
   ];
   for (const [keys, palette, accessory] of rules) {
@@ -190,6 +215,32 @@ function renderAccessory(c: Creature) {
       ];
     case 'cap':
       return [px(9, 5, 8, 2, c.accent), px(10, 4, 6, 1, c.accent), px(5, 6, 4, 1, c.accent), px(12, 4, 2, 1, '#ffffff')];
+    case 'sunhat':
+      return [
+        px(10, 3, 6, 2, '#f3d27a'), px(9, 4, 8, 1, '#f3d27a'), px(9, 5, 8, 1, c.accent),
+        px(5, 6, 16, 1, '#f3d27a'), px(5, 6, 1, 1, '#c99a3c'), px(20, 6, 1, 1, '#c99a3c'), px(11, 3, 2, 1, '#fff1b8'),
+      ];
+    case 'toque':
+      return [
+        px(10, 2, 6, 1, '#ffffff'), px(9, 3, 8, 2, '#ffffff'), px(10, 5, 6, 2, '#e3def5'),
+        px(12, 3, 1, 1, '#d2cbec'), px(15, 4, 1, 1, '#d2cbec'), px(10, 6, 6, 1, '#c9c2e8'),
+      ];
+    case 'partyhat':
+      return [
+        px(12, 2, 2, 1, '#ffe066'), px(12, 3, 2, 1, c.accent), px(11, 4, 4, 1, BLUSH), px(11, 5, 4, 1, c.accent),
+        px(10, 6, 6, 1, BLUSH), px(7, 4, 1, 1, '#ffe066'), px(18, 3, 1, 1, c.accent), px(19, 6, 1, 1, BLUSH),
+        px(6, 7, 1, 1, '#3ccf6e'),
+      ];
+    case 'hardhat':
+      return [
+        px(10, 3, 6, 1, c.accent), px(9, 4, 8, 2, c.accent), px(7, 6, 12, 1, '#d99a00'),
+        px(13, 3, 1, 3, '#d99a00'), px(10, 4, 2, 1, '#fff1b8'),
+      ];
+    case 'flower':
+      return [
+        px(15, 2, 2, 2, '#ffffff'), px(13, 4, 2, 2, '#ffffff'), px(17, 4, 2, 2, '#ffffff'), px(15, 6, 2, 1, '#ffffff'),
+        px(15, 4, 2, 2, '#ffd23f'), px(11, 5, 2, 1, '#3ccf6e'), px(12, 6, 1, 1, '#1f8f4c'),
+      ];
     default:
       return [];
   }
@@ -210,6 +261,11 @@ function renderOverlay(c: Creature) {
       ];
     case 'bowtie':
       return [px(10, 16, 2, 2, c.accent), px(14, 16, 2, 2, c.accent), px(12, 16, 2, 1, '#a8323a'), px(12, 17, 2, 1, c.accent)];
+    case 'headband':
+      return [
+        px(8, 8, 10, 1, c.accent), px(7, 9, 12, 1, c.accent),
+        px(19, 8, 2, 1, c.accent), px(20, 9, 1, 2, c.accent), px(10, 9, 3, 1, '#ffffff'),
+      ];
     case 'tie':
       return [px(12, 16, 2, 1, c.accent), px(12, 17, 2, 1, c.accent), px(12, 18, 2, 1, '#a8323a')];
     default:

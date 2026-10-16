@@ -8,6 +8,7 @@ export interface AgentFormData {
   name: string;
   title: string;
   persona_prompt: string;
+  soul?: string;
   avatar_sprite: string;
   preferred_model: string;
 }
@@ -43,6 +44,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [roleStyle, setRoleStyle] = useState('architect');
   const [model, setModel] = useState('auto');
   const [prompt, setPrompt] = useState('');
+  const [soul, setSoul] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [presetId, setPresetId] = useState<string | null>(null);
@@ -56,6 +58,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setRoleStyle(initial?.avatar_sprite || 'architect');
     setModel(initial?.preferred_model || 'auto');
     setPrompt(initial?.persona_prompt ?? '');
+    setSoul(initial?.soul ?? '');
     setSubmitting(false);
     setError(null);
     setPresetId(null);
@@ -70,6 +73,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setRoleStyle(preset?.avatar_sprite ?? 'architect');
     setModel(preset?.preferred_model ?? 'auto');
     setPrompt(preset?.persona_prompt ?? '');
+    setSoul(preset?.soul ?? '');
   };
 
   if (!isOpen) return null;
@@ -90,6 +94,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
       name: name.trim(),
       title: title.trim() || 'AI Specialist',
       persona_prompt: prompt.trim() || 'You are an intelligent AI specialist ready to collaborate.',
+      soul: soul.trim(),
       avatar_sprite: roleStyle,
       preferred_model: model,
     });
@@ -162,7 +167,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
                       key={preset?.id ?? 'blank'}
                       type="button"
                       onClick={() => applyPreset(preset)}
-                      title={preset ? `${preset.title}: ${preset.persona_prompt}` : 'Start with empty fields'}
+                      title={preset ? `${preset.title}: ${preset.persona_prompt}\n\nSoul: ${preset.soul}` : 'Start with empty fields'}
                       className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-left text-[11px] transition-all ${
                         active
                           ? 'border-sky-500/60 bg-sky-500/10 text-sky-200'
@@ -207,7 +212,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
 
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">Avatar & Role Specialty</label>
-            <div className="grid grid-cols-4 gap-1.5">
+            <div className="grid grid-cols-6 gap-1.5">
               {AVATAR_STYLES.map((item) => {
                 const active = roleStyle === item.id;
                 return (
@@ -215,14 +220,15 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
                     key={item.id}
                     type="button"
                     onClick={() => setRoleStyle(item.id)}
-                    className={`flex flex-col items-center gap-1 py-2 rounded-xl border text-[11px] transition-all ${
+                    title={item.label}
+                    className={`flex flex-col items-center gap-1 py-1.5 px-0.5 min-w-0 rounded-xl border text-[10px] transition-all ${
                       active
                         ? 'border-sky-500/60 bg-sky-500/10 text-sky-200 shadow-sm'
                         : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
                     }`}
                   >
                     <ModernAvatar role={item.id} size={32} />
-                    <span className="truncate font-medium">{item.label}</span>
+                    <span className="w-full truncate text-center font-medium">{item.label}</span>
                   </button>
                 );
               })}
@@ -245,12 +251,25 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Persona & System Prompt</label>
+            <label className="block text-xs font-medium text-zinc-400 mb-1">Persona & Instructions</label>
             <textarea
               rows={isEdit || presetId ? 6 : 3}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Define instructions, personality, tone, and domain expertise..."
+              placeholder="What this agent does: expertise, responsibilities, and how it should work..."
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1">
+              Soul <span className="text-zinc-600 font-normal">· personality, voice, values, quirks</span>
+            </label>
+            <textarea
+              rows={isEdit || presetId ? 4 : 2}
+              value={soul}
+              onChange={(e) => setSoul(e.target.value)}
+              placeholder="e.g. Warm and witty, a little impatient with jargon, celebrates small wins..."
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none"
             />
           </div>

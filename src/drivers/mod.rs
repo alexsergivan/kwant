@@ -61,10 +61,17 @@ pub struct Teammate {
 
 impl TurnInput {
     pub fn format_system_prompt(&self) -> String {
-        let base = format!(
+        let mut base = format!(
             "{}\n\nYou are {}, {}.",
             self.kwant.persona_prompt, self.kwant.name, self.kwant.title
         );
+        let soul = self.kwant.soul.trim();
+        if !soul.is_empty() {
+            base.push_str(&format!(
+                "\n\nYour soul (let it shape your voice and judgment, but never at the cost of being accurate and helpful):\n{}",
+                soul
+            ));
+        }
         let team_block = if let Some(ref team) = self.team_context {
             let desc = team.description.as_deref().unwrap_or("General team objectives");
             let mut ws_info = String::new();
