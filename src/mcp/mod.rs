@@ -49,6 +49,9 @@ pub struct McpServerView {
     /// OAuth sign-in status (http servers); filled in by the routes, never contains tokens.
     #[serde(default)]
     pub oauth: OAuthStatus,
+    /// Kwants that have this server switched off; every other kwant gets it. Filled in by the routes.
+    #[serde(default)]
+    pub disabled_for_kwants: Vec<String>,
 }
 
 impl From<&McpServer> for McpServerView {
@@ -67,6 +70,7 @@ impl From<&McpServer> for McpServerView {
             timeout_secs: s.timeout_secs,
             created_at: s.created_at,
             oauth: OAuthStatus::default(),
+            disabled_for_kwants: Vec::new(),
         }
     }
 }

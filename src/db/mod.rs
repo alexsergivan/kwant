@@ -564,11 +564,11 @@ impl Database {
         self.get_mcp_server(&server.id).await
     }
 
-    /// Deletes the server, its kwant assignments and its OAuth tokens and registrations. `foreign_keys` is only set on one pooled
+    /// Deletes the server, its kwant opt-outs (and legacy assignments) and its OAuth tokens and registrations. `foreign_keys` is only set on one pooled
     /// connection, so the cascade is done here rather than trusted to SQLite.
     pub async fn delete_mcp_server(&self, id: &str) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
-        for table in ["kwant_mcp_servers", "mcp_oauth_tokens", "mcp_oauth_clients"] {
+        for table in ["kwant_mcp_disabled", "kwant_mcp_servers", "mcp_oauth_tokens", "mcp_oauth_clients"] {
             sqlx::query(&format!("DELETE FROM {table} WHERE server_id = ?"))
                 .bind(id)
                 .execute(&mut *tx)
@@ -582,10 +582,11 @@ impl Database {
         Ok(res.rows_affected() > 0)
     }
 
+    /// The servers a kwant may use, enabled or not: every server it hasn't opted out of.
     pub async fn get_kwant_mcp_server_ids(&self, kwant_id: &str) -> Result<Vec<String>, DbError> {
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT a.server_id FROM kwant_mcp_servers a JOIN mcp_servers s ON s.id = a.server_id \
-             WHERE a.kwant_id = ? ORDER BY s.name ASC",
+            "SELECT s.id FROM mcp_servers s WHERE NOT EXISTS \
+             (SELECT 1 FROM kwant_mcp_disabled d WHERE d.kwant_id = ? AND d.server_id = s.id) ORDER BY s.name ASC",
         )
         .bind(kwant_id)
         .fetch_all(&self.pool)
@@ -593,17 +594,19 @@ impl Database {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
-    /// Replaces the kwant's whole assignment. Callers validate that every id exists.
+    /// Makes `server_ids` the kwant's servers: every other server is opted out, so ones added later
+    /// start on. Callers validate that every id exists.
     pub async fn set_kwant_mcp_servers(&self, kwant_id: &str, server_ids: &[String]) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM kwant_mcp_servers WHERE kwant_id = ?")
+        sqlx::query("DELETE FROM kwant_mcp_disabled WHERE kwant_id = ?")
             .bind(kwant_id)
             .execute(&mut *tx)
             .await?;
-        for server_id in server_ids {
-            sqlx::query("INSERT OR IGNORE INTO kwant_mcp_servers (kwant_id, server_id) VALUES (?, ?)")
+        let all: Vec<(String,)> = sqlx::query_as("SELECT id FROM mcp_servers").fetch_all(&mut *tx).await?;
+        for (server_id,) in all.into_iter().filter(|(id,)| !server_ids.contains(id)) {
+            sqlx::query("INSERT OR IGNORE INTO kwant_mcp_disabled (kwant_id, server_id) VALUES (?, ?)")
                 .bind(kwant_id)
-                .bind(server_id)
+                .bind(&server_id)
                 .execute(&mut *tx)
                 .await?;
         }
@@ -611,16 +614,33 @@ impl Database {
         Ok(())
     }
 
-    /// The enabled servers assigned to a kwant: what it may use on its next turn.
+    /// The enabled servers the kwant hasn't opted out of: what it may use on its next turn.
     pub async fn list_active_mcp_servers_for_kwant(&self, kwant_id: &str) -> Result<Vec<McpServer>, DbError> {
         let rows = sqlx::query_as::<_, McpServerRow>(
-            "SELECT s.* FROM mcp_servers s JOIN kwant_mcp_servers a ON a.server_id = s.id \
-             WHERE a.kwant_id = ? AND s.enabled = 1 ORDER BY s.name ASC",
+            "SELECT s.* FROM mcp_servers s WHERE s.enabled = 1 AND NOT EXISTS \
+             (SELECT 1 FROM kwant_mcp_disabled d WHERE d.kwant_id = ? AND d.server_id = s.id) ORDER BY s.name ASC",
         )
         .bind(kwant_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(McpServer::from_row).collect())
+    }
+
+    /// Opt-outs by server: `server_id -> kwant ids that have it off`. Only existing kwants are listed.
+    pub async fn list_mcp_kwant_opt_outs(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, DbError> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT d.server_id, d.kwant_id FROM kwant_mcp_disabled d JOIN kwants k ON k.id = d.kwant_id \
+             ORDER BY k.name ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut map = std::collections::HashMap::<String, Vec<String>>::new();
+        for (server_id, kwant_id) in rows {
+            map.entry(server_id).or_default().push(kwant_id);
+        }
+        Ok(map)
     }
     // MCP OAuth
     pub async fn get_mcp_oauth_token(&self, server_id: &str) -> Result<Option<McpOAuthToken>, DbError> {
