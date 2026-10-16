@@ -136,6 +136,9 @@ pub fn not_signed_in(stderr: &str) -> bool {
     stderr.contains("Not signed in")
 }
 
+/// Longest refused-tool label quoted in a notice.
+const REFUSED_LABEL_CHARS: usize = 120;
+
 /// Longest piece of grok's stderr quoted in a notice.
 const NOTICE_TAIL_CHARS: usize = 600;
 
@@ -190,9 +193,18 @@ pub fn empty_reply_notice(run: &EmptyRun<'_>, secrets: &[String]) -> String {
     };
     let refused = refused_tools(run.stderr);
     if !refused.is_empty() {
+        // grok's labels can hold a whole shell command: shorten and redact them too
+        let label = |tool: &str| {
+            let tool = crate::mcp::redact(tool, secrets);
+            match tool.char_indices().nth(REFUSED_LABEL_CHARS) {
+                Some((cut, _)) => format!("“{}…”", &tool[..cut]),
+                None => format!("“{tool}”"),
+            }
+        };
         return format!(
-            "grok stopped without a reply: it needed approval to run {}, and a headless grok run can't ask for it.              kwnt only approves MCP tools assigned to this kwant (through its approval card), not grok's own tools.",
-            refused.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ")
+            "grok stopped without a reply: it needed approval for {}, and a headless grok run can't ask for it. \
+             kwnt only approves MCP tools assigned to this kwant (through its approval card), not grok's own tools.",
+            refused.iter().map(|t| label(t)).collect::<Vec<_>>().join(", ")
         );
     }
     if not_signed_in(run.stderr) {
@@ -203,6 +215,9 @@ pub fn empty_reply_notice(run: &EmptyRun<'_>, secrets: &[String]) -> String {
     }
     if run.stop_reason == Some("refusal") {
         return "grok declined to answer this request.".into();
+    }
+    if run.stop_reason == Some("cancelled") {
+        return "grok's turn was cancelled before it replied.".into();
     }
     let ended = match (run.exit_code, run.stop_reason) {
         (Some(0), Some(reason)) => {
@@ -433,7 +448,29 @@ allow = ["Bash(*)"]
             &[],
         );
         assert!(
-            notice.contains("needed approval to run `run_terminal_cmd`, `kwnt__alpha-ping`,"),
+            notice.contains("needed approval for “run_terminal_cmd”, “kwnt__alpha-ping”, and a headless grok run can't ask for it. kwnt only"),
+            "{notice}"
+        );
+
+        let command = format!("Execute `curl -H 'Bearer gw-1' {}`", "x".repeat(300));
+        let stderr = format!(
+            "permission required: {command} was not run, as a headless run cannot ask for approval"
+        );
+        let notice = empty_reply_notice(
+            &EmptyRun {
+                stderr: &stderr,
+                exit_code: Some(0),
+                ..Default::default()
+            },
+            &["gw-1".into()],
+        );
+        assert!(
+            notice.contains("“Execute `curl -H 'Bearer ********' xxx")
+                && notice.contains("x…”, and"),
+            "{notice}"
+        );
+        assert!(
+            !notice.contains("gw-1") && notice.chars().count() < 400,
             "{notice}"
         );
     }
@@ -493,6 +530,14 @@ allow = ["Bash(*)"]
                 ..Default::default()
             }),
             "grok was stopped before it replied."
+        );
+        assert_eq!(
+            notice(EmptyRun {
+                stop_reason: Some("cancelled"),
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+            "grok's turn was cancelled before it replied."
         );
 
         let crash = notice(EmptyRun {

@@ -378,7 +378,7 @@ async fn grok_refusing_a_tool_explains_instead_of_replying_empty() {
     );
     let (reply, _) = grok.run(None).await;
     assert!(
-        reply.contains("needed approval to run `run_terminal_cmd`"),
+        reply.contains("needed approval for “run_terminal_cmd”"),
         "{reply}"
     );
 }
