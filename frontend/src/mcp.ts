@@ -302,28 +302,64 @@ export const mcpSupportFor = (preferredModel: string, keys: EngineKeys): { suppo
   };
 };
 
-/** Last test result per server, kept in the browser so cards can show a status. */
+/**
+ * Last test result per server, kept in the browser so cards can show a status.
+ * Only ok, tool names and time are kept: a server's error text can echo back
+ * secrets, so the full error lives in memory for the open screen only.
+ */
 const STATUS_KEY = 'kwnt.mcp.lastTest';
 
 export interface StoredStatus {
   ok: boolean;
   tools: string[];
-  error?: string;
   at: string;
 }
 
-export const loadStatuses = (): Record<string, StoredStatus> => {
-  try {
-    return JSON.parse(localStorage.getItem(STATUS_KEY) || '{}') ?? {};
-  } catch {
-    return {};
+export const toStoredStatus = (result: Pick<McpTestResult, 'ok' | 'tools'>, at: string): StoredStatus => ({
+  ok: result.ok === true,
+  tools: (result.tools ?? []).map((t) => t.name).filter((n): n is string => typeof n === 'string'),
+  at,
+});
+
+/** Keeps only the safe fields of each entry; drops anything malformed (and old `error` text). */
+export const sanitizeStatuses = (raw: unknown): Record<string, StoredStatus> => {
+  const out: Record<string, StoredStatus> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [id, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.ok !== 'boolean') continue;
+    out[id] = {
+      ok: e.ok,
+      tools: Array.isArray(e.tools) ? e.tools.filter((n): n is string => typeof n === 'string') : [],
+      at: typeof e.at === 'string' ? e.at : '',
+    };
   }
+  return out;
 };
 
 export const saveStatuses = (statuses: Record<string, StoredStatus>) => {
   try {
-    localStorage.setItem(STATUS_KEY, JSON.stringify(statuses));
+    localStorage.setItem(STATUS_KEY, JSON.stringify(sanitizeStatuses(statuses)));
   } catch {
     // storage full or blocked: status is a nicety
+  }
+};
+
+export const loadStatuses = (): Record<string, StoredStatus> => {
+  try {
+    const stored = localStorage.getItem(STATUS_KEY);
+    if (!stored) return {};
+    const clean = sanitizeStatuses(JSON.parse(stored));
+    // Rewrite older entries that still carry error text.
+    if (JSON.stringify(clean) !== stored) saveStatuses(clean);
+    return clean;
+  } catch {
+    try {
+      localStorage.removeItem(STATUS_KEY);
+    } catch {
+      // blocked
+    }
+    return {};
   }
 };

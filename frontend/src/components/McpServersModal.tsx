@@ -37,6 +37,7 @@ import {
   validateMcpForm,
   loadStatuses,
   saveStatuses,
+  toStoredStatus,
   humanizeToolName,
 } from '../mcp';
 
@@ -244,7 +245,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     }
     setTesting((t) => ({ ...t, [id]: false }));
     setTestResults((r) => ({ ...r, [id]: result }));
-    setStatus(id, { ok: result.ok, tools: (result.tools ?? []).map((t) => t.name), error: result.error, at: new Date().toISOString() });
+    setStatus(id, toStoredStatus(result, new Date().toISOString()));
     playSfx(result.ok ? 'coin' : 'alert');
   };
 

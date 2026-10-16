@@ -22,6 +22,10 @@ const {
   parseToolCalls,
   formatArgs,
   mcpSupportFor,
+  toStoredStatus,
+  sanitizeStatuses,
+  loadStatuses,
+  saveStatuses,
 } = mcp;
 
 test('splits command lines like a README shows them', () => {
@@ -149,4 +153,48 @@ test('says honestly which engines can use MCP tools', () => {
   const auto = mcpSupportFor('auto', none);
   assert.equal(auto.supported, true);
   assert.match(auto.note, /Laya/);
+});
+
+const memoryStorage = (initial = {}) => {
+  const data = { ...initial };
+  return {
+    data,
+    getItem: (k) => (k in data ? data[k] : null),
+    setItem: (k, v) => { data[k] = String(v); },
+    removeItem: (k) => { delete data[k]; },
+  };
+};
+
+test('stored test status keeps only ok, tool names and time, never error text', () => {
+  const failed = toStoredStatus({ ok: false, error: 'bad token SECRET-123', stderr_tail: 'SECRET-123', tools: undefined }, '2026-10-16T00:00:00Z');
+  assert.deepEqual(failed, { ok: false, tools: [], at: '2026-10-16T00:00:00Z' });
+  const ok = toStoredStatus({ ok: true, tools: [{ name: 'echo', description: 'x' }, { name: 'add' }] }, 't');
+  assert.deepEqual(ok, { ok: true, tools: ['echo', 'add'], at: 't' });
+
+  globalThis.localStorage = memoryStorage();
+  saveStatuses({ a: { ok: false, tools: [], at: 't', error: 'SECRET-123' } });
+  assert.deepEqual(JSON.parse(localStorage.data['kwnt.mcp.lastTest']), { a: { ok: false, tools: [], at: 't' } });
+  assert.ok(!localStorage.data['kwnt.mcp.lastTest'].includes('SECRET'));
+});
+
+test('old stored statuses with error text are cleaned on load and rewritten', () => {
+  const old = {
+    a: { ok: false, tools: [], error: 'Authorization: Bearer SECRET-456', at: 't1' },
+    b: { ok: true, tools: ['echo', 7], at: 't2' },
+    junk: 'nope',
+    noOk: { tools: ['x'] },
+  };
+  globalThis.localStorage = memoryStorage({ 'kwnt.mcp.lastTest': JSON.stringify(old) });
+  const loaded = loadStatuses();
+  assert.deepEqual(loaded, { a: { ok: false, tools: [], at: 't1' }, b: { ok: true, tools: ['echo'], at: 't2' } });
+  assert.ok(!localStorage.data['kwnt.mcp.lastTest'].includes('SECRET'));
+  assert.deepEqual(JSON.parse(localStorage.data['kwnt.mcp.lastTest']), loaded);
+
+  globalThis.localStorage = memoryStorage({ 'kwnt.mcp.lastTest': '{not json' });
+  assert.deepEqual(loadStatuses(), {});
+  assert.equal(localStorage.data['kwnt.mcp.lastTest'], undefined);
+
+  assert.deepEqual(sanitizeStatuses(null), {});
+  assert.deepEqual(sanitizeStatuses([{ ok: true }]), {});
+  delete globalThis.localStorage;
 });

@@ -1,14 +1,18 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { ChatView, ChatMessage, DiscussionState, RoutingState } from './components/ChatView';
 import { PendingApproval } from './components/ModernApprovalCard';
 import { SettingsModal } from './components/SettingsModal';
-import { McpServersModal } from './components/McpServersModal';
-import { NewAgentModal, AgentFormData } from './components/NewAgentModal';
+import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
+
+// Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
+// so both load right after start-up and opening them never waits.
+const NewAgentModal = lazy(() => import('./components/NewAgentModal').then((m) => ({ default: m.NewAgentModal })));
+const McpServersModal = lazy(() => import('./components/McpServersModal').then((m) => ({ default: m.McpServersModal })));
 
 export const App: React.FC = () => {
   const [kwants, setKwants] = useState<Kwant[]>([]);
@@ -1120,27 +1124,29 @@ export const App: React.FC = () => {
       </div>
 
       {/* New Agent Modal */}
-      <NewAgentModal
-        isOpen={isNewAgentOpen}
-        onClose={() => {
-          setIsNewAgentOpen(false);
-          setNewAgentTeam(null);
-        }}
-        joinTeamName={newAgentTeam?.name}
-        takenNames={kwants.map((k) => k.name)}
-        onManageServers={() => setIsMcpOpen(true)}
-        onSubmit={handleCreateAgent}
-      />
+      <Suspense fallback={null}>
+        <NewAgentModal
+          isOpen={isNewAgentOpen}
+          onClose={() => {
+            setIsNewAgentOpen(false);
+            setNewAgentTeam(null);
+          }}
+          joinTeamName={newAgentTeam?.name}
+          takenNames={kwants.map((k) => k.name)}
+          onManageServers={() => setIsMcpOpen(true)}
+          onSubmit={handleCreateAgent}
+        />
 
-      {/* Edit Agent Modal */}
-      <NewAgentModal
-        isOpen={!!editingKwant}
-        initial={editingKwant}
-        kwantId={editingKwant?.id}
-        onManageServers={() => setIsMcpOpen(true)}
-        onClose={() => setEditingKwant(null)}
-        onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
-      />
+        {/* Edit Agent Modal */}
+        <NewAgentModal
+          isOpen={!!editingKwant}
+          initial={editingKwant}
+          kwantId={editingKwant?.id}
+          onManageServers={() => setIsMcpOpen(true)}
+          onClose={() => setEditingKwant(null)}
+          onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
+        />
+      </Suspense>
 
       {/* New Team Modal */}
       <NewTeamModal
@@ -1171,7 +1177,9 @@ export const App: React.FC = () => {
       />
 
       {/* MCP tool servers (opened last so it sits above the agent modal) */}
-      <McpServersModal isOpen={isMcpOpen} onClose={() => setIsMcpOpen(false)} />
+      <Suspense fallback={null}>
+        <McpServersModal isOpen={isMcpOpen} onClose={() => setIsMcpOpen(false)} />
+      </Suspense>
     </div>
   );
 };
