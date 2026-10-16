@@ -59,6 +59,18 @@ pub struct Teammate {
     pub title: String,
 }
 
+/// Models only know their training cutoff, so every turn is told the real date and how to use it.
+pub fn current_date_block(now: chrono::DateTime<chrono::FixedOffset>) -> String {
+    format!(
+        "\n\n[Current date]\n\
+        Right now it is {} (UTC{}). Your training data is older than this: trust this date over your own sense of what year it is.\n\
+        Before saying an event, offer, deadline or opening is happening now or soon, check its dates against today. \
+        Websites often keep featuring events that are already over, so read the dates on the page; if they are missing, say you could not confirm them.",
+        now.format("%A, %-d %B %Y, %H:%M"),
+        now.format("%:z"),
+    )
+}
+
 impl TurnInput {
     pub fn format_system_prompt(&self) -> String {
         let mut base = format!(
@@ -72,6 +84,7 @@ impl TurnInput {
                 soul
             ));
         }
+        base.push_str(&current_date_block(chrono::Local::now().fixed_offset()));
         let team_block = if let Some(ref team) = self.team_context {
             let desc = team.description.as_deref().unwrap_or("General team objectives");
             let mut ws_info = String::new();

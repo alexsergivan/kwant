@@ -159,6 +159,9 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
     assert!(!solo_prompt.contains("Active Team Alignment"));
     assert!(!solo_prompt.contains("[Teammates in this chat]"));
     assert!(!solo_prompt.contains("Your soul"));
+    assert!(solo_prompt.contains("[Current date]"));
+    let year = chrono::Local::now().format("%Y").to_string();
+    assert!(solo_prompt.contains(&year));
 
     let mut with_soul = input_solo.clone();
     with_soul.kwant.soul = "  Calm and wry; loves a good diagram.  ".into();
@@ -227,3 +230,12 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
     assert!(ws_prompt.contains("Git Repo: https://github.com/org/app"));
 }
 
+
+#[test]
+fn test_current_date_block_names_weekday_year_and_offset() {
+    use chrono::TimeZone;
+    let now = chrono::FixedOffset::east_opt(2 * 3600).unwrap().with_ymd_and_hms(2026, 10, 16, 11, 7, 0).unwrap();
+    let block = kwnt::drivers::current_date_block(now);
+    assert!(block.contains("Friday, 16 October 2026, 11:07 (UTC+02:00)"), "{block}");
+    assert!(block.contains("already over"));
+}
