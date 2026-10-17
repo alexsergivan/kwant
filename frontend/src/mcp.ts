@@ -48,6 +48,8 @@ export interface SecretRow {
   saved: boolean;
   /** Placeholder for an empty value, like the format a preset expects. */
   hint?: string;
+  /** Set by presets: the server won't work until this has a value. */
+  required?: boolean;
 }
 
 export interface McpFormState {
@@ -98,18 +100,24 @@ export interface McpPreset {
   form: McpFormState;
 }
 
-const stdioPreset = (name: string, commandLine: string, env: Array<[string, string]> = []): McpFormState => ({
+/** A preset's secret: name, placeholder, and whether the server needs it to work. */
+type PresetSecret = [key: string, hint: string, required?: boolean];
+
+const presetRows = (secrets: PresetSecret[]): SecretRow[] =>
+  secrets.map(([key, hint, required]) => ({ key, value: '', saved: false, hint, ...(required ? { required: true } : {}) }));
+
+const stdioPreset = (name: string, commandLine: string, env: PresetSecret[] = []): McpFormState => ({
   ...emptyMcpForm('stdio'),
   name,
   commandLine,
-  env: env.map(([key, hint]) => ({ key, value: '', saved: false, hint })),
+  env: presetRows(env),
 });
 
-const httpPreset = (name: string, url: string, headers: Array<[string, string]> = []): McpFormState => ({
+const httpPreset = (name: string, url: string, headers: PresetSecret[] = []): McpFormState => ({
   ...emptyMcpForm('http'),
   name,
   url,
-  headers: headers.map(([key, hint]) => ({ key, value: '', saved: false, hint })),
+  headers: presetRows(headers),
 });
 
 /**
@@ -149,7 +157,7 @@ export const MCP_PRESETS: McpPreset[] = [
     category: 'files',
     needs: ['Token'],
     source: 'https://github.com/github/github-mcp-server',
-    form: httpPreset('github', 'https://api.githubcopilot.com/mcp/', [['Authorization', 'Bearer ghp_…']]),
+    form: httpPreset('github', 'https://api.githubcopilot.com/mcp/', [['Authorization', 'Bearer ghp_…', true]]),
   },
   {
     // PyPI mcp-server-fetch 2026.10.10
@@ -179,7 +187,7 @@ export const MCP_PRESETS: McpPreset[] = [
     category: 'web',
     needs: ['Node.js', 'API key'],
     source: 'https://github.com/brave/brave-search-mcp-server',
-    form: stdioPreset('brave-search', 'npx -y @brave/brave-search-mcp-server --transport stdio', [['BRAVE_API_KEY', 'From api-dashboard.search.brave.com']]),
+    form: stdioPreset('brave-search', 'npx -y @brave/brave-search-mcp-server --transport stdio', [['BRAVE_API_KEY', 'From api-dashboard.search.brave.com', true]]),
   },
   {
     // Upstash's hosted server; works without a key, a key (Authorization: Bearer …) raises limits.
@@ -200,7 +208,7 @@ export const MCP_PRESETS: McpPreset[] = [
     category: 'data',
     needs: ['uv'],
     source: 'https://github.com/crystaldba/postgres-mcp',
-    form: stdioPreset('postgres', 'uvx postgres-mcp --access-mode=restricted', [['DATABASE_URI', 'postgresql://user:password@host:5432/db']]),
+    form: stdioPreset('postgres', 'uvx postgres-mcp --access-mode=restricted', [['DATABASE_URI', 'postgresql://user:password@host:5432/db', true]]),
   },
   {
     // Supabase's hosted server with sign-in.
@@ -357,6 +365,17 @@ export const validateMcpForm = (form: McpFormState): string | null => {
     return 'Timeout should be between 1 and 600 seconds.';
   return null;
 };
+
+/**
+ * Whether a row the server needs is still empty. A saved row is never blank: leaving it empty
+ * keeps the stored value. "Bearer" or "Basic" with nothing after it counts as empty.
+ */
+export const isBlankRequired = (row: SecretRow): boolean =>
+  !!row.required && !row.saved && /^((bearer|basic)\b)?$/i.test(row.value.trim());
+
+/** Names of required keys in the form that are still empty, for the "needs a key" warning. Saving is still allowed. */
+export const blankRequiredKeys = (form: McpFormState): string[] =>
+  (form.transport === 'stdio' ? form.env : form.headers).filter(isBlankRequired).map((r) => r.key.trim() || 'key');
 
 const rowsToMap = (rows: SecretRow[]): Record<string, string> => {
   const out: Record<string, string> = {};
