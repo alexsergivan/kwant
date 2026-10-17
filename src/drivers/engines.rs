@@ -270,6 +270,9 @@ impl Probe {
 #[derive(Debug, Clone, Default)]
 pub struct ProbeEnv {
     pub claude_bin: Option<String>,
+    /// Set only when kwnt points Claude Code at a config dir of its own (tests, isolated
+    /// sign-in); otherwise the CLI uses its env's `CLAUDE_CONFIG_DIR` or `~/.claude`.
+    pub claude_config_dir: Option<std::path::PathBuf>,
     pub codex_bin: Option<String>,
     pub grok_bin: Option<String>,
     pub anthropic_key: Option<String>,
@@ -297,6 +300,7 @@ impl ProbeEnv {
         let ollama_url = db.get_setting("ollama_url").await.ok().flatten();
         Self {
             claude_bin: super::find_cli_binary("claude"),
+            claude_config_dir: None,
             codex_bin: super::find_cli_binary("codex"),
             grok_bin: super::find_cli_binary("grok"),
             anthropic_key: key(db, "anthropic_api_key", "ANTHROPIC_API_KEY").await,
@@ -319,7 +323,7 @@ pub async fn probe(id: EngineId, env: &ProbeEnv) -> Probe {
 pub async fn probe_within(id: EngineId, env: &ProbeEnv, limit: Duration) -> Probe {
     let check = async {
         match id {
-            EngineId::Claude => probe_claude(env.claude_bin.as_deref()).await,
+            EngineId::Claude => probe_claude(env.claude_bin.as_deref(), env.claude_config_dir.as_deref()).await,
             EngineId::Codex => probe_codex(env.codex_bin.as_deref()).await,
             EngineId::Grok => probe_grok(env.grok_bin.as_deref()).await,
             EngineId::AnthropicApi | EngineId::OpenaiApi | EngineId::XaiApi => probe_api(id, env).await,
@@ -339,7 +343,16 @@ struct CmdOut {
 }
 
 async fn run(bin: &str, args: &[&str]) -> Result<CmdOut, String> {
-    let out = tokio::process::Command::new(bin)
+    run_in(bin, args, None).await
+}
+
+/// [`run`], with Claude Code pointed at `claude_home` when one is given.
+async fn run_in(bin: &str, args: &[&str], claude_home: Option<&std::path::Path>) -> Result<CmdOut, String> {
+    let mut cmd = tokio::process::Command::new(bin);
+    if let Some(home) = claude_home {
+        crate::profiles::CliEnv::for_home(crate::profiles::Engine::Claude, home).apply(&mut cmd);
+    }
+    let out = cmd
         .args(args)
         .env("NO_COLOR", "1")
         .stdin(Stdio::null())
@@ -394,13 +407,13 @@ pub fn claude_cli_models() -> Vec<EngineModel> {
     .collect()
 }
 
-async fn probe_claude(bin: Option<&str>) -> Probe {
+async fn probe_claude(bin: Option<&str>, home: Option<&std::path::Path>) -> Probe {
     let Some(bin) = bin else {
         return Probe::not_installed("Claude Code isn't installed");
     };
     let version = version_of(bin).await;
     // `auth status` asks Claude Code itself, so a login kept in the macOS Keychain counts.
-    let out = match run(bin, &["auth", "status", "--json"]).await {
+    let out = match run_in(bin, &["auth", "status", "--json"], home).await {
         Ok(o) => o,
         Err(e) => return Probe::error(e).with_version(version),
     };

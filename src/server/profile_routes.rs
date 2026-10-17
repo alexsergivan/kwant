@@ -405,7 +405,8 @@ pub async fn start_login(State(state): State<AppState>, Path(id): Path<String>) 
     let db = state.db.clone();
     let manager = state.profiles.clone();
     let on_success: crate::profiles::login::OnSuccess =
-        std::sync::Arc::new(move |profile_id: String| {
+        std::sync::Arc::new(move |view: LoginView| {
+            let profile_id = view.profile_id;
             let db = db.clone();
             let manager = manager.clone();
             tokio::spawn(async move {
