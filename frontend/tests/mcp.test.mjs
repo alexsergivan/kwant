@@ -34,6 +34,8 @@ const {
   readOAuthMessage,
   kwantUsage,
   defaultKwantServerIds,
+  isBlankRequired,
+  blankRequiredKeys,
 } = mcp;
 
 test('splits command lines like a README shows them', () => {
@@ -334,4 +336,58 @@ test('a new kwant starts with every server on, paused ones included', () => {
     ]),
     ['a', 'b'],
   );
+});
+
+const presetForm = (id) => {
+  const f = MCP_PRESETS.find((p) => p.id === id).form;
+  return { ...f, env: f.env.map((r) => ({ ...r })), headers: f.headers.map((r) => ({ ...r })) };
+};
+
+test('only presets that need a key or token mark it required', () => {
+  const marked = Object.fromEntries(
+    MCP_PRESETS.map((p) => [p.id, [...p.form.env, ...p.form.headers].filter((r) => r.required).map((r) => r.key)]).filter(([, keys]) => keys.length > 0),
+  );
+  assert.deepEqual(marked, { github: ['Authorization'], 'brave-search': ['BRAVE_API_KEY'], postgres: ['DATABASE_URI'] });
+  // Every preset tagged as needing a key or token has a required field, and no Sign-in preset does.
+  for (const p of MCP_PRESETS) {
+    const hasRequired = [...p.form.env, ...p.form.headers].some((r) => r.required);
+    assert.equal(hasRequired, p.needs.includes('Token') || p.needs.includes('API key') || p.id === 'postgres', p.id);
+    if (p.needs.includes('Sign-in')) assert.equal(hasRequired, false, p.id);
+  }
+});
+
+test('warns about required keys that are still blank, and only those', () => {
+  const github = presetForm('github');
+  assert.deepEqual(blankRequiredKeys(github), ['Authorization']);
+  for (const blank of ['', '   ', 'Bearer', 'bearer ', 'Basic']) {
+    github.headers[0].value = blank;
+    assert.deepEqual(blankRequiredKeys(github), ['Authorization'], JSON.stringify(blank));
+  }
+  github.headers[0].value = 'Bearer ghp_abc123';
+  assert.deepEqual(blankRequiredKeys(github), []);
+
+  const brave = presetForm('brave-search');
+  assert.deepEqual(blankRequiredKeys(brave), ['BRAVE_API_KEY']);
+  brave.env[0].value = 'BSA123';
+  assert.deepEqual(blankRequiredKeys(brave), []);
+  assert.deepEqual(blankRequiredKeys(presetForm('postgres')), ['DATABASE_URI']);
+
+  // Sign-in, no-key and custom servers never warn.
+  for (const id of ['notion', 'context7', 'files', 'supabase']) assert.deepEqual(blankRequiredKeys(presetForm(id)), [], id);
+  const custom = { ...emptyMcpForm('http'), headers: [{ key: 'Authorization', value: '', saved: false }] };
+  assert.deepEqual(blankRequiredKeys(custom), []);
+});
+
+test('a saved key left blank is kept, so it never warns', () => {
+  assert.equal(isBlankRequired({ key: 'Authorization', value: '', saved: true, required: true }), false);
+  assert.equal(isBlankRequired({ key: 'Authorization', value: '', saved: false, required: true }), true);
+  assert.equal(isBlankRequired({ key: 'Authorization', value: '', saved: false }), false);
+});
+
+test('a blank required key still saves, and the flag stays out of the request', () => {
+  const github = presetForm('github');
+  assert.equal(validateMcpForm(github), null);
+  const payload = formToPayload(github);
+  assert.deepEqual(payload.headers, { Authorization: '' });
+  assert.equal(JSON.stringify(payload).includes('required'), false);
 });

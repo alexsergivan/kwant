@@ -51,6 +51,7 @@ import {
   serverStatusKind,
   isSignedIn,
   readOAuthMessage,
+  isBlankRequired,
 } from '../mcp';
 
 interface McpServersModalProps {
@@ -117,52 +118,68 @@ const SecretRows: React.FC<{
   keyPlaceholder: string;
   keyLabel: string;
   addLabel: string;
-}> = ({ rows, onChange, keyPlaceholder, keyLabel, addLabel }) => {
+  /** Prefix for the ids that tie a row's warning to its value field. */
+  idPrefix: string;
+}> = ({ rows, onChange, keyPlaceholder, keyLabel, addLabel, idPrefix }) => {
   const [shown, setShown] = useState<Record<number, boolean>>({});
   const update = (i: number, patch: Partial<SecretRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
     <div className="space-y-1.5">
-      {rows.map((row, i) => (
-        <div key={i} className="flex flex-col sm:flex-row gap-1.5">
-          <input
-            aria-label={keyLabel}
-            value={row.key}
-            disabled={row.saved}
-            onChange={(e) => update(i, { key: e.target.value })}
-            placeholder={keyPlaceholder}
-            className={`${inputCls} sm:w-2/5 font-mono disabled:text-zinc-400 disabled:bg-zinc-950/60`}
-          />
-          <div className="flex gap-1.5 flex-1 min-w-0">
-            <div className="relative flex-1 min-w-0">
+      {rows.map((row, i) => {
+        // A preset's key that is still empty: say so, but saving stays allowed.
+        const missing = isBlankRequired(row);
+        const warnId = `${idPrefix}-missing-${i}`;
+        return (
+          <div key={i} className="space-y-1">
+            <div className="flex flex-col sm:flex-row gap-1.5">
               <input
-                aria-label={`Value for ${row.key || 'this entry'}`}
-                type={shown[i] ? 'text' : 'password'}
-                autoComplete="off"
-                value={row.value}
-                onChange={(e) => update(i, { value: e.target.value })}
-                placeholder={row.saved ? '•••••••• saved, leave blank to keep' : row.hint || 'Secret value'}
-                className={`${inputCls} pr-8 font-mono`}
+                aria-label={keyLabel}
+                value={row.key}
+                disabled={row.saved}
+                onChange={(e) => update(i, { key: e.target.value })}
+                placeholder={keyPlaceholder}
+                className={`${inputCls} sm:w-2/5 font-mono disabled:text-zinc-400 disabled:bg-zinc-950/60`}
               />
-              <button
-                type="button"
-                onClick={() => setShown((s) => ({ ...s, [i]: !s[i] }))}
-                aria-label={shown[i] ? 'Hide value' : 'Show value'}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-zinc-500 hover:text-zinc-200"
-              >
-                {shown[i] ? <EyeOff size={13} /> : <Eye size={13} />}
-              </button>
+              <div className="flex gap-1.5 flex-1 min-w-0">
+                <div className="relative flex-1 min-w-0">
+                  <input
+                    aria-label={`Value for ${row.key || 'this entry'}`}
+                    aria-describedby={missing ? warnId : undefined}
+                    type={shown[i] ? 'text' : 'password'}
+                    autoComplete="off"
+                    value={row.value}
+                    onChange={(e) => update(i, { value: e.target.value })}
+                    placeholder={row.saved ? '•••••••• saved, leave blank to keep' : row.hint || 'Secret value'}
+                    className={`${inputCls} pr-8 font-mono ${missing ? 'border-amber-500/40' : ''}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShown((s) => ({ ...s, [i]: !s[i] }))}
+                    aria-label={shown[i] ? 'Hide value' : 'Show value'}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded text-zinc-500 hover:text-zinc-200"
+                  >
+                    {shown[i] ? <EyeOff size={13} /> : <Eye size={13} />}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onChange(rows.filter((_, j) => j !== i))}
+                  aria-label={`Remove ${row.key || 'entry'}`}
+                  className="p-2 rounded-lg text-zinc-500 hover:text-rose-300 hover:bg-rose-500/10 transition-colors"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
-            <button
-              type="button"
-              onClick={() => onChange(rows.filter((_, j) => j !== i))}
-              aria-label={`Remove ${row.key || 'entry'}`}
-              className="p-2 rounded-lg text-zinc-500 hover:text-rose-300 hover:bg-rose-500/10 transition-colors"
-            >
-              <Trash2 size={14} />
-            </button>
+            {missing && (
+              <p id={warnId} className="flex items-start gap-1.5 text-[11px] text-amber-300/90">
+                <KeyRound size={12} className="flex-shrink-0 mt-px text-amber-400" aria-hidden="true" />
+                <span>This server needs a key to work. Add it now, or save and edit later.</span>
+              </p>
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
       <button
         type="button"
         onClick={() => onChange([...rows, { key: '', value: '', saved: false }])}
@@ -948,6 +965,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
                 keyPlaceholder="API_TOKEN"
                 keyLabel="Variable name"
                 addLabel="Add variable"
+                idPrefix="mcp-env"
               />
             </div>
           </>
@@ -975,6 +993,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
                 keyPlaceholder="Authorization"
                 keyLabel="Header name"
                 addLabel="Add header"
+                idPrefix="mcp-header"
               />
               <p className="mt-1.5 text-[11px] text-zinc-500">
                 Servers that need sign-in (like Notion) don’t need a header. Use <span className="text-zinc-300">Connect</span> on the server after saving.
