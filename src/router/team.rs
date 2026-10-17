@@ -515,6 +515,7 @@ mod tests {
             lead_kwant_id: "kwant-1".into(),
             member_kwants: "[\"kwant-1\", \"kwant-2\"]".into(),
             created_at: None,
+            instructions: None,
         };
         let members = vec![
             Kwant {

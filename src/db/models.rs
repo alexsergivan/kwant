@@ -55,6 +55,10 @@ pub struct Channel {
     pub member_kwants: String, // JSON array of string IDs
     pub routing_mode: String,
     pub created_at: Option<DateTime<Utc>>,
+    /// Pinned instructions every agent turn in this channel sees.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub instructions: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +126,10 @@ pub struct Team {
     pub workspace_path: Option<String>,
     pub repo_url: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
+    /// Pinned instructions every agent turn in the team's channel sees.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub instructions: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -159,4 +159,43 @@ CREATE TABLE IF NOT EXISTS llm_profile_state (
     last_error TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(profile_id) REFERENCES llm_profiles(id) ON DELETE CASCADE
-)
+);
+
+-- Agent memory: short facts a kwant carries into every turn. source: 'user' (added in the UI) or 'agent' (its own tools)
+CREATE TABLE IF NOT EXISTS kwant_memories (
+    id TEXT PRIMARY KEY,
+    kwant_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'user' CHECK (source IN ('user', 'agent')),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS kwant_memories_by_kwant ON kwant_memories (kwant_id, created_at);
+
+-- Scheduled agent runs. schedule is JSON (see crate::routines::Schedule). channel_id NULL = the kwant direct chat
+CREATE TABLE IF NOT EXISTS routines (
+    id TEXT PRIMARY KEY,
+    kwant_id TEXT NOT NULL,
+    channel_id TEXT,
+    name TEXT NOT NULL,
+    instructions TEXT NOT NULL,
+    schedule TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    next_run_at TIMESTAMP,
+    last_run_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS routine_runs (
+    id TEXT PRIMARY KEY,
+    routine_id TEXT NOT NULL,
+    trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual')),
+    started_at TIMESTAMP NOT NULL,
+    ended_at TIMESTAMP,
+    status TEXT NOT NULL CHECK (status IN ('running', 'ok', 'error', 'skipped')),
+    error TEXT,
+    message_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS routine_runs_by_routine ON routine_runs (routine_id, started_at)
