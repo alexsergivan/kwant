@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Cpu, Key, Globe, X, Sparkles, Check, Plug, ChevronRight } from 'lucide-react';
+import { Cpu, Key, Globe, X, Sparkles, Check, Plug, ChevronRight, UserRound, LogOut } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
+import { useAuth } from './AuthGate';
 
 interface SettingsData {
   anthropic_api_key: string;
@@ -19,9 +20,11 @@ interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenTools?: () => void;
+  onOpenProfiles?: () => void;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onOpenTools }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onOpenTools, onOpenProfiles }) => {
+  const { authRequired, signOut } = useAuth();
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [anthropicKey, setAnthropicKey] = useState('');
   const [xaiKey, setXaiKey] = useState('');
@@ -145,6 +148,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           </div>
         </div>
 
+        {onOpenProfiles && (
+          <button
+            type="button"
+            onClick={() => {
+              playSfx('click');
+              onOpenProfiles();
+            }}
+            className="w-full flex items-center gap-3 p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 text-left transition-colors group"
+          >
+            <span className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+              <UserRound size={15} />
+            </span>
+            <span className="flex-1">
+              <span className="block text-xs font-medium text-zinc-200">LLM profiles</span>
+              <span className="block text-[11px] text-zinc-500">Work and personal accounts per engine, with automatic failover</span>
+            </span>
+            <ChevronRight size={15} className="text-zinc-500 group-hover:text-sky-300" />
+          </button>
+        )}
+
         {onOpenTools && (
           <button
             type="button"
@@ -235,6 +258,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           )}
 
           <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-zinc-800">
+            {authRequired && (
+              <button
+                type="button"
+                onClick={() => {
+                  playSfx('click');
+                  signOut();
+                }}
+                title="Forget the access token in this browser"
+                className="mr-auto flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-rose-200 hover:bg-zinc-800 transition-colors"
+              >
+                <LogOut size={13} /> Sign out
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {

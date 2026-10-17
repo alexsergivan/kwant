@@ -23,6 +23,8 @@ use tower::ServiceExt;
 
 const ORIGIN: &str = "https://kwnt.example.test";
 const HOST: &str = "kwnt.example.test";
+/// kwnt is addressed by a public name here, so requests need the API token.
+const TOKEN: &str = "test-token-0123456789abcdef";
 
 struct Env {
     app: Router,
@@ -40,21 +42,38 @@ async fn env(options: oauth_mock::MockOptions) -> Env {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
     let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
-    let state = AppState::new(
+    let mut state = AppState::new(
         config.clone(),
         db,
         ToolRunner::new(tmp.path().join("workspace")),
         PermissionBroker::new(),
         LayaRouter::new(config.laya_url.clone()),
     );
-    Env { app: create_router(state.clone()), state, mock, _tmp: tmp }
+    state.api_token = Arc::new(kwnt::server::auth::ApiToken::for_tests(
+        TOKEN,
+        kwnt::server::auth::Require::Auto,
+        config.port,
+    ));
+    Env {
+        app: create_router(state.clone()),
+        state,
+        mock,
+        _tmp: tmp,
+    }
 }
 
-async fn send(app: &Router, method: &str, uri: &str, body: Option<Value>, host: &str) -> (StatusCode, String) {
+async fn send(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+    host: &str,
+) -> (StatusCode, String) {
     let req = Request::builder()
         .method(method)
         .uri(uri)
         .header("host", host)
+        .header("authorization", format!("Bearer {TOKEN}"))
         .header("content-type", "application/json")
         .body(body.map(|b| Body::from(b.to_string())).unwrap_or_else(Body::empty))
         .unwrap();
@@ -314,6 +333,7 @@ async fn callback_reports_provider_errors_and_bad_state() {
         .uri(format!("/api/mcp/servers/{id}/oauth/start"))
         .header("host", "127.0.0.1:7777")
         .header("x-forwarded-host", HOST)
+        .header("authorization", format!("Bearer {TOKEN}"))
         .header("content-type", "application/json")
         .body(Body::from(json!({"origin": ORIGIN}).to_string()))
         .unwrap();

@@ -55,3 +55,72 @@
   color: theme('colors.sky.300') !important;
   font-family: theme('fontFamily.mono') !important;
 }
+
+/* Working kwant avatars: transform and opacity only, so it stays on the compositor. */
+@keyframes kw-avatar-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-0.9px); }
+}
+
+@keyframes kw-avatar-ring {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50% { opacity: 0.95; transform: scale(1.07); }
+}
+
+@keyframes kw-avatar-pip {
+  0%, 100% { opacity: 0.4; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.kw-avatar-working .kw-avatar-body {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: kw-avatar-bob 0.9s ease-in-out infinite;
+}
+
+.kw-avatar-ring {
+  position: absolute;
+  inset: -2px;
+  border-radius: 30%;
+  box-shadow: 0 0 0 1.5px theme('colors.sky.400'), 0 0 8px 1px rgb(56 189 248 / 0.55);
+  pointer-events: none;
+  animation: kw-avatar-ring 1.4s ease-in-out infinite;
+}
+
+.kw-avatar-pip {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 30%;
+  max-width: 8px;
+  min-width: 4px;
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  background: theme('colors.sky.300');
+  box-shadow: 0 0 0 1.5px theme('colors.zinc.950');
+  pointer-events: none;
+  animation: kw-avatar-pip 0.7s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kw-avatar-working .kw-avatar-body,
+  .kw-avatar-ring,
+  .kw-avatar-pip {
+    animation: none;
+  }
+  .kw-avatar-ring { opacity: 0.9; }
+}
+
+/* Toasts slide in; without motion they just appear. */
+@keyframes kw-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.kw-toast {
+  animation: kw-toast-in 0.18s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kw-toast { animation: none; }
+}

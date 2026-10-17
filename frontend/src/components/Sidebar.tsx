@@ -12,6 +12,10 @@ export interface Kwant {
   avatar_sprite: string;
   driver_type: string;
   preferred_model: string;
+  /** Pinned LLM profile; null uses the engine's default. */
+  profile_id?: string | null;
+  /** Whether turns may move to the engine's next profile when this one is out of usage. */
+  profile_failover?: boolean;
 }
 
 export interface Channel {
@@ -266,7 +270,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               }`}
                               title={`Chat with ${k.name}`}
                             >
-                              <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} />
+                              <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} kwantId={k.id} />
                               <span className="truncate flex-1">{k.name}</span>
                               {onEditKwant && (
                                 <button
@@ -344,7 +348,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 }}
                                 className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-[11px] text-zinc-300 hover:bg-sky-500/10 hover:text-zinc-100 text-left"
                               >
-                                <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} />
+                                <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} kwantId={k.id} />
                                 <span className="truncate flex-1">{k.name}</span>
                                 <span className="text-[10px] text-zinc-500 truncate max-w-[80px]">{k.title}</span>
                               </button>
@@ -394,7 +398,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {!fleetOpen && (
               <span className="flex items-center -space-x-1">
                 {kwants.slice(0, 6).map((k) => (
-                  <ModernAvatar key={k.id} role={k.avatar_sprite} name={k.name} size={16} />
+                  <ModernAvatar key={k.id} role={k.avatar_sprite} name={k.name} size={16} kwantId={k.id} />
                 ))}
                 {kwants.length > 6 && (
                   <span className="pl-1.5 text-[10px] font-mono normal-case text-zinc-500">+{kwants.length - 6}</span>
@@ -424,6 +428,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     name={k.name}
                     size={32}
                     isOnline={true}
+                    kwantId={k.id}
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-1">

@@ -1,0 +1,193 @@
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { KeyRound, Loader2, RefreshCw, Terminal } from 'lucide-react';
+import { ModernAvatar } from './ModernAvatar';
+import {
+  UNAUTHORIZED_EVENT,
+  consumeTokenLink,
+  endSession,
+  fetchAuthStatus,
+  installUnauthorizedListener,
+  startSession,
+} from '../auth';
+
+interface AuthContextValue {
+  /** True when this browser needs the API token (Docker, a VPS reached directly). */
+  authRequired: boolean;
+  signOut: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextValue>({ authRequired: false, signOut: async () => undefined });
+
+export const useAuth = () => useContext(AuthContext);
+
+type GateState =
+  | { kind: 'checking' }
+  | { kind: 'ready'; authRequired: boolean }
+  | { kind: 'locked'; notice: string | null }
+  | { kind: 'offline'; message: string };
+
+installUnauthorizedListener();
+
+/** Shows its children once the API answers, and the token screen while it needs a token. */
+export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [state, setState] = useState<GateState>({ kind: 'checking' });
+  const checking = useRef(false);
+
+  const check = useCallback(async (notice: string | null = null) => {
+    if (checking.current) return;
+    checking.current = true;
+    try {
+      const s = await fetchAuthStatus();
+      setState(s.auth_required && !s.authenticated ? { kind: 'locked', notice } : { kind: 'ready', authRequired: s.auth_required });
+    } catch (e) {
+      setState({ kind: 'offline', message: e instanceof Error && e.message !== 'Failed to fetch' ? e.message : "Can't reach kwnt. Is it running?" });
+    } finally {
+      checking.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    consumeTokenLink().then((linkError) => {
+      if (!cancelled) check(linkError);
+    });
+    const onUnauthorized = () => check('Your session ended. Paste the token again to continue.');
+    // A token link opened in a tab that already shows kwnt only changes the hash.
+    const onHash = () => {
+      if (window.location.hash.includes('kwnt_token=')) consumeTokenLink().then((linkError) => check(linkError));
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    window.addEventListener('hashchange', onHash);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+      window.removeEventListener('hashchange', onHash);
+    };
+  }, [check]);
+
+  const signOut = useCallback(async () => {
+    try {
+      await endSession();
+    } finally {
+      setState({ kind: 'locked', notice: 'Signed out.' });
+    }
+  }, []);
+
+  if (state.kind === 'ready') {
+    return <AuthContext.Provider value={{ authRequired: state.authRequired, signOut }}>{children}</AuthContext.Provider>;
+  }
+
+  return (
+    <div className="min-h-screen w-screen flex items-center justify-center bg-zinc-950 text-zinc-100 p-4 font-sans">
+      <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-5">
+        <div className="flex items-center gap-3">
+          <ModernAvatar role="brand" name="Kwant" size={36} />
+          <div>
+            <h1 className="text-sm font-semibold">Kwant</h1>
+            <p className="text-xs text-zinc-400">your team of super-intelligent bots</p>
+          </div>
+        </div>
+        {state.kind === 'checking' && (
+          <p className="flex items-center gap-2 text-xs text-zinc-400" role="status">
+            <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> Connecting…
+          </p>
+        )}
+        {state.kind === 'offline' && (
+          <div className="space-y-3" role="alert">
+            <p className="text-xs text-rose-300">{state.message}</p>
+            <button
+              type="button"
+              onClick={() => {
+                setState({ kind: 'checking' });
+                check();
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 transition-colors"
+            >
+              <RefreshCw size={13} /> Try again
+            </button>
+          </div>
+        )}
+        {state.kind === 'locked' && <TokenForm notice={state.notice} onSignedIn={() => check()} />}
+      </div>
+    </div>
+  );
+};
+
+const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void }> = ({ notice, onSignedIn }) => {
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const value = token.trim();
+    if (!value) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (await startSession(value)) {
+        setToken('');
+        onSignedIn();
+        return;
+      }
+      setError("That token isn't right. Copy it again from the command below.");
+    } catch (err) {
+      setError(err instanceof Error && err.message !== 'Failed to fetch' ? err.message : 'Could not reach the server.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      <div className="space-y-1.5">
+        <h2 className="flex items-center gap-2 text-sm font-medium">
+          <KeyRound size={15} className="text-sky-400" /> Enter your access token
+        </h2>
+        <p className="text-xs text-zinc-400 leading-relaxed">
+          This kwnt is reachable from other machines, so it needs its token once per browser. Get it on the server:
+        </p>
+        <div className="space-y-1 text-[11px] font-mono text-zinc-300">
+          <p className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 rounded-md px-2 py-1">
+            <Terminal size={12} className="text-zinc-500" /> kwnt token
+          </p>
+          <p className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 rounded-md px-2 py-1">
+            <Terminal size={12} className="text-zinc-500" /> docker compose exec kwnt kwnt token
+          </p>
+        </div>
+      </div>
+      {notice && <p className="text-xs text-amber-300" role="status">{notice}</p>}
+      <div>
+        <label htmlFor="kwnt-token" className="block text-xs font-medium text-zinc-400 mb-1">
+          Token
+        </label>
+        <input
+          id="kwnt-token"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          autoFocus
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          aria-invalid={!!error}
+          aria-describedby={error ? 'kwnt-token-error' : undefined}
+          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
+          placeholder="Paste the token"
+        />
+        {error && (
+          <p id="kwnt-token-error" className="mt-1.5 text-[11px] text-rose-400" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+      <button
+        type="submit"
+        disabled={busy || !token.trim()}
+        className="w-full flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50"
+      >
+        {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} Continue
+      </button>
+      <p className="text-[11px] text-zinc-500">The browser keeps you signed in for a year. Anyone with the token controls this kwnt.</p>
+    </form>
+  );
+};

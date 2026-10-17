@@ -2,7 +2,7 @@ use super::discussion;
 use super::AppState;
 use crate::broker::ApprovalDecision;
 use crate::db::models::*;
-use crate::drivers::{find_cli_binary, resolve_driver_for_model, RoutingCandidate, RuntimeEvent, TurnInput};
+use crate::drivers::{find_cli_binary, RoutingCandidate, RuntimeEvent, TurnInput};
 use crate::router::{parse_mentions_with_lookup, TagMention, TeamDecision};
 use axum::{
     extract::{Path, Query, State},
@@ -39,10 +39,12 @@ pub async fn laya_status(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.router.status())
 }
 
-pub async fn list_kwants(State(state): State<AppState>) -> Result<Json<Vec<Kwant>>, StatusCode> {
+pub async fn list_kwants(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<KwantView>>, StatusCode> {
     state
         .db
-        .list_kwants()
+        .kwant_views()
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -61,30 +63,114 @@ async fn validate_kwant_name(state: &AppState, name: &mut String, own_id: Option
     Ok(())
 }
 
-pub async fn create_kwant(
-    State(state): State<AppState>,
-    Json(mut payload): Json<NewKwant>,
-) -> Result<Json<Kwant>, StatusCode> {
-    validate_kwant_name(&state, &mut payload.name, None).await?;
+/// `Some(None)` for an explicit JSON `null`, so "unset" and "leave as is" differ.
+fn deserialize_some<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(d).map(Some)
+}
+
+/// Profile fields a kwant create or update may carry besides the kwant's own.
+#[derive(Debug, Deserialize)]
+pub struct ProfileBinding {
+    /// A profile id, `null` for the engine default, absent to leave as is.
+    #[serde(default, deserialize_with = "deserialize_some")]
+    profile_id: Option<Option<String>>,
+    profile_failover: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateKwantRequest {
+    #[serde(flatten)]
+    base: NewKwant,
+    #[serde(flatten)]
+    binding: ProfileBinding,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateKwantRequest {
+    #[serde(flatten)]
+    base: UpdateKwant,
+    #[serde(flatten)]
+    binding: ProfileBinding,
+}
+
+/// The pinned profile must exist and be for the engine of the kwant's model.
+async fn check_binding(
+    state: &AppState,
+    binding: &ProfileBinding,
+    preferred_model: &str,
+) -> Result<(), StatusCode> {
+    let Some(Some(id)) = &binding.profile_id else {
+        return Ok(());
+    };
+    let profile = state
+        .db
+        .get_profile(id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    match crate::profiles::Engine::from_model(preferred_model) {
+        Some(engine) if engine.as_str() != profile.engine => Err(StatusCode::BAD_REQUEST),
+        _ => Ok(()),
+    }
+}
+
+async fn save_binding(
+    state: &AppState,
+    kwant_id: &str,
+    binding: &ProfileBinding,
+) -> Result<(), StatusCode> {
+    if binding.profile_id.is_none() && binding.profile_failover.is_none() {
+        return Ok(());
+    }
+    let profile_id = binding.profile_id.as_ref().map(|p| p.as_deref());
     state
         .db
-        .create_kwant(&payload)
+        .set_kwant_binding(kwant_id, profile_id, binding.profile_failover)
         .await
-        .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn kwant_view_json(state: &AppState, id: &str) -> Result<Json<KwantView>, StatusCode> {
+    match state.db.kwant_view(id).await {
+        Ok(Some(v)) => Ok(Json(v)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+pub async fn create_kwant(
+    State(state): State<AppState>,
+    Json(mut payload): Json<CreateKwantRequest>,
+) -> Result<Json<KwantView>, StatusCode> {
+    validate_kwant_name(&state, &mut payload.base.name, None).await?;
+    check_binding(&state, &payload.binding, &payload.base.preferred_model).await?;
+    let kwant = state
+        .db
+        .create_kwant(&payload.base)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    save_binding(&state, &kwant.id, &payload.binding).await?;
+    kwant_view_json(&state, &kwant.id).await
 }
 
 pub async fn update_kwant(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(mut payload): Json<UpdateKwant>,
-) -> Result<Json<Kwant>, StatusCode> {
-    validate_kwant_name(&state, &mut payload.name, Some(&id)).await?;
-    match state.db.update_kwant(&id, &payload).await {
-        Ok(Some(kwant)) => Ok(Json(kwant)),
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    Json(mut payload): Json<UpdateKwantRequest>,
+) -> Result<Json<KwantView>, StatusCode> {
+    validate_kwant_name(&state, &mut payload.base.name, Some(&id)).await?;
+    check_binding(&state, &payload.binding, &payload.base.preferred_model).await?;
+    match state.db.update_kwant(&id, &payload.base).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(StatusCode::NOT_FOUND),
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
+    save_binding(&state, &id, &payload.binding).await?;
+    kwant_view_json(&state, &id).await
 }
 
 pub async fn list_channels(State(state): State<AppState>) -> Result<Json<Vec<Channel>>, StatusCode> {
@@ -528,7 +614,60 @@ struct TurnOpts {
 
 /// Runs one kwant turn: picks model/effort, syncs the bot browser, streams the reply and saves it.
 /// Returns the raw reply text, or `None` if the turn was cancelled or failed.
-async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String, opts: TurnOpts) -> Option<String> {
+async fn run_kwant_turn(
+    scope: &TurnScope,
+    target_kwant: &Kwant,
+    prompt: String,
+    opts: TurnOpts,
+) -> Option<String> {
+    let context_id = scope
+        .channel_id
+        .clone()
+        .or_else(|| scope.kwant_id.clone())
+        .unwrap_or_else(|| target_kwant.id.clone());
+    let _ = scope.state.event_sender.send(RuntimeEvent::TurnStarted {
+        kwant_id: target_kwant.id.clone(),
+        context_id: Some(context_id.clone()),
+    });
+    // Sends turn_ended even if this future is dropped mid-turn
+    let mut ended = TurnEndedGuard {
+        sender: scope.state.event_sender.clone(),
+        kwant_id: target_kwant.id.clone(),
+        context_id,
+        outcome: "cancelled",
+    };
+    let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts).await;
+    ended.outcome = match (&reply, scope.cancel_token.is_cancelled()) {
+        (Some(_), _) => "completed",
+        (None, true) => "cancelled",
+        (None, false) => "failed",
+    };
+    reply
+}
+
+struct TurnEndedGuard {
+    sender: tokio::sync::broadcast::Sender<RuntimeEvent>,
+    kwant_id: String,
+    context_id: String,
+    outcome: &'static str,
+}
+
+impl Drop for TurnEndedGuard {
+    fn drop(&mut self) {
+        let _ = self.sender.send(RuntimeEvent::TurnEnded {
+            kwant_id: std::mem::take(&mut self.kwant_id),
+            context_id: Some(std::mem::take(&mut self.context_id)),
+            outcome: self.outcome.to_string(),
+        });
+    }
+}
+
+async fn run_kwant_turn_inner(
+    scope: &TurnScope,
+    target_kwant: &Kwant,
+    prompt: String,
+    opts: TurnOpts,
+) -> Option<String> {
     let state = &scope.state;
     let event_broadcast = state.event_sender.clone();
     let db = state.db.clone();
@@ -600,7 +739,7 @@ async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String,
                 "🌐 Navigating bot browser to {}...",
                 target_url
             )));
-            if let Some(ctrl) = get_or_create_browser_controller(&state, &sandbox_target).await {
+            if let Some(ctrl) = get_or_create_browser_controller(state, &sandbox_target).await {
                 match ctrl.navigate(&target_url).await {
                 Ok(nav) => {
                     let page_text = ctrl.extract_content().await.unwrap_or_default();
@@ -667,16 +806,27 @@ async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String,
             }
         }
 
-        let driver = resolve_driver_for_model(&target_model, configured_key, endpoint);
-        let mcp_turn = super::mcp_runtime::prepare_turn(&state, &target_kwant, scope.workspace_dir.clone()).await;
+        let engine = crate::profiles::Engine::from_model(&target_model);
+        let candidates = super::profile_turn::plan(state, engine, &target_kwant.id).await;
+        let attempts: Vec<Option<LlmProfile>> = if candidates.is_empty() {
+            vec![None]
+        } else {
+            candidates.into_iter().map(Some).collect()
+        };
+        let mcp_turn =
+            super::mcp_runtime::prepare_turn(state, target_kwant, scope.workspace_dir.clone())
+                .await;
         let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());
         let turn_input = TurnInput {
-            browser_api_url: Some(format!("http://127.0.0.1:{}/api/sandbox/{}", state.config.port, sandbox_target)),
+            browser_api_url: Some(format!(
+                "http://127.0.0.1:{}/api/sandbox/{}",
+                state.config.port, sandbox_target
+            )),
             thread_id: context_id,
             kwant: target_kwant.clone(),
             prompt: final_prompt,
             history,
-            model_override: Some(target_model),
+            model_override: Some(target_model.clone()),
             effort_level: Some(effort_level),
             team_context: scope.team_context.clone(),
             workspace_dir: scope.workspace_dir.clone(),
@@ -690,42 +840,172 @@ async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String,
             mcp: mcp_ctx.clone(),
         };
 
-        let (driver_tx, mut driver_rx) = mpsc::channel(32);
-        let driver_task = tokio::spawn(async move {
-            driver.stream_turn(turn_input, driver_tx).await
-        });
-
+        let had_state = state.db.list_profile_states().await.unwrap_or_default();
+        let turn_start = std::time::Instant::now();
+        // Notices about profile switches, kept with the saved reply
+        let mut notices: Vec<String> = Vec::new();
         let mut cancelled = false;
-        loop {
-            tokio::select! {
-                _ = cancel_token.cancelled() => {
-                    cancelled = true;
-                    driver_task.abort();
-                    break;
-                }
-                event_opt = driver_rx.recv() => {
-                    match event_opt {
-                        Some(event) => {
-                            let _ = event_broadcast.send(event);
+        let mut driver_result = None;
+        let mut gave_up: Option<String> = None;
+        for (i, profile) in attempts.iter().enumerate() {
+            let driver = super::profile_turn::driver_for(
+                state,
+                profile.as_ref(),
+                &target_model,
+                configured_key.clone(),
+                endpoint.clone(),
+            )
+            .await;
+            let input = turn_input.clone();
+            let (driver_tx, mut driver_rx) = mpsc::channel(32);
+            let driver_task =
+                tokio::spawn(async move { driver.stream_turn(input, driver_tx).await });
+
+            // The driver's TurnComplete is held back: it's re-sent with the kwant and profile,
+            // or dropped when the turn moves to another profile.
+            let mut held_complete = None;
+            let mut side_effects = false;
+            loop {
+                tokio::select! {
+                    _ = cancel_token.cancelled() => {
+                        cancelled = true;
+                        driver_task.abort();
+                        break;
+                    }
+                    event_opt = driver_rx.recv() => {
+                        match event_opt {
+                            Some(RuntimeEvent::TurnComplete { tokens, duration_ms, .. }) => {
+                                held_complete = Some((tokens, duration_ms));
+                            }
+                            Some(event) => {
+                                let visible = match &event {
+                                    RuntimeEvent::TextDelta(t) => !t.trim().is_empty(),
+                                    RuntimeEvent::ToolCallPending { .. } | RuntimeEvent::ApprovalRequired { .. } => true,
+                                    _ => false,
+                                };
+                                side_effects |= visible;
+                                let _ = event_broadcast.send(event);
+                            }
+                            None => break,
                         }
-                        None => break,
                     }
                 }
             }
+            if cancelled {
+                break;
+            }
+            let result = driver_task.await;
+            let refused = match &result {
+                Ok(Ok(out)) => out.failure.clone(),
+                _ => None,
+            };
+            if let Some(failure) = refused {
+                if let Some(p) = profile {
+                    super::profile_turn::record_failure(state, p, &failure).await;
+                }
+                let next = attempts.get(i + 1).and_then(|n| n.as_ref());
+                if let (Some(from), Some(to), false) = (profile, next, side_effects) {
+                    let notice = super::profile_turn::switch_notice(from, to, &failure);
+                    let _ = event_broadcast.send(RuntimeEvent::ProfileSwitched {
+                        kwant_id: target_kwant.id.clone(),
+                        from_profile_id: from.id.clone(),
+                        from_name: from.name.clone(),
+                        to_profile_id: to.id.clone(),
+                        to_name: to.name.clone(),
+                        class: failure.class.as_str().into(),
+                        retry_at: failure.retry_at,
+                    });
+                    let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(notice.clone()));
+                    tracing::info!(kwant = %target_kwant.id, from = %from.id, to = %to.id, class = failure.class.as_str(), "turn moved to another profile");
+                    notices.push(notice);
+                    continue;
+                }
+                let text = match profile {
+                    Some(p) => {
+                        super::profile_turn::give_up_notice(&target_kwant.name, p, &failure, i + 1)
+                    }
+                    None => format!(
+                        "⚠️ [{}] The model provider refused the turn ({}). {}",
+                        target_kwant.name,
+                        failure.class.as_str(),
+                        failure.detail
+                    ),
+                };
+                let _ = event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
+                let _ = event_broadcast.send(RuntimeEvent::TurnComplete {
+                    tokens: 0,
+                    duration_ms: turn_start.elapsed().as_millis() as u64,
+                    kwant_id: Some(target_kwant.id.clone()),
+                    profile_id: profile.as_ref().map(|p| p.id.clone()),
+                });
+                gave_up = Some(text);
+                break;
+            }
+            if let Some(p) = profile {
+                if had_state.contains_key(&p.id) && matches!(result, Ok(Ok(_))) {
+                    let _ = state.db.clear_profile_state(&p.id).await;
+                }
+            }
+            match &result {
+                Ok(Err(e)) => {
+                    let _ = event_broadcast.send(RuntimeEvent::Error {
+                        code: "driver_error".into(),
+                        message: e.to_string(),
+                        kwant_id: Some(target_kwant.id.clone()),
+                    });
+                }
+                Err(_) => {
+                    let _ = event_broadcast.send(RuntimeEvent::Error {
+                        code: "driver_crashed".into(),
+                        message: "the model driver stopped unexpectedly".into(),
+                        kwant_id: Some(target_kwant.id.clone()),
+                    });
+                }
+                Ok(Ok(_)) => {}
+            }
+            if let Some((tokens, duration_ms)) = held_complete {
+                let _ = event_broadcast.send(RuntimeEvent::TurnComplete {
+                    tokens,
+                    duration_ms,
+                    kwant_id: Some(target_kwant.id.clone()),
+                    profile_id: profile.as_ref().map(|p| p.id.clone()),
+                });
+            }
+            driver_result = Some(result);
+            break;
         }
-
-        let driver_result = if cancelled { None } else { Some(driver_task.await) };
         if let Some((_, token)) = &mcp_turn {
             super::mcp_runtime::finish_turn(&state, token).await;
         }
         let mcp_records = mcp_ctx.map(|c| c.take_records()).filter(|r| !r.is_empty());
 
+        let with_notices = |reasoning: Option<String>| -> Option<String> {
+            if notices.is_empty() {
+                return reasoning;
+            }
+            Some(match reasoning {
+                Some(r) => format!("{}\n{r}", notices.join("\n")),
+                None => notices.join("\n"),
+            })
+        };
         if cancelled {
             let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta("⏹️ Cancelled by user".into()));
+        } else if let Some(text) = gave_up {
+            let msg = NewMessage {
+                channel_id: channel_id.clone(),
+                direct_kwant_id: kwant_id.clone(),
+                sender_role: "kwant".into(),
+                sender_id: target_kwant.name.clone(),
+                text,
+                reasoning_content: with_notices(opts.label.clone()),
+                tool_calls: None,
+                tokens_used: 0,
+            };
+            let _ = db.insert_message(&msg).await;
         } else if let Some(Ok(Ok(output))) = driver_result {
             // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM
             if let Some(bot_url) = extract_url_from_text(&output.text) {
-                if let Some(ctrl) = get_or_create_browser_controller(&state, &sandbox_target).await {
+                if let Some(ctrl) = get_or_create_browser_controller(state, &sandbox_target).await {
                     let curr = ctrl.current_url.lock().await.clone().unwrap_or_default();
                     if curr != bot_url && !bot_url.contains("localhost") && !bot_url.contains("127.0.0.1") {
                         if let Ok(nav) = ctrl.navigate(&bot_url).await {
@@ -749,14 +1029,17 @@ async fn run_kwant_turn(scope: &TurnScope, target_kwant: &Kwant, prompt: String,
             }
 
             let saved = match &opts.discussion {
-                None => Some((output.text.clone(), opts.label.clone().or(output.reasoning))),
+                None => Some((
+                    output.text.clone(),
+                    with_notices(opts.label.clone().or(output.reasoning)),
+                )),
                 Some(question_label) => match discussion::parse_reply(&output.text) {
                     discussion::Reply::Pass => None,
                     discussion::Reply::AskUser(q) => match question_label {
-                        Some(label) => Some((q, Some(label.clone()))),
-                        None => Some((q, opts.label.clone())),
+                        Some(label) => Some((q, with_notices(Some(label.clone())))),
+                        None => Some((q, with_notices(opts.label.clone()))),
                     },
-                    discussion::Reply::Speak(t) => Some((t, opts.label.clone())),
+                    discussion::Reply::Speak(t) => Some((t, with_notices(opts.label.clone()))),
                 },
             };
             if let Some((text, reasoning_content)) = saved {

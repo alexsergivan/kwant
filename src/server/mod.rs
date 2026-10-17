@@ -5,6 +5,9 @@ pub mod browser_stream;
 pub mod mcp_oauth;
 pub mod mcp_routes;
 pub mod mcp_runtime;
+pub mod profile_routes;
+pub mod profile_turn;
+pub mod auth;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -21,7 +24,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
-use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -38,6 +40,10 @@ pub struct AppState {
     /// Live claude CLI turns whose MCP permission prompts kwnt answers, by URL token.
     pub mcp_sessions: Arc<Mutex<HashMap<String, mcp_runtime::PermissionSession>>>,
     pub mcp_oauth: Arc<mcp_oauth::OAuthState>,
+    /// LLM profiles: sign-in checks and in-app logins.
+    pub profiles: Arc<crate::profiles::ProfileManager>,
+    /// API token for requests from other machines (see `auth`).
+    pub api_token: Arc<auth::ApiToken>,
 }
 
 impl AppState {
@@ -51,6 +57,8 @@ impl AppState {
         let (event_sender, _) = broadcast::channel(128);
         let sandbox_manager = Arc::new(SandboxManager::new());
         let browser_controllers = Arc::new(Mutex::new(HashMap::new()));
+        let profiles = Arc::new(crate::profiles::ProfileManager::new(config.data_dir.clone()));
+        let api_token = Arc::new(auth::ApiToken::load(&config));
         let browser_service = Arc::new(crate::sandbox::service::BrowserService::new(config.data_dir.clone(), config.browser_cdp_url.clone()));
         Self {
             config,
@@ -65,6 +73,8 @@ impl AppState {
             browser_service,
             mcp_sessions: Arc::new(Mutex::new(HashMap::new())),
             mcp_oauth: Arc::new(mcp_oauth::OAuthState::default()),
+            profiles,
+            api_token,
         }
     }
 
@@ -76,13 +86,20 @@ impl AppState {
 }
 
 pub fn create_router(state: AppState) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
     Router::new()
         .route("/api/health", get(routes::health))
+        .route("/api/auth/status", get(auth::status))
+        .route("/api/auth/session", post(auth::create_session).delete(auth::delete_session))
+        .route("/api/profiles", get(profile_routes::list).post(profile_routes::create))
+        .route("/api/profiles/:id", axum::routing::patch(profile_routes::update).delete(profile_routes::remove))
+        .route("/api/profiles/:id/key", put(profile_routes::set_key).delete(profile_routes::delete_key))
+        .route("/api/profiles/:id/login", post(profile_routes::start_login))
+        .route(
+            "/api/profiles/:id/login/:flow_id",
+            get(profile_routes::get_login).delete(profile_routes::cancel_login),
+        )
+        .route("/api/profiles/:id/login/:flow_id/code", post(profile_routes::submit_login_code))
+        .route("/api/profiles/:id/logout", post(profile_routes::logout))
         .route("/api/laya/status", get(routes::laya_status))
         .route("/api/kwants", get(routes::list_kwants).post(routes::create_kwant))
         .route("/api/kwants/:id", put(routes::update_kwant))
@@ -121,6 +138,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/gateway/grok", post(mcp_runtime::gateway_grok_endpoint))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
-        .layer(cors)
+        .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))
         .with_state(state)
 }

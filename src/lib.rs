@@ -4,6 +4,7 @@ pub mod db;
 pub mod drivers;
 pub mod embedded;
 pub mod mcp;
+pub mod profiles;
 pub mod router;
 pub mod sandbox;
 pub mod server;

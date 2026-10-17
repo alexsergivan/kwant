@@ -123,12 +123,28 @@ pub fn codex_reserved_name_conflict(ctx: Option<&crate::mcp::McpTurnContext>, us
 /// How long `codex mcp list` may take before the turn is refused.
 const CODEX_MCP_LIST_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// `codex exec` overrides limiting the model's shell commands to codex's "core" env
+/// (PATH, HOME, USER, SHELL...). codex's default passes its whole env, provider key included.
+pub const CODEX_SHELL_POLICY: [&str; 4] = [
+    "-c",
+    "shell_environment_policy.inherit=\"core\"",
+    "-c",
+    "shell_environment_policy.ignore_default_excludes=false",
+];
+
 /// Names of the MCP servers codex would load for this turn, as codex itself resolves them:
 /// `$CODEX_HOME`/`~/.codex` config, its active profile, a trusted project's `.codex/config.toml`
 /// for `cwd`, and system config. The listing holds server env values, so it is never logged.
-pub async fn codex_user_mcp_servers(bin: &str, cwd: Option<&Path>) -> Result<Vec<String>, String> {
+pub async fn codex_user_mcp_servers(
+    bin: &str,
+    cwd: Option<&Path>,
+    profile_env: Option<&crate::profiles::CliEnv>,
+) -> Result<Vec<String>, String> {
     let mut cmd = Command::new(bin);
     cmd.args(["mcp", "list", "--json"]);
+    if let Some(env) = profile_env {
+        env.apply(&mut cmd);
+    }
     if let Some(dir) = cwd.filter(|d| d.exists()) {
         cmd.current_dir(dir);
     }
@@ -185,6 +201,9 @@ pub struct CliDriver {
     /// The user's grok home to take model settings and login from; `None` means `$GROK_HOME`
     /// or `~/.grok`. Only read, never written.
     pub grok_home: Option<std::path::PathBuf>,
+    /// Set when the turn runs on a `cli_home` profile: points the CLI at the profile's home and
+    /// removes credential variables that would override its login.
+    pub profile_env: Option<crate::profiles::CliEnv>,
 }
 
 impl CliDriver {
@@ -195,7 +214,22 @@ impl CliDriver {
             cli_binary: bin,
             tool_kind: kind,
             grok_home: None,
+            profile_env: None,
         }
+    }
+
+    /// Runs the CLI on a profile's own home (its login and settings) instead of the user's.
+    /// grok still runs in a private temp home, taking settings and login from this one only.
+    pub fn with_profile_home(
+        mut self,
+        engine: crate::profiles::Engine,
+        home: std::path::PathBuf,
+    ) -> Self {
+        self.profile_env = Some(crate::profiles::CliEnv::for_home(engine, &home));
+        if engine == crate::profiles::Engine::Grok {
+            self.grok_home = Some(home);
+        }
+        self
     }
 
     pub fn with_grok_home(mut self, dir: std::path::PathBuf) -> Self {
@@ -227,6 +261,8 @@ struct GrokLaunch<'a> {
     auth_file: Option<std::path::PathBuf>,
     /// This turn's gateway token, handed over in grok's env only.
     gateway_token: Option<String>,
+    /// Credential variables a profile run removes.
+    removed_env: Vec<String>,
 }
 
 /// What one grok process left behind.
@@ -239,6 +275,8 @@ struct GrokRun {
     stop_reason: Option<String>,
     /// `None` if grok was killed by a signal.
     exit_code: Option<i32>,
+    /// grok called at least one tool.
+    tool_calls: bool,
 }
 
 /// Reads a pipe to the end, keeping at most the last `max` bytes.
@@ -279,6 +317,9 @@ impl CliDriver {
         for key in super::grok::REMOVED_ENV {
             cmd.env_remove(key);
         }
+        for key in &launch.removed_env {
+            cmd.env_remove(key);
+        }
         match (launch.auth_file.as_deref(), auth) {
             (Some(file), GrokAuth::InPlace) => {
                 cmd.env("GROK_AUTH_PATH", file);
@@ -311,6 +352,7 @@ impl CliDriver {
                 errors: Vec::new(),
                 stop_reason: None,
                 exit_code: None,
+                tool_calls: false,
             };
             let mut parser = super::grok::StreamParser::default();
             let mut buffer = [0u8; 4096];
@@ -366,6 +408,7 @@ impl CliDriver {
             }
             super::grok::StreamEvent::Error(message) => run.errors.push(message),
             super::grok::StreamEvent::End { stop_reason } => run.stop_reason = stop_reason,
+            super::grok::StreamEvent::ToolCall => run.tool_calls = true,
         }
     }
 
@@ -382,8 +425,11 @@ impl CliDriver {
             .and_then(|h| std::fs::read_to_string(h.join("config.toml")).ok())
             .map(|text| super::grok::model_settings(&text))
             .unwrap_or_default();
-        let auth_file = std::env::var_os("GROK_AUTH_PATH")
-            .filter(|p| !p.is_empty())
+        super::grok::restrict_shell_env(&mut config);
+        // A profile's login is its home's auth.json and nothing else
+        let env_auth = std::env::var_os("GROK_AUTH_PATH")
+            .filter(|p| !p.is_empty() && self.profile_env.is_none());
+        let auth_file = env_auth
             .map(std::path::PathBuf::from)
             .or_else(|| user_home.map(|h| h.join("auth.json")))
             .filter(|p| p.is_file());
@@ -412,6 +458,11 @@ impl CliDriver {
             config,
             auth_file,
             gateway_token,
+            removed_env: self
+                .profile_env
+                .as_ref()
+                .map(|e| e.remove.clone())
+                .unwrap_or_default(),
         };
         let run = Self::run_grok_once(&launch, GrokAuth::InPlace, event_tx).await?;
         if launch.auth_file.is_some()
@@ -425,6 +476,121 @@ impl CliDriver {
             return Self::run_grok_once(&launch, GrokAuth::Copied, event_tx).await;
         }
         Ok(run)
+    }
+}
+
+/// A provider refusal (quota, auth) in a CLI's error output, if that's what stopped it.
+fn refusal(text: &str) -> Option<crate::profiles::ProviderFailure> {
+    let (class, retry_at) = crate::profiles::classify(None, text, chrono::Utc::now())?;
+    class
+        .fails_over()
+        .then(|| crate::profiles::ProviderFailure {
+            class,
+            retry_at,
+            detail: crate::profiles::classify::redact_detail(text, 300),
+        })
+}
+
+/// The error lines of codex's stderr. Its stderr also echoes the prompt, which must not be
+/// mistaken for an error message.
+fn codex_error_lines(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("ERROR")
+                || t.starts_with("Error:")
+                || t.contains("unexpected status")
+                || t.contains("stream error")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Whether codex's stderr shows it ran a command, edited a file or called a tool.
+fn codex_had_effects(stderr: &str) -> bool {
+    stderr.lines().any(|l| {
+        let t = l.trim();
+        t == "exec"
+            || t.starts_with("exec ")
+            || t.contains("apply_patch")
+            || t.starts_with("tool ")
+            || t == "file update"
+    })
+}
+
+/// Says why grok gave no reply, so the chat never shows an empty message.
+async fn empty_grok_reply(
+    input: &TurnInput,
+    run: &GrokRun,
+    event_tx: &mpsc::Sender<RuntimeEvent>,
+) -> (String, usize) {
+    let mut secrets = input
+        .mcp
+        .as_ref()
+        .map(|c| c.secret_values())
+        .unwrap_or_default();
+    secrets.extend(
+        input
+            .mcp
+            .as_ref()
+            .and_then(|c| c.gateway.as_ref())
+            .map(|g| g.token.clone()),
+    );
+    let notice = super::grok::empty_reply_notice(
+        &super::grok::EmptyRun {
+            stderr: &run.stderr,
+            errors: &run.errors,
+            stop_reason: run.stop_reason.as_deref(),
+            exit_code: run.exit_code,
+        },
+        &secrets,
+    );
+    tracing::warn!(exit_code = ?run.exit_code, stop_reason = ?run.stop_reason, "grok gave no reply");
+    let msg = format!("⚠️ [{}] {notice}", input.kwant.name);
+    let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
+    (msg, 0)
+}
+
+/// What `claude -p --output-format json` reports.
+#[derive(Debug, Default, serde::Deserialize)]
+struct ClaudeResult {
+    #[serde(default)]
+    is_error: bool,
+    #[serde(default)]
+    num_turns: u64,
+    #[serde(default)]
+    result: String,
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
+}
+
+impl ClaudeResult {
+    /// The result line of claude's JSON output, if it printed one.
+    fn parse(stdout: &str) -> Option<Self> {
+        stdout
+            .lines()
+            .rev()
+            .find_map(|l| {
+                serde_json::from_str::<serde_json::Value>(l.trim())
+                    .ok()
+                    .filter(|v| v["type"] == "result")
+            })
+            .and_then(|v| serde_json::from_value(v).ok())
+    }
+
+    fn tokens(&self) -> Option<usize> {
+        let u = self.usage.as_ref()?;
+        let sum = [
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ]
+        .iter()
+        .filter_map(|k| u[*k].as_u64())
+        .sum::<u64>();
+        (sum > 0).then_some(sum as usize)
     }
 }
 
@@ -448,12 +614,15 @@ impl Driver for CliDriver {
                     .send(RuntimeEvent::TurnComplete {
                         tokens: 10,
                         duration_ms: 10,
+                        kwant_id: None,
+                        profile_id: None,
                     })
                     .await;
                 return Ok(TurnOutput {
                     text: msg,
                     reasoning: None,
                     tokens_used: 10,
+                    ..Default::default()
                 });
             }
         };
@@ -496,7 +665,7 @@ impl Driver for CliDriver {
                 // Fail closed: without the names, the user's own servers would run with no
                 // approval card (and despite a per-kwant opt-out). Same for a user server named
                 // like the gateway, which can't be switched off while the gateway uses its name.
-                let listed = codex_user_mcp_servers(&bin_path, input.workspace_dir.as_deref()).await.map_err(|e| {
+                let listed = codex_user_mcp_servers(&bin_path, input.workspace_dir.as_deref(), self.profile_env.as_ref()).await.map_err(|e| {
                     tracing::warn!(error = %e, "could not list codex's own MCP servers; not running codex");
                     format!(
                         "kwnt couldn't check which MCP servers your codex config would start ({e}), so it didn't run codex. Check that `codex mcp list` works."
@@ -512,9 +681,19 @@ impl Driver for CliDriver {
                         let msg = format!("⚠️ [{}] {reason}", input.kwant.name);
                         let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
                         let _ = event_tx
-                            .send(RuntimeEvent::TurnComplete { tokens: 0, duration_ms: start.elapsed().as_millis() as u64 })
+                            .send(RuntimeEvent::TurnComplete {
+                                tokens: 0,
+                                duration_ms: start.elapsed().as_millis() as u64,
+                                kwant_id: None,
+                                profile_id: None,
+                            })
                             .await;
-                        return Ok(TurnOutput { text: msg, reasoning: None, tokens_used: 0 });
+                        return Ok(TurnOutput {
+                            text: msg,
+                            reasoning: None,
+                            tokens_used: 0,
+                            ..Default::default()
+                        });
                     }
                 };
                 cmd.arg("exec")
@@ -527,7 +706,9 @@ impl Driver for CliDriver {
                     // Never the user's own codex servers: codex exec has no hook for kwnt's
                     // approval cards. The kwant's servers come only through kwnt's gateway.
                     .arg("-c")
-                    .arg(codex_mcp_servers(input.mcp.as_ref(), &user_servers));
+                    .arg(codex_mcp_servers(input.mcp.as_ref(), &user_servers))
+                    // The model's shell sees only codex's core env, never kwnt's keys or rc exports
+                    .args(CODEX_SHELL_POLICY);
                 if let Some(gateway) = input.mcp.as_ref().and_then(|c| c.gateway.as_ref()) {
                     cmd.env(crate::mcp::GATEWAY_TOKEN_ENV, &gateway.token);
                     // codex's default shell env policy passes the token on to the model's shell
@@ -557,33 +738,14 @@ impl Driver for CliDriver {
                     effective_prompt.clone(),
                 ];
                 let (text, tokens) = match self.run_grok(&bin_path, &input, args, &event_tx).await {
+                    Ok(run) if run.stdout.trim().is_empty() && !run.tool_calls => {
+                        match refusal(&format!("{}\n{}", run.errors.join("\n"), run.stderr)) {
+                            Some(failure) => return Ok(TurnOutput::refused(failure)),
+                            None => empty_grok_reply(&input, &run, &event_tx).await,
+                        }
+                    }
                     Ok(run) if run.stdout.trim().is_empty() => {
-                        // Never an empty reply: say why grok gave none
-                        let mut secrets = input
-                            .mcp
-                            .as_ref()
-                            .map(|c| c.secret_values())
-                            .unwrap_or_default();
-                        secrets.extend(
-                            input
-                                .mcp
-                                .as_ref()
-                                .and_then(|c| c.gateway.as_ref())
-                                .map(|g| g.token.clone()),
-                        );
-                        let notice = super::grok::empty_reply_notice(
-                            &super::grok::EmptyRun {
-                                stderr: &run.stderr,
-                                errors: &run.errors,
-                                stop_reason: run.stop_reason.as_deref(),
-                                exit_code: run.exit_code,
-                            },
-                            &secrets,
-                        );
-                        tracing::warn!(exit_code = ?run.exit_code, stop_reason = ?run.stop_reason, "grok gave no reply");
-                        let msg = format!("⚠️ [{}] {notice}", input.kwant.name);
-                        let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
-                        (msg, 0)
+                        empty_grok_reply(&input, &run, &event_tx).await
                     }
                     Ok(run) => {
                         let tokens = run.stdout.len() / 4;
@@ -603,6 +765,8 @@ impl Driver for CliDriver {
                     .send(RuntimeEvent::TurnComplete {
                         tokens,
                         duration_ms: start.elapsed().as_millis() as u64,
+                        kwant_id: None,
+                        profile_id: None,
                     })
                     .await;
                 return Ok(TurnOutput {
@@ -612,6 +776,7 @@ impl Driver for CliDriver {
                         self.tool_kind, bin_path, effort
                     )),
                     tokens_used: tokens,
+                    ..Default::default()
                 });
             }
             _ => {
@@ -649,50 +814,91 @@ impl Driver for CliDriver {
                     }
                 }
                 cmd.arg("--append-system-prompt").arg(&system_prompt);
+                // One JSON result: tells a usage limit or sign-out apart from a reply
+                cmd.arg("--output-format").arg("json");
                 cmd.arg("-p").arg(&effective_prompt);
             }
+        }
+        if let Some(env) = &self.profile_env {
+            env.apply(&mut cmd);
         }
 
         // codex's reply comes from its -o file; an unread pipe could fill up and stall the CLI
         cmd.stdin(Stdio::null());
-        cmd.stdout(if codex_out_file.is_some() { Stdio::null() } else { Stdio::piped() });
-        cmd.stderr(Stdio::null());
+        cmd.stdout(if codex_out_file.is_some() {
+            Stdio::null()
+        } else {
+            Stdio::piped()
+        });
+        // codex reports a usage limit or sign-out only on stderr
+        cmd.stderr(if codex_out_file.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
         // A cancelled turn aborts this task; the CLI must not outlive it
         cmd.kill_on_drop(true);
 
         match cmd.spawn() {
             Ok(mut child) => {
-                let mut output_str = String::new();
-                let mut buffer = [0u8; 1024];
-
-                if let Some(mut stdout) = child.stdout.take() {
-                    while let Ok(n) = stdout.read(&mut buffer).await {
-                        if n == 0 {
-                            break;
-                        }
-                        let chunk = String::from_utf8_lossy(&buffer[..n]).to_string();
-                        let _ = event_tx.send(RuntimeEvent::TextDelta(chunk.clone())).await;
-                        output_str.push_str(&chunk);
+                let stdout_pipe = child.stdout.take();
+                let stderr_pipe = child.stderr.take();
+                let read_stdout = async {
+                    match stdout_pipe {
+                        Some(stdout) => read_tail(stdout, 8 * 1024 * 1024).await,
+                        None => String::new(),
                     }
-                }
-
-                let _ = child.wait().await;
-
-                if let Some(ref out_file) = codex_out_file {
-                    if let Ok(content) = tokio::fs::read_to_string(out_file).await {
-                        output_str = content;
+                };
+                let read_stderr = async {
+                    match stderr_pipe {
+                        Some(stderr) => read_tail(stderr, GROK_STDERR_MAX).await,
+                        None => String::new(),
                     }
+                };
+                let (stdout, stderr) = tokio::join!(read_stdout, read_stderr);
+                let exit = child.wait().await.ok();
+
+                let mut tokens = None;
+                let output_str = if let Some(ref out_file) = codex_out_file {
+                    let content = tokio::fs::read_to_string(out_file)
+                        .await
+                        .unwrap_or_default();
                     let _ = tokio::fs::remove_file(out_file).await;
-                    let _ = event_tx.send(RuntimeEvent::TextDelta(output_str.clone())).await;
-                }
+                    let failed = !exit.is_some_and(|s| s.success());
+                    if content.trim().is_empty() && failed && !codex_had_effects(&stderr) {
+                        if let Some(failure) = refusal(&codex_error_lines(&stderr)) {
+                            return Ok(TurnOutput::refused(failure));
+                        }
+                    }
+                    content
+                } else {
+                    match ClaudeResult::parse(&stdout) {
+                        Some(result) => {
+                            if result.is_error && result.num_turns <= 1 {
+                                if let Some(failure) = refusal(&result.result) {
+                                    return Ok(TurnOutput::refused(failure));
+                                }
+                            }
+                            tokens = result.tokens();
+                            result.result
+                        }
+                        // Not JSON (an older claude): its plain text is the reply
+                        None => stdout,
+                    }
+                };
+                let _ = event_tx
+                    .send(RuntimeEvent::TextDelta(output_str.clone()))
+                    .await;
 
                 let duration = start.elapsed().as_millis() as u64;
-                let tokens = output_str.len() / 4;
+                let tokens = tokens.unwrap_or(output_str.len() / 4);
 
                 let _ = event_tx
                     .send(RuntimeEvent::TurnComplete {
                         tokens,
                         duration_ms: duration,
+                        kwant_id: None,
+                        profile_id: None,
                     })
                     .await;
 
@@ -703,6 +909,7 @@ impl Driver for CliDriver {
                         self.tool_kind, bin_path, effort
                     )),
                     tokens_used: tokens,
+                    ..Default::default()
                 })
             }
             Err(e) => {
@@ -716,6 +923,8 @@ impl Driver for CliDriver {
                     .send(RuntimeEvent::TurnComplete {
                         tokens: 15,
                         duration_ms: start.elapsed().as_millis() as u64,
+                        kwant_id: None,
+                        profile_id: None,
                     })
                     .await;
 
@@ -723,6 +932,7 @@ impl Driver for CliDriver {
                     text: msg,
                     reasoning: None,
                     tokens_used: 15,
+                    ..Default::default()
                 })
             }
         }
@@ -733,6 +943,20 @@ impl Driver for CliDriver {
 mod tests {
     use super::*;
     use crate::db::models::{Kwant, Message};
+
+    #[test]
+    fn codex_shell_policy_is_core_only() {
+        let args = CODEX_SHELL_POLICY.join(" ");
+        assert_eq!(
+            args,
+            "-c shell_environment_policy.inherit=\"core\" -c shell_environment_policy.ignore_default_excludes=false"
+        );
+        // Each override must parse as TOML, the way `codex -c key=value` reads it
+        for pair in CODEX_SHELL_POLICY.iter().skip(1).step_by(2) {
+            let table: toml::Table = pair.parse().unwrap();
+            assert!(table.contains_key("shell_environment_policy"), "{pair}");
+        }
+    }
 
     #[test]
     fn test_build_cli_prompt_with_history() {

@@ -537,14 +537,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {teamMembers && teamMembers.length > 0 && (
             <div className="flex items-center gap-2 pl-3 border-l border-zinc-800">
-              <div className="flex -space-x-2 overflow-hidden items-center py-0.5">
+              <div className="flex -space-x-2 items-center px-1 py-1 -my-0.5">
                 {teamMembers.map((member) => (
                   <div
                     key={member.id}
                     title={`${member.name} (${member.title})`}
                     className="inline-block ring-2 ring-zinc-950 rounded-full"
                   >
-                    <ModernAvatar role={member.avatar_sprite} name={member.name} size={24} />
+                    <ModernAvatar role={member.avatar_sprite} name={member.name} size={24} kwantId={member.id} />
                   </div>
                 ))}
               </div>
@@ -779,7 +779,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
                 title={`Ask ${m.name}`}
               >
-                <ModernAvatar role={m.avatar_sprite} name={m.name} size={14} />
+                <ModernAvatar role={m.avatar_sprite} name={m.name} size={14} kwantId={m.id} />
                 <span>@{m.name}</span>
               </button>
             ))}

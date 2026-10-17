@@ -56,6 +56,9 @@ pub enum Commands {
     /// List channels stored in the local database
     Channels,
 
+    /// Print the API token that browsers and scripts on other machines need
+    Token,
+
     /// Run a tiny MCP test server on stdin/stdout (for tests and smoke checks)
     #[command(hide = true)]
     McpEchoServer,
@@ -119,6 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let db = Database::init(&config.data_dir).await?;
+            restrict_data_dir(&config.data_dir);
             let tools = ToolRunner::new(config.data_dir.join("workspace"));
             let broker = PermissionBroker::new();
             let router = LayaRouter::new(config.laya_url.clone());
@@ -159,7 +163,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "⚡ Kwant: your team of super-intelligent bots (kwants), listening at http://{}",
                 addr
             );
+            if !is_loopback_bind(&config.host) {
+                println!(
+                    "🔒 Requests from other machines need the API token: run `kwnt token` and open http://<this-host>:{}/#kwnt_token=<token>",
+                    config.port
+                );
+            }
 
+            let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
             tokio::select! {
                 res = axum::serve(listener, app) => res?,
                 _ = shutdown_signal() => println!("Shutting down…"),
@@ -171,6 +182,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Agents) => print_agents(&config).await?,
         Some(Commands::Teams) => print_teams(&config).await?,
         Some(Commands::Channels) => print_channels(&config).await?,
+        Some(Commands::Token) => {
+            let token = std::env::var("KWNT_API_TOKEN")
+                .ok()
+                .map(|t| t.trim().to_string())
+                .filter(|t| t.len() >= 16)
+                .unwrap_or_else(|| kwnt::server::auth::load_or_create(&config.data_dir));
+            println!("{token}");
+        }
         Some(Commands::McpEchoServer) => unreachable!("handled before config loading"),
         Some(Commands::McpOauthMockServer { .. }) => unreachable!("handled before config loading"),
         None => {
@@ -180,6 +199,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn is_loopback_bind(host: &str) -> bool {
+    host == "localhost"
+        || host
+            .trim_matches(['[', ']'])
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// The data dir holds the database (keys, MCP tokens) and profile logins: owner only.
+fn restrict_data_dir(dir: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        for name in ["kwnt.db", "kwnt.db-wal", "kwnt.db-shm"] {
+            let path = dir.join(name);
+            if path.exists() {
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
 }
 
 fn print_status(config: &Config) {

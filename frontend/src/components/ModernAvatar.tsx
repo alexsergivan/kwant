@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useCallback, useSyncExternalStore } from 'react';
+import { isKwantWorking, subscribeKwant } from '../kwantActivity';
 
 interface ModernAvatarProps {
   role?: string;
@@ -6,7 +7,20 @@ interface ModernAvatarProps {
   size?: number; // pixel diameter
   isOnline?: boolean;
   className?: string;
+  /** The kwant this avatar shows; it animates while that kwant is working on a turn. */
+  kwantId?: string;
 }
+
+const noopUnsubscribe = () => undefined;
+
+/** Whether a kwant is mid-turn; only this kwant's turns re-render the caller. */
+export const useKwantWorking = (kwantId: string | undefined): boolean => {
+  const subscribe = useCallback(
+    (onChange: () => void) => (kwantId ? subscribeKwant(kwantId, onChange) : noopUnsubscribe),
+    [kwantId],
+  );
+  return useSyncExternalStore(subscribe, () => isKwantWorking(kwantId));
+};
 
 type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
@@ -315,7 +329,9 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   size = 36,
   isOnline,
   className = '',
+  kwantId,
 }) => {
+  const working = useKwantWorking(kwantId);
   const creature = pickCreature(role, name);
   // At tiny sizes the frame would dominate, so zoom in on the creature alone
   const framed = size > 20;
@@ -324,10 +340,12 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
 
   return (
     <div
-      className={`relative inline-flex flex-shrink-0 select-none ${className}`}
+      className={`kw-avatar relative inline-flex flex-shrink-0 select-none ${working ? 'kw-avatar-working' : ''} ${className}`}
       style={{ width: size, height: size }}
-      title={name || undefined}
+      title={name ? (working ? `${name} is working…` : name) : undefined}
+      data-working={working || undefined}
     >
+      {working && <span className="kw-avatar-ring" aria-hidden="true" />}
       <svg
         viewBox={framed ? '0 0 26 26' : '5 2.5 16 17'}
         className="w-full h-full"
@@ -342,9 +360,12 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
             <rect key={`scan-${i}`} x={3.5} y={4.5 + i} width={19} height={0.25} fill={SCAN} />
           ))}
         <g transform={compact ? 'translate(13 13.2) scale(1.2) translate(-13 -12)' : undefined}>
-          {renderCreature(creature).filter((r) => framed && !compact || r.key !== 'shadow')}
+          <g className="kw-avatar-body">
+            {renderCreature(creature).filter((r) => framed && !compact || r.key !== 'shadow')}
+          </g>
         </g>
       </svg>
+      {working && <span className="kw-avatar-pip" aria-hidden="true" />}
       {isOnline !== undefined && (
         <span
           className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-zinc-950 ${

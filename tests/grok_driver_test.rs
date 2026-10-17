@@ -174,10 +174,17 @@ async fn grok_runs_in_a_private_temp_home() {
         "{listing}"
     );
 
-    // Only the model settings are carried over
+    // Only the model settings are carried over, plus kwnt's shell env policy
     let config: toml::Table = grok.out("config.toml").parse().unwrap();
-    assert_eq!(config.keys().collect::<Vec<_>>(), ["model", "models"]);
+    assert_eq!(
+        config.keys().collect::<Vec<_>>(),
+        ["model", "models", "shell_environment_policy"]
+    );
     assert_eq!(config["models"]["default"].as_str(), Some("mock"));
+    assert_eq!(
+        config["shell_environment_policy"]["inherit"].as_str(),
+        Some("core")
+    );
 
     assert!(!home.exists(), "temp home left behind: {home:?}");
     // The user's own grok home is untouched
@@ -226,7 +233,16 @@ async fn grok_without_user_config_still_runs_isolated() {
     std::fs::remove_file(grok.user_home.join("config.toml")).unwrap();
     let (reply, _) = grok.run(None).await;
     assert_eq!(reply.trim(), "ok");
-    assert_eq!(grok.out("config.toml").trim(), "");
+    // Nothing of the user's, but the model's shell is still limited to core env
+    let config: toml::Table = grok.out("config.toml").parse().unwrap();
+    assert_eq!(
+        config.keys().collect::<Vec<_>>(),
+        ["shell_environment_policy"]
+    );
+    assert_eq!(
+        config["shell_environment_policy"]["inherit"].as_str(),
+        Some("core")
+    );
 }
 
 async fn wait_for(path: &Path) {
@@ -338,9 +354,13 @@ async fn grok_gets_the_gateway_with_the_token_in_env_only() {
         Some("Bearer ${KWNT_MCP_GATEWAY_TOKEN}")
     );
     assert_eq!(
-        config["shell_environment_policy"]["exclude"][0].as_str(),
-        Some("KWNT_MCP_GATEWAY_TOKEN")
+        config["shell_environment_policy"]["inherit"].as_str(),
+        Some("core")
     );
+    assert!(config["shell_environment_policy"]["exclude"]
+        .as_array()
+        .unwrap()
+        .contains(&toml::Value::from("KWNT_MCP_GATEWAY_TOKEN")));
     for secret in ["gw-secret-token", "sk-very-secret", "/usr/bin/true"] {
         assert!(!argv.contains(secret), "{secret} in argv: {argv}");
         assert!(
