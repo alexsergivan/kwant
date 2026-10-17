@@ -30,6 +30,8 @@ interface SettingsData {
   max_turns_per_agent?: number;
   max_turns_global?: number;
   delegation_follow_up_minutes?: number;
+  /** Agents' own kwnt tools (delegate, ask_user, share_file, skills, history, memory); false when the `agent_tools` setting is "off". */
+  agent_tools?: boolean;
 }
 
 const LIMIT_FIELDS: { key: TurnLimitKey; label: string; hint: string }[] = [
@@ -55,6 +57,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // null until loaded (or from a server without the setting), and then left out of the save
+  const [agentTools, setAgentTools] = useState<boolean | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [notifyOn, setNotifyOn] = useState<NotifyKind[]>(NOTIFY_KINDS.map((k) => k.id));
   const [browserNotify, setBrowserNotify] = useState(browserNotifyEnabled);
@@ -102,6 +106,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 }
               : null,
           );
+          setAgentTools(typeof data.agent_tools === 'boolean' ? data.agent_tools : null);
         })
         .catch((err) => console.error('Failed to load settings:', err));
     }
@@ -151,6 +156,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 delegation_follow_up_minutes: Number(limits.delegation_follow_up_minutes),
               }
             : {}),
+          ...(agentTools !== null ? { agent_tools: agentTools } : {}),
         }),
       });
 
@@ -385,6 +391,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 </p>
               )}
             </fieldset>
+          )}
+
+          {agentTools !== null && (
+            <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
+              <div className="flex-1">
+                <p id="agent-tools-label" className="text-xs font-medium text-zinc-200">Agents can use their own tools</p>
+                <p id="agent-tools-hint" className="text-[11px] text-zinc-500">
+                  Delegating to each other, asking you questions, sharing files, skills, searching earlier chats and keeping notes. Off, agents just reply.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={agentTools}
+                aria-labelledby="agent-tools-label"
+                aria-describedby="agent-tools-hint"
+                onClick={() => {
+                  playSfx('click');
+                  setAgentTools((v) => !v);
+                }}
+                className={`relative shrink-0 w-9 h-5 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                  agentTools ? 'bg-sky-600' : 'bg-zinc-700'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${agentTools ? 'translate-x-4' : ''}`}
+                />
+              </button>
+            </div>
           )}
 
           <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
