@@ -2310,6 +2310,8 @@ pub async fn get_or_create_browser_controller(
     state: &AppState,
     team_id: &str,
 ) -> Option<crate::sandbox::BrowserController> {
+    // follow a mode switch made elsewhere (another kwnt process sharing the data dir)
+    super::computer::apply_mode(state).await;
     let mut controllers = state.browser_controllers.lock().await;
     if let Some(ctrl) = controllers.get(team_id) {
         if !ctrl.is_managed_session() || ctrl.refresh_location().await.is_ok() { return Some(ctrl.clone()); }
@@ -2644,6 +2646,25 @@ pub async fn execute_tool(
         if let Some(tid) = team_id { get_or_create_browser_controller(state, tid).await } else { None }
     } else { None };
 
+    if tool_name == "execute_shell"
+        && super::computer::apply_mode(state).await == crate::sandbox::computer::ComputerMode::Local
+    {
+        // Local mode: the command runs on this computer, so the person approves each one first.
+        let workspace = match team_id {
+            Some(tid) => resolve_sandbox_target_info(state, tid).await.map(|(_, ws)| ws),
+            None => None,
+        }
+        .unwrap_or_else(|| state.tools.workspace_dir.clone());
+        tokio::fs::create_dir_all(&workspace).await?;
+        let command = args["command"].as_str()
+            .ok_or_else(|| crate::tools::ToolError::InvalidArgs("Missing 'command' argument".into()))?;
+        if !super::computer::approve_local_shell(state, team_id.unwrap_or("default"), command, &workspace).await {
+            return Err(crate::tools::ToolError::Execution(
+                "The person did not approve this command, so it was not run.".into(),
+            ));
+        }
+        return crate::tools::shell::execute_shell(&workspace, args).await;
+    }
     if tool_name == "execute_shell" {
         if let Some(tid) = team_id {
             if let Some((name, workspace)) = resolve_sandbox_target_info(state, tid).await {

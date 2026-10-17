@@ -1,4 +1,5 @@
 pub mod browser;
+pub mod computer;
 pub mod manager;
 pub mod service;
 
