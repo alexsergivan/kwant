@@ -6,7 +6,32 @@ Clicks, text, keys, and scroll events are acknowledged independently of frames. 
 
 Take Control obtains an exclusive server-side lease. Bot navigation and selector actions return a conflict while the person holds it; other viewers cannot acquire it. Returning control, closing the pane, or disconnecting releases the lease. The connection has heartbeat and slow-client timeouts. This pauses browser actions, not the entire agent conversation or host CLI process.
 
-## Local Mac or Linux VPS
+## Computer mode: local or VM
+
+Kwnt runs bots' browser and shell commands in one of two places, chosen in **Settings → Computer** or with the browser panel's mode toggle:
+
+- **Local computer** (`local`, the default on macOS): Kwnt opens your installed Chrome or Chromium in a visible window with its own profile, `<data dir>/local-chrome`. It never uses your everyday Chrome profile. Each bot gets its own tab. Sign-ins made in that window are kept in the kwant profile and shared by its tabs. The debugging port is chosen by Chrome and listens on 127.0.0.1 only. Shell commands run on your computer in the bot's working folder, and **every command asks for your approval first**. "Always allow" applies to that one command; it is not remembered. Docker is not needed.
+- **VM (isolated)** (`vm`, the default everywhere else, including a VPS): the Docker browser and execution containers described below.
+
+Switching takes effect at once, without a restart. Kwnt disconnects from the old browser without closing it: the local Chrome window and the VM container both keep running, and switching back reuses them. Each mode keeps its own saved pages (`browser-sessions-local.json` and `browser-sessions.json`). If the local window was closed, the next browser action opens it again. Kwnt does not close the window when it stops, either.
+
+Precedence: a choice saved in Settings wins; otherwise `KWNT_COMPUTER_MODE=local|vm`; otherwise the platform default. `KWNT_CHROME_PATH` names the browser binary local mode launches. Without it, Kwnt looks for Google Chrome, Chromium or Chrome Canary in `/Applications` and `~/Applications` on macOS, then for `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` or `chrome` on `PATH`.
+
+A mode that cannot run here is refused with the reason: local needs a Chrome binary and a display (always present on macOS; `DISPLAY` or `WAYLAND_DISPLAY` on Linux). VM needs Docker, or a `KWNT_BROWSER_CDP_URL` for the browser.
+
+API (same authentication as the other settings routes):
+
+```text
+GET /api/settings/computer
+→ {"mode":"local"|"vm","available":{"local":bool,"vm":bool},"reasons":{"local":string|null,"vm":string|null}}
+
+PUT /api/settings/computer  {"mode":"local"|"vm"}
+→ the same shape after switching; 400 {"error":"<reason>"} for an unknown or unavailable mode
+```
+
+Local mode gives up isolation: commands run with your user's access to your files, and the debugging port can be reached by other programs on the same computer while the kwant window is open. Use VM mode for untrusted work.
+
+## VM mode on a Mac or Linux VPS
 
 Install Docker and start Kwnt normally. The first browser request builds the embedded browser image and starts a private container. Neither a desktop session nor a display server is required on the VPS. Subsequent requests reuse Chromium. The managed debugging port binds only to 127.0.0.1.
 
