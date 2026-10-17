@@ -14,7 +14,7 @@ static CLI_BINARY_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::
 pub fn find_cli_binary(name: &str) -> Option<String> {
     let cache = CLI_BINARY_CACHE.get_or_init(Default::default);
     if let Some(hit) = cache.lock().ok().and_then(|c| c.get(name).cloned()) {
-        if hit.as_deref().map_or(true, |p| Path::new(p).exists()) {
+        if hit.as_deref().is_none_or(|p| Path::new(p).exists()) {
             return hit;
         }
     }

@@ -68,13 +68,12 @@ pub fn heuristic_fallback_with_models(
     };
 
     // 1. Private / local check
-    if combined.contains("private")
+    if (combined.contains("private")
         || combined.contains("confidential")
         || combined.contains("local")
         || combined.contains("offline")
-        || combined.contains("sensitive")
-    {
-        if is_available("local_ollama") {
+        || combined.contains("sensitive"))
+        && is_available("local_ollama") {
             return RouteDecision {
                 selected_model: "local_ollama".into(),
                 effort_level: effort_level.clone(),
@@ -84,18 +83,16 @@ pub fn heuristic_fallback_with_models(
                 reasoning: format!("Local privacy keywords detected; effort={}", effort_level),
             };
         }
-    }
 
     // 2. Complex architecture / multi-file / deep analysis check
-    if combined.contains("architecture")
+    if (combined.contains("architecture")
         || combined.contains("design doc")
         || combined.contains("tradeoff")
         || combined.contains("refactor")
         || combined.contains("analysis")
         || combined.contains("philosophy")
-        || combined.contains("essay")
-    {
-        if is_available("claude") {
+        || combined.contains("essay"))
+        && is_available("claude") {
             return RouteDecision {
                 selected_model: "claude".into(),
                 effort_level: effort_level.clone(),
@@ -105,10 +102,9 @@ pub fn heuristic_fallback_with_models(
                 reasoning: format!("Architectural reasoning keywords detected; effort={}", effort_level),
             };
         }
-    }
 
     // 3. Direct coding / script / regex check
-    if combined.contains("python")
+    if (combined.contains("python")
         || combined.contains("rust")
         || combined.contains("javascript")
         || combined.contains("typescript")
@@ -116,9 +112,8 @@ pub fn heuristic_fallback_with_models(
         || combined.contains("script")
         || combined.contains("regex")
         || combined.contains("algorithm")
-        || combined.contains("function")
-    {
-        if is_available("codex") {
+        || combined.contains("function"))
+        && is_available("codex") {
             return RouteDecision {
                 selected_model: "codex".into(),
                 effort_level: effort_level.clone(),
@@ -128,7 +123,6 @@ pub fn heuristic_fallback_with_models(
                 reasoning: format!("Programming keywords detected; effort={}", effort_level),
             };
         }
-    }
 
     // 4. Default fast & general — ordered by measured CLI latency (claude ~3s, codex ~7s, grok 10s+)
     let selected = if is_available("claude") {

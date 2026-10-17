@@ -498,7 +498,7 @@ async fn aborting_a_cli_turn_kills_the_cli() {
     };
     task.abort();
     let _ = task.await;
-    let alive = || std::fs::read_to_string(format!("/proc/{pid}/stat")).map_or(false, |s| !s.contains(") Z "));
+    let alive = || std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| !s.contains(") Z "));
     for _ in 0..100 {
         if !alive() {
             return;

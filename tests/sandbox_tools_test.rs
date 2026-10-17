@@ -124,7 +124,7 @@ async fn test_sandbox_rest_endpoints() {
     match event {
         RuntimeEvent::SandboxStatusChanged { team_id, is_running, .. } => {
             assert_eq!(team_id, "team-a");
-            assert_eq!(is_running, false);
+            assert!(!is_running);
         }
         other => panic!("Expected SandboxStatusChanged, got {:?}", other),
     }
@@ -218,7 +218,7 @@ async fn test_restart_sandbox_stopped_when_docker_unavailable() {
     match event {
         RuntimeEvent::SandboxStatusChanged { team_id, is_running, container_name } => {
             assert_eq!(team_id, "team-restarted");
-            assert_eq!(is_running, false);
+            assert!(!is_running);
             assert!(container_name.contains("team-restarted"));
         }
         other => panic!("Expected SandboxStatusChanged, got {:?}", other),

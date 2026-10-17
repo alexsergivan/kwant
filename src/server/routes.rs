@@ -391,7 +391,7 @@ fn execute_single_turn(
 
     tokio::spawn(async move {
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, prompt.clone(), TurnOpts::default()).await {
-            run_handoffs(&scope, &[target_kwant.id.clone()], &[(target_kwant.clone(), reply)], &prompt).await;
+            run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
         }
 
         let mut tokens = active_cancellations.lock().await;
@@ -975,7 +975,7 @@ async fn run_kwant_turn_inner(
             break;
         }
         if let Some((_, token)) = &mcp_turn {
-            super::mcp_runtime::finish_turn(&state, token).await;
+            super::mcp_runtime::finish_turn(state, token).await;
         }
         let mcp_records = mcp_ctx.map(|c| c.take_records()).filter(|r| !r.is_empty());
 
@@ -1607,9 +1607,9 @@ pub async fn list_system_directories(
 
     let target_path = if let Some(p) = query.path.filter(|s| !s.trim().is_empty()) {
         let trimmed = p.trim();
-        if trimmed.starts_with("~/") {
+        if let Some(rest) = trimmed.strip_prefix("~/") {
             if let Some(ref home) = home_dir {
-                home.join(&trimmed[2..])
+                home.join(rest)
             } else {
                 PathBuf::from(trimmed)
             }
@@ -1642,7 +1642,7 @@ pub async fn list_system_directories(
             }
         }
     }
-    directories.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    directories.sort_by_key(|a| a.to_lowercase());
 
     let parent_path = canonical_target.parent().map(|p| p.to_string_lossy().to_string());
 

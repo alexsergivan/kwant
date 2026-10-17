@@ -82,9 +82,9 @@ pub async fn resolve_or_prepare_workspace(
 ) -> PathBuf {
     let target_dir = if let Some(ws) = workspace_path.filter(|s| !s.trim().is_empty()) {
         let trimmed = ws.trim();
-        if trimmed.starts_with("~/") {
+        if let Some(rest) = trimmed.strip_prefix("~/") {
             if let Ok(home) = std::env::var("HOME") {
-                PathBuf::from(home).join(&trimmed[2..])
+                PathBuf::from(home).join(rest)
             } else {
                 PathBuf::from(trimmed)
             }
