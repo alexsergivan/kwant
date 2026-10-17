@@ -10,7 +10,7 @@ export interface ComputerSettings {
 }
 
 export const COMPUTER_MODES: { id: ComputerMode; label: string; short: string; hint: string }[] = [
-  { id: 'local', label: 'Local computer', short: 'Local', hint: 'Uses your Chrome and your files. Commands ask before running.' },
+  { id: 'local', label: 'Local computer', short: 'Local', hint: 'Uses your Chrome and your files.' },
   { id: 'vm', label: 'VM (isolated)', short: 'VM', hint: 'Runs in Docker containers, isolated from your files.' },
 ];
 

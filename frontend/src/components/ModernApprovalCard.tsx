@@ -27,6 +27,17 @@ const mcpView = (approval: PendingApproval) => {
   };
 };
 
+/** Command and folder of a kwant shell command on this computer, or null for other tools. */
+export const localShellView = (approval: PendingApproval) => {
+  const d = approval.details ?? {};
+  if (d.source !== 'local_shell') return null;
+  const args = (d.arguments ?? {}) as Record<string, unknown>;
+  return {
+    command: typeof args.command === 'string' ? args.command : '',
+    cwd: typeof args.cwd === 'string' && args.cwd ? args.cwd : null,
+  };
+};
+
 export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   approval,
   onResolve,
@@ -36,6 +47,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
     onResolve(approval.id, decision);
   };
   const mcp = mcpView(approval);
+  const shell = localShellView(approval);
 
   return (
     <div className="my-3 border border-amber-500/30 bg-amber-950/20 rounded-xl p-4 text-zinc-100 max-w-2xl shadow-lg backdrop-blur-sm">
@@ -44,7 +56,19 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         <span>Action Approval Required</span>
       </div>
 
-      {mcp ? (
+      {shell ? (
+        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
+          <p className="text-zinc-300">A kwant wants to run a command on your computer.</p>
+          <pre className="font-mono text-[11px] text-zinc-100 bg-zinc-950/70 border border-zinc-800 rounded-md p-2 whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
+            {shell.command || '(empty command)'}
+          </pre>
+          {shell.cwd && (
+            <p className="text-[11px] text-zinc-400 break-all">
+              <span className="text-zinc-500">In folder:</span> <span className="font-mono text-zinc-300">{shell.cwd}</span>
+            </p>
+          )}
+        </div>
+      ) : mcp ? (
         <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
           <p className="text-zinc-300">
             {mcp.kwant ? <span className="font-medium text-zinc-100">{mcp.kwant}</span> : 'A kwant'} wants to use{' '}
@@ -95,14 +119,17 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
           <span>Allow Once</span>
         </button>
 
-        <button
-          onClick={() => handleDecision('always_allow')}
-          title={mcp ? 'Allow this tool for this kwant until kwnt restarts' : undefined}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm"
-        >
-          <CheckCheck size={14} />
-          <span>Always Allow</span>
-        </button>
+        {/* Local shell approvals are never remembered, so only offer a one-off answer. */}
+        {!shell && (
+          <button
+            onClick={() => handleDecision('always_allow')}
+            title={mcp ? 'Allow this tool for this kwant until kwnt restarts' : undefined}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm"
+          >
+            <CheckCheck size={14} />
+            <span>Always Allow</span>
+          </button>
+        )}
       </div>
     </div>
   );

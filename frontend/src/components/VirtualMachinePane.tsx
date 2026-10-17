@@ -101,6 +101,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
   const currentScreenshot = stream.frame?.image || screenshotBase64;
   const controlError = stream.error || (!stream.connected ? browserError : null);
+  // A live stream is ready; otherwise trust isRunning only while no error says the service is down.
+  const browserReady = stream.connected || (isRunning && !controlError);
   useEffect(() => {
     if (stream.location?.url) setInputUrl(stream.location.url);
   }, [stream.location]);
@@ -317,13 +319,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
       {/* Top Header */}
       <div className="h-14 border-b border-zinc-800 px-4 flex items-center justify-between gap-2 bg-zinc-900/60">
         <div className="flex items-center gap-2 min-w-0">
-          <div className={`shrink-0 w-2.5 h-2.5 rounded-full ${(stream.connected || isRunning) ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`} />
+          <div className={`shrink-0 w-2.5 h-2.5 rounded-full ${browserReady ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`} />
           <div className="min-w-0">
-            <div className="text-xs font-semibold text-zinc-100 flex items-center gap-1.5">
-              <span className="whitespace-nowrap">Bot Browser</span>
-              <span className="text-[10px] font-mono text-zinc-400 truncate">(@{teamName})</span>
-            </div>
-            <p className="text-[10px] text-zinc-400 truncate">{isLocal ? 'Your Chrome • Commands ask first' : 'Live Chromium • Separate code sandbox'}</p>
+            <div className="text-xs font-semibold text-zinc-100 truncate" title={`@${teamName}`}>@{teamName}</div>
+            <p className="text-[10px] text-zinc-400 truncate">{isLocal ? 'Your Chrome' : 'Live Chromium'}</p>
           </div>
         </div>
 
@@ -615,8 +614,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
               ) : (
                 <div className="text-center p-6 text-zinc-600 text-xs">
                   <Globe size={32} className="mx-auto mb-2 opacity-40 text-zinc-500" />
-                  <p>{(stream.connected || isRunning) ? 'Browser idle' : 'Browser unavailable'}</p>
-                  <p className="text-[10px] text-zinc-500 mt-1">{(stream.connected || isRunning) ? 'Enter a URL above to open a page' : 'Start Docker, then use Restart Browser below'}</p>
+                  <p>{browserReady ? 'Browser idle' : 'Browser unavailable'}</p>
+                  <p className="text-[10px] text-zinc-500 mt-1">{browserReady ? 'Enter a URL above to open a page' : 'Start Docker, then use Restart Browser below'}</p>
                 </div>
               )}
             </div>
@@ -894,8 +893,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           </div>
         ) : (
           <div className="flex items-center gap-1.5">
-            <Cpu size={12} className={(stream.connected || isRunning) ? 'text-emerald-400' : 'text-zinc-500'} />
-            <span>{(stream.connected || isRunning) ? 'Browser Ready' : 'Browser Offline'}</span>
+            <Cpu size={12} className={browserReady ? 'text-emerald-400' : 'text-zinc-500'} />
+            <span>{browserReady ? 'Browser Ready' : 'Browser Offline'}</span>
           </div>
         )}
         {onRestartVm && !isLocal && (

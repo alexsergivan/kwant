@@ -81,7 +81,8 @@ test('control: both available', () => {
   const html = render(m.ComputerModeControl, ready(settings('local')));
   assert.match(html, /role="radiogroup"/);
   assert.match(html, /aria-checked="true"[^>]*>.*Local computer/);
-  assert.match(html, /Uses your Chrome and your files\. Commands ask before running\./);
+  assert.match(html, /Uses your Chrome and your files\.</);
+  assert.doesNotMatch(html, /Commands ask/);
   assert.match(html, /Runs in Docker containers, isolated from your files\./);
   assert.doesNotMatch(html, /disabled=""/);
   assert.doesNotMatch(html, /Unavailable/);
