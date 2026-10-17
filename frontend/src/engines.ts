@@ -3,7 +3,7 @@
 
 export type EngineId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'ollama';
 export type EngineKind = 'cli' | 'api' | 'local';
-export type EngineStatus = 'ready' | 'signed_out' | 'not_installed' | 'error' | 'checking';
+export type EngineStatus = 'ready' | 'signed_out' | 'not_installed' | 'error' | 'checking' | 'disabled';
 export type Tier = 'fast' | 'balanced' | 'deep';
 
 export interface EngineModel {
@@ -52,7 +52,7 @@ export const familyLabel = (f: Family) => FAMILIES.find((x) => x.id === f)?.labe
 export type Tone = 'ok' | 'warn' | 'error' | 'muted' | 'busy';
 
 export function statusView(e: Pick<EngineInfo, 'status' | 'enabled'> & { kind?: EngineKind }): { label: string; tone: Tone } {
-  if (e.enabled === false) return { label: 'Off', tone: 'muted' };
+  if (e.enabled === false || e.status === 'disabled') return { label: 'Off', tone: 'muted' };
   switch (e.status) {
     case 'ready':
       return { label: 'Ready', tone: 'ok' };
@@ -70,7 +70,7 @@ export function statusView(e: Pick<EngineInfo, 'status' | 'enabled'> & { kind?: 
 
 export const isUsable = (e: EngineInfo) => e.status === 'ready' && e.enabled !== false;
 
-const RANK: Record<EngineStatus, number> = { ready: 0, checking: 1, error: 2, signed_out: 3, not_installed: 5 };
+const RANK: Record<EngineStatus, number> = { ready: 0, checking: 1, error: 2, signed_out: 3, disabled: 4, not_installed: 5 };
 
 /** Ready first, then ones that need attention, switched-off ones, and not installed last. Stable. */
 export function sortEngines(list: EngineInfo[]): EngineInfo[] {
@@ -228,6 +228,12 @@ export function pickLabel(value: string, engines: EngineInfo[] | null = null): s
   return `${family} · ${known?.label ?? pick.model}`;
 }
 
+/** "Claude Haiku (latest)" → "Haiku" when shown after the family name. */
+function shortModelLabel(label: string, family: string): string {
+  const out = label.replace(/\s*\(latest\)$/i, '');
+  return out.toLowerCase().startsWith(family.toLowerCase() + ' ') ? out.slice(family.length + 1) : out;
+}
+
 /** "Claude · Sonnet" for a reply, from the `ran_on` the server adds to a message's meta. */
 export function ranOnLabel(meta: string | null | undefined, engines: EngineInfo[] | null = null): string | null {
   if (!meta) return null;
@@ -235,7 +241,7 @@ export function ranOnLabel(meta: string | null | undefined, engines: EngineInfo[
     const ran = JSON.parse(meta)?.ran_on;
     if (!ran || typeof ran.engine !== 'string') return null;
     const engine = ran.engine as EngineId;
-    const family = FAMILY_OF[engine];
+    const family: Family | undefined = FAMILIES.some((f) => f.id === ran.family) ? ran.family : FAMILY_OF[engine];
     const name = family ? familyLabel(family).replace(/ \(.*\)$/, '') : engine;
     if (typeof ran.model !== 'string' || !ran.model) return name;
     const label = typeof ran.model_label === 'string' && ran.model_label
@@ -243,7 +249,7 @@ export function ranOnLabel(meta: string | null | undefined, engines: EngineInfo[
       : [...(engines?.filter((e) => e.id === engine) ?? []), ...(engines?.filter((e) => e.id !== engine && FAMILY_OF[e.id] === family) ?? [])]
           .flatMap((e) => e.models)
           .find((m) => m.id === ran.model)?.label ?? ran.model;
-    return `${name} · ${label}`;
+    return `${name} · ${shortModelLabel(label, name)}`;
   } catch {
     return null;
   }

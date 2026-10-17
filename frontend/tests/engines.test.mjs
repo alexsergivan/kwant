@@ -203,6 +203,10 @@ test('a reply says which engine and model answered it', () => {
   assert.equal(m.ranOnLabel(JSON.stringify({ ran_on: { engine: 'claude', model: 'sonnet', model_label: 'Sonnet' } })), 'Claude · Sonnet');
   assert.equal(m.ranOnLabel(JSON.stringify({ ran_on: { engine: 'anthropic_api', model: 'opus' } }), live), 'Claude · Opus');
   assert.equal(m.ranOnLabel(JSON.stringify({ ran_on: { engine: 'codex' } })), 'Codex');
+  // Lin's final shape: EngineId + family + full model_label.
+  assert.equal(m.ranOnLabel(JSON.stringify({ ran_on: { engine: 'claude', family: 'claude', model: 'haiku', model_label: 'Claude Haiku (latest)', tier: 'fast', picked_by: 'laya' } })), 'Claude · Haiku');
+  assert.equal(m.ranOnLabel(JSON.stringify({ ran_on: { engine: 'anthropic_api', family: 'claude', model: 'claude-opus-5-5', model_label: null } })), 'Claude · claude-opus-5-5');
+  assert.equal(m.statusView({ status: 'disabled' }).label, 'Off');
   assert.equal(m.ranOnLabel(JSON.stringify({ delegation: {} })), null);
   assert.equal(m.ranOnLabel('not json'), null);
   assert.equal(m.ranOnLabel(null), null);
