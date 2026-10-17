@@ -142,6 +142,7 @@ async fn build(
             .ok_or_else(|| bad("schedule is required"))?,
     };
     schedule.validate().map_err(|m| bad(&m))?;
+    let schedule = schedule.canonical();
     let enabled = p.enabled.or(existing.map(|e| e.enabled)).unwrap_or(true);
     let next_run_at = if enabled {
         schedule.next_after(Utc::now(), existing.and_then(|e| e.last_run_at))

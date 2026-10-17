@@ -490,9 +490,9 @@ pub(super) async fn run_routine_turn(
         teammates,
         cancel_token: cancel_token.clone(),
     };
-    let reply = run_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts::default()).await;
+    let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts::default()).await;
     let outcome = match reply {
-        Some(text) => {
+        Ok(text) => {
             let context_id = keys[0].clone();
             let reply_id = state
                 .db
@@ -506,8 +506,8 @@ pub(super) async fn run_routine_turn(
             run_handoffs(&scope, std::slice::from_ref(&kwant.id), &[(kwant.clone(), text)], &prompt).await;
             Ok(reply_id)
         }
-        None if cancel_token.is_cancelled() => Err("stopped by the user".into()),
-        None => Err("the agent's turn failed".into()),
+        Err(_) if cancel_token.is_cancelled() => Err("stopped by the user".into()),
+        Err(why) => Err(format!("the agent's turn failed: {why}")),
     };
     let mut tokens = state.active_cancellations.lock().await;
     for key in &keys {
@@ -727,6 +727,19 @@ async fn run_kwant_turn(
     prompt: String,
     opts: TurnOpts,
 ) -> Option<String> {
+    try_kwant_turn(scope, target_kwant, prompt, opts).await.ok()
+}
+
+/// Longest failure reason kept for a routine run's history.
+const MAX_FAILURE_CHARS: usize = 500;
+
+/// [`run_kwant_turn`], but a failed turn says why: the driver's error or the provider's refusal.
+async fn try_kwant_turn(
+    scope: &TurnScope,
+    target_kwant: &Kwant,
+    prompt: String,
+    opts: TurnOpts,
+) -> Result<String, String> {
     let context_id = scope
         .channel_id
         .clone()
@@ -745,11 +758,33 @@ async fn run_kwant_turn(
     };
     let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts).await;
     ended.outcome = match (&reply, scope.cancel_token.is_cancelled()) {
-        (Some(_), _) => "completed",
-        (None, true) => "cancelled",
-        (None, false) => "failed",
+        (Ok(_), _) => "completed",
+        (Err(_), true) => "cancelled",
+        (Err(_), false) => "failed",
     };
-    reply
+    reply.map_err(|why| truncate_chars(&scrub_urls(why.trim()), MAX_FAILURE_CHARS).to_string())
+}
+
+/// `text` with every URL's userinfo and query dropped, so a failure reason that names a
+/// custom endpoint can be stored without the credentials some endpoints carry there.
+fn scrub_urls(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let Some(scheme_end) = word.find("://") else {
+                return word.to_string();
+            };
+            let (scheme, rest) = word.split_at(scheme_end + 3);
+            let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            let (authority, path) = rest.split_at(host_end);
+            let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+            let path = match path.find(['?', '#']) {
+                Some(q) => format!("{}?…", &path[..q]),
+                None => path.to_string(),
+            };
+            format!("{scheme}{host}{path}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 struct TurnEndedGuard {
@@ -774,7 +809,7 @@ async fn run_kwant_turn_inner(
     target_kwant: &Kwant,
     prompt: String,
     opts: TurnOpts,
-) -> Option<String> {
+) -> Result<String, String> {
     let state = &scope.state;
     let event_broadcast = state.event_sender.clone();
     let db = state.db.clone();
@@ -1117,18 +1152,20 @@ async fn run_kwant_turn_inner(
         };
         if cancelled {
             let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta("⏹️ Cancelled by user".into()));
+            return Err("stopped by the user".into());
         } else if let Some(text) = gave_up {
             let msg = NewMessage {
                 channel_id: channel_id.clone(),
                 direct_kwant_id: kwant_id.clone(),
                 sender_role: "kwant".into(),
                 sender_id: target_kwant.name.clone(),
-                text,
+                text: text.clone(),
                 reasoning_content: with_notices(opts.label.clone()),
                 tool_calls: None,
                 tokens_used: 0,
             };
             let _ = db.insert_message(&msg).await;
+            return Err(text);
         } else if let Some(Ok(Ok(output))) = driver_result {
             // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM
             if let Some(bot_url) = extract_url_from_text(&output.text) {
@@ -1182,9 +1219,13 @@ async fn run_kwant_turn_inner(
                 };
                 let _ = db.insert_message(&asst_msg).await;
             }
-            return Some(output.text);
+            return Ok(output.text);
         }
-        None
+        Err(match driver_result {
+            Some(Ok(Err(e))) => format!("the {target_model} driver failed: {e}"),
+            Some(Err(_)) => format!("the {target_model} driver stopped unexpectedly"),
+            _ => format!("the {target_model} turn ended without a reply"),
+        })
     }
 }
 
@@ -2525,3 +2566,18 @@ pub async fn delete_password(
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::scrub_urls;
+
+    #[test]
+    fn failure_reasons_drop_url_credentials() {
+        assert_eq!(
+            scrub_urls("HTTP API error: error sending request for url (https://u:p4ss@llm.example/v1/chat?key=sk-123&x=1)"),
+            "HTTP API error: error sending request for url (https://llm.example/v1/chat?…"
+        );
+        assert_eq!(scrub_urls("see http://host:8080/a#frag now"), "see http://host:8080/a?… now");
+        assert_eq!(scrub_urls("not logged in; run `codex login`"), "not logged in; run `codex login`");
+    }
+}

@@ -76,8 +76,42 @@ impl Zone {
     }
 }
 
-fn parse_tz(tz: &str) -> Result<Zone, String> {
+/// Old IANA names (the tz `backward` links) that browsers' ICU still reports but some systems
+/// (e.g. Ubuntu 24.04 without tzdata-legacy) no longer ship. Mirrors frontend/src/continuity.ts.
+const LEGACY_TZ: &[(&str, &str)] = &[
+    ("Africa/Asmera", "Africa/Asmara"),
+    ("America/Buenos_Aires", "America/Argentina/Buenos_Aires"),
+    ("America/Catamarca", "America/Argentina/Catamarca"),
+    ("America/Cordoba", "America/Argentina/Cordoba"),
+    ("America/Godthab", "America/Nuuk"),
+    ("America/Indianapolis", "America/Indiana/Indianapolis"),
+    ("America/Jujuy", "America/Argentina/Jujuy"),
+    ("America/Louisville", "America/Kentucky/Louisville"),
+    ("America/Mendoza", "America/Argentina/Mendoza"),
+    ("Asia/Calcutta", "Asia/Kolkata"),
+    ("Asia/Katmandu", "Asia/Kathmandu"),
+    ("Asia/Rangoon", "Asia/Yangon"),
+    ("Asia/Saigon", "Asia/Ho_Chi_Minh"),
+    ("Atlantic/Faeroe", "Atlantic/Faroe"),
+    ("Europe/Kiev", "Europe/Kyiv"),
+    ("Pacific/Enderbury", "Pacific/Kanton"),
+    ("Pacific/Ponape", "Pacific/Pohnpei"),
+    ("Pacific/Truk", "Pacific/Chuuk"),
+];
+
+/// The current IANA name for `tz`, trimmed; unknown names pass through for `parse_tz` to judge.
+pub fn canonical_tz(tz: &str) -> String {
     let name = tz.trim();
+    LEGACY_TZ
+        .iter()
+        .find(|(old, _)| *old == name)
+        .map_or(name, |(_, new)| new)
+        .to_string()
+}
+
+fn parse_tz(tz: &str) -> Result<Zone, String> {
+    let canonical = canonical_tz(tz);
+    let name = canonical.as_str();
     let unknown = || format!("unknown time zone '{tz}'; use an IANA name like Europe/Kyiv");
     if name == "UTC" {
         return Ok(Zone(tz::TimeZone::utc()));
@@ -119,6 +153,22 @@ fn parse_weekday(day: &str) -> Result<Weekday, String> {
 }
 
 impl Schedule {
+    /// The same schedule with its time zone under its current IANA name, as it should be stored.
+    pub fn canonical(self) -> Self {
+        match self {
+            Schedule::Daily { time, tz } => Schedule::Daily {
+                time,
+                tz: canonical_tz(&tz),
+            },
+            Schedule::Weekly { time, weekdays, tz } => Schedule::Weekly {
+                time,
+                weekdays,
+                tz: canonical_tz(&tz),
+            },
+            other => other,
+        }
+    }
+
     /// Checks every field; the API returns the message as a 400.
     pub fn validate(&self) -> Result<(), String> {
         match self {
@@ -414,5 +464,51 @@ mod tests {
         .unwrap();
         assert!(parsed.validate().is_ok());
         assert!(serde_json::from_str::<Schedule>(r#"{"type":"daily","time":"07:30"}"#).is_err());
+    }
+
+    #[test]
+    fn legacy_zone_names_are_accepted_and_stored_canonically() {
+        for (old, new) in [("Europe/Kiev", "Europe/Kyiv"), ("Asia/Calcutta", "Asia/Kolkata")] {
+            let s = Schedule::Daily {
+                time: "09:00".into(),
+                tz: format!(" {old} "),
+            };
+            assert!(s.validate().is_ok(), "{old}");
+            let canonical = s.clone().canonical();
+            assert_eq!(
+                canonical,
+                Schedule::Daily {
+                    time: "09:00".into(),
+                    tz: new.into()
+                }
+            );
+            let after = utc("2026-10-17T00:00:00Z");
+            assert_eq!(s.next_after(after, None), canonical.next_after(after, None));
+        }
+        let weekly = Schedule::Weekly {
+            time: "09:00".into(),
+            weekdays: vec!["mon".into()],
+            tz: "Asia/Calcutta".into(),
+        }
+        .canonical();
+        assert!(matches!(weekly, Schedule::Weekly { ref tz, .. } if tz == "Asia/Kolkata"));
+        // Kyiv is UTC+3 in summer: 09:00 local is 06:00Z
+        assert_eq!(
+            Schedule::Daily {
+                time: "09:00".into(),
+                tz: "Europe/Kiev".into()
+            }
+            .next_after(utc("2026-07-01T00:00:00Z"), None),
+            Some(utc("2026-07-01T06:00:00Z"))
+        );
+        assert_eq!(canonical_tz("Europe/Kyiv"), "Europe/Kyiv");
+        assert_eq!(canonical_tz("Mars/Olympus"), "Mars/Olympus");
+        // Aliasing never opens a path around the name checks
+        assert!(Schedule::Daily {
+            time: "09:00".into(),
+            tz: "Europe/Kiev/../../../etc/passwd".into()
+        }
+        .validate()
+        .is_err());
     }
 }
