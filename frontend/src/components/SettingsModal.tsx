@@ -48,9 +48,11 @@ interface SettingsModalProps {
   onClose: () => void;
   onOpenTools?: () => void;
   onOpenProfiles?: () => void;
+  /** Changes to focus "Sign in with Claude" in Engines. */
+  focusClaudeSignIn?: number;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onOpenTools, onOpenProfiles }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onOpenTools, onOpenProfiles, focusClaudeSignIn }) => {
   const { authRequired, signOut } = useAuth();
   const computer = useComputerMode(isOpen);
   const engines = useEngines(isOpen);
@@ -211,7 +213,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           </button>
         </div>
 
-        <EnginesPanel api={engines} />
+        <EnginesPanel api={engines} focusClaudeSignIn={focusClaudeSignIn} />
 
         {computer.state.settings && (
           <div className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3">
