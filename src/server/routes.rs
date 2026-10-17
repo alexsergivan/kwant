@@ -1817,9 +1817,15 @@ pub struct SettingsResponse {
     pub max_turns_global: usize,
     /// Minutes before an unfinished delegation gets a "still working" note; 0 = never.
     pub delegation_follow_up_minutes: i64,
+    /// Whether turns get the agents' own tools (history search, memory); see
+    /// [`super::continuity::agent_tools_enabled`].
+    pub agent_tools: bool,
 }
 
+/// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
+/// being dropped.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SaveSettingsPayload {
     pub anthropic_api_key: Option<String>,
     pub xai_api_key: Option<String>,
@@ -1831,6 +1837,8 @@ pub struct SaveSettingsPayload {
     pub max_turns_per_agent: Option<usize>,
     pub max_turns_global: Option<usize>,
     pub delegation_follow_up_minutes: Option<i64>,
+    /// Stored as the `agent_tools` setting: "on" or "off".
+    pub agent_tools: Option<bool>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -1860,6 +1868,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         max_turns_per_agent: state.turns.limiter.limits().0,
         max_turns_global: state.turns.limiter.limits().1,
         delegation_follow_up_minutes: super::delegation::follow_up_minutes(&state).await,
+        agent_tools: super::continuity::agent_tools_enabled(&state).await,
     }))
 }
 
@@ -1874,10 +1883,15 @@ pub async fn load_turn_limits(state: &AppState) {
 
 pub async fn save_settings(
     State(state): State<AppState>,
-    Json(payload): Json<SaveSettingsPayload>,
+    payload: Result<Json<SaveSettingsPayload>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     use super::turns::{GLOBAL_SETTING, MAX_GLOBAL, MAX_PER_AGENT, PER_AGENT_SETTING};
     let bad = |m: String| Err((StatusCode::BAD_REQUEST, Json(json!({ "error": m }))));
+    // 400 rather than axum's 422, like the other refusals here
+    let Json(payload) = match payload {
+        Ok(p) => p,
+        Err(e) => return bad(e.body_text()),
+    };
     // Checked first, so a bad value saves nothing
     if payload.max_turns_per_agent.is_some_and(|n| !(1..=MAX_PER_AGENT).contains(&n)) {
         return bad(format!("max_turns_per_agent must be 1–{MAX_PER_AGENT}"));
@@ -1924,6 +1938,9 @@ pub async fn save_settings(
     }
     if let Some(m) = payload.delegation_follow_up_minutes {
         let _ = state.db.set_setting(super::delegation::FOLLOW_UP_SETTING, &m.to_string()).await;
+    }
+    if let Some(on) = payload.agent_tools {
+        let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;
     }
 
     Ok(Json(json!({ "status": "saved" })))

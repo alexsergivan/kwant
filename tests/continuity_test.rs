@@ -1180,6 +1180,46 @@ async fn webhook_setting_is_https_only_and_masked() {
 }
 
 #[tokio::test]
+async fn settings_refuse_unknown_keys_and_save_agent_tools() {
+    let (app, state, _tmp) = setup().await;
+
+    let (_, s) = req(&app, "GET", "/api/settings", None).await;
+    assert_eq!(s["agent_tools"], true, "on by default");
+
+    // An unknown key is refused and nothing in the request is saved
+    let (status, v) = req(
+        &app,
+        "POST",
+        "/api/settings",
+        Some(json!({"agent_tools": false, "agent_tool": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(v["error"].as_str().unwrap().contains("agent_tool"));
+    assert_eq!(state.db.get_setting("agent_tool").await.unwrap(), None);
+    assert_eq!(state.db.get_setting("agent_tools").await.unwrap(), None);
+    // So is the wrong type
+    let (status, _) = req(&app, "POST", "/api/settings", Some(json!({"agent_tools": "off"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _) = req(&app, "POST", "/api/settings", Some(json!({"agent_tools": false}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state.db.get_setting("agent_tools").await.unwrap().as_deref(), Some("off"));
+    assert!(!kwnt::server::continuity::agent_tools_enabled(&state).await);
+    let (_, s) = req(&app, "GET", "/api/settings", None).await;
+    assert_eq!(s["agent_tools"], false);
+
+    // Other saves leave it alone
+    let (status, _) = req(&app, "POST", "/api/settings", Some(json!({"ollama_url": "http://localhost:1/v1"}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state.db.get_setting("agent_tools").await.unwrap().as_deref(), Some("off"));
+
+    req(&app, "POST", "/api/settings", Some(json!({"agent_tools": true}))).await;
+    let (_, s) = req(&app, "GET", "/api/settings", None).await;
+    assert_eq!(s["agent_tools"], true);
+}
+
+#[tokio::test]
 async fn notifications_are_filtered_and_content_free() {
     let (_app, state, _tmp) = setup().await;
     let kwants = state.db.list_kwants().await.unwrap();
