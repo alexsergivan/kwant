@@ -205,17 +205,76 @@ fn relative_reset(lower: &str) -> Option<Duration> {
     found.then_some(total)
 }
 
-/// Key names (matched case-insensitively, as the whole name or its suffix, so `client_secret` and
-/// `x-api-key` count) whose value is a credential when written as `name=value` or `name: value`.
-const CREDENTIAL_KEYS: [&str; 8] = [
-    "password", "passwd", "pwd", "secret", "token", "api_key", "apikey", "api-key",
+/// Key names (matched case-insensitively, as the whole name or its suffix, so `client_secret`,
+/// `x-api-key` and `AWS_SECRET_ACCESS_KEY` count) whose value is a credential when written as
+/// `name=value`, `name: value` or, for a `--flag`, `--name value`.
+const CREDENTIAL_KEYS: [&str; 11] = [
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "api-key",
+    "secret_key",
+    "access_key",
+    "authorization",
 ];
+/// Short key names that only count whole or after `_`/`-` (`db_pass`, `--pass`), so `bypass=1`
+/// and `compass: north` are left alone.
+const SHORT_CREDENTIAL_KEYS: [&str; 1] = ["pass"];
 
-/// Masks the value in free-text credentials such as `password=hunter2`, `pwd: hunter2` or
-/// `"api_key":"…"`, keeping the key: `password=[redacted]`. Only a key followed by `=` or `:`
-/// counts, so prose like "the password field is empty" is left alone.
+fn is_credential_key(name: &str) -> bool {
+    CREDENTIAL_KEYS.iter().any(|k| name.ends_with(k))
+        || SHORT_CREDENTIAL_KEYS.iter().any(|k| {
+            name.strip_suffix(k)
+                .is_some_and(|rest| rest.is_empty() || rest.ends_with(['_', '-']))
+        })
+}
+
+/// Masks the password in URL userinfo, keeping the user and host:
+/// `postgres://bob:hunter2@db/x` → `postgres://bob:[redacted]@db/x`.
+fn mask_url_passwords(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(p) = rest.find("://") {
+        let after = &rest[p + 3..];
+        out.push_str(&rest[..p + 3]);
+        let len = after
+            .find(|c: char| c.is_whitespace() || "/?#\"'<>`".contains(c))
+            .unwrap_or(after.len());
+        let authority = &after[..len];
+        // the last `@` ends the userinfo, so a password with a raw `@` is still hidden whole
+        if let Some(at) = authority.rfind('@') {
+            if let Some(colon) = authority[..at].find(':').filter(|&c| at > c + 1) {
+                out.push_str(&authority[..=colon]);
+                out.push_str("[redacted]");
+                out.push_str(&authority[at..]);
+                rest = &after[len..];
+                continue;
+            }
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Masks free-text credentials, keeping the key: `password=hunter2`, `pwd: hunter2`,
+/// `"api_key":"…"`, `--password hunter2`, `Authorization: Bearer …` and a bare `Bearer …` become
+/// `password=[redacted]`, `Bearer [redacted]` and so on, and a password in a URL becomes
+/// `postgres://bob:[redacted]@db`. Only a key followed by `=` or `:` (or a `--flag` followed by
+/// a value) counts, so prose like "the password field is empty" is left alone.
 pub fn mask_credentials(text: &str) -> String {
+    let text = &mask_url_passwords(text);
     let is_name = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+    let skip_spaces = |mut j: usize| {
+        while j < text.len() && text.as_bytes()[j] == b' ' {
+            j += 1;
+        }
+        j
+    };
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
     let mut copied = 0;
@@ -230,23 +289,50 @@ pub fn mask_credentials(text: &str) -> String {
             i += 1;
         }
         let name = text[start..i].to_ascii_lowercase();
-        if !CREDENTIAL_KEYS.iter().any(|k| name.ends_with(k)) {
-            continue;
-        }
-        // name, an optional closing quote, then `=` or `:`
-        let mut j = i;
-        if j < bytes.len() && (bytes[j] == b'"' || bytes[j] == b'\'') {
-            j += 1;
-        }
-        while j < bytes.len() && bytes[j] == b' ' {
-            j += 1;
-        }
-        if j >= bytes.len() || (bytes[j] != b'=' && bytes[j] != b':') {
-            continue;
-        }
-        j += 1;
-        while j < bytes.len() && bytes[j] == b' ' {
-            j += 1;
+        let mut j;
+        if name == "bearer" {
+            // a bare `Bearer <token>`; an all-lowercase word is prose ("Bearer token", "bearer of")
+            j = skip_spaces(i);
+            let word = &text[j..];
+            let word = &word[..word.find(char::is_whitespace).unwrap_or(word.len())];
+            if j == i || word.is_empty() || word.bytes().all(|b| b.is_ascii_lowercase()) {
+                continue;
+            }
+        } else {
+            if !is_credential_key(&name) {
+                continue;
+            }
+            // name, an optional closing quote, then `=` or `:`; or `--flag value`
+            j = i;
+            if j < bytes.len() && (bytes[j] == b'"' || bytes[j] == b'\'') {
+                j += 1;
+            }
+            let after_name = j;
+            j = skip_spaces(j);
+            if j < bytes.len() && (bytes[j] == b'=' || bytes[j] == b':') {
+                j = skip_spaces(j + 1);
+            } else {
+                let flag = name.starts_with("--") && !name.starts_with("--no-");
+                if !(flag && after_name == i && j > i && j < bytes.len() && bytes[j] != b'-') {
+                    continue;
+                }
+            }
+            // `Authorization: Bearer abc` keeps its scheme and hides the credential after it
+            if name.ends_with("authorization") {
+                let scheme = text[j..]
+                    .find(|c: char| !c.is_ascii_alphabetic())
+                    .map_or(bytes.len(), |e| j + e);
+                let value = skip_spaces(scheme);
+                if scheme > j && bytes.get(scheme) == Some(&b' ') && value < bytes.len() {
+                    j = value;
+                } else if value >= bytes.len()
+                    && ["bearer", "basic", "digest"]
+                        .contains(&text[j..scheme].to_ascii_lowercase().as_str())
+                {
+                    // a scheme name with no credential after it
+                    continue;
+                }
+            }
         }
         // a quoted value up to its closing quote, otherwise up to whitespace or punctuation
         let (from, to) = match bytes.get(j) {
@@ -478,6 +564,149 @@ mod tests {
             "keyboard=us",
         ] {
             assert_eq!(redact_detail(text, 500), text);
+        }
+    }
+    #[test]
+    fn url_passwords_are_masked_but_user_and_host_stay() {
+        for (text, want) in [
+            (
+                "connect postgres://bob:hunter2@db:5432/x failed",
+                "connect postgres://bob:[redacted]@db:5432/x failed",
+            ),
+            ("https://user:pass@host/x", "https://user:[redacted]@host/x"),
+            (
+                "mysql://root:p@ss@10.0.0.1/db",
+                "mysql://root:[redacted]@10.0.0.1/db",
+            ),
+            (
+                r#"{"url":"redis://:s3cret@cache:6379"}"#,
+                r#"{"url":"redis://:[redacted]@cache:6379"}"#,
+            ),
+            (
+                "a ftp://u:x@h and amqp://u:y@q",
+                "a ftp://u:[redacted]@h and amqp://u:[redacted]@q",
+            ),
+        ] {
+            assert_eq!(mask_credentials(text), want, "{text}");
+            assert_eq!(redact_detail(text, 500), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn authorization_and_bearer_values_are_masked() {
+        for (text, want) in [
+            (
+                "Authorization: Bearer abc123",
+                "Authorization: Bearer [redacted]",
+            ),
+            (
+                "authorization: basic Ym9iOmh1bnRlcjI=",
+                "authorization: basic [redacted]",
+            ),
+            (
+                "Proxy-Authorization: Basic Ym9i",
+                "Proxy-Authorization: Basic [redacted]",
+            ),
+            ("Authorization: abc123", "Authorization: [redacted]"),
+            ("sent Bearer abc123 to api", "sent Bearer [redacted] to api"),
+            ("BEARER Xyz", "BEARER [redacted]"),
+            (
+                r#"{"Authorization":"Bearer abc"}"#,
+                r#"{"Authorization":"[redacted]"}"#,
+            ),
+        ] {
+            assert_eq!(redact_detail(text, 500), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn space_separated_secret_flags_are_masked() {
+        for (text, want) in [
+            (
+                "run --password hunter2 --user bob",
+                "run --password [redacted] --user bob",
+            ),
+            (
+                "--token abc --secret def",
+                "--token [redacted] --secret [redacted]",
+            ),
+            ("cli --api-key abc123", "cli --api-key [redacted]"),
+            ("--pass hunter2", "--pass [redacted]"),
+            (
+                r#"--password "my secret phrase""#,
+                r#"--password "[redacted]""#,
+            ),
+        ] {
+            assert_eq!(redact_detail(text, 500), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn more_credential_key_names_are_masked() {
+        for (text, want) in [
+            ("pass=hunter2", "pass=[redacted]"),
+            ("db_pass: hunter2", "db_pass: [redacted]"),
+            (
+                "AWS_SECRET_ACCESS_KEY=abc",
+                "AWS_SECRET_ACCESS_KEY=[redacted]",
+            ),
+            ("DJANGO_SECRET_KEY=abc", "DJANGO_SECRET_KEY=[redacted]"),
+            (
+                "GITHUB_TOKEN=abc SLACK_SECRET=def",
+                "GITHUB_TOKEN=[redacted] SLACK_SECRET=[redacted]",
+            ),
+            (
+                "PGPASSWORD=abc DB_PASSWORD=def",
+                "PGPASSWORD=[redacted] DB_PASSWORD=[redacted]",
+            ),
+            (
+                "password=\"my secret phrase\" ok",
+                "password=\"[redacted]\" ok",
+            ),
+        ] {
+            assert_eq!(redact_detail(text, 500), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn lookalikes_of_new_rules_are_left_alone() {
+        for text in [
+            "secret santa",
+            "Cookie: session=abc123",
+            "passenger count",
+            "bypass=1",
+            "compass: north",
+            "https://host/x",
+            "git@github.com:a/b",
+            "ssh://git@github.com/a/b",
+            "mail bob@host:25",
+            "ssh -p 22 host",
+            "mkdir -p dir",
+            "missing Bearer token",
+            "the bearer of bad news",
+            "--password-file /etc/pw",
+            "--no-password local",
+            "--token-limit 4096",
+            "--password",
+            "Authorization: Bearer",
+            "access_key_id=AKID",
+        ] {
+            assert_eq!(redact_detail(text, 500), text, "{text}");
+        }
+    }
+
+    #[test]
+    fn masking_never_panics_on_utf8() {
+        let nasty = "🔑 postgres://ü:пароль@хост/ä Authorization: Bearer 秘密 --password 🙈 pass=é token: 鍵 ";
+        let out = mask_credentials(nasty);
+        assert!(
+            !out.contains("пароль") && !out.contains("秘密") && !out.contains('🙈'),
+            "{out}"
+        );
+        for (i, _) in nasty.char_indices() {
+            let _ = mask_credentials(&nasty[..i]);
+            let _ = mask_credentials(&nasty[i..]);
+            let _ = redact_detail(&nasty[..i], 40);
         }
     }
 }
