@@ -471,9 +471,12 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
             }
         }
         let _ = state.db.delete_orphan_routines().await;
+        super::routes::load_turn_limits(&state).await;
+        super::delegation::interrupt_open(&state).await;
         reschedule_all(&state, Utc::now()).await;
         loop {
             tick(&state, Utc::now()).await;
+            super::delegation::follow_ups(&state, Utc::now()).await;
             let sleep = match state.db.next_routine_due().await.ok().flatten() {
                 Some(at) => (at - Utc::now())
                     .to_std()

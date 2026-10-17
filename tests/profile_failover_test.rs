@@ -66,7 +66,8 @@ async fn run_turn(app: &Router, state: &AppState, kwant_id: &str) -> Vec<Runtime
     tokio::time::timeout(Duration::from_secs(60), async {
         while let Ok(e) = rx.recv().await {
             let end = matches!(&e, RuntimeEvent::TurnEnded { kwant_id: k, .. } if k == kwant_id);
-            events.push(e);
+            // Turn events arrive tagged with their turn; the test looks at what happened
+            events.push(e.unscoped().clone());
             if end {
                 break;
             }

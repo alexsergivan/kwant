@@ -34,7 +34,8 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 3] = ["turn_finished", "approval_needed", "routine_failed"];
+pub const NOTIFY_KINDS: [&str; 5] =
+    ["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled"];
 const MASK: &str = "••••••••";
 
 fn error(status: StatusCode, message: impl Into<String>) -> Response {
@@ -143,6 +144,21 @@ pub fn memory_block(memories: &[Memory], with_tools: bool) -> String {
 pub struct SelfScope {
     pub kwant_id: String,
     pub kwant_name: String,
+    /// The chat the turn runs in; delegation tools are offered only when it is known.
+    pub origin: Option<TurnOrigin>,
+}
+
+/// Where a turn runs, for the delegation tools: results go back to this chat.
+#[derive(Clone, Debug, Default)]
+pub struct TurnOrigin {
+    pub channel_id: Option<String>,
+    pub direct_kwant_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub team_id: Option<String>,
+    /// The chat's members, when it has a member list: the only agents the lead may delegate to.
+    pub member_ids: Vec<String>,
+    /// 0 in user chats, 1 in a delegation thread, …
+    pub depth: i64,
 }
 
 /// The synthetic http MCP server a turn reaches its own tools through. The token travels as a
@@ -177,7 +193,45 @@ impl ToolApprover for SelfToolsApprover {
     }
 }
 
-fn tool_list() -> Value {
+fn tool_list(scope: &SelfScope) -> Value {
+    let mut tools = memory_tools();
+    if scope.origin.is_some() {
+        if let Some(list) = tools.as_array_mut() {
+            list.extend(delegation_tools());
+        }
+    }
+    tools
+}
+
+fn delegation_tools() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "delegate",
+            "description": "Hand a task to another agent (a specialist). It works on it in its own thread in the background while                 you and the user carry on; its result is posted to this chat and you get a turn to continue.                 Use it for longer, self-contained work that fits another agent's role. Write the task so it stands on its own.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string", "description": "The agent's name"},
+                    "task": {"type": "string", "description": "What to do and what to report back (max 8000 characters)"},
+                    "title": {"type": "string", "description": "A short title for the task"},
+                },
+                "required": ["to", "task"],
+            },
+        }),
+        json!({
+            "name": "delegation_status",
+            "description": "See your delegated tasks: one by id, or your latest 10.",
+            "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}},
+        }),
+        json!({
+            "name": "delegation_cancel",
+            "description": "Stop one of your delegated tasks by its id.",
+            "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+        }),
+    ]
+}
+
+fn memory_tools() -> Value {
     json!([
         {
             "name": "search_history",
@@ -308,7 +362,7 @@ pub async fn self_endpoint(
             }),
         ),
         "ping" => rpc_result(id, json!({})),
-        "tools/list" => rpc_result(id, json!({ "tools": tool_list() })),
+        "tools/list" => rpc_result(id, json!({ "tools": tool_list(&scope) })),
         "tools/call" => {
             let args = &msg["params"]["arguments"];
             let name = msg["params"]["name"].as_str().unwrap_or("");
@@ -401,6 +455,9 @@ async fn call_tool(
                 Err(_) => ("database error".into(), true),
             }
         }
+        "delegate" => super::delegation::tool_delegate(state, scope, args).await,
+        "delegation_status" => super::delegation::tool_status(state, scope, args).await,
+        "delegation_cancel" => super::delegation::tool_cancel(state, scope, args).await,
         _ => (format!("Unknown tool {name}."), true),
     }
 }
@@ -840,19 +897,30 @@ async fn place(state: &AppState, context_id: Option<&str>) -> (Option<String>, S
     match context_id {
         Some(id) => match state.db.get_channel(id).await.ok().flatten() {
             Some(c) => (Some(c.id), format!("#{}", c.name)),
-            None => (None, "your direct chat".into()),
+            None => match state.db.get_thread(id).await.ok().flatten() {
+                Some(t) => (None, format!("the thread “{}”", clip(&t.title, 60))),
+                None => (None, "your direct chat".into()),
+            },
         },
         None => (None, "a chat".into()),
     }
 }
 
 async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Notification> {
-    match event {
+    match event.unscoped() {
         RuntimeEvent::TurnEnded {
             kwant_id,
             context_id,
             outcome,
+            thread_id,
+            ..
         } if outcome == "completed" => {
+            // A delegated task reports with delegation_finished instead
+            if let Some(t) = thread_id {
+                if state.db.delegation_for_thread(t).await.ok().flatten().is_some() {
+                    return None;
+                }
+            }
             let name = kwant_name(state, kwant_id).await;
             let (channel_id, where_) = place(state, context_id.as_deref()).await;
             Some(Notification {

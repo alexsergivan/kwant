@@ -252,8 +252,6 @@ async fn test_chat_routing_with_team_mention_and_cancellation() {
 
 #[tokio::test]
 async fn test_cancel_chat_with_null_fields_only_cancels_target_kwant() {
-    use tokio_util::sync::CancellationToken;
-
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
     let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
@@ -264,14 +262,10 @@ async fn test_cancel_chat_with_null_fields_only_cancels_target_kwant() {
     let state = AppState::new(config, db, tools, broker, router);
     let app = create_router(state.clone());
 
-    // Insert two distinct tokens in active_cancellations
-    let target_token = CancellationToken::new();
-    let other_token = CancellationToken::new();
-    {
-        let mut tokens = state.active_cancellations.lock().await;
-        tokens.insert("test-kwant".to_string(), target_token.clone());
-        tokens.insert("other-session".to_string(), other_token.clone());
-    }
+    // Two running dispatches: one for the target agent's direct chat, one elsewhere
+    let target = state.turns.start_job(["msg-1", "test-kwant"]);
+    let other = state.turns.start_job(["other-session"]);
+    let (target_token, other_token) = (target.token.clone(), other.token.clone());
 
     // Cancel with payload containing null channel_id and team_id, but specific kwant_id
     let cancel_body = json!({
@@ -294,10 +288,12 @@ async fn test_cancel_chat_with_null_fields_only_cancels_target_kwant() {
     // Other token must NOT be cancelled (no global drain!)
     assert!(!other_token.is_cancelled(), "Other session token must NOT be cancelled by targeted cancellation");
 
-    // active_cancellations map must still contain other_token and not test-kwant
-    let tokens = state.active_cancellations.lock().await;
-    assert!(!tokens.contains_key("test-kwant"));
-    assert!(tokens.contains_key("other-session"));
+    // Only the target's job answers to its keys any more
+    assert!(state.turns.has_job("test-kwant"));
+    drop(target);
+    assert!(!state.turns.has_job("test-kwant"));
+    assert!(state.turns.has_job("other-session"));
+    drop(other);
 }
 
 #[tokio::test]

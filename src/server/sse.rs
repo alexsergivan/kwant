@@ -14,7 +14,7 @@ pub async fn sse_handler(
     let rx = state.event_sender.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
         Ok(event) => {
-            let json_str = serde_json::to_string(&event).unwrap_or_default();
+            let json_str = event.to_wire().to_string();
             Some(Ok(Event::default().data(json_str)))
         }
         Err(_) => None,

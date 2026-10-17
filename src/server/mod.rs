@@ -10,6 +10,8 @@ pub mod profile_turn;
 pub mod auth;
 pub mod continuity;
 pub mod scheduler;
+pub mod turns;
+pub mod delegation;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -25,7 +27,6 @@ use axum::{
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
-use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -35,7 +36,8 @@ pub struct AppState {
     pub broker: PermissionBroker,
     pub router: LayaRouter,
     pub event_sender: broadcast::Sender<RuntimeEvent>,
-    pub active_cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Running dispatches (their cancel tokens) and turns, and the caps on concurrent turns.
+    pub turns: turns::TurnRegistry,
     pub sandbox_manager: Arc<SandboxManager>,
     pub browser_controllers: Arc<Mutex<HashMap<String, BrowserController>>>,
     pub browser_service: Arc<crate::sandbox::service::BrowserService>,
@@ -75,7 +77,7 @@ impl AppState {
             broker,
             router,
             event_sender,
-            active_cancellations: Arc::new(Mutex::new(HashMap::new())),
+            turns: turns::TurnRegistry::default(),
             sandbox_manager,
             browser_controllers,
             browser_service,
@@ -165,6 +167,14 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/api/routines/:id/run", post(scheduler::run_now))
         .route("/api/routines/:id/runs", get(scheduler::runs))
+        .route("/api/turns", get(delegation::list_turns))
+        .route("/api/kwants/:id/threads", get(delegation::list_threads).post(delegation::create_thread))
+        .route("/api/threads/:id", get(delegation::get_thread).patch(delegation::patch_thread))
+        .route("/api/threads/:id/messages", get(delegation::thread_messages))
+        .route("/api/threads/:id/cancel", post(delegation::cancel_thread))
+        .route("/api/delegations", get(delegation::list_delegations).post(delegation::create_delegation))
+        .route("/api/delegations/:id", get(delegation::get_delegation))
+        .route("/api/delegations/:id/cancel", post(delegation::cancel_delegation))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))

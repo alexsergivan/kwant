@@ -665,6 +665,7 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
         Some(SelfScope {
             kwant_id: k1.id.clone(),
             kwant_name: k1.name.clone(),
+            origin: None,
         }),
     )
     .await
@@ -1131,7 +1132,7 @@ async fn webhook_setting_is_https_only_and_masked() {
     assert_eq!(s["notify_webhook_url"], "");
     assert_eq!(
         s["notify_on"],
-        json!(["turn_finished", "approval_needed", "routine_failed"])
+        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled"])
     );
 
     let (status, _) = req(
@@ -1200,11 +1201,15 @@ async fn notifications_are_filtered_and_content_free() {
         kwant_id: k.id.clone(),
         context_id: Some(general.id.clone()),
         outcome: "completed".into(),
+        turn_id: None,
+        thread_id: None,
     });
     let _ = state.event_sender.send(RuntimeEvent::TurnEnded {
         kwant_id: k.id.clone(),
         context_id: None,
         outcome: "failed".into(),
+        turn_id: None,
+        thread_id: None,
     });
     let _ = state.event_sender.send(RuntimeEvent::ApprovalRequired {
         id: "a1".into(),
