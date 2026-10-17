@@ -698,15 +698,17 @@ pub async fn save_notify_settings(
     Ok(())
 }
 
-/// A URL for logs: scheme, host and path only (ntfy topics and tokens often sit in the query).
+/// A URL for logs: scheme, host and non-default port only. The path is the secret on ntfy
+/// (it names the topic) and tokens often sit in the query or userinfo, so all are dropped.
 pub fn loggable_url(raw: &str) -> String {
     match reqwest::Url::parse(raw) {
-        Ok(u) => format!(
-            "{}://{}{}",
-            u.scheme(),
-            u.host_str().unwrap_or(""),
-            u.path()
-        ),
+        Ok(u) => {
+            let host = u.host_str().unwrap_or("");
+            match u.port() {
+                Some(port) => format!("{}://{host}:{port}", u.scheme()),
+                None => format!("{}://{host}", u.scheme()),
+            }
+        }
         Err(_) => "<invalid url>".into(),
     }
 }
@@ -931,10 +933,13 @@ mod tests {
         assert!(check_webhook_url("https://user:pw@ntfy.sh/t").is_err());
         assert!(check_webhook_url("file:///etc/passwd").is_err());
         assert!(check_webhook_url("nonsense").is_err());
-        assert_eq!(
-            loggable_url("https://ntfy.sh/topic?auth=secret#x"),
-            "https://ntfy.sh/topic"
-        );
+        assert_eq!(loggable_url("https://ntfy.sh/topic?auth=secret#x"), "https://ntfy.sh");
+        let logged = loggable_url("https://user:pw@ntfy.sh/secret-topic?x=1");
+        assert_eq!(logged, "https://ntfy.sh");
+        assert!(!logged.contains("secret-topic") && !logged.contains("pw"));
+        assert_eq!(loggable_url("https://ntfy.sh:443/t"), "https://ntfy.sh");
+        assert_eq!(loggable_url("https://10.0.0.5:8443/t"), "https://10.0.0.5:8443");
+        assert_eq!(loggable_url("not a url"), "<invalid url>");
     }
 
     #[test]

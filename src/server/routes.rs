@@ -765,8 +765,9 @@ async fn try_kwant_turn(
     reply.map_err(|why| truncate_chars(&scrub_urls(why.trim()), MAX_FAILURE_CHARS).to_string())
 }
 
-/// `text` with every URL's userinfo and query dropped, so a failure reason that names a
-/// custom endpoint can be stored without the credentials some endpoints carry there.
+/// `text` with every URL cut to scheme and host, so a failure reason that names a custom
+/// endpoint can be stored without the credentials some endpoints carry in the userinfo,
+/// path or query.
 fn scrub_urls(text: &str) -> String {
     text.split(' ')
         .map(|word| {
@@ -775,13 +776,13 @@ fn scrub_urls(text: &str) -> String {
             };
             let (scheme, rest) = word.split_at(scheme_end + 3);
             let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-            let (authority, path) = rest.split_at(host_end);
+            let (authority, tail) = rest.split_at(host_end);
             let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-            let path = match path.find(['?', '#']) {
-                Some(q) => format!("{}?…", &path[..q]),
-                None => path.to_string(),
-            };
-            format!("{scheme}{host}{path}")
+            if tail.is_empty() {
+                format!("{scheme}{host}")
+            } else {
+                format!("{scheme}{host}/…")
+            }
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -2575,9 +2576,13 @@ mod tests {
     fn failure_reasons_drop_url_credentials() {
         assert_eq!(
             scrub_urls("HTTP API error: error sending request for url (https://u:p4ss@llm.example/v1/chat?key=sk-123&x=1)"),
-            "HTTP API error: error sending request for url (https://llm.example/v1/chat?…"
+            "HTTP API error: error sending request for url (https://llm.example/…"
         );
-        assert_eq!(scrub_urls("see http://host:8080/a#frag now"), "see http://host:8080/a?… now");
+        assert_eq!(scrub_urls("see http://host:8080/a#frag now"), "see http://host:8080/… now");
+        let keyed = scrub_urls("401 from https://llm.example/v1/key/sk-path-secret/chat");
+        assert_eq!(keyed, "401 from https://llm.example/…");
+        assert!(!keyed.contains("sk-path-secret"));
+        assert_eq!(scrub_urls("down: https://llm.example"), "down: https://llm.example");
         assert_eq!(scrub_urls("not logged in; run `codex login`"), "not logged in; run `codex login`");
     }
 }
