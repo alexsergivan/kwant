@@ -976,6 +976,7 @@ mod tests {
             created_at: None,
         };
         let input = TurnInput {
+            continuity: String::new(),
             browser_api_url: None,
             thread_id: "t1".into(),
             kwant,
@@ -1040,6 +1041,7 @@ mod tests {
             created_at: None,
         };
         let input = TurnInput {
+            continuity: String::new(),
             browser_api_url: None,
             thread_id: "t1".into(),
             kwant,

@@ -23,6 +23,8 @@ use std::sync::{Arc, Mutex};
 pub const SECRET_MASK: &str = "********";
 /// Server name kwnt uses for its own permission endpoint in agent CLI configs.
 pub const RESERVED_SERVER_NAME: &str = "kwnt";
+/// Server name of the agents' own continuity tools (`mcp__kwnt_tools__memory_add`, …).
+pub const SELF_SERVER_NAME: &str = "kwnt_tools";
 pub const DEFAULT_TIMEOUT_SECS: i64 = 30;
 pub const DEFAULT_MAX_TOOL_ITERATIONS: usize = 8;
 /// Longest tool result kept in a message's `tool_calls` record.
@@ -145,8 +147,8 @@ pub fn build_server(input: McpServerInput, existing: Option<&McpServer>) -> Resu
     if !valid_server_name(&name) {
         return Err("name must be 1-48 characters of letters, digits, '_' or '-', start with a letter or digit and not contain '__'".into());
     }
-    if name.eq_ignore_ascii_case(RESERVED_SERVER_NAME) {
-        return Err(format!("name '{RESERVED_SERVER_NAME}' is reserved"));
+    if name.eq_ignore_ascii_case(RESERVED_SERVER_NAME) || name.eq_ignore_ascii_case(SELF_SERVER_NAME) {
+        return Err(format!("name '{name}' is reserved"));
     }
     let timeout_secs = input.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
     if !(1..=600).contains(&timeout_secs) {

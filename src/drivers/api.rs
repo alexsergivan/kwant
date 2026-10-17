@@ -420,7 +420,12 @@ impl Driver for ApiDriver {
             let model = api_model_name(target_model, &url).await;
             // The Anthropic Messages API has a different tool format; it is not given MCP tools yet
             let mcp = input.mcp.as_ref().filter(|_| !url.ends_with("/v1/messages"));
-            if input.mcp.is_some() && mcp.is_none() {
+            // kwnt's own continuity tools are always attached; only the user's servers are worth a notice
+            let has_user_servers = input
+                .mcp
+                .as_ref()
+                .is_some_and(|c| c.servers.iter().any(|s| s.name != crate::mcp::SELF_SERVER_NAME));
+            if has_user_servers && mcp.is_none() {
                 let _ = event_tx
                     .send(RuntimeEvent::ThinkingDelta("MCP tools aren't offered on the Anthropic API endpoint; running without them.".into()))
                     .await;
