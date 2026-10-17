@@ -137,6 +137,16 @@ export const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   // Bumped when Settings closes, so open kwant forms read engine status again.
   const [settingsClosedCount, setSettingsClosedCount] = useState(0);
+  // Set when Settings opens from a "Sign in with Claude" hint, to focus that button.
+  const [claudeSignInFocus, setClaudeSignInFocus] = useState(0);
+  const openSettings = () => {
+    setClaudeSignInFocus(0);
+    setIsSettingsOpen(true);
+  };
+  const openClaudeSignIn = () => {
+    setClaudeSignInFocus(Date.now());
+    setIsSettingsOpen(true);
+  };
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isProfilesOpen, setIsProfilesOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -1808,7 +1818,7 @@ export const App: React.FC = () => {
     <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden font-sans">
       {/* Modern App Header */}
       <AppHeader
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={openSettings}
         onOpenTools={() => setIsMcpOpen(true)}
         onOpenSearch={() => setIsSearchOpen(true)}
         onOpenRoutines={() => setIsRoutinesOpen(true)}
@@ -1819,7 +1829,8 @@ export const App: React.FC = () => {
       {/* Main Workspace Shell */}
       <div className="flex-1 flex overflow-hidden">
         <Sidebar
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenSettings={openSettings}
+          onSignInClaude={openClaudeSignIn}
           enginesRefreshKey={settingsClosedCount}
           kwants={kwants}
           channels={channels}
@@ -1950,7 +1961,8 @@ export const App: React.FC = () => {
           profiles={profiles}
           onManageProfiles={() => setIsProfilesOpen(true)}
           onManageServers={() => setIsMcpOpen(true)}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenSettings={openSettings}
+          onSignInClaude={openClaudeSignIn}
           enginesRefreshKey={settingsClosedCount}
           onSubmit={handleCreateAgent}
         />
@@ -1965,7 +1977,8 @@ export const App: React.FC = () => {
           profiles={profiles}
           onManageProfiles={() => setIsProfilesOpen(true)}
           onManageServers={() => setIsMcpOpen(true)}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenSettings={openSettings}
+          onSignInClaude={openClaudeSignIn}
           enginesRefreshKey={settingsClosedCount}
           initialTab={editingTab}
           pendingSkills={editingKwant ? pendingSkillCounts[editingKwant.id] ?? 0 : 0}
@@ -1996,6 +2009,7 @@ export const App: React.FC = () => {
       <Suspense fallback={null}>
         <SettingsModal
           isOpen={isSettingsOpen}
+          focusClaudeSignIn={claudeSignInFocus}
           onClose={() => {
             setIsSettingsOpen(false);
             setSettingsClosedCount((n) => n + 1);

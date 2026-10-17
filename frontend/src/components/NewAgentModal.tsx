@@ -54,6 +54,8 @@ interface NewAgentModalProps {
   onManageProfiles?: () => void;
   /** Opens Settings → Engines. */
   onOpenSettings?: () => void;
+  /** Opens Settings at "Sign in with Claude". */
+  onSignInClaude?: () => void;
   /** Changes when Settings closes, so engine status is read again. */
   enginesRefreshKey?: number;
   /** Resolves to an error message when saving failed. */
@@ -78,6 +80,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   profiles = [],
   onManageProfiles,
   onOpenSettings,
+  onSignInClaude,
   enginesRefreshKey,
   onSubmit,
   kwants = [],
@@ -367,7 +370,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
             </div>
           </div>
 
-          <ModelPicker value={model} onChange={setModel} engines={engines.engines} onOpenSettings={onOpenSettings} />
+          <ModelPicker value={model} onChange={setModel} engines={engines.engines} onOpenSettings={onOpenSettings} onSignInClaude={onSignInClaude} />
 
           {engine && (
             <div>

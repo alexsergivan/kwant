@@ -3,6 +3,8 @@ import { AlertTriangle, ChevronDown, ChevronRight, Cpu, Key, Loader2, RefreshCw,
 import { EngineInfo, Tone, checkedAgo, isAbsent, onlyCliReady, sortEngines, statusView } from '../engines';
 import { playSfx } from '../audio/chiptune';
 import type { EnginesApi } from '../useEngines';
+import { claudeNeedsSignIn } from '../claudeLogin';
+import { ClaudeSignIn, ClaudeSignOut } from './ClaudeSignIn';
 
 const DOT: Record<Tone, string> = {
   ok: 'bg-emerald-400 shadow-sm shadow-emerald-500/50',
@@ -32,64 +34,78 @@ const withCode = (text: string) =>
     ),
   );
 
-export const EngineRow: React.FC<{ engine: EngineInfo; onToggle?: (on: boolean) => void }> = ({ engine, onToggle }) => {
+export const EngineRow: React.FC<{ engine: EngineInfo; onToggle?: (on: boolean) => void; children?: React.ReactNode }> = ({ engine, onToggle, children }) => {
   const view = statusView(engine);
   const Icon = KIND_ICON[engine.kind] ?? Cpu;
   const off = engine.enabled === false;
   const labelId = `engine-${engine.id}-name`;
-  const showDetail = !off && engine.detail && engine.status !== 'ready';
+  // A sign-in button replaces "run `claude auth login`".
+  const showDetail = !off && engine.detail && engine.status !== 'ready' && !(children && engine.status === 'signed_out');
   return (
     <li
       data-engine={engine.id}
       data-status={off ? 'off' : engine.status}
-      className="flex items-start gap-2.5 bg-zinc-900/90 px-3 py-2 rounded-lg border border-zinc-800 text-xs"
+      className="bg-zinc-900/90 px-3 py-2 rounded-lg border border-zinc-800 text-xs"
     >
-      <span className={`mt-1 w-2 h-2 shrink-0 rounded-full ${DOT[view.tone]}`} aria-hidden="true" />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <Icon size={12} className="text-zinc-500 shrink-0" aria-hidden="true" />
-          <span id={labelId} className={`font-medium ${off ? 'text-zinc-500' : 'text-zinc-200'}`}>
-            {engine.name}
-          </span>
-          {engine.version && <span className="text-[10px] font-mono text-zinc-500">v{engine.version}</span>}
+      <div className="flex items-start gap-2.5">
+        <span className={`mt-1 w-2 h-2 shrink-0 rounded-full ${DOT[view.tone]}`} aria-hidden="true" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Icon size={12} className="text-zinc-500 shrink-0" aria-hidden="true" />
+            <span id={labelId} className={`font-medium ${off ? 'text-zinc-500' : 'text-zinc-200'}`}>
+              {engine.name}
+            </span>
+            {engine.version && <span className="text-[10px] font-mono text-zinc-500">v{engine.version}</span>}
+          </div>
+          {showDetail && <p className="mt-0.5 text-[11px] text-zinc-400 leading-snug break-words">{withCode(engine.detail!)}</p>}
+          {!off && engine.status === 'ready' && engine.models.length > 0 && (
+            <p className="mt-0.5 text-[11px] text-zinc-500 truncate" title={engine.models.map((m) => m.label).join(', ')}>
+              {engine.models.length === 1 ? '1 model' : `${engine.models.length} models`}
+              {' · '}
+              {engine.models.slice(0, 3).map((m) => m.label).join(', ')}
+              {engine.models.length > 3 ? '…' : ''}
+            </p>
+          )}
         </div>
-        {showDetail && <p className="mt-0.5 text-[11px] text-zinc-400 leading-snug break-words">{withCode(engine.detail!)}</p>}
-        {!off && engine.status === 'ready' && engine.models.length > 0 && (
-          <p className="mt-0.5 text-[11px] text-zinc-500 truncate" title={engine.models.map((m) => m.label).join(', ')}>
-            {engine.models.length === 1 ? '1 model' : `${engine.models.length} models`}
-            {' · '}
-            {engine.models.slice(0, 3).map((m) => m.label).join(', ')}
-            {engine.models.length > 3 ? '…' : ''}
-          </p>
+        <span className={`shrink-0 text-[11px] font-mono ${TEXT[view.tone]}`}>{view.label}</span>
+        {onToggle && typeof engine.enabled === 'boolean' && (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={!off}
+            aria-labelledby={labelId}
+            title={off ? 'Off: kwnt never uses it' : 'On: kwnt may use it'}
+            onClick={() => {
+              playSfx('click');
+              onToggle(off);
+            }}
+            className={`relative shrink-0 mt-px w-8 h-[18px] rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+              off ? 'bg-zinc-700' : 'bg-sky-600'
+            }`}
+          >
+            <span
+              className={`absolute top-[2px] left-[2px] w-[14px] h-[14px] rounded-full bg-white transition-transform motion-reduce:transition-none ${off ? '' : 'translate-x-[14px]'}`}
+            />
+          </button>
         )}
       </div>
-      <span className={`shrink-0 text-[11px] font-mono ${TEXT[view.tone]}`}>{view.label}</span>
-      {onToggle && typeof engine.enabled === 'boolean' && (
-        <button
-          type="button"
-          role="switch"
-          aria-checked={!off}
-          aria-labelledby={labelId}
-          title={off ? 'Off: kwnt never uses it' : 'On: kwnt may use it'}
-          onClick={() => {
-            playSfx('click');
-            onToggle(off);
-          }}
-          className={`relative shrink-0 mt-px w-8 h-[18px] rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-            off ? 'bg-zinc-700' : 'bg-sky-600'
-          }`}
-        >
-          <span
-            className={`absolute top-[2px] left-[2px] w-[14px] h-[14px] rounded-full bg-white transition-transform motion-reduce:transition-none ${off ? '' : 'translate-x-[14px]'}`}
-          />
-        </button>
-      )}
+      {/* Full width under the name, lined up with it */}
+      {!off && children && <div className="pl-[18px]">{children}</div>}
     </li>
   );
 };
 
-/** The Settings "Engines" list: honest status per engine, ready ones first, with Re-check. */
-export const EnginesPanel: React.FC<{ api: EnginesApi; now?: number }> = ({ api, now = Date.now() }) => {
+/** Sign in or out of Claude Code from its row; nothing for other engines. */
+const accountAction = (e: EngineInfo, api: EnginesApi, focusClaudeSignIn?: number) => {
+  if (e.id !== 'claude' || e.enabled === false) return null;
+  if (e.status === 'signed_out') return <ClaudeSignIn onSignedIn={api.reload} focusRequest={focusClaudeSignIn} />;
+  if (e.status === 'ready') return <ClaudeSignOut onSignedOut={api.apply} />;
+  return null;
+};
+
+/** The Settings "Engines" list: honest status per engine, ready ones first, with Re-check.
+ *  `focusClaudeSignIn` changes to bring "Sign in with Claude" into view and focus it. */
+export const EnginesPanel: React.FC<{ api: EnginesApi; now?: number; focusClaudeSignIn?: number }> = ({ api, now = Date.now(), focusClaudeSignIn }) => {
   const { engines, error, rechecking, recheck, setEnabled } = api;
   const [showAbsent, setShowAbsent] = useState(false);
   const sorted = engines ? sortEngines(engines) : [];
@@ -124,7 +140,9 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; now?: number }> = ({ api,
           : engines.length === 0
             ? 'This server doesn’t report engine status yet.'
             : readyCount === 0
-              ? 'No engine can run right now. Sign in to a CLI below or add an API key.'
+              ? claudeNeedsSignIn(engines)
+                ? 'No engine can run right now. Sign in with Claude below, or add an API key.'
+                : 'No engine can run right now. Sign in to a CLI below or add an API key.'
               : `${readyCount} ready${onlyCliReady(engines) ? ', all through your signed-in CLIs, so no API keys are needed' : ''}. Kwants only use engines that are ready.`}
         {ago && <span className="text-zinc-500"> Checked {ago}.</span>}
       </p>
@@ -138,7 +156,9 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; now?: number }> = ({ api,
       {present.length > 0 && (
         <ul className="grid grid-cols-1 gap-2" aria-label="Engines on this computer">
           {present.map((e) => (
-            <EngineRow key={e.id} engine={e} onToggle={(on) => setEnabled(e.id, on)} />
+            <EngineRow key={e.id} engine={e} onToggle={(on) => setEnabled(e.id, on)}>
+              {accountAction(e, api, focusClaudeSignIn)}
+            </EngineRow>
           ))}
         </ul>
       )}

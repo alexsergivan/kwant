@@ -1,5 +1,6 @@
 import React, { useId } from 'react';
 import { AlertTriangle, ChevronRight, Loader2 } from 'lucide-react';
+import { claudeNeedsSignIn } from '../claudeLogin';
 import {
   EngineInfo,
   FAMILIES,
@@ -21,13 +22,15 @@ interface ModelPickerProps {
   engines: EngineInfo[] | null;
   /** Opens Settings → Engines. */
   onOpenSettings?: () => void;
+  /** Opens Settings at "Sign in with Claude". */
+  onSignInClaude?: () => void;
 }
 
 const SELECT =
   'w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none transition-colors disabled:opacity-50';
 
 /** One Engine → Model choice used wherever a kwant's model is set. Only engines that can run are offered. */
-export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange, engines, onOpenSettings }) => {
+export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange, engines, onOpenSettings, onSignInClaude }) => {
   const id = useId();
   const pick = parsePick(value);
   // A server without engine checks: offer every family, as before.
@@ -101,7 +104,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange, engin
         </div>
       </div>
 
-      <PickHint id={hintId} health={health} onOpenSettings={onOpenSettings} />
+      <PickHint id={hintId} health={health} onOpenSettings={onOpenSettings} onSignInClaude={claudeNeedsSignIn(engines) ? onSignInClaude : undefined} />
     </div>
   );
 };
@@ -115,7 +118,19 @@ const SettingsLink: React.FC<{ onOpenSettings?: () => void }> = ({ onOpenSetting
     <span>Check Settings → Engines.</span>
   );
 
-const PickHint: React.FC<{ id: string; health: ReturnType<typeof pickHealth>; onOpenSettings?: () => void }> = ({ id, health, onOpenSettings }) => {
+/** "Sign in with Claude", when that's what fixes it. */
+const SignInClaudeLink: React.FC<{ onSignInClaude: () => void }> = ({ onSignInClaude }) => (
+  <button type="button" onClick={onSignInClaude} className="inline-flex items-center gap-0.5 font-medium text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline">
+    Sign in with Claude <ChevronRight size={11} />
+  </button>
+);
+
+const PickHint: React.FC<{ id: string; health: ReturnType<typeof pickHealth>; onOpenSettings?: () => void; onSignInClaude?: () => void }> = ({
+  id,
+  health,
+  onOpenSettings,
+  onSignInClaude,
+}) => {
   switch (health.kind) {
     case 'ok':
       return null;
@@ -132,7 +147,15 @@ const PickHint: React.FC<{ id: string; health: ReturnType<typeof pickHealth>; on
             <AlertTriangle size={12} /> No engine can run right now
           </p>
           <p className="text-amber-200/80">
-            Sign in to a CLI like Claude Code, or add an API key. <SettingsLink onOpenSettings={onOpenSettings} />
+            {onSignInClaude ? (
+              <>
+                Claude Code is installed but signed out. <SignInClaudeLink onSignInClaude={onSignInClaude} />
+              </>
+            ) : (
+              <>
+                Sign in to a CLI like Claude Code, or add an API key. <SettingsLink onOpenSettings={onOpenSettings} />
+              </>
+            )}
           </p>
         </div>
       );
@@ -144,7 +167,8 @@ const PickHint: React.FC<{ id: string; health: ReturnType<typeof pickHealth>; on
           </p>
           <p className="text-amber-200/80">
             {health.reason ? `${health.reason.replace(/`/g, '').replace(/\.$/, '')}. ` : ''}
-            This kwant won't switch engine by itself: fix it, or pick another engine. <SettingsLink onOpenSettings={onOpenSettings} />
+            This kwant won't switch engine by itself: fix it, or pick another engine.{' '}
+            {health.family === 'claude' && onSignInClaude ? <SignInClaudeLink onSignInClaude={onSignInClaude} /> : <SettingsLink onOpenSettings={onOpenSettings} />}
           </p>
         </div>
       );

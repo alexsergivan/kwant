@@ -11,6 +11,8 @@ export interface EnginesApi {
   /** Reads the cached status again, without re-running the checks. */
   reload: () => Promise<void>;
   setEnabled: (id: EngineInfo['id'], enabled: boolean) => Promise<void>;
+  /** Shows a list the server already answered with (e.g. after signing out). */
+  apply: (engines: EngineInfo[]) => void;
 }
 
 /** Loads /api/engines while `active`; polls briefly while any engine is still "checking". */
@@ -93,5 +95,10 @@ export function useEngines(active: boolean): EnginesApi {
     [load],
   );
 
-  return { engines, error, rechecking, recheck, reload: load, setEnabled };
+  const apply = useCallback((list: EngineInfo[]) => {
+    setEngines(list);
+    setError(null);
+  }, []);
+
+  return { engines, error, rechecking, recheck, reload: load, setEnabled, apply };
 }

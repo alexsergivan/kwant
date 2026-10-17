@@ -5,6 +5,7 @@ import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
 import { isUsable, pickLabel } from '../engines';
 import { useEngines } from '../useEngines';
+import { claudeNeedsSignIn } from '../claudeLogin';
 
 export interface Kwant {
   id: string;
@@ -69,6 +70,8 @@ export interface SidebarProps {
   onOpenAway?: () => void;
   /** Opens Settings → Engines from the footer. */
   onOpenSettings?: () => void;
+  /** Opens Settings at "Sign in with Claude", when Claude being signed out is why nothing runs. */
+  onSignInClaude?: () => void;
   /** Changes when Settings closes, so the footer reads engine status again. */
   enginesRefreshKey?: number;
 }
@@ -100,6 +103,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   awayActive = false,
   onOpenAway,
   onOpenSettings,
+  onSignInClaude,
   enginesRefreshKey = 0,
 }) => {
   const engines = useEngines(true);
@@ -108,6 +112,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (enginesRefreshKey) reloadEngines();
   }, [enginesRefreshKey, reloadEngines]);
   const readyCount = engines.engines?.filter(isUsable).length ?? null;
+  // Nothing can run and Claude only needs signing in: the footer goes straight to that.
+  const offerClaude = readyCount === 0 && !!onSignInClaude && claudeNeedsSignIn(engines.engines);
   const [teamsOpen, setTeamsOpen] = useState(true);
   const [fleetOpen, setFleetOpen] = useState(() => localStorage.getItem('kwant.fleetOpen') === '1');
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
@@ -528,8 +534,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="p-3 border-t border-zinc-800/60 bg-zinc-950/40 text-[11px] text-zinc-500">
           <button
             type="button"
-            onClick={onOpenSettings}
-            disabled={!onOpenSettings}
+            onClick={offerClaude ? onSignInClaude : onOpenSettings}
+            disabled={!onOpenSettings && !offerClaude}
             className="flex items-center gap-1.5 hover:text-zinc-300 disabled:hover:text-zinc-500 transition-colors"
           >
             {readyCount === null ? (
@@ -543,7 +549,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {readyCount === null
                 ? 'Checking engines…'
                 : readyCount === 0
-                  ? 'No engine can run · check Settings'
+                  ? offerClaude
+                    ? 'No engine can run · Sign in with Claude'
+                    : 'No engine can run · check Settings'
                   : `${readyCount} ${readyCount === 1 ? 'engine' : 'engines'} ready`}
             </span>
           </button>
