@@ -135,6 +135,8 @@ export const App: React.FC = () => {
 
   // Modals state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // Bumped when Settings closes, so open kwant forms read engine status again.
+  const [settingsClosedCount, setSettingsClosedCount] = useState(0);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isProfilesOpen, setIsProfilesOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -1817,6 +1819,8 @@ export const App: React.FC = () => {
       {/* Main Workspace Shell */}
       <div className="flex-1 flex overflow-hidden">
         <Sidebar
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          enginesRefreshKey={settingsClosedCount}
           kwants={kwants}
           channels={channels}
           teams={teams}
@@ -1946,6 +1950,8 @@ export const App: React.FC = () => {
           profiles={profiles}
           onManageProfiles={() => setIsProfilesOpen(true)}
           onManageServers={() => setIsMcpOpen(true)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          enginesRefreshKey={settingsClosedCount}
           onSubmit={handleCreateAgent}
         />
 
@@ -1959,6 +1965,8 @@ export const App: React.FC = () => {
           profiles={profiles}
           onManageProfiles={() => setIsProfilesOpen(true)}
           onManageServers={() => setIsMcpOpen(true)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          enginesRefreshKey={settingsClosedCount}
           initialTab={editingTab}
           pendingSkills={editingKwant ? pendingSkillCounts[editingKwant.id] ?? 0 : 0}
           onClose={() => setEditingKwant(null)}
@@ -1988,7 +1996,10 @@ export const App: React.FC = () => {
       <Suspense fallback={null}>
         <SettingsModal
           isOpen={isSettingsOpen}
-          onClose={() => setIsSettingsOpen(false)}
+          onClose={() => {
+            setIsSettingsOpen(false);
+            setSettingsClosedCount((n) => n + 1);
+          }}
           onOpenTools={() => {
             setIsSettingsOpen(false);
             setIsMcpOpen(true);

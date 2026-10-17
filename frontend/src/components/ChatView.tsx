@@ -27,6 +27,7 @@ import {
   uploadSlotsLeft,
 } from '../attachments';
 import { FileTiles, UploadChip } from './Attachments';
+import { ranOnLabel } from '../engines';
 
 export interface ChatMessage {
   id: string;
@@ -620,6 +621,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     // An agent's share_file note: the file tiles say it all.
     const filesOnly = files.length > 0 && isSharedFileMessage(msg.meta);
     const isThoughtOpen = !!openThoughts[msg.id];
+    const ranOn = isUser ? null : ranOnLabel(msg.meta);
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
 
     return (
@@ -640,6 +642,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {/* Header info */}
           <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
             <span className="text-zinc-200">{displayName}</span>
+            {ranOn && (
+              <span className="text-zinc-500 font-mono text-[10px]" title={`Answered with ${ranOn}`}>
+                {ranOn}
+              </span>
+            )}
             {msg.tokens_used ? (
               <span className="text-zinc-500 font-mono text-[10px]">({msg.tokens_used} tokens)</span>
             ) : null}

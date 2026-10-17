@@ -4,6 +4,8 @@ import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
 import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
 import { playSfx } from '../audio/chiptune';
 import { KwantToolsPicker } from './KwantToolsPicker';
+import { ModelPicker } from './ModelPicker';
+import { useEngines } from '../useEngines';
 import { McpServer, defaultKwantServerIds } from '../mcp';
 import { ENGINES, Profile, engineOfModel, profileStatus, profilesForEngine } from '../profiles';
 import { MemoryPanel } from './MemoryPanel';
@@ -33,14 +35,6 @@ export interface AgentFormData {
   profile_failover?: boolean;
 }
 
-const MODEL_OPTIONS = [
-  { id: 'auto', label: 'Auto (Laya 33ms Decision Router - Recommended)' },
-  { id: 'claude', label: 'Anthropic Claude (Deep Architecture)' },
-  { id: 'grok', label: 'xAI Grok (Fast Technical Reasoning)' },
-  { id: 'codex', label: 'OpenAI Codex (Coding & Scripts)' },
-  { id: 'local_ollama', label: 'Local Ollama (Offline / Private)' },
-];
-
 interface NewAgentModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -58,6 +52,10 @@ interface NewAgentModalProps {
   profiles?: Profile[];
   /** Opens the LLM profiles screen. */
   onManageProfiles?: () => void;
+  /** Opens Settings → Engines. */
+  onOpenSettings?: () => void;
+  /** Changes when Settings closes, so engine status is read again. */
+  enginesRefreshKey?: number;
   /** Resolves to an error message when saving failed. */
   onSubmit: (data: AgentFormData) => Promise<string | void> | void;
   /** For the Routines tab when editing. */
@@ -79,6 +77,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   onManageServers,
   profiles = [],
   onManageProfiles,
+  onOpenSettings,
+  enginesRefreshKey,
   onSubmit,
   kwants = [],
   channels = [],
@@ -100,6 +100,11 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [profileId, setProfileId] = useState<string | null>(null);
   const [failover, setFailover] = useState(true);
   const isEdit = !!initial;
+  const engines = useEngines(isOpen);
+  const { reload: reloadEngines } = engines;
+  useEffect(() => {
+    if (isOpen && enginesRefreshKey) reloadEngines();
+  }, [isOpen, enginesRefreshKey, reloadEngines]);
   const engine = engineOfModel(model);
   const engineProfiles = profilesForEngine(profiles, engine);
 
@@ -186,10 +191,6 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     }
     onClose();
   };
-
-  const modelOptions = MODEL_OPTIONS.some((m) => m.id === model)
-    ? MODEL_OPTIONS
-    : [...MODEL_OPTIONS, { id: model, label: model }];
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
@@ -366,20 +367,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Model Engine</label>
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none transition-colors"
-            >
-              {modelOptions.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          <ModelPicker value={model} onChange={setModel} engines={engines.engines} onOpenSettings={onOpenSettings} />
 
           {engine && (
             <div>
