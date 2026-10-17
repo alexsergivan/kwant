@@ -72,6 +72,12 @@ impl Engine {
                 "ANTHROPIC_AUTH_TOKEN",
                 "CLAUDE_CODE_OAUTH_TOKEN",
                 "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+                // A provider or proxy set for this machine (e.g. Bedrock) would run the
+                // profile's turns there instead of on its own login
+                "CLAUDE_CODE_USE_BEDROCK",
+                "CLAUDE_CODE_USE_VERTEX",
+                "CLAUDE_CODE_USE_FOUNDRY",
+                "ANTHROPIC_BASE_URL",
             ],
             Engine::Codex => &["OPENAI_API_KEY", "CODEX_API_KEY"],
             Engine::Grok => &["XAI_API_KEY", "GROK_AUTH_PATH"],
@@ -387,6 +393,9 @@ mod tests {
         );
         assert!(env.remove.contains(&"ANTHROPIC_API_KEY".to_string()));
         assert!(env.remove.contains(&"CLAUDE_CODE_OAUTH_TOKEN".to_string()));
+        for provider in ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_BASE_URL"] {
+            assert!(env.remove.contains(&provider.to_string()), "{provider}");
+        }
         let env = CliEnv::for_home(Engine::Codex, home);
         assert_eq!(env.set[0].0, "CODEX_HOME");
         assert!(env.remove.contains(&"OPENAI_API_KEY".to_string()));

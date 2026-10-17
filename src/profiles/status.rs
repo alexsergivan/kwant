@@ -186,14 +186,27 @@ pub(crate) fn claude_status(stdout: &str) -> ProfileStatus {
         return ProfileStatus::default();
     };
     let signed_in = v["loggedIn"].as_bool();
-    let label = ["email", "emailAddress", "account", "authMethod"]
+    // An auth method like "third_party" isn't an account: name the provider it runs on instead
+    let label = ["email", "emailAddress", "account"]
         .iter()
         .find_map(|k| v[*k].as_str().filter(|s| !s.is_empty()))
-        .map(|s| s.chars().take(80).collect());
+        .map(|s| s.chars().take(80).collect())
+        .or_else(|| (v["authMethod"] == "third_party").then(|| third_party_name(v["apiProvider"].as_str())));
     ProfileStatus {
         signed_in,
         account_label: if signed_in == Some(true) { label } else { None },
     }
+}
+
+/// What Claude Code runs on when it's set up for another provider instead of a Claude login.
+fn third_party_name(provider: Option<&str>) -> String {
+    match provider {
+        Some("bedrock") => "Amazon Bedrock",
+        Some("vertex") => "Google Vertex AI",
+        Some("foundry") => "Microsoft Foundry",
+        _ => "a third-party provider",
+    }
+    .into()
 }
 
 pub(crate) fn codex_status(success: bool, stdout: &str, stderr: &str) -> ProfileStatus {
@@ -236,6 +249,11 @@ mod tests {
             }
         );
         assert_eq!(claude_status("garbage"), ProfileStatus::default());
+        // Set up for Bedrock (as this machine's env can do): the provider, never "third_party"
+        let s = claude_status(r#"{"loggedIn":true,"authMethod":"third_party","apiProvider":"bedrock"}"#);
+        assert_eq!(s.account_label.as_deref(), Some("Amazon Bedrock"));
+        let s = claude_status(r#"{"loggedIn":true,"authMethod":"claude.ai"}"#);
+        assert_eq!(s.account_label, None);
         let s = codex_status(true, "Logged in using ChatGPT\n", "");
         assert_eq!(s.signed_in, Some(true));
         assert_eq!(s.account_label.as_deref(), Some("Logged in using ChatGPT"));
