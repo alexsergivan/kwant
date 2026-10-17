@@ -59,7 +59,7 @@ pub struct ProfileOut {
 
 /// Profiles that count as signed in through a key: their own, or for a system profile the
 /// engine's Settings key or env key, as before profiles.
-async fn keyed_ids(state: &AppState, profiles: &[LlmProfile]) -> HashSet<String> {
+pub(super) async fn keyed_ids(state: &AppState, profiles: &[LlmProfile]) -> HashSet<String> {
     let mut ids = state.db.profile_ids_with_key().await.unwrap_or_default();
     for p in profiles.iter().filter(|p| p.kind == "system") {
         let Some(engine) = Engine::parse(&p.engine) else {

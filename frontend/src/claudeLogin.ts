@@ -83,6 +83,6 @@ export function isClaudeSignInUrl(url: string | null | undefined): url is string
   }
 }
 
-/** The Claude Code CLI is installed and switched on but signed out, so "Sign in with Claude" fixes it. */
+/** The Claude Code CLI is on but signed out and no other Claude account is ready, so "Sign in with Claude" fixes it. */
 export const claudeNeedsSignIn = (engines: EngineInfo[] | null | undefined) =>
-  !!engines?.some((e) => e.id === 'claude' && e.enabled !== false && e.status === 'signed_out');
+  !!engines?.some((e) => e.id === 'claude' && e.enabled !== false && e.status === 'signed_out' && e.ready !== true);

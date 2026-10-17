@@ -3,12 +3,34 @@
 
 use super::AppState;
 use crate::db::models::LlmProfile;
-use crate::drivers::engines::EngineId;
+use crate::drivers::engines::{EngineAccount, EngineId, EngineReport, EngineStatus};
 use crate::drivers::{find_cli_binary, resolve_driver_for_model, ApiDriver, CliDriver, Driver};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::profiles::{
-    failover_order, Availability, Engine, FailClass, ProfileStatus, ProviderFailure,
+    failover_order, preference_order, Availability, Engine, FailClass, ProfileStatus,
+    ProviderFailure, SignInBar,
 };
+
+/// Every profile and what decides whether each can take a turn now, from the db and the
+/// cached sign-in checks (never waits on a check). `None` when the db can't be read.
+async fn accounts(state: &AppState) -> Option<(Vec<LlmProfile>, Availability)> {
+    let db = &state.db;
+    let (Ok(profiles), Ok(states), Ok(with_key)) = (
+        db.list_profiles().await,
+        db.list_profile_states().await,
+        db.profile_ids_with_key().await,
+    ) else {
+        return None;
+    };
+    let avail = Availability {
+        states,
+        with_key,
+        signed_out: state.profiles.signed_out(),
+        signed_in: state.profiles.signed_in(),
+    };
+    Some((profiles, avail))
+}
 
 /// Profiles to try for a turn on `engine`, in order. Empty when the model has no profiles
 /// (e.g. Ollama) or the engine has none enabled: the turn then runs as before profiles.
@@ -16,21 +38,12 @@ pub async fn plan(state: &AppState, engine: Option<Engine>, kwant_id: &str) -> V
     let Some(engine) = engine else {
         return Vec::new();
     };
-    let db = &state.db;
-    let (Ok(profiles), Ok(binding), Ok(states), Ok(with_key)) = (
-        db.list_profiles().await,
-        db.get_kwant_binding(kwant_id).await,
-        db.list_profile_states().await,
-        db.profile_ids_with_key().await,
-    ) else {
+    let (Some((profiles, avail)), Ok(binding)) =
+        (accounts(state).await, state.db.get_kwant_binding(kwant_id).await)
+    else {
         return Vec::new();
     };
     let (bound, failover) = binding.unwrap_or((None, true));
-    let avail = Availability {
-        states,
-        with_key,
-        signed_out: state.profiles.signed_out(),
-    };
     failover_order(
         &profiles,
         engine,
@@ -98,33 +111,102 @@ pub async fn driver_for(
     ))
 }
 
+/// `family`'s own accounts (not the system profile) that pass `bar` and whose engine is on,
+/// in the order failover prefers them. The one rule for "this account can take a turn".
+fn own_accounts<'a>(
+    state: &AppState,
+    profiles: &'a [LlmProfile],
+    family: Engine,
+    avail: &Availability,
+    bar: SignInBar,
+) -> Vec<&'a LlmProfile> {
+    let now = chrono::Utc::now();
+    preference_order(profiles, family, None)
+        .into_iter()
+        .filter(|p| p.kind != "system" && avail.admits(p, now, bar))
+        .filter(|p| profile_engine_on(state, p))
+        .collect()
+}
+
 /// Engines with an enabled account of their own (not the system profile) that failover
-/// would use: these engines can run even when the host's own CLI or key can't.
+/// would use: these engines can run even when the host's own CLI or key can't. Routing keeps
+/// the lenient bar (an unchecked profile counts) so turns right after startup, before any
+/// sign-in check, still reach a profile that is in fact signed in.
 pub async fn profile_engines(state: &AppState) -> HashSet<Engine> {
-    let db = &state.db;
-    let (Ok(profiles), Ok(states), Ok(with_key)) = (
-        db.list_profiles().await,
-        db.list_profile_states().await,
-        db.profile_ids_with_key().await,
-    ) else {
+    let Some((profiles, avail)) = accounts(state).await else {
         return HashSet::new();
     };
-    let signed_out = state.profiles.signed_out();
-    let now = chrono::Utc::now();
-    profiles
-        .iter()
-        .filter(|p| p.enabled && p.kind != "system")
-        .filter(|p| profile_engine_on(state, p))
-        .filter(|p| p.kind != "api_key" || with_key.contains(&p.id))
-        .filter(|p| !signed_out.contains(&p.id))
-        .filter(|p| {
-            !states
-                .get(&p.id)
-                .and_then(|s| s.limited_until)
-                .is_some_and(|t| t > now)
-        })
-        .filter_map(|p| Engine::parse(&p.engine))
+    [Engine::Claude, Engine::Codex, Engine::Grok]
+        .into_iter()
+        .filter(|f| !own_accounts(state, &profiles, *f, &avail, SignInBar::NotSignedOut).is_empty())
         .collect()
+}
+
+/// Whether `report`'s engine is ready and the account a kwant on it uses: the first of the
+/// engine's accounts in failover order (the default first) that can take a turn, the system
+/// profile ("This machine") counting when the engine's own login is ready. Off ⇒ not ready.
+pub fn readiness(
+    report: &EngineReport,
+    profiles: &[LlmProfile],
+    avail: &Availability,
+    now: chrono::DateTime<chrono::Utc>,
+) -> (bool, Option<EngineAccount>) {
+    if !report.enabled {
+        return (false, None);
+    }
+    let host = report.status == EngineStatus::Ready;
+    let Some(family) = report.id.family() else {
+        return (host, None);
+    };
+    let system = |p: &&LlmProfile| p.kind == "system";
+    let picked = preference_order(profiles, family, None)
+        .into_iter()
+        .filter(|p| system(p) || profile_engine(p) == Some(report.id))
+        .find(|p| {
+            if system(p) {
+                host
+            } else {
+                avail.admits(p, now, SignInBar::SignedIn)
+            }
+        })
+        .or_else(|| {
+            // This machine turned off as a profile still runs turns when nothing else does
+            host.then(|| profiles.iter().find(|p| p.engine == family.as_str() && system(p)))
+                .flatten()
+        });
+    let uses = picked.map(|p| EngineAccount { profile_id: p.id.clone(), label: p.name.clone() });
+    (host || uses.is_some(), uses)
+}
+
+/// Fills in `ready` and `uses` on every report.
+pub async fn with_accounts(state: &AppState, mut reports: Vec<EngineReport>) -> Vec<EngineReport> {
+    let accounts = accounts(state).await;
+    let now = chrono::Utc::now();
+    for r in &mut reports {
+        let (ready, uses) = match &accounts {
+            Some((profiles, avail)) => readiness(r, profiles, avail, now),
+            None => (r.enabled && r.status == EngineStatus::Ready, None),
+        };
+        // An engine switched off is off for its accounts too (see profile_engine_on)
+        r.ready = ready;
+        r.uses = uses;
+    }
+    reports
+}
+
+static REFRESHING: AtomicBool = AtomicBool::new(false);
+
+/// Runs the stale profile sign-in checks so `ready` is current; one run at a time, others
+/// return at once.
+pub async fn refresh_sign_ins(state: &AppState) {
+    if REFRESHING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if let Ok(profiles) = state.db.list_profiles().await {
+        let keyed = super::profile_routes::keyed_ids(state, &profiles).await;
+        state.profiles.statuses(&profiles, &keyed).await;
+    }
+    REFRESHING.store(false, Ordering::Release);
 }
 
 /// Remembers a refusal so failover skips the profile: until its quota resets, or until it is
@@ -187,4 +269,172 @@ pub fn give_up_notice(
         format!("The {} profile \"{}\"", last.engine, last.name)
     };
     format!("⚠️ [{kwant_name}] {which} {}. {fix}", reason(failure))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::models::LlmProfileState;
+    use chrono::{DateTime, Duration, TimeZone, Utc};
+    use std::collections::HashMap;
+
+    fn now() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 10, 17, 12, 0, 0).unwrap()
+    }
+
+    fn profile(id: &str, name: &str, kind: &str, priority: i64, default: bool) -> LlmProfile {
+        LlmProfile {
+            id: id.into(),
+            engine: "claude".into(),
+            name: name.into(),
+            kind: kind.into(),
+            home_dir: None,
+            priority,
+            enabled: true,
+            is_default: default,
+            created_at: None,
+        }
+    }
+
+    fn report(id: EngineId, enabled: bool, status: EngineStatus) -> EngineReport {
+        EngineReport {
+            id,
+            name: id.name().into(),
+            kind: id.kind(),
+            enabled,
+            status,
+            detail: None,
+            version: None,
+            models: Vec::new(),
+            checked_at: None,
+            ready: false,
+            uses: None,
+        }
+    }
+
+    fn signed_in(ids: &[&str]) -> Availability {
+        Availability {
+            signed_in: ids.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn uses(r: (bool, Option<EngineAccount>)) -> (bool, Option<String>) {
+        (r.0, r.1.map(|a| a.label))
+    }
+
+    /// Oleks's setup: This machine plus a Personal Claude account that is the default.
+    fn oleks() -> Vec<LlmProfile> {
+        vec![
+            profile("prf_system_claude", "This machine", "system", 0, false),
+            profile("p_personal", "Personal", "cli_home", 100, true),
+        ]
+    }
+
+    #[test]
+    fn engine_off_is_not_ready_even_with_a_signed_in_account() {
+        let r = report(EngineId::Claude, false, EngineStatus::Disabled);
+        let avail = signed_in(&["p_personal"]);
+        assert_eq!(readiness(&r, &oleks(), &avail, now()), (false, None));
+    }
+
+    #[test]
+    fn host_signed_out_but_personal_signed_in_is_ready_on_personal() {
+        let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
+        let got = readiness(&r, &oleks(), &signed_in(&["p_personal"]), now());
+        assert!(got.0);
+        assert_eq!(
+            got.1,
+            Some(EngineAccount { profile_id: "p_personal".into(), label: "Personal".into() })
+        );
+        // Host signed out and no account signed in: not ready
+        let got = readiness(&r, &oleks(), &Availability::default(), now());
+        assert_eq!(got, (false, None));
+    }
+
+    #[test]
+    fn unknown_sign_in_is_not_ready_but_routing_still_tries_it() {
+        let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
+        let unknown = Availability::default();
+        assert_eq!(readiness(&r, &oleks(), &unknown, now()), (false, None));
+        // Routing keeps the lenient bar: an unchecked profile is still tried by a turn
+        let personal = &oleks()[1];
+        assert!(unknown.admits(personal, now(), SignInBar::NotSignedOut));
+        assert!(!unknown.admits(personal, now(), SignInBar::SignedIn));
+    }
+
+    #[test]
+    fn quota_limited_account_is_not_ready_until_it_resets() {
+        let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
+        let limited = |until: DateTime<Utc>| Availability {
+            states: HashMap::from([(
+                "p_personal".to_string(),
+                LlmProfileState {
+                    profile_id: "p_personal".into(),
+                    limited_until: Some(until),
+                    last_error: Some("quota".into()),
+                },
+            )]),
+            ..signed_in(&["p_personal"])
+        };
+        let avail = limited(now() + Duration::hours(1));
+        assert_eq!(readiness(&r, &oleks(), &avail, now()), (false, None));
+        let avail = limited(now() - Duration::minutes(1));
+        assert_eq!(uses(readiness(&r, &oleks(), &avail, now())), (true, Some("Personal".into())));
+    }
+
+    #[test]
+    fn uses_the_default_first_then_priority_order() {
+        let r = report(EngineId::Claude, true, EngineStatus::Ready);
+        let profiles = vec![
+            profile("prf_system_claude", "This machine", "system", 0, false),
+            profile("p_work", "Work", "cli_home", 10, false),
+            profile("p_personal", "Personal", "cli_home", 20, true),
+        ];
+        // The default wins over a higher priority, signed-in account and the host's own login
+        let all = signed_in(&["p_work", "p_personal"]);
+        assert_eq!(uses(readiness(&r, &profiles, &all, now())), (true, Some("Personal".into())));
+        // Default not signed in: next by priority, here This machine (host ready)
+        let work = signed_in(&["p_work"]);
+        assert_eq!(uses(readiness(&r, &profiles, &work, now())), (true, Some("This machine".into())));
+        // Host signed out too: Work
+        let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
+        assert_eq!(uses(readiness(&r, &profiles, &work, now())), (true, Some("Work".into())));
+    }
+
+    #[test]
+    fn disabled_profiles_and_other_engines_accounts_do_not_count() {
+        let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
+        let mut profiles = oleks();
+        profiles[1].enabled = false;
+        assert_eq!(readiness(&r, &profiles, &signed_in(&["p_personal"]), now()), (false, None));
+        // An API-key account runs on the Anthropic API, not the Claude CLI, and needs its key
+        let profiles = vec![
+            profile("prf_system_claude", "This machine", "system", 0, true),
+            profile("p_key", "Team key", "api_key", 10, false),
+        ];
+        assert_eq!(readiness(&r, &profiles, &Availability::default(), now()), (false, None));
+        let api = report(EngineId::AnthropicApi, true, EngineStatus::SignedOut);
+        assert_eq!(readiness(&api, &profiles, &Availability::default(), now()), (false, None));
+        let keyed = Availability {
+            with_key: HashSet::from(["p_key".to_string()]),
+            ..Default::default()
+        };
+        assert_eq!(uses(readiness(&api, &profiles, &keyed, now())), (true, Some("Team key".into())));
+        assert_eq!(readiness(&r, &profiles, &keyed, now()), (false, None));
+    }
+
+    #[test]
+    fn host_ready_uses_this_machine_even_when_its_profile_is_off() {
+        let r = report(EngineId::Claude, true, EngineStatus::Ready);
+        let mut profiles = oleks();
+        profiles[0].enabled = false;
+        assert_eq!(
+            uses(readiness(&r, &profiles, &Availability::default(), now())),
+            (true, Some("This machine".into()))
+        );
+        // Ollama has no accounts: ready from its own check alone
+        let o = report(EngineId::Ollama, true, EngineStatus::Ready);
+        assert_eq!(readiness(&o, &profiles, &Availability::default(), now()), (true, None));
+    }
 }

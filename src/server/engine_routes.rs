@@ -1,6 +1,7 @@
 //! `GET /api/engines`, `POST /api/engines/recheck` and `POST /api/engines/{id}`: whether each
 //! engine can run, why not, the models it offers, and turning one off or on.
 
+use super::profile_turn::{self, with_accounts};
 use super::AppState;
 use crate::drivers::engines::{parse_disabled, EngineId, EngineReport, ProbeEnv, DISABLED_SETTING};
 use axum::{
@@ -15,9 +16,13 @@ pub struct EnginesResponse {
     pub engines: Vec<EngineReport>,
 }
 
-/// The cached checks; never waits on one. Engines not checked yet show as "checking".
+/// The cached checks; never waits on one. Engines not checked yet show as "checking". Stale
+/// profile sign-in checks run in the background for the next call.
 pub async fn list(State(state): State<AppState>) -> Json<EnginesResponse> {
-    Json(EnginesResponse { engines: state.engines.snapshot() })
+    let engines = with_accounts(&state, state.engines.snapshot()).await;
+    let bg = state.clone();
+    tokio::spawn(async move { profile_turn::refresh_sign_ins(&bg).await });
+    Json(EnginesResponse { engines })
 }
 
 /// Checks every engine again and answers once done (each check is capped at 10s).
@@ -25,10 +30,12 @@ pub async fn recheck(State(state): State<AppState>) -> Json<EnginesResponse> {
     Json(EnginesResponse { engines: recheck_all(&state).await })
 }
 
+/// Every engine and every profile's sign-in, checked again.
 pub async fn recheck_all(state: &AppState) -> Vec<EngineReport> {
     load_disabled(state).await;
     let env = probe_env(state).await;
-    state.engines.recheck(&env).await
+    let (engines, ()) = tokio::join!(state.engines.recheck(&env), profile_turn::refresh_sign_ins(state));
+    with_accounts(state, engines).await
 }
 
 /// What the checks run with: Settings and the env, and Claude's sign-in config dir.
@@ -74,7 +81,7 @@ pub async fn set_enabled(
         let env = probe_env(&state).await;
         state.engines.recheck_one(id, &env).await;
     }
-    Ok(Json(EnginesResponse { engines: state.engines.snapshot() }))
+    Ok(Json(EnginesResponse { engines: with_accounts(&state, state.engines.snapshot()).await }))
 }
 
 /// Checks every engine in the background, so the first turns after startup see real status.

@@ -72,6 +72,17 @@ impl ProfileManager {
             .collect()
     }
 
+    /// Profiles whose last check said signed in, for Engines to call ready.
+    pub fn signed_in(&self) -> HashSet<String> {
+        self.cache
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, (_, s))| s.signed_in == Some(true))
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
     /// Sign-in status of every profile; checks run concurrently, only for stale entries.
     /// `with_key`: profiles (and system profiles whose engine has a Settings or env key) that
     /// count as signed in through an API key.

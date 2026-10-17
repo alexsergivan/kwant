@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Key, Globe, X, Sparkles, Check, Plug, ChevronRight, UserRound, LogOut, Bell, AlertTriangle, Layers, Monitor } from 'lucide-react';
+import { Key, Globe, X, Sparkles, Check, Plug, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import {
   BROWSER_NOTIFY_KEY,
@@ -15,6 +15,8 @@ import { useAuth } from './AuthGate';
 import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
 import { EnginesPanel } from './EnginesPanel';
 import { useEngines } from '../useEngines';
+import { useProfiles } from '../useProfiles';
+import type { Profile } from '../profiles';
 
 interface SettingsData {
   anthropic_api_key: string;
@@ -47,15 +49,17 @@ interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenTools?: () => void;
-  onOpenProfiles?: () => void;
+  /** Gets the accounts list after every change, so kwant pickers stay current. */
+  onProfilesChanged?: (profiles: Profile[]) => void;
   /** Changes to focus "Sign in with Claude" in Engines. */
   focusClaudeSignIn?: number;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onOpenTools, onOpenProfiles, focusClaudeSignIn }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onOpenTools, onProfilesChanged, focusClaudeSignIn }) => {
   const { authRequired, signOut } = useAuth();
   const computer = useComputerMode(isOpen);
   const engines = useEngines(isOpen);
+  const accounts = useProfiles(isOpen, onProfilesChanged);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [anthropicKey, setAnthropicKey] = useState('');
   const [xaiKey, setXaiKey] = useState('');
@@ -198,7 +202,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             </div>
             <div>
               <h2 id="settings-title" className="text-sm font-semibold text-zinc-100">Fleet & Engine Settings</h2>
-              <p className="text-xs text-zinc-400">Which engines can run, and the keys and accounts they use</p>
+              <p className="text-xs text-zinc-400">Engines, the accounts they run on, and API keys</p>
             </div>
           </div>
 
@@ -213,7 +217,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           </button>
         </div>
 
-        <EnginesPanel api={engines} focusClaudeSignIn={focusClaudeSignIn} />
+        <EnginesPanel api={engines} accounts={accounts} focusClaudeSignIn={focusClaudeSignIn} />
 
         {computer.state.settings && (
           <div className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3">
@@ -226,26 +230,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             </div>
             <ComputerModeControl api={computer} />
           </div>
-        )}
-
-        {onOpenProfiles && (
-          <button
-            type="button"
-            onClick={() => {
-              playSfx('click');
-              onOpenProfiles();
-            }}
-            className="w-full flex items-center gap-3 p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 text-left transition-colors group"
-          >
-            <span className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
-              <UserRound size={15} />
-            </span>
-            <span className="flex-1">
-              <span className="block text-xs font-medium text-zinc-200">LLM profiles</span>
-              <span className="block text-[11px] text-zinc-500">Work and personal accounts per engine, with automatic failover</span>
-            </span>
-            <ChevronRight size={15} className="text-zinc-500 group-hover:text-sky-300" />
-          </button>
         )}
 
         {onOpenTools && (

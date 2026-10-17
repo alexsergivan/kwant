@@ -187,6 +187,10 @@ async fn laya_picks_model_tier_pins_and_engine_switches() {
         by_id(&v, id)["models"].as_array().unwrap().iter().map(|m| (m["id"].as_str().unwrap().to_string(), m["tier"].clone())).collect()
     };
     assert_eq!(by_id(&v, "claude")["status"], "ready");
+    // Ready on its own login, so a kwant uses This machine; keyless APIs are neither
+    assert_eq!(by_id(&v, "claude")["ready"], true);
+    assert_eq!(by_id(&v, "claude")["uses"], json!({"profile_id": "prf_system_claude", "label": "This machine"}));
+    assert_eq!((by_id(&v, "anthropic_api")["ready"].clone(), by_id(&v, "anthropic_api")["uses"].clone()), (json!(false), Value::Null));
     assert!(tiers("claude").contains(&("haiku".into(), json!("fast"))));
     assert!(tiers("claude").contains(&("opus".into(), json!("deep"))));
     assert_eq!(tiers("codex"), [("gpt-6.1-sol".into(), json!("balanced")), ("gpt-6-astra".into(), json!("deep")), ("gpt-6-luna".into(), json!("fast"))]);
@@ -200,6 +204,9 @@ async fn laya_picks_model_tier_pins_and_engine_switches() {
     assert_eq!(v["engines"].as_array().unwrap().len(), 7, "the full GET /api/engines shape");
     let codex = by_id(&v, "codex");
     assert_eq!((codex["status"].clone(), codex["enabled"].clone(), codex["models"].clone()), (json!("disabled"), json!(false), json!([])));
+    assert_eq!((codex["ready"].clone(), codex["uses"].clone()), (json!(false), Value::Null));
+    let (_, listed) = call(&app, "GET", "/api/engines", None).await;
+    assert_eq!(by_id(&listed, "claude")["ready"], true, "GET carries ready/uses too");
     let (s, _) = call(&app, "PUT", "/api/engines/grok", Some(json!({"enabled": false}))).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(state.db.get_setting("engines_disabled").await.unwrap().as_deref(), Some(r#"["codex","grok"]"#));

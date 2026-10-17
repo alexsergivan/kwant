@@ -50,7 +50,7 @@ interface NewAgentModalProps {
   onManageServers?: () => void;
   /** Every LLM profile, for the profile picker. */
   profiles?: Profile[];
-  /** Opens the LLM profiles screen. */
+  /** Opens Settings → Engines & accounts. */
   onManageProfiles?: () => void;
   /** Opens Settings → Engines. */
   onOpenSettings?: () => void;
@@ -376,7 +376,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label htmlFor="agent-profile" className="text-xs font-medium text-zinc-400">
-                  Account (LLM profile)
+                  Account
                 </label>
                 {onManageProfiles && (
                   <button
@@ -384,7 +384,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
                     onClick={onManageProfiles}
                     className="flex items-center gap-0.5 text-[11px] text-zinc-500 hover:text-sky-300 transition-colors"
                   >
-                    Manage profiles <ChevronRight size={11} />
+                    Manage accounts <ChevronRight size={11} />
                   </button>
                 )}
               </div>
@@ -405,12 +405,12 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
                   </option>
                 ))}
                 {profileId && !engineProfiles.some((p) => p.id === profileId) && (
-                  <option value={profileId}>Another engine's profile (cleared on save)</option>
+                  <option value={profileId}>Another engine's account (cleared on save)</option>
                 )}
               </select>
               <label className="mt-1.5 flex items-start gap-2 text-[11px] text-zinc-400">
                 <input type="checkbox" checked={failover} onChange={(e) => setFailover(e.target.checked)} className="mt-0.5 accent-sky-500" />
-                <span>Switch to the engine's next profile when this one runs out of usage or is signed out</span>
+                <span>Switch to the engine's next account when this one runs out of usage or is signed out</span>
               </label>
             </div>
           )}
