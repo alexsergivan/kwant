@@ -34,13 +34,14 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 6] = [
+pub const NOTIFY_KINDS: [&str; 7] = [
     "turn_finished",
     "approval_needed",
     "routine_failed",
     "delegation_finished",
     "delegation_stalled",
     "skill_proposed",
+    "question_asked",
 ];
 const MASK: &str = "••••••••";
 
@@ -152,6 +153,9 @@ pub struct SelfScope {
     pub kwant_name: String,
     /// The chat the turn runs in; delegation tools are offered only when it is known.
     pub origin: Option<TurnOrigin>,
+    /// The turn's stop button: a waiting `ask_user` ends when it fires.
+    pub cancel: Option<tokio_util::sync::CancellationToken>,
+    pub turn_id: Option<String>,
 }
 
 /// Where a turn runs, for the delegation tools: results go back to this chat.
@@ -182,7 +186,8 @@ pub fn self_server(base_url: &str, token: &str) -> McpServer {
             .into_iter()
             .collect(),
         enabled: true,
-        timeout_secs: 30,
+        // ask_user waits for the user up to the approval timeout
+        timeout_secs: (crate::mcp::APPROVAL_TIMEOUT_SECS + 30) as i64,
         created_at: None,
     }
 }
@@ -205,6 +210,9 @@ fn tool_list(scope: &SelfScope) -> Value {
         list.extend(super::skills::tools());
         if scope.origin.is_some() {
             list.extend(delegation_tools());
+            if scope.cancel.is_some() {
+                list.extend(super::questions::tools());
+            }
         }
     }
     tools
@@ -464,6 +472,7 @@ async fn call_tool(
         }
         "skill_propose" => super::skills::tool_propose(state, scope, args).await,
         "skill_get" => super::skills::tool_get(state, scope, args).await,
+        "ask_user" => super::questions::tool_ask(state, scope, args).await,
         "delegate" => super::delegation::tool_delegate(state, scope, args).await,
         "delegation_status" => super::delegation::tool_status(state, scope, args).await,
         "delegation_cancel" => super::delegation::tool_cancel(state, scope, args).await,

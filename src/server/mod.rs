@@ -12,6 +12,7 @@ pub mod continuity;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
+pub mod questions;
 pub mod skills;
 
 use crate::broker::PermissionBroker;
@@ -55,6 +56,8 @@ pub struct AppState {
     pub running_routines: Arc<Mutex<std::collections::HashSet<String>>>,
     /// Wakes the scheduler early when routines change.
     pub scheduler_wake: Arc<tokio::sync::Notify>,
+    /// `ask_user` calls waiting for the user's answer.
+    pub questions: Arc<questions::QuestionHub>,
 }
 
 impl AppState {
@@ -89,6 +92,7 @@ impl AppState {
             self_tools: Default::default(),
             running_routines: Default::default(),
             scheduler_wake: Default::default(),
+            questions: Default::default(),
         }
     }
 
@@ -176,6 +180,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/delegations", get(delegation::list_delegations).post(delegation::create_delegation))
         .route("/api/delegations/:id", get(delegation::get_delegation))
         .route("/api/delegations/:id/cancel", post(delegation::cancel_delegation))
+        .route("/api/questions", get(questions::list))
+        .route("/api/questions/:id", get(questions::get))
+        .route("/api/questions/:id/answer", post(questions::answer))
+        .route("/api/questions/:id/cancel", post(questions::cancel))
         .route("/api/skills", get(skills::list).post(skills::create))
         .route("/api/skills/:id", get(skills::get).patch(skills::update).delete(skills::remove))
         .route("/api/skills/:id/diff", get(skills::diff))

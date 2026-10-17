@@ -2,6 +2,7 @@ pub mod models;
 pub mod profiles;
 pub mod continuity;
 pub mod threads;
+pub mod questions;
 pub mod skills;
 
 use models::*;
@@ -86,6 +87,7 @@ impl Database {
         db.migrate_continuity().await?;
         db.migrate_threads().await?;
         db.migrate_skills().await?;
+        db.migrate_questions().await?;
         db.seed_defaults().await?;
 
         Ok(db)

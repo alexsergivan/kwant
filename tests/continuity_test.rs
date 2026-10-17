@@ -666,6 +666,7 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
             kwant_id: k1.id.clone(),
             kwant_name: k1.name.clone(),
             origin: None,
+            ..Default::default()
         }),
     )
     .await
@@ -1134,7 +1135,7 @@ async fn webhook_setting_is_https_only_and_masked() {
     assert_eq!(s["notify_webhook_url"], "");
     assert_eq!(
         s["notify_on"],
-        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed"])
+        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked"])
     );
 
     let (status, _) = req(

@@ -818,6 +818,9 @@ pub(super) async fn try_kwant_turn(
         return Err("stopped by the user".into());
     }
     let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts, &tag).await;
+    if scope.cancel_token.is_cancelled() {
+        super::questions::cancel_for_turn(&scope.state, &tag.turn_id).await;
+    }
     ended.outcome = match (&reply, scope.cancel_token.is_cancelled()) {
         (Ok(_), _) => "completed",
         (Err(_), true) => "cancelled",
@@ -1043,6 +1046,8 @@ async fn run_kwant_turn_inner(
                     member_ids: scope.teammates.iter().map(|k| k.id.clone()).collect(),
                     depth: scope.delegation_depth,
                 }),
+                cancel: Some(cancel_token.clone()),
+                turn_id: Some(tag.turn_id.clone()),
             }
         });
         let mcp_turn = super::mcp_runtime::prepare_turn_with_self(

@@ -3,7 +3,7 @@
 //! own tools (`kwnt_tools`) over HTTP the way the real CLI does, so a test drives a whole turn:
 //!
 //! - `CALLTOOL:<tool>:<base64 json args>` in the prompt: call that tool and reply with its text
-//!   (the last marker counts; earlier ones are chat history).
+//!   (the last marker counts, and each marker runs once: later turns see it again in history).
 //! - `REPLYTAG:<tag>`: reply "answer <tag>" (after any tool call).
 //!
 //! Each test file that uses it is its own binary, because it changes PATH.
@@ -35,7 +35,14 @@ with open(os.path.join(out_dir, "%d-%d" % (os.getpid(), time.time_ns())), "w") a
     f.write("\n".join(args))
 reply = []
 m = ([None] + list(re.finditer(r"CALLTOOL:([a-z_]+):([A-Za-z0-9+/=]+)", prompt)))[-1]
+done = None
+if m:
+    import hashlib
+    done = os.path.join(os.path.dirname(out_dir), "called-" + hashlib.sha1(m.group(0).encode()).hexdigest())
+    if os.path.exists(done):
+        m = None
 if m and "--mcp-config" in args:
+    open(done, "w").close()
     cfg = json.load(open(args[args.index("--mcp-config") + 1]))
     srv = cfg["mcpServers"]["kwnt_tools"]
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",

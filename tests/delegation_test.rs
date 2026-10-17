@@ -452,6 +452,7 @@ async fn delegation_tools_enforce_their_rules() {
                 kwant_id: env.lead.clone(),
                 kwant_name: names[0].clone(),
                 origin: Some(continuity::TurnOrigin { direct_kwant_id: Some(env.lead.clone()), ..Default::default() }),
+                ..Default::default()
             },
         );
         tools.insert(
@@ -460,11 +461,12 @@ async fn delegation_tools_enforce_their_rules() {
                 kwant_id: env.lead.clone(),
                 kwant_name: names[0].clone(),
                 origin: Some(continuity::TurnOrigin { direct_kwant_id: Some(env.lead.clone()), depth: 2, ..Default::default() }),
+                ..Default::default()
             },
         );
         tools.insert(
             "other-token".into(),
-            continuity::SelfScope { kwant_id: env.specialist.clone(), kwant_name: names[1].clone(), origin: None },
+            continuity::SelfScope { kwant_id: env.specialist.clone(), kwant_name: names[1].clone(), origin: None, ..Default::default() },
         );
     }
     // Offered only to turns that know their chat
