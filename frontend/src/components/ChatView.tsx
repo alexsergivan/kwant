@@ -9,6 +9,7 @@ import { VirtualMachinePane, TerminalLogEntry } from './VirtualMachinePane';
 import { playSfx } from '../audio/chiptune';
 import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThreads';
 import { PinnedInstructions, PinnedItem } from './Instructions';
+import { DelegationMeta, parseDelegationMeta } from '../threads';
 
 export interface ChatMessage {
   id: string;
@@ -18,6 +19,18 @@ export interface ChatMessage {
   reasoning_content?: string | null;
   tool_calls?: string | null;
   tokens_used?: number;
+  channel_id?: string | null;
+  direct_kwant_id?: string | null;
+  thread_id?: string | null;
+  /** JSON string kwnt sets on messages it writes itself, e.g. delegation notes. */
+  meta?: string | null;
+}
+
+/** The open chat's turn is waiting for a free slot. */
+export interface QueuedState {
+  position: number | null;
+  reason: 'agent_busy' | 'server_busy';
+  speaker: string;
 }
 
 export interface DiscussionState {
@@ -95,6 +108,16 @@ export interface ChatViewProps {
   /** A message to scroll to and flash (from search). */
   highlightMessageId?: string | null;
   onHighlightDone?: () => void;
+  /** Under the header: the agent's conversations and the open thread's controls. */
+  subHeader?: React.ReactNode;
+  /** Next to the title, e.g. "Working on …" while the agent has background turns. */
+  titleExtra?: React.ReactNode;
+  /** Set while the open chat's turn waits in the queue. */
+  queued?: QueuedState | null;
+  /** Draws a delegation note or result (messages with delegation `meta`). */
+  renderDelegation?: (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => React.ReactNode;
+  /** Changes when another chat opens, so the view jumps to its bottom. */
+  contextKey?: string;
 }
 
 export const renderFormattedText = (text: string): React.ReactNode => {
@@ -223,6 +246,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onEditInstructions,
   highlightMessageId,
   onHighlightDone,
+  subHeader,
+  titleExtra,
+  queued,
+  renderDelegation,
+  contextKey,
 }) => {
   const [internalIsVmPaneOpen, setInternalIsVmPaneOpen] = useState(false);
   const vmOpen = isVmPaneOpen !== undefined ? isVmPaneOpen : internalIsVmPaneOpen;
@@ -352,12 +380,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }, 0);
   };
 
-  // Auto-scroll on new tokens
+  // Follow new tokens only while the reader is at the bottom; scrolling up to read stays put.
+  const stickRef = useRef(true);
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
   useEffect(() => {
-    if (scrollRef.current) {
+    stickRef.current = true;
+  }, [contextKey]);
+  useEffect(() => {
+    if (scrollRef.current && stickRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamingText, streamingThinking, pendingApproval, routingState]);
+  }, [messages, streamingText, streamingThinking, pendingApproval, routingState, queued, contextKey]);
 
   // Jump to a search hit: open its folded discussion if needed, then centre and flash it.
   // Runs after the auto-scroll above, so it wins.
@@ -397,8 +433,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputVal.trim() || isStreaming) return;
+    // A reply in progress doesn't block the next message (it waits its turn); a team discussion does.
+    if (!inputVal.trim() || (isStreaming && discussionState?.inProgress)) return;
     playSfx('click');
+    stickRef.current = true;
     onSendMessage(inputVal.trim());
     setInputVal('');
     setMentionQuery(null);
@@ -449,6 +487,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   const renderMessage = (msg: ChatMessage) => {
+    const meta = msg.meta && renderDelegation ? parseDelegationMeta(msg.meta) : null;
+    if (meta && renderDelegation) return <React.Fragment key={msg.id}>{renderDelegation(msg, meta, flashId === msg.id)}</React.Fragment>;
     const isUser = msg.sender_role === 'user';
     const isThoughtOpen = !!openThoughts[msg.id];
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
@@ -549,8 +589,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
       {/* Channel / Agent Header */}
       <div className="h-14 border-b border-zinc-800/80 px-6 flex items-center justify-between bg-zinc-900/30 backdrop-blur-sm select-none">
         <div>
-          <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
-            <span>{title}</span>
+          <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2 min-w-0">
+            <span className="truncate">{title}</span>
+            {titleExtra}
           </h2>
           <p className="text-[11px] text-zinc-400 truncate max-w-lg mt-0.5">{subtitle}</p>
         </div>
@@ -663,6 +704,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
       </div>
 
+      {subHeader}
+
       <PinnedInstructions items={pinned} onEdit={onEditInstructions} />
 
       {/* Discussion In-Flight Banner */}
@@ -713,7 +756,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
       <div className="flex-1 flex overflow-hidden min-h-0">
         <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
           {/* Messages Stream */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div
+            ref={scrollRef}
+            onScroll={onScroll}
+            className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6"
+            role="log"
+            aria-label={`Messages in ${title}`}
+            aria-busy={isStreaming}
+          >
         {groupDiscussionThreads(messages).map((item) => {
           if (item.kind === 'message') return renderMessage(item.message);
           const threadKey = `thread:${item.id}`;
@@ -749,7 +799,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <LayaRoutingCard routing={routingState} />
         )}
 
-        {/* Live Streaming Assistant Message */}
+        {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
         {isStreaming && routingState?.phase !== 'deciding' && (
           <div className="flex items-start gap-3.5 w-full max-w-5xl">
             <ModernAvatar
@@ -772,10 +822,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     ? discussionState.currentSpeaker
                     : streamingSpeakerName || title}
                 </span>
-                <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
-                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
-                  {discussionState?.inProgress ? 'Speaking...' : 'Generating...'}
-                </span>
+                {queued ? (
+                  <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
+                    Queued
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping motion-reduce:animate-none" aria-hidden="true" />
+                    {discussionState?.inProgress ? 'Speaking...' : 'Generating...'}
+                  </span>
+                )}
               </div>
 
               {streamingThinking && (
@@ -785,8 +842,27 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </div>
               )}
 
-              <div className="p-4 sm:p-5 rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full">
-                <MarkdownRenderer content={stripDiscussionMarkers(streamingText)} isStreaming={true} />
+              <div className="p-4 sm:p-5 min-h-[3.5rem] rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full">
+                {queued ? (
+                  <p className="text-zinc-300" role="status">
+                    {queued.position ? <strong className="text-amber-200">#{queued.position} in line.</strong> : <strong className="text-amber-200">In line.</strong>}{' '}
+                    {queued.reason === 'server_busy'
+                      ? 'kwnt is running as many turns as it allows right now; this one starts as soon as a slot frees up.'
+                      : `${queued.speaker} is busy with other work; this starts as soon as one of those finishes.`}
+                  </p>
+                ) : streamingText ? (
+                  <MarkdownRenderer content={stripDiscussionMarkers(streamingText)} isStreaming={true} />
+                ) : (
+                  <span className="inline-flex gap-1 py-1.5" aria-label="Waiting for the first words">
+                    {[0, 1, 2].map((i) => (
+                      <span
+                        key={i}
+                        className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce motion-reduce:animate-none"
+                        style={{ animationDelay: `${i * 150}ms` }}
+                      />
+                    ))}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -888,18 +964,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
             className="flex-1 bg-transparent px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-40 leading-relaxed font-sans"
           />
 
-          {isStreaming ? (
+          {isStreaming && (
             <button
               type="button"
               onClick={onCancelDiscussion}
-              className="w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 shadow-sm cursor-pointer"
+              className="w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 shadow-sm cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-500"
               title={discussionState?.inProgress ? 'Stop Discussion' : 'Stop generation'}
+              aria-label={discussionState?.inProgress ? 'Stop discussion' : 'Stop the reply'}
             >
-              <Square size={12} fill="currentColor" />
+              <Square size={12} fill="currentColor" aria-hidden="true" />
             </button>
-          ) : (
+          )}
+          {!(isStreaming && (discussionState?.inProgress || !inputVal.trim())) && (
             <button
               type="submit"
+              aria-label={isStreaming ? 'Send (waits for the current reply)' : 'Send'}
               disabled={!inputVal.trim()}
               className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 ${
                 inputVal.trim()

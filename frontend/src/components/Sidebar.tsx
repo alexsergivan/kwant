@@ -49,6 +49,8 @@ export interface SidebarProps {
   selectedId: string;
   isChannel: boolean;
   selectedTeamId?: string | null;
+  /** Agents busy outside the open chat -> "Working on …", shown under their name. */
+  busyKwants?: Record<string, string>;
   onSelectKwant: (kwant: Kwant) => void;
   onSelectChannel: (channel: Channel) => void;
   onSelectTeam: (team: Team) => void;
@@ -74,6 +76,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   selectedId,
   isChannel,
   selectedTeamId,
+  busyKwants = {},
   onSelectKwant,
   onSelectChannel,
   onSelectTeam,
@@ -272,10 +275,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               className={`group/member flex items-center gap-2 px-1.5 py-1 rounded-md cursor-pointer text-[11px] transition-colors ${
                                 memberActive ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
                               }`}
-                              title={`Chat with ${k.name}`}
+                              title={busyKwants[k.id] ? `Chat with ${k.name} · ${busyKwants[k.id]}` : `Chat with ${k.name}`}
                             >
                               <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} kwantId={k.id} />
-                              <span className="truncate flex-1">{k.name}</span>
+                              <span className="truncate flex-1">
+                                {k.name}
+                                {busyKwants[k.id] && <span className="sr-only"> ({busyKwants[k.id]})</span>}
+                              </span>
+                              {busyKwants[k.id] && (
+                                <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-sky-400 animate-pulse motion-reduce:animate-none" aria-hidden="true" />
+                              )}
                               {onEditKwant && (
                                 <button
                                   type="button"
@@ -454,7 +463,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         {k.preferred_model === 'auto' ? 'Laya' : k.preferred_model.split('-')[0]}
                       </span>
                     </div>
-                    <p className="text-[11px] text-zinc-400 truncate mt-0.5">{k.title}</p>
+                    {busyKwants[k.id] ? (
+                      <p className="text-[11px] text-sky-300 truncate mt-0.5" title={busyKwants[k.id]}>
+                        {busyKwants[k.id]}
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-zinc-400 truncate mt-0.5">{k.title}</p>
+                    )}
                   </div>
                 </div>
               );

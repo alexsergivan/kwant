@@ -3,7 +3,7 @@
 
 type Listener = () => void;
 
-/** kwant id -> the contexts it's working in (a kwant can run in a DM and a team at once). */
+/** kwant id -> its running turns, by turn id (or context id from servers that don't send turn ids). */
 const active = new Map<string, Set<string>>();
 const listeners = new Map<string, Set<Listener>>();
 
@@ -36,6 +36,18 @@ export function clearAllTurns(): void {
   const ids = Array.from(active.keys());
   active.clear();
   ids.forEach(notify);
+}
+
+/** Replaces everything with the server's running turns (GET /api/turns after a (re)connect). */
+export function resetTurns(running: Array<{ kwant_id: string; turn_id: string }>): void {
+  const before = new Set(active.keys());
+  active.clear();
+  for (const t of running) {
+    const set = active.get(t.kwant_id) ?? new Set<string>();
+    set.add(t.turn_id);
+    active.set(t.kwant_id, set);
+  }
+  new Set([...before, ...active.keys()]).forEach(notify);
 }
 
 export const isKwantWorking = (kwantId: string | undefined): boolean => !!kwantId && active.has(kwantId);

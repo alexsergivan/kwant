@@ -79,12 +79,17 @@ export interface RoutineInput {
   enabled: boolean;
 }
 
-export type NotifyKind = 'turn_finished' | 'approval_needed' | 'routine_failed';
+export type NotifyKind = 'turn_finished' | 'approval_needed' | 'routine_failed' | 'delegation_finished' | 'delegation_stalled';
 export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'turn_finished', label: 'A kwant finished replying' },
   { id: 'approval_needed', label: 'A kwant needs your approval' },
   { id: 'routine_failed', label: 'A routine failed' },
+  { id: 'delegation_finished', label: 'A delegated task finished' },
+  { id: 'delegation_stalled', label: 'A delegated task is taking long' },
 ];
+
+/** Kinds also shown as an in-app toast while kwnt is visible (the others only matter in the background). */
+export const TOAST_KINDS: NotifyKind[] = ['routine_failed', 'delegation_finished', 'delegation_stalled'];
 
 export interface NotifyEvent {
   kind: NotifyKind;
