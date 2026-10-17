@@ -6,6 +6,7 @@ pub mod history;
 pub mod attachments;
 pub mod questions;
 pub mod skills;
+pub mod away;
 
 use models::*;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
@@ -92,6 +93,7 @@ impl Database {
         db.migrate_questions().await?;
         db.migrate_attachments().await?;
         db.migrate_history().await?;
+        db.migrate_away().await?;
         db.seed_defaults().await?;
 
         Ok(db)

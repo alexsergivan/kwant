@@ -239,14 +239,17 @@ fn local_base_url(state: &AppState) -> String {
 /// behaviour change) otherwise. `cwd` is where the gateway starts stdio servers. Pair with
 /// [`finish_turn`].
 pub async fn prepare_turn(state: &AppState, kwant: &Kwant, cwd: Option<PathBuf>) -> Option<(McpTurnContext, String)> {
-    prepare_turn_with_self(state, kwant, cwd, None).await
+    prepare_turn_with_self(state, kwant, None, cwd, None).await
 }
 
 /// [`prepare_turn`], plus the agents' own continuity tools (`search_history`, `memory_*`) when
 /// `self_scope` is set. Those are served by kwnt itself and never need an approval card.
+/// `turn_id` is the running turn's id, so its approvals can be traced back to it (e.g. to link
+/// them to their chat); without one the session gets a fresh id.
 pub async fn prepare_turn_with_self(
     state: &AppState,
     kwant: &Kwant,
+    turn_id: Option<String>,
     cwd: Option<PathBuf>,
     self_scope: Option<super::continuity::SelfScope>,
 ) -> Option<(McpTurnContext, String)> {
@@ -289,7 +292,8 @@ pub async fn prepare_turn_with_self(
         max_tool_iterations: max_tool_iterations(setting),
         records: Default::default(),
     };
-    let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), uuid::Uuid::new_v4().to_string(), ctx.clone(), cwd);
+    let turn_id = turn_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), turn_id, ctx.clone(), cwd);
     state.mcp_sessions.lock().await.insert(token.clone(), session);
     if let (true, Some(scope)) = (self_tools, self_scope) {
         state.self_tools.lock().await.insert(token.clone(), scope);

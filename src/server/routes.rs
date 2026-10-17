@@ -1083,6 +1083,7 @@ async fn run_kwant_turn_inner(
         let mcp_turn = super::mcp_runtime::prepare_turn_with_self(
             state,
             target_kwant,
+            Some(tag.turn_id.clone()),
             scope.workspace_dir.clone(),
             self_scope,
         )

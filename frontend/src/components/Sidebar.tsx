@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Hash, Plus, CheckCircle2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
+import { badgeText } from '../away';
 
 export interface Kwant {
   id: string;
@@ -60,6 +61,10 @@ export interface SidebarProps {
   /** Opens the new-agent form; with a team, the new agent joins it. */
   onSummonKwant: (team?: Team) => void;
   onCreateTeam: () => void;
+  /** "While you were away": unseen count for the badge, whether it's open, and how to open it. */
+  awayCount?: number;
+  awayActive?: boolean;
+  onOpenAway?: () => void;
 }
 
 export const memberIdsOf = (t: Team): string[] =>
@@ -85,6 +90,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onEditKwant,
   onSummonKwant,
   onCreateTeam,
+  awayCount = 0,
+  awayActive = false,
+  onOpenAway,
 }) => {
   const [teamsOpen, setTeamsOpen] = useState(true);
   const [fleetOpen, setFleetOpen] = useState(() => localStorage.getItem('kwant.fleetOpen') === '1');
@@ -143,6 +151,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-4">
+        {onOpenAway && (
+          <button
+            type="button"
+            onClick={onOpenAway}
+            aria-current={awayActive ? 'page' : undefined}
+            className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+              awayActive
+                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50'
+                : 'text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/50 border border-transparent'
+            }`}
+          >
+            <Inbox size={15} className={awayActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
+            <span className="truncate flex-1">While you were away</span>
+            {awayCount > 0 && (
+              <span className="shrink-0 min-w-[18px] px-1.5 py-px rounded-full bg-amber-500 text-zinc-950 text-[10px] font-semibold text-center">
+                {badgeText(awayCount)}
+                <span className="sr-only"> new</span>
+              </span>
+            )}
+          </button>
+        )}
+
         {/* Channels Section */}
         <div>
           <div className="px-2 py-1 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">

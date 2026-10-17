@@ -662,6 +662,7 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
         &state,
         k1,
         None,
+        None,
         Some(SelfScope {
             kwant_id: k1.id.clone(),
             kwant_name: k1.name.clone(),

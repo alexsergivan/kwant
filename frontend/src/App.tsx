@@ -5,6 +5,7 @@ import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } fro
 import { ThreadBar, ThreadHeader } from './components/ThreadBar';
 import { DelegationCard } from './components/DelegationCard';
 import { QuestionCard } from './components/QuestionCard';
+import { AwayPage } from './components/AwayView';
 import { HelpCircle, ListChecks, Loader2 } from 'lucide-react';
 import { PendingApproval } from './components/ModernApprovalCard';
 import type { AgentFormData } from './components/NewAgentModal';
@@ -57,6 +58,7 @@ import {
   questionsApi,
   turnsAwaitingAnswer,
 } from './questions';
+import { AwayItem, affectsAway, awayApi, awayTarget } from './away';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -144,6 +146,17 @@ export const App: React.FC = () => {
   const [historyWindow, setHistoryWindow] = useState<{ ctx: string; messages: ChatMessage[] } | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // "While you were away": open instead of a chat, and its unseen count for the sidebar badge.
+  const [showAway, setShowAway] = useState(false);
+  const [awayCount, setAwayCount] = useState(0);
+  const awaySinceRef = useRef<string | null>(null);
+  const awayTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const refreshAwayCount = (delay = 0) => {
+    clearTimeout(awayTimerRef.current);
+    awayTimerRef.current = setTimeout(() => {
+      awayApi.get().then((r) => setAwayCount(r.unseen.total), () => undefined);
+    }, delay);
+  };
   const toastIdRef = useRef(0);
   const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
   // Set each render once the select handlers exist; the SSE handler and notification clicks go through it.
@@ -256,6 +269,7 @@ export const App: React.FC = () => {
   /** Running turns after a (re)connect; chats whose reply ended meanwhile stop spinning. */
   const hydrateFromServer = async () => {
     skillsApi.list({ status: 'pending' }).then(setPendingSkills, () => undefined);
+    refreshAwayCount();
     questionsApi.listOpen().then((list) => {
       // Closed ones seen live stay; open ones come from the server.
       setQuestions((prev) => {
@@ -446,6 +460,7 @@ export const App: React.FC = () => {
     sse.onmessage = (e) => {
       try {
         const event = JSON.parse(e.data);
+        if (affectsAway(event.type)) refreshAwayCount(800);
         switch (event.type) {
           case 'turn_queued':
           case 'TurnQueued':
@@ -942,6 +957,7 @@ export const App: React.FC = () => {
 
   const handleSelectTeam = (team: Team) => {
     setOpenThreadId(null);
+    setShowAway(false);
     setSelectedTeamId(team.id);
     const targetChannel = channels.find(
       (c) => c.name === `team-${team.name}` || c.id === team.id
@@ -980,6 +996,7 @@ export const App: React.FC = () => {
 
   const handleSelectChannel = (channel: Channel) => {
     setOpenThreadId(null);
+    setShowAway(false);
     setSelectedId(channel.id);
     selectedIdRef.current = channel.id;
     setIsChannel(true);
@@ -994,6 +1011,7 @@ export const App: React.FC = () => {
 
   const handleSelectKwant = (kwant: Kwant) => {
     setOpenThreadId(null);
+    setShowAway(false);
     setSelectedId(kwant.id);
     selectedIdRef.current = kwant.id;
     setIsChannel(false);
@@ -1048,10 +1066,20 @@ export const App: React.FC = () => {
       return;
     }
     knownThreadsRef.current.add(threadId);
+    setShowAway(false);
     if (selectedIdRef.current !== kwant.id || isChannelRef.current) handleSelectKwant(kwant);
     else playSfx('click');
     setOpenThreadId(threadId);
     if (threadsByKwantRef.current[kwantId] === undefined) loadThreads(kwantId);
+  };
+
+  /** Opens the thread, channel or direct chat an away item links to. */
+  const openAwayItem = (item: AwayItem) => {
+    const t = awayTarget(item);
+    if ('thread' in t) return openThread(t.kwant, t.thread);
+    const ok = 'channel' in t ? openTarget({ channel_id: t.channel, kwant_id: null }) : openTarget({ channel_id: null, kwant_id: t.direct });
+    if (!ok) return pushToast('That chat no longer exists.');
+    setShowAway(false);
   };
 
   const openDirectChat = () => {
@@ -1816,8 +1844,17 @@ export const App: React.FC = () => {
             setIsNewTeamOpen(true);
             playSfx('click');
           }}
+          awayCount={awayCount}
+          awayActive={showAway}
+          onOpenAway={() => {
+            setShowAway(true);
+            playSfx('click');
+          }}
         />
 
+        {showAway ? (
+          <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount} />
+        ) : (
         <ChatView
           title={chatTitle}
           subtitle={chatSubtitle}
@@ -1893,6 +1930,7 @@ export const App: React.FC = () => {
           awaitingAnswer={awaitingHere}
           contextKey={openCtx}
         />
+        )}
       </div>
 
       {/* New Agent Modal */}

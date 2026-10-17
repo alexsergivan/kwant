@@ -48,6 +48,12 @@ impl PermissionBroker {
         map.contains_key(ticket_id)
     }
 
+    /// Tickets still waiting for the user. A stored ticket not in here (kwnt restarted, the
+    /// turn ended) can no longer be answered.
+    pub async fn pending_ids(&self) -> Vec<String> {
+        self.pending.lock().await.keys().cloned().collect()
+    }
+
     /// Resolves an approval ticket by sending the user's decision to the waiting oneshot channel.
     pub async fn resolve(&self, ticket_id: &str, decision: ApprovalDecision) -> bool {
         let mut map = self.pending.lock().await;
