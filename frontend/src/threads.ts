@@ -316,7 +316,7 @@ export const messageContextId = (m: { thread_id?: string | null; channel_id?: st
 // ---------------------------------------------------------------------------
 // API
 
-async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+export async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
@@ -332,6 +332,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
     }
     throw new Error(message);
   }
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 

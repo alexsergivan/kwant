@@ -4,7 +4,7 @@ import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } from './components/ChatView';
 import { ThreadBar, ThreadHeader } from './components/ThreadBar';
 import { DelegationCard } from './components/DelegationCard';
-import { Loader2 } from 'lucide-react';
+import { ListChecks, Loader2 } from 'lucide-react';
 import { PendingApproval } from './components/ModernApprovalCard';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
@@ -44,6 +44,8 @@ import {
   shouldShowOsNotification,
 } from './continuity';
 import type { PinnedItem } from './components/Instructions';
+import type { EditTab } from './components/NewAgentModal';
+import { Skill, applySkillEvent, pendingByKwant, skillsApi } from './skills';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -131,14 +133,21 @@ export const App: React.FC = () => {
   const toastIdRef = useRef(0);
   const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
   // Set each render once the select handlers exist; the SSE handler and notification clicks go through it.
+  // Opens an agent's settings on the Skills tab (set once the agents are known).
+  const openSkillsRef = useRef<(kwantId: string) => void>(() => undefined);
   const openTargetRef = useRef<(t: { channel_id: string | null; kwant_id: string | null }) => boolean>(() => false);
   const showNotification = (n: NotifyEvent) => {
     const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
     // Failed routines and finished or slow delegations show in the app; the OS notification is for a hidden tab.
     if (!document.hidden && (TOAST_KINDS as string[]).includes(n.kind)) {
-      if (n.kind !== 'routine_failed' && openCtxRef.current === (n.channel_id ?? n.kwant_id)) return;
+      if (n.kind !== 'routine_failed' && n.kind !== 'skill_proposed' && openCtxRef.current === (n.channel_id ?? n.kwant_id)) return;
       const id = ++toastIdRef.current;
-      const action = n.kind === 'routine_failed' ? undefined : { label: 'Open', onClick: () => openTargetRef.current(target) };
+      const action =
+        n.kind === 'routine_failed'
+          ? undefined
+          : n.kind === 'skill_proposed'
+            ? { label: 'Review', onClick: () => openSkillsRef.current(n.kwant_id) }
+            : { label: 'Open', onClick: () => openTargetRef.current(target) };
       setToasts((prev) => [...prev.slice(-2), { id, title: n.title, detail: n.body, action }]);
       if (n.kind !== 'routine_failed') playSfx('alert');
       return;
@@ -148,7 +157,8 @@ export const App: React.FC = () => {
       const note = new Notification(n.title, { body: n.body, tag: `kwnt-${n.kind}-${n.channel_id ?? n.kwant_id}` });
       note.onclick = () => {
         window.focus();
-        openTargetRef.current(target);
+        if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
+        else openTargetRef.current(target);
         note.close();
       };
     } catch {
@@ -227,6 +237,7 @@ export const App: React.FC = () => {
 
   /** Running turns after a (re)connect; chats whose reply ended meanwhile stop spinning. */
   const hydrateFromServer = async () => {
+    skillsApi.list({ status: 'pending' }).then(setPendingSkills, () => undefined);
     try {
       const { turns: list } = await threadsApi.turns();
       const map = hydrateTurns(list);
@@ -254,6 +265,9 @@ export const App: React.FC = () => {
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [editingKwant, setEditingKwant] = useState<Kwant | null>(null);
+  const [editingTab, setEditingTab] = useState<EditTab>('profile');
+  // Skills waiting for review, for the counts on the agent's header and Skills tab.
+  const [pendingSkills, setPendingSkills] = useState<Skill[]>([]);
 
   // Virtual Machine & Live Browser state
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
@@ -482,6 +496,14 @@ export const App: React.FC = () => {
             setToasts((prev) => [...prev.slice(-2), { id, title, detail }]);
             playSfx('alert');
             refreshProfiles();
+            break;
+          }
+          case 'skill_updated':
+          case 'SkillUpdated': {
+            const sk = event.data?.skill;
+            if (!sk?.id) break;
+            emitContinuity({ type: 'skill_updated', data: sk });
+            setPendingSkills((prev) => applySkillEvent(prev, sk).filter((x) => x.status === 'pending'));
             break;
           }
           case 'memory_changed':
@@ -954,6 +976,15 @@ export const App: React.FC = () => {
     return true;
   };
   openTargetRef.current = openTarget;
+  const openAgentSettings = (kwant: Kwant, tab: EditTab = 'profile') => {
+    setEditingTab(tab);
+    setEditingKwant(kwant);
+    playSfx('click');
+  };
+  openSkillsRef.current = (kwantId: string) => {
+    const k = kwants.find((x) => x.id === kwantId);
+    if (k) openAgentSettings(k, 'skills');
+  };
 
   const pushToast = (title: string, detail?: string) => {
     const id = ++toastIdRef.current;
@@ -1547,6 +1578,19 @@ export const App: React.FC = () => {
         {elsewhere.length > 1 && <span className="shrink-0 text-sky-300/80">+{elsewhere.length - 1} more</span>}
       </button>
     ) : null;
+  const pendingSkillCounts = pendingByKwant(pendingSkills);
+  const pendingHere = currentKwant ? pendingSkillCounts[currentKwant.id] ?? 0 : 0;
+  const skillsBadge =
+    currentKwant && pendingHere > 0 ? (
+      <button
+        type="button"
+        onClick={() => openAgentSettings(currentKwant, 'skills')}
+        className="inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-full border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-200 hover:bg-amber-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400"
+      >
+        <ListChecks size={11} aria-hidden="true" />
+        {pendingHere === 1 ? '1 skill to review' : `${pendingHere} skills to review`}
+      </button>
+    ) : null;
   // Sidebar: agents busy somewhere other than the open chat.
   const busyKwants: Record<string, string> = {};
   for (const t of Object.values(turns)) {
@@ -1642,8 +1686,7 @@ export const App: React.FC = () => {
             playSfx('click');
           }}
           onEditKwant={(kwant) => {
-            setEditingKwant(kwant);
-            playSfx('click');
+            openAgentSettings(kwant);
           }}
           onSummonKwant={(team) => {
             setNewAgentTeam(team ?? null);
@@ -1688,8 +1731,7 @@ export const App: React.FC = () => {
           onEditKwant={
             currentKwant
               ? () => {
-                  setEditingKwant(currentKwant);
-                  playSfx('click');
+                  openAgentSettings(currentKwant);
                 }
               : undefined
           }
@@ -1716,7 +1758,14 @@ export const App: React.FC = () => {
           highlightMessageId={highlightMessageId}
           onHighlightDone={() => setHighlightMessageId(null)}
           subHeader={subHeader}
-          titleExtra={workingBadge}
+          titleExtra={
+            workingBadge || skillsBadge ? (
+              <>
+                {workingBadge}
+                {skillsBadge}
+              </>
+            ) : null
+          }
           queued={queuedHere}
           renderDelegation={renderDelegation}
           contextKey={openCtx}
@@ -1749,6 +1798,8 @@ export const App: React.FC = () => {
           profiles={profiles}
           onManageProfiles={() => setIsProfilesOpen(true)}
           onManageServers={() => setIsMcpOpen(true)}
+          initialTab={editingTab}
+          pendingSkills={editingKwant ? pendingSkillCounts[editingKwant.id] ?? 0 : 0}
           onClose={() => setEditingKwant(null)}
           onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
         />

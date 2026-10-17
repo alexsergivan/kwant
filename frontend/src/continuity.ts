@@ -1,6 +1,8 @@
 // Agent continuity: pinned instructions, chat search, kwant memory, routines and notifications.
 // Shapes follow /home/maus/shared/ship-software-safely/agent-continuity/contract.md ("Lin's implementation notes").
 
+import type { DeletedSkill, Skill } from './skills';
+
 export const MAX_INSTRUCTIONS = 4000;
 export const MAX_MEMORY = 500;
 export const MAX_MEMORIES = 100;
@@ -79,17 +81,26 @@ export interface RoutineInput {
   enabled: boolean;
 }
 
-export type NotifyKind = 'turn_finished' | 'approval_needed' | 'routine_failed' | 'delegation_finished' | 'delegation_stalled';
+export type NotifyKind =
+  | 'turn_finished'
+  | 'approval_needed'
+  | 'routine_failed'
+  | 'delegation_finished'
+  | 'delegation_stalled'
+  | 'skill_proposed'
+  | 'question_asked';
 export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'turn_finished', label: 'A kwant finished replying' },
   { id: 'approval_needed', label: 'A kwant needs your approval' },
   { id: 'routine_failed', label: 'A routine failed' },
   { id: 'delegation_finished', label: 'A delegated task finished' },
   { id: 'delegation_stalled', label: 'A delegated task is taking long' },
+  { id: 'skill_proposed', label: 'A kwant proposed a skill to review' },
+  { id: 'question_asked', label: 'A kwant has a question for you' },
 ];
 
 /** Kinds also shown as an in-app toast while kwnt is visible (the others only matter in the background). */
-export const TOAST_KINDS: NotifyKind[] = ['routine_failed', 'delegation_finished', 'delegation_stalled'];
+export const TOAST_KINDS: NotifyKind[] = ['routine_failed', 'delegation_finished', 'delegation_stalled', 'skill_proposed', 'question_asked'];
 
 export interface NotifyEvent {
   kind: NotifyKind;
@@ -365,7 +376,8 @@ export function notificationPermission(): NotificationPermission | 'unsupported'
 
 export type ContinuityEvent =
   | { type: 'memory_changed'; data: { kwant_id: string } }
-  | { type: 'routine_run'; data: { routine_id: string; run_id: string; status: RunStatus } };
+  | { type: 'routine_run'; data: { routine_id: string; run_id: string; status: RunStatus } }
+  | { type: 'skill_updated'; data: Skill | DeletedSkill };
 
 const bus = typeof EventTarget !== 'undefined' ? new EventTarget() : null;
 
