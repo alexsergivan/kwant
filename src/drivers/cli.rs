@@ -998,6 +998,8 @@ mod tests {
                     tool_calls: None,
                     tokens_used: 10,
                     created_at: None,
+                    thread_id: None,
+                    meta: None,
                 },
                 Message {
                     id: "m2".into(),
@@ -1010,6 +1012,8 @@ mod tests {
                     tool_calls: None,
                     tokens_used: 20,
                     created_at: None,
+                    thread_id: None,
+                    meta: None,
                 },
             ],
             model_override: None,

@@ -19,7 +19,7 @@ export const useKwantWorking = (kwantId: string | undefined): boolean => {
     (onChange: () => void) => (kwantId ? subscribeKwant(kwantId, onChange) : noopUnsubscribe),
     [kwantId],
   );
-  return useSyncExternalStore(subscribe, () => isKwantWorking(kwantId));
+  return useSyncExternalStore(subscribe, () => isKwantWorking(kwantId), () => false);
 };
 
 type Accessory =

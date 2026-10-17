@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Cpu, Key, Globe, X, Sparkles, Check, Plug, ChevronRight, UserRound, LogOut, Bell, AlertTriangle } from 'lucide-react';
+import { Cpu, Key, Globe, X, Sparkles, Check, Plug, ChevronRight, UserRound, LogOut, Bell, AlertTriangle, Layers } from 'lucide-react';
+import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import {
   BROWSER_NOTIFY_KEY,
   MASK,
@@ -26,7 +27,18 @@ interface SettingsData {
   /** "••••••••" when one is saved, "" otherwise. */
   notify_webhook_url?: string;
   notify_on?: NotifyKind[];
+  max_turns_per_agent?: number;
+  max_turns_global?: number;
+  delegation_follow_up_minutes?: number;
+  /** Agents' own kwnt tools (delegate, ask_user, share_file, skills, history, memory); false when the `agent_tools` setting is "off". */
+  agent_tools?: boolean;
 }
+
+const LIMIT_FIELDS: { key: TurnLimitKey; label: string; hint: string }[] = [
+  { key: 'max_turns_per_agent', label: 'Replies at once per agent', hint: 'More than this and an agent’s next request waits in line.' },
+  { key: 'max_turns_global', label: 'Replies at once in total', hint: 'Across all agents; keeps the server responsive.' },
+  { key: 'delegation_follow_up_minutes', label: 'Check on delegated work after (minutes)', hint: '0 turns the check-in off.' },
+];
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -45,11 +57,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // null until loaded (or from a server without the setting), and then left out of the save
+  const [agentTools, setAgentTools] = useState<boolean | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [notifyOn, setNotifyOn] = useState<NotifyKind[]>(NOTIFY_KINDS.map((k) => k.id));
   const [browserNotify, setBrowserNotify] = useState(browserNotifyEnabled);
   const [permission, setPermission] = useState(notificationPermission);
   const webhookError = webhookUrlError(webhookUrl);
+  // Kept as typed text so a half-typed value can be shown with its error; null until loaded.
+  const [limits, setLimits] = useState<Record<TurnLimitKey, string> | null>(null);
+  const limitErrors = Object.fromEntries(
+    LIMIT_FIELDS.map(({ key }) => [key, limits ? limitError(key, limits[key]) : null]),
+  ) as Record<TurnLimitKey, string | null>;
+  const limitsInvalid = Object.values(limitErrors).some(Boolean);
+  const perAgentOverGlobal =
+    !!limits && !limitsInvalid && Number(limits.max_turns_per_agent) > Number(limits.max_turns_global);
 
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -75,6 +97,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           setOllamaUrl(data.ollama_url || 'http://localhost:11434/v1');
           setWebhookUrl(data.notify_webhook_url ?? '');
           if (Array.isArray(data.notify_on)) setNotifyOn(data.notify_on);
+          setLimits(
+            typeof data.max_turns_per_agent === 'number'
+              ? {
+                  max_turns_per_agent: String(data.max_turns_per_agent),
+                  max_turns_global: String(data.max_turns_global ?? ''),
+                  delegation_follow_up_minutes: String(data.delegation_follow_up_minutes ?? ''),
+                }
+              : null,
+          );
+          setAgentTools(typeof data.agent_tools === 'boolean' ? data.agent_tools : null);
         })
         .catch((err) => console.error('Failed to load settings:', err));
     }
@@ -101,7 +133,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (webhookError) return;
+    if (webhookError || limitsInvalid) return;
     setSaveError(null);
     setSaving(true);
     playSfx('click');
@@ -117,6 +149,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           ollama_url: ollamaUrl,
           notify_webhook_url: webhookUrl.trim(),
           notify_on: notifyOn,
+          ...(limits
+            ? {
+                max_turns_per_agent: Number(limits.max_turns_per_agent),
+                max_turns_global: Number(limits.max_turns_global),
+                delegation_follow_up_minutes: Number(limits.delegation_follow_up_minutes),
+              }
+            : {}),
+          ...(agentTools !== null ? { agent_tools: agentTools } : {}),
         }),
       });
 
@@ -308,6 +348,80 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             </div>
           </div>
 
+          {limits && (
+            <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
+              <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
+                <Layers size={14} className="text-sky-300" aria-hidden="true" />
+                <span>Parallel work</span>
+              </legend>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {LIMIT_FIELDS.map(({ key, label, hint }) => {
+                  const err = limitErrors[key];
+                  const { min, max } = TURN_LIMITS[key];
+                  return (
+                    <div key={key} className="space-y-1">
+                      <label htmlFor={`limit-${key}`} className="block text-[11px] font-medium text-zinc-300">
+                        {label}
+                      </label>
+                      <input
+                        id={`limit-${key}`}
+                        type="number"
+                        inputMode="numeric"
+                        min={min}
+                        max={max}
+                        step={1}
+                        value={limits[key]}
+                        onChange={(e) => setLimits((prev) => (prev ? { ...prev, [key]: e.target.value } : prev))}
+                        aria-invalid={!!err}
+                        aria-describedby={`limit-${key}-hint`}
+                        className={`w-full bg-zinc-950 border rounded-lg px-3 py-2 text-xs text-zinc-100 focus:outline-none transition-colors ${
+                          err ? 'border-rose-500/60 focus:border-rose-400' : 'border-zinc-800 focus:border-sky-500'
+                        }`}
+                      />
+                      <p id={`limit-${key}-hint`} className={`text-[11px] ${err ? 'text-rose-300' : 'text-zinc-500'}`}>
+                        {err ?? `${hint} (${min}–${max})`}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+              {perAgentOverGlobal && (
+                <p className="text-[11px] text-amber-300" role="status">
+                  The total is lower than the per-agent limit, so an agent never gets more than {limits.max_turns_global} at once.
+                </p>
+              )}
+            </fieldset>
+          )}
+
+          {agentTools !== null && (
+            <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
+              <div className="flex-1">
+                <p id="agent-tools-label" className="text-xs font-medium text-zinc-200">Agents can use their own tools</p>
+                <p id="agent-tools-hint" className="text-[11px] text-zinc-500">
+                  Delegating to each other, asking you questions, sharing files, skills, searching earlier chats and keeping notes. Off, agents just reply.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={agentTools}
+                aria-labelledby="agent-tools-label"
+                aria-describedby="agent-tools-hint"
+                onClick={() => {
+                  playSfx('click');
+                  setAgentTools((v) => !v);
+                }}
+                className={`relative shrink-0 w-9 h-5 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                  agentTools ? 'bg-sky-600' : 'bg-zinc-700'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${agentTools ? 'translate-x-4' : ''}`}
+                />
+              </button>
+            </div>
+          )}
+
           <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
             <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
               <Bell size={14} className="text-amber-300" />
@@ -437,7 +551,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             </button>
             <button
               type="submit"
-              disabled={saving || !!webhookError}
+              disabled={saving || !!webhookError || limitsInvalid}
               className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save Settings'}

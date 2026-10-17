@@ -1,18 +1,42 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
-import { ChatView, ChatMessage, DiscussionState, RoutingState } from './components/ChatView';
+import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } from './components/ChatView';
+import { ThreadBar, ThreadHeader } from './components/ThreadBar';
+import { DelegationCard } from './components/DelegationCard';
+import { QuestionCard } from './components/QuestionCard';
+import { HelpCircle, ListChecks, Loader2 } from 'lucide-react';
 import { PendingApproval } from './components/ModernApprovalCard';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
 import { Toasts, Toast } from './components/Toasts';
-import { clearAllTurns, turnEnded, turnStarted } from './kwantActivity';
+import { clearAllTurns, resetTurns, turnEnded, turnStarted } from './kwantActivity';
+import {
+  Delegation,
+  DelegationMeta,
+  Thread,
+  TurnMap,
+  applyDelegation,
+  applyTurnEvent,
+  backgroundTurns,
+  hydrateTurns,
+  messageContextId,
+  parseDelegationMeta,
+  queuePosition,
+  shouldRenderDelta,
+  streamTarget,
+  threadBadge,
+  threadsApi,
+  turnsIn,
+  upsertThread,
+} from './threads';
 import { Profile, describeProfileSwitch, profilesApi } from './profiles';
 import {
   NotifyEvent,
   SearchHit,
+  TOAST_KINDS,
   browserNotifyEnabled,
   channelLabel,
   continuityApi,
@@ -21,6 +45,18 @@ import {
   shouldShowOsNotification,
 } from './continuity';
 import type { PinnedItem } from './components/Instructions';
+import type { EditTab } from './components/NewAgentModal';
+import { Skill, applySkillEvent, pendingByKwant, skillsApi } from './skills';
+import { AttachmentRef, sendAttachmentErrorText } from './attachments';
+import {
+  Question,
+  QuestionMeta,
+  applyQuestion,
+  hydrateQuestions,
+  latestOpenQuestion,
+  questionsApi,
+  turnsAwaitingAnswer,
+} from './questions';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -42,13 +78,36 @@ export const App: React.FC = () => {
   const [isChannel, setIsChannel] = useState(true);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
+  // The open thread of the selected agent; null for its direct chat (and for channels).
+  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const openCtx = openThreadId || selectedId;
+  const openCtxRef = useRef(openCtx);
+  openCtxRef.current = openCtx;
+  // What the open chat is streaming; other chats' streams are kept in streamsRef until opened.
   const [streamingText, setStreamingText] = useState('');
   const [streamingThinking, setStreamingThinking] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamingContextId, setStreamingContextId] = useState<string | null>(null);
-  const [streamingSpeakerName, setStreamingSpeakerName] = useState<string>('');
+  const streamsRef = useRef<Record<string, { text: string; thinking: string }>>({});
+  // Chats with a reply in flight -> who is replying. Several can stream at once.
+  const [live, setLive] = useState<Record<string, string>>({});
+  const liveRef = useRef(live);
+  // Chat the last send or discussion started in; untagged events (team discussions) go here.
   const streamingContextIdRef = useRef<string | null>(null);
-  const streamingSpeakerNameRef = useRef<string>('');
+  const [turns, setTurns] = useState<TurnMap>({});
+  const turnsRef = useRef(turns);
+  turnsRef.current = turns;
+  const [threadsByKwant, setThreadsByKwant] = useState<Record<string, Thread[] | undefined>>({});
+  const threadsByKwantRef = useRef(threadsByKwant);
+  threadsByKwantRef.current = threadsByKwant;
+  const [threadErrors, setThreadErrors] = useState<Record<string, string | null>>({});
+  const [showArchived, setShowArchived] = useState(false);
+  const [delegations, setDelegations] = useState<Record<string, Delegation>>({});
+  const delegationsRef = useRef(delegations);
+  delegationsRef.current = delegations;
+  /** Ids known to be threads, so their messages load from the thread route. */
+  const knownThreadsRef = useRef<Set<string>>(new Set());
+  const threadsLoadingRef = useRef<Set<string>>(new Set());
+  const delegationsFetchedRef = useRef<Set<string>>(new Set());
   const selectedIdRef = useRef<string>(selectedId);
   selectedIdRef.current = selectedId;
   const isChannelRef = useRef<boolean>(isChannel);
@@ -80,16 +139,35 @@ export const App: React.FC = () => {
   const [isRoutinesOpen, setIsRoutinesOpen] = useState(false);
   const [editingChannelInstructions, setEditingChannelInstructions] = useState<Channel | null>(null);
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
+  // Older messages shown instead of the latest (a search hit beyond them). Kept apart from the
+  // cache, which live updates keep current underneath.
+  const [historyWindow, setHistoryWindow] = useState<{ ctx: string; messages: ChatMessage[] } | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastIdRef = useRef(0);
   const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
   // Set each render once the select handlers exist; the SSE handler and notification clicks go through it.
+  // Opens an agent's settings on the Skills tab (set once the agents are known).
+  const openSkillsRef = useRef<(kwantId: string) => void>(() => undefined);
+  // Opens the chat of an agent's newest open question; false when it has none.
+  const openQuestionRef = useRef<(kwantId: string) => boolean>(() => false);
   const openTargetRef = useRef<(t: { channel_id: string | null; kwant_id: string | null }) => boolean>(() => false);
   const showNotification = (n: NotifyEvent) => {
-    if (!document.hidden && n.kind === 'routine_failed') {
+    const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
+    // Failed routines and finished or slow delegations show in the app; the OS notification is for a hidden tab.
+    if (!document.hidden && (TOAST_KINDS as string[]).includes(n.kind)) {
+      if (n.kind !== 'routine_failed' && n.kind !== 'skill_proposed' && openCtxRef.current === (n.channel_id ?? n.kwant_id)) return;
       const id = ++toastIdRef.current;
-      setToasts((prev) => [...prev.slice(-2), { id, title: n.title, detail: n.body }]);
+      const action =
+        n.kind === 'routine_failed'
+          ? undefined
+          : n.kind === 'skill_proposed'
+            ? { label: 'Review', onClick: () => openSkillsRef.current(n.kwant_id) }
+            : n.kind === 'question_asked'
+              ? { label: 'Answer', onClick: () => openQuestionRef.current(n.kwant_id) || openTargetRef.current(target) }
+              : { label: 'Open', onClick: () => openTargetRef.current(target) };
+      setToasts((prev) => [...prev.slice(-2), { id, title: n.title, detail: n.body, action }]);
+      if (n.kind !== 'routine_failed') playSfx('alert');
       return;
     }
     if (!shouldShowOsNotification({ enabled: browserNotifyEnabled(), permission: notificationPermission(), hidden: document.hidden, kind: n.kind })) return;
@@ -97,22 +175,129 @@ export const App: React.FC = () => {
       const note = new Notification(n.title, { body: n.body, tag: `kwnt-${n.kind}-${n.channel_id ?? n.kwant_id}` });
       note.onclick = () => {
         window.focus();
-        openTargetRef.current({ channel_id: n.channel_id, kwant_id: n.kwant_id });
+        if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
+        else if (!(n.kind === 'question_asked' && openQuestionRef.current(n.kwant_id))) openTargetRef.current(target);
         note.close();
       };
     } catch {
       // Some mobile browsers only allow notifications from a service worker.
     }
   };
+  const showNotificationRef = useRef(showNotification);
+  showNotificationRef.current = showNotification;
   const refreshProfiles = useCallback(() => {
     profilesApi.list().then(setProfiles, () => undefined);
   }, []);
+  const markLive = (ctx: string | null | undefined, speaker?: string) => {
+    if (!ctx) return;
+    const name = speaker ?? liveRef.current[ctx] ?? '';
+    if (liveRef.current[ctx] === name) return;
+    liveRef.current = { ...liveRef.current, [ctx]: name };
+    setLive(liveRef.current);
+  };
+  const clearLive = (ctx: string | null | undefined) => {
+    if (ctx) delete streamsRef.current[ctx];
+    if (ctx === openCtxRef.current) {
+      setStreamingText('');
+      setStreamingThinking('');
+    }
+    if (!ctx || !(ctx in liveRef.current)) return;
+    const next = { ...liveRef.current };
+    delete next[ctx];
+    liveRef.current = next;
+    setLive(next);
+  };
+  const kwantName = (id: unknown) => (typeof id === 'string' ? kwantsRef.current.find((k) => k.id === id)?.name : undefined);
+
+  /** Loads a chat's latest messages into the cache, and on screen if it's open. */
+  const refreshContext = async (ctx: string | null | undefined): Promise<void> => {
+    if (!ctx) return;
+    try {
+      let data: ChatMessage[];
+      if (knownThreadsRef.current.has(ctx)) {
+        data = await threadsApi.messages<ChatMessage>(ctx);
+      } else {
+        const res = await fetch(`/api/channels/${encodeURIComponent(ctx)}/messages`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        data = await res.json();
+      }
+      messagesCacheRef.current[ctx] = data;
+      if (openCtxRef.current === ctx) {
+        setMessages(data);
+        setMessagesError(null);
+      }
+    } catch {
+      if (openCtxRef.current === ctx) setMessagesError('Could not load this chat.');
+    }
+  };
+
+  const rememberThreads = (list: Thread[]) => list.forEach((t) => knownThreadsRef.current.add(t.id));
+
+  const loadThreads = async (kwantId: string, includeArchived = false) => {
+    if (!kwantId || threadsLoadingRef.current.has(kwantId)) return;
+    threadsLoadingRef.current.add(kwantId);
+    setThreadErrors((prev) => ({ ...prev, [kwantId]: null }));
+    try {
+      const list = await threadsApi.list(kwantId, includeArchived);
+      rememberThreads(list);
+      setThreadsByKwant((prev) => ({ ...prev, [kwantId]: list }));
+      setDelegations((prev) => {
+        const next = { ...prev };
+        for (const t of list) if (t.delegation) next[t.delegation.id] = t.delegation;
+        return next;
+      });
+    } catch (err) {
+      setThreadErrors((prev) => ({ ...prev, [kwantId]: err instanceof Error ? err.message : 'Failed' }));
+    } finally {
+      threadsLoadingRef.current.delete(kwantId);
+    }
+  };
+
+  /** Running turns after a (re)connect; chats whose reply ended meanwhile stop spinning. */
+  const hydrateFromServer = async () => {
+    skillsApi.list({ status: 'pending' }).then(setPendingSkills, () => undefined);
+    questionsApi.listOpen().then((list) => {
+      // Closed ones seen live stay; open ones come from the server.
+      setQuestions((prev) => {
+        const next = hydrateQuestions(list);
+        for (const q of Object.values(prev)) if (q.status !== 'open' && !next[q.id]) next[q.id] = q;
+        return next;
+      });
+    }, () => undefined);
+    try {
+      const { turns: list } = await threadsApi.turns();
+      const map = hydrateTurns(list);
+      for (const t of Object.values(map)) if (t.thread_id) knownThreadsRef.current.add(t.thread_id);
+      turnsRef.current = map;
+      setTurns(map);
+      resetTurns(Object.values(map).filter((t) => t.state === 'running'));
+      const busy = new Set(Object.values(map).map((t) => t.context_id));
+      for (const ctx of Object.keys(liveRef.current)) {
+        if (!busy.has(ctx) && !discussionInProgressRef.current) clearLive(ctx);
+      }
+      for (const t of Object.values(map)) markLive(t.context_id, kwantName(t.kwant_id));
+      // Titles for the "working on" badges
+      for (const t of Object.values(map)) {
+        if (t.thread_id && !threadsByKwantRef.current[t.kwant_id]) loadThreads(t.kwant_id);
+      }
+    } catch {
+      clearAllTurns();
+    }
+  };
+
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
   // Team that a newly created agent should join (set by a team's "Add member")
   const [newAgentTeam, setNewAgentTeam] = useState<Team | null>(null);
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [editingKwant, setEditingKwant] = useState<Kwant | null>(null);
+  const [editingTab, setEditingTab] = useState<EditTab>('profile');
+  // Skills waiting for review, for the counts on the agent's header and Skills tab.
+  const [pendingSkills, setPendingSkills] = useState<Skill[]>([]);
+  // Agents' questions by id: open ones from the server, plus every question_updated since.
+  const [questions, setQuestions] = useState<Record<string, Question>>({});
+  const questionsRef = useRef(questions);
+  questionsRef.current = questions;
 
   // Virtual Machine & Live Browser state
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
@@ -174,39 +359,87 @@ export const App: React.FC = () => {
     refreshProfiles();
   }, [refreshProfiles]);
 
-  // Load messages when selected channel/kwant changes
+  // The open chat (channel, direct chat or thread): show what's cached, then load the latest.
   useEffect(() => {
-    if (!selectedId) return;
-    const currentTargetId = selectedId;
-    async function loadMessages() {
-      try {
-        const res = await fetch(`/api/channels/${currentTargetId}/messages`);
-        if (res.ok) {
-          const data: ChatMessage[] = await res.json();
-          messagesCacheRef.current[currentTargetId] = data;
-          if (selectedIdRef.current === currentTargetId) {
-            setMessages(data);
-            const totalTokens = data.reduce((acc, m) => acc + (m.tokens_used || 0), 0);
-            setTokensUsed(totalTokens);
-          }
-        }
-      } catch (err) {
-        console.error('Failed loading messages:', err);
-      }
+    setHistoryWindow((w) => (w && w.ctx !== openCtx ? null : w));
+    if (!openCtx) return;
+    const b = streamsRef.current[openCtx];
+    setStreamingText(b?.text ?? '');
+    setStreamingThinking(b?.thinking ?? '');
+    setMessages(messagesCacheRef.current[openCtx] || []);
+    setMessagesError(null);
+    refreshContext(openCtx).then(() => {
+      if (openCtxRef.current !== openCtx) return;
+      const data = messagesCacheRef.current[openCtx] || [];
+      setTokensUsed(data.reduce((acc, m) => acc + (m.tokens_used || 0), 0));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openCtx]);
+
+  // An agent's conversations load when its chat opens; SSE keeps them current from then on.
+  useEffect(() => {
+    if (!selectedId || isChannel || threadsByKwantRef.current[selectedId] !== undefined) return;
+    loadThreads(selectedId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, isChannel]);
+
+  // Delegation notes need the live record for their status; fetch each unknown one once.
+  useEffect(() => {
+    for (const m of messages) {
+      const meta = parseDelegationMeta(m.meta);
+      if (!meta || delegationsRef.current[meta.delegation_id] || delegationsFetchedRef.current.has(meta.delegation_id)) continue;
+      delegationsFetchedRef.current.add(meta.delegation_id);
+      knownThreadsRef.current.add(meta.thread_id);
+      threadsApi.delegation(meta.delegation_id).then(
+        (d) => setDelegations((prev) => (prev[d.id] ? prev : { ...prev, [d.id]: d })),
+        () => undefined,
+      );
     }
-    loadMessages();
-  }, [selectedId]);
+  }, [messages]);
 
   // Connect to SSE stream
   useEffect(() => {
     const sse = new EventSource('/api/events');
-    // After a reconnect a `turn_ended` may have been missed; drop working states rather than spin forever.
     let dropped = false;
+    /** TurnComplete already refreshed these turns' chats; their turn_ended needn't again. */
+    const completed = new Set<string>();
+
+    /** After a reply: drop the chat's stream once nothing else runs or waits there. */
+    const settle = (ctx: string | null) => {
+      if (!ctx) return;
+      if (discussionInProgressRef.current && ctx === streamingContextIdRef.current) return;
+      if (turnsIn(turnsRef.current, ctx).length > 0) {
+        streamsRef.current[ctx] = { text: '', thinking: '' };
+        if (ctx === openCtxRef.current) {
+          setStreamingText('');
+          setStreamingThinking('');
+        }
+        return;
+      }
+      clearLive(ctx);
+      if (ctx === streamingContextIdRef.current) {
+        streamingContextIdRef.current = null;
+        setRoutingState(null);
+      }
+    };
+
+    const setTurnMap = (next: TurnMap) => {
+      if (next === turnsRef.current) return;
+      turnsRef.current = next;
+      setTurns(next);
+    };
+
     sse.onerror = () => {
       dropped = true;
     };
+    // First connect and every reconnect: running turns from the server. After a drop, also
+    // whatever changed meanwhile in the open chat and the open agent's conversations.
     sse.onopen = () => {
-      if (dropped) clearAllTurns();
+      hydrateFromServer();
+      if (dropped) {
+        refreshContext(openCtxRef.current);
+        if (!isChannelRef.current && selectedIdRef.current) loadThreads(selectedIdRef.current);
+      }
       dropped = false;
     };
 
@@ -214,14 +447,78 @@ export const App: React.FC = () => {
       try {
         const event = JSON.parse(e.data);
         switch (event.type) {
+          case 'turn_queued':
+          case 'TurnQueued':
           case 'turn_started':
           case 'TurnStarted':
-            turnStarted(event.data?.kwant_id, event.data?.context_id);
-            break;
           case 'turn_ended':
-          case 'TurnEnded':
-            turnEnded(event.data?.kwant_id, event.data?.context_id);
+          case 'TurnEnded': {
+            const d = event.data ?? {};
+            const ctx: string | null = d.context_id ?? d.thread_id ?? d.kwant_id ?? null;
+            setTurnMap(applyTurnEvent(turnsRef.current, event));
+            if (d.thread_id) {
+              knownThreadsRef.current.add(d.thread_id);
+              const list = threadsByKwantRef.current[d.kwant_id];
+              if (list && !list.some((t) => t.id === d.thread_id)) loadThreads(d.kwant_id);
+            }
+            const key = d.turn_id ?? d.context_id;
+            if (event.type === 'turn_ended' || event.type === 'TurnEnded') {
+              turnEnded(d.kwant_id, key);
+              if (d.turn_id && completed.delete(d.turn_id)) settle(ctx);
+              else refreshContext(ctx).then(() => settle(ctx));
+            } else {
+              if (event.type === 'turn_started' || event.type === 'TurnStarted') turnStarted(d.kwant_id, key);
+              if (!discussionInProgressRef.current || ctx !== streamingContextIdRef.current) markLive(ctx, kwantName(d.kwant_id));
+            }
             break;
+          }
+          case 'thread_updated':
+          case 'ThreadUpdated': {
+            const t: Thread | undefined = event.data?.thread;
+            if (!t?.id) break;
+            knownThreadsRef.current.add(t.id);
+            setThreadsByKwant((prev) =>
+              prev[t.kwant_id] === undefined ? prev : { ...prev, [t.kwant_id]: upsertThread(prev[t.kwant_id], t) },
+            );
+            break;
+          }
+          case 'delegation_updated':
+          case 'DelegationUpdated': {
+            const dl: Delegation | undefined = event.data?.delegation;
+            if (!dl?.id) break;
+            knownThreadsRef.current.add(dl.thread_id);
+            setDelegations((prev) => ({ ...prev, [dl.id]: dl }));
+            const list = threadsByKwantRef.current[dl.specialist_kwant_id];
+            if (list && !list.some((t) => t.id === dl.thread_id)) loadThreads(dl.specialist_kwant_id);
+            else setThreadsByKwant((prev) => {
+              const next = applyDelegation(prev[dl.specialist_kwant_id], dl);
+              return next === prev[dl.specialist_kwant_id] ? prev : { ...prev, [dl.specialist_kwant_id]: next };
+            });
+            break;
+          }
+          case 'message_added':
+          case 'MessageAdded': {
+            const m: ChatMessage | undefined = event.data?.message;
+            const ctx = m ? messageContextId(m) : null;
+            if (!m?.id || !ctx) break;
+            if (m.thread_id) knownThreadsRef.current.add(m.thread_id);
+            const list = messagesCacheRef.current[ctx];
+            if (!list) {
+              if (ctx === openCtxRef.current) refreshContext(ctx);
+              break;
+            }
+            if (list.some((x) => x.id === m.id)) break;
+            // The person's own message replaces its optimistic copy.
+            let base = list;
+            if (m.sender_role === 'user') {
+              const i = list.findIndex((x) => x.id.startsWith('temp-') && x.text === m.text);
+              if (i >= 0) base = list.filter((_, j) => j !== i);
+            }
+            const updated = [...base, m];
+            messagesCacheRef.current[ctx] = updated;
+            if (ctx === openCtxRef.current) setMessages(updated);
+            break;
+          }
           case 'profile_switched':
           case 'ProfileSwitched': {
             const kwantName = kwantsRef.current.find((k) => k.id === event.data?.kwant_id)?.name;
@@ -230,6 +527,20 @@ export const App: React.FC = () => {
             setToasts((prev) => [...prev.slice(-2), { id, title, detail }]);
             playSfx('alert');
             refreshProfiles();
+            break;
+          }
+          case 'skill_updated':
+          case 'SkillUpdated': {
+            const sk = event.data?.skill;
+            if (!sk?.id) break;
+            emitContinuity({ type: 'skill_updated', data: sk });
+            setPendingSkills((prev) => applySkillEvent(prev, sk).filter((x) => x.status === 'pending'));
+            break;
+          }
+          case 'question_updated':
+          case 'QuestionUpdated': {
+            const q: Question | undefined = event.data?.question;
+            if (q?.id) setQuestions((prev) => applyQuestion(prev, q));
             break;
           }
           case 'memory_changed':
@@ -242,15 +553,25 @@ export const App: React.FC = () => {
             break;
           case 'notify':
           case 'Notify':
-            showNotification(event.data as NotifyEvent);
+            showNotificationRef.current(event.data as NotifyEvent);
             break;
           case 'TextDelta':
-            setStreamingText((prev) => prev + event.data);
-            playSfx('blip');
+          case 'ThinkingDelta': {
+            // Each chat streams into its own buffer; only the open chat's is drawn.
+            const ctx = streamTarget(event, streamingContextIdRef.current);
+            if (!ctx) break;
+            const buf = (streamsRef.current[ctx] ??= { text: '', thinking: '' });
+            if (event.type === 'TextDelta') buf.text += event.data;
+            else buf.thinking = event.data;
+            if (!(ctx in liveRef.current)) markLive(ctx, kwantName(event.kwant_id));
+            if (shouldRenderDelta(event, openCtxRef.current, streamingContextIdRef.current)) {
+              if (event.type === 'TextDelta') {
+                setStreamingText(buf.text);
+                playSfx('blip');
+              } else setStreamingThinking(buf.thinking);
+            }
             break;
-          case 'ThinkingDelta':
-            setStreamingThinking(event.data);
-            break;
+          }
           case 'routing_started':
           case 'RoutingStarted': {
             const ctx = event.data?.context_id;
@@ -262,8 +583,7 @@ export const App: React.FC = () => {
               contextId: ctx || targetId || undefined,
               candidates: event.data?.candidates || [],
             });
-            setStreamingSpeakerName('Laya');
-            streamingSpeakerNameRef.current = 'Laya';
+            markLive(ctx || targetId, 'Laya');
             break;
           }
           case 'routing_decided':
@@ -285,10 +605,7 @@ export const App: React.FC = () => {
               reason: event.data?.reason,
               mode: event.data?.mode,
             }));
-            if (name) {
-              setStreamingSpeakerName(name);
-              streamingSpeakerNameRef.current = name;
-            }
+            if (name && (ctx || targetId) && (ctx || targetId) in liveRef.current) markLive(ctx || targetId, name);
             playSfx('blip');
             };
             // Keep Laya's "deciding" visible briefly so instant heuristic routing doesn't just flash.
@@ -321,10 +638,8 @@ export const App: React.FC = () => {
             );
             const contextId = matchedChannel ? matchedChannel.id : (teamId || selectedIdRef.current);
 
-            setStreamingContextId(contextId);
             streamingContextIdRef.current = contextId;
-            setStreamingSpeakerName(initialSpeakerName);
-            streamingSpeakerNameRef.current = initialSpeakerName;
+            markLive(contextId, initialSpeakerName);
 
             setDiscussionState({
               inProgress: true,
@@ -336,7 +651,6 @@ export const App: React.FC = () => {
               currentTurn: 1,
               kind: event.data?.kind,
             });
-            setIsStreaming(true);
             playSfx('alert');
             break;
           }
@@ -344,8 +658,6 @@ export const App: React.FC = () => {
           case 'DiscussionTurnStarted': {
             discussionInProgressRef.current = true;
             const spkName = event.data?.speaker_name;
-            setStreamingSpeakerName(spkName);
-            streamingSpeakerNameRef.current = spkName;
             setDiscussionState((prev) => ({
               ...prev,
               inProgress: true,
@@ -355,20 +667,16 @@ export const App: React.FC = () => {
               currentTurn: event.data?.turn_index,
               totalTurns: event.data?.total_turns ?? prev.totalTurns,
             }));
-            setIsStreaming(true);
-            setStreamingText('');
-            setStreamingThinking('');
             const targetId = streamingContextIdRef.current || selectedIdRef.current;
             if (targetId) {
-              fetch(`/api/channels/${targetId}/messages`)
-                .then((r) => r.json())
-                .then((msgs) => {
-                  messagesCacheRef.current[targetId] = msgs;
-                  if (selectedIdRef.current === targetId) {
-                    setMessages(msgs);
-                  }
-                })
-                .catch(() => {});
+              refreshContext(targetId).then(() => {
+                streamsRef.current[targetId] = { text: '', thinking: '' };
+                if (openCtxRef.current === targetId) {
+                  setStreamingText('');
+                  setStreamingThinking('');
+                }
+              });
+              markLive(targetId, spkName);
             }
             break;
           }
@@ -377,53 +685,23 @@ export const App: React.FC = () => {
             discussionInProgressRef.current = false;
             setDiscussionState({ inProgress: false });
             setRoutingState(null);
-            setIsStreaming(false);
-            setStreamingText('');
-            setStreamingThinking('');
             const targetId = streamingContextIdRef.current || selectedIdRef.current;
-            setStreamingContextId(null);
             streamingContextIdRef.current = null;
-            setStreamingSpeakerName('');
-            streamingSpeakerNameRef.current = '';
             playSfx('coin');
-            if (targetId) {
-              fetch(`/api/channels/${targetId}/messages`)
-                .then((r) => r.json())
-                .then((msgs) => {
-                  messagesCacheRef.current[targetId] = msgs;
-                  if (selectedIdRef.current === targetId) {
-                    setMessages(msgs);
-                  }
-                })
-                .catch(() => {});
-            }
+            refreshContext(targetId).then(() => settle(targetId));
             break;
           }
           case 'TurnComplete': {
-            playSfx('coin');
-            setStreamingText('');
-            setStreamingThinking('');
-            setTokensUsed((prev) => prev + (event.data?.tokens || 0));
-            const targetId = streamingContextIdRef.current || selectedIdRef.current;
-            if (targetId) {
-              fetch(`/api/channels/${targetId}/messages`)
-                .then((r) => r.json())
-                .then((msgs) => {
-                  messagesCacheRef.current[targetId] = msgs;
-                  if (selectedIdRef.current === targetId) {
-                    setMessages(msgs);
-                  }
-                })
-                .catch(() => {});
+            const ctx = streamTarget(event, streamingContextIdRef.current);
+            if (ctx === openCtxRef.current) {
+              playSfx('coin');
+              setTokensUsed((prev) => prev + (event.data?.tokens || 0));
             }
-            if (!discussionInProgressRef.current) {
-              setRoutingState(null);
-              setIsStreaming(false);
-              setStreamingContextId(null);
-              streamingContextIdRef.current = null;
-              setStreamingSpeakerName('');
-              streamingSpeakerNameRef.current = '';
-            }
+            if (typeof event.turn_id === 'string') completed.add(event.turn_id);
+            // The stream stays up until the saved reply is on screen, so nothing jumps.
+            refreshContext(ctx).then(() => {
+              if (!discussionInProgressRef.current) settle(ctx);
+            });
             break;
           }
           case 'browser_navigated':
@@ -509,16 +787,13 @@ export const App: React.FC = () => {
             break;
           }
           case 'Error': {
-            discussionInProgressRef.current = false;
-            setDiscussionState({ inProgress: false });
-            setRoutingState(null);
-            setIsStreaming(false);
-            setStreamingContextId(null);
-            streamingContextIdRef.current = null;
-            setStreamingSpeakerName('');
-            streamingSpeakerNameRef.current = '';
-            setStreamingText('');
-            setStreamingThinking('');
+            const ctx = streamTarget(event, streamingContextIdRef.current);
+            if (ctx && ctx === streamingContextIdRef.current) {
+              discussionInProgressRef.current = false;
+              setDiscussionState({ inProgress: false });
+              setRoutingState(null);
+            }
+            refreshContext(ctx).then(() => settle(ctx));
             break;
           }
         }
@@ -533,60 +808,63 @@ export const App: React.FC = () => {
     };
   }, [refreshProfiles]);
 
+  /** Stop in the composer: the open thread's turn, the direct chat's, or the channel's. */
   const handleCancelDiscussion = async () => {
-    const targetId = selectedIdRef.current;
+    const ctx = openCtxRef.current;
+    const threadId = openThreadId;
     try {
-      await fetch('/api/chat/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          channel_id: isChannelRef.current ? targetId : null,
-          kwant_id: !isChannelRef.current ? targetId : null,
-          team_id: activeTeamIdRef.current || null,
-        }),
-      });
+      if (threadId) {
+        await threadsApi.cancel(threadId);
+      } else {
+        const running = turnsIn(turnsRef.current, ctx).find((t) => t.state === 'running');
+        const direct = !isChannelRef.current;
+        const res = await fetch('/api/chat/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            direct
+              ? { kwant_id: ctx, turn_id: running?.turn_id }
+              : { channel_id: ctx, team_id: activeTeamIdRef.current || null },
+          ),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      }
     } catch (err) {
       console.error('Failed cancelling chat/discussion:', err);
+      pushToast('Could not stop the reply.', err instanceof Error ? err.message : undefined);
+      return;
     }
-    discussionInProgressRef.current = false;
-    setDiscussionState({ inProgress: false });
-    setRoutingState(null);
-    setIsStreaming(false);
-    setStreamingContextId(null);
-    streamingContextIdRef.current = null;
-    setStreamingSpeakerName('');
-    streamingSpeakerNameRef.current = '';
-    setStreamingText('');
-    setStreamingThinking('');
-    if (targetId) {
-      fetch(`/api/channels/${targetId}/messages`)
-        .then((r) => r.json())
-        .then((msgs) => {
-          messagesCacheRef.current[targetId] = msgs;
-          if (selectedIdRef.current === targetId) {
-            setMessages(msgs);
-          }
-        })
-        .catch(() => {});
+    if (ctx === streamingContextIdRef.current) {
+      discussionInProgressRef.current = false;
+      setDiscussionState({ inProgress: false });
+      setRoutingState(null);
+      streamingContextIdRef.current = null;
     }
+    refreshContext(ctx).then(() => {
+      if (turnsIn(turnsRef.current, ctx).length === 0) clearLive(ctx);
+    });
   };
 
-  const handleSendMessage = async (text: string) => {
-    const targetId = selectedId;
+  const handleSendMessage = async (text: string, attachments: AttachmentRef[] = []) => {
+    setHistoryWindow(null);
+    const targetId = openCtx;
+    const threadId = openThreadId;
     const isTargetChannel = isChannel;
     const targetTeam = selectedTeamId;
     const speakerName = !isTargetChannel ? (currentKwant?.name || 'Agent') : chatTitle;
 
-    discussionInProgressRef.current = false;
-    setDiscussionState({ inProgress: false });
-    setRoutingState(null);
-    setIsStreaming(true);
-    setStreamingContextId(targetId);
+    if (!threadId) {
+      discussionInProgressRef.current = false;
+      setDiscussionState({ inProgress: false });
+      setRoutingState(null);
+    }
     streamingContextIdRef.current = targetId;
-    setStreamingSpeakerName(speakerName);
-    streamingSpeakerNameRef.current = speakerName;
-    setStreamingText('');
-    setStreamingThinking('');
+    if (!(targetId in liveRef.current)) {
+      streamsRef.current[targetId] = { text: '', thinking: '' };
+      setStreamingText('');
+      setStreamingThinking('');
+    }
+    markLive(targetId, speakerName);
 
     // Optimistically add user message
     const tempId = `temp-${Date.now()}`;
@@ -595,34 +873,54 @@ export const App: React.FC = () => {
       sender_role: 'user',
       sender_id: 'PlayerHero',
       text,
+      meta: attachments.length ? JSON.stringify({ attachments }) : null,
     };
     const cached = messagesCacheRef.current[targetId] || messages;
     const updated = [...cached, userMsg];
     messagesCacheRef.current[targetId] = updated;
-    if (selectedIdRef.current === targetId) {
+    if (openCtxRef.current === targetId) {
       setMessages(updated);
     }
 
+    const attachment_ids = attachments.map((a) => a.id);
     try {
-      await fetch('/api/chat/send', {
+      const res = await fetch('/api/chat/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          channel_id: isTargetChannel ? targetId : null,
-          kwant_id: !isTargetChannel ? targetId : null,
-          team_id: targetTeam || null,
-          prompt: text,
-          sender_id: 'PlayerHero',
-        }),
+        body: JSON.stringify(
+          threadId
+            ? { thread_id: threadId, prompt: text, sender_id: 'PlayerHero', attachment_ids }
+            : {
+                channel_id: isTargetChannel ? targetId : null,
+                kwant_id: !isTargetChannel ? targetId : null,
+                team_id: targetTeam || null,
+                prompt: text,
+                sender_id: 'PlayerHero',
+                attachment_ids,
+              },
+        ),
       });
+      if (!res.ok) {
+        let message = attachments.length ? sendAttachmentErrorText(res.status) ?? `HTTP ${res.status}` : `HTTP ${res.status}`;
+        try {
+          const data = await res.json();
+          if (typeof data?.error === 'string') message = data.error;
+        } catch {
+          // no JSON body
+        }
+        throw new Error(message);
+      }
     } catch (err) {
       console.error('Failed sending chat:', err);
-      setRoutingState(null);
-      setIsStreaming(false);
-      setStreamingContextId(null);
-      streamingContextIdRef.current = null;
-      setStreamingSpeakerName('');
-      streamingSpeakerNameRef.current = '';
+      const rest = (messagesCacheRef.current[targetId] || []).filter((m) => m.id !== tempId);
+      messagesCacheRef.current[targetId] = rest;
+      if (openCtxRef.current === targetId) setMessages(rest);
+      pushToast('Message not sent.', err instanceof Error ? err.message : undefined);
+      if (turnsIn(turnsRef.current, targetId).length === 0) clearLive(targetId);
+      if (streamingContextIdRef.current === targetId) {
+        setRoutingState(null);
+        streamingContextIdRef.current = null;
+      }
     }
   };
 
@@ -643,6 +941,7 @@ export const App: React.FC = () => {
   };
 
   const handleSelectTeam = (team: Team) => {
+    setOpenThreadId(null);
     setSelectedTeamId(team.id);
     const targetChannel = channels.find(
       (c) => c.name === `team-${team.name}` || c.id === team.id
@@ -680,6 +979,7 @@ export const App: React.FC = () => {
   };
 
   const handleSelectChannel = (channel: Channel) => {
+    setOpenThreadId(null);
     setSelectedId(channel.id);
     selectedIdRef.current = channel.id;
     setIsChannel(true);
@@ -693,6 +993,7 @@ export const App: React.FC = () => {
   };
 
   const handleSelectKwant = (kwant: Kwant) => {
+    setOpenThreadId(null);
     setSelectedId(kwant.id);
     selectedIdRef.current = kwant.id;
     setIsChannel(false);
@@ -712,17 +1013,167 @@ export const App: React.FC = () => {
     }
     const kwant = kwants.find((k) => k.id === t.kwant_id);
     if (!kwant) return false;
-    if (selectedIdRef.current !== kwant.id) handleSelectKwant(kwant);
+    if (selectedIdRef.current !== kwant.id || openThreadId) handleSelectKwant(kwant);
     return true;
   };
   openTargetRef.current = openTarget;
+  const openAgentSettings = (kwant: Kwant, tab: EditTab = 'profile') => {
+    setEditingTab(tab);
+    setEditingKwant(kwant);
+    playSfx('click');
+  };
+  openQuestionRef.current = (kwantId: string) => {
+    const q = latestOpenQuestion(questionsRef.current, kwantId);
+    if (!q) return false;
+    if (q.thread_id) openThread(q.kwant_id, q.thread_id);
+    else openTarget({ channel_id: q.channel_id, kwant_id: q.channel_id ? null : q.kwant_id });
+    if (q.message_id) setHighlightMessageId(q.message_id);
+    return true;
+  };
+  openSkillsRef.current = (kwantId: string) => {
+    const k = kwants.find((x) => x.id === kwantId);
+    if (k) openAgentSettings(k, 'skills');
+  };
 
   const pushToast = (title: string, detail?: string) => {
     const id = ++toastIdRef.current;
     setToasts((prev) => [...prev.slice(-2), { id, title, detail }]);
   };
 
-  // Search result picked: open its chat, then scroll to the message if it's among the ones loaded.
+  /** Opens one of an agent's threads (from the thread list, a delegation card or a badge). */
+  const openThread = (kwantId: string, threadId: string) => {
+    const kwant = kwants.find((k) => k.id === kwantId);
+    if (!kwant) {
+      pushToast('That agent no longer exists.');
+      return;
+    }
+    knownThreadsRef.current.add(threadId);
+    if (selectedIdRef.current !== kwant.id || isChannelRef.current) handleSelectKwant(kwant);
+    else playSfx('click');
+    setOpenThreadId(threadId);
+    if (threadsByKwantRef.current[kwantId] === undefined) loadThreads(kwantId);
+  };
+
+  const openDirectChat = () => {
+    if (!openThreadId) return;
+    setOpenThreadId(null);
+    playSfx('click');
+  };
+
+  const errText = (err: unknown) => (err instanceof Error ? err.message : 'Something went wrong.');
+
+  const handleNewThread = async (): Promise<string | void> => {
+    const kwantId = selectedIdRef.current;
+    try {
+      const t = await threadsApi.create(kwantId);
+      knownThreadsRef.current.add(t.id);
+      messagesCacheRef.current[t.id] = [];
+      setThreadsByKwant((prev) => ({ ...prev, [kwantId]: upsertThread(prev[kwantId], t) }));
+      if (selectedIdRef.current === kwantId) setOpenThreadId(t.id);
+    } catch (err) {
+      return `Couldn't start a conversation: ${errText(err)}`;
+    }
+  };
+
+  /** Stops a thread's work: its delegation when one is open (so the lead hears), else its turns. */
+  const handleStopThread = async (t: Thread): Promise<string | void> => {
+    const d = t.delegation ? delegationsRef.current[t.delegation.id] ?? t.delegation : null;
+    try {
+      if (d && (d.status === 'queued' || d.status === 'running')) {
+        const next = await threadsApi.cancelDelegation(d.id);
+        setDelegations((prev) => ({ ...prev, [next.id]: next }));
+      } else {
+        await threadsApi.cancel(t.id);
+      }
+    } catch (err) {
+      return `Couldn't stop it: ${errText(err)}`;
+    }
+  };
+
+  const handleArchiveThread = async (t: Thread, archived: boolean): Promise<string | void> => {
+    try {
+      const next = await threadsApi.patch(t.id, { archived });
+      setThreadsByKwant((prev) => ({ ...prev, [next.kwant_id]: upsertThread(prev[next.kwant_id], next) }));
+      if (archived && openThreadId === t.id) {
+        setOpenThreadId(null);
+        pushToast(`Archived “${t.title}”`, 'Find it under Archived in the conversation list.');
+      }
+    } catch (err) {
+      return `Couldn't ${archived ? 'archive' : 'unarchive'} it: ${errText(err)}`;
+    }
+  };
+
+  const handleCancelDelegation = async (id: string): Promise<string | void> => {
+    try {
+      const next = await threadsApi.cancelDelegation(id);
+      setDelegations((prev) => ({ ...prev, [next.id]: next }));
+    } catch (err) {
+      return `Couldn't stop it: ${errText(err)}`;
+    }
+  };
+
+  const handleAnswerQuestion = async (id: string, answer: { choice: number } | { text: string }): Promise<string | void> => {
+    try {
+      const { question } = await questionsApi.answer(id, answer);
+      setQuestions((prev) => applyQuestion(prev, question));
+    } catch (err) {
+      // Answered from another tab, dismissed, or its turn was stopped: show what happened.
+      try {
+        const { question } = await questionsApi.get(id);
+        setQuestions((prev) => applyQuestion(prev, question));
+        if (question.status === 'answered') return 'This was already answered.';
+        if (question.status === 'cancelled') return 'This question was closed.';
+      } catch {
+        // keep the first error
+      }
+      return `Couldn't send your answer: ${errText(err)}`;
+    }
+  };
+  const handleDismissQuestion = async (id: string): Promise<string | void> => {
+    try {
+      const q = await questionsApi.cancel(id);
+      setQuestions((prev) => applyQuestion(prev, q));
+    } catch (err) {
+      return `Couldn't skip it: ${errText(err)}`;
+    }
+  };
+  const renderQuestion = (msg: ChatMessage, meta: QuestionMeta, flash: boolean) => {
+    const live = questions[meta.question_id];
+    const turnId = live?.turn_id;
+    const name = live ? kwantName(live.kwant_id) : undefined;
+    return (
+      <QuestionCard
+        meta={meta}
+        messageId={msg.id}
+        kwantName={name ?? (msg.sender_id && msg.sender_id.length <= 20 ? msg.sender_id : chatTitle)}
+        kwantId={live?.kwant_id}
+        live={live}
+        waiting={!!turnId && !!turns[turnId]}
+        onAnswer={handleAnswerQuestion}
+        onDismiss={handleDismissQuestion}
+        flash={flash}
+      />
+    );
+  };
+
+  const renderDelegation = (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => {
+    const queued = turnsIn(turns, meta.thread_id).find((t) => t.state === 'queued');
+    return (
+      <DelegationCard
+        meta={meta}
+        text={msg.text}
+        messageId={msg.id}
+        live={delegations[meta.delegation_id]}
+        queuePos={queued ? queuePosition(turns, queued.turn_id) : null}
+        onOpenThread={(m) => openThread(m.specialist_id, m.thread_id)}
+        onCancel={handleCancelDelegation}
+        flash={flash}
+      />
+    );
+  };
+
+  // Search result picked: open its chat and scroll to the message, loading the messages around it
+  // when it's older than the latest page.
   const handleJump = async (hit: SearchHit) => {
     const targetId = hit.channel_id ?? hit.kwant_id;
     if (!targetId || !openTarget(hit)) {
@@ -735,8 +1186,23 @@ export const App: React.FC = () => {
       const data: ChatMessage[] = await res.json();
       messagesCacheRef.current[targetId] = data;
       if (selectedIdRef.current === targetId) setMessages(data);
-      if (data.some((m) => m.id === hit.message_id)) setHighlightMessageId(hit.message_id);
-      else pushToast('Opened the chat', 'That message is older than the latest 100 shown here.');
+      if (data.some((m) => m.id === hit.message_id)) {
+        setHistoryWindow(null);
+        setHighlightMessageId(hit.message_id);
+        return;
+      }
+      const around = await fetch(
+        `/api/channels/${encodeURIComponent(targetId)}/messages?around=${encodeURIComponent(hit.message_id)}`,
+      );
+      if (around.status === 404) {
+        pushToast('Opened the chat', 'That message is no longer there.');
+        return;
+      }
+      if (!around.ok) throw new Error(`HTTP ${around.status}`);
+      const older: ChatMessage[] = await around.json();
+      if (selectedIdRef.current !== targetId) return;
+      setHistoryWindow({ ctx: targetId, messages: older });
+      setHighlightMessageId(hit.message_id);
     } catch {
       pushToast('Could not load that chat.');
     }
@@ -1186,7 +1652,117 @@ export const App: React.FC = () => {
 
   const closeProfiles = useCallback(() => setIsProfilesOpen(false), []);
 
-  const isCurrentContextStreaming = isStreaming && streamingContextId === selectedId;
+  const isCurrentContextStreaming = openCtx in live;
+  const openTurns = turnsIn(turns, openCtx);
+  // Turns paused on a question wait for the person; they don't make the agent "busy".
+  const awaitingTurns = turnsAwaitingAnswer(questions);
+  const awaitingHere = openTurns.some((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) && !openTurns.some((t) => t.state === 'running' && !awaitingTurns.has(t.turn_id));
+  const waiting = openTurns.some((t) => t.state === 'running') ? undefined : openTurns.find((t) => t.state === 'queued');
+  const queuedHere: QueuedState | null = waiting
+    ? { position: queuePosition(turns, waiting.turn_id), reason: waiting.reason ?? 'agent_busy', speaker: kwantName(waiting.kwant_id) ?? live[openCtx] ?? 'The agent' }
+    : null;
+
+  // The agent's conversations, the open thread's controls, and "working on…" elsewhere.
+  const agentThreads = currentKwant ? threadsByKwant[currentKwant.id] : undefined;
+  const shownThread = openThreadId ? agentThreads?.find((t) => t.id === openThreadId) ?? null : null;
+  const elsewhere = currentKwant ? backgroundTurns(turns, currentKwant.id).filter((t) => t.context_id !== openCtx) : [];
+  const describeContext = (ctx: string, kwantId: string): string =>
+    threadsByKwant[kwantId]?.find((t) => t.id === ctx)?.title ??
+    (ctx === kwantId ? 'the direct chat' : channels.find((c) => c.id === ctx) ? channelLabel(channels.find((c) => c.id === ctx)!.name) : 'another conversation');
+  const workingBadge =
+    currentKwant && elsewhere.length > 0 ? (
+      <button
+        type="button"
+        onClick={() => {
+          const t = elsewhere[0];
+          if (t.thread_id) openThread(t.kwant_id, t.thread_id);
+          else if (t.context_id === t.kwant_id) openDirectChat();
+          else openTarget({ channel_id: t.context_id, kwant_id: null });
+        }}
+        className="inline-flex items-center gap-1.5 min-w-0 max-w-[16rem] sm:max-w-xs px-2 py-0.5 rounded-full border border-sky-500/30 bg-sky-500/10 text-[11px] text-sky-200 hover:bg-sky-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+        title={elsewhere.map((t) => describeContext(t.context_id, t.kwant_id)).join(', ')}
+      >
+        {awaitingTurns.has(elsewhere[0].turn_id) ? (
+          <HelpCircle size={10} className="shrink-0 text-amber-300" aria-hidden="true" />
+        ) : (
+          <Loader2 size={10} className="shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+        )}
+        <span className="truncate">
+          {elsewhere[0].state === 'queued' ? 'Waiting to work on ' : awaitingTurns.has(elsewhere[0].turn_id) ? 'Asked you a question in ' : 'Working on '}
+          {describeContext(elsewhere[0].context_id, elsewhere[0].kwant_id)}
+        </span>
+        {elsewhere.length > 1 && <span className="shrink-0 text-sky-300/80">+{elsewhere.length - 1} more</span>}
+      </button>
+    ) : null;
+  const pendingSkillCounts = pendingByKwant(pendingSkills);
+  const pendingHere = currentKwant ? pendingSkillCounts[currentKwant.id] ?? 0 : 0;
+  const skillsBadge =
+    currentKwant && pendingHere > 0 ? (
+      <button
+        type="button"
+        onClick={() => openAgentSettings(currentKwant, 'skills')}
+        className="inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-full border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-200 hover:bg-amber-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400"
+      >
+        <ListChecks size={11} aria-hidden="true" />
+        {pendingHere === 1 ? '1 skill to review' : `${pendingHere} skills to review`}
+      </button>
+    ) : null;
+  // Sidebar: agents busy somewhere other than the open chat.
+  const busyKwants: Record<string, string> = {};
+  for (const t of Object.values(turns)) {
+    if (t.context_id === openCtx || busyKwants[t.kwant_id]) continue;
+    busyKwants[t.kwant_id] = `${t.state === 'queued' ? 'Waiting to work on' : awaitingTurns.has(t.turn_id) ? 'Asked you a question in' : 'Working on'} ${describeContext(t.context_id, t.kwant_id)}`;
+  }
+
+  const viewingHistory = !!historyWindow && historyWindow.ctx === openCtx;
+  const errorBar = messagesError ? (
+    <div role="alert" className="px-3 sm:px-6 py-2 border-b border-rose-500/20 bg-rose-500/5 flex items-center gap-2 text-xs text-rose-300">
+      <span>{messagesError}</span>
+      <button
+        type="button"
+        onClick={() => refreshContext(openCtx)}
+        className="px-2 py-0.5 rounded border border-rose-500/30 hover:bg-rose-500/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-500"
+      >
+        Retry
+      </button>
+    </div>
+  ) : null;
+  const subHeader = currentKwant ? (
+    <>
+      <ThreadBar
+        kwantName={currentKwant.name}
+        threads={agentThreads}
+        error={threadErrors[currentKwant.id] ?? null}
+        openThreadId={openThreadId}
+        turns={turns}
+        awaiting={awaitingTurns}
+        directBadge={threadBadge({ id: currentKwant.id, delegation: null }, turns, awaitingTurns)}
+        showArchived={showArchived}
+        onToggleArchived={() => setShowArchived((v) => !v)}
+        onOpenDirect={openDirectChat}
+        onOpenThread={(t) => openThread(t.kwant_id, t.id)}
+        onNewThread={handleNewThread}
+        onRetry={() => loadThreads(currentKwant.id)}
+      />
+      {shownThread && (
+        <ThreadHeader
+          thread={shownThread}
+          badge={threadBadge(
+            { id: shownThread.id, delegation: shownThread.delegation ? delegations[shownThread.delegation.id] ?? shownThread.delegation : null },
+            turns,
+            awaitingTurns,
+          )}
+          delegatedBy={kwantName(shownThread.delegation?.lead_kwant_id ?? shownThread.created_by)}
+          onBack={openDirectChat}
+          onStop={() => handleStopThread(shownThread)}
+          onArchive={(archived) => handleArchiveThread(shownThread, archived)}
+        />
+      )}
+      {errorBar}
+    </>
+  ) : (
+    errorBar
+  );
   const pinned: PinnedItem[] = [];
   if (currentTeam?.instructions?.trim()) pinned.push({ label: `Team @${currentTeam.name}`, text: currentTeam.instructions });
   if (isChannel && currentChannel?.instructions?.trim())
@@ -1219,6 +1795,7 @@ export const App: React.FC = () => {
           selectedId={selectedId}
           isChannel={isChannel}
           selectedTeamId={selectedTeamId}
+          busyKwants={busyKwants}
           onSelectKwant={handleSelectKwant}
           onSelectChannel={handleSelectChannel}
           onSelectTeam={handleSelectTeam}
@@ -1228,8 +1805,7 @@ export const App: React.FC = () => {
             playSfx('click');
           }}
           onEditKwant={(kwant) => {
-            setEditingKwant(kwant);
-            playSfx('click');
+            openAgentSettings(kwant);
           }}
           onSummonKwant={(team) => {
             setNewAgentTeam(team ?? null);
@@ -1245,12 +1821,14 @@ export const App: React.FC = () => {
         <ChatView
           title={chatTitle}
           subtitle={chatSubtitle}
-          messages={messages}
+          messages={viewingHistory ? historyWindow.messages : messages}
+          viewingHistory={viewingHistory}
+          onJumpToLatest={() => setHistoryWindow(null)}
           streamingText={isCurrentContextStreaming ? streamingText : ''}
           streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
           pendingApproval={pendingApproval}
           isStreaming={isCurrentContextStreaming}
-          streamingSpeakerName={streamingSpeakerName}
+          streamingSpeakerName={live[openCtx] || undefined}
           onSendMessage={handleSendMessage}
           onResolveApproval={handleResolveApproval}
           kwants={kwants}
@@ -1274,8 +1852,7 @@ export const App: React.FC = () => {
           onEditKwant={
             currentKwant
               ? () => {
-                  setEditingKwant(currentKwant);
-                  playSfx('click');
+                  openAgentSettings(currentKwant);
                 }
               : undefined
           }
@@ -1301,6 +1878,20 @@ export const App: React.FC = () => {
           }
           highlightMessageId={highlightMessageId}
           onHighlightDone={() => setHighlightMessageId(null)}
+          subHeader={subHeader}
+          titleExtra={
+            workingBadge || skillsBadge ? (
+              <>
+                {workingBadge}
+                {skillsBadge}
+              </>
+            ) : null
+          }
+          queued={queuedHere}
+          renderDelegation={renderDelegation}
+          renderQuestion={renderQuestion}
+          awaitingAnswer={awaitingHere}
+          contextKey={openCtx}
         />
       </div>
 
@@ -1330,6 +1921,8 @@ export const App: React.FC = () => {
           profiles={profiles}
           onManageProfiles={() => setIsProfilesOpen(true)}
           onManageServers={() => setIsMcpOpen(true)}
+          initialTab={editingTab}
+          pendingSkills={editingKwant ? pendingSkillCounts[editingKwant.id] ?? 0 : 0}
           onClose={() => setEditingKwant(null)}
           onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
         />

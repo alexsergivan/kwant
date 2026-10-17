@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, Sparkles, Pencil, ChevronRight, Brain, CalendarClock, UserRound } from 'lucide-react';
+import { X, Sparkles, Pencil, ChevronRight, Brain, CalendarClock, UserRound, ListChecks } from 'lucide-react';
 import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
 import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
 import { playSfx } from '../audio/chiptune';
@@ -8,12 +8,14 @@ import { McpServer, defaultKwantServerIds } from '../mcp';
 import { ENGINES, Profile, engineOfModel, profileStatus, profilesForEngine } from '../profiles';
 import { MemoryPanel } from './MemoryPanel';
 import { RoutinesPanel } from './RoutinesPanel';
+import { SkillsPanel } from './SkillsPanel';
 import type { Channel, Kwant } from './Sidebar';
 
-type EditTab = 'profile' | 'memory' | 'routines';
+export type EditTab = 'profile' | 'memory' | 'skills' | 'routines';
 const EDIT_TABS: Array<{ id: EditTab; label: string; Icon: typeof Brain }> = [
   { id: 'profile', label: 'Profile', Icon: UserRound },
   { id: 'memory', label: 'Memory', Icon: Brain },
+  { id: 'skills', label: 'Skills', Icon: ListChecks },
   { id: 'routines', label: 'Routines', Icon: CalendarClock },
 ];
 
@@ -61,6 +63,10 @@ interface NewAgentModalProps {
   /** For the Routines tab when editing. */
   kwants?: Kwant[];
   channels?: Channel[];
+  /** Tab to open on (editing only), e.g. 'skills' from a "skill proposed" notification. */
+  initialTab?: EditTab;
+  /** Skills waiting for review, shown as a count on the Skills tab. */
+  pendingSkills?: number;
 }
 
 export const NewAgentModal: React.FC<NewAgentModalProps> = ({
@@ -76,6 +82,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   onSubmit,
   kwants = [],
   channels = [],
+  initialTab = 'profile',
+  pendingSkills = 0,
 }) => {
   const [tab, setTab] = useState<EditTab>('profile');
   const [name, setName] = useState('');
@@ -105,7 +113,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setSoul(initial?.soul ?? '');
     setSubmitting(false);
     setError(null);
-    setTab('profile');
+    setTab(initialTab);
     setPresetId(null);
     setMcpIds(undefined);
     setProfileId(initial?.profile_id ?? null);
@@ -231,6 +239,11 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
                 }`}
               >
                 <Icon size={12} aria-hidden="true" /> {label}
+                {id === 'skills' && pendingSkills > 0 && (
+                  <span className="ml-0.5 px-1 min-w-[1rem] rounded-full bg-amber-500/25 text-amber-200 text-[10px]" aria-label={`${pendingSkills} to review`}>
+                    {pendingSkills}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -239,6 +252,11 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
         {isEdit && kwantId && tab === 'memory' && (
           <div role="tabpanel" id="agent-panel-memory" aria-labelledby="agent-tab-memory">
             <MemoryPanel kwantId={kwantId} kwantName={initial?.name ?? 'This kwant'} />
+          </div>
+        )}
+        {isEdit && kwantId && tab === 'skills' && (
+          <div role="tabpanel" id="agent-panel-skills" aria-labelledby="agent-tab-skills">
+            <SkillsPanel kwantId={kwantId} kwantName={initial?.name ?? 'This kwant'} />
           </div>
         )}
         {isEdit && kwantId && tab === 'routines' && (

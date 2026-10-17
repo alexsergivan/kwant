@@ -194,16 +194,42 @@ pub async fn create_channel(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MessagesQuery {
+    /// A window centred on this message (e.g. a search hit older than the latest page).
+    pub around: Option<String>,
+    /// The page just before this message.
+    pub before: Option<String>,
+    /// Default 100, at most [`crate::db::history::MAX_HISTORY_PAGE`].
+    pub limit: Option<i64>,
+}
+
+/// The latest 100 messages, or with `around`/`before` an older window. 404 when that
+/// message isn't in this chat.
 pub async fn list_messages(
     State(state): State<AppState>,
     Path(channel_or_kwant_id): Path<String>,
-) -> Result<Json<Vec<Message>>, StatusCode> {
-    state
-        .db
-        .list_messages(&channel_or_kwant_id, 100)
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    Query(q): Query<MessagesQuery>,
+) -> Result<Json<Vec<Message>>, (StatusCode, Json<serde_json::Value>)> {
+    let err = |status: StatusCode, m: &str| (status, Json(json!({ "error": m })));
+    let max = crate::db::history::MAX_HISTORY_PAGE;
+    let limit = match q.limit {
+        None => 100,
+        Some(n) if (1..=max).contains(&n) => n,
+        Some(_) => return Err(err(StatusCode::BAD_REQUEST, &format!("limit must be 1–{max}"))),
+    };
+    let db = &state.db;
+    let rows = match (q.around.as_deref(), q.before.as_deref()) {
+        (Some(_), Some(_)) => return Err(err(StatusCode::BAD_REQUEST, "use around or before, not both")),
+        (Some(id), None) => db.list_messages_around(&channel_or_kwant_id, id, limit).await,
+        (None, Some(id)) => db.list_messages_before(&channel_or_kwant_id, id, limit).await,
+        (None, None) => db.list_messages(&channel_or_kwant_id, limit).await.map(Some),
+    };
+    match rows {
+        Ok(Some(rows)) => Ok(Json(rows)),
+        Ok(None) => Err(err(StatusCode::NOT_FOUND, "That message isn't in this chat.")),
+        Err(_) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Could not load messages.")),
+    }
 }
 
 pub async fn list_teams(State(state): State<AppState>) -> Result<Json<Vec<Team>>, StatusCode> {
@@ -282,36 +308,32 @@ pub async fn delete_team(
 
 #[derive(Debug, Deserialize)]
 pub struct CancelPayload {
+    pub turn_id: Option<String>,
     pub session_id: Option<String>,
+    pub thread_id: Option<String>,
     pub channel_id: Option<String>,
     pub team_id: Option<String>,
     pub kwant_id: Option<String>,
 }
 
+/// Stops the dispatches for one turn, message, thread, channel, team or direct chat (the first
+/// given), or everything with no body. A direct chat's Stop leaves that agent's threads running.
 pub async fn cancel_chat(
     State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let mut tokens = state.active_cancellations.lock().await;
-    let maybe_session_id = if !body.is_empty() {
-        serde_json::from_slice::<CancelPayload>(&body)
-            .ok()
-            .and_then(|p| p.session_id.or(p.channel_id).or(p.team_id).or(p.kwant_id))
+    let key = if !body.is_empty() {
+        serde_json::from_slice::<CancelPayload>(&body).ok().and_then(|p| {
+            p.turn_id.or(p.session_id).or(p.thread_id).or(p.channel_id).or(p.team_id).or(p.kwant_id)
+        })
     } else {
         None
     };
-
-    if let Some(session_id) = maybe_session_id {
-        if let Some(token) = tokens.remove(&session_id) {
-            token.cancel();
-        }
-    } else {
-        for (_, token) in tokens.drain() {
-            token.cancel();
-        }
+    let cancelled = state.turns.cancel(key.as_deref());
+    if let Some(thread_id) = &key {
+        super::delegation::cancel_thread_delegation(&state, thread_id).await;
     }
-
-    Ok(Json(json!({ "status": "cancelled" })))
+    Ok(Json(json!({ "status": "cancelled", "cancelled": cancelled })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -319,8 +341,14 @@ pub struct SendChatPayload {
     pub channel_id: Option<String>,
     pub kwant_id: Option<String>,
     pub team_id: Option<String>,
+    /// Send into this thread of its agent (then `channel_id`, `kwant_id` and `team_id` are ignored).
+    #[serde(default)]
+    pub thread_id: Option<String>,
     pub prompt: String,
     pub sender_id: String,
+    /// Uploaded files (`POST /api/attachments`) sent with this message, at most 10.
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
 }
 
 async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Option<String> {
@@ -367,16 +395,128 @@ fn routing_candidates(members: &[Kwant]) -> Vec<RoutingCandidate> {
 }
 
 /// Everything a kwant turn needs besides the speaker and the prompt, shared by handoff turns.
-struct TurnScope {
-    state: AppState,
-    channel_id: Option<String>,
-    kwant_id: Option<String>,
-    team_keys: Option<(String, String)>,
-    team_context: Option<crate::drivers::TeamContext>,
-    workspace_dir: Option<std::path::PathBuf>,
+pub(super) struct TurnScope {
+    pub(super) state: AppState,
+    pub(super) channel_id: Option<String>,
+    pub(super) kwant_id: Option<String>,
+    /// Set for turns in a thread; then `channel_id` and `kwant_id` are `None`.
+    pub(super) thread_id: Option<String>,
+    pub(super) team_keys: Option<(String, String)>,
+    pub(super) team_context: Option<crate::drivers::TeamContext>,
+    pub(super) workspace_dir: Option<std::path::PathBuf>,
     /// Kwants in this chat that a speaker may hand the turn to with an @mention.
-    teammates: Vec<Kwant>,
-    cancel_token: CancellationToken,
+    pub(super) teammates: Vec<Kwant>,
+    pub(super) cancel_token: CancellationToken,
+    /// The dispatch this turn belongs to (see [`super::turns`]); its turns are added as keys.
+    pub(super) job_id: String,
+    /// How many delegations deep this chat is: 0 for user chats, 1 in a delegation thread, …
+    pub(super) delegation_depth: i64,
+}
+
+impl TurnScope {
+    /// The chat's id: channel, thread, or the direct chat's kwant (falling back to `speaker`).
+    pub(super) fn context_id(&self, speaker: &Kwant) -> String {
+        self.channel_id
+            .clone()
+            .or_else(|| self.thread_id.clone())
+            .or_else(|| self.kwant_id.clone())
+            .unwrap_or_else(|| speaker.id.clone())
+    }
+
+    fn message(&self, sender_role: &str, sender_id: &str, text: String) -> NewMessage {
+        NewMessage {
+            channel_id: self.channel_id.clone(),
+            direct_kwant_id: self.kwant_id.clone(),
+            sender_role: sender_role.into(),
+            sender_id: sender_id.into(),
+            text,
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 0,
+        }
+    }
+
+    fn extra(&self) -> MessageExtra {
+        MessageExtra { thread_id: self.thread_id.clone(), meta: None }
+    }
+
+    /// Saves a message in this chat (moving a thread up its list).
+    pub(super) async fn save(&self, msg: &NewMessage, meta: Option<serde_json::Value>) -> Option<Message> {
+        let extra = MessageExtra { meta, ..self.extra() };
+        let saved = self.state.db.insert_message_with(msg, &extra).await.ok();
+        if let Some(t) = &self.thread_id {
+            let _ = self.state.db.touch_thread(t).await;
+        }
+        saved
+    }
+}
+
+/// Builds the scope for a turn in a channel, a thread or `kwant`'s direct chat (when both are
+/// `None`): its team, workspace and members, like a user message there would get.
+pub(super) async fn scope_for(
+    state: &AppState,
+    kwant: &Kwant,
+    channel_id: Option<String>,
+    thread_id: Option<String>,
+    job: &super::turns::JobGuard,
+    delegation_depth: i64,
+) -> Result<TurnScope, String> {
+    let all_kwants = state.db.list_kwants().await.map_err(|_| "could not load agents".to_string())?;
+    let channel = match &channel_id {
+        Some(id) => Some(
+            state.db.get_channel(id).await.ok().flatten().ok_or_else(|| "the chat's channel no longer exists".to_string())?,
+        ),
+        None => None,
+    };
+    let thread = match &thread_id {
+        Some(id) => Some(state.db.get_thread(id).await.ok().flatten().ok_or_else(|| "the thread no longer exists".to_string())?),
+        None => None,
+    };
+    let teams = state.db.list_teams().await.unwrap_or_default();
+    let team = match (&thread, channel.as_ref().and_then(|c| c.name.strip_prefix("team-"))) {
+        (Some(t), _) => t.team_id.as_ref().and_then(|id| teams.iter().find(|x| &x.id == id).cloned()),
+        (None, Some(name)) => teams.iter().find(|t| t.name.eq_ignore_ascii_case(name)).cloned(),
+        _ => None,
+    };
+    // Threads are one agent's own conversation: nobody to hand the turn to
+    let member_ids: Vec<String> = match (&thread, &team, &channel) {
+        (Some(_), _, _) => Vec::new(),
+        (None, Some(t), _) => serde_json::from_str(&t.member_kwants).unwrap_or_default(),
+        (None, None, Some(c)) if c.name == "general" => all_kwants.iter().map(|k| k.id.clone()).collect(),
+        (None, None, Some(c)) => serde_json::from_str(&c.member_kwants).unwrap_or_default(),
+        (None, None, None) => Vec::new(),
+    };
+    let teammates: Vec<Kwant> = member_ids.iter().filter_map(|id| all_kwants.iter().find(|k| &k.id == id).cloned()).collect();
+    let workspace_dir = match &team {
+        Some(t) => Some(
+            crate::tools::resolve_or_prepare_workspace(&state.config.data_dir, &t.name, t.workspace_path.as_deref(), t.repo_url.as_deref())
+                .await,
+        ),
+        None => None,
+    };
+    Ok(TurnScope {
+        state: state.clone(),
+        kwant_id: if channel_id.is_none() && thread_id.is_none() { Some(kwant.id.clone()) } else { None },
+        channel_id,
+        thread_id,
+        team_keys: team.as_ref().map(|t| (t.id.clone(), t.name.clone())),
+        team_context: team.as_ref().map(team_context),
+        workspace_dir,
+        teammates,
+        cancel_token: job.token.clone(),
+        job_id: job.id.clone(),
+        delegation_depth,
+    })
+}
+
+fn team_context(t: &Team) -> crate::drivers::TeamContext {
+    crate::drivers::TeamContext {
+        id: t.id.clone(),
+        name: t.name.clone(),
+        description: t.description.clone(),
+        workspace_path: t.workspace_path.clone(),
+        repo_url: t.repo_url.clone(),
+    }
 }
 
 /// Max follow-up turns kwants may trigger by @mentioning each other for one user message.
@@ -387,43 +527,32 @@ fn execute_single_turn(
     state: AppState,
     target_kwant: Kwant,
     payload: SendChatPayload,
-    cancel_token: CancellationToken,
-    session_id: String,
+    job: super::turns::JobGuard,
     team_keys: Option<(String, String)>,
-    kwant_id: Option<String>,
     team_context: Option<crate::drivers::TeamContext>,
     workspace_dir: Option<std::path::PathBuf>,
     teammates: Vec<Kwant>,
 ) {
-    let active_cancellations = state.active_cancellations.clone();
     let scope = TurnScope {
         channel_id: payload.channel_id.clone(),
-        kwant_id: kwant_id.or_else(|| payload.kwant_id.clone()),
+        kwant_id: payload.kwant_id.clone(),
+        thread_id: None,
         team_keys,
         team_context,
         workspace_dir,
         teammates,
-        cancel_token,
+        cancel_token: job.token.clone(),
+        job_id: job.id.clone(),
+        delegation_depth: 0,
         state,
     };
     let prompt = payload.prompt.clone();
 
     tokio::spawn(async move {
+        // Ends the job (its cancel keys) when the turn and its handoffs are done
+        let _job = job;
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, prompt.clone(), TurnOpts::default()).await {
             run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
-        }
-
-        let mut tokens = active_cancellations.lock().await;
-        tokens.remove(&session_id);
-        if let Some(cid) = &scope.channel_id {
-            tokens.remove(cid);
-        }
-        if let Some(kid) = &scope.kwant_id {
-            tokens.remove(kid);
-        }
-        if let Some((team_id, team_name)) = &scope.team_keys {
-            tokens.remove(team_id);
-            tokens.remove(team_name);
         }
     });
 }
@@ -438,65 +567,15 @@ pub(super) async fn run_routine_turn(
     channel_id: Option<String>,
     prompt: String,
 ) -> Result<Option<String>, String> {
-    let all_kwants = state.db.list_kwants().await.map_err(|_| "could not load agents".to_string())?;
-    let channel = match &channel_id {
-        Some(id) => Some(
-            state.db.get_channel(id).await.ok().flatten().ok_or_else(|| "the routine's channel no longer exists".to_string())?,
-        ),
-        None => None,
-    };
-    let team = match channel.as_ref().and_then(|c| c.name.strip_prefix("team-")) {
-        Some(name) => state.db.list_teams().await.unwrap_or_default().into_iter().find(|t| t.name.eq_ignore_ascii_case(name)),
-        None => None,
-    };
-    let member_ids: Vec<String> = match (&team, &channel) {
-        (Some(t), _) => serde_json::from_str(&t.member_kwants).unwrap_or_default(),
-        (None, Some(c)) if c.name == "general" => all_kwants.iter().map(|k| k.id.clone()).collect(),
-        (None, Some(c)) => serde_json::from_str(&c.member_kwants).unwrap_or_default(),
-        (None, None) => Vec::new(),
-    };
-    let teammates: Vec<Kwant> = member_ids.iter().filter_map(|id| all_kwants.iter().find(|k| &k.id == id).cloned()).collect();
-    let workspace_dir = match &team {
-        Some(t) => Some(
-            crate::tools::resolve_or_prepare_workspace(&state.config.data_dir, &t.name, t.workspace_path.as_deref(), t.repo_url.as_deref())
-                .await,
-        ),
-        None => None,
-    };
-    let cancel_token = CancellationToken::new();
-    let keys: Vec<String> = match &channel_id {
-        Some(c) => vec![c.clone()],
-        None => vec![kwant.id.clone()],
-    };
-    {
-        let mut tokens = state.active_cancellations.lock().await;
-        for key in &keys {
-            tokens.insert(key.clone(), cancel_token.clone());
-        }
-    }
-    let scope = TurnScope {
-        state: state.clone(),
-        kwant_id: if channel_id.is_none() { Some(kwant.id.clone()) } else { None },
-        channel_id,
-        team_keys: team.as_ref().map(|t| (t.id.clone(), t.name.clone())),
-        team_context: team.as_ref().map(|t| crate::drivers::TeamContext {
-            id: t.id.clone(),
-            name: t.name.clone(),
-            description: t.description.clone(),
-            workspace_path: t.workspace_path.clone(),
-            repo_url: t.repo_url.clone(),
-        }),
-        workspace_dir,
-        teammates,
-        cancel_token: cancel_token.clone(),
-    };
+    let context_key = channel_id.clone().unwrap_or_else(|| kwant.id.clone());
+    let job = state.turns.start_job([context_key.clone()]);
+    let scope = scope_for(state, kwant, channel_id, None, &job, 0).await?;
     let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts::default()).await;
-    let outcome = match reply {
+    match reply {
         Ok(text) => {
-            let context_id = keys[0].clone();
             let reply_id = state
                 .db
-                .list_messages(&context_id, 10)
+                .list_messages(&context_key, 10)
                 .await
                 .unwrap_or_default()
                 .into_iter()
@@ -506,14 +585,9 @@ pub(super) async fn run_routine_turn(
             run_handoffs(&scope, std::slice::from_ref(&kwant.id), &[(kwant.clone(), text)], &prompt).await;
             Ok(reply_id)
         }
-        Err(_) if cancel_token.is_cancelled() => Err("stopped by the user".into()),
+        Err(_) if job.token.is_cancelled() => Err("stopped by the user".into()),
         Err(why) => Err(format!("the agent's turn failed: {why}")),
-    };
-    let mut tokens = state.active_cancellations.lock().await;
-    for key in &keys {
-        tokens.remove(key);
     }
-    outcome
 }
 
 /// Lets teammates that kwants @mentioned in `replies` answer in turn, so kwants can delegate to each other.
@@ -541,11 +615,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
     }
 
     let events = scope.state.event_sender.clone();
-    let context_id = scope
-        .channel_id
-        .clone()
-        .or_else(|| scope.kwant_id.clone())
-        .unwrap_or_else(|| replies[0].0.id.clone());
+    let context_id = scope.context_id(&replies[0].0);
     let total = |queue_len: usize, done: usize| (1 + done + queue_len).min(1 + MAX_HANDOFFS);
     let _ = events.send(RuntimeEvent::DiscussionStarted {
         team_id: context_id,
@@ -709,7 +779,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
 
 /// Per-turn tweaks for turns that kwnt drives itself (team discussions).
 #[derive(Default)]
-struct TurnOpts {
+pub(super) struct TurnOpts {
     /// Saved as the message's `reasoning_content` instead of the driver's reasoning.
     label: Option<String>,
     /// Text checked for a URL to open in the bot browser; defaults to the prompt.
@@ -734,29 +804,52 @@ async fn run_kwant_turn(
 const MAX_FAILURE_CHARS: usize = 500;
 
 /// [`run_kwant_turn`], but a failed turn says why: the driver's error or the provider's refusal.
-async fn try_kwant_turn(
+/// The turn first waits for a slot under the per-agent and server-wide caps (see [`super::turns`]).
+pub(super) async fn try_kwant_turn(
     scope: &TurnScope,
     target_kwant: &Kwant,
     prompt: String,
     opts: TurnOpts,
 ) -> Result<String, String> {
-    let context_id = scope
-        .channel_id
-        .clone()
-        .or_else(|| scope.kwant_id.clone())
-        .unwrap_or_else(|| target_kwant.id.clone());
-    let _ = scope.state.event_sender.send(RuntimeEvent::TurnStarted {
+    let tag = crate::drivers::events::TurnTag {
+        turn_id: uuid::Uuid::new_v4().to_string(),
         kwant_id: target_kwant.id.clone(),
-        context_id: Some(context_id.clone()),
-    });
-    // Sends turn_ended even if this future is dropped mid-turn
+        context_id: scope.context_id(target_kwant),
+        thread_id: scope.thread_id.clone(),
+    };
+    let turns = &scope.state.turns;
+    turns.add_keys(&scope.job_id, std::slice::from_ref(&tag.turn_id));
+    // Sends turn_ended even if this future is dropped, queued or mid-turn
     let mut ended = TurnEndedGuard {
         sender: scope.state.event_sender.clone(),
-        kwant_id: target_kwant.id.clone(),
-        context_id,
+        turns: turns.clone(),
+        tag: tag.clone(),
         outcome: "cancelled",
     };
-    let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts).await;
+    let Some(_slot) = turns.acquire(&tag, &scope.cancel_token, &scope.state.event_sender).await else {
+        return Err("stopped by the user".into());
+    };
+    turns.set_turn(super::turns::ActiveTurn {
+        turn_id: tag.turn_id.clone(),
+        kwant_id: tag.kwant_id.clone(),
+        context_id: tag.context_id.clone(),
+        thread_id: tag.thread_id.clone(),
+        state: "running".into(),
+        since: chrono::Utc::now(),
+    });
+    let _ = scope.state.event_sender.send(RuntimeEvent::TurnStarted {
+        kwant_id: target_kwant.id.clone(),
+        context_id: Some(tag.context_id.clone()),
+        turn_id: Some(tag.turn_id.clone()),
+        thread_id: tag.thread_id.clone(),
+    });
+    if scope.cancel_token.is_cancelled() {
+        return Err("stopped by the user".into());
+    }
+    let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts, &tag).await;
+    if scope.cancel_token.is_cancelled() {
+        super::questions::cancel_for_turn(&scope.state, &tag.turn_id).await;
+    }
     ended.outcome = match (&reply, scope.cancel_token.is_cancelled()) {
         (Ok(_), _) => "completed",
         (Err(_), true) => "cancelled",
@@ -790,18 +883,34 @@ fn scrub_urls(text: &str) -> String {
 
 struct TurnEndedGuard {
     sender: tokio::sync::broadcast::Sender<RuntimeEvent>,
-    kwant_id: String,
-    context_id: String,
+    turns: super::turns::TurnRegistry,
+    tag: crate::drivers::events::TurnTag,
     outcome: &'static str,
 }
 
 impl Drop for TurnEndedGuard {
     fn drop(&mut self) {
+        self.turns.end_turn(&self.tag.turn_id);
+        let tag = std::mem::take(&mut self.tag);
         let _ = self.sender.send(RuntimeEvent::TurnEnded {
-            kwant_id: std::mem::take(&mut self.kwant_id),
-            context_id: Some(std::mem::take(&mut self.context_id)),
+            kwant_id: tag.kwant_id,
+            context_id: Some(tag.context_id),
             outcome: self.outcome.to_string(),
+            turn_id: Some(tag.turn_id),
+            thread_id: tag.thread_id,
         });
+    }
+}
+
+/// Sends a turn's events tagged with the turn and its chat.
+struct TurnEvents {
+    sender: tokio::sync::broadcast::Sender<RuntimeEvent>,
+    tag: crate::drivers::events::TurnTag,
+}
+
+impl TurnEvents {
+    fn send(&self, event: RuntimeEvent) {
+        let _ = self.sender.send(RuntimeEvent::Scoped { tag: self.tag.clone(), event: Box::new(event) });
     }
 }
 
@@ -810,9 +919,10 @@ async fn run_kwant_turn_inner(
     target_kwant: &Kwant,
     prompt: String,
     opts: TurnOpts,
+    tag: &crate::drivers::events::TurnTag,
 ) -> Result<String, String> {
     let state = &scope.state;
-    let event_broadcast = state.event_sender.clone();
+    let event_broadcast = TurnEvents { sender: state.event_sender.clone(), tag: tag.clone() };
     let db = state.db.clone();
     let router = state.router.clone();
     let channel_id = scope.channel_id.clone();
@@ -838,7 +948,7 @@ async fn run_kwant_turn_inner(
         let target_model = route.selected_model;
         let effort_level = route.effort_level;
 
-        let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
+        event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
             "🔮 Laya Router: model='{}', effort='{}' ({:.0}% conf) — {}",
             target_model,
             effort_level,
@@ -846,11 +956,7 @@ async fn run_kwant_turn_inner(
             route.reasoning
         )));
 
-        let context_id = channel_id
-            .as_deref()
-            .or(kwant_id.as_deref())
-            .unwrap_or(&target_kwant.id)
-            .to_string();
+        let context_id = tag.context_id.clone();
 
         let history = db.list_messages(&context_id, 20).await.unwrap_or_default();
 
@@ -878,7 +984,7 @@ async fn run_kwant_turn_inner(
         let target_url_opt = detect_url_with_context(nav_prompt, active_browser_url.as_deref());
 
         if let Some(target_url) = target_url_opt {
-            let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
+            event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
                 "🌐 Navigating bot browser to {}...",
                 target_url
             )));
@@ -887,14 +993,14 @@ async fn run_kwant_turn_inner(
                 Ok(nav) => {
                     let page_text = ctrl.extract_content().await.unwrap_or_default();
                     let preview = truncate_chars(&page_text, 3000);
-                    let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
+                    event_broadcast.send(RuntimeEvent::BrowserNavigated {
                         team_id: sandbox_target.clone(),
                         url: nav.url.clone(),
                         title: nav.title.clone(),
                         status_code: nav.status_code,
                     });
                     if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
-                        let _ = event_broadcast.send(RuntimeEvent::BrowserScreenshot {
+                        event_broadcast.send(RuntimeEvent::BrowserScreenshot {
                             team_id: sandbox_target.clone(),
                             url: nav.url.clone(),
                             image_base64: b64,
@@ -917,7 +1023,7 @@ async fn run_kwant_turn_inner(
                 Err(crate::sandbox::BrowserError::Navigation(reason)) => {
                     let shown_url = ctrl.current_url.lock().await.clone().unwrap_or_else(|| target_url.clone());
                     if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
-                        let _ = event_broadcast.send(RuntimeEvent::BrowserScreenshot {
+                        event_broadcast.send(RuntimeEvent::BrowserScreenshot {
                             team_id: sandbox_target.clone(),
                             url: shown_url,
                             image_base64: b64,
@@ -958,7 +1064,21 @@ async fn run_kwant_turn_inner(
         };
         // The agents' own continuity tools, for engines that can call MCP tools
         let self_scope = (engine.is_some() && super::continuity::agent_tools_enabled(state).await).then(|| {
-            super::continuity::SelfScope { kwant_id: target_kwant.id.clone(), kwant_name: target_kwant.name.clone() }
+            super::continuity::SelfScope {
+                kwant_id: target_kwant.id.clone(),
+                kwant_name: target_kwant.name.clone(),
+                origin: Some(super::continuity::TurnOrigin {
+                    channel_id: channel_id.clone(),
+                    direct_kwant_id: kwant_id.clone(),
+                    thread_id: scope.thread_id.clone(),
+                    team_id: scope.team_context.as_ref().map(|t| t.id.clone()),
+                    member_ids: scope.teammates.iter().map(|k| k.id.clone()).collect(),
+                    depth: scope.delegation_depth,
+                }),
+                cancel: Some(cancel_token.clone()),
+                turn_id: Some(tag.turn_id.clone()),
+                workspace: scope.workspace_dir.clone(),
+            }
         });
         let mcp_turn = super::mcp_runtime::prepare_turn_with_self(
             state,
@@ -978,7 +1098,8 @@ async fn run_kwant_turn_inner(
             channel_id.as_deref(),
             with_tools,
         )
-        .await;
+        .await
+            + &super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
         let turn_input = TurnInput {
             browser_api_url: Some(format!(
                 "http://127.0.0.1:{}/api/sandbox/{}",
@@ -1047,7 +1168,7 @@ async fn run_kwant_turn_inner(
                                     _ => false,
                                 };
                                 side_effects |= visible;
-                                let _ = event_broadcast.send(event);
+                                event_broadcast.send(event);
                             }
                             None => break,
                         }
@@ -1069,7 +1190,7 @@ async fn run_kwant_turn_inner(
                 let next = attempts.get(i + 1).and_then(|n| n.as_ref());
                 if let (Some(from), Some(to), false) = (profile, next, side_effects) {
                     let notice = super::profile_turn::switch_notice(from, to, &failure);
-                    let _ = event_broadcast.send(RuntimeEvent::ProfileSwitched {
+                    event_broadcast.send(RuntimeEvent::ProfileSwitched {
                         kwant_id: target_kwant.id.clone(),
                         from_profile_id: from.id.clone(),
                         from_name: from.name.clone(),
@@ -1078,7 +1199,7 @@ async fn run_kwant_turn_inner(
                         class: failure.class.as_str().into(),
                         retry_at: failure.retry_at,
                     });
-                    let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta(notice.clone()));
+                    event_broadcast.send(RuntimeEvent::ThinkingDelta(notice.clone()));
                     tracing::info!(kwant = %target_kwant.id, from = %from.id, to = %to.id, class = failure.class.as_str(), "turn moved to another profile");
                     notices.push(notice);
                     continue;
@@ -1094,8 +1215,8 @@ async fn run_kwant_turn_inner(
                         failure.detail
                     ),
                 };
-                let _ = event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
-                let _ = event_broadcast.send(RuntimeEvent::TurnComplete {
+                event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
+                event_broadcast.send(RuntimeEvent::TurnComplete {
                     tokens: 0,
                     duration_ms: turn_start.elapsed().as_millis() as u64,
                     kwant_id: Some(target_kwant.id.clone()),
@@ -1111,14 +1232,14 @@ async fn run_kwant_turn_inner(
             }
             match &result {
                 Ok(Err(e)) => {
-                    let _ = event_broadcast.send(RuntimeEvent::Error {
+                    event_broadcast.send(RuntimeEvent::Error {
                         code: "driver_error".into(),
                         message: e.to_string(),
                         kwant_id: Some(target_kwant.id.clone()),
                     });
                 }
                 Err(_) => {
-                    let _ = event_broadcast.send(RuntimeEvent::Error {
+                    event_broadcast.send(RuntimeEvent::Error {
                         code: "driver_crashed".into(),
                         message: "the model driver stopped unexpectedly".into(),
                         kwant_id: Some(target_kwant.id.clone()),
@@ -1127,7 +1248,7 @@ async fn run_kwant_turn_inner(
                 Ok(Ok(_)) => {}
             }
             if let Some((tokens, duration_ms)) = held_complete {
-                let _ = event_broadcast.send(RuntimeEvent::TurnComplete {
+                event_broadcast.send(RuntimeEvent::TurnComplete {
                     tokens,
                     duration_ms,
                     kwant_id: Some(target_kwant.id.clone()),
@@ -1152,20 +1273,14 @@ async fn run_kwant_turn_inner(
             })
         };
         if cancelled {
-            let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta("⏹️ Cancelled by user".into()));
+            event_broadcast.send(RuntimeEvent::ThinkingDelta("⏹️ Cancelled by user".into()));
             return Err("stopped by the user".into());
         } else if let Some(text) = gave_up {
             let msg = NewMessage {
-                channel_id: channel_id.clone(),
-                direct_kwant_id: kwant_id.clone(),
-                sender_role: "kwant".into(),
-                sender_id: target_kwant.name.clone(),
-                text: text.clone(),
                 reasoning_content: with_notices(opts.label.clone()),
-                tool_calls: None,
-                tokens_used: 0,
+                ..scope.message("kwant", &target_kwant.name, text.clone())
             };
-            let _ = db.insert_message(&msg).await;
+            scope.save(&msg, None).await;
             return Err(text);
         } else if let Some(Ok(Ok(output))) = driver_result {
             // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM
@@ -1174,14 +1289,14 @@ async fn run_kwant_turn_inner(
                     let curr = ctrl.current_url.lock().await.clone().unwrap_or_default();
                     if curr != bot_url && !bot_url.contains("localhost") && !bot_url.contains("127.0.0.1") {
                         if let Ok(nav) = ctrl.navigate(&bot_url).await {
-                            let _ = event_broadcast.send(RuntimeEvent::BrowserNavigated {
+                            event_broadcast.send(RuntimeEvent::BrowserNavigated {
                                 team_id: sandbox_target.clone(),
                                 url: nav.url.clone(),
                                 title: nav.title.clone(),
                                 status_code: nav.status_code,
                             });
                             if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
-                                let _ = event_broadcast.send(RuntimeEvent::BrowserScreenshot {
+                                event_broadcast.send(RuntimeEvent::BrowserScreenshot {
                                     team_id: sandbox_target.clone(),
                                     url: nav.url.clone(),
                                     image_base64: b64,
@@ -1209,16 +1324,12 @@ async fn run_kwant_turn_inner(
             };
             if let Some((text, reasoning_content)) = saved {
                 let asst_msg = NewMessage {
-                    channel_id: channel_id.clone(),
-                    direct_kwant_id: kwant_id.clone(),
-                    sender_role: "kwant".into(),
-                    sender_id: target_kwant.name.clone(),
-                    text,
                     reasoning_content,
                     tool_calls: mcp_records.map(serde_json::Value::Array),
                     tokens_used: output.tokens_used as i64,
+                    ..scope.message("kwant", &target_kwant.name, text)
                 };
-                let _ = db.insert_message(&asst_msg).await;
+                scope.save(&asst_msg, None).await;
             }
             return Ok(output.text);
         }
@@ -1232,8 +1343,12 @@ async fn run_kwant_turn_inner(
 
 pub async fn send_chat(
     State(state): State<AppState>,
-    Json(payload): Json<SendChatPayload>,
+    Json(mut payload): Json<SendChatPayload>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    let uploads = super::attachments::check_uploads(&state, &payload.attachment_ids).await?;
+    if let Some(thread_id) = payload.thread_id.clone() {
+        return send_to_thread(state, thread_id, payload, uploads).await;
+    }
     let all_kwants = state
         .db
         .list_kwants()
@@ -1382,28 +1497,33 @@ pub async fn send_chat(
         tool_calls: None,
         tokens_used: payload.prompt.len() as i64 / 4,
     };
+    let user_extra = MessageExtra {
+        thread_id: None,
+        meta: (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)})),
+    };
     let saved_user_msg = state
         .db
-        .insert_message(&user_msg)
+        .insert_message_with(&user_msg, &user_extra)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let note = super::attachments::attach_to_message(
+        &state,
+        &uploads,
+        &saved_user_msg.id,
+        payload.channel_id.as_deref(),
+        payload.kwant_id.as_deref(),
+        None,
+    )
+    .await;
+    payload.prompt.push_str(&note);
 
-    let cancel_token = CancellationToken::new();
-    let session_id = saved_user_msg.id.clone();
-    {
-        let mut tokens = state.active_cancellations.lock().await;
-        tokens.insert(session_id.clone(), cancel_token.clone());
-        if let Some(cid) = &payload.channel_id {
-            tokens.insert(cid.clone(), cancel_token.clone());
-        }
-        if let Some(kid) = &payload.kwant_id {
-            tokens.insert(kid.clone(), cancel_token.clone());
-        }
-        if let Some(ref team) = target_team {
-            tokens.insert(team.id.clone(), cancel_token.clone());
-            tokens.insert(team.name.clone(), cancel_token.clone());
-        }
+    // Stop answers to this message, chat or team; other dispatches (threads, other chats) keep going
+    let mut keys = vec![saved_user_msg.id.clone()];
+    keys.extend(payload.channel_id.iter().chain(payload.kwant_id.iter()).cloned());
+    if let Some(team) = target_team.as_ref().or(active_team.as_ref()) {
+        keys.extend([team.id.clone(), team.name.clone()]);
     }
+    let job = state.turns.start_job(keys);
 
     // Branch: Team routing vs Single Kwant routing
     if let Some(team) = target_team {
@@ -1450,15 +1570,12 @@ pub async fn send_chat(
                     target_kwant.name, target_kwant.title, reason
                 )));
 
-                let kwant_id_cleanup = payload.kwant_id.clone();
                 execute_single_turn(
                     state.clone(),
                     target_kwant.clone(),
                     payload,
-                    cancel_token,
-                    session_id,
+                    job,
                     Some((team.id.clone(), team.name.clone())),
-                    kwant_id_cleanup,
                     active_team_context,
                     workspace_dir.clone(),
                     members.clone(),
@@ -1506,36 +1623,21 @@ pub async fn send_chat(
                     state: state.clone(),
                     channel_id: payload.channel_id.clone(),
                     kwant_id: payload.kwant_id.clone(),
+                    thread_id: None,
                     team_keys: Some((team.id.clone(), team.name.clone())),
-                    team_context: Some(crate::drivers::TeamContext {
-                        id: team.id.clone(),
-                        name: team.name.clone(),
-                        description: team.description.clone(),
-                        workspace_path: team.workspace_path.clone(),
-                        repo_url: team.repo_url.clone(),
-                    }),
+                    team_context: Some(team_context(&team)),
                     workspace_dir: workspace_dir.clone(),
                     teammates: members.clone(),
-                    cancel_token: cancel_token.clone(),
+                    cancel_token: job.token.clone(),
+                    job_id: job.id.clone(),
+                    delegation_depth: 0,
                 };
                 let team_clone = team.clone();
                 let prompt = payload.prompt.clone();
-                let session_id_clone = session_id.clone();
-                let active_cancellations = state.active_cancellations.clone();
 
                 tokio::spawn(async move {
+                    let _job = job;
                     run_discussion(&scope, &team_clone, planned, &prompt).await;
-
-                    let mut tokens = active_cancellations.lock().await;
-                    tokens.remove(&session_id_clone);
-                    if let Some(cid) = &scope.channel_id {
-                        tokens.remove(cid);
-                    }
-                    if let Some(kid) = &scope.kwant_id {
-                        tokens.remove(kid);
-                    }
-                    tokens.remove(&team_clone.id);
-                    tokens.remove(&team_clone.name);
                 });
 
                 Ok(Json(json!({
@@ -1616,15 +1718,12 @@ pub async fn send_chat(
         .ok_or(StatusCode::BAD_REQUEST)?;
 
         let team_keys = active_team.as_ref().map(|t| (t.id.clone(), t.name.clone()));
-        let kwant_id_cleanup = payload.kwant_id.clone();
         execute_single_turn(
             state.clone(),
             target_kwant.clone(),
             payload,
-            cancel_token,
-            session_id,
+            job,
             team_keys,
-            kwant_id_cleanup,
             active_team_context,
             workspace_dir,
             chat_teammates,
@@ -1636,6 +1735,54 @@ pub async fn send_chat(
             "kwant": target_kwant.name
         })))
     }
+}
+
+/// `/api/chat/send` into a thread: the thread's agent answers there, with only that thread's history.
+async fn send_to_thread(
+    state: AppState,
+    thread_id: String,
+    payload: SendChatPayload,
+    uploads: Vec<crate::db::attachments::Attachment>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let thread = state.db.get_thread(&thread_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
+    if thread.archived {
+        return Err(StatusCode::CONFLICT);
+    }
+    let kwant = state.db.get_kwant(&thread.kwant_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
+    let depth = match state.db.delegation_for_thread(&thread.id).await.ok().flatten() {
+        Some(d) => d.depth,
+        None => 0,
+    };
+    let user_msg = NewMessage {
+        channel_id: None,
+        direct_kwant_id: None,
+        sender_role: "user".into(),
+        sender_id: payload.sender_id.clone(),
+        text: payload.prompt.clone(),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: payload.prompt.len() as i64 / 4,
+    };
+    let meta = (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)}));
+    let extra = MessageExtra { thread_id: Some(thread.id.clone()), meta };
+    let saved = state.db.insert_message_with(&user_msg, &extra).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let _ = state.db.touch_thread(&thread.id).await;
+    let note = super::attachments::attach_to_message(&state, &uploads, &saved.id, None, None, Some(&thread.id)).await;
+
+    let job = state.turns.start_job([saved.id.clone(), thread.id.clone()]);
+    let scope = scope_for(&state, &kwant, None, Some(thread.id.clone()), &job, depth).await.map_err(|_| StatusCode::NOT_FOUND)?;
+    let prompt = payload.prompt + &note;
+    let target = kwant.clone();
+    tokio::spawn(async move {
+        let _job = job;
+        run_kwant_turn(&scope, &target, prompt, TurnOpts::default()).await;
+    });
+    Ok(Json(json!({
+        "status": "dispatched",
+        "user_message_id": saved.id,
+        "kwant": kwant.name,
+        "thread_id": thread.id,
+    })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1690,9 +1837,21 @@ pub struct SettingsResponse {
     /// "••••••••" when set: ntfy topics and webhook tokens are secrets.
     pub notify_webhook_url: String,
     pub notify_on: Vec<String>,
+    /// Turns one agent runs at once (in different chats/threads); more wait in a queue.
+    pub max_turns_per_agent: usize,
+    /// Turns the whole server runs at once.
+    pub max_turns_global: usize,
+    /// Minutes before an unfinished delegation gets a "still working" note; 0 = never.
+    pub delegation_follow_up_minutes: i64,
+    /// Whether turns get the agents' own tools (history search, memory); see
+    /// [`super::continuity::agent_tools_enabled`].
+    pub agent_tools: bool,
 }
 
+/// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
+/// being dropped.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SaveSettingsPayload {
     pub anthropic_api_key: Option<String>,
     pub xai_api_key: Option<String>,
@@ -1701,6 +1860,11 @@ pub struct SaveSettingsPayload {
     /// https only; "" removes it, the mask keeps it.
     pub notify_webhook_url: Option<String>,
     pub notify_on: Option<Vec<String>>,
+    pub max_turns_per_agent: Option<usize>,
+    pub max_turns_global: Option<usize>,
+    pub delegation_follow_up_minutes: Option<i64>,
+    /// Stored as the `agent_tools` setting: "on" or "off".
+    pub agent_tools: Option<bool>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -1727,14 +1891,44 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         codex_cli_path: codex_bin,
         notify_webhook_url,
         notify_on,
+        max_turns_per_agent: state.turns.limiter.limits().0,
+        max_turns_global: state.turns.limiter.limits().1,
+        delegation_follow_up_minutes: super::delegation::follow_up_minutes(&state).await,
+        agent_tools: super::continuity::agent_tools_enabled(&state).await,
     }))
+}
+
+/// Applies the saved turn limits (at startup); missing or bad values keep the defaults.
+pub async fn load_turn_limits(state: &AppState) {
+    use super::turns::*;
+    let read = |key: &'static str| async move { state.db.get_setting(key).await.ok().flatten().and_then(|v| v.parse::<usize>().ok()) };
+    let per_agent = read(PER_AGENT_SETTING).await.unwrap_or(DEFAULT_PER_AGENT).clamp(1, MAX_PER_AGENT);
+    let global = read(GLOBAL_SETTING).await.unwrap_or(DEFAULT_GLOBAL).clamp(1, MAX_GLOBAL);
+    state.turns.limiter.set_limits(per_agent, global);
 }
 
 pub async fn save_settings(
     State(state): State<AppState>,
-    Json(payload): Json<SaveSettingsPayload>,
+    payload: Result<Json<SaveSettingsPayload>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    // Checked first, so a bad webhook URL saves nothing
+    use super::turns::{GLOBAL_SETTING, MAX_GLOBAL, MAX_PER_AGENT, PER_AGENT_SETTING};
+    let bad = |m: String| Err((StatusCode::BAD_REQUEST, Json(json!({ "error": m }))));
+    // 400 rather than axum's 422, like the other refusals here
+    let Json(payload) = match payload {
+        Ok(p) => p,
+        Err(e) => return bad(e.body_text()),
+    };
+    // Checked first, so a bad value saves nothing
+    if payload.max_turns_per_agent.is_some_and(|n| !(1..=MAX_PER_AGENT).contains(&n)) {
+        return bad(format!("max_turns_per_agent must be 1–{MAX_PER_AGENT}"));
+    }
+    if payload.max_turns_global.is_some_and(|n| !(1..=MAX_GLOBAL).contains(&n)) {
+        return bad(format!("max_turns_global must be 1–{MAX_GLOBAL}"));
+    }
+    let max_minutes = super::delegation::MAX_FOLLOW_UP_MINUTES;
+    if payload.delegation_follow_up_minutes.is_some_and(|m| !(0..=max_minutes).contains(&m)) {
+        return bad(format!("delegation_follow_up_minutes must be 0–{max_minutes}"));
+    }
     if let Err(e) =
         super::continuity::save_notify_settings(&state, payload.notify_webhook_url, payload.notify_on).await
     {
@@ -1759,6 +1953,20 @@ pub async fn save_settings(
         if !url.is_empty() {
             let _ = state.db.set_setting("ollama_url", &url).await;
         }
+    }
+    if payload.max_turns_per_agent.is_some() || payload.max_turns_global.is_some() {
+        let (per_agent, global) = state.turns.limiter.limits();
+        let per_agent = payload.max_turns_per_agent.unwrap_or(per_agent);
+        let global = payload.max_turns_global.unwrap_or(global);
+        let _ = state.db.set_setting(PER_AGENT_SETTING, &per_agent.to_string()).await;
+        let _ = state.db.set_setting(GLOBAL_SETTING, &global.to_string()).await;
+        state.turns.limiter.set_limits(per_agent, global);
+    }
+    if let Some(m) = payload.delegation_follow_up_minutes {
+        let _ = state.db.set_setting(super::delegation::FOLLOW_UP_SETTING, &m.to_string()).await;
+    }
+    if let Some(on) = payload.agent_tools {
+        let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;
     }
 
     Ok(Json(json!({ "status": "saved" })))

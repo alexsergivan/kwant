@@ -39,6 +39,12 @@ pub enum RuntimeEvent {
     TurnStarted {
         kwant_id: String,
         context_id: Option<String>,
+        /// This turn; matches `turn_id` on the turn's streamed events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        /// Set when the turn runs in a thread (then `context_id` is the thread id too).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
     },
     /// A kwant's turn is over, however it ended: "completed", "failed" or "cancelled".
     #[serde(rename = "turn_ended", alias = "TurnEnded")]
@@ -46,6 +52,48 @@ pub enum RuntimeEvent {
         kwant_id: String,
         context_id: Option<String>,
         outcome: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+    },
+    /// A turn is waiting for a free slot: its agent already runs as many turns as allowed
+    /// (`reason` "agent_busy") or the whole server does ("server_busy"). It starts on its own,
+    /// with `turn_started`; it is never dropped. `position` is 1 for the next to start.
+    #[serde(rename = "turn_queued", alias = "TurnQueued")]
+    TurnQueued {
+        turn_id: String,
+        kwant_id: String,
+        context_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+        position: usize,
+        reason: String,
+    },
+    /// A thread was created, renamed or archived.
+    #[serde(rename = "thread_updated", alias = "ThreadUpdated")]
+    ThreadUpdated { thread: Value },
+    /// A delegation changed state; `delegation` is the whole record (see `crate::db::threads`).
+    #[serde(rename = "delegation_updated", alias = "DelegationUpdated")]
+    DelegationUpdated { delegation: Value },
+    /// kwnt wrote a message outside a streamed turn (delegation notes and results); `message` is
+    /// the saved message, with `channel_id` / `direct_kwant_id` / `thread_id` saying which chat.
+    #[serde(rename = "message_added", alias = "MessageAdded")]
+    MessageAdded { message: Value },
+    /// A skill was proposed, reviewed, edited or deleted; `skill` is the whole record (or
+    /// `{id, kwant_id, deleted: true}`). See `crate::db::skills`.
+    #[serde(rename = "skill_updated", alias = "SkillUpdated")]
+    SkillUpdated { skill: Value },
+    /// A question an agent asked the user was asked, answered or cancelled.
+    #[serde(rename = "question_updated", alias = "QuestionUpdated")]
+    QuestionUpdated { question: Value },
+    /// An event from inside one turn, tagged with the turn and its chat. On the SSE wire it is
+    /// the inner event with `turn_id`, `kwant_id`, `context_id` and `thread_id` added at the top
+    /// level (see [`RuntimeEvent::to_wire`]), so clients that ignore the tags still work.
+    #[serde(rename = "scoped")]
+    Scoped {
+        tag: TurnTag,
+        event: Box<RuntimeEvent>,
     },
     /// A turn moved to another profile of the same engine because the first ran out of quota
     /// or was signed out. `class` is "quota" or "auth".
@@ -151,6 +199,46 @@ pub enum RuntimeEvent {
         title: String,
         body: String,
     },
+}
+
+/// Which turn and chat an event belongs to.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TurnTag {
+    pub turn_id: String,
+    pub kwant_id: String,
+    /// Channel id, kwant id (direct chat) or thread id.
+    pub context_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+}
+
+impl RuntimeEvent {
+    /// The JSON sent to SSE clients.
+    pub fn to_wire(&self) -> Value {
+        match self {
+            RuntimeEvent::Scoped { tag, event } => {
+                let mut v = event.to_wire();
+                if let Value::Object(map) = &mut v {
+                    map.insert("turn_id".into(), Value::String(tag.turn_id.clone()));
+                    map.entry("kwant_id").or_insert_with(|| Value::String(tag.kwant_id.clone()));
+                    map.insert("context_id".into(), Value::String(tag.context_id.clone()));
+                    if let Some(t) = &tag.thread_id {
+                        map.insert("thread_id".into(), Value::String(t.clone()));
+                    }
+                }
+                v
+            }
+            other => serde_json::to_value(other).unwrap_or(Value::Null),
+        }
+    }
+
+    /// The event without its turn tag.
+    pub fn unscoped(&self) -> &RuntimeEvent {
+        match self {
+            RuntimeEvent::Scoped { event, .. } => event.unscoped(),
+            other => other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

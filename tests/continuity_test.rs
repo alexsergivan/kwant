@@ -665,6 +665,8 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
         Some(SelfScope {
             kwant_id: k1.id.clone(),
             kwant_name: k1.name.clone(),
+            origin: None,
+            ..Default::default()
         }),
     )
     .await
@@ -755,7 +757,9 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
             "search_history",
             "memory_add",
             "memory_update",
-            "memory_remove"
+            "memory_remove",
+            "skill_propose",
+            "skill_get"
         ]
     );
 
@@ -1103,6 +1107,89 @@ async fn interrupted_runs_are_failed_on_start() {
     assert!(runs[0].ended_at.is_some());
 }
 
+// History beyond the latest page (search jumps)
+
+#[tokio::test]
+async fn messages_load_around_and_before_a_message() {
+    let (app, state, _tmp) = setup().await;
+    let kwant = state.db.list_kwants().await.unwrap().remove(0);
+    let channel = |name: &str| NewChannel {
+        name: name.into(),
+        description: None,
+        lead_kwant_id: kwant.id.clone(),
+        member_kwants: vec![kwant.id.clone()],
+        routing_mode: "auto".into(),
+    };
+    let chan = state.db.create_channel(&channel("history")).await.unwrap();
+    let other = state.db.create_channel(&channel("other")).await.unwrap();
+    let mut ids = Vec::new();
+    for i in 0..250 {
+        let m = state.db.insert_message(&msg(Some(&chan.id), None, "user", "me", &format!("m{i}"))).await.unwrap();
+        ids.push(m.id);
+        if i % 50 == 0 {
+            state.db.insert_message(&msg(Some(&other.id), None, "user", "me", "elsewhere")).await.unwrap();
+        }
+    }
+    let foreign = state.db.insert_message(&msg(Some(&other.id), None, "user", "me", "x")).await.unwrap().id;
+    let texts = |v: &Value| v.as_array().unwrap().iter().map(|m| m["text"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let range = |a: usize, b: usize| (a..b).map(|i| format!("m{i}")).collect::<Vec<_>>();
+    let base = format!("/api/channels/{}/messages", chan.id);
+
+    // Unchanged without parameters: the latest 100, oldest first
+    let (s, v) = req(&app, "GET", &base, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(texts(&v), range(150, 250));
+
+    // Centred on m20: 50 before it (only 20 exist), it, and 49 after
+    let (s, v) = req(&app, "GET", &format!("{base}?around={}", ids[20]), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(texts(&v), range(0, 70));
+    let (_, v) = req(&app, "GET", &format!("{base}?around={}&limit=10", ids[100]), None).await;
+    assert_eq!(texts(&v), range(95, 105));
+    // Near the end, the window just stops at the latest
+    let (_, v) = req(&app, "GET", &format!("{base}?around={}&limit=10", ids[248]), None).await;
+    assert_eq!(texts(&v), range(243, 250));
+
+    // Paging back
+    let (_, v) = req(&app, "GET", &format!("{base}?before={}&limit=30", ids[95]), None).await;
+    assert_eq!(texts(&v), range(65, 95));
+    let (_, v) = req(&app, "GET", &format!("{base}?before={}", ids[0]), None).await;
+    assert_eq!(v, json!([]));
+
+    // Another chat's message, or none, is a 404 that reveals nothing
+    for q in [format!("around={foreign}"), format!("before={foreign}"), "around=nope".into()] {
+        let (s, v) = req(&app, "GET", &format!("{base}?{q}"), None).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{q}");
+        assert!(!v.to_string().contains("elsewhere"));
+    }
+    // Bounded, and one mode at a time
+    for q in ["limit=0", "limit=201", "limit=-1", &format!("around={}&before={}", ids[1], ids[2])] {
+        let (s, _) = req(&app, "GET", &format!("{base}?{q}"), None).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{q}");
+    }
+    let (_, v) = req(&app, "GET", &format!("{base}?around={}&limit=200", ids[125]), None).await;
+    assert_eq!(texts(&v), range(25, 225));
+
+    // Direct chats work the same way
+    let mut dm = Vec::new();
+    for i in 0..5 {
+        dm.push(state.db.insert_message(&msg(None, Some(&kwant.id), "user", "me", &format!("d{i}"))).await.unwrap().id);
+    }
+    let (_, v) = req(&app, "GET", &format!("/api/channels/{}/messages?around={}&limit=3", kwant.id, dm[2]), None).await;
+    assert_eq!(texts(&v), vec!["d1", "d2", "d3"]);
+
+    // Same auth as the rest of the API
+    let (s, _) = call(
+        &app,
+        "GET",
+        &format!("{base}?around={}", ids[20]),
+        None,
+        &[("host", "kwnt.example.com")],
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
 // Notifications
 
 #[tokio::test]
@@ -1131,7 +1218,7 @@ async fn webhook_setting_is_https_only_and_masked() {
     assert_eq!(s["notify_webhook_url"], "");
     assert_eq!(
         s["notify_on"],
-        json!(["turn_finished", "approval_needed", "routine_failed"])
+        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked"])
     );
 
     let (status, _) = req(
@@ -1176,6 +1263,46 @@ async fn webhook_setting_is_https_only_and_masked() {
 }
 
 #[tokio::test]
+async fn settings_refuse_unknown_keys_and_save_agent_tools() {
+    let (app, state, _tmp) = setup().await;
+
+    let (_, s) = req(&app, "GET", "/api/settings", None).await;
+    assert_eq!(s["agent_tools"], true, "on by default");
+
+    // An unknown key is refused and nothing in the request is saved
+    let (status, v) = req(
+        &app,
+        "POST",
+        "/api/settings",
+        Some(json!({"agent_tools": false, "agent_tool": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(v["error"].as_str().unwrap().contains("agent_tool"));
+    assert_eq!(state.db.get_setting("agent_tool").await.unwrap(), None);
+    assert_eq!(state.db.get_setting("agent_tools").await.unwrap(), None);
+    // So is the wrong type
+    let (status, _) = req(&app, "POST", "/api/settings", Some(json!({"agent_tools": "off"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _) = req(&app, "POST", "/api/settings", Some(json!({"agent_tools": false}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state.db.get_setting("agent_tools").await.unwrap().as_deref(), Some("off"));
+    assert!(!kwnt::server::continuity::agent_tools_enabled(&state).await);
+    let (_, s) = req(&app, "GET", "/api/settings", None).await;
+    assert_eq!(s["agent_tools"], false);
+
+    // Other saves leave it alone
+    let (status, _) = req(&app, "POST", "/api/settings", Some(json!({"ollama_url": "http://localhost:1/v1"}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state.db.get_setting("agent_tools").await.unwrap().as_deref(), Some("off"));
+
+    req(&app, "POST", "/api/settings", Some(json!({"agent_tools": true}))).await;
+    let (_, s) = req(&app, "GET", "/api/settings", None).await;
+    assert_eq!(s["agent_tools"], true);
+}
+
+#[tokio::test]
 async fn notifications_are_filtered_and_content_free() {
     let (_app, state, _tmp) = setup().await;
     let kwants = state.db.list_kwants().await.unwrap();
@@ -1200,11 +1327,15 @@ async fn notifications_are_filtered_and_content_free() {
         kwant_id: k.id.clone(),
         context_id: Some(general.id.clone()),
         outcome: "completed".into(),
+        turn_id: None,
+        thread_id: None,
     });
     let _ = state.event_sender.send(RuntimeEvent::TurnEnded {
         kwant_id: k.id.clone(),
         context_id: None,
         outcome: "failed".into(),
+        turn_id: None,
+        thread_id: None,
     });
     let _ = state.event_sender.send(RuntimeEvent::ApprovalRequired {
         id: "a1".into(),

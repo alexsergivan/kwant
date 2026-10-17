@@ -1,6 +1,11 @@
 pub mod models;
 pub mod profiles;
 pub mod continuity;
+pub mod threads;
+pub mod history;
+pub mod attachments;
+pub mod questions;
+pub mod skills;
 
 use models::*;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
@@ -82,6 +87,11 @@ impl Database {
         let db = Self { pool };
         db.migrate_profiles().await?;
         db.migrate_continuity().await?;
+        db.migrate_threads().await?;
+        db.migrate_skills().await?;
+        db.migrate_questions().await?;
+        db.migrate_attachments().await?;
+        db.migrate_history().await?;
         db.seed_defaults().await?;
 
         Ok(db)
@@ -277,6 +287,11 @@ impl Database {
 
     // Messages CRUD
     pub async fn insert_message(&self, input: &NewMessage) -> Result<Message, DbError> {
+        self.insert_message_with(input, &MessageExtra::default()).await
+    }
+
+    /// [`Self::insert_message`] into a thread and/or with kwnt's own `meta`.
+    pub async fn insert_message_with(&self, input: &NewMessage, extra: &MessageExtra) -> Result<Message, DbError> {
         let id = Uuid::new_v4().to_string();
         let tools_json = input
             .tool_calls
@@ -286,8 +301,8 @@ impl Database {
 
         sqlx::query(
             r#"
-            INSERT INTO messages (id, channel_id, direct_kwant_id, sender_role, sender_id, text, reasoning_content, tool_calls, tokens_used)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (id, channel_id, direct_kwant_id, sender_role, sender_id, text, reasoning_content, tool_calls, tokens_used, thread_id, meta)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
@@ -299,6 +314,8 @@ impl Database {
         .bind(&input.reasoning_content)
         .bind(&tools_json)
         .bind(input.tokens_used)
+        .bind(&extra.thread_id)
+        .bind(extra.meta.as_ref().map(|m| m.to_string()))
         .execute(&self.pool)
         .await?;
 
@@ -314,13 +331,14 @@ impl Database {
             r#"
             SELECT * FROM (
                 SELECT *, rowid AS _seq FROM messages
-                WHERE channel_id = ? OR direct_kwant_id = ?
+                WHERE channel_id = ? OR direct_kwant_id = ? OR thread_id = ?
                 ORDER BY created_at DESC, rowid DESC
                 LIMIT ?
             )
             ORDER BY created_at ASC, _seq ASC
             "#,
         )
+        .bind(channel_or_kwant_id)
         .bind(channel_or_kwant_id)
         .bind(channel_or_kwant_id)
         .bind(limit)

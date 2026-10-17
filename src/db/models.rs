@@ -82,6 +82,22 @@ pub struct Message {
     pub tool_calls: Option<String>, // JSON serialized tool calls & outputs
     pub tokens_used: i64,
     pub created_at: Option<DateTime<Utc>>,
+    /// Set for messages in a thread (see `crate::db::threads`); `channel_id` and
+    /// `direct_kwant_id` are then both empty.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub thread_id: Option<String>,
+    /// JSON for messages kwnt writes itself, e.g. `{"kind":"delegation_result",…}`.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub meta: Option<String>,
+}
+
+/// Where a message goes besides [`NewMessage`]'s channel or direct chat.
+#[derive(Debug, Clone, Default)]
+pub struct MessageExtra {
+    pub thread_id: Option<String>,
+    pub meta: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

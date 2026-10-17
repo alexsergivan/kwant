@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin } from 'lucide-react';
+import { ArrowDown, ArrowUp, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -9,6 +9,24 @@ import { VirtualMachinePane, TerminalLogEntry } from './VirtualMachinePane';
 import { playSfx } from '../audio/chiptune';
 import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThreads';
 import { PinnedInstructions, PinnedItem } from './Instructions';
+import { DelegationMeta, parseDelegationMeta } from '../threads';
+import { QuestionMeta, parseQuestionMeta } from '../questions';
+import {
+  AttachmentRef,
+  MAX_ATTACHMENTS,
+  PendingUpload,
+  UploadError,
+  composerReady,
+  filesFrom,
+  isSharedFileMessage,
+  parseAttachments,
+  preflightFile,
+  readyAttachments,
+  uploadAttachment,
+  uploadRetryable,
+  uploadSlotsLeft,
+} from '../attachments';
+import { FileTiles, UploadChip } from './Attachments';
 
 export interface ChatMessage {
   id: string;
@@ -18,6 +36,18 @@ export interface ChatMessage {
   reasoning_content?: string | null;
   tool_calls?: string | null;
   tokens_used?: number;
+  channel_id?: string | null;
+  direct_kwant_id?: string | null;
+  thread_id?: string | null;
+  /** JSON string kwnt sets on messages it writes itself, e.g. delegation notes. */
+  meta?: string | null;
+}
+
+/** The open chat's turn is waiting for a free slot. */
+export interface QueuedState {
+  position: number | null;
+  reason: 'agent_busy' | 'server_busy';
+  speaker: string;
 }
 
 export interface DiscussionState {
@@ -62,7 +92,8 @@ export interface ChatViewProps {
   pendingApproval: PendingApproval | null;
   isStreaming: boolean;
   streamingSpeakerName?: string;
-  onSendMessage: (text: string) => void;
+  /** `attachments` are files already uploaded from the composer. */
+  onSendMessage: (text: string, attachments: AttachmentRef[]) => void;
   onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
@@ -95,6 +126,24 @@ export interface ChatViewProps {
   /** A message to scroll to and flash (from search). */
   highlightMessageId?: string | null;
   onHighlightDone?: () => void;
+  /** Set while `messages` is an older window (a search hit beyond the latest page). */
+  viewingHistory?: boolean;
+  /** Leaves that window for the latest messages. */
+  onJumpToLatest?: () => void;
+  /** Under the header: the agent's conversations and the open thread's controls. */
+  subHeader?: React.ReactNode;
+  /** Next to the title, e.g. "Working on …" while the agent has background turns. */
+  titleExtra?: React.ReactNode;
+  /** Set while the open chat's turn waits in the queue. */
+  queued?: QueuedState | null;
+  /** Draws a delegation note or result (messages with delegation `meta`). */
+  renderDelegation?: (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => React.ReactNode;
+  /** Draws an agent's question card (messages with `ask_user` meta). */
+  renderQuestion?: (msg: ChatMessage, meta: QuestionMeta, flash: boolean) => React.ReactNode;
+  /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
+  awaitingAnswer?: boolean;
+  /** Changes when another chat opens, so the view jumps to its bottom. */
+  contextKey?: string;
 }
 
 export const renderFormattedText = (text: string): React.ReactNode => {
@@ -223,12 +272,27 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onEditInstructions,
   highlightMessageId,
   onHighlightDone,
+  viewingHistory,
+  onJumpToLatest,
+  subHeader,
+  titleExtra,
+  queued,
+  renderDelegation,
+  renderQuestion,
+  awaitingAnswer,
+  contextKey,
 }) => {
   const [internalIsVmPaneOpen, setInternalIsVmPaneOpen] = useState(false);
   const vmOpen = isVmPaneOpen !== undefined ? isVmPaneOpen : internalIsVmPaneOpen;
   const toggleVm = onToggleVmPane || (() => setInternalIsVmPaneOpen((prev) => !prev));
 
   const [inputVal, setInputVal] = useState('');
+  const [uploads, setUploads] = useState<PendingUpload[]>([]);
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const uploadFiles = useRef(new Map<string, { file: File; abort: AbortController }>());
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepth = useRef(0);
   const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -352,12 +416,24 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }, 0);
   };
 
-  // Auto-scroll on new tokens
+  // Follow new tokens only while the reader is at the bottom; scrolling up to read stays put.
+  const stickRef = useRef(true);
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
   useEffect(() => {
-    if (scrollRef.current) {
+    stickRef.current = true;
+  }, [contextKey]);
+  // Back from an older window: land on the newest message
+  useEffect(() => {
+    if (!viewingHistory) stickRef.current = true;
+  }, [viewingHistory]);
+  useEffect(() => {
+    if (scrollRef.current && stickRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamingText, streamingThinking, pendingApproval, routingState]);
+  }, [messages, streamingText, streamingThinking, pendingApproval, routingState, queued, contextKey]);
 
   // Jump to a search hit: open its folded discussion if needed, then centre and flash it.
   // Runs after the auto-scroll above, so it wins.
@@ -395,12 +471,98 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const patchUpload = (key: string, patch: Partial<PendingUpload>) =>
+    setUploads((list) => list.map((u) => (u.key === key ? { ...u, ...patch } : u)));
+
+  const startUpload = (key: string, file: File) => {
+    const abort = new AbortController();
+    uploadFiles.current.set(key, { file, abort });
+    uploadAttachment(file, (progress) => patchUpload(key, { progress }), abort.signal).then(
+      (attachment) => patchUpload(key, { state: 'done', progress: 1, attachment, error: undefined }),
+      (err: Error) => {
+        if (err.name === 'AbortError') return;
+        const retryable = !(err instanceof UploadError) || uploadRetryable(err.status);
+        patchUpload(key, { state: 'error', error: err.message, retryable });
+      },
+    );
+  };
+
+  /** Files from the picker, a drop or a paste: checked here, then uploaded right away. */
+  const addFiles = (files: File[]) => {
+    if (!files.length) return;
+    const room = uploadSlotsLeft(uploads);
+    const notes: string[] = [];
+    if (files.length > room) notes.push(`Up to ${MAX_ATTACHMENTS} files per message; ${files.length - room === 1 ? 'one was' : `${files.length - room} were`} left out.`);
+    const added: PendingUpload[] = [];
+    for (const file of files.slice(0, room)) {
+      const problem = preflightFile(file);
+      if (problem) {
+        notes.push(problem);
+        continue;
+      }
+      const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      added.push({ key, name: file.name || 'pasted file', size: file.size, progress: 0, state: 'uploading' });
+      startUpload(key, file);
+    }
+    setUploadNote(notes.length ? notes.join(' ') : null);
+    if (added.length) setUploads((list) => [...list, ...added]);
+  };
+
+  const removeUpload = (key: string) => {
+    uploadFiles.current.get(key)?.abort.abort();
+    uploadFiles.current.delete(key);
+    setUploads((list) => list.filter((u) => u.key !== key));
+  };
+
+  const retryUpload = (key: string) => {
+    const f = uploadFiles.current.get(key)?.file;
+    if (!f) return;
+    patchUpload(key, { state: 'uploading', progress: 0, error: undefined });
+    startUpload(key, f);
+  };
+
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
+  const dropHandlers = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current += 1;
+      setDragOver(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragOver(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragOver(false);
+      addFiles(filesFrom(e.dataTransfer.files));
+      textareaRef.current?.focus();
+    },
+  };
+
+  const canSend = composerReady(inputVal, uploads);
+  const stillUploading = uploads.some((u) => u.state === 'uploading');
+
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputVal.trim() || isStreaming) return;
+    // A reply in progress doesn't block the next message (it waits its turn); a team discussion does.
+    if (!canSend || (isStreaming && discussionState?.inProgress)) return;
     playSfx('click');
-    onSendMessage(inputVal.trim());
+    stickRef.current = true;
+    onSendMessage(inputVal.trim(), readyAttachments(uploads));
     setInputVal('');
+    setUploads([]);
+    setUploadNote(null);
+    uploadFiles.current.clear();
     setMentionQuery(null);
     setMentionStartIndex(-1);
     if (textareaRef.current) {
@@ -449,7 +611,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   const renderMessage = (msg: ChatMessage) => {
+    const meta = msg.meta && renderDelegation ? parseDelegationMeta(msg.meta) : null;
+    if (meta && renderDelegation) return <React.Fragment key={msg.id}>{renderDelegation(msg, meta, flashId === msg.id)}</React.Fragment>;
+    const question = msg.meta && renderQuestion ? parseQuestionMeta(msg.meta) : null;
+    if (question && renderQuestion) return <React.Fragment key={msg.id}>{renderQuestion(msg, question, flashId === msg.id)}</React.Fragment>;
     const isUser = msg.sender_role === 'user';
+    const files = msg.meta ? parseAttachments(msg.meta) : [];
+    // An agent's share_file note: the file tiles say it all.
+    const filesOnly = files.length > 0 && isSharedFileMessage(msg.meta);
     const isThoughtOpen = !!openThoughts[msg.id];
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
 
@@ -500,6 +669,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
 
           {/* Message Body Bubble */}
+          {!filesOnly && (msg.text.trim() || !files.length) && (
           <div
             className={`p-4 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
               isUser
@@ -513,11 +683,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <MarkdownRenderer content={msg.text} />
             )}
           </div>
+          )}
+          {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} />}
 
           {!isUser && msg.tool_calls && <ToolCallsList raw={msg.tool_calls} />}
 
           {/* Copy action */}
-          {!isUser && (
+          {!isUser && !filesOnly && (
             <div className="mt-1.5 flex items-center gap-2 text-zinc-500 text-xs">
               <button
                 type="button"
@@ -549,8 +721,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
       {/* Channel / Agent Header */}
       <div className="h-14 border-b border-zinc-800/80 px-6 flex items-center justify-between bg-zinc-900/30 backdrop-blur-sm select-none">
         <div>
-          <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
-            <span>{title}</span>
+          <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2 min-w-0">
+            <span className="truncate">{title}</span>
+            {titleExtra}
           </h2>
           <p className="text-[11px] text-zinc-400 truncate max-w-lg mt-0.5">{subtitle}</p>
         </div>
@@ -663,6 +836,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
       </div>
 
+      {subHeader}
+
       <PinnedInstructions items={pinned} onEdit={onEditInstructions} />
 
       {/* Discussion In-Flight Banner */}
@@ -713,7 +888,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
       <div className="flex-1 flex overflow-hidden min-h-0">
         <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
           {/* Messages Stream */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div
+            ref={scrollRef}
+            onScroll={onScroll}
+            className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6"
+            role="log"
+            aria-label={`Messages in ${title}`}
+            aria-busy={isStreaming}
+          >
         {groupDiscussionThreads(messages).map((item) => {
           if (item.kind === 'message') return renderMessage(item.message);
           const threadKey = `thread:${item.id}`;
@@ -749,7 +931,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <LayaRoutingCard routing={routingState} />
         )}
 
-        {/* Live Streaming Assistant Message */}
+        {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
         {isStreaming && routingState?.phase !== 'deciding' && (
           <div className="flex items-start gap-3.5 w-full max-w-5xl">
             <ModernAvatar
@@ -772,10 +954,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     ? discussionState.currentSpeaker
                     : streamingSpeakerName || title}
                 </span>
-                <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
-                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
-                  {discussionState?.inProgress ? 'Speaking...' : 'Generating...'}
-                </span>
+                {queued ? (
+                  <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
+                    Queued
+                  </span>
+                ) : awaitingAnswer ? (
+                  <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
+                    Waiting for your answer
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping motion-reduce:animate-none" aria-hidden="true" />
+                    {discussionState?.inProgress ? 'Speaking...' : 'Generating...'}
+                  </span>
+                )}
               </div>
 
               {streamingThinking && (
@@ -785,8 +979,31 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </div>
               )}
 
-              <div className="p-4 sm:p-5 rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full">
-                <MarkdownRenderer content={stripDiscussionMarkers(streamingText)} isStreaming={true} />
+              <div className="p-4 sm:p-5 min-h-[3.5rem] rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full">
+                {queued ? (
+                  <p className="text-zinc-300" role="status">
+                    {queued.position ? <strong className="text-amber-200">#{queued.position} in line.</strong> : <strong className="text-amber-200">In line.</strong>}{' '}
+                    {queued.reason === 'server_busy'
+                      ? 'kwnt is running as many turns as it allows right now; this one starts as soon as a slot frees up.'
+                      : `${queued.speaker} is busy with other work; this starts as soon as one of those finishes.`}
+                  </p>
+                ) : streamingText ? (
+                  <MarkdownRenderer content={stripDiscussionMarkers(streamingText)} isStreaming={true} />
+                ) : awaitingAnswer ? (
+                  <p className="text-zinc-400" role="status">
+                    Paused on the question above. Answer it there; this reply carries on from it.
+                  </p>
+                ) : (
+                  <span className="inline-flex gap-1 py-1.5" aria-label="Waiting for the first words">
+                    {[0, 1, 2].map((i) => (
+                      <span
+                        key={i}
+                        className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce motion-reduce:animate-none"
+                        style={{ animationDelay: `${i * 150}ms` }}
+                      />
+                    ))}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -852,10 +1069,54 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
         )}
 
+        {viewingHistory && (
+          <div role="status" className="max-w-4xl mx-auto mb-2 flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl border border-sky-800/50 bg-sky-950/40 text-xs text-sky-200">
+            <span className="min-w-0">Showing older messages around the search result.</span>
+            <button
+              type="button"
+              onClick={() => {
+                playSfx('click');
+                onJumpToLatest?.();
+              }}
+              className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-lg border border-sky-700/60 text-sky-100 hover:bg-sky-900/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+            >
+              <ArrowDown size={12} aria-hidden="true" /> Jump to latest
+            </button>
+          </div>
+        )}
+
         <form
           onSubmit={handleSubmit}
-          className="relative max-w-4xl mx-auto flex items-end gap-2 bg-zinc-900 border border-zinc-800 focus-within:border-zinc-700 rounded-2xl p-2 shadow-sm transition-all"
+          {...dropHandlers}
+          aria-label={`Message ${title}`}
+          className={`relative max-w-4xl mx-auto flex flex-wrap items-end gap-2 bg-zinc-900 border rounded-2xl p-2 shadow-sm transition-all ${
+            dragOver ? 'border-sky-500/70 bg-sky-950/30' : 'border-zinc-800 focus-within:border-zinc-700'
+          }`}
         >
+          {dragOver && (
+            <div className="absolute inset-0 z-10 rounded-2xl border-2 border-dashed border-sky-400/70 bg-zinc-950/80 flex items-center justify-center gap-2 text-sm font-medium text-sky-200 pointer-events-none">
+              <Paperclip size={15} aria-hidden="true" /> Drop files to attach
+            </div>
+          )}
+          {(uploads.length > 0 || uploadNote) && (
+            <div className="basis-full min-w-0 px-1 pt-0.5 space-y-1.5">
+              {uploads.length > 0 && (
+                <ul className="flex flex-wrap gap-1.5 min-w-0" aria-label="Files to send">
+                  {uploads.map((u) => (
+                    <UploadChip key={u.key} item={u} onRemove={() => removeUpload(u.key)} onRetry={() => retryUpload(u.key)} />
+                  ))}
+                </ul>
+              )}
+              {uploadNote && (
+                <p role="alert" className="flex items-start gap-2 text-[11px] text-amber-300">
+                  <span className="min-w-0">{uploadNote}</span>
+                  <button type="button" onClick={() => setUploadNote(null)} className="shrink-0 text-zinc-500 hover:text-zinc-300 underline-offset-2 hover:underline">
+                    Dismiss
+                  </button>
+                </p>
+              )}
+            </div>
+          )}
           {isMentionOpen && (
             <MentionPopover
               items={matchingItems}
@@ -876,6 +1137,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
               checkMention(val, e.target.selectionStart);
             }}
             onKeyDown={handleKeyDown}
+            onPaste={(e) => {
+              const pasted = filesFrom(e.clipboardData.items);
+              if (pasted.length) {
+                e.preventDefault();
+                addFiles(pasted);
+              }
+            }}
             onClick={(e) => {
               checkMention(inputVal, (e.target as HTMLTextAreaElement).selectionStart);
             }}
@@ -885,24 +1153,49 @@ export const ChatView: React.FC<ChatViewProps> = ({
               }
             }}
             placeholder={`Message ${title}... (Enter to send, Shift+Enter for newline, @ to mention)`}
-            className="flex-1 bg-transparent px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-40 leading-relaxed font-sans"
+            className="flex-1 min-w-0 bg-transparent px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-40 leading-relaxed font-sans"
           />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            tabIndex={-1}
+            onChange={(e) => {
+              addFiles(filesFrom(e.target.files));
+              e.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadSlotsLeft(uploads) === 0}
+            title={uploadSlotsLeft(uploads) === 0 ? `Up to ${MAX_ATTACHMENTS} files per message` : 'Attach files (or drop / paste them here). Max 20 MB each.'}
+            aria-label="Attach files"
+            className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+          >
+            <Paperclip size={16} aria-hidden="true" />
+          </button>
 
-          {isStreaming ? (
+          {isStreaming && (
             <button
               type="button"
               onClick={onCancelDiscussion}
-              className="w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 shadow-sm cursor-pointer"
+              className="w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 shadow-sm cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-500"
               title={discussionState?.inProgress ? 'Stop Discussion' : 'Stop generation'}
+              aria-label={discussionState?.inProgress ? 'Stop discussion' : 'Stop the reply'}
             >
-              <Square size={12} fill="currentColor" />
+              <Square size={12} fill="currentColor" aria-hidden="true" />
             </button>
-          ) : (
+          )}
+          {!(isStreaming && (discussionState?.inProgress || !canSend)) && (
             <button
               type="submit"
-              disabled={!inputVal.trim()}
+              aria-label={stillUploading ? 'Send (waiting for uploads)' : isStreaming ? 'Send (waits for the current reply)' : 'Send'}
+              title={stillUploading ? 'Waiting for uploads to finish' : undefined}
+              disabled={!canSend}
               className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 ${
-                inputVal.trim()
+                canSend
                   ? 'bg-sky-500 text-white hover:bg-sky-400 shadow-sm'
                   : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
               }`}
