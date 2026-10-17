@@ -7,6 +7,7 @@ pub mod mcp_routes;
 pub mod mcp_runtime;
 pub mod profile_routes;
 pub mod profile_turn;
+pub mod engine_routes;
 pub mod auth;
 pub mod continuity;
 pub mod scheduler;
@@ -51,6 +52,8 @@ pub struct AppState {
     pub mcp_oauth: Arc<mcp_oauth::OAuthState>,
     /// LLM profiles: sign-in checks and in-app logins.
     pub profiles: Arc<crate::profiles::ProfileManager>,
+    /// Which engines can run and their models: checked at startup and on Re-check.
+    pub engines: Arc<crate::drivers::engines::EngineRegistry>,
     /// API token for requests from other machines (see `auth`).
     pub api_token: Arc<auth::ApiToken>,
     /// Live turns that have the agents' own tools, by bearer token.
@@ -91,6 +94,7 @@ impl AppState {
             mcp_sessions: Arc::new(Mutex::new(HashMap::new())),
             mcp_oauth: Arc::new(mcp_oauth::OAuthState::default()),
             profiles,
+            engines: Default::default(),
             api_token,
             self_tools: Default::default(),
             running_routines: Default::default(),
@@ -121,6 +125,8 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/api/profiles/:id/login/:flow_id/code", post(profile_routes::submit_login_code))
         .route("/api/profiles/:id/logout", post(profile_routes::logout))
+        .route("/api/engines", get(engine_routes::list))
+        .route("/api/engines/recheck", post(engine_routes::recheck))
         .route("/api/laya/status", get(routes::laya_status))
         .route("/api/kwants", get(routes::list_kwants).post(routes::create_kwant))
         .route("/api/kwants/:id", put(routes::update_kwant))

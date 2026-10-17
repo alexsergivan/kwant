@@ -148,6 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let state = AppState::new(config.clone(), db, tools, broker, router);
             kwnt::server::scheduler::spawn_background(state.clone(), shutdown.clone());
+            kwnt::server::engine_routes::spawn_startup_check(state.clone());
             let app = create_router(state);
 
             let addr = format!("{}:{}", config.host, config.port);

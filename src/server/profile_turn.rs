@@ -3,7 +3,9 @@
 
 use super::AppState;
 use crate::db::models::LlmProfile;
+use crate::drivers::engines::EngineId;
 use crate::drivers::{find_cli_binary, resolve_driver_for_model, ApiDriver, CliDriver, Driver};
+use std::collections::HashSet;
 use crate::profiles::{
     failover_order, Availability, Engine, FailClass, ProfileStatus, ProviderFailure,
 };
@@ -39,16 +41,18 @@ pub async fn plan(state: &AppState, engine: Option<Engine>, kwant_id: &str) -> V
     )
 }
 
-/// The driver for one attempt. `None` or the system profile: exactly the pre-profiles choice.
+/// The driver for one attempt, and the engine it runs on when it's the host's own (no profile
+/// or the system profile; see [`resolve_driver_for_model`]). `Err` when that engine can't run.
 pub async fn driver_for(
     state: &AppState,
     profile: Option<&LlmProfile>,
     target_model: &str,
     configured_key: Option<String>,
     endpoint: Option<String>,
-) -> Box<dyn Driver> {
+) -> Result<(Box<dyn Driver>, Option<EngineId>), String> {
     let Some(p) = profile.filter(|p| p.kind != "system") else {
-        return resolve_driver_for_model(target_model, configured_key, endpoint);
+        return resolve_driver_for_model(target_model, configured_key, endpoint, &state.engines)
+            .map(|(d, e)| (d, Some(e)));
     };
     let engine = Engine::parse(&p.engine).unwrap_or(Engine::Claude);
     if p.kind == "api_key" {
@@ -59,16 +63,47 @@ pub async fn driver_for(
             .ok()
             .flatten()
             .map(|k| k.0);
-        return Box::new(ApiDriver::for_profile(key));
+        return Ok((Box::new(ApiDriver::for_profile(key)), None));
     }
     let home = state.profiles.home_of(p).unwrap_or_default();
-    Box::new(
-        CliDriver::new(
-            find_cli_binary(engine.as_str()),
-            Some(engine.as_str().into()),
-        )
-        .with_profile_home(engine, home),
-    )
+    Ok((
+        Box::new(
+            CliDriver::new(
+                find_cli_binary(engine.as_str()),
+                Some(engine.as_str().into()),
+            )
+            .with_profile_home(engine, home),
+        ),
+        None,
+    ))
+}
+
+/// Engines with an enabled account of their own (not the system profile) that failover
+/// would use: these engines can run even when the host's own CLI or key can't.
+pub async fn profile_engines(state: &AppState) -> HashSet<Engine> {
+    let db = &state.db;
+    let (Ok(profiles), Ok(states), Ok(with_key)) = (
+        db.list_profiles().await,
+        db.list_profile_states().await,
+        db.profile_ids_with_key().await,
+    ) else {
+        return HashSet::new();
+    };
+    let signed_out = state.profiles.signed_out();
+    let now = chrono::Utc::now();
+    profiles
+        .iter()
+        .filter(|p| p.enabled && p.kind != "system")
+        .filter(|p| p.kind != "api_key" || with_key.contains(&p.id))
+        .filter(|p| !signed_out.contains(&p.id))
+        .filter(|p| {
+            !states
+                .get(&p.id)
+                .and_then(|s| s.limited_until)
+                .is_some_and(|t| t > now)
+        })
+        .filter_map(|p| Engine::parse(&p.engine))
+        .collect()
 }
 
 /// Remembers a refusal so failover skips the profile: until its quota resets, or until it is

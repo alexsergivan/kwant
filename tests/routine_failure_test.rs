@@ -123,6 +123,14 @@ async fn failed_routine_run_records_the_engine_error() {
     assert!(error.contains("is signed out"), "{error}");
     assert!(error.chars().count() <= 600, "{error}");
 
+    // The refusal marked claude signed out, so turns stop starting it until it's signed in again
+    use kwnt::drivers::engines::{EngineId, EngineStatus, Probe};
+    assert_eq!(state.engines.status(EngineId::Claude), EngineStatus::SignedOut);
+    state.engines.store(vec![(
+        EngineId::Claude,
+        Probe { status: EngineStatus::Ready, detail: None, version: None, models: Vec::new() },
+    )]);
+
     // A CLI that dies silently used to be recorded as an ok run with an empty reply
     std::fs::write(&crash, "").unwrap();
     let error = run_once(&app, &id).await;

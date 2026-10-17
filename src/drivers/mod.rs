@@ -1,5 +1,6 @@
 pub mod api;
 pub mod cli;
+pub mod engines;
 pub mod events;
 pub mod grok;
 
@@ -200,78 +201,75 @@ pub async fn first_ollama_model(root: &str) -> Option<String> {
     tags["models"].as_array()?.first()?["name"].as_str().map(str::to_string)
 }
 
-/// Automatically detects all currently available and functional models on the host
-pub async fn detect_available_models(db: &crate::db::Database) -> Vec<ModelDescriptor> {
+/// The model families a turn can run on right now, for routing: a family counts when its API key
+/// or CLI passed its check (see [`engines`]), or when `profile_engines` has a usable profile for
+/// it. Empty when nothing can run; there is no made-up fallback.
+pub async fn detect_available_models(
+    db: &crate::db::Database,
+    engines: &engines::EngineRegistry,
+    profile_engines: &std::collections::HashSet<crate::profiles::Engine>,
+) -> Vec<ModelDescriptor> {
+    use crate::profiles::Engine;
+    use engines::{EngineId, SystemRoute};
     let mut available = Vec::new();
-
-    // 1. Claude
-    let claude_cli = find_cli_binary("claude");
-    let claude_key = db.get_setting("anthropic_api_key").await.ok().flatten()
-        .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok());
-    if claude_cli.is_some() || claude_key.is_some() {
+    let families = [
+        (
+            Engine::Claude,
+            "deep architecture, multi-file refactoring, long complex analysis",
+            "fastest local replies (~3s): everyday questions, quick answers, plus deep architecture and complex analysis",
+        ),
+        (
+            Engine::Grok,
+            "fast technical reasoning, witty banter, quick coding solutions",
+            "witty banter and technical reasoning; slow local CLI (10s+ per reply), avoid for quick questions",
+        ),
+        (
+            Engine::Codex,
+            "direct code generation, standard algorithms, regex, JSON transforms",
+            "direct code generation, standard algorithms, regex, JSON transforms",
+        ),
+    ];
+    for (family, api_desc, cli_desc) in families {
+        let key = db.get_setting(family.key_setting()).await.ok().flatten();
+        let route = engines::system_route(engines, family.as_str(), key, find_cli_binary);
+        let engine = match &route {
+            Ok(SystemRoute::Api { engine, .. }) | Ok(SystemRoute::Cli { engine, .. }) => Some(*engine),
+            _ => None,
+        };
+        if engine.is_none() && !profile_engines.contains(&family) {
+            continue;
+        }
+        let (cli, api) = EngineId::of_family(family);
+        let report = engines.report(engine.unwrap_or(cli));
+        let model = report.default_model().map(|m| m.label.clone());
+        let fallback_name = match family {
+            Engine::Claude => "Claude",
+            Engine::Grok => "Grok",
+            Engine::Codex => "OpenAI Codex",
+        };
         available.push(ModelDescriptor {
-            id: "claude".into(),
-            display_name: "Claude 3.5 Sonnet".into(),
-            capability_desc: if claude_key.is_none() {
-                "fastest local replies (~3s): everyday questions, quick answers, plus deep architecture and complex analysis"
-            } else {
-                "deep architecture, multi-file refactoring, long complex analysis"
-            }
-            .into(),
-            is_cli: claude_key.is_none() && claude_cli.is_some(),
+            id: family.as_str().into(),
+            display_name: model.unwrap_or_else(|| fallback_name.into()),
+            capability_desc: if engine == Some(api) { api_desc } else { cli_desc }.into(),
+            is_cli: engine != Some(api),
         });
     }
 
-    // 2. Grok
-    let grok_cli = find_cli_binary("grok");
-    let grok_key = db.get_setting("xai_api_key").await.ok().flatten()
-        .or_else(|| std::env::var("XAI_API_KEY").ok());
-    if grok_cli.is_some() || grok_key.is_some() {
-        available.push(ModelDescriptor {
-            id: "grok".into(),
-            display_name: "xAI Grok-2".into(),
-            capability_desc: if grok_key.is_none() {
-                "witty banter and technical reasoning; slow local CLI (10s+ per reply), avoid for quick questions"
-            } else {
-                "fast technical reasoning, witty banter, quick coding solutions"
-            }
-            .into(),
-            is_cli: grok_key.is_none() && grok_cli.is_some(),
-        });
-    }
-
-    // 3. Codex
-    let codex_cli = find_cli_binary("codex");
-    let codex_key = db.get_setting("openai_api_key").await.ok().flatten()
-        .or_else(|| std::env::var("OPENAI_API_KEY").ok());
-    if codex_cli.is_some() || codex_key.is_some() {
-        available.push(ModelDescriptor {
-            id: "codex".into(),
-            display_name: "OpenAI Codex".into(),
-            capability_desc: "direct code generation, standard algorithms, regex, JSON transforms".into(),
-            is_cli: codex_key.is_none() && codex_cli.is_some(),
-        });
-    }
-
-    // 4. Local Ollama
-    let ollama_url = db.get_setting("ollama_url").await.ok().flatten()
-        .or_else(|| std::env::var("OLLAMA_URL").ok());
-    // Having the binary isn't enough: routing here only works with the server up and a model pulled.
-    if let Some(model) = first_ollama_model(&ollama_root(ollama_url.as_deref())).await {
+    // Local Ollama: before its first check, the old quick look at the server decides.
+    let ollama = engines.report(EngineId::Ollama);
+    let model = match ollama.status {
+        engines::EngineStatus::Ready => ollama.default_model().map(|m| m.id.clone()),
+        engines::EngineStatus::Checking => {
+            let ollama_url = db.get_setting("ollama_url").await.ok().flatten();
+            first_ollama_model(&ollama_root(ollama_url.as_deref())).await
+        }
+        _ => None,
+    };
+    if let Some(model) = model {
         available.push(ModelDescriptor {
             id: "local_ollama".into(),
             display_name: format!("Ollama ({model})"),
             capability_desc: "private data, offline tasks, zero API cost".into(),
-            is_cli: false,
-        });
-    }
-
-    // Fallback: If host has zero configured, provide default fleet so system functions
-    if available.is_empty() {
-        available.push(ModelDescriptor {
-            id: "grok".into(),
-            display_name: "Grok (Arcade Default)".into(),
-            capability_desc: "fast technical reasoning, witty banter, quick coding solutions".into(),
             is_cli: false,
         });
     }
@@ -306,64 +304,31 @@ pub trait Driver: Send + Sync {
     ) -> Result<TurnOutput, DriverError>;
 }
 
-/// Creates a driver for a Kwant based on target model, configured API keys, and locally installed CLIs
+/// The driver for a turn on `target_model` without a profile, and the engine it runs on: the
+/// family's API when its key works, else its CLI when signed in. Engines whose check failed are
+/// skipped, and another family is never used instead. `Err` explains why nothing can run it.
 pub fn resolve_driver_for_model(
     target_model: &str,
     configured_key: Option<String>,
     endpoint: Option<String>,
-) -> Box<dyn Driver> {
-    // 1. If an explicit API key is provided, use ApiDriver directly
-    if let Some(key) = configured_key {
-        return Box::new(ApiDriver::new(Some(key), endpoint));
-    }
-
-    // 2. Check environment variable for direct API key
-    let env_key = if target_model.contains("claude") {
-        std::env::var("ANTHROPIC_API_KEY").ok()
-    } else if target_model.contains("grok") {
-        std::env::var("XAI_API_KEY").ok()
-    } else if target_model.contains("codex") || target_model.contains("gpt") {
-        std::env::var("OPENAI_API_KEY").ok()
-    } else {
-        None
-    };
-
-    if let Some(key) = env_key {
-        return Box::new(ApiDriver::new(Some(key), endpoint));
-    }
-
-    // 3. Bring-Your-Own-Agent CLI auto-discovery (Claude, Grok, Codex)
-    if target_model.contains("claude") {
-        if let Some(bin) = find_cli_binary("claude") {
-            return Box::new(CliDriver::new(Some(bin), Some("claude".into())));
+    engines: &engines::EngineRegistry,
+) -> Result<(Box<dyn Driver>, engines::EngineId), String> {
+    use engines::{EngineId, SystemRoute};
+    Ok(match engines::system_route(engines, target_model, configured_key, find_cli_binary)? {
+        SystemRoute::Ollama => (Box::new(ApiDriver::new(None, endpoint)), EngineId::Ollama),
+        SystemRoute::Api { engine, key } => (Box::new(ApiDriver::new(Some(key), endpoint)), engine),
+        SystemRoute::Cli { engine, bin } => {
+            let name = crate::profiles::Engine::from_model(target_model).map(|e| e.as_str().to_string());
+            (Box::new(CliDriver::new(Some(bin), name)), engine)
         }
-    } else if target_model.contains("grok") {
-        if let Some(bin) = find_cli_binary("grok") {
-            return Box::new(CliDriver::new(Some(bin), Some("grok".into())));
-        }
-    } else if target_model.contains("codex") || target_model.contains("gpt") {
-        if let Some(bin) = find_cli_binary("codex") {
-            return Box::new(CliDriver::new(Some(bin), Some("codex".into())));
-        }
-    } else if target_model == "local_ollama" {
-        return Box::new(ApiDriver::new(None, endpoint));
-    }
-
-    // 4. Fallback: check if ANY local agent CLI is installed on this host
-    if let Some(bin) = find_cli_binary("claude") {
-        return Box::new(CliDriver::new(Some(bin), Some("claude".into())));
-    }
-    if let Some(bin) = find_cli_binary("grok") {
-        return Box::new(CliDriver::new(Some(bin), Some("grok".into())));
-    }
-    if let Some(bin) = find_cli_binary("codex") {
-        return Box::new(CliDriver::new(Some(bin), Some("codex".into())));
-    }
-
-    // 5. Default to ApiDriver (which will prompt user to set an API key in Settings)
-    Box::new(ApiDriver::new(None, endpoint))
+    })
 }
 
+/// A driver for the kwant's pinned model, as before engine checks ran (nothing checked yet).
+/// Without any way to run it, the API driver explains how to set one up.
 pub fn create_driver_for_kwant(kwant: &Kwant) -> Box<dyn Driver> {
-    resolve_driver_for_model(&kwant.preferred_model, None, None)
+    match resolve_driver_for_model(&kwant.preferred_model, None, None, &engines::EngineRegistry::default()) {
+        Ok((driver, _)) => driver,
+        Err(_) => Box::new(ApiDriver::new(None, None)),
+    }
 }

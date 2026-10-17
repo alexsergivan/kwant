@@ -931,7 +931,25 @@ async fn run_kwant_turn_inner(
     let cancel_token = &scope.cancel_token;
 
     {
-        let available_models = crate::drivers::detect_available_models(&db).await;
+        let profile_engines = super::profile_turn::profile_engines(state).await;
+        let available_models =
+            crate::drivers::detect_available_models(&db, &state.engines, &profile_engines).await;
+        if available_models.is_empty() {
+            let text = format!("⚠️ [{}] {}", target_kwant.name, crate::drivers::engines::NO_ENGINE_MESSAGE);
+            event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
+            event_broadcast.send(RuntimeEvent::TurnComplete {
+                tokens: 0,
+                duration_ms: 0,
+                kwant_id: Some(target_kwant.id.clone()),
+                profile_id: None,
+            });
+            let msg = NewMessage {
+                reasoning_content: opts.label.clone(),
+                ..scope.message("kwant", &target_kwant.name, text.clone())
+            };
+            scope.save(&msg, None).await;
+            return Err(text);
+        }
         let route = match router.route_prompt_with_models(&prompt, "chat", &available_models).await {
             Ok(r) => r,
             Err(_) => crate::router::RouteDecision {
@@ -1133,14 +1151,34 @@ async fn run_kwant_turn_inner(
         let mut driver_result = None;
         let mut gave_up: Option<String> = None;
         for (i, profile) in attempts.iter().enumerate() {
-            let driver = super::profile_turn::driver_for(
+            let (driver, host_engine) = match super::profile_turn::driver_for(
                 state,
                 profile.as_ref(),
                 &target_model,
                 configured_key.clone(),
                 endpoint.clone(),
             )
-            .await;
+            .await
+            {
+                Ok(d) => d,
+                // The host's own CLI or key can't run it: try the next profile, else say why
+                Err(why) if i + 1 < attempts.len() => {
+                    tracing::info!(kwant = %target_kwant.id, reason = %why, "skipping an engine that can't run");
+                    continue;
+                }
+                Err(why) => {
+                    let text = format!("⚠️ [{}] {why}", target_kwant.name);
+                    event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
+                    event_broadcast.send(RuntimeEvent::TurnComplete {
+                        tokens: 0,
+                        duration_ms: turn_start.elapsed().as_millis() as u64,
+                        kwant_id: Some(target_kwant.id.clone()),
+                        profile_id: profile.as_ref().map(|p| p.id.clone()),
+                    });
+                    gave_up = Some(text);
+                    break;
+                }
+            };
             let input = turn_input.clone();
             let (driver_tx, mut driver_rx) = mpsc::channel(32);
             let driver_task =
@@ -1187,6 +1225,9 @@ async fn run_kwant_turn_inner(
             if let Some(failure) = refused {
                 if let Some(p) = profile {
                     super::profile_turn::record_failure(state, p, &failure).await;
+                }
+                if let Some(engine) = host_engine {
+                    state.engines.record_failure(engine, &failure);
                 }
                 let next = attempts.get(i + 1).and_then(|n| n.as_ref());
                 if let (Some(from), Some(to), false) = (profile, next, side_effects) {
@@ -1935,25 +1976,37 @@ pub async fn save_settings(
     {
         return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": e }))));
     }
+    // A new key or Ollama URL is checked right away, in the background
+    let mut engines_changed = false;
     if let Some(key) = payload.anthropic_api_key {
         if !key.starts_with('•') && !key.is_empty() {
             let _ = state.db.set_setting("anthropic_api_key", &key).await;
+            engines_changed = true;
         }
     }
     if let Some(key) = payload.xai_api_key {
         if !key.starts_with('•') && !key.is_empty() {
             let _ = state.db.set_setting("xai_api_key", &key).await;
+            engines_changed = true;
         }
     }
     if let Some(key) = payload.openai_api_key {
         if !key.starts_with('•') && !key.is_empty() {
             let _ = state.db.set_setting("openai_api_key", &key).await;
+            engines_changed = true;
         }
     }
     if let Some(url) = payload.ollama_url {
         if !url.is_empty() {
             let _ = state.db.set_setting("ollama_url", &url).await;
+            engines_changed = true;
         }
+    }
+    if engines_changed {
+        let state = state.clone();
+        tokio::spawn(async move {
+            super::engine_routes::recheck_all(&state).await;
+        });
     }
     if payload.max_turns_per_agent.is_some() || payload.max_turns_global.is_some() {
         let (per_agent, global) = state.turns.limiter.limits();

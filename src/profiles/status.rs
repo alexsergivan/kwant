@@ -170,7 +170,7 @@ pub async fn probe(engine: Engine, home: Option<&Path>) -> ProfileStatus {
     }
 }
 
-fn claude_status(stdout: &str) -> ProfileStatus {
+pub(crate) fn claude_status(stdout: &str) -> ProfileStatus {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(stdout.trim()) else {
         return ProfileStatus::default();
     };
@@ -185,7 +185,7 @@ fn claude_status(stdout: &str) -> ProfileStatus {
     }
 }
 
-fn codex_status(success: bool, stdout: &str, stderr: &str) -> ProfileStatus {
+pub(crate) fn codex_status(success: bool, stdout: &str, stderr: &str) -> ProfileStatus {
     let text = format!("{stdout}\n{stderr}");
     let line = text
         .lines()
