@@ -177,18 +177,46 @@ async fn test_execute_tool_shell_fallback() {
     let router = LayaRouter::new(config.laya_url.clone());
 
     let state = AppState::new(config, db, tools, broker, router);
+    state.db.set_setting("computer_mode", "vm").await.unwrap();
 
-    let res = kwnt::server::routes::execute_tool(
+    // vm mode with an unknown team: refused with a clear error, never run on this computer
+    let err = kwnt::server::routes::execute_tool(
         &state,
         Some("team-test"),
         "execute_shell",
         &json!({ "command": "echo 'sandboxed-fallback'" }),
     )
     .await
-    .unwrap();
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("team-test") && msg.contains("not run"), "{msg}");
+}
 
-    assert_eq!(res["exit_code"], 0);
-    assert!(res["stdout"].as_str().unwrap().contains("sandboxed-fallback"));
+#[tokio::test]
+async fn test_vm_shell_unknown_target_never_runs_on_host() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let tools = ToolRunner::new(workspace.clone());
+    let broker = PermissionBroker::new();
+    let router = LayaRouter::new(config.laya_url.clone());
+
+    let state = AppState::new(config, db, tools, broker, router);
+    state.db.set_setting("computer_mode", "vm").await.unwrap();
+    let mut rx = state.event_sender.subscribe();
+
+    let marker = tmp.path().join("ran-on-host.txt");
+    let cmd = format!("touch '{}'", marker.display());
+    for team in [Some("no-such-team"), Some(""), None] {
+        let res = kwnt::server::routes::execute_tool(&state, team, "execute_shell", &json!({ "command": cmd })).await;
+        assert!(res.is_err(), "{team:?}: must be refused, got {res:?}");
+        assert!(!marker.exists(), "{team:?}: command ran on the host");
+    }
+    assert!(std::fs::read_dir(&workspace).unwrap().next().is_none(), "host workspace must stay untouched");
+    // refused outright: no approval prompt, since vm mode never offers host execution
+    assert!(rx.try_recv().is_err());
 }
 
 #[tokio::test]
