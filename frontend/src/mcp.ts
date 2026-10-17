@@ -46,6 +46,8 @@ export interface SecretRow {
   value: string;
   /** Already stored on the server: a blank value keeps it. */
   saved: boolean;
+  /** Placeholder for an empty value, like the format a preset expects. */
+  hint?: string;
 }
 
 export interface McpFormState {
@@ -71,43 +73,221 @@ export const emptyMcpForm = (transport: McpTransport = 'stdio'): McpFormState =>
   timeout_secs: 30,
 });
 
+export type McpPresetCategory = 'files' | 'web' | 'data' | 'productivity' | 'devtools';
+
+/** Catalog groups, in display order. */
+export const MCP_PRESET_CATEGORIES: Array<{ id: McpPresetCategory; label: string }> = [
+  { id: 'files', label: 'Files & code' },
+  { id: 'web', label: 'Web' },
+  { id: 'data', label: 'Data' },
+  { id: 'productivity', label: 'Productivity' },
+  { id: 'devtools', label: 'Dev tools' },
+];
+
+/** What a preset needs before it works, shown as small tags on its card. */
+export type McpPresetNeed = 'Node.js' | 'uv' | 'API key' | 'Token' | 'Sign-in';
+
 export interface McpPreset {
   id: string;
   label: string;
   blurb: string;
+  category: McpPresetCategory;
+  needs: McpPresetNeed[];
+  /** Where the setup comes from: the vendor's docs or the package page. */
+  source: string;
   form: McpFormState;
 }
 
-/** Ready-made examples offered on the empty screen and in the form. */
+const stdioPreset = (name: string, commandLine: string, env: Array<[string, string]> = []): McpFormState => ({
+  ...emptyMcpForm('stdio'),
+  name,
+  commandLine,
+  env: env.map(([key, hint]) => ({ key, value: '', saved: false, hint })),
+});
+
+const httpPreset = (name: string, url: string, headers: Array<[string, string]> = []): McpFormState => ({
+  ...emptyMcpForm('http'),
+  name,
+  url,
+  headers: headers.map(([key, hint]) => ({ key, value: '', saved: false, hint })),
+});
+
+/**
+ * Well-known servers offered as one-click starting points. Built in rather than fetched from a
+ * registry, so the list works offline and on a VPS. Each entry was checked against its package
+ * or the vendor's docs on 2026-10-17; reference servers that were deprecated were swapped for
+ * the vendor's own server. URL servers marked Sign-in support automatic client registration,
+ * which kwnt's Connect flow needs.
+ */
 export const MCP_PRESETS: McpPreset[] = [
   {
+    // npm @modelcontextprotocol/server-filesystem 1.0.0
     id: 'files',
     label: 'Files in a folder',
-    blurb: 'Read and write files in one folder you choose. Needs Node.js.',
-    form: {
-      ...emptyMcpForm('stdio'),
-      name: 'files',
-      commandLine: 'npx -y @modelcontextprotocol/server-filesystem /home/me/projects',
-    },
+    blurb: 'Read and write files in one folder you choose.',
+    category: 'files',
+    needs: ['Node.js'],
+    source: 'https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem',
+    form: stdioPreset('files', 'npx -y @modelcontextprotocol/server-filesystem /home/me/projects'),
   },
   {
-    id: 'fetch',
-    label: 'Read web pages',
-    blurb: 'Fetch a URL and turn the page into readable text. Needs uv.',
-    form: { ...emptyMcpForm('stdio'), name: 'fetch', commandLine: 'uvx mcp-server-fetch' },
+    // PyPI mcp-server-git 2026.10.10
+    id: 'git',
+    label: 'Git',
+    blurb: 'Status, diffs, history and commits in one local repository.',
+    category: 'files',
+    needs: ['uv'],
+    source: 'https://github.com/modelcontextprotocol/servers/tree/main/src/git',
+    form: stdioPreset('git', 'uvx mcp-server-git --repository /home/me/projects/my-repo'),
   },
   {
+    // GitHub's official remote server. Its sign-in has no automatic client registration, so it
+    // takes a personal access token. Replaces the deprecated @modelcontextprotocol/server-github.
     id: 'github',
     label: 'GitHub',
-    blurb: 'Issues, pull requests and code search. Needs a GitHub token.',
-    form: {
-      ...emptyMcpForm('stdio'),
-      name: 'github',
-      commandLine: 'npx -y @modelcontextprotocol/server-github',
-      env: [{ key: 'GITHUB_PERSONAL_ACCESS_TOKEN', value: '', saved: false }],
-    },
+    blurb: 'Issues, pull requests, code search and Actions. Paste “Bearer” and your token.',
+    category: 'files',
+    needs: ['Token'],
+    source: 'https://github.com/github/github-mcp-server',
+    form: httpPreset('github', 'https://api.githubcopilot.com/mcp/', [['Authorization', 'Bearer ghp_…']]),
+  },
+  {
+    // PyPI mcp-server-fetch 2026.10.10
+    id: 'fetch',
+    label: 'Read web pages',
+    blurb: 'Fetch a URL and turn the page into readable text.',
+    category: 'web',
+    needs: ['uv'],
+    source: 'https://github.com/modelcontextprotocol/servers/tree/main/src/fetch',
+    form: stdioPreset('fetch', 'uvx mcp-server-fetch'),
+  },
+  {
+    // npm @playwright/mcp 0.0.83. Headless so it also runs on a server without a screen.
+    id: 'playwright',
+    label: 'Playwright browser',
+    blurb: 'Drive a real browser: open pages, click, fill forms, take screenshots.',
+    category: 'web',
+    needs: ['Node.js'],
+    source: 'https://github.com/microsoft/playwright-mcp',
+    form: stdioPreset('playwright', 'npx -y @playwright/mcp@latest --headless'),
+  },
+  {
+    // npm @brave/brave-search-mcp-server 2.1.4. Replaces the deprecated @modelcontextprotocol/server-brave-search.
+    id: 'brave-search',
+    label: 'Brave Search',
+    blurb: 'Web, news and image search through the Brave Search API.',
+    category: 'web',
+    needs: ['Node.js', 'API key'],
+    source: 'https://github.com/brave/brave-search-mcp-server',
+    form: stdioPreset('brave-search', 'npx -y @brave/brave-search-mcp-server --transport stdio', [['BRAVE_API_KEY', 'From api-dashboard.search.brave.com']]),
+  },
+  {
+    // Upstash's hosted server; works without a key, a key (Authorization: Bearer …) raises limits.
+    id: 'context7',
+    label: 'Context7 docs',
+    blurb: 'Up-to-date docs and code examples for libraries and frameworks.',
+    category: 'web',
+    needs: [],
+    source: 'https://github.com/upstash/context7',
+    form: httpPreset('context7', 'https://mcp.context7.com/mcp'),
+  },
+  {
+    // PyPI postgres-mcp 0.3.0 (Postgres MCP Pro). Replaces the deprecated @modelcontextprotocol/server-postgres.
+    // Restricted mode keeps it read-only.
+    id: 'postgres',
+    label: 'PostgreSQL',
+    blurb: 'Read-only queries, schema browsing and index advice for a Postgres database.',
+    category: 'data',
+    needs: ['uv'],
+    source: 'https://github.com/crystaldba/postgres-mcp',
+    form: stdioPreset('postgres', 'uvx postgres-mcp --access-mode=restricted', [['DATABASE_URI', 'postgresql://user:password@host:5432/db']]),
+  },
+  {
+    // Supabase's hosted server with sign-in.
+    id: 'supabase',
+    label: 'Supabase',
+    blurb: 'Projects, tables, SQL, logs and edge functions. Sign in after adding.',
+    category: 'data',
+    needs: ['Sign-in'],
+    source: 'https://supabase.com/docs/guides/getting-started/mcp',
+    form: httpPreset('supabase', 'https://mcp.supabase.com/mcp'),
+  },
+  {
+    // npm @modelcontextprotocol/server-memory 1.0.0
+    id: 'memory',
+    label: 'Memory',
+    blurb: 'A small knowledge graph kwants can save facts to and recall later.',
+    category: 'data',
+    needs: ['Node.js'],
+    source: 'https://github.com/modelcontextprotocol/servers/tree/main/src/memory',
+    form: stdioPreset('memory', 'npx -y @modelcontextprotocol/server-memory'),
+  },
+  {
+    // Notion's hosted server with sign-in.
+    id: 'notion',
+    label: 'Notion',
+    blurb: 'Search, read and edit pages and databases. Sign in after adding.',
+    category: 'productivity',
+    needs: ['Sign-in'],
+    source: 'https://developers.notion.com/docs/mcp',
+    form: httpPreset('notion', 'https://mcp.notion.com/mcp'),
+  },
+  {
+    // Linear's hosted server with sign-in.
+    id: 'linear',
+    label: 'Linear',
+    blurb: 'Find, create and update issues, projects and comments. Sign in after adding.',
+    category: 'productivity',
+    needs: ['Sign-in'],
+    source: 'https://linear.app/docs/mcp',
+    form: httpPreset('linear', 'https://mcp.linear.app/mcp'),
+  },
+  {
+    // Atlassian's hosted Rovo MCP server with sign-in.
+    id: 'atlassian',
+    label: 'Jira & Confluence',
+    blurb: 'Search and update Jira issues and Confluence pages. Sign in after adding.',
+    category: 'productivity',
+    needs: ['Sign-in'],
+    source: 'https://github.com/atlassian/atlassian-mcp-server',
+    form: httpPreset('atlassian', 'https://mcp.atlassian.com/v1/mcp'),
+  },
+  {
+    // Sentry's hosted server with sign-in.
+    id: 'sentry',
+    label: 'Sentry',
+    blurb: 'Look into errors, issues and releases. Sign in after adding.',
+    category: 'devtools',
+    needs: ['Sign-in'],
+    source: 'https://github.com/getsentry/sentry-mcp',
+    form: httpPreset('sentry', 'https://mcp.sentry.dev/mcp'),
+  },
+  {
+    // npm @modelcontextprotocol/server-sequential-thinking 1.0.0
+    id: 'sequential-thinking',
+    label: 'Sequential thinking',
+    blurb: 'Helps a kwant plan step by step and revise its plan on hard problems.',
+    category: 'devtools',
+    needs: ['Node.js'],
+    source: 'https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking',
+    form: stdioPreset('sequential-thinking', 'npx -y @modelcontextprotocol/server-sequential-thinking'),
   },
 ];
+
+/** Presets matching a search, by name, blurb, group or what they need. A blank query keeps all. */
+export const searchPresets = (query: string, presets: McpPreset[] = MCP_PRESETS): McpPreset[] => {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return presets;
+  const label = (c: McpPresetCategory) => MCP_PRESET_CATEGORIES.find((x) => x.id === c)?.label ?? c;
+  return presets.filter((p) => {
+    const text = [p.id, p.label, p.blurb, label(p.category), ...p.needs].join(' ').toLowerCase();
+    return words.every((w) => text.includes(w));
+  });
+};
+
+/** Presets grouped for display, in category order, leaving out empty groups. */
+export const groupPresets = (presets: McpPreset[]) =>
+  MCP_PRESET_CATEGORIES.map((c) => ({ ...c, presets: presets.filter((p) => p.category === c.id) })).filter((g) => g.presets.length > 0);
 
 /** Splits a command line into words, honouring '…' and "…" quotes and backslash escapes. */
 export const splitCommandLine = (line: string): string[] => {

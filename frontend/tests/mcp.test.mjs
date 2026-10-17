@@ -10,6 +10,9 @@ const { outputText } = ts.transpileModule(source, {
 const mcp = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 const {
   MCP_PRESETS,
+  MCP_PRESET_CATEGORIES,
+  searchPresets,
+  groupPresets,
   SECRET_MASK,
   emptyMcpForm,
   formToPayload,
@@ -112,10 +115,65 @@ test('editing a server never puts the mask in an input, and saving unchanged kee
   assert.deepEqual([payload.command, ...payload.args], ['npx', '-y', 'a b']);
 });
 
-test('presets are valid forms with distinct ids', () => {
-  assert.ok(MCP_PRESETS.length >= 2);
+test('presets are valid forms with distinct ids and names', () => {
+  assert.ok(MCP_PRESETS.length >= 12);
   assert.equal(new Set(MCP_PRESETS.map((p) => p.id)).size, MCP_PRESETS.length);
-  for (const p of MCP_PRESETS) assert.equal(validateMcpForm(p.form), null, p.id);
+  assert.equal(new Set(MCP_PRESETS.map((p) => p.form.name)).size, MCP_PRESETS.length);
+  assert.equal(new Set(MCP_PRESETS.map((p) => p.label)).size, MCP_PRESETS.length);
+  const categories = new Set(MCP_PRESET_CATEGORIES.map((c) => c.id));
+  for (const p of MCP_PRESETS) {
+    assert.equal(validateMcpForm(p.form), null, p.id);
+    assert.ok(categories.has(p.category), `${p.id} category`);
+    assert.match(p.source, /^https:\/\//, `${p.id} source`);
+    assert.ok(p.blurb.length > 0 && p.blurb.length <= 100, `${p.id} blurb`);
+    // Secrets start blank: the user brings their own.
+    for (const row of [...p.form.env, ...p.form.headers]) {
+      assert.equal(row.value, '', `${p.id} ${row.key}`);
+      assert.equal(row.saved, false, `${p.id} ${row.key}`);
+    }
+    // URL servers are https and keep their keys in headers, never in the address.
+    if (p.form.transport === 'http') assert.match(p.form.url, /^https:\/\/[^?#]+$/, p.id);
+    // What a preset needs matches how it runs.
+    const cmd = splitCommandLine(p.form.commandLine)[0];
+    if (cmd === 'npx') assert.ok(p.needs.includes('Node.js'), p.id);
+    if (cmd === 'uvx') assert.ok(p.needs.includes('uv'), p.id);
+    if (p.needs.includes('Sign-in')) assert.equal(p.form.transport, 'http', p.id);
+  }
+});
+
+test('presets avoid deprecated reference servers', () => {
+  const deprecated = ['server-github', 'server-brave-search', 'server-postgres', 'server-slack', 'mcp-server-sqlite'];
+  for (const p of MCP_PRESETS) {
+    for (const d of deprecated) assert.ok(!p.form.commandLine.includes(d), `${p.id} uses ${d}`);
+  }
+});
+
+test('a preset form copies into the payload kwnt expects', () => {
+  const github = MCP_PRESETS.find((p) => p.id === 'github');
+  const payload = formToPayload({ ...github.form, headers: [{ ...github.form.headers[0], value: 'Bearer t' }] });
+  assert.deepEqual(payload.headers, { Authorization: 'Bearer t' });
+  assert.equal(payload.url, 'https://api.githubcopilot.com/mcp/');
+  const pg = formToPayload(MCP_PRESETS.find((p) => p.id === 'postgres').form);
+  assert.deepEqual([pg.command, ...pg.args], ['uvx', 'postgres-mcp', '--access-mode=restricted']);
+  assert.deepEqual(Object.keys(pg.env), ['DATABASE_URI']);
+});
+
+test('searches presets by name, blurb, group and needs', () => {
+  assert.equal(searchPresets('').length, MCP_PRESETS.length);
+  assert.equal(searchPresets('   ').length, MCP_PRESETS.length);
+  assert.deepEqual(searchPresets('NOTION').map((p) => p.id), ['notion']);
+  assert.ok(searchPresets('database').some((p) => p.id === 'postgres'));
+  assert.ok(searchPresets('sign-in').every((p) => p.needs.includes('Sign-in')));
+  assert.ok(searchPresets('dev tools').some((p) => p.id === 'sentry'));
+  assert.deepEqual(searchPresets('zzz-nothing'), []);
+});
+
+test('groups presets in category order and drops empty groups', () => {
+  const groups = groupPresets(MCP_PRESETS);
+  assert.deepEqual(groups.map((g) => g.id), MCP_PRESET_CATEGORIES.map((c) => c.id));
+  assert.equal(groups.reduce((n, g) => n + g.presets.length, 0), MCP_PRESETS.length);
+  assert.deepEqual(groupPresets(searchPresets('notion')).map((g) => g.id), ['productivity']);
+  assert.deepEqual(groupPresets([]), []);
 });
 
 test('reads MCP tool names and recorded tool calls', () => {

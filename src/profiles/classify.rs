@@ -205,6 +205,73 @@ fn relative_reset(lower: &str) -> Option<Duration> {
     found.then_some(total)
 }
 
+/// Key names (matched case-insensitively, as the whole name or its suffix, so `client_secret` and
+/// `x-api-key` count) whose value is a credential when written as `name=value` or `name: value`.
+const CREDENTIAL_KEYS: [&str; 8] = [
+    "password", "passwd", "pwd", "secret", "token", "api_key", "apikey", "api-key",
+];
+
+/// Masks the value in free-text credentials such as `password=hunter2`, `pwd: hunter2` or
+/// `"api_key":"…"`, keeping the key: `password=[redacted]`. Only a key followed by `=` or `:`
+/// counts, so prose like "the password field is empty" is left alone.
+pub fn mask_credentials(text: &str) -> String {
+    let is_name = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if !is_name(bytes[i]) || (i > 0 && is_name(bytes[i - 1])) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && is_name(bytes[i]) {
+            i += 1;
+        }
+        let name = text[start..i].to_ascii_lowercase();
+        if !CREDENTIAL_KEYS.iter().any(|k| name.ends_with(k)) {
+            continue;
+        }
+        // name, an optional closing quote, then `=` or `:`
+        let mut j = i;
+        if j < bytes.len() && (bytes[j] == b'"' || bytes[j] == b'\'') {
+            j += 1;
+        }
+        while j < bytes.len() && bytes[j] == b' ' {
+            j += 1;
+        }
+        if j >= bytes.len() || (bytes[j] != b'=' && bytes[j] != b':') {
+            continue;
+        }
+        j += 1;
+        while j < bytes.len() && bytes[j] == b' ' {
+            j += 1;
+        }
+        // a quoted value up to its closing quote, otherwise up to whitespace or punctuation
+        let (from, to) = match bytes.get(j) {
+            Some(&q) if q == b'"' || q == b'\'' => {
+                let end = text[j + 1..].find(q as char).map_or(bytes.len(), |e| j + 1 + e);
+                (j + 1, end)
+            }
+            _ => {
+                let end = text[j..]
+                    .find(|c: char| c.is_whitespace() || ",;&)]}\"'".contains(c))
+                    .map_or(bytes.len(), |e| j + e);
+                (j, end)
+            }
+        };
+        if to > from {
+            out.push_str(&text[copied..from]);
+            out.push_str("[redacted]");
+            copied = to;
+            i = to;
+        }
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
 /// Shortens provider error text for a chat notice: one line, at most `max` chars, with anything
 /// that looks like a key or token masked.
 pub fn redact_detail(text: &str, max: usize) -> String {
@@ -213,6 +280,7 @@ pub fn redact_detail(text: &str, max: usize) -> String {
         .map(str::trim)
         .find(|l| !l.is_empty())
         .unwrap_or_default();
+    let line = mask_credentials(line);
     let masked: Vec<String> = line
         .split(' ')
         .map(|w| {
@@ -374,5 +442,42 @@ mod tests {
         assert!(!out.contains("second line"));
         assert!(out.contains("[redacted]"));
         assert_eq!(redact_detail(&"x".repeat(300), 10).chars().count(), 11);
+    }
+
+    #[test]
+    fn free_text_credentials_keep_the_key_and_lose_the_value() {
+        for (text, want) in [
+            ("login failed password=hunter2 for bob", "login failed password=[redacted] for bob"),
+            ("password: hunter2", "password: [redacted]"),
+            ("PASSWORD=Hunter2", "PASSWORD=[redacted]"),
+            ("pwd=hunter2", "pwd=[redacted]"),
+            ("passwd=hunter2&user=bob", "passwd=[redacted]&user=bob"),
+            ("secret=s3cr3t", "secret=[redacted]"),
+            ("client_secret: abc", "client_secret: [redacted]"),
+            ("token=abc.def, then", "token=[redacted], then"),
+            ("api_key=abc123", "api_key=[redacted]"),
+            ("X-Api-Key: abc123", "X-Api-Key: [redacted]"),
+            (
+                r#"{"user":"bob","password":"hunter 2","api_key": "abc"}"#,
+                r#"{"user":"bob","password":"[redacted]","api_key": "[redacted]"}"#,
+            ),
+            ("password='hunter2'", "password='[redacted]'"),
+        ] {
+            assert_eq!(redact_detail(text, 500), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn prose_about_credentials_is_left_alone() {
+        for text in [
+            "the password field is empty",
+            "Password incorrect, please try again",
+            "your token expired",
+            "max_tokens=4096 and tokens: 12",
+            "password:",
+            "keyboard=us",
+        ] {
+            assert_eq!(redact_detail(text, 500), text);
+        }
     }
 }
