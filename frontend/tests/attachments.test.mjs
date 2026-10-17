@@ -27,6 +27,12 @@ test('server refusals read as plain language', () => {
   assert.equal(a.uploadErrorText(400, 'bad name'), 'bad name');
   assert.match(a.uploadErrorText(0), /interrupted/);
   assert.match(a.uploadErrorText(500), /HTTP 500/);
+  // Retry can't help when the server refused the file itself
+  for (const st of [400, 413, 415]) assert.equal(a.uploadRetryable(st), false, `HTTP ${st}`);
+  for (const st of [0, 401, 429, 500, 503]) assert.equal(a.uploadRetryable(st), true, `HTTP ${st}`);
+  const e = new a.UploadError(415);
+  assert.equal(e.status, 415);
+  assert.match(e.message, /isn't supported/);
   assert.match(a.sendAttachmentErrorText(409), /already sent/);
   assert.equal(a.sendAttachmentErrorText(500), null);
 });
@@ -94,4 +100,7 @@ test('upload chips show progress, and failures with the reason', () => {
   const failed = ui.chip({ key: 'k', name: 'c.exe', size: 10, progress: 0, state: 'error', error: 'Not supported' });
   assert.match(failed, /role="alert">Not supported/);
   assert.match(failed, /Retry c.exe/);
+  const refused = ui.chip({ key: 'k', name: 'c.exe', size: 10, progress: 0, state: 'error', error: 'Not supported', retryable: false });
+  assert.match(refused, /role="alert">Not supported/);
+  assert.doesNotMatch(refused, /Retry/);
 });

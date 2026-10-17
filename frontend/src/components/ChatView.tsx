@@ -15,6 +15,7 @@ import {
   AttachmentRef,
   MAX_ATTACHMENTS,
   PendingUpload,
+  UploadError,
   composerReady,
   filesFrom,
   isSharedFileMessage,
@@ -22,6 +23,7 @@ import {
   preflightFile,
   readyAttachments,
   uploadAttachment,
+  uploadRetryable,
   uploadSlotsLeft,
 } from '../attachments';
 import { FileTiles, UploadChip } from './Attachments';
@@ -468,7 +470,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     uploadAttachment(file, (progress) => patchUpload(key, { progress }), abort.signal).then(
       (attachment) => patchUpload(key, { state: 'done', progress: 1, attachment, error: undefined }),
       (err: Error) => {
-        if (err.name !== 'AbortError') patchUpload(key, { state: 'error', error: err.message });
+        if (err.name === 'AbortError') return;
+        const retryable = !(err instanceof UploadError) || uploadRetryable(err.status);
+        patchUpload(key, { state: 'error', error: err.message, retryable });
       },
     );
   };

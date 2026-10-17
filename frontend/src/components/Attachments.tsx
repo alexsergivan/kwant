@@ -97,7 +97,7 @@ export const UploadChip: React.FC<{ item: PendingUpload; onRemove: () => void; o
           {failed ? item.error : item.state === 'uploading' ? `Uploading… ${pct}%` : formatBytes(item.size)}
         </span>
       </span>
-      {failed && onRetry && (
+      {failed && onRetry && item.retryable !== false && (
         <button
           type="button"
           onClick={onRetry}

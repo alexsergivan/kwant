@@ -91,6 +91,16 @@ export function uploadErrorText(status: number, serverMessage?: string): string 
   }
 }
 
+/** Whether retrying the same file can help: not when the server refused the file itself. */
+export const uploadRetryable = (status: number) => status !== 400 && status !== 413 && status !== 415;
+
+/** An upload the server refused, or that never reached it (`status` 0). */
+export class UploadError extends Error {
+  constructor(readonly status: number, serverMessage?: string) {
+    super(uploadErrorText(status, serverMessage));
+  }
+}
+
 /** Why `/chat/send` refused a message's files, or null when the status isn't about them. */
 export function sendAttachmentErrorText(status: number): string | null {
   if (status === 409) return 'A file here was already sent. Attach it again to resend.';
@@ -111,6 +121,8 @@ export interface PendingUpload {
   progress: number;
   state: UploadState;
   error?: string;
+  /** False when Retry can't help, e.g. an unsupported file type. */
+  retryable?: boolean;
   attachment?: Attachment;
 }
 
@@ -149,10 +161,10 @@ export function uploadAttachment(file: Blob & { name?: string }, onProgress: (fr
         resolve(body as Attachment);
       } else {
         const msg = body && typeof (body as { error?: unknown }).error === 'string' ? (body as { error: string }).error : undefined;
-        reject(new Error(uploadErrorText(xhr.status, msg)));
+        reject(new UploadError(xhr.status, msg));
       }
     };
-    xhr.onerror = () => reject(new Error(uploadErrorText(0)));
+    xhr.onerror = () => reject(new UploadError(0));
     xhr.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'));
     signal?.addEventListener('abort', () => xhr.abort(), { once: true });
     xhr.send(file);
