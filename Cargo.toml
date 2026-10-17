@@ -39,6 +39,7 @@ tokio-tungstenite = { version = "0.24", features = ["connect"] }
 sha2 = "0.10"
 base64 = "0.22"
 url = "2"
+tz-rs = "0.7"
 
 [dev-dependencies]
 tempfile = "3"
