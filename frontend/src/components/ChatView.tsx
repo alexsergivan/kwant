@@ -537,7 +537,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {teamMembers && teamMembers.length > 0 && (
             <div className="flex items-center gap-2 pl-3 border-l border-zinc-800">
-              <div className="flex -space-x-2 overflow-hidden items-center py-0.5">
+              <div className="flex -space-x-2 items-center px-1 py-1 -my-0.5">
                 {teamMembers.map((member) => (
                   <div
                     key={member.id}
