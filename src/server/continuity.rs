@@ -156,6 +156,8 @@ pub struct SelfScope {
     /// The turn's stop button: a waiting `ask_user` ends when it fires.
     pub cancel: Option<tokio_util::sync::CancellationToken>,
     pub turn_id: Option<String>,
+    /// The turn's workspace (team chats): `share_file` may share files from inside it.
+    pub workspace: Option<std::path::PathBuf>,
 }
 
 /// Where a turn runs, for the delegation tools: results go back to this chat.
@@ -210,6 +212,7 @@ fn tool_list(scope: &SelfScope) -> Value {
         list.extend(super::skills::tools());
         if scope.origin.is_some() {
             list.extend(delegation_tools());
+            list.extend(super::attachments::tools());
             if scope.cancel.is_some() {
                 list.extend(super::questions::tools());
             }
@@ -381,6 +384,10 @@ pub async fn self_endpoint(
         "tools/call" => {
             let args = &msg["params"]["arguments"];
             let name = msg["params"]["name"].as_str().unwrap_or("");
+            if name == "read_attachment" && scope.origin.is_some() {
+                let (content, is_error) = super::attachments::tool_read(&state, &scope, args).await;
+                return rpc_result(id, json!({"content": content, "isError": is_error}));
+            }
             let (text, is_error) = call_tool(&state, &scope, name, args).await;
             tool_text(id, text, is_error)
         }
@@ -473,6 +480,8 @@ async fn call_tool(
         "skill_propose" => super::skills::tool_propose(state, scope, args).await,
         "skill_get" => super::skills::tool_get(state, scope, args).await,
         "ask_user" => super::questions::tool_ask(state, scope, args).await,
+        "list_attachments" if scope.origin.is_some() => super::attachments::tool_list(state, scope).await,
+        "share_file" if scope.origin.is_some() => super::attachments::tool_share(state, scope, args).await,
         "delegate" => super::delegation::tool_delegate(state, scope, args).await,
         "delegation_status" => super::delegation::tool_status(state, scope, args).await,
         "delegation_cancel" => super::delegation::tool_cancel(state, scope, args).await,

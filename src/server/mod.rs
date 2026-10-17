@@ -12,6 +12,7 @@ pub mod continuity;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
+pub mod attachments;
 pub mod questions;
 pub mod skills;
 
@@ -180,6 +181,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/delegations", get(delegation::list_delegations).post(delegation::create_delegation))
         .route("/api/delegations/:id", get(delegation::get_delegation))
         .route("/api/delegations/:id/cancel", post(delegation::cancel_delegation))
+        .route("/api/attachments", get(attachments::list).post(attachments::upload))
+        .route("/api/attachments/:id", get(attachments::get))
+        .route("/api/attachments/:id/content", get(attachments::content))
         .route("/api/questions", get(questions::list))
         .route("/api/questions/:id", get(questions::get))
         .route("/api/questions/:id/answer", post(questions::answer))

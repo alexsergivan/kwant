@@ -320,6 +320,9 @@ pub struct SendChatPayload {
     pub thread_id: Option<String>,
     pub prompt: String,
     pub sender_id: String,
+    /// Uploaded files (`POST /api/attachments`) sent with this message, at most 10.
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
 }
 
 async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Option<String> {
@@ -1048,6 +1051,7 @@ async fn run_kwant_turn_inner(
                 }),
                 cancel: Some(cancel_token.clone()),
                 turn_id: Some(tag.turn_id.clone()),
+                workspace: scope.workspace_dir.clone(),
             }
         });
         let mcp_turn = super::mcp_runtime::prepare_turn_with_self(
@@ -1313,10 +1317,11 @@ async fn run_kwant_turn_inner(
 
 pub async fn send_chat(
     State(state): State<AppState>,
-    Json(payload): Json<SendChatPayload>,
+    Json(mut payload): Json<SendChatPayload>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    let uploads = super::attachments::check_uploads(&state, &payload.attachment_ids).await?;
     if let Some(thread_id) = payload.thread_id.clone() {
-        return send_to_thread(state, thread_id, payload).await;
+        return send_to_thread(state, thread_id, payload, uploads).await;
     }
     let all_kwants = state
         .db
@@ -1466,11 +1471,25 @@ pub async fn send_chat(
         tool_calls: None,
         tokens_used: payload.prompt.len() as i64 / 4,
     };
+    let user_extra = MessageExtra {
+        thread_id: None,
+        meta: (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)})),
+    };
     let saved_user_msg = state
         .db
-        .insert_message(&user_msg)
+        .insert_message_with(&user_msg, &user_extra)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let note = super::attachments::attach_to_message(
+        &state,
+        &uploads,
+        &saved_user_msg.id,
+        payload.channel_id.as_deref(),
+        payload.kwant_id.as_deref(),
+        None,
+    )
+    .await;
+    payload.prompt.push_str(&note);
 
     // Stop answers to this message, chat or team; other dispatches (threads, other chats) keep going
     let mut keys = vec![saved_user_msg.id.clone()];
@@ -1697,6 +1716,7 @@ async fn send_to_thread(
     state: AppState,
     thread_id: String,
     payload: SendChatPayload,
+    uploads: Vec<crate::db::attachments::Attachment>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let thread = state.db.get_thread(&thread_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
     if thread.archived {
@@ -1717,13 +1737,15 @@ async fn send_to_thread(
         tool_calls: None,
         tokens_used: payload.prompt.len() as i64 / 4,
     };
-    let extra = MessageExtra { thread_id: Some(thread.id.clone()), meta: None };
+    let meta = (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)}));
+    let extra = MessageExtra { thread_id: Some(thread.id.clone()), meta };
     let saved = state.db.insert_message_with(&user_msg, &extra).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let _ = state.db.touch_thread(&thread.id).await;
+    let note = super::attachments::attach_to_message(&state, &uploads, &saved.id, None, None, Some(&thread.id)).await;
 
     let job = state.turns.start_job([saved.id.clone(), thread.id.clone()]);
     let scope = scope_for(&state, &kwant, None, Some(thread.id.clone()), &job, depth).await.map_err(|_| StatusCode::NOT_FOUND)?;
-    let prompt = payload.prompt;
+    let prompt = payload.prompt + &note;
     let target = kwant.clone();
     tokio::spawn(async move {
         let _job = job;

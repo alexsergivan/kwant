@@ -2,6 +2,7 @@ pub mod models;
 pub mod profiles;
 pub mod continuity;
 pub mod threads;
+pub mod attachments;
 pub mod questions;
 pub mod skills;
 
@@ -88,6 +89,7 @@ impl Database {
         db.migrate_threads().await?;
         db.migrate_skills().await?;
         db.migrate_questions().await?;
+        db.migrate_attachments().await?;
         db.seed_defaults().await?;
 
         Ok(db)
