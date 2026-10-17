@@ -179,7 +179,7 @@ export const backgroundTurns = (turns: TurnMap, kwantId: string): TrackedTurn[] 
 // ---------------------------------------------------------------------------
 // Thread list and status badges
 
-export type BadgeKind = 'working' | 'queued' | 'done' | 'failed' | 'interrupted' | 'cancelled';
+export type BadgeKind = 'working' | 'waiting' | 'queued' | 'done' | 'failed' | 'interrupted' | 'cancelled';
 
 export interface Badge {
   kind: BadgeKind;
@@ -194,10 +194,15 @@ const FINAL_LABEL: Record<string, Badge> = {
   interrupted: { kind: 'interrupted', label: 'Interrupted' },
 };
 
-/** A thread's badge: live turns win over the delegation record; idle user threads have none. */
-export function threadBadge(thread: Pick<Thread, 'id' | 'delegation'>, turns: TurnMap): Badge | null {
+/**
+ * A thread's badge: live turns win over the delegation record; idle user threads have none.
+ * A turn paused on the person's answer (`awaiting`) reads "Waiting for you", not "Working".
+ */
+export function threadBadge(thread: Pick<Thread, 'id' | 'delegation'>, turns: TurnMap, awaiting?: ReadonlySet<string>): Badge | null {
   const live = turnsIn(turns, thread.id);
-  if (live.some((t) => t.state === 'running')) return { kind: 'working', label: 'Working' };
+  const running = live.filter((t) => t.state === 'running');
+  if (running.some((t) => !awaiting?.has(t.turn_id))) return { kind: 'working', label: 'Working' };
+  if (running.length) return { kind: 'waiting', label: 'Waiting for you' };
   const queued = live.find((t) => t.state === 'queued');
   if (queued) {
     const pos = queuePosition(turns, queued.turn_id);

@@ -98,3 +98,19 @@ test('answered and dismissed cards are closed', () => {
   assert.match(dismissed, /Dismissed/);
   assert.equal((dismissed.match(/disabled=""/g) || []).length, 2, 'every choice disabled');
 });
+
+test('a turn paused on a question reads "Waiting for you", not "Working"', async () => {
+  const th = await loadBundled(`export * from './src/threads';`);
+  const turns = th.hydrateTurns([
+    { turn_id: 't1', kwant_id: 'cto', context_id: 'cto', thread_id: null, state: 'running', since: '2026-10-17T10:00:00Z' },
+  ]);
+  const direct = { id: 'cto', delegation: null };
+  assert.equal(th.threadBadge(direct, turns).label, 'Working');
+  assert.deepEqual(th.threadBadge(direct, turns, q.turnsAwaitingAnswer({ q1: rec({ turn_id: 't1' }) })), { kind: 'waiting', label: 'Waiting for you' });
+  // A second request it is working on in the same chat wins.
+  const both = th.hydrateTurns([
+    { turn_id: 't1', kwant_id: 'cto', context_id: 'cto', thread_id: null, state: 'running', since: '2026-10-17T10:00:00Z' },
+    { turn_id: 't2', kwant_id: 'cto', context_id: 'cto', thread_id: null, state: 'running', since: '2026-10-17T10:01:00Z' },
+  ]);
+  assert.equal(th.threadBadge(direct, both, new Set(['t1'])).kind, 'working');
+});

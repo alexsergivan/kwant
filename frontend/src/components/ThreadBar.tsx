@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Archive, ArchiveRestore, ArrowLeft, ArrowRightLeft, Loader2, MessageSquare, Plus, RotateCw, Square } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, ArrowRightLeft, HelpCircle, Loader2, MessageSquare, Plus, RotateCw, Square } from 'lucide-react';
 import { Badge, BadgeKind, Thread, TurnMap, sortThreads, threadBadge } from '../threads';
 
 const BADGE_STYLE: Record<BadgeKind, string> = {
   working: 'text-sky-300 bg-sky-500/10 border-sky-500/30',
+  waiting: 'text-amber-300 bg-amber-500/10 border-amber-500/30',
   queued: 'text-amber-300 bg-amber-500/10 border-amber-500/30',
   done: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30',
   failed: 'text-rose-300 bg-rose-500/10 border-rose-500/30',
@@ -16,6 +17,7 @@ export const StatusBadge: React.FC<{ badge: Badge; className?: string }> = ({ ba
     className={`inline-flex items-center gap-1 px-1.5 py-px rounded-full border text-[10px] font-medium whitespace-nowrap ${BADGE_STYLE[badge.kind]} ${className}`}
   >
     {badge.kind === 'working' && <Loader2 size={9} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+    {badge.kind === 'waiting' && <HelpCircle size={9} aria-hidden="true" />}
     {badge.label}
   </span>
 );
@@ -27,6 +29,8 @@ export interface ThreadBarProps {
   error: string | null;
   openThreadId: string | null;
   turns: TurnMap;
+  /** Turns paused on a question to the person. */
+  awaiting?: ReadonlySet<string>;
   /** Badge for the direct chat itself (working / queued). */
   directBadge: Badge | null;
   showArchived: boolean;
@@ -52,6 +56,7 @@ export const ThreadBar: React.FC<ThreadBarProps> = ({
   error,
   openThreadId,
   turns,
+  awaiting,
   directBadge,
   showArchived,
   onToggleArchived,
@@ -110,7 +115,7 @@ export const ThreadBar: React.FC<ThreadBarProps> = ({
         )}
 
         {visible.map((t) => {
-          const badge = threadBadge(t, turns);
+          const badge = threadBadge(t, turns, awaiting);
           const isOpen = openThreadId === t.id;
           const delegated = t.kind === 'delegation';
           return (
@@ -192,7 +197,7 @@ export interface ThreadHeaderProps {
 export const ThreadHeader: React.FC<ThreadHeaderProps> = ({ thread, badge, delegatedBy, onBack, onStop, onArchive }) => {
   const [busy, setBusy] = useState<'stop' | 'archive' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const running = badge?.kind === 'working' || badge?.kind === 'queued';
+  const running = badge?.kind === 'working' || badge?.kind === 'waiting' || badge?.kind === 'queued';
 
   const act = async (kind: 'stop' | 'archive', fn: () => Promise<string | void>) => {
     setBusy(kind);

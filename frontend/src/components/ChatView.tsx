@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin } from 'lucide-react';
+import { ArrowUp, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -11,6 +11,20 @@ import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThr
 import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
 import { QuestionMeta, parseQuestionMeta } from '../questions';
+import {
+  AttachmentRef,
+  MAX_ATTACHMENTS,
+  PendingUpload,
+  composerReady,
+  filesFrom,
+  isSharedFileMessage,
+  parseAttachments,
+  preflightFile,
+  readyAttachments,
+  uploadAttachment,
+  uploadSlotsLeft,
+} from '../attachments';
+import { FileTiles, UploadChip } from './Attachments';
 
 export interface ChatMessage {
   id: string;
@@ -76,7 +90,8 @@ export interface ChatViewProps {
   pendingApproval: PendingApproval | null;
   isStreaming: boolean;
   streamingSpeakerName?: string;
-  onSendMessage: (text: string) => void;
+  /** `attachments` are files already uploaded from the composer. */
+  onSendMessage: (text: string, attachments: AttachmentRef[]) => void;
   onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
@@ -264,6 +279,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const toggleVm = onToggleVmPane || (() => setInternalIsVmPaneOpen((prev) => !prev));
 
   const [inputVal, setInputVal] = useState('');
+  const [uploads, setUploads] = useState<PendingUpload[]>([]);
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const uploadFiles = useRef(new Map<string, { file: File; abort: AbortController }>());
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepth = useRef(0);
   const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -438,14 +459,96 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  const patchUpload = (key: string, patch: Partial<PendingUpload>) =>
+    setUploads((list) => list.map((u) => (u.key === key ? { ...u, ...patch } : u)));
+
+  const startUpload = (key: string, file: File) => {
+    const abort = new AbortController();
+    uploadFiles.current.set(key, { file, abort });
+    uploadAttachment(file, (progress) => patchUpload(key, { progress }), abort.signal).then(
+      (attachment) => patchUpload(key, { state: 'done', progress: 1, attachment, error: undefined }),
+      (err: Error) => {
+        if (err.name !== 'AbortError') patchUpload(key, { state: 'error', error: err.message });
+      },
+    );
+  };
+
+  /** Files from the picker, a drop or a paste: checked here, then uploaded right away. */
+  const addFiles = (files: File[]) => {
+    if (!files.length) return;
+    const room = uploadSlotsLeft(uploads);
+    const notes: string[] = [];
+    if (files.length > room) notes.push(`Up to ${MAX_ATTACHMENTS} files per message; ${files.length - room === 1 ? 'one was' : `${files.length - room} were`} left out.`);
+    const added: PendingUpload[] = [];
+    for (const file of files.slice(0, room)) {
+      const problem = preflightFile(file);
+      if (problem) {
+        notes.push(problem);
+        continue;
+      }
+      const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      added.push({ key, name: file.name || 'pasted file', size: file.size, progress: 0, state: 'uploading' });
+      startUpload(key, file);
+    }
+    setUploadNote(notes.length ? notes.join(' ') : null);
+    if (added.length) setUploads((list) => [...list, ...added]);
+  };
+
+  const removeUpload = (key: string) => {
+    uploadFiles.current.get(key)?.abort.abort();
+    uploadFiles.current.delete(key);
+    setUploads((list) => list.filter((u) => u.key !== key));
+  };
+
+  const retryUpload = (key: string) => {
+    const f = uploadFiles.current.get(key)?.file;
+    if (!f) return;
+    patchUpload(key, { state: 'uploading', progress: 0, error: undefined });
+    startUpload(key, f);
+  };
+
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
+  const dropHandlers = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current += 1;
+      setDragOver(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragOver(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragOver(false);
+      addFiles(filesFrom(e.dataTransfer.files));
+      textareaRef.current?.focus();
+    },
+  };
+
+  const canSend = composerReady(inputVal, uploads);
+  const stillUploading = uploads.some((u) => u.state === 'uploading');
+
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     // A reply in progress doesn't block the next message (it waits its turn); a team discussion does.
-    if (!inputVal.trim() || (isStreaming && discussionState?.inProgress)) return;
+    if (!canSend || (isStreaming && discussionState?.inProgress)) return;
     playSfx('click');
     stickRef.current = true;
-    onSendMessage(inputVal.trim());
+    onSendMessage(inputVal.trim(), readyAttachments(uploads));
     setInputVal('');
+    setUploads([]);
+    setUploadNote(null);
+    uploadFiles.current.clear();
     setMentionQuery(null);
     setMentionStartIndex(-1);
     if (textareaRef.current) {
@@ -499,6 +602,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const question = msg.meta && renderQuestion ? parseQuestionMeta(msg.meta) : null;
     if (question && renderQuestion) return <React.Fragment key={msg.id}>{renderQuestion(msg, question, flashId === msg.id)}</React.Fragment>;
     const isUser = msg.sender_role === 'user';
+    const files = msg.meta ? parseAttachments(msg.meta) : [];
+    // An agent's share_file note: the file tiles say it all.
+    const filesOnly = files.length > 0 && isSharedFileMessage(msg.meta);
     const isThoughtOpen = !!openThoughts[msg.id];
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
 
@@ -549,6 +655,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
 
           {/* Message Body Bubble */}
+          {!filesOnly && (msg.text.trim() || !files.length) && (
           <div
             className={`p-4 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
               isUser
@@ -562,11 +669,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <MarkdownRenderer content={msg.text} />
             )}
           </div>
+          )}
+          {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} />}
 
           {!isUser && msg.tool_calls && <ToolCallsList raw={msg.tool_calls} />}
 
           {/* Copy action */}
-          {!isUser && (
+          {!isUser && !filesOnly && (
             <div className="mt-1.5 flex items-center gap-2 text-zinc-500 text-xs">
               <button
                 type="button"
@@ -948,8 +1057,36 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         <form
           onSubmit={handleSubmit}
-          className="relative max-w-4xl mx-auto flex items-end gap-2 bg-zinc-900 border border-zinc-800 focus-within:border-zinc-700 rounded-2xl p-2 shadow-sm transition-all"
+          {...dropHandlers}
+          aria-label={`Message ${title}`}
+          className={`relative max-w-4xl mx-auto flex flex-wrap items-end gap-2 bg-zinc-900 border rounded-2xl p-2 shadow-sm transition-all ${
+            dragOver ? 'border-sky-500/70 bg-sky-950/30' : 'border-zinc-800 focus-within:border-zinc-700'
+          }`}
         >
+          {dragOver && (
+            <div className="absolute inset-0 z-10 rounded-2xl border-2 border-dashed border-sky-400/70 bg-zinc-950/80 flex items-center justify-center gap-2 text-sm font-medium text-sky-200 pointer-events-none">
+              <Paperclip size={15} aria-hidden="true" /> Drop files to attach
+            </div>
+          )}
+          {(uploads.length > 0 || uploadNote) && (
+            <div className="basis-full min-w-0 px-1 pt-0.5 space-y-1.5">
+              {uploads.length > 0 && (
+                <ul className="flex flex-wrap gap-1.5 min-w-0" aria-label="Files to send">
+                  {uploads.map((u) => (
+                    <UploadChip key={u.key} item={u} onRemove={() => removeUpload(u.key)} onRetry={() => retryUpload(u.key)} />
+                  ))}
+                </ul>
+              )}
+              {uploadNote && (
+                <p role="alert" className="flex items-start gap-2 text-[11px] text-amber-300">
+                  <span className="min-w-0">{uploadNote}</span>
+                  <button type="button" onClick={() => setUploadNote(null)} className="shrink-0 text-zinc-500 hover:text-zinc-300 underline-offset-2 hover:underline">
+                    Dismiss
+                  </button>
+                </p>
+              )}
+            </div>
+          )}
           {isMentionOpen && (
             <MentionPopover
               items={matchingItems}
@@ -970,6 +1107,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
               checkMention(val, e.target.selectionStart);
             }}
             onKeyDown={handleKeyDown}
+            onPaste={(e) => {
+              const pasted = filesFrom(e.clipboardData.items);
+              if (pasted.length) {
+                e.preventDefault();
+                addFiles(pasted);
+              }
+            }}
             onClick={(e) => {
               checkMention(inputVal, (e.target as HTMLTextAreaElement).selectionStart);
             }}
@@ -979,8 +1123,29 @@ export const ChatView: React.FC<ChatViewProps> = ({
               }
             }}
             placeholder={`Message ${title}... (Enter to send, Shift+Enter for newline, @ to mention)`}
-            className="flex-1 bg-transparent px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-40 leading-relaxed font-sans"
+            className="flex-1 min-w-0 bg-transparent px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-40 leading-relaxed font-sans"
           />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            tabIndex={-1}
+            onChange={(e) => {
+              addFiles(filesFrom(e.target.files));
+              e.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadSlotsLeft(uploads) === 0}
+            title={uploadSlotsLeft(uploads) === 0 ? `Up to ${MAX_ATTACHMENTS} files per message` : 'Attach files (or drop / paste them here). Max 20 MB each.'}
+            aria-label="Attach files"
+            className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+          >
+            <Paperclip size={16} aria-hidden="true" />
+          </button>
 
           {isStreaming && (
             <button
@@ -993,13 +1158,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <Square size={12} fill="currentColor" aria-hidden="true" />
             </button>
           )}
-          {!(isStreaming && (discussionState?.inProgress || !inputVal.trim())) && (
+          {!(isStreaming && (discussionState?.inProgress || !canSend)) && (
             <button
               type="submit"
-              aria-label={isStreaming ? 'Send (waits for the current reply)' : 'Send'}
-              disabled={!inputVal.trim()}
+              aria-label={stillUploading ? 'Send (waiting for uploads)' : isStreaming ? 'Send (waits for the current reply)' : 'Send'}
+              title={stillUploading ? 'Waiting for uploads to finish' : undefined}
+              disabled={!canSend}
               className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 ${
-                inputVal.trim()
+                canSend
                   ? 'bg-sky-500 text-white hover:bg-sky-400 shadow-sm'
                   : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
               }`}

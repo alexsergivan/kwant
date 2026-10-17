@@ -47,6 +47,7 @@ import {
 import type { PinnedItem } from './components/Instructions';
 import type { EditTab } from './components/NewAgentModal';
 import { Skill, applySkillEvent, pendingByKwant, skillsApi } from './skills';
+import { AttachmentRef, sendAttachmentErrorText } from './attachments';
 import {
   Question,
   QuestionMeta,
@@ -840,7 +841,7 @@ export const App: React.FC = () => {
     });
   };
 
-  const handleSendMessage = async (text: string) => {
+  const handleSendMessage = async (text: string, attachments: AttachmentRef[] = []) => {
     const targetId = openCtx;
     const threadId = openThreadId;
     const isTargetChannel = isChannel;
@@ -867,6 +868,7 @@ export const App: React.FC = () => {
       sender_role: 'user',
       sender_id: 'PlayerHero',
       text,
+      meta: attachments.length ? JSON.stringify({ attachments }) : null,
     };
     const cached = messagesCacheRef.current[targetId] || messages;
     const updated = [...cached, userMsg];
@@ -875,24 +877,26 @@ export const App: React.FC = () => {
       setMessages(updated);
     }
 
+    const attachment_ids = attachments.map((a) => a.id);
     try {
       const res = await fetch('/api/chat/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
           threadId
-            ? { thread_id: threadId, prompt: text, sender_id: 'PlayerHero' }
+            ? { thread_id: threadId, prompt: text, sender_id: 'PlayerHero', attachment_ids }
             : {
                 channel_id: isTargetChannel ? targetId : null,
                 kwant_id: !isTargetChannel ? targetId : null,
                 team_id: targetTeam || null,
                 prompt: text,
                 sender_id: 'PlayerHero',
+                attachment_ids,
               },
         ),
       });
       if (!res.ok) {
-        let message = `HTTP ${res.status}`;
+        let message = attachments.length ? sendAttachmentErrorText(res.status) ?? `HTTP ${res.status}` : `HTTP ${res.status}`;
         try {
           const data = await res.json();
           if (typeof data?.error === 'string') message = data.error;
@@ -1709,7 +1713,8 @@ export const App: React.FC = () => {
         error={threadErrors[currentKwant.id] ?? null}
         openThreadId={openThreadId}
         turns={turns}
-        directBadge={threadBadge({ id: currentKwant.id, delegation: null }, turns)}
+        awaiting={awaitingTurns}
+        directBadge={threadBadge({ id: currentKwant.id, delegation: null }, turns, awaitingTurns)}
         showArchived={showArchived}
         onToggleArchived={() => setShowArchived((v) => !v)}
         onOpenDirect={openDirectChat}
@@ -1723,6 +1728,7 @@ export const App: React.FC = () => {
           badge={threadBadge(
             { id: shownThread.id, delegation: shownThread.delegation ? delegations[shownThread.delegation.id] ?? shownThread.delegation : null },
             turns,
+            awaitingTurns,
           )}
           delegatedBy={kwantName(shownThread.delegation?.lead_kwant_id ?? shownThread.created_by)}
           onBack={openDirectChat}
