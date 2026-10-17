@@ -1,0 +1,293 @@
+//! "While you were away" (batch 3): `GET /api/away` lists what's waiting on the user, what
+//! finished and what failed or got stuck; `POST /api/away/seen` records that the user looked,
+//! which moves the default `since` and resets the unseen counts for the sidebar badge.
+//!
+//! Summaries are one line of at most [`SUMMARY_CHARS`] with anything key-like masked: results
+//! and errors can carry provider text.
+
+use super::AppState;
+use crate::db::away::{AwayRow, LAST_SEEN_KEY};
+use crate::profiles::classify::redact_detail;
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+/// Most items per list.
+pub const MAX_ITEMS: i64 = 50;
+/// A delegation still running this long after it started counts as stuck.
+pub const STUCK_AFTER_MINUTES: i64 = 30;
+/// How far back the page looks when the user has never marked it seen.
+pub const DEFAULT_LOOKBACK_DAYS: i64 = 7;
+pub const SUMMARY_CHARS: usize = 200;
+const TITLE_CHARS: usize = 120;
+/// Argument names whose values are never shown in an approval's summary.
+const SECRET_ARG_HINTS: [&str; 6] = ["key", "token", "secret", "password", "auth", "cookie"];
+
+fn error(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(json!({ "error": message.into() }))).into_response()
+}
+
+fn internal() -> Response {
+    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+}
+
+fn rfc3339(t: DateTime<Utc>) -> String {
+    t.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+/// Whether `word` looks like a key or token, by the same rule provider errors are masked with.
+fn looks_secret(word: &str) -> bool {
+    !word.is_empty() && redact_detail(word, usize::MAX) == "[redacted]"
+}
+
+/// One line for a card: the first non-empty line without markdown markers, at most
+/// [`SUMMARY_CHARS`], with any word that has a key-like part (`"sk-…"`, `key=…`) masked.
+pub fn summarize(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(|l| l.trim().trim_start_matches(['#', '>', '*', '-', ' ']).trim())
+        .find(|l| !l.is_empty())
+        .unwrap_or_default();
+    let masked: Vec<&str> = line
+        .split_whitespace()
+        .map(|w| {
+            if w.split(|c: char| "\"'`=:,;()[]{}<>".contains(c)).any(looks_secret) {
+                "[redacted]"
+            } else {
+                w
+            }
+        })
+        .collect();
+    let joined = masked.join(" ");
+    if joined.chars().count() > SUMMARY_CHARS {
+        let cut: String = joined.chars().take(SUMMARY_CHARS - 1).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        joined
+    }
+}
+
+fn clip_title(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= TITLE_CHARS {
+        return line;
+    }
+    let cut: String = line.chars().take(TITLE_CHARS - 1).collect();
+    format!("{cut}…")
+}
+
+/// An approval's stored details as `name: value` pairs, sensitive argument names masked.
+fn approval_summary(parameters: &str) -> String {
+    let details: Value = serde_json::from_str(parameters).unwrap_or(Value::Null);
+    let mut parts = Vec::new();
+    if let Some(args) = details["arguments"].as_object() {
+        for (k, v) in args {
+            let lower = k.to_ascii_lowercase();
+            let shown = if SECRET_ARG_HINTS.iter().any(|h| lower.contains(h)) {
+                "[redacted]".to_string()
+            } else {
+                match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                }
+            };
+            parts.push(format!("{k}: {shown}"));
+        }
+    }
+    if parts.is_empty() {
+        return "Wants your approval to use this tool".into();
+    }
+    summarize(&parts.join(", "))
+}
+
+fn approval_title(tool_name: &str, parameters: &str) -> String {
+    let details: Value = serde_json::from_str(parameters).unwrap_or(Value::Null);
+    match (details["tool"].as_str(), details["server"].as_str()) {
+        (Some(tool), Some(server)) => clip_title(&format!("Use {tool} ({server})")),
+        _ => clip_title(&format!("Use {tool_name}")),
+    }
+}
+
+fn fallback_summary(row: &AwayRow) -> &'static str {
+    match (row.kind.as_str(), row.status.as_str()) {
+        (_, "stuck") => "Still running with no result yet",
+        (_, "completed" | "ok") => "Finished",
+        (_, "interrupted") => "Stopped before it finished",
+        _ => "Failed",
+    }
+}
+
+fn item(row: AwayRow) -> Value {
+    let (title, summary) = match row.kind.as_str() {
+        "approval" => {
+            let params = row.body.as_deref().unwrap_or("");
+            (approval_title(&row.title, params), approval_summary(params))
+        }
+        "question" => {
+            let choices: Vec<String> = row
+                .choices
+                .as_deref()
+                .and_then(|c| serde_json::from_str(c).ok())
+                .unwrap_or_default();
+            let summary = if choices.is_empty() {
+                "Waiting for your answer".to_string()
+            } else {
+                summarize(&format!("Choices: {}", choices.join(" · ")))
+            };
+            (clip_title(&row.title), summary)
+        }
+        _ => {
+            let summary = row.body.as_deref().map(summarize).filter(|s| !s.is_empty());
+            (clip_title(&row.title), summary.unwrap_or_else(|| fallback_summary(&row).into()))
+        }
+    };
+    let mut v = json!({
+        "kind": row.kind,
+        "id": row.id,
+        "kwant_id": row.kwant_id,
+        "kwant_name": row.kwant_name.unwrap_or_else(|| "An agent".into()),
+        "title": title,
+        "summary": summary,
+        "status": row.status,
+        "timestamp": rfc3339(row.at),
+        "link": {
+            "thread_id": row.thread_id,
+            "channel_id": row.channel_id,
+            "direct_kwant_id": row.direct_kwant_id,
+        },
+    });
+    if row.kind == "question" {
+        v["choices"] = row
+            .choices
+            .as_deref()
+            .and_then(|c| serde_json::from_str(c).ok())
+            .unwrap_or_else(|| json!([]));
+    }
+    v
+}
+
+async fn last_seen(state: &AppState) -> Result<Option<DateTime<Utc>>, crate::db::DbError> {
+    Ok(state
+        .db
+        .get_setting(LAST_SEEN_KEY)
+        .await?
+        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+        .map(|t| t.with_timezone(&Utc)))
+}
+
+/// Approvals the broker still waits on, each linked to the chat its turn runs in.
+async fn waiting_approvals(state: &AppState) -> Result<Vec<AwayRow>, crate::db::DbError> {
+    let live = state.broker.pending_ids().await;
+    let mut rows = state.db.away_pending_approvals(&live).await?;
+    let turns = state.turns.active_turns();
+    // turn_id isn't in the row; look it up by ticket
+    for row in &mut rows {
+        let turn_id = state.db.get_approval(&row.id).await?.map(|a| a.turn_id);
+        let turn = turns.iter().find(|t| Some(&t.turn_id) == turn_id.as_ref());
+        match turn {
+            Some(t) if t.thread_id.is_some() => row.thread_id = t.thread_id.clone(),
+            Some(t) => match state.db.get_channel(&t.context_id).await?.is_some() {
+                true => row.channel_id = Some(t.context_id.clone()),
+                false => row.direct_kwant_id = Some(t.context_id.clone()),
+            },
+            None => row.direct_kwant_id = Some(row.kwant_id.clone()),
+        }
+    }
+    Ok(rows)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AwayQuery {
+    pub since: Option<String>,
+}
+
+/// `GET /api/away?since=<RFC 3339>`: `since` defaults to the last-seen marker, else 7 days ago.
+/// Waiting items and stuck delegations are listed whatever `since` is: they still need you.
+pub async fn get(State(state): State<AppState>, Query(q): Query<AwayQuery>) -> Response {
+    let now = Utc::now();
+    let Ok(seen) = last_seen(&state).await else {
+        return internal();
+    };
+    let default_since = seen.unwrap_or(now - Duration::days(DEFAULT_LOOKBACK_DAYS));
+    let since = match q.since.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => default_since,
+        Some(s) => match DateTime::parse_from_rfc3339(s) {
+            Ok(t) => t.with_timezone(&Utc),
+            Err(_) => return error(StatusCode::BAD_REQUEST, "since must be an RFC 3339 time, e.g. 2026-10-17T09:00:00Z"),
+        },
+    };
+    let stuck_before = now - Duration::minutes(STUCK_AFTER_MINUTES);
+
+    let result = async {
+        let mut waiting = state.db.away_open_questions(MAX_ITEMS).await?;
+        let approvals = waiting_approvals(&state).await?;
+        let waiting_count = state.db.away_count_open_questions().await? + approvals.len() as i64;
+        waiting.extend(approvals);
+        waiting.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| b.id.cmp(&a.id)));
+        waiting.truncate(MAX_ITEMS as usize);
+        let finished = state.db.away_finished(since, MAX_ITEMS).await?;
+        let failed = state.db.away_failed(since, stuck_before, MAX_ITEMS).await?;
+        // The badge counts from the marker, whatever this page asked for
+        let (unseen_finished, unseen_failed) = state.db.away_counts(default_since, stuck_before).await?;
+        Ok::<_, crate::db::DbError>((waiting, finished, failed, waiting_count, unseen_finished, unseen_failed))
+    }
+    .await;
+    let Ok((waiting, finished, failed, waiting_count, unseen_finished, unseen_failed)) = result else {
+        return internal();
+    };
+    Json(json!({
+        "since": rfc3339(since),
+        "last_seen": seen.map(rfc3339),
+        "now": rfc3339(now),
+        "stuck_after_minutes": STUCK_AFTER_MINUTES,
+        "waiting": waiting.into_iter().map(item).collect::<Vec<_>>(),
+        "finished": finished.into_iter().map(item).collect::<Vec<_>>(),
+        "failed": failed.into_iter().map(item).collect::<Vec<_>>(),
+        "unseen": {
+            "waiting": waiting_count,
+            "finished": unseen_finished,
+            "failed": unseen_failed,
+            "total": waiting_count + unseen_finished + unseen_failed,
+        },
+    }))
+    .into_response()
+}
+
+/// `POST /api/away/seen`: the user has looked; returns the stored marker.
+pub async fn seen(State(state): State<AppState>) -> Response {
+    let now = Utc::now();
+    if state.db.set_setting(LAST_SEEN_KEY, &rfc3339(now)).await.is_err() {
+        return internal();
+    }
+    Json(json!({ "last_seen": rfc3339(now) })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summaries_are_one_short_masked_line() {
+        assert_eq!(summarize("\n\n## Done\nmore"), "Done");
+        let s = summarize(r#"401 from provider: {"key":"sk-ant-api03-abcdefghijklmnop1234"} key=xai-ABCDEFGH12345678abcd"#);
+        assert!(!s.contains("sk-ant") && !s.contains("xai-"), "{s}");
+        assert!(s.starts_with("401 from provider:"));
+        let long = summarize(&"word ".repeat(100));
+        assert_eq!(long.chars().count(), SUMMARY_CHARS);
+        assert!(long.ends_with('…'));
+    }
+
+    #[test]
+    fn approval_summaries_hide_sensitive_arguments() {
+        let p = r#"{"tool":"send","server":"mail","arguments":{"to":"a@b.c","api_token":"plain-but-hidden"}}"#;
+        assert_eq!(approval_title("mcp__mail__send", p), "Use send (mail)");
+        let s = approval_summary(p);
+        assert!(s.contains("to: a@b.c") && !s.contains("plain-but-hidden"), "{s}");
+    }
+}

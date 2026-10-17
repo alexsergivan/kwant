@@ -15,6 +15,7 @@ pub mod delegation;
 pub mod attachments;
 pub mod questions;
 pub mod skills;
+pub mod away;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -193,6 +194,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/skills/:id/diff", get(skills::diff))
         .route("/api/skills/:id/approve", post(skills::approve))
         .route("/api/skills/:id/reject", post(skills::reject))
+        .route("/api/away", get(away::get))
+        .route("/api/away/seen", post(away::seen))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))
