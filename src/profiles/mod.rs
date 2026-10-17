@@ -230,9 +230,30 @@ pub struct Availability {
     pub with_key: HashSet<String>,
     /// Profiles whose last login check said signed out.
     pub signed_out: HashSet<String>,
+    /// Profiles whose last login check said signed in.
+    pub signed_in: HashSet<String>,
+}
+
+/// How sure an account check must be that a profile is signed in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignInBar {
+    /// Not known to be signed out: what turn routing uses, so a profile isn't skipped before
+    /// its first sign-in check.
+    NotSignedOut,
+    /// Signed in on its last check (an API-key profile: has its key): what Engines calls ready.
+    SignedIn,
 }
 
 impl Availability {
+    /// Whether `p` passes `bar`: also never out of quota, and never an API-key profile without
+    /// its key.
+    pub fn admits(&self, p: &LlmProfile, now: DateTime<Utc>, bar: SignInBar) -> bool {
+        self.usable(p, now)
+            && (bar == SignInBar::NotSignedOut
+                || p.kind == "api_key"
+                || self.signed_in.contains(&p.id))
+    }
+
     fn usable(&self, p: &LlmProfile, now: DateTime<Utc>) -> bool {
         let limited = self
             .states
@@ -242,6 +263,28 @@ impl Availability {
         let keyless = p.kind == "api_key" && !self.with_key.contains(&p.id);
         !limited && !keyless && !self.signed_out.contains(&p.id)
     }
+}
+
+/// `engine`'s enabled profiles in the order failover prefers them: `bound` (if it is one of
+/// them) or else the default first, then the rest by priority.
+pub fn preference_order<'a>(
+    profiles: &'a [LlmProfile],
+    engine: Engine,
+    bound: Option<&str>,
+) -> Vec<&'a LlmProfile> {
+    let mut mine: Vec<&LlmProfile> = profiles
+        .iter()
+        .filter(|p| p.engine == engine.as_str() && p.enabled)
+        .collect();
+    mine.sort_by(|a, b| (a.priority, a.created_at, &a.id).cmp(&(b.priority, b.created_at, &b.id)));
+    let first = bound
+        .and_then(|id| mine.iter().position(|p| p.id == id))
+        .or_else(|| mine.iter().position(|p| p.is_default));
+    if let Some(i) = first {
+        let p = mine.remove(i);
+        mine.insert(0, p);
+    }
+    mine
 }
 
 /// Profiles a turn on `engine` tries, in order. First the kwant's own profile (`bound`, if it is
@@ -257,25 +300,16 @@ pub fn failover_order(
     avail: &Availability,
     now: DateTime<Utc>,
 ) -> Vec<LlmProfile> {
-    let mut mine: Vec<&LlmProfile> = profiles
-        .iter()
-        .filter(|p| p.engine == engine.as_str() && p.enabled)
-        .collect();
-    mine.sort_by(|a, b| (a.priority, a.created_at, &a.id).cmp(&(b.priority, b.created_at, &b.id)));
-    let first = bound
-        .and_then(|id| mine.iter().find(|p| p.id == id))
-        .or_else(|| mine.iter().find(|p| p.is_default))
-        .or_else(|| mine.first())
-        .copied();
-    let Some(first) = first else {
+    let mine = preference_order(profiles, engine, bound);
+    let Some(&first) = mine.first() else {
         return Vec::new();
     };
     if !failover {
         return vec![first.clone()];
     }
-    let rest: Vec<LlmProfile> = mine
+    let rest: Vec<LlmProfile> = mine[1..]
         .iter()
-        .filter(|p| p.id != first.id && avail.usable(p, now))
+        .filter(|p| avail.usable(p, now))
         .map(|p| (*p).clone())
         .collect();
     let mut order = Vec::with_capacity(MAX_ATTEMPTS);
@@ -442,6 +476,7 @@ mod tests {
             states,
             with_key: HashSet::new(),
             signed_out: HashSet::from(["a".to_string()]),
+            ..Default::default()
         };
         // sys is limited so it's skipped even as the default; a is signed out; b has no key; d is disabled
         assert_eq!(

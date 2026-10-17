@@ -208,6 +208,18 @@ pub struct EngineReport {
     pub version: Option<String>,
     pub models: Vec<EngineModel>,
     pub checked_at: Option<DateTime<Utc>>,
+    /// On, and its own login (`status` ready) or one of its accounts can take a turn: set
+    /// from the profiles by `profile_turn::with_accounts`.
+    pub ready: bool,
+    /// The account a kwant on this engine runs on; `None` when not ready.
+    pub uses: Option<EngineAccount>,
+}
+
+/// An account (profile) an engine runs on, as `GET /api/engines` names it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EngineAccount {
+    pub profile_id: String,
+    pub label: String,
 }
 
 impl EngineReport {
@@ -226,6 +238,8 @@ impl EngineReport {
             version: p.version,
             models: if p.status == EngineStatus::Ready { p.models } else { Vec::new() },
             checked_at,
+            ready: false,
+            uses: None,
         }
     }
 
