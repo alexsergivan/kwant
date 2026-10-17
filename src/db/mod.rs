@@ -2,6 +2,7 @@ pub mod models;
 pub mod profiles;
 pub mod continuity;
 pub mod threads;
+pub mod skills;
 
 use models::*;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
@@ -84,6 +85,7 @@ impl Database {
         db.migrate_profiles().await?;
         db.migrate_continuity().await?;
         db.migrate_threads().await?;
+        db.migrate_skills().await?;
         db.seed_defaults().await?;
 
         Ok(db)

@@ -12,6 +12,7 @@ pub mod continuity;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
+pub mod skills;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -175,6 +176,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/delegations", get(delegation::list_delegations).post(delegation::create_delegation))
         .route("/api/delegations/:id", get(delegation::get_delegation))
         .route("/api/delegations/:id/cancel", post(delegation::cancel_delegation))
+        .route("/api/skills", get(skills::list).post(skills::create))
+        .route("/api/skills/:id", get(skills::get).patch(skills::update).delete(skills::remove))
+        .route("/api/skills/:id/diff", get(skills::diff))
+        .route("/api/skills/:id/approve", post(skills::approve))
+        .route("/api/skills/:id/reject", post(skills::reject))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))

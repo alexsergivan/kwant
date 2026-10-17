@@ -80,6 +80,10 @@ pub enum RuntimeEvent {
     /// the saved message, with `channel_id` / `direct_kwant_id` / `thread_id` saying which chat.
     #[serde(rename = "message_added", alias = "MessageAdded")]
     MessageAdded { message: Value },
+    /// A skill was proposed, reviewed, edited or deleted; `skill` is the whole record (or
+    /// `{id, kwant_id, deleted: true}`). See `crate::db::skills`.
+    #[serde(rename = "skill_updated", alias = "SkillUpdated")]
+    SkillUpdated { skill: Value },
     /// An event from inside one turn, tagged with the turn and its chat. On the SSE wire it is
     /// the inner event with `turn_id`, `kwant_id`, `context_id` and `thread_id` added at the top
     /// level (see [`RuntimeEvent::to_wire`]), so clients that ignore the tags still work.

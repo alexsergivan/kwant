@@ -1063,7 +1063,8 @@ async fn run_kwant_turn_inner(
             channel_id.as_deref(),
             with_tools,
         )
-        .await;
+        .await
+            + &super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
         let turn_input = TurnInput {
             browser_api_url: Some(format!(
                 "http://127.0.0.1:{}/api/sandbox/{}",

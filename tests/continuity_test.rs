@@ -756,7 +756,9 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
             "search_history",
             "memory_add",
             "memory_update",
-            "memory_remove"
+            "memory_remove",
+            "skill_propose",
+            "skill_get"
         ]
     );
 
@@ -1132,7 +1134,7 @@ async fn webhook_setting_is_https_only_and_masked() {
     assert_eq!(s["notify_webhook_url"], "");
     assert_eq!(
         s["notify_on"],
-        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled"])
+        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed"])
     );
 
     let (status, _) = req(

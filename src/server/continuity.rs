@@ -34,8 +34,14 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 5] =
-    ["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled"];
+pub const NOTIFY_KINDS: [&str; 6] = [
+    "turn_finished",
+    "approval_needed",
+    "routine_failed",
+    "delegation_finished",
+    "delegation_stalled",
+    "skill_proposed",
+];
 const MASK: &str = "••••••••";
 
 fn error(status: StatusCode, message: impl Into<String>) -> Response {
@@ -140,7 +146,7 @@ pub fn memory_block(memories: &[Memory], with_tools: bool) -> String {
 // Agents' own tools
 
 /// Who a self-tools token speaks for: one live turn of one kwant.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SelfScope {
     pub kwant_id: String,
     pub kwant_name: String,
@@ -195,8 +201,9 @@ impl ToolApprover for SelfToolsApprover {
 
 fn tool_list(scope: &SelfScope) -> Value {
     let mut tools = memory_tools();
-    if scope.origin.is_some() {
-        if let Some(list) = tools.as_array_mut() {
+    if let Some(list) = tools.as_array_mut() {
+        list.extend(super::skills::tools());
+        if scope.origin.is_some() {
             list.extend(delegation_tools());
         }
     }
@@ -455,6 +462,8 @@ async fn call_tool(
                 Err(_) => ("database error".into(), true),
             }
         }
+        "skill_propose" => super::skills::tool_propose(state, scope, args).await,
+        "skill_get" => super::skills::tool_get(state, scope, args).await,
         "delegate" => super::delegation::tool_delegate(state, scope, args).await,
         "delegation_status" => super::delegation::tool_status(state, scope, args).await,
         "delegation_cancel" => super::delegation::tool_cancel(state, scope, args).await,
