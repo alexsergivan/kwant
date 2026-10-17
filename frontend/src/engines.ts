@@ -25,6 +25,10 @@ export interface EngineInfo {
   checked_at: string | null;
   /** Off in Settings: never checked or used. Missing on servers without the switch. */
   enabled?: boolean;
+  /** On, and its own login or one of its accounts can run a kwant. Missing on older servers. */
+  ready?: boolean;
+  /** The account kwants run on now; null when not ready or the engine has no accounts. */
+  uses?: { profile_id: string; label: string } | null;
 }
 
 /** What a kwant picks: the model family, whichever of its engines (CLI or key) can run it. */
@@ -51,8 +55,12 @@ export const familyLabel = (f: Family) => FAMILIES.find((x) => x.id === f)?.labe
 
 export type Tone = 'ok' | 'warn' | 'error' | 'muted' | 'busy';
 
-export function statusView(e: Pick<EngineInfo, 'status' | 'enabled'> & { kind?: EngineKind }): { label: string; tone: Tone } {
+/** Whether kwants can run on it: the server's `ready` (which counts its accounts), else the host check. */
+export const isUsable = (e: Pick<EngineInfo, 'status' | 'enabled' | 'ready'>) => e.enabled !== false && (e.ready ?? e.status === 'ready');
+
+export function statusView(e: Pick<EngineInfo, 'status' | 'enabled' | 'ready'> & { kind?: EngineKind }): { label: string; tone: Tone } {
   if (e.enabled === false || e.status === 'disabled') return { label: 'Off', tone: 'muted' };
+  if (isUsable(e)) return { label: 'Ready', tone: 'ok' };
   switch (e.status) {
     case 'ready':
       return { label: 'Ready', tone: 'ok' };
@@ -68,13 +76,11 @@ export function statusView(e: Pick<EngineInfo, 'status' | 'enabled'> & { kind?: 
   }
 }
 
-export const isUsable = (e: EngineInfo) => e.status === 'ready' && e.enabled !== false;
-
 const RANK: Record<EngineStatus, number> = { ready: 0, checking: 1, error: 2, signed_out: 3, disabled: 4, not_installed: 5 };
 
 /** Ready first, then ones that need attention, switched-off ones, and not installed last. Stable. */
 export function sortEngines(list: EngineInfo[]): EngineInfo[] {
-  const rank = (e: EngineInfo) => (e.enabled === false ? 4 : RANK[e.status] ?? 1);
+  const rank = (e: EngineInfo) => (e.enabled === false ? 4 : isUsable(e) ? 0 : RANK[e.status] === 0 ? 3 : RANK[e.status] ?? 1);
   return list
     .map((e, i) => ({ e, i }))
     .sort((a, b) => rank(a.e) - rank(b.e) || a.i - b.i)
@@ -82,7 +88,7 @@ export function sortEngines(list: EngineInfo[]): EngineInfo[] {
 }
 
 /** Engines that aren't on this computer at all, to fold away. An API engine with no key is "not installed". */
-export const isAbsent = (e: EngineInfo) => e.status === 'not_installed' && e.enabled !== false;
+export const isAbsent = (e: EngineInfo) => e.status === 'not_installed' && e.enabled !== false && !isUsable(e);
 
 /** Whether only CLIs can run things right now (so "no API keys needed" is true). */
 export const onlyCliReady = (list: EngineInfo[]) => {
@@ -206,7 +212,11 @@ export function pickHealth(value: string, engines: EngineInfo[] | null): PickHea
     // Still being checked isn't broken yet.
     const mine = engines.filter((e) => FAMILY_OF[e.id] === family);
     if (mine.some((e) => e.status === 'checking' && e.enabled !== false)) return { kind: 'loading' };
-    const reason = mine.find((e) => e.enabled !== false && e.detail)?.detail ?? (mine.every((e) => e.enabled === false) && mine.length ? 'Switched off in Settings' : null);
+    // The CLI that's installed but off says more than "No API key" on its API sibling.
+    const installed = mine.filter((e) => e.status !== 'not_installed');
+    const reason = installed.some((e) => e.enabled === false) || (mine.length > 0 && mine.every((e) => e.enabled === false))
+      ? 'Switched off in Settings'
+      : (installed.find((e) => e.detail) ?? mine.find((e) => e.enabled !== false && e.detail))?.detail ?? null;
     return { kind: 'engine_unavailable', family, reason };
   }
   // A model list we can't see (a CLI that lists none) can't prove a model is gone.
@@ -266,4 +276,43 @@ export function checkedAgo(at: string | null, now = Date.now()): string | null {
   if (m < 60) return `${m} min ago`;
   const h = Math.round(m / 60);
   return h < 24 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
+}
+
+/** An account as the card summary needs it. */
+export interface SummaryAccount {
+  name: string;
+  /** Signed in (or keyed), on, and not out of usage. */
+  usable: boolean;
+  is_default: boolean;
+  priority: number;
+  /** "back in 2 h" when it's out of usage. */
+  outUntil?: string | null;
+}
+
+/** The line under an engine's name: which account kwants use, or the one next step. */
+export function engineSummary(e: EngineInfo, accounts: SummaryAccount[] = []): { text: string; tone: Tone } {
+  // The order turns try them: the default, then by priority.
+  const next = [...accounts]
+    .sort((a, b) => Number(b.is_default) - Number(a.is_default) || a.priority - b.priority)
+    .find((a) => a.usable);
+  if (e.enabled === false || e.status === 'disabled') {
+    if (next) return { text: `Off · Turn on to use ${next.name}`, tone: 'muted' };
+    return { text: e.kind === 'local' || accounts.length === 0 ? 'Off · Turn on to use it' : 'Off · Turn on, then sign in to an account', tone: 'muted' };
+  }
+  if (isUsable(e)) return e.uses ? { text: `Kwants use ${e.uses.label}`, tone: 'ok' } : { text: 'Kwants can use it', tone: 'ok' };
+  switch (e.status) {
+    case 'checking':
+      return { text: 'Checking…', tone: 'busy' };
+    case 'not_installed':
+      if (e.kind === 'api') return { text: 'No key yet · Add a key below to use it', tone: 'muted' };
+      return { text: e.detail ?? (e.kind === 'local' ? 'Not running on this computer' : 'Not installed on this computer'), tone: 'muted' };
+    case 'error':
+      return { text: `${e.detail ?? 'The check failed'} · Try Re-check`, tone: 'error' };
+    default: {
+      const out = accounts.find((a) => a.outUntil);
+      if (out) return { text: `${out.name} is out of usage, back ${out.outUntil} · Sign in to another account below`, tone: 'warn' };
+      if (accounts.length === 0) return { text: e.detail ?? 'Not signed in', tone: 'warn' };
+      return { text: 'No account is signed in · Sign in to one below', tone: 'warn' };
+    }
+  }
 }

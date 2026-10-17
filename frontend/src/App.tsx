@@ -64,7 +64,6 @@ import { AwayItem, affectsAway, awayApi, awayTarget } from './away';
 // so both load right after start-up and opening them never waits.
 const NewAgentModal = lazy(() => import('./components/NewAgentModal').then((m) => ({ default: m.NewAgentModal })));
 const McpServersModal = lazy(() => import('./components/McpServersModal').then((m) => ({ default: m.McpServersModal })));
-const ProfilesModal = lazy(() => import('./components/ProfilesModal').then((m) => ({ default: m.ProfilesModal })));
 const SettingsModal = lazy(() => import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal })));
 const ChannelInstructionsModal = lazy(() =>
   import('./components/ChannelInstructionsModal').then((m) => ({ default: m.ChannelInstructionsModal })),
@@ -148,7 +147,6 @@ export const App: React.FC = () => {
     setIsSettingsOpen(true);
   };
   const [isMcpOpen, setIsMcpOpen] = useState(false);
-  const [isProfilesOpen, setIsProfilesOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isRoutinesOpen, setIsRoutinesOpen] = useState(false);
   const [editingChannelInstructions, setEditingChannelInstructions] = useState<Channel | null>(null);
@@ -1690,7 +1688,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const closeProfiles = useCallback(() => setIsProfilesOpen(false), []);
 
   const isCurrentContextStreaming = openCtx in live;
   const openTurns = turnsIn(turns, openCtx);
@@ -1959,7 +1956,7 @@ export const App: React.FC = () => {
           joinTeamName={newAgentTeam?.name}
           takenNames={kwants.map((k) => k.name)}
           profiles={profiles}
-          onManageProfiles={() => setIsProfilesOpen(true)}
+          onManageProfiles={openSettings}
           onManageServers={() => setIsMcpOpen(true)}
           onOpenSettings={openSettings}
           onSignInClaude={openClaudeSignIn}
@@ -1975,7 +1972,7 @@ export const App: React.FC = () => {
           kwants={kwants}
           channels={channels}
           profiles={profiles}
-          onManageProfiles={() => setIsProfilesOpen(true)}
+          onManageProfiles={openSettings}
           onManageServers={() => setIsMcpOpen(true)}
           onOpenSettings={openSettings}
           onSignInClaude={openClaudeSignIn}
@@ -2018,17 +2015,13 @@ export const App: React.FC = () => {
             setIsSettingsOpen(false);
             setIsMcpOpen(true);
           }}
-          onOpenProfiles={() => {
-            setIsSettingsOpen(false);
-            setIsProfilesOpen(true);
-          }}
+          onProfilesChanged={setProfiles}
         />
       </Suspense>
 
       {/* MCP tool servers (opened last so it sits above the agent modal) */}
       <Suspense fallback={null}>
         <McpServersModal isOpen={isMcpOpen} onClose={() => setIsMcpOpen(false)} kwants={kwants} />
-        <ProfilesModal isOpen={isProfilesOpen} onClose={closeProfiles} onProfilesChanged={setProfiles} />
         {isSearchOpen && <SearchModal isOpen onClose={() => setIsSearchOpen(false)} kwants={kwants} onJump={handleJump} />}
         {isRoutinesOpen && <RoutinesModal isOpen onClose={() => setIsRoutinesOpen(false)} kwants={kwants} channels={channels} />}
       </Suspense>

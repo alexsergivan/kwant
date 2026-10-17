@@ -173,3 +173,35 @@ export function describeProfileSwitch(e: ProfileSwitchedEvent, kwantName: string
         : `${e.from_name} is out of usage.`;
   return { title: `${who} switched to ${e.to_name}`, detail: why };
 }
+
+// ---- Accounts on the "Engines & accounts" cards ----
+
+type EngineCardId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'ollama';
+const API_CARD: Record<Engine, EngineCardId> = { claude: 'anthropic_api', codex: 'openai_api', grok: 'xai_api' };
+
+/** The engine card an account sits on: API-key accounts on the API engine, the rest on the CLI. */
+export const cardOf = (p: Pick<Profile, 'engine' | 'kind'>): EngineCardId => (p.kind === 'api_key' ? API_CARD[p.engine] : p.engine);
+
+/** The account family and kind a new account on this card gets; null where accounts can't be added. */
+export function newAccountFor(card: string): { engine: Engine; kind: 'cli_home' | 'api_key' } | null {
+  if (card === 'claude' || card === 'codex' || card === 'grok') return { engine: card, kind: 'cli_home' };
+  const api = (Object.keys(API_CARD) as Engine[]).find((e) => API_CARD[e] === card);
+  return api ? { engine: api, kind: 'api_key' } : null;
+}
+
+/** A card's accounts: "This machine" first, then the order turns try them (default, then priority). */
+export function accountsForCard(profiles: Profile[], card: string): Profile[] {
+  return profiles
+    .filter((p) => cardOf(p) === card)
+    .sort(
+      (a, b) =>
+        Number(b.kind === 'system') - Number(a.kind === 'system') ||
+        Number(b.is_default) - Number(a.is_default) ||
+        a.priority - b.priority ||
+        a.name.localeCompare(b.name),
+    );
+}
+
+/** Could run a turn as last checked: on, signed in (or keyed), not out of usage. */
+export const accountUsable = (p: Profile, now = Date.now()) =>
+  p.enabled && !activeLimit(p.limited_until, now) && p.last_error !== 'auth' && (p.kind === 'api_key' ? p.has_key : p.signed_in === true);
