@@ -260,8 +260,8 @@ async fn print_agents(config: &Config) -> Result<(), Box<dyn std::error::Error>>
     let db = Database::init(&config.data_dir).await?;
     let kwants = db.list_kwants().await?;
     println!(
-        "{:<16} {:<32} {:<8} {}",
-        "NAME", "TITLE", "DRIVER", "MODEL"
+        "{:<16} {:<32} {:<8} MODEL",
+        "NAME", "TITLE", "DRIVER"
     );
     if kwants.is_empty() {
         println!("(no agents)");
@@ -279,7 +279,7 @@ async fn print_agents(config: &Config) -> Result<(), Box<dyn std::error::Error>>
 async fn print_teams(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::init(&config.data_dir).await?;
     let teams = db.list_teams().await?;
-    println!("{:<24} {:<8} {}", "TEAM", "MEMBERS", "WORKSPACE");
+    println!("{:<24} {:<8} WORKSPACE", "TEAM", "MEMBERS");
     if teams.is_empty() {
         println!("(no teams)");
         return Ok(());
@@ -297,7 +297,7 @@ async fn print_teams(config: &Config) -> Result<(), Box<dyn std::error::Error>> 
 async fn print_channels(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::init(&config.data_dir).await?;
     let channels = db.list_channels().await?;
-    println!("{:<24} {:<10} {}", "CHANNEL", "ROUTING", "DESCRIPTION");
+    println!("{:<24} {:<10} DESCRIPTION", "CHANNEL", "ROUTING");
     if channels.is_empty() {
         println!("(no channels)");
         return Ok(());

@@ -335,7 +335,7 @@ impl ApiDriver {
                 if let Some(args) = call["function"].get("arguments").filter(|a| !a.is_string()).cloned() {
                     call["function"]["arguments"] = json!(args.to_string());
                 }
-                if call["id"].as_str().map_or(true, str::is_empty) {
+                if call["id"].as_str().is_none_or(str::is_empty) {
                     call["id"] = json!(format!("call_{}", uuid::Uuid::new_v4().simple()));
                 }
             }

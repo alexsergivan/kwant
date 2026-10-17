@@ -279,7 +279,7 @@ impl Database {
         let tools_json = input
             .tool_calls
             .as_ref()
-            .map(|v| serde_json::to_string(v))
+            .map(serde_json::to_string)
             .transpose()?;
 
         sqlx::query(

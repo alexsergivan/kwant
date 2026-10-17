@@ -326,12 +326,12 @@ impl BrowserController {
         });
 
         let ws = guard.as_mut().unwrap();
-        if ws.send(Message::Text(request.to_string().into())).await.is_err() {
+        if ws.send(Message::Text(request.to_string())).await.is_err() {
             // Reconnect and retry send once if disconnected
             *guard = None;
             self.ensure_connected(&mut guard).await?;
             let ws = guard.as_mut().unwrap();
-            ws.send(Message::Text(request.to_string().into()))
+            ws.send(Message::Text(request.to_string()))
                 .await
                 .map_err(|e| BrowserError::Ws(e.to_string()))?;
         }

@@ -483,7 +483,7 @@ async fn test_sandbox_interactive_control_endpoint() {
             };
             let reply = json!({ "id": command["id"], "result": result });
             commands.lock().await.push(command);
-            ws.send(tokio_tungstenite::tungstenite::Message::Text(reply.to_string().into())).await.unwrap();
+            ws.send(tokio_tungstenite::tungstenite::Message::Text(reply.to_string())).await.unwrap();
         }
     });
     let http_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

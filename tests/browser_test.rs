@@ -95,9 +95,7 @@ async fn test_mock_cdp_controller_lifecycle() {
                                         json!({ "result": { "type": "string", "value": "Kwants Sandbox Test" } })
                                     } else if expr.contains("clone.innerText") {
                                         json!({ "result": { "type": "string", "value": "Extracted DOM Content" } })
-                                    } else if expr.contains("el.click()") {
-                                        json!({ "result": { "type": "boolean", "value": true } })
-                                    } else if expr.contains("el.value =") {
+                                    } else if expr.contains("el.click()") || expr.contains("el.value =") {
                                         json!({ "result": { "type": "boolean", "value": true } })
                                     } else {
                                         json!({ "result": { "type": "undefined" } })
@@ -113,7 +111,7 @@ async fn test_mock_cdp_controller_lifecycle() {
 
                             let _ = ws
                                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                                    resp.to_string().into(),
+                                    resp.to_string(),
                                 ))
                                 .await;
                         }
@@ -212,7 +210,7 @@ async fn test_mock_cdp_persistent_connection_reuse() {
                             });
                             let _ = ws
                                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                                    resp.to_string().into(),
+                                    resp.to_string(),
                                 ))
                                 .await;
                         }
@@ -298,7 +296,7 @@ async fn test_mock_cdp_string_escaping_multiline_and_quotes() {
                             });
                             let _ = ws
                                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                                    resp.to_string().into(),
+                                    resp.to_string(),
                                 ))
                                 .await;
                         }
@@ -378,7 +376,7 @@ async fn test_mock_cdp_click_element_not_found() {
                             });
                             let _ = ws
                                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                                    resp.to_string().into(),
+                                    resp.to_string(),
                                 ))
                                 .await;
                         }
@@ -473,7 +471,7 @@ async fn test_mock_cdp_protocol_error_response() {
                             });
                             let _ = ws
                                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                                    resp.to_string().into(),
+                                    resp.to_string(),
                                 ))
                                 .await;
                         }
@@ -617,7 +615,7 @@ async fn test_mock_cdp_interactive_control() {
 
                             let _ = ws
                                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                                    resp.to_string().into(),
+                                    resp.to_string(),
                                 ))
                                 .await;
                         }
