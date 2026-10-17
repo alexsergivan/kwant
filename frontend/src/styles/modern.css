@@ -124,3 +124,20 @@
 @media (prefers-reduced-motion: reduce) {
   .kw-toast { animation: none; }
 }
+
+/* A message reached from search glows briefly; without motion it is just outlined. */
+@keyframes kw-flash {
+  0%, 60% { box-shadow: 0 0 0 2px theme('colors.amber.400 / 70%'); background: theme('colors.amber.400 / 8%'); }
+  100% { box-shadow: 0 0 0 2px transparent; background: transparent; }
+}
+
+.kw-flash {
+  animation: kw-flash 2.4s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kw-flash {
+    animation: none;
+    box-shadow: 0 0 0 2px theme('colors.amber.400 / 70%');
+  }
+}

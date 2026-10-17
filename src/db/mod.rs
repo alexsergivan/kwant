@@ -1,5 +1,6 @@
 pub mod models;
 pub mod profiles;
+pub mod continuity;
 
 use models::*;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
@@ -80,6 +81,7 @@ impl Database {
 
         let db = Self { pool };
         db.migrate_profiles().await?;
+        db.migrate_continuity().await?;
         db.seed_defaults().await?;
 
         Ok(db)

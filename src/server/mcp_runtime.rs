@@ -239,26 +239,50 @@ fn local_base_url(state: &AppState) -> String {
 /// behaviour change) otherwise. `cwd` is where the gateway starts stdio servers. Pair with
 /// [`finish_turn`].
 pub async fn prepare_turn(state: &AppState, kwant: &Kwant, cwd: Option<PathBuf>) -> Option<(McpTurnContext, String)> {
+    prepare_turn_with_self(state, kwant, cwd, None).await
+}
+
+/// [`prepare_turn`], plus the agents' own continuity tools (`search_history`, `memory_*`) when
+/// `self_scope` is set. Those are served by kwnt itself and never need an approval card.
+pub async fn prepare_turn_with_self(
+    state: &AppState,
+    kwant: &Kwant,
+    cwd: Option<PathBuf>,
+    self_scope: Option<super::continuity::SelfScope>,
+) -> Option<(McpTurnContext, String)> {
     let mut servers = match state.db.list_active_mcp_servers_for_kwant(&kwant.id).await {
-        Ok(s) if !s.is_empty() => s,
-        Ok(_) => return None,
+        Ok(s) => s,
         Err(e) => {
             tracing::warn!(error = %e, "could not load MCP servers for kwant");
-            return None;
+            // The agent's own tools don't depend on the stored servers
+            self_scope.as_ref()?;
+            Vec::new()
         }
     };
+    if servers.is_empty() && self_scope.is_none() {
+        return None;
+    }
     // Signed-in http servers get their (refreshed) access token as a secret header
     super::mcp_oauth::authorize_servers(state, &mut servers).await;
     let token = uuid::Uuid::new_v4().simple().to_string();
+    let self_tools = self_scope.is_some() && !servers.iter().any(|s| s.name.eq_ignore_ascii_case(mcp::SELF_SERVER_NAME));
+    if self_tools {
+        servers.push(super::continuity::self_server(&local_base_url(state), &token));
+    }
     let setting = state.db.get_setting("mcp_max_tool_iterations").await.ok().flatten();
+    let broker_approver: Arc<dyn ToolApprover> = Arc::new(BrokerApprover {
+        db: state.db.clone(),
+        broker: state.broker.clone(),
+        events: state.event_sender.clone(),
+        timeout: APPROVAL_TIMEOUT,
+    });
     let ctx = McpTurnContext {
         servers,
-        approver: Arc::new(BrokerApprover {
-            db: state.db.clone(),
-            broker: state.broker.clone(),
-            events: state.event_sender.clone(),
-            timeout: APPROVAL_TIMEOUT,
-        }),
+        approver: if self_tools {
+            Arc::new(super::continuity::SelfToolsApprover { inner: broker_approver })
+        } else {
+            broker_approver
+        },
         config_dir: state.config.data_dir.join("mcp"),
         permission_url: Some(format!("{}/api/mcp/permission/{token}", local_base_url(state))),
         gateway: Some(GatewayAccess { url: format!("{}/api/mcp/gateway", local_base_url(state)), token: token.clone() }),
@@ -267,10 +291,14 @@ pub async fn prepare_turn(state: &AppState, kwant: &Kwant, cwd: Option<PathBuf>)
     };
     let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), uuid::Uuid::new_v4().to_string(), ctx.clone(), cwd);
     state.mcp_sessions.lock().await.insert(token.clone(), session);
+    if let (true, Some(scope)) = (self_tools, self_scope) {
+        state.self_tools.lock().await.insert(token.clone(), scope);
+    }
     Some((ctx, token))
 }
 
 pub async fn finish_turn(state: &AppState, token: &str) {
+    state.self_tools.lock().await.remove(token);
     let session = state.mcp_sessions.lock().await.remove(token);
     if let Some(session) = session {
         session.close().await;

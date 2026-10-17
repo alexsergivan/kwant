@@ -4,6 +4,8 @@ import { ModernAvatar } from './ModernAvatar';
 import { Team, Kwant } from './Sidebar';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { playSfx } from '../audio/chiptune';
+import { InstructionsField } from './Instructions';
+import { MAX_INSTRUCTIONS } from '../continuity';
 
 interface ManageTeamModalProps {
   isOpen: boolean;
@@ -19,6 +21,7 @@ interface ManageTeamModalProps {
       repo_url?: string;
       lead_kwant_id: string;
       member_kwants: string[];
+      instructions?: string;
     }
   ) => Promise<void>;
   onDeleteTeam: (id: string) => Promise<void>;
@@ -34,6 +37,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
 }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [instructions, setInstructions] = useState('');
   const [workspaceType, setWorkspaceType] = useState<'local' | 'repo' | 'default'>('default');
   const [workspacePath, setWorkspacePath] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
@@ -73,6 +77,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
     if (team) {
       setName(team.name);
       setDescription(team.description || '');
+      setInstructions(team.instructions || '');
       setLeadKwantId(team.lead_kwant_id || (kwants[0]?.id ?? ''));
 
       if (team.workspace_path) {
@@ -132,6 +137,10 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
       setError('Select at least one agent for this team.');
       return;
     }
+    if (instructions.length > MAX_INSTRUCTIONS) {
+      setError(`Team instructions can be at most ${MAX_INSTRUCTIONS} characters.`);
+      return;
+    }
 
     try {
       setIsSaving(true);
@@ -143,6 +152,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
         repo_url: workspaceType === 'repo' && repoUrl.trim() ? repoUrl.trim() : undefined,
         lead_kwant_id: leadKwantId || memberIds[0],
         member_kwants: memberIds,
+        instructions: instructions.trim(),
       });
       playSfx('fanfare');
       setIsSaving(false);
@@ -174,7 +184,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full p-6 text-zinc-100 shadow-2xl space-y-5">
+      <div role="dialog" aria-modal="true" aria-labelledby="manage-team-title" className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[94vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-2.5">
@@ -182,7 +192,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
               <Users size={16} />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-zinc-100">Manage Team: @{team.name}</h3>
+              <h3 id="manage-team-title" className="text-sm font-semibold text-zinc-100">Manage Team: @{team.name}</h3>
               <p className="text-[11px] text-zinc-400">Configure team roster, lead agent, and permissions</p>
             </div>
           </div>
@@ -231,6 +241,14 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
             />
           </div>
+
+          <InstructionsField
+            value={instructions}
+            onChange={setInstructions}
+            label="Team instructions"
+            hint="Pinned for every kwant in this team, before each turn. Leave empty to unpin."
+            rows={4}
+          />
 
           {/* Team Workspace */}
           <div>

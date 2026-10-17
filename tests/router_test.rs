@@ -115,6 +115,7 @@ async fn test_team_orchestration_heuristic_fallback() {
         lead_kwant_id: "kwant-1".into(),
         member_kwants: "[\"kwant-1\", \"kwant-2\"]".into(),
         created_at: None,
+        instructions: None,
     };
     let members = vec![
         Kwant {
@@ -289,6 +290,7 @@ fn test_laya_team_discussion_uses_runner_up_as_second_speaker() {
         lead_kwant_id: "a".into(),
         member_kwants: "[]".into(),
         created_at: None,
+        instructions: None,
     };
     let data = json!({"answers": {
         "team_decision": {"choice": "discuss"},

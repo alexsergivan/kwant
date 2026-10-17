@@ -130,6 +130,27 @@ pub enum RuntimeEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kwant_id: Option<String>,
     },
+    /// A kwant's memory changed (by the user or by the kwant's own tools); refetch it.
+    #[serde(rename = "memory_changed", alias = "MemoryChanged")]
+    MemoryChanged { kwant_id: String },
+    /// A routine run started or finished. `status` is "running", "ok", "error" or "skipped".
+    #[serde(rename = "routine_run", alias = "RoutineRun")]
+    RoutineRun {
+        routine_id: String,
+        run_id: String,
+        status: String,
+    },
+    /// Something the user asked to be told about. `kind` is "turn_finished", "approval_needed"
+    /// or "routine_failed". `body` never holds chat text, tool arguments or secrets.
+    #[serde(rename = "notify", alias = "Notify")]
+    Notify {
+        kind: String,
+        kwant_id: String,
+        kwant_name: String,
+        channel_id: Option<String>,
+        title: String,
+        body: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -882,6 +882,11 @@ impl Driver for CliDriver {
                             tokens = result.tokens();
                             result.result
                         }
+                        // A failed run with no output is an error, not an empty reply
+                        None if stdout.trim().is_empty() && !exit.is_some_and(|s| s.success()) => {
+                            let status = exit.and_then(|s| s.code()).map_or("a signal".to_string(), |c| format!("status {c}"));
+                            return Err(DriverError::Execution(format!("{bin_path} exited with {status} and no output")));
+                        }
                         // Not JSON (an older claude): its plain text is the reply
                         None => stdout,
                     }
@@ -976,6 +981,7 @@ mod tests {
             created_at: None,
         };
         let input = TurnInput {
+            continuity: String::new(),
             browser_api_url: None,
             thread_id: "t1".into(),
             kwant,
@@ -1040,6 +1046,7 @@ mod tests {
             created_at: None,
         };
         let input = TurnInput {
+            continuity: String::new(),
             browser_api_url: None,
             thread_id: "t1".into(),
             kwant,

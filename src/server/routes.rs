@@ -238,13 +238,32 @@ pub async fn get_team(
     }
 }
 
+/// `PUT /api/teams/:id` body: a team, plus its pinned instructions if given ("" clears).
+#[derive(Debug, Deserialize)]
+pub struct UpdateTeamPayload {
+    #[serde(flatten)]
+    pub team: NewTeam,
+    pub instructions: Option<String>,
+}
+
 pub async fn update_team(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(payload): Json<NewTeam>,
+    Json(payload): Json<UpdateTeamPayload>,
 ) -> Result<Json<Team>, StatusCode> {
-    match state.db.update_team(&id, &payload).await {
-        Ok(Some(team)) => Ok(Json(team)),
+    if let Some(text) = &payload.instructions {
+        if super::continuity::check_instructions(text).is_err() {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    match state.db.update_team(&id, &payload.team).await {
+        Ok(Some(mut team)) => {
+            if let Some(text) = &payload.instructions {
+                state.db.set_team_instructions(&id, text).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                team.instructions = Some(text.trim().to_string()).filter(|t| !t.is_empty());
+            }
+            Ok(Json(team))
+        }
         Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
@@ -407,6 +426,94 @@ fn execute_single_turn(
             tokens.remove(team_name);
         }
     });
+}
+
+/// Runs a routine's turn as if the user had sent `prompt` to `kwant` in `channel_id` (or in
+/// their direct chat): same team context, workspace, approvals and profile failover, and the
+/// chat's stop button cancels it. The prompt message must already be saved. Returns the id of
+/// the kwant's reply, or `Err` with why there is none.
+pub(super) async fn run_routine_turn(
+    state: &AppState,
+    kwant: &Kwant,
+    channel_id: Option<String>,
+    prompt: String,
+) -> Result<Option<String>, String> {
+    let all_kwants = state.db.list_kwants().await.map_err(|_| "could not load agents".to_string())?;
+    let channel = match &channel_id {
+        Some(id) => Some(
+            state.db.get_channel(id).await.ok().flatten().ok_or_else(|| "the routine's channel no longer exists".to_string())?,
+        ),
+        None => None,
+    };
+    let team = match channel.as_ref().and_then(|c| c.name.strip_prefix("team-")) {
+        Some(name) => state.db.list_teams().await.unwrap_or_default().into_iter().find(|t| t.name.eq_ignore_ascii_case(name)),
+        None => None,
+    };
+    let member_ids: Vec<String> = match (&team, &channel) {
+        (Some(t), _) => serde_json::from_str(&t.member_kwants).unwrap_or_default(),
+        (None, Some(c)) if c.name == "general" => all_kwants.iter().map(|k| k.id.clone()).collect(),
+        (None, Some(c)) => serde_json::from_str(&c.member_kwants).unwrap_or_default(),
+        (None, None) => Vec::new(),
+    };
+    let teammates: Vec<Kwant> = member_ids.iter().filter_map(|id| all_kwants.iter().find(|k| &k.id == id).cloned()).collect();
+    let workspace_dir = match &team {
+        Some(t) => Some(
+            crate::tools::resolve_or_prepare_workspace(&state.config.data_dir, &t.name, t.workspace_path.as_deref(), t.repo_url.as_deref())
+                .await,
+        ),
+        None => None,
+    };
+    let cancel_token = CancellationToken::new();
+    let keys: Vec<String> = match &channel_id {
+        Some(c) => vec![c.clone()],
+        None => vec![kwant.id.clone()],
+    };
+    {
+        let mut tokens = state.active_cancellations.lock().await;
+        for key in &keys {
+            tokens.insert(key.clone(), cancel_token.clone());
+        }
+    }
+    let scope = TurnScope {
+        state: state.clone(),
+        kwant_id: if channel_id.is_none() { Some(kwant.id.clone()) } else { None },
+        channel_id,
+        team_keys: team.as_ref().map(|t| (t.id.clone(), t.name.clone())),
+        team_context: team.as_ref().map(|t| crate::drivers::TeamContext {
+            id: t.id.clone(),
+            name: t.name.clone(),
+            description: t.description.clone(),
+            workspace_path: t.workspace_path.clone(),
+            repo_url: t.repo_url.clone(),
+        }),
+        workspace_dir,
+        teammates,
+        cancel_token: cancel_token.clone(),
+    };
+    let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts::default()).await;
+    let outcome = match reply {
+        Ok(text) => {
+            let context_id = keys[0].clone();
+            let reply_id = state
+                .db
+                .list_messages(&context_id, 10)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .rev()
+                .find(|m| m.sender_role == "kwant" && m.sender_id == kwant.name)
+                .map(|m| m.id);
+            run_handoffs(&scope, std::slice::from_ref(&kwant.id), &[(kwant.clone(), text)], &prompt).await;
+            Ok(reply_id)
+        }
+        Err(_) if cancel_token.is_cancelled() => Err("stopped by the user".into()),
+        Err(why) => Err(format!("the agent's turn failed: {why}")),
+    };
+    let mut tokens = state.active_cancellations.lock().await;
+    for key in &keys {
+        tokens.remove(key);
+    }
+    outcome
 }
 
 /// Lets teammates that kwants @mentioned in `replies` answer in turn, so kwants can delegate to each other.
@@ -620,6 +727,19 @@ async fn run_kwant_turn(
     prompt: String,
     opts: TurnOpts,
 ) -> Option<String> {
+    try_kwant_turn(scope, target_kwant, prompt, opts).await.ok()
+}
+
+/// Longest failure reason kept for a routine run's history.
+const MAX_FAILURE_CHARS: usize = 500;
+
+/// [`run_kwant_turn`], but a failed turn says why: the driver's error or the provider's refusal.
+async fn try_kwant_turn(
+    scope: &TurnScope,
+    target_kwant: &Kwant,
+    prompt: String,
+    opts: TurnOpts,
+) -> Result<String, String> {
     let context_id = scope
         .channel_id
         .clone()
@@ -638,11 +758,34 @@ async fn run_kwant_turn(
     };
     let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts).await;
     ended.outcome = match (&reply, scope.cancel_token.is_cancelled()) {
-        (Some(_), _) => "completed",
-        (None, true) => "cancelled",
-        (None, false) => "failed",
+        (Ok(_), _) => "completed",
+        (Err(_), true) => "cancelled",
+        (Err(_), false) => "failed",
     };
-    reply
+    reply.map_err(|why| truncate_chars(&scrub_urls(why.trim()), MAX_FAILURE_CHARS).to_string())
+}
+
+/// `text` with every URL cut to scheme and host, so a failure reason that names a custom
+/// endpoint can be stored without the credentials some endpoints carry in the userinfo,
+/// path or query.
+fn scrub_urls(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let Some(scheme_end) = word.find("://") else {
+                return word.to_string();
+            };
+            let (scheme, rest) = word.split_at(scheme_end + 3);
+            let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            let (authority, tail) = rest.split_at(host_end);
+            let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+            if tail.is_empty() {
+                format!("{scheme}{host}")
+            } else {
+                format!("{scheme}{host}/…")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 struct TurnEndedGuard {
@@ -667,7 +810,7 @@ async fn run_kwant_turn_inner(
     target_kwant: &Kwant,
     prompt: String,
     opts: TurnOpts,
-) -> Option<String> {
+) -> Result<String, String> {
     let state = &scope.state;
     let event_broadcast = state.event_sender.clone();
     let db = state.db.clone();
@@ -813,10 +956,29 @@ async fn run_kwant_turn_inner(
         } else {
             candidates.into_iter().map(Some).collect()
         };
-        let mcp_turn =
-            super::mcp_runtime::prepare_turn(state, target_kwant, scope.workspace_dir.clone())
-                .await;
+        // The agents' own continuity tools, for engines that can call MCP tools
+        let self_scope = (engine.is_some() && super::continuity::agent_tools_enabled(state).await).then(|| {
+            super::continuity::SelfScope { kwant_id: target_kwant.id.clone(), kwant_name: target_kwant.name.clone() }
+        });
+        let mcp_turn = super::mcp_runtime::prepare_turn_with_self(
+            state,
+            target_kwant,
+            scope.workspace_dir.clone(),
+            self_scope,
+        )
+        .await;
         let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());
+        let with_tools = mcp_ctx
+            .as_ref()
+            .is_some_and(|c| c.servers.iter().any(|s| s.name == crate::mcp::SELF_SERVER_NAME));
+        let continuity = super::continuity::prompt_block(
+            state,
+            target_kwant,
+            scope.team_context.as_ref().map(|t| t.id.as_str()),
+            channel_id.as_deref(),
+            with_tools,
+        )
+        .await;
         let turn_input = TurnInput {
             browser_api_url: Some(format!(
                 "http://127.0.0.1:{}/api/sandbox/{}",
@@ -838,6 +1000,7 @@ async fn run_kwant_turn_inner(
                 .map(|k| crate::drivers::Teammate { name: k.name.clone(), title: k.title.clone() })
                 .collect(),
             mcp: mcp_ctx.clone(),
+            continuity,
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();
@@ -990,18 +1153,20 @@ async fn run_kwant_turn_inner(
         };
         if cancelled {
             let _ = event_broadcast.send(RuntimeEvent::ThinkingDelta("⏹️ Cancelled by user".into()));
+            return Err("stopped by the user".into());
         } else if let Some(text) = gave_up {
             let msg = NewMessage {
                 channel_id: channel_id.clone(),
                 direct_kwant_id: kwant_id.clone(),
                 sender_role: "kwant".into(),
                 sender_id: target_kwant.name.clone(),
-                text,
+                text: text.clone(),
                 reasoning_content: with_notices(opts.label.clone()),
                 tool_calls: None,
                 tokens_used: 0,
             };
             let _ = db.insert_message(&msg).await;
+            return Err(text);
         } else if let Some(Ok(Ok(output))) = driver_result {
             // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM
             if let Some(bot_url) = extract_url_from_text(&output.text) {
@@ -1055,9 +1220,13 @@ async fn run_kwant_turn_inner(
                 };
                 let _ = db.insert_message(&asst_msg).await;
             }
-            return Some(output.text);
+            return Ok(output.text);
         }
-        None
+        Err(match driver_result {
+            Some(Ok(Err(e))) => format!("the {target_model} driver failed: {e}"),
+            Some(Err(_)) => format!("the {target_model} driver stopped unexpectedly"),
+            _ => format!("the {target_model} turn ended without a reply"),
+        })
     }
 }
 
@@ -1518,6 +1687,9 @@ pub struct SettingsResponse {
     pub grok_cli_path: Option<String>,
     pub codex_cli_found: bool,
     pub codex_cli_path: Option<String>,
+    /// "••••••••" when set: ntfy topics and webhook tokens are secrets.
+    pub notify_webhook_url: String,
+    pub notify_on: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1526,6 +1698,9 @@ pub struct SaveSettingsPayload {
     pub xai_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub ollama_url: Option<String>,
+    /// https only; "" removes it, the mask keeps it.
+    pub notify_webhook_url: Option<String>,
+    pub notify_on: Option<Vec<String>>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -1537,6 +1712,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
     let claude_bin = find_cli_binary("claude");
     let grok_bin = find_cli_binary("grok");
     let codex_bin = find_cli_binary("codex");
+    let (notify_webhook_url, notify_on) = super::continuity::notify_settings_view(&state).await;
 
     Ok(Json(SettingsResponse {
         anthropic_api_key: if anthropic.is_empty() { String::new() } else { "••••••••".into() },
@@ -1549,13 +1725,21 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         grok_cli_path: grok_bin,
         codex_cli_found: codex_bin.is_some(),
         codex_cli_path: codex_bin,
+        notify_webhook_url,
+        notify_on,
     }))
 }
 
 pub async fn save_settings(
     State(state): State<AppState>,
     Json(payload): Json<SaveSettingsPayload>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Checked first, so a bad webhook URL saves nothing
+    if let Err(e) =
+        super::continuity::save_notify_settings(&state, payload.notify_webhook_url, payload.notify_on).await
+    {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": e }))));
+    }
     if let Some(key) = payload.anthropic_api_key {
         if !key.starts_with('•') && !key.is_empty() {
             let _ = state.db.set_setting("anthropic_api_key", &key).await;
@@ -2383,3 +2567,22 @@ pub async fn delete_password(
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::scrub_urls;
+
+    #[test]
+    fn failure_reasons_drop_url_credentials() {
+        assert_eq!(
+            scrub_urls("HTTP API error: error sending request for url (https://u:p4ss@llm.example/v1/chat?key=sk-123&x=1)"),
+            "HTTP API error: error sending request for url (https://llm.example/…"
+        );
+        assert_eq!(scrub_urls("see http://host:8080/a#frag now"), "see http://host:8080/… now");
+        let keyed = scrub_urls("401 from https://llm.example/v1/key/sk-path-secret/chat");
+        assert_eq!(keyed, "401 from https://llm.example/…");
+        assert!(!keyed.contains("sk-path-secret"));
+        assert_eq!(scrub_urls("down: https://llm.example"), "down: https://llm.example");
+        assert_eq!(scrub_urls("not logged in; run `codex login`"), "not logged in; run `codex login`");
+    }
+}

@@ -32,6 +32,7 @@ const AUTH: &str = r#"{"xai::api_key":{"key":"xai-FAKE","auth_mode":"api_key"}}"
 
 fn turn(mcp: Option<McpTurnContext>) -> TurnInput {
     TurnInput {
+        continuity: String::new(),
         browser_api_url: None,
         thread_id: "t1".into(),
         kwant: Kwant {

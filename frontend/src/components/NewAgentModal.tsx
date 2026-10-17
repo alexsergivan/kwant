@@ -1,11 +1,21 @@
 import React, { useEffect, useState } from 'react';
-import { X, Sparkles, Pencil, ChevronRight } from 'lucide-react';
+import { X, Sparkles, Pencil, ChevronRight, Brain, CalendarClock, UserRound } from 'lucide-react';
 import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
 import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
 import { playSfx } from '../audio/chiptune';
 import { KwantToolsPicker } from './KwantToolsPicker';
 import { McpServer, defaultKwantServerIds } from '../mcp';
 import { ENGINES, Profile, engineOfModel, profileStatus, profilesForEngine } from '../profiles';
+import { MemoryPanel } from './MemoryPanel';
+import { RoutinesPanel } from './RoutinesPanel';
+import type { Channel, Kwant } from './Sidebar';
+
+type EditTab = 'profile' | 'memory' | 'routines';
+const EDIT_TABS: Array<{ id: EditTab; label: string; Icon: typeof Brain }> = [
+  { id: 'profile', label: 'Profile', Icon: UserRound },
+  { id: 'memory', label: 'Memory', Icon: Brain },
+  { id: 'routines', label: 'Routines', Icon: CalendarClock },
+];
 
 export interface AgentFormData {
   name: string;
@@ -48,6 +58,9 @@ interface NewAgentModalProps {
   onManageProfiles?: () => void;
   /** Resolves to an error message when saving failed. */
   onSubmit: (data: AgentFormData) => Promise<string | void> | void;
+  /** For the Routines tab when editing. */
+  kwants?: Kwant[];
+  channels?: Channel[];
 }
 
 export const NewAgentModal: React.FC<NewAgentModalProps> = ({
@@ -61,7 +74,10 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   profiles = [],
   onManageProfiles,
   onSubmit,
+  kwants = [],
+  channels = [],
 }) => {
+  const [tab, setTab] = useState<EditTab>('profile');
   const [name, setName] = useState('');
   const [title, setTitle] = useState('');
   const [roleStyle, setRoleStyle] = useState('architect');
@@ -89,6 +105,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setSoul(initial?.soul ?? '');
     setSubmitting(false);
     setError(null);
+    setTab('profile');
     setPresetId(null);
     setMcpIds(undefined);
     setProfileId(initial?.profile_id ?? null);
@@ -168,13 +185,18 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-6 text-zinc-100 shadow-2xl space-y-5">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agent-modal-title"
+        className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
+      >
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
               {isEdit ? <Pencil size={14} /> : <Sparkles size={15} />}
             </div>
-            <h3 className="text-sm font-semibold text-zinc-100">
+            <h3 id="agent-modal-title" className="text-sm font-semibold text-zinc-100">
               {isEdit ? `Edit ${initial?.name}` : joinTeamName ? `New Agent for @${joinTeamName}` : 'Create New AI Agent'}
             </h3>
           </div>
@@ -183,13 +205,49 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               playSfx('click');
               onClose();
             }}
+            aria-label="Close"
             className="p-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
           >
             <X size={17} />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        {isEdit && kwantId && (
+          <div className="flex p-0.5 rounded-lg bg-zinc-950 border border-zinc-800" role="tablist" aria-label="Agent settings">
+            {EDIT_TABS.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                id={`agent-tab-${id}`}
+                aria-selected={tab === id}
+                aria-controls={`agent-panel-${id}`}
+                onClick={() => {
+                  playSfx('click');
+                  setTab(id);
+                }}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-[11px] font-medium transition-colors ${
+                  tab === id ? 'bg-sky-500/15 text-sky-200' : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                <Icon size={12} aria-hidden="true" /> {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {isEdit && kwantId && tab === 'memory' && (
+          <div role="tabpanel" id="agent-panel-memory" aria-labelledby="agent-tab-memory">
+            <MemoryPanel kwantId={kwantId} kwantName={initial?.name ?? 'This kwant'} />
+          </div>
+        )}
+        {isEdit && kwantId && tab === 'routines' && (
+          <div role="tabpanel" id="agent-panel-routines" aria-labelledby="agent-tab-routines">
+            <RoutinesPanel kwantId={kwantId} kwants={kwants} channels={channels} />
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4" hidden={isEdit && !!kwantId && tab !== 'profile'} role={isEdit && kwantId ? 'tabpanel' : undefined} id="agent-panel-profile">
           {!isEdit && (
             <div>
               <div className="flex items-center justify-between mb-1.5">

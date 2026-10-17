@@ -25,6 +25,8 @@ export interface Channel {
   lead_kwant_id: string;
   member_kwants: string[];
   routing_mode: string;
+  /** Pinned for every turn in this channel; null when unset. */
+  instructions?: string | null;
 }
 
 export interface Team {
@@ -36,6 +38,8 @@ export interface Team {
   icon: string;
   lead_kwant_id: string;
   member_kwants: string[];
+  /** Pinned for every turn in the team's channels; null when unset. */
+  instructions?: string | null;
 }
 
 export interface SidebarProps {

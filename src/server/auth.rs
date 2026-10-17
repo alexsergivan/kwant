@@ -180,6 +180,7 @@ fn exempt(path: &str) -> bool {
         || path == "/api/mcp/oauth/callback"
         || path.starts_with("/api/mcp/permission/")
         || path.starts_with("/api/mcp/gateway")
+        || path == "/api/mcp/self"
 }
 
 fn header_str(headers: &HeaderMap, name: impl header::AsHeaderName) -> Option<&str> {

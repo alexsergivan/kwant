@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch, Pencil } from 'lucide-react';
+import { ArrowUp, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -8,6 +8,7 @@ import { ToolCallsList } from './ToolCallsList';
 import { VirtualMachinePane, TerminalLogEntry } from './VirtualMachinePane';
 import { playSfx } from '../audio/chiptune';
 import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThreads';
+import { PinnedInstructions, PinnedItem } from './Instructions';
 
 export interface ChatMessage {
   id: string;
@@ -87,6 +88,13 @@ export interface ChatViewProps {
   onRefreshVm?: () => void;
   onRestartVm?: () => void;
   onNavigateVm?: (url: string) => void;
+  /** Pinned team/channel instructions, shown collapsed above the messages. */
+  pinned?: PinnedItem[];
+  /** Opens the channel's instructions editor; only for channels. */
+  onEditInstructions?: () => void;
+  /** A message to scroll to and flash (from search). */
+  highlightMessageId?: string | null;
+  onHighlightDone?: () => void;
 }
 
 export const renderFormattedText = (text: string): React.ReactNode => {
@@ -211,6 +219,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onRefreshVm,
   onRestartVm,
   onNavigateVm,
+  pinned = [],
+  onEditInstructions,
+  highlightMessageId,
+  onHighlightDone,
 }) => {
   const [internalIsVmPaneOpen, setInternalIsVmPaneOpen] = useState(false);
   const vmOpen = isVmPaneOpen !== undefined ? isVmPaneOpen : internalIsVmPaneOpen;
@@ -347,6 +359,31 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   }, [messages, streamingText, streamingThinking, pendingApproval, routingState]);
 
+  // Jump to a search hit: open its folded discussion if needed, then centre and flash it.
+  // Runs after the auto-scroll above, so it wins.
+  const [flashId, setFlashId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!highlightMessageId || !messages.some((m) => m.id === highlightMessageId)) return;
+    const thread = groupDiscussionThreads(messages).find(
+      (item) => item.kind === 'thread' && item.turns.some((t) => t.id === highlightMessageId),
+    );
+    if (thread && thread.kind === 'thread' && !openThoughts[`thread:${thread.id}`]) {
+      setOpenThoughts((prev) => ({ ...prev, [`thread:${thread.id}`]: true }));
+      return;
+    }
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(highlightMessageId)}"]`);
+    if (!el) return;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+    setFlashId(highlightMessageId);
+    onHighlightDone?.();
+  }, [highlightMessageId, messages, openThoughts, onHighlightDone]);
+  useEffect(() => {
+    if (!flashId) return;
+    const t = setTimeout(() => setFlashId(null), 2400);
+    return () => clearTimeout(t);
+  }, [flashId]);
+
   const toggleThought = (id: string) => {
     setOpenThoughts((prev) => ({ ...prev, [id]: !prev[id] }));
   };
@@ -419,7 +456,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
     return (
       <div
         key={msg.id}
-        className={`flex items-start gap-3.5 w-full max-w-5xl ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''}`}
+        data-message-id={msg.id}
+        className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
+          flashId === msg.id ? 'kw-flash' : ''
+        }`}
       >
         <ModernAvatar
           role={isUser ? 'user' : title}
@@ -562,6 +602,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </div>
           )}
 
+          {onEditInstructions && pinned.length === 0 && (
+            <button
+              type="button"
+              onClick={onEditInstructions}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
+              title="Pin instructions every kwant reads in this channel"
+              aria-label="Pin instructions"
+            >
+              <Pin size={12} className="text-amber-300" />
+              <span className="hidden sm:inline">Pin</span>
+            </button>
+          )}
+
           {onEditKwant && (
             <button
               type="button"
@@ -609,6 +662,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
         </div>
       </div>
+
+      <PinnedInstructions items={pinned} onEdit={onEditInstructions} />
 
       {/* Discussion In-Flight Banner */}
       {discussionState?.inProgress && (

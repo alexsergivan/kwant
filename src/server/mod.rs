@@ -8,6 +8,8 @@ pub mod mcp_runtime;
 pub mod profile_routes;
 pub mod profile_turn;
 pub mod auth;
+pub mod continuity;
+pub mod scheduler;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -44,6 +46,12 @@ pub struct AppState {
     pub profiles: Arc<crate::profiles::ProfileManager>,
     /// API token for requests from other machines (see `auth`).
     pub api_token: Arc<auth::ApiToken>,
+    /// Live turns that have the agents' own tools, by bearer token.
+    pub self_tools: Arc<Mutex<HashMap<String, continuity::SelfScope>>>,
+    /// Routines with a run in progress; a run that would overlap is skipped.
+    pub running_routines: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Wakes the scheduler early when routines change.
+    pub scheduler_wake: Arc<tokio::sync::Notify>,
 }
 
 impl AppState {
@@ -75,6 +83,9 @@ impl AppState {
             mcp_oauth: Arc::new(mcp_oauth::OAuthState::default()),
             profiles,
             api_token,
+            self_tools: Default::default(),
+            running_routines: Default::default(),
+            scheduler_wake: Default::default(),
         }
     }
 
@@ -106,7 +117,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/channels", get(routes::list_channels).post(routes::create_channel))
         .route("/api/channels/:id/messages", get(routes::list_messages))
         .route("/api/teams", get(routes::list_teams).post(routes::create_team))
-        .route("/api/teams/:id", get(routes::get_team).put(routes::update_team).delete(routes::delete_team))
+        .route(
+            "/api/teams/:id",
+            get(routes::get_team).put(routes::update_team).patch(continuity::patch_team).delete(routes::delete_team),
+        )
         .route("/api/chat/send", post(routes::send_chat))
         .route("/api/chat/cancel", post(routes::cancel_chat))
         .route("/api/approvals/:id/resolve", post(routes::resolve_approval))
@@ -136,6 +150,21 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/permission/:token", post(mcp_runtime::permission_endpoint))
         .route("/api/mcp/gateway", post(mcp_runtime::gateway_endpoint))
         .route("/api/mcp/gateway/grok", post(mcp_runtime::gateway_grok_endpoint))
+        .route("/api/mcp/self", post(continuity::self_endpoint))
+        .route("/api/channels/:id", get(continuity::get_channel).patch(continuity::patch_channel))
+        .route("/api/search", get(continuity::search))
+        .route("/api/kwants/:id/memories", get(continuity::list_memories).post(continuity::add_memory))
+        .route(
+            "/api/kwants/:id/memories/:mid",
+            axum::routing::patch(continuity::update_memory).delete(continuity::delete_memory),
+        )
+        .route("/api/routines", get(scheduler::list).post(scheduler::create))
+        .route(
+            "/api/routines/:id",
+            get(scheduler::get).patch(scheduler::update).delete(scheduler::remove),
+        )
+        .route("/api/routines/:id/run", post(scheduler::run_now))
+        .route("/api/routines/:id/runs", get(scheduler::runs))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))

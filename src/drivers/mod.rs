@@ -52,6 +52,10 @@ pub struct TurnInput {
     /// Other kwants in this chat that the speaker can hand the turn to with an @mention.
     #[serde(default)]
     pub teammates: Vec<Teammate>,
+    /// Pinned instructions, memory and history-tool notes for this turn, already formatted
+    /// (see `crate::server::continuity`). Empty when there are none.
+    #[serde(default)]
+    pub continuity: String,
     /// MCP servers, approver and records for this turn; `None` when the kwant has none.
     #[serde(skip)]
     pub mcp: Option<crate::mcp::McpTurnContext>,
@@ -160,7 +164,7 @@ impl TurnInput {
             )
         };
 
-        format!("{}{}{}{}", base, team_block, teammates_block, sandbox_rules)
+        format!("{}{}{}{}{}", base, team_block, self.continuity, teammates_block, sandbox_rules)
     }
 }
 

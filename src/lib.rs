@@ -6,6 +6,7 @@ pub mod embedded;
 pub mod mcp;
 pub mod profiles;
 pub mod router;
+pub mod routines;
 pub mod sandbox;
 pub mod server;
 pub mod tools;
