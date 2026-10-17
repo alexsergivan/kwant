@@ -27,8 +27,13 @@ pub async fn recheck(State(state): State<AppState>) -> Json<EnginesResponse> {
 
 pub async fn recheck_all(state: &AppState) -> Vec<EngineReport> {
     load_disabled(state).await;
-    let env = ProbeEnv::from_settings(&state.db).await;
+    let env = probe_env(state).await;
     state.engines.recheck(&env).await
+}
+
+/// What the checks run with: Settings and the env, and Claude's sign-in config dir.
+pub async fn probe_env(state: &AppState) -> ProbeEnv {
+    state.claude_login.probe_env(ProbeEnv::from_settings(&state.db).await)
 }
 
 /// Reads which engines are off from Settings into the registry.
@@ -66,7 +71,7 @@ pub async fn set_enabled(
     }
     tracing::info!(engine = id.as_str(), enabled = body.enabled, "engine switched");
     if body.enabled {
-        let env = ProbeEnv::from_settings(&state.db).await;
+        let env = probe_env(&state).await;
         state.engines.recheck_one(id, &env).await;
     }
     Ok(Json(EnginesResponse { engines: state.engines.snapshot() }))

@@ -8,6 +8,7 @@ pub mod mcp_runtime;
 pub mod profile_routes;
 pub mod profile_turn;
 pub mod engine_routes;
+pub mod engine_login;
 pub mod auth;
 pub mod continuity;
 pub mod scheduler;
@@ -64,6 +65,8 @@ pub struct AppState {
     pub scheduler_wake: Arc<tokio::sync::Notify>,
     /// `ask_user` calls waiting for the user's answer.
     pub questions: Arc<questions::QuestionHub>,
+    /// "Sign in with Claude" for the Claude engine.
+    pub claude_login: Arc<engine_login::ClaudeLogin>,
 }
 
 impl AppState {
@@ -100,6 +103,7 @@ impl AppState {
             running_routines: Default::default(),
             scheduler_wake: Default::default(),
             questions: Default::default(),
+            claude_login: Default::default(),
         }
     }
 
@@ -127,6 +131,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/profiles/:id/logout", post(profile_routes::logout))
         .route("/api/engines", get(engine_routes::list))
         .route("/api/engines/recheck", post(engine_routes::recheck))
+        .route("/api/engines/claude/login", post(engine_login::start))
+        .route(
+            "/api/engines/claude/login/:sid",
+            get(engine_login::get).delete(engine_login::cancel),
+        )
+        .route("/api/engines/claude/login/:sid/code", post(engine_login::submit_code))
+        .route("/api/engines/claude/logout", post(engine_login::logout))
         .route("/api/engines/:id", post(engine_routes::set_enabled).put(engine_routes::set_enabled))
         .route("/api/laya/status", get(routes::laya_status))
         .route("/api/kwants", get(routes::list_kwants).post(routes::create_kwant))

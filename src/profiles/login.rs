@@ -59,6 +59,8 @@ pub struct LoginView {
     pub user_code: Option<String>,
     /// Whether the user must paste a code back (Claude).
     pub needs_code: bool,
+    /// The pasted code went to the CLI, which is now checking it.
+    pub code_sent: bool,
     pub error: Option<String>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
@@ -71,15 +73,41 @@ struct Flow {
 }
 
 /// Login flows by id, at most one active per profile home.
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct LoginManager {
     flows: Arc<Mutex<HashMap<String, Arc<Flow>>>>,
+    /// Held while a login starts, so two starts for one home can't both spawn a CLI.
+    starting: Arc<tokio::sync::Mutex<()>>,
+    timeout: Duration,
 }
 
-/// Called with the profile id when a login succeeds.
-pub type OnSuccess = Arc<dyn Fn(String) + Send + Sync>;
+impl Default for LoginManager {
+    fn default() -> Self {
+        Self::with_timeout(LOGIN_TIMEOUT)
+    }
+}
+
+/// Called with the finished login (its `profile_id` and `flow_id`) when it succeeds.
+pub type OnSuccess = Arc<dyn Fn(LoginView) + Send + Sync>;
+
+/// Why [`LoginManager::start_exclusive`] didn't start a login.
+#[derive(Debug)]
+pub enum StartError {
+    /// A login for this home is already running.
+    Busy(Box<LoginView>),
+    Failed(String),
+}
 
 impl LoginManager {
+    /// A manager whose logins are killed after `timeout` instead of [`LOGIN_TIMEOUT`].
+    pub fn with_timeout(timeout: Duration) -> Self {
+        Self {
+            flows: Default::default(),
+            starting: Default::default(),
+            timeout,
+        }
+    }
+
     /// Starts a login, or returns the active one for this home.
     pub async fn start(
         &self,
@@ -89,6 +117,29 @@ impl LoginManager {
         home: &Path,
         on_success: OnSuccess,
     ) -> Result<LoginView, String> {
+        let env = CliEnv::for_home(engine, home);
+        match self
+            .start_exclusive(engine, bin, profile_id, home, &env, on_success)
+            .await
+        {
+            Ok(view) => Ok(view),
+            Err(StartError::Busy(view)) => Ok(*view),
+            Err(StartError::Failed(e)) => Err(e),
+        }
+    }
+
+    /// Starts a login with `env` applied to the CLI. `home` is the config dir it writes to: only
+    /// one login per home runs at a time.
+    pub async fn start_exclusive(
+        &self,
+        engine: Engine,
+        bin: &str,
+        profile_id: &str,
+        home: &Path,
+        env: &CliEnv,
+        on_success: OnSuccess,
+    ) -> Result<LoginView, StartError> {
+        let _one_start = self.starting.lock().await;
         {
             let mut flows = self.flows.lock().unwrap();
             flows.retain(|_, f| f.view.lock().unwrap().status.is_active() || !expired_long_ago(f));
@@ -96,7 +147,7 @@ impl LoginManager {
                 .values()
                 .find(|f| f.home == home && f.view.lock().unwrap().status.is_active())
             {
-                return Ok(f.view.lock().unwrap().clone());
+                return Err(StartError::Busy(Box::new(f.view.lock().unwrap().clone())));
             }
         }
         let mut cmd = tokio::process::Command::new(bin);
@@ -105,20 +156,23 @@ impl LoginManager {
             Engine::Codex => cmd.args(["login", "--device-auth"]),
             Engine::Grok => cmd.args(["login", "--device-auth"]),
         };
-        CliEnv::for_home(engine, home).apply(&mut cmd);
+        env.apply(&mut cmd);
+        if home.is_dir() {
+            cmd.current_dir(home);
+        }
         // CLIs print plain links without a terminal; keep them from opening a host browser
         cmd.env("BROWSER", "true")
             .env("NO_COLOR", "1")
             .env_remove("DISPLAY")
             .env_remove("WAYLAND_DISPLAY")
-            .current_dir(home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("could not start {} login: {e}", engine.as_str()))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            StartError::Failed(format!("could not start {} login: {e}", engine.as_str()))
+        })?;
+        let timeout = self.timeout;
         let flow_id = format!("login_{}", uuid::Uuid::new_v4().simple());
         let flow = Arc::new(Flow {
             view: Mutex::new(LoginView {
@@ -128,8 +182,9 @@ impl LoginManager {
                 url: None,
                 user_code: None,
                 needs_code: engine == Engine::Claude,
+                code_sent: false,
                 error: None,
-                expires_at: chrono::Utc::now() + chrono::Duration::from_std(LOGIN_TIMEOUT).unwrap(),
+                expires_at: chrono::Utc::now() + chrono::Duration::from_std(timeout).unwrap(),
             }),
             home: home.to_path_buf(),
             stdin: tokio::sync::Mutex::new(child.stdin.take()),
@@ -147,9 +202,8 @@ impl LoginManager {
         if let Some(err) = child.stderr.take() {
             tokio::spawn(read_lines(BufReader::new(err), line_tx));
         }
-        let profile_id = profile_id.to_string();
         tokio::spawn(async move {
-            let deadline = tokio::time::sleep(LOGIN_TIMEOUT);
+            let deadline = tokio::time::sleep(timeout);
             tokio::pin!(deadline);
             let mut lines_open = true;
             let end = loop {
@@ -179,13 +233,14 @@ impl LoginManager {
             };
             let _ = child.kill().await;
             flow.stdin.lock().await.take();
-            {
+            let finished = {
                 let mut view = flow.view.lock().unwrap();
                 view.status = end.0;
                 view.error = end.1;
-            }
+                view.clone()
+            };
             if end.0 == LoginStatus::Succeeded {
-                on_success(profile_id);
+                on_success(finished);
             }
         });
         // Give the CLI a moment to print its link so the first response usually has it
@@ -198,7 +253,7 @@ impl LoginManager {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         self.get(&flow_id)
-            .ok_or_else(|| "sign-in vanished".to_string())
+            .ok_or_else(|| StartError::Failed("sign-in vanished".to_string()))
     }
 
     pub fn get(&self, flow_id: &str) -> Option<LoginView> {
@@ -234,6 +289,8 @@ impl LoginManager {
         }
         let mut stdin = flow.stdin.lock().await;
         let pipe = stdin.as_mut().ok_or("a code was already sent")?;
+        // Marked first: a CLI that rejects the code may exit before the write returns
+        flow.view.lock().unwrap().code_sent = true;
         pipe.write_all(format!("{code}\n").as_bytes())
             .await
             .map_err(|_| "sign-in process is gone")?;
@@ -478,7 +535,7 @@ echo "$CLAUDE_CONFIG_DIR" > "$CLAUDE_CONFIG_DIR/seen-home"
                 &bin,
                 "prf_x",
                 &home,
-                Arc::new(move |id| *done2.lock().unwrap() = Some(id)),
+                Arc::new(move |v: LoginView| *done2.lock().unwrap() = Some(v.profile_id)),
             )
             .await
             .unwrap();
