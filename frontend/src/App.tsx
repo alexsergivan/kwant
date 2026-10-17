@@ -3,7 +3,6 @@ import { AppHeader } from './components/AppHeader';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { ChatView, ChatMessage, DiscussionState, RoutingState } from './components/ChatView';
 import { PendingApproval } from './components/ModernApprovalCard';
-import { SettingsModal } from './components/SettingsModal';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ManageTeamModal } from './components/ManageTeamModal';
@@ -11,12 +10,29 @@ import { playSfx } from './audio/chiptune';
 import { Toasts, Toast } from './components/Toasts';
 import { clearAllTurns, turnEnded, turnStarted } from './kwantActivity';
 import { Profile, describeProfileSwitch, profilesApi } from './profiles';
+import {
+  NotifyEvent,
+  SearchHit,
+  browserNotifyEnabled,
+  channelLabel,
+  continuityApi,
+  emitContinuity,
+  notificationPermission,
+  shouldShowOsNotification,
+} from './continuity';
+import type { PinnedItem } from './components/Instructions';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
 const NewAgentModal = lazy(() => import('./components/NewAgentModal').then((m) => ({ default: m.NewAgentModal })));
 const McpServersModal = lazy(() => import('./components/McpServersModal').then((m) => ({ default: m.McpServersModal })));
 const ProfilesModal = lazy(() => import('./components/ProfilesModal').then((m) => ({ default: m.ProfilesModal })));
+const SettingsModal = lazy(() => import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal })));
+const ChannelInstructionsModal = lazy(() =>
+  import('./components/ChannelInstructionsModal').then((m) => ({ default: m.ChannelInstructionsModal })),
+);
+const SearchModal = lazy(() => import('./components/SearchModal').then((m) => ({ default: m.SearchModal })));
+const RoutinesModal = lazy(() => import('./components/RoutinesModal').then((m) => ({ default: m.RoutinesModal })));
 
 export const App: React.FC = () => {
   const [kwants, setKwants] = useState<Kwant[]>([]);
@@ -60,10 +76,34 @@ export const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isProfilesOpen, setIsProfilesOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isRoutinesOpen, setIsRoutinesOpen] = useState(false);
+  const [editingChannelInstructions, setEditingChannelInstructions] = useState<Channel | null>(null);
+  const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastIdRef = useRef(0);
   const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
+  // Set each render once the select handlers exist; the SSE handler and notification clicks go through it.
+  const openTargetRef = useRef<(t: { channel_id: string | null; kwant_id: string | null }) => boolean>(() => false);
+  const showNotification = (n: NotifyEvent) => {
+    if (!document.hidden && n.kind === 'routine_failed') {
+      const id = ++toastIdRef.current;
+      setToasts((prev) => [...prev.slice(-2), { id, title: n.title, detail: n.body }]);
+      return;
+    }
+    if (!shouldShowOsNotification({ enabled: browserNotifyEnabled(), permission: notificationPermission(), hidden: document.hidden, kind: n.kind })) return;
+    try {
+      const note = new Notification(n.title, { body: n.body, tag: `kwnt-${n.kind}-${n.channel_id ?? n.kwant_id}` });
+      note.onclick = () => {
+        window.focus();
+        openTargetRef.current({ channel_id: n.channel_id, kwant_id: n.kwant_id });
+        note.close();
+      };
+    } catch {
+      // Some mobile browsers only allow notifications from a service worker.
+    }
+  };
   const refreshProfiles = useCallback(() => {
     profilesApi.list().then(setProfiles, () => undefined);
   }, []);
@@ -192,6 +232,18 @@ export const App: React.FC = () => {
             refreshProfiles();
             break;
           }
+          case 'memory_changed':
+          case 'MemoryChanged':
+            emitContinuity({ type: 'memory_changed', data: event.data });
+            break;
+          case 'routine_run':
+          case 'RoutineRun':
+            emitContinuity({ type: 'routine_run', data: event.data });
+            break;
+          case 'notify':
+          case 'Notify':
+            showNotification(event.data as NotifyEvent);
+            break;
           case 'TextDelta':
             setStreamingText((prev) => prev + event.data);
             playSfx('blip');
@@ -650,6 +702,68 @@ export const App: React.FC = () => {
     playSfx('click');
   };
 
+  /** Opens a channel, or the direct chat with a kwant when there's no channel. False if it's gone. */
+  const openTarget = (t: { channel_id: string | null; kwant_id: string | null }): boolean => {
+    if (t.channel_id) {
+      const channel = channels.find((c) => c.id === t.channel_id);
+      if (!channel) return false;
+      if (selectedIdRef.current !== channel.id) handleSelectChannel(channel);
+      return true;
+    }
+    const kwant = kwants.find((k) => k.id === t.kwant_id);
+    if (!kwant) return false;
+    if (selectedIdRef.current !== kwant.id) handleSelectKwant(kwant);
+    return true;
+  };
+  openTargetRef.current = openTarget;
+
+  const pushToast = (title: string, detail?: string) => {
+    const id = ++toastIdRef.current;
+    setToasts((prev) => [...prev.slice(-2), { id, title, detail }]);
+  };
+
+  // Search result picked: open its chat, then scroll to the message if it's among the ones loaded.
+  const handleJump = async (hit: SearchHit) => {
+    const targetId = hit.channel_id ?? hit.kwant_id;
+    if (!targetId || !openTarget(hit)) {
+      pushToast('That chat no longer exists.');
+      return;
+    }
+    try {
+      const res = await fetch(`/api/channels/${encodeURIComponent(targetId)}/messages`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: ChatMessage[] = await res.json();
+      messagesCacheRef.current[targetId] = data;
+      if (selectedIdRef.current === targetId) setMessages(data);
+      if (data.some((m) => m.id === hit.message_id)) setHighlightMessageId(hit.message_id);
+      else pushToast('Opened the chat', 'That message is older than the latest 100 shown here.');
+    } catch {
+      pushToast('Could not load that chat.');
+    }
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsSearchOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const saveChannelInstructions = async (text: string): Promise<string | void> => {
+    const channel = editingChannelInstructions;
+    if (!channel) return;
+    try {
+      const updated = await continuityApi.setChannelInstructions(channel.id, text);
+      setChannels((prev) => prev.map((c) => (c.id === channel.id ? { ...c, instructions: updated.instructions } : c)));
+    } catch (err) {
+      return err instanceof Error ? err.message : 'Could not save.';
+    }
+  };
+
   const saveKwantMcpServers = async (kwantId: string, serverIds: string[] | undefined): Promise<string | void> => {
     if (serverIds === undefined) return;
     const res = await fetch(`/api/kwants/${kwantId}/mcp-servers`, {
@@ -810,6 +924,7 @@ export const App: React.FC = () => {
       repo_url?: string;
       lead_kwant_id: string;
       member_kwants: string[];
+      instructions?: string;
     }
   ) => {
     try {
@@ -1072,6 +1187,11 @@ export const App: React.FC = () => {
   const closeProfiles = useCallback(() => setIsProfilesOpen(false), []);
 
   const isCurrentContextStreaming = isStreaming && streamingContextId === selectedId;
+  const pinned: PinnedItem[] = [];
+  if (currentTeam?.instructions?.trim()) pinned.push({ label: `Team @${currentTeam.name}`, text: currentTeam.instructions });
+  if (isChannel && currentChannel?.instructions?.trim())
+    pinned.push({ label: `Channel ${channelLabel(currentChannel.name)}`, text: currentChannel.instructions });
+
   const isDiscussionActiveHere =
     discussionState.inProgress &&
     (discussionState.contextId === selectedId ||
@@ -1084,6 +1204,8 @@ export const App: React.FC = () => {
       <AppHeader
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenTools={() => setIsMcpOpen(true)}
+        onOpenSearch={() => setIsSearchOpen(true)}
+        onOpenRoutines={() => setIsRoutinesOpen(true)}
         tokensUsed={tokensUsed}
         activeModel={currentKwant?.preferred_model || 'auto'}
       />
@@ -1168,6 +1290,17 @@ export const App: React.FC = () => {
           onRefreshVm={handleRefreshVm}
           onRestartVm={handleRestartVm}
           onNavigateVm={handleNavigateVm}
+          pinned={pinned}
+          onEditInstructions={
+            isChannel && currentChannel
+              ? () => {
+                  setEditingChannelInstructions(currentChannel);
+                  playSfx('click');
+                }
+              : undefined
+          }
+          highlightMessageId={highlightMessageId}
+          onHighlightDone={() => setHighlightMessageId(null)}
         />
       </div>
 
@@ -1192,6 +1325,8 @@ export const App: React.FC = () => {
           isOpen={!!editingKwant}
           initial={editingKwant}
           kwantId={editingKwant?.id}
+          kwants={kwants}
+          channels={channels}
           profiles={profiles}
           onManageProfiles={() => setIsProfilesOpen(true)}
           onManageServers={() => setIsMcpOpen(true)}
@@ -1219,24 +1354,39 @@ export const App: React.FC = () => {
       />
 
       {/* Settings Modal */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        onOpenTools={() => {
-          setIsSettingsOpen(false);
-          setIsMcpOpen(true);
-        }}
-        onOpenProfiles={() => {
-          setIsSettingsOpen(false);
-          setIsProfilesOpen(true);
-        }}
-      />
+      <Suspense fallback={null}>
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          onOpenTools={() => {
+            setIsSettingsOpen(false);
+            setIsMcpOpen(true);
+          }}
+          onOpenProfiles={() => {
+            setIsSettingsOpen(false);
+            setIsProfilesOpen(true);
+          }}
+        />
+      </Suspense>
 
       {/* MCP tool servers (opened last so it sits above the agent modal) */}
       <Suspense fallback={null}>
         <McpServersModal isOpen={isMcpOpen} onClose={() => setIsMcpOpen(false)} kwants={kwants} />
         <ProfilesModal isOpen={isProfilesOpen} onClose={closeProfiles} onProfilesChanged={setProfiles} />
+        {isSearchOpen && <SearchModal isOpen onClose={() => setIsSearchOpen(false)} kwants={kwants} onJump={handleJump} />}
+        {isRoutinesOpen && <RoutinesModal isOpen onClose={() => setIsRoutinesOpen(false)} kwants={kwants} channels={channels} />}
       </Suspense>
+
+      {editingChannelInstructions && (
+        <Suspense fallback={null}>
+          <ChannelInstructionsModal
+            channelLabel={channelLabel(editingChannelInstructions.name)}
+            initial={editingChannelInstructions.instructions ?? ''}
+            onClose={() => setEditingChannelInstructions(null)}
+            onSave={saveChannelInstructions}
+          />
+        </Suspense>
+      )}
 
       <Toasts toasts={toasts} onDismiss={dismissToast} />
     </div>

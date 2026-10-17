@@ -1,5 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { Cpu, Key, Globe, X, Sparkles, Check, Plug, ChevronRight, UserRound, LogOut } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Cpu, Key, Globe, X, Sparkles, Check, Plug, ChevronRight, UserRound, LogOut, Bell, AlertTriangle } from 'lucide-react';
+import {
+  BROWSER_NOTIFY_KEY,
+  MASK,
+  NOTIFY_KINDS,
+  NotifyKind,
+  browserNotifyEnabled,
+  notificationPermission,
+  webhookUrlError,
+} from '../continuity';
 import { playSfx } from '../audio/chiptune';
 import { useAuth } from './AuthGate';
 
@@ -14,6 +23,9 @@ interface SettingsData {
   grok_cli_path: string | null;
   codex_cli_found: boolean;
   codex_cli_path: string | null;
+  /** "••••••••" when one is saved, "" otherwise. */
+  notify_webhook_url?: string;
+  notify_on?: NotifyKind[];
 }
 
 interface SettingsModalProps {
@@ -32,9 +44,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434/v1');
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [notifyOn, setNotifyOn] = useState<NotifyKind[]>(NOTIFY_KINDS.map((k) => k.id));
+  const [browserNotify, setBrowserNotify] = useState(browserNotifyEnabled);
+  const [permission, setPermission] = useState(notificationPermission);
+  const webhookError = webhookUrlError(webhookUrl);
+
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
+      setSaveError(null);
+      setPermission(notificationPermission());
+      setBrowserNotify(browserNotifyEnabled());
       fetch('/api/settings')
         .then((r) => r.json())
         .then((data: SettingsData) => {
@@ -43,6 +73,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           setXaiKey(data.xai_api_key);
           setOpenaiKey(data.openai_api_key);
           setOllamaUrl(data.ollama_url || 'http://localhost:11434/v1');
+          setWebhookUrl(data.notify_webhook_url ?? '');
+          if (Array.isArray(data.notify_on)) setNotifyOn(data.notify_on);
         })
         .catch((err) => console.error('Failed to load settings:', err));
     }
@@ -50,8 +82,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
   if (!isOpen) return null;
 
+  // Permission is only ever asked from this click, never on load.
+  const toggleBrowserNotify = async () => {
+    playSfx('click');
+    if (browserNotify) {
+      localStorage.setItem(BROWSER_NOTIFY_KEY, 'off');
+      setBrowserNotify(false);
+      return;
+    }
+    let p = notificationPermission();
+    if (p === 'default') p = await Notification.requestPermission();
+    setPermission(p);
+    if (p === 'granted') {
+      localStorage.setItem(BROWSER_NOTIFY_KEY, 'on');
+      setBrowserNotify(true);
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (webhookError) return;
+    setSaveError(null);
     setSaving(true);
     playSfx('click');
 
@@ -64,16 +115,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           xai_api_key: xaiKey,
           openai_api_key: openaiKey,
           ollama_url: ollamaUrl,
+          notify_webhook_url: webhookUrl.trim(),
+          notify_on: notifyOn,
         }),
       });
 
       if (res.ok) {
         setSaveSuccess(true);
+        if (webhookUrl.trim() && webhookUrl.trim() !== MASK) setWebhookUrl(MASK);
         playSfx('coin');
         setTimeout(() => setSaveSuccess(false), 2500);
+      } else {
+        const data = await res.json().catch(() => null);
+        setSaveError(data && typeof data.error === 'string' ? data.error : `Saving failed (HTTP ${res.status}).`);
       }
     } catch (err) {
       console.error('Failed to save settings:', err);
+      setSaveError('Could not reach the server.');
     } finally {
       setSaving(false);
     }
@@ -81,7 +139,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-6 text-zinc-100 shadow-2xl space-y-6">
+      <div role="dialog" aria-modal="true" aria-labelledby="settings-title" className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
           <div className="flex items-center gap-2.5">
@@ -89,7 +147,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               <Sparkles size={17} />
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-zinc-100">Fleet & Engine Settings</h2>
+              <h2 id="settings-title" className="text-sm font-semibold text-zinc-100">Fleet & Engine Settings</h2>
               <p className="text-xs text-zinc-400">Configure local CLI routing and cloud provider credentials</p>
             </div>
           </div>
@@ -250,6 +308,102 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             </div>
           </div>
 
+          <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
+            <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
+              <Bell size={14} className="text-amber-300" />
+              <span>Notifications</span>
+            </legend>
+
+            <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
+              <div className="flex-1">
+                <p id="browser-notify-label" className="text-xs font-medium text-zinc-200">Notify me on this computer</p>
+                <p className="text-[11px] text-zinc-500">
+                  Only while kwnt is in a background tab.
+                  {permission === 'denied' && <span className="text-amber-300"> Blocked by your browser; allow notifications for this site in its settings.</span>}
+                  {permission === 'unsupported' && <span className="text-amber-300"> This browser can't show notifications.</span>}
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={browserNotify}
+                aria-labelledby="browser-notify-label"
+                disabled={permission === 'unsupported' || (permission === 'denied' && !browserNotify)}
+                onClick={toggleBrowserNotify}
+                className={`relative shrink-0 w-9 h-5 rounded-full transition-colors disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                  browserNotify ? 'bg-sky-600' : 'bg-zinc-700'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${browserNotify ? 'translate-x-4' : ''}`}
+                />
+              </button>
+            </div>
+
+            <div>
+              <label htmlFor="notify-webhook" className="block text-xs font-medium text-zinc-400 mb-1">
+                Phone webhook (optional)
+              </label>
+              <div className="flex gap-1.5">
+                <input
+                  id="notify-webhook"
+                  type={webhookUrl === MASK ? 'password' : 'url'}
+                  value={webhookUrl}
+                  onChange={(e) => setWebhookUrl(e.target.value)}
+                  onFocus={() => webhookUrl === MASK && setWebhookUrl('')}
+                  onBlur={() => !webhookUrl.trim() && settings?.notify_webhook_url === MASK && setWebhookUrl(MASK)}
+                  placeholder="https://ntfy.sh/your-secret-topic"
+                  aria-invalid={!!webhookError}
+                  aria-describedby="notify-webhook-hint"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className={`flex-1 min-w-0 bg-zinc-950 border rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none transition-colors ${
+                    webhookError ? 'border-rose-500/70' : 'border-zinc-800 focus:border-sky-500'
+                  }`}
+                />
+                {settings?.notify_webhook_url === MASK && (
+                  <button
+                    type="button"
+                    onClick={() => setWebhookUrl('')}
+                    className="px-2.5 rounded-lg text-[11px] font-medium text-zinc-300 border border-zinc-800 hover:text-rose-200 hover:bg-zinc-800 transition-colors"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <p id="notify-webhook-hint" className={`mt-1 text-[11px] ${webhookError ? 'text-rose-400' : 'text-zinc-500'}`}>
+                {webhookError ??
+                  (webhookUrl === MASK
+                    ? 'A webhook is saved. Type a new URL to replace it.'
+                    : settings?.notify_webhook_url === MASK && !webhookUrl.trim()
+                      ? 'Saving will remove the webhook.'
+                      : 'https only. kwnt posts a short title and line, never message text.')}
+              </p>
+            </div>
+
+            <div className="space-y-1.5" role="group" aria-labelledby="notify-kinds-label">
+              <p id="notify-kinds-label" className="text-xs font-medium text-zinc-400">Tell me when</p>
+              {NOTIFY_KINDS.map((k) => (
+                <label key={k.id} className="flex items-center gap-2 text-[11px] text-zinc-300">
+                  <input
+                    type="checkbox"
+                    className="accent-sky-500"
+                    checked={notifyOn.includes(k.id)}
+                    onChange={(e) => setNotifyOn((prev) => (e.target.checked ? [...prev, k.id] : prev.filter((x) => x !== k.id)))}
+                  />
+                  {k.label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          {saveError && (
+            <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 px-3 py-2 rounded-lg text-xs flex items-center gap-2" role="alert">
+              <AlertTriangle size={14} />
+              <span>{saveError}</span>
+            </div>
+          )}
+
           {saveSuccess && (
             <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-3 py-2 rounded-lg text-xs flex items-center gap-2">
               <Check size={14} />
@@ -283,8 +437,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             </button>
             <button
               type="submit"
-              disabled={saving}
-              className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm"
+              disabled={saving || !!webhookError}
+              className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50"
             >
               {saving ? 'Saving...' : 'Save Settings'}
             </button>
