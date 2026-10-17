@@ -36,7 +36,8 @@ const profile = (over) => ({
   id: 'prf_x', engine: 'claude', name: 'Work', kind: 'cli_home', enabled: true, is_default: false, priority: 100,
   home_dir: null, has_key: false, signed_in: true, account_label: null, limited_until: null, last_error: null, ...over,
 });
-const machine = profile({ id: 'prf_system_claude', name: 'This machine', kind: 'system', signed_in: null, priority: 0 });
+// The host CLI is signed out, so This machine's own check says signed out too (src/profiles/status.rs probes it).
+const machine = profile({ id: 'prf_system_claude', name: 'This machine', kind: 'system', signed_in: false, priority: 0 });
 const personal = profile({ id: 'prf_personal', name: 'Personal', is_default: true, priority: 10 });
 
 const api = (engines) => ({ engines, error: null, rechecking: false, recheck: async () => {}, reload: async () => {}, setEnabled: async () => {}, apply: () => {} });

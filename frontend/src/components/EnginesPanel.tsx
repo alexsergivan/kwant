@@ -163,13 +163,14 @@ export const RouteSummary: React.FC<{ rows: RouteRow[]; pending: boolean }> = ({
             <span className="w-14 shrink-0 font-semibold text-zinc-100">{r.label}</span>
             <span className="px-1.5 py-0.5 rounded-md bg-zinc-800/80 text-zinc-300">{r.engine}</span>
             <ArrowRight size={11} className="text-zinc-500" aria-label="on" />
-            <span className={`px-1.5 py-0.5 rounded-md font-medium ${r.account.otherProvider ? 'bg-amber-500/15 text-amber-100' : 'bg-emerald-500/15 text-emerald-100'}`}>
+            <span className={`px-1.5 py-0.5 rounded-md font-medium ${r.account.otherProvider || r.note ? 'bg-amber-500/15 text-amber-100' : 'bg-emerald-500/15 text-emerald-100'}`}>
               {r.account.name}
             </span>
             {r.account.detail && <span className={r.account.otherProvider ? 'text-amber-200' : 'text-zinc-400'}>{r.account.detail}</span>}
           </div>
           <p className="mt-1 pl-0 sm:pl-[3.875rem] text-zinc-500">
-            {r.then.length > 0 ? `If it’s out of usage or signed out: ${r.then.join(', then ')}.` : 'No backup account is ready.'}
+            {r.note && <span className="text-amber-200">{r.note} </span>}
+            {r.then.length > 0 ? `If it’s out of usage or signed out: ${r.then.join(', then ')}.` : r.note ? '' : 'No backup account is ready.'}
             {r.defaultModel && <> Kwants on Auto get {r.defaultModel}.</>}
           </p>
           {r.fallback && <p className="pl-0 sm:pl-[3.875rem] text-zinc-500">{r.fallback}</p>}

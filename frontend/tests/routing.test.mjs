@@ -72,3 +72,44 @@ test('nothing ready means no rows; an API key from Settings shows as such', () =
   assert.equal(row.engine, 'Anthropic API key');
   assert.equal(row.account.name, 'API key in Settings');
 });
+
+// Rigel's edge run: the only switched-on accounts are a signed-out Work and an unchecked one.
+test('when no account is ready, the summary names the one the server still tries, with why', () => {
+  const out = { ...work, signed_in: false, is_default: true };
+  const [row] = m.routeSummary([engine('claude', { uses: { profile_id: 'prf_personal', label: 'Personal' } })], [machine, out, { ...personal, enabled: false }], NOW);
+  assert.equal(row.account.name, 'Work');
+  assert.match(row.note, /needs sign-in/);
+  assert.deepEqual(row.then, []);
+  const limited = { ...personal, limited_until: '2026-10-17T21:00:00Z' };
+  const [r2] = m.routeSummary([engine('claude')], [machine, limited], NOW);
+  assert.equal(r2.account.name, 'Personal');
+  assert.match(r2.note, /out of usage/);
+  // A ready account carries no note.
+  assert.equal(m.routeSummary([engine('claude')], [machine, personal], NOW)[0].note, null);
+});
+
+test('an account whose sign-in is not checked yet is tried, as on the server', () => {
+  const unchecked = profile({ id: 'prf_new', name: 'New', priority: 10, signed_in: null });
+  const out = { ...work, signed_in: false };
+  assert.deepEqual(m.tryOrder([machine, personal, unchecked, out], 'claude', NOW).map((p) => p.name), ['Personal', 'New']);
+  const [row] = m.routeSummary([engine('claude')], [machine, { ...unchecked, is_default: true }, out], NOW);
+  assert.equal(row.account.name, 'New');
+  assert.match(row.note, /hasn’t been checked/);
+  // A refused turn's "auth" error alone doesn't take it out; only a signed-out check does.
+  assert.deepEqual(m.tryOrder([{ ...personal, last_error: 'auth' }, work], 'claude', NOW).map((p) => p.name), ['Personal', 'Work']);
+});
+
+test('equal priorities keep the API order (created_at, then id), not the name', () => {
+  // The API lists Zed before Alpha: Zed was added first.
+  const zed = profile({ id: 'prf_a1', name: 'Zed', priority: 100 });
+  const alpha = profile({ id: 'prf_b2', name: 'Alpha', priority: 100 });
+  assert.deepEqual(m.tryOrder([machine, zed, alpha], 'claude', NOW).map((p) => p.name), ['Zed', 'Alpha']);
+  assert.deepEqual(m.tryOrder([machine, alpha, zed], 'claude', NOW).map((p) => p.name), ['Alpha', 'Zed']);
+});
+
+test('an API-key account on an engine that is off drops out of the route', () => {
+  const key = profile({ id: 'prf_key', name: 'Key', kind: 'api_key', has_key: true, priority: 10 });
+  const [row] = m.routeSummary([engine('claude')], [machine, key, personal], NOW);
+  assert.equal(row.account.name, 'Personal');
+  assert.deepEqual(row.then, []);
+});

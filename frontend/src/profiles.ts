@@ -233,6 +233,12 @@ export function accountsForCard(profiles: Profile[], card: string): Profile[] {
     );
 }
 
+/** What turn routing asks of an account (Availability::usable on the server): not out of usage, not an
+ * API-key account without its key, and not signed out on its last check. Not checked yet still counts,
+ * so the server tries it; a refused turn's "auth" error doesn't matter until a check says signed out. */
+export const accountRoutable = (p: Profile, now = Date.now()) =>
+  !activeLimit(p.limited_until, now) && !(p.kind === 'api_key' && !p.has_key) && p.signed_in !== false;
+
 /** Could run a turn as last checked: on, signed in (or keyed), not out of usage. */
 export const accountUsable = (p: Profile, now = Date.now()) =>
   p.enabled && !activeLimit(p.limited_until, now) && p.last_error !== 'auth' && (p.kind === 'api_key' ? p.has_key : p.signed_in === true);
