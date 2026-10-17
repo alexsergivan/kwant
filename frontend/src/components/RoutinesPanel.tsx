@@ -269,7 +269,7 @@ const RunHistory: React.FC<{ routineId: string; tick: number }> = ({ routineId, 
           <StatusBadge status={r.status} />
           <span>{formatWhen(r.started_at)}</span>
           <span className="text-zinc-600">{r.trigger === 'manual' ? 'Run now' : 'Scheduled'}</span>
-          {r.error && <span className="basis-full text-rose-300/90 break-words">{r.error}</span>}
+          {r.error && <span className="basis-full min-w-0 text-rose-300/90 [overflow-wrap:anywhere]">{r.error}</span>}
         </li>
       ))}
     </ol>
