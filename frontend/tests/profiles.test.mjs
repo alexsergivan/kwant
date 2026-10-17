@@ -43,13 +43,30 @@ test('lists an engine default first, then by ascending priority', () => {
 test('status explains usage limits, sign-in and keys without showing secrets', () => {
   const now = Date.parse('2026-10-16T12:00:00Z');
   const { profileStatus } = profiles;
-  assert.deepEqual(profileStatus(profile({ limited_until: '2026-10-16T12:45:00Z' }), now), { tone: 'warn', text: 'Out of usage · back in 45 min' });
-  assert.equal(profileStatus(profile({ limited_until: '2026-10-16T11:00:00Z', account_label: 'me@x.io' }), now).text, 'Signed in as me@x.io');
+  assert.deepEqual(profileStatus(profile({ limited_until: '2026-10-16T12:45:00Z' }), now), { tone: 'warn', text: 'Out of usage · Back in 45 min' });
+  assert.equal(profileStatus(profile({ limited_until: '2026-10-16T11:00:00Z', account_label: 'me@x.io' }), now).text, 'Ready · me@x.io');
+  assert.equal(profileStatus(profile({}), now).text, 'Ready');
   assert.equal(profileStatus(profile({ last_error: 'auth' }), now).tone, 'error');
-  assert.equal(profileStatus(profile({ kind: 'api_key', has_key: false }), now).text, 'No key yet');
-  assert.equal(profileStatus(profile({ kind: 'api_key', has_key: true }), now).text, 'Key saved');
-  assert.equal(profileStatus(profile({ enabled: false, last_error: 'quota' }), now).text, 'Turned off');
+  assert.equal(profileStatus(profile({ last_error: 'auth' }), now).text, 'Needs sign-in');
+  assert.equal(profileStatus(profile({ signed_in: false }), now).text, 'Needs sign-in');
+  assert.equal(profileStatus(profile({ kind: 'api_key', has_key: false }), now).text, 'No key');
+  assert.equal(profileStatus(profile({ kind: 'api_key', has_key: true }), now).text, 'Ready');
+  assert.equal(profileStatus(profile({ enabled: false, last_error: 'quota' }), now).text, 'Off');
   assert.equal(profileStatus(profile({ signed_in: null, kind: 'system' }), now).tone, 'muted');
+});
+
+test('a Claude Code set up for another provider reads as "Other provider", never "Signed in as"', () => {
+  const { accountState, isThirdPartyLabel } = profiles;
+  const bedrock = profile({ account_label: 'Amazon Bedrock' });
+  assert.deepEqual(accountState(bedrock), { label: 'Other provider', tone: 'warn', detail: 'Runs through Amazon Bedrock instead of its own Claude login' });
+  // On This machine it's a setup, not a problem.
+  assert.equal(accountState(profile({ kind: 'system', account_label: 'Google Vertex AI' })).tone, 'info');
+  // An older server's raw auth method.
+  assert.equal(accountState(profile({ account_label: 'third_party' })).detail, 'Runs through a third-party provider instead of its own Claude login');
+  assert.equal(profiles.profileStatus(bedrock).text, 'Other provider · Runs through Amazon Bedrock instead of its own Claude login');
+  assert.ok(!isThirdPartyLabel('me@x.io'));
+  // Off wins over everything, so a switched-off account never looks in use.
+  assert.equal(accountState(profile({ enabled: false, account_label: 'Amazon Bedrock' })).label, 'Off');
 });
 
 test('only opens https sign-in links', () => {
