@@ -292,4 +292,10 @@ mod tests {
         let s = approval_summary(p);
         assert!(s.contains("to: a@b.c") && !s.contains("plain-but-hidden"), "{s}");
     }
+
+    #[test]
+    fn summaries_mask_url_passwords_and_bearer_tokens() {
+        let s = summarize("failed: postgres://bob:hunter2@db:5432/x with Authorization: Bearer abc123");
+        assert_eq!(s, "failed: postgres://bob:[redacted]@db:5432/x with Authorization: Bearer [redacted]");
+    }
 }
