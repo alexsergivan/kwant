@@ -19,10 +19,12 @@ import {
   MousePointerClick,
   Keyboard,
   Loader2,
+  Laptop,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import { mapBrowserPoint } from '../browserViewport';
 import { useBrowserStream } from '../useBrowserStream';
+import { ComputerModeChip, ComputerModeError, LocalBrowserNote, useComputerMode } from './ComputerModeSwitch';
 
 export interface TerminalLogEntry {
   command: string;
@@ -83,8 +85,12 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const [newPassword, setNewPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Local mode drives a real Chrome window, so there's no stream to show. Unknown counts as vm.
+  const computer = useComputerMode(isOpen);
+  const isLocal = computer.state.settings?.mode === 'local';
+
   // Interactive Remote Control State
-  const stream = useBrowserStream(teamId, isOpen && activeTab === 'browser');
+  const stream = useBrowserStream(teamId, isOpen && activeTab === 'browser' && !isLocal);
   const isControlMode = stream.controlling;
   const isInteracting = stream.busy;
   const [quickTypeText, setQuickTypeText] = useState('');
@@ -309,38 +315,42 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   return (
     <div className="w-96 border-l border-zinc-800 bg-zinc-950 flex flex-col h-full shadow-2xl z-30 select-none animate-in slide-in-from-right duration-200">
       {/* Top Header */}
-      <div className="h-14 border-b border-zinc-800 px-4 flex items-center justify-between bg-zinc-900/60">
-        <div className="flex items-center gap-2">
-          <div className={`w-2.5 h-2.5 rounded-full ${(stream.connected || isRunning) ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`} />
-          <div>
+      <div className="h-14 border-b border-zinc-800 px-4 flex items-center justify-between gap-2 bg-zinc-900/60">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className={`shrink-0 w-2.5 h-2.5 rounded-full ${(stream.connected || isRunning) ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`} />
+          <div className="min-w-0">
             <div className="text-xs font-semibold text-zinc-100 flex items-center gap-1.5">
-              <span>Bot Browser</span>
-              <span className="text-[10px] font-mono text-zinc-400">(@{teamName})</span>
+              <span className="whitespace-nowrap">Bot Browser</span>
+              <span className="text-[10px] font-mono text-zinc-400 truncate">(@{teamName})</span>
             </div>
-            <p className="text-[10px] text-zinc-400">Live Chromium • Separate code sandbox</p>
+            <p className="text-[10px] text-zinc-400 truncate">{isLocal ? 'Your Chrome • Commands ask first' : 'Live Chromium • Separate code sandbox'}</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
+          <ComputerModeChip api={computer} />
+
           {/* Interactive Control Toggle */}
-          <button
-            type="button"
-            onClick={() => {
-              playSfx('click');
-              stream.send({ action: isControlMode ? 'release_control' : 'take_control' });
-              if (!isControlMode) setActiveTab('browser');
-            }}
-            disabled={!stream.connected}
-            title={isControlMode ? 'Exit Control Mode' : 'Take Control of Bot Browser'}
-            className={`p-1.5 rounded-md transition-colors cursor-pointer flex items-center gap-1 ${
-              isControlMode
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm shadow-cyan-500/20 animate-pulse'
-                : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
-            }`}
-          >
-            <MousePointerClick size={13} className={isControlMode ? 'text-cyan-400' : ''} />
-            <span className="text-[10px] font-semibold">{isControlMode ? 'Controlling' : 'Take Control'}</span>
-          </button>
+          {!isLocal && (
+            <button
+              type="button"
+              onClick={() => {
+                playSfx('click');
+                stream.send({ action: isControlMode ? 'release_control' : 'take_control' });
+                if (!isControlMode) setActiveTab('browser');
+              }}
+              disabled={!stream.connected}
+              title={isControlMode ? 'Exit Control Mode' : 'Take Control of Bot Browser'}
+              className={`p-1.5 rounded-md transition-colors cursor-pointer flex items-center gap-1 ${
+                isControlMode
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm shadow-cyan-500/20 animate-pulse'
+                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
+              }`}
+            >
+              <MousePointerClick size={13} className={isControlMode ? 'text-cyan-400' : ''} />
+              <span className="text-[10px] font-semibold whitespace-nowrap">{isControlMode ? 'Controlling' : 'Take Control'}</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -391,6 +401,12 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           </button>
         </div>
       </div>
+
+      {computer.state.error && (
+        <div className="px-3 pt-2">
+          <ComputerModeError error={computer.state.error} onDismiss={computer.dismissError} />
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex border-b border-zinc-800 bg-zinc-900/30 text-xs font-medium">
@@ -448,7 +464,11 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
       {/* Content Area */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {activeTab === 'browser' ? (
+        {activeTab === 'browser' && isLocal ? (
+          <div className="flex-1 flex flex-col p-3 overflow-hidden">
+            <LocalBrowserNote />
+          </div>
+        ) : activeTab === 'browser' ? (
           <div className="flex-1 flex flex-col p-3 gap-2 overflow-hidden">
             {/* Browser Address Bar */}
             <div className="flex items-center gap-1.5 p-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs">
@@ -867,11 +887,18 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
       {/* Footer Status */}
       <div className="p-2.5 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] text-zinc-400">
-        <div className="flex items-center gap-1.5">
-          <Cpu size={12} className={(stream.connected || isRunning) ? 'text-emerald-400' : 'text-zinc-500'} />
-          <span>{(stream.connected || isRunning) ? 'Browser Ready' : 'Browser Offline'}</span>
-        </div>
-        {onRestartVm && (
+        {isLocal ? (
+          <div className="flex items-center gap-1.5">
+            <Laptop size={12} className="text-amber-300/80" />
+            <span>Chrome on your computer</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <Cpu size={12} className={(stream.connected || isRunning) ? 'text-emerald-400' : 'text-zinc-500'} />
+            <span>{(stream.connected || isRunning) ? 'Browser Ready' : 'Browser Offline'}</span>
+          </div>
+        )}
+        {onRestartVm && !isLocal && (
           <button
             type="button"
             onClick={() => {

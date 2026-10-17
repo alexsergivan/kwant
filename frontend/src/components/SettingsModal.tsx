@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Cpu, Key, Globe, X, Sparkles, Check, Plug, ChevronRight, UserRound, LogOut, Bell, AlertTriangle, Layers } from 'lucide-react';
+import { Cpu, Key, Globe, X, Sparkles, Check, Plug, ChevronRight, UserRound, LogOut, Bell, AlertTriangle, Layers, Monitor } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import {
   BROWSER_NOTIFY_KEY,
@@ -12,6 +12,7 @@ import {
 } from '../continuity';
 import { playSfx } from '../audio/chiptune';
 import { useAuth } from './AuthGate';
+import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
 
 interface SettingsData {
   anthropic_api_key: string;
@@ -49,6 +50,7 @@ interface SettingsModalProps {
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onOpenTools, onOpenProfiles }) => {
   const { authRequired, signOut } = useAuth();
+  const computer = useComputerMode(isOpen);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [anthropicKey, setAnthropicKey] = useState('');
   const [xaiKey, setXaiKey] = useState('');
@@ -245,6 +247,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             </div>
           </div>
         </div>
+
+        {computer.state.settings && (
+          <div className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3">
+            <div>
+              <p id="computer-mode-label" className="flex items-center gap-2 text-xs font-medium text-zinc-300">
+                <Monitor size={15} className="text-sky-400" aria-hidden="true" />
+                <span>Computer for browsing and commands</span>
+              </p>
+              <p className="mt-1 text-[11px] text-zinc-500">Switches right away, no need to save.</p>
+            </div>
+            <ComputerModeControl api={computer} />
+          </div>
+        )}
 
         {onOpenProfiles && (
           <button

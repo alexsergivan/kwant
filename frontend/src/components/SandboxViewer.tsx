@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Globe, Loader2, RefreshCw, Share2, MousePointerClick } from 'lucide-react';
+import { ComputerModeChip, ComputerModeError, LocalBrowserNote, useComputerMode } from './ComputerModeSwitch';
 
 // Must match the sandbox Chromium --window-size (docker/entrypoint.sh)
 const VIEWPORT_W = 1280;
@@ -34,6 +35,8 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
   const urlInputFocusedRef = useRef(false);
   const lastWheelRef = useRef(0);
   const api = `/api/sandbox/${encodeURIComponent(teamId)}`;
+  const computer = useComputerMode(true);
+  const isLocal = computer.state.settings?.mode === 'local';
 
   const applyUrl = useCallback((next?: string) => {
     if (!next || next === 'about:blank') return;
@@ -110,12 +113,13 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
 
   // Initial load + polling so page changes (loads, animations, bot actions) show up
   useEffect(() => {
+    if (isLocal) return;
     refresh();
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') refresh();
     }, POLL_MS);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, isLocal]);
 
   // Live updates when the bot (or the in-app pane) drives the same browser
   useEffect(() => {
@@ -235,6 +239,8 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
           <RefreshCw size={14} />
         </button>
 
+        <ComputerModeChip api={computer} />
+
         <div
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 flex-shrink-0"
           title="This is the same browser your agents use. They will see the current page on their next reply."
@@ -244,18 +250,30 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
         </div>
       </header>
 
-      <div className="px-4 py-1.5 text-[11px] text-zinc-500 border-b border-zinc-900 flex items-center gap-2">
-        <MousePointerClick size={12} className={isFocused ? 'text-sky-400' : ''} />
-        <span>
-          {isFocused
-            ? 'Controlling the sandbox: clicks, scrolling, typing and paste go to the page.'
-            : 'Click the page to take control. Your agents will see wherever you leave this browser.'}
-        </span>
-        {title && <span className="ml-auto truncate text-zinc-400">{title}</span>}
-      </div>
+      {!isLocal && (
+        <div className="px-4 py-1.5 text-[11px] text-zinc-500 border-b border-zinc-900 flex items-center gap-2">
+          <MousePointerClick size={12} className={isFocused ? 'text-sky-400' : ''} />
+          <span>
+            {isFocused
+              ? 'Controlling the sandbox: clicks, scrolling, typing and paste go to the page.'
+              : 'Click the page to take control. Your agents will see wherever you leave this browser.'}
+          </span>
+          {title && <span className="ml-auto truncate text-zinc-400">{title}</span>}
+        </div>
+      )}
+
+      {computer.state.error && (
+        <div className="px-4 pt-2">
+          <ComputerModeError error={computer.state.error} onDismiss={computer.dismissError} />
+        </div>
+      )}
 
       <main className="flex-1 min-h-0 flex items-center justify-center p-4 overflow-hidden">
-        {error && !screenshot ? (
+        {isLocal ? (
+          <div className="w-full max-w-md flex">
+            <LocalBrowserNote />
+          </div>
+        ) : error && !screenshot ? (
           <div className="text-sm text-zinc-400">{error}</div>
         ) : (
           <div
