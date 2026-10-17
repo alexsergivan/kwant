@@ -208,10 +208,10 @@ fn relative_reset(lower: &str) -> Option<Duration> {
 /// Key names (matched case-insensitively, as the whole name or its suffix, so `client_secret`,
 /// `x-api-key` and `AWS_SECRET_ACCESS_KEY` count) whose value is a credential when written as
 /// `name=value`, `name: value` or, for a `--flag`, `--name value`.
-const CREDENTIAL_KEYS: [&str; 11] = [
+const CREDENTIAL_KEYS: [&str; 15] = [
     "password",
     "passwd",
-    "pwd",
+    "passphrase",
     "secret",
     "token",
     "api_key",
@@ -219,18 +219,35 @@ const CREDENTIAL_KEYS: [&str; 11] = [
     "api-key",
     "secret_key",
     "access_key",
+    "private_key",
+    "private-key",
+    "privatekey",
     "authorization",
+    "cookie",
 ];
 /// Short key names that only count whole or after `_`/`-` (`db_pass`, `--pass`), so `bypass=1`
 /// and `compass: north` are left alone.
 const SHORT_CREDENTIAL_KEYS: [&str; 1] = ["pass"];
+/// Key names that only count after `_`/`-` (`MYSQL_PWD`, `--pwd`), so the shell's `PWD=/home/x`
+/// and `OLDPWD=…` stay readable.
+const SEPARATED_CREDENTIAL_KEYS: [&str; 1] = ["pwd"];
+/// Slack token prefixes; the whole token is masked (`xoxb-123-abc` → `[redacted]`).
+const SLACK_TOKEN_PREFIXES: [&str; 7] = [
+    "xoxb-", "xoxp-", "xoxa-", "xoxs-", "xoxe-", "xoxr-", "xapp-",
+];
 
 fn is_credential_key(name: &str) -> bool {
+    let after_separator = |k: &&str, whole: bool| {
+        name.strip_suffix(*k)
+            .is_some_and(|rest| (whole && rest.is_empty()) || rest.ends_with(['_', '-']))
+    };
     CREDENTIAL_KEYS.iter().any(|k| name.ends_with(k))
-        || SHORT_CREDENTIAL_KEYS.iter().any(|k| {
-            name.strip_suffix(k)
-                .is_some_and(|rest| rest.is_empty() || rest.ends_with(['_', '-']))
-        })
+        || SHORT_CREDENTIAL_KEYS
+            .iter()
+            .any(|k| after_separator(k, true))
+        || SEPARATED_CREDENTIAL_KEYS
+            .iter()
+            .any(|k| after_separator(k, false))
 }
 
 /// Masks the password in URL userinfo, keeping the user and host:
@@ -261,11 +278,12 @@ fn mask_url_passwords(text: &str) -> String {
     out
 }
 
-/// Masks free-text credentials, keeping the key: `password=hunter2`, `pwd: hunter2`,
+/// Masks free-text credentials, keeping the key: `password=hunter2`, `db_pwd: hunter2`,
 /// `"api_key":"…"`, `--password hunter2`, `Authorization: Bearer …` and a bare `Bearer …` become
-/// `password=[redacted]`, `Bearer [redacted]` and so on, and a password in a URL becomes
-/// `postgres://bob:[redacted]@db`. Only a key followed by `=` or `:` (or a `--flag` followed by
-/// a value) counts, so prose like "the password field is empty" is left alone.
+/// `password=[redacted]`, `Bearer [redacted]` and so on, a `Cookie:`/`Set-Cookie:` value is
+/// hidden to the end of the line, a Slack token (`xoxb-…`) is hidden whole, and a password in a
+/// URL becomes `postgres://bob:[redacted]@db`. Only a key followed by `=` or `:` (or a `--flag`
+/// followed by a value) counts, so prose like "the password field is empty" is left alone.
 pub fn mask_credentials(text: &str) -> String {
     let text = &mask_url_passwords(text);
     let is_name = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
@@ -289,6 +307,15 @@ pub fn mask_credentials(text: &str) -> String {
             i += 1;
         }
         let name = text[start..i].to_ascii_lowercase();
+        if SLACK_TOKEN_PREFIXES
+            .iter()
+            .any(|p| name.len() > p.len() && name.starts_with(p))
+        {
+            out.push_str(&text[copied..start]);
+            out.push_str("[redacted]");
+            copied = i;
+            continue;
+        }
         let mut j;
         if name == "bearer" {
             // a bare `Bearer <token>`; an all-lowercase word is prose ("Bearer token", "bearer of")
@@ -339,6 +366,11 @@ pub fn mask_credentials(text: &str) -> String {
             Some(&q) if q == b'"' || q == b'\'' => {
                 let end = text[j + 1..].find(q as char).map_or(bytes.len(), |e| j + 1 + e);
                 (j + 1, end)
+            }
+            // a cookie header holds several `name=value; …` pairs, so it is hidden to the line end
+            _ if name.ends_with("cookie") => {
+                let end = text[j..].find(['\n', '\r']).map_or(bytes.len(), |e| j + e);
+                (j, text[j..end].trim_end().len() + j)
             }
             _ => {
                 let end = text[j..]
@@ -536,7 +568,7 @@ mod tests {
             ("login failed password=hunter2 for bob", "login failed password=[redacted] for bob"),
             ("password: hunter2", "password: [redacted]"),
             ("PASSWORD=Hunter2", "PASSWORD=[redacted]"),
-            ("pwd=hunter2", "pwd=[redacted]"),
+            ("MYSQL_PWD=hunter2", "MYSQL_PWD=[redacted]"),
             ("passwd=hunter2&user=bob", "passwd=[redacted]&user=bob"),
             ("secret=s3cr3t", "secret=[redacted]"),
             ("client_secret: abc", "client_secret: [redacted]"),
@@ -672,7 +704,6 @@ mod tests {
     fn lookalikes_of_new_rules_are_left_alone() {
         for text in [
             "secret santa",
-            "Cookie: session=abc123",
             "passenger count",
             "bypass=1",
             "compass: north",
@@ -696,11 +727,116 @@ mod tests {
     }
 
     #[test]
+    fn passphrase_private_key_and_cookie_values_are_masked() {
+        for (text, want) in [
+            ("passphrase=abc", "passphrase=[redacted]"),
+            (
+                "ssh passphrase: correct horse",
+                "ssh passphrase: [redacted] horse",
+            ),
+            ("GPG_PASSPHRASE=abc", "GPG_PASSPHRASE=[redacted]"),
+            ("private_key=abc123", "private_key=[redacted]"),
+            ("SSH_PRIVATE_KEY=abc", "SSH_PRIVATE_KEY=[redacted]"),
+            (
+                r#"{"private_key":"-----BEGIN"}"#,
+                r#"{"private_key":"[redacted]"}"#,
+            ),
+            ("Cookie: session=abc123", "Cookie: [redacted]"),
+            ("Cookie: a=1; sid=xyz; theme=dark", "Cookie: [redacted]"),
+            (
+                "Set-Cookie: sid=abc; Path=/; HttpOnly",
+                "Set-Cookie: [redacted]",
+            ),
+            ("set-cookie:sid=abc", "set-cookie:[redacted]"),
+            (
+                r#"{"Cookie":"sid=abc; a=b","x":1}"#,
+                r#"{"Cookie":"[redacted]","x":1}"#,
+            ),
+            ("curl --cookie sid=abc", "curl --cookie [redacted]"),
+        ] {
+            assert_eq!(mask_credentials(text), want, "{text}");
+            assert_eq!(redact_detail(text, 500), want, "{text}");
+        }
+        // a cookie value stops at the line end
+        assert_eq!(
+            mask_credentials("Cookie: sid=abc\nnext line"),
+            "Cookie: [redacted]\nnext line"
+        );
+    }
+
+    #[test]
+    fn working_directory_variables_stay_readable() {
+        for text in ["PWD=/home/x", "OLDPWD=/tmp", "pwd: /srv/app", "cwd=/home/x"] {
+            assert_eq!(mask_credentials(text), text, "{text}");
+            assert_eq!(redact_detail(text, 500), text, "{text}");
+        }
+        for (text, want) in [
+            ("password=hunter2", "password=[redacted]"),
+            ("passwd=hunter2", "passwd=[redacted]"),
+            ("--passwd hunter2", "--passwd [redacted]"),
+            ("MYSQL_PWD=hunter2", "MYSQL_PWD=[redacted]"),
+            ("db-pwd: hunter2", "db-pwd: [redacted]"),
+            ("--pwd hunter2", "--pwd [redacted]"),
+        ] {
+            assert_eq!(redact_detail(text, 500), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn slack_tokens_are_masked_whole() {
+        for (text, want) in [
+            ("token xoxb-1234-abcd rejected", "token [redacted] rejected"),
+            ("xoxp-1-2-3-abcdef", "[redacted]"),
+            ("used xoxa-2-abc, xoxs-9-z", "used [redacted], [redacted]"),
+            ("XOXB-1234-ABCD", "[redacted]"),
+            ("app token xapp-1-A0B1-123-abc", "app token [redacted]"),
+            (r#"{"bot":"xoxb-1-abc"}"#, r#"{"bot":"[redacted]"}"#),
+        ] {
+            assert_eq!(mask_credentials(text), want, "{text}");
+            assert_eq!(redact_detail(text, 500), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn batch6_lookalikes_are_left_alone() {
+        for text in [
+            "cookie policy",
+            "Cookies accepted",
+            "cookies: 3",
+            "--cookie-jar /tmp/jar",
+            "xoxo",
+            "xoxo, gossip girl",
+            "xoxb-",
+            "skip",
+            "sky-high",
+            "passphrases are long",
+            "private_key_path=/etc/key.pem",
+            "private key missing",
+            "token expired",
+            "max_tokens=4096",
+            "bypass=1",
+            "compass: north",
+            "ssh -p 8080 host",
+            "https://user@host",
+            "--no-password",
+            "passwordless login",
+        ] {
+            assert_eq!(mask_credentials(text), text, "{text}");
+            assert_eq!(redact_detail(text, 500), text, "{text}");
+        }
+    }
+
+    #[test]
     fn masking_never_panics_on_utf8() {
-        let nasty = "🔑 postgres://ü:пароль@хост/ä Authorization: Bearer 秘密 --password 🙈 pass=é token: 鍵 ";
+        let nasty = "🔑 postgres://ü:пароль@хост/ä Authorization: Bearer 秘密 --password 🙈 pass=é token: 鍵 passphrase=ключ xoxb-1-é Cookie: 🍪=秘\nPWD=/дом ";
         let out = mask_credentials(nasty);
         assert!(
-            !out.contains("пароль") && !out.contains("秘密") && !out.contains('🙈'),
+            !out.contains("пароль")
+                && !out.contains("秘密")
+                && !out.contains('🙈')
+                && !out.contains("ключ")
+                && !out.contains('🍪')
+                && out.contains("PWD=/дом"),
             "{out}"
         );
         for (i, _) in nasty.char_indices() {
