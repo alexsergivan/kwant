@@ -2,6 +2,7 @@ import React from 'react';
 import { Settings, Volume2, VolumeX, Cpu, Plug, Search, CalendarClock } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { isSfxMuted, toggleSfxMute, playSfx } from '../audio/chiptune';
+import { pickLabel } from '../engines';
 
 interface AppHeaderProps {
   onOpenSettings: () => void;
@@ -51,7 +52,7 @@ const useLayaStatus = (): LayaStatus | null => {
 };
 
 const layaPill = (status: LayaStatus | null, activeModel: string) => {
-  const ready = activeModel === 'auto' ? 'Laya • Dynamic Effort' : `Laya ➔ ${activeModel}`;
+  const ready = activeModel === 'auto' ? 'Laya • Dynamic Effort' : `Laya ➔ ${pickLabel(activeModel)}`;
   switch (status?.state) {
     case 'online':
     case 'external':

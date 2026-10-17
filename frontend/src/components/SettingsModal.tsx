@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Cpu, Key, Globe, X, Sparkles, Check, Plug, ChevronRight, UserRound, LogOut, Bell, AlertTriangle, Layers, Monitor } from 'lucide-react';
+import { Key, Globe, X, Sparkles, Check, Plug, ChevronRight, UserRound, LogOut, Bell, AlertTriangle, Layers, Monitor } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import {
   BROWSER_NOTIFY_KEY,
@@ -13,6 +13,8 @@ import {
 import { playSfx } from '../audio/chiptune';
 import { useAuth } from './AuthGate';
 import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
+import { EnginesPanel } from './EnginesPanel';
+import { useEngines } from '../useEngines';
 
 interface SettingsData {
   anthropic_api_key: string;
@@ -51,6 +53,7 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onOpenTools, onOpenProfiles }) => {
   const { authRequired, signOut } = useAuth();
   const computer = useComputerMode(isOpen);
+  const engines = useEngines(isOpen);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [anthropicKey, setAnthropicKey] = useState('');
   const [xaiKey, setXaiKey] = useState('');
@@ -164,6 +167,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
       if (res.ok) {
         setSaveSuccess(true);
+        // Saving a key or the Ollama URL re-checks engines on the server; show the result.
+        window.setTimeout(engines.reload, 1500);
+        window.setTimeout(engines.reload, 6000);
         if (webhookUrl.trim() && webhookUrl.trim() !== MASK) setWebhookUrl(MASK);
         playSfx('coin');
         setTimeout(() => setSaveSuccess(false), 2500);
@@ -190,7 +196,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             </div>
             <div>
               <h2 id="settings-title" className="text-sm font-semibold text-zinc-100">Fleet & Engine Settings</h2>
-              <p className="text-xs text-zinc-400">Configure local CLI routing and cloud provider credentials</p>
+              <p className="text-xs text-zinc-400">Which engines can run, and the keys and accounts they use</p>
             </div>
           </div>
 
@@ -205,48 +211,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           </button>
         </div>
 
-        {/* Local CLI Auto-Detection Fleet */}
-        <div className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3">
-          <div className="flex items-center gap-2 text-xs font-medium text-zinc-300">
-            <Cpu size={15} className="text-sky-400" />
-            <span>Local Host CLI Engines (Auto-Detected)</span>
-          </div>
-          <p className="text-xs text-zinc-400 leading-relaxed">
-            Tasks auto-route through your authenticated local terminal CLIs without requiring cloud API keys.
-          </p>
-
-          <div className="grid grid-cols-1 gap-2 pt-1">
-            <div className="flex items-center justify-between bg-zinc-900/90 px-3 py-2 rounded-lg border border-zinc-800 text-xs">
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${settings?.claude_cli_found ? 'bg-emerald-400 shadow-sm shadow-emerald-500/50' : 'bg-zinc-600'}`} />
-                <span className="font-medium text-zinc-200">Claude Code CLI</span>
-              </div>
-              <span className="text-[11px] font-mono text-zinc-400">
-                {settings?.claude_cli_found ? 'Connected' : 'Not installed'}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between bg-zinc-900/90 px-3 py-2 rounded-lg border border-zinc-800 text-xs">
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${settings?.grok_cli_found ? 'bg-emerald-400 shadow-sm shadow-emerald-500/50' : 'bg-zinc-600'}`} />
-                <span className="font-medium text-zinc-200">xAI Grok CLI</span>
-              </div>
-              <span className="text-[11px] font-mono text-zinc-400">
-                {settings?.grok_cli_found ? 'Connected' : 'Not installed'}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between bg-zinc-900/90 px-3 py-2 rounded-lg border border-zinc-800 text-xs">
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${settings?.codex_cli_found ? 'bg-emerald-400 shadow-sm shadow-emerald-500/50' : 'bg-zinc-600'}`} />
-                <span className="font-medium text-zinc-200">OpenAI Codex CLI</span>
-              </div>
-              <span className="text-[11px] font-mono text-zinc-400">
-                {settings?.codex_cli_found ? 'Connected' : 'Not installed'}
-              </span>
-            </div>
-          </div>
-        </div>
+        <EnginesPanel api={engines} />
 
         {computer.state.settings && (
           <div className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3">

@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
-import { Hash, Plus, CheckCircle2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
+import { isUsable, pickLabel } from '../engines';
+import { useEngines } from '../useEngines';
 
 export interface Kwant {
   id: string;
@@ -65,6 +67,10 @@ export interface SidebarProps {
   awayCount?: number;
   awayActive?: boolean;
   onOpenAway?: () => void;
+  /** Opens Settings → Engines from the footer. */
+  onOpenSettings?: () => void;
+  /** Changes when Settings closes, so the footer reads engine status again. */
+  enginesRefreshKey?: number;
 }
 
 export const memberIdsOf = (t: Team): string[] =>
@@ -93,7 +99,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   awayCount = 0,
   awayActive = false,
   onOpenAway,
+  onOpenSettings,
+  enginesRefreshKey = 0,
 }) => {
+  const engines = useEngines(true);
+  const { reload: reloadEngines } = engines;
+  useEffect(() => {
+    if (enginesRefreshKey) reloadEngines();
+  }, [enginesRefreshKey, reloadEngines]);
+  const readyCount = engines.engines?.filter(isUsable).length ?? null;
   const [teamsOpen, setTeamsOpen] = useState(true);
   const [fleetOpen, setFleetOpen] = useState(() => localStorage.getItem('kwant.fleetOpen') === '1');
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
@@ -490,7 +504,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         </button>
                       )}
                       <span className="text-[10px] text-zinc-500 font-mono uppercase bg-zinc-900 px-1 py-0.2 rounded border border-zinc-800">
-                        {k.preferred_model === 'auto' ? 'Laya' : k.preferred_model.split('-')[0]}
+                        {k.preferred_model === 'auto' ? 'Laya' : pickLabel(k.preferred_model)}
                       </span>
                     </div>
                     {busyKwants[k.id] ? (
@@ -509,13 +523,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Footer Host Bridge status */}
-      <div className="p-3 border-t border-zinc-800/60 bg-zinc-950/40 text-[11px] text-zinc-500 flex items-center justify-between">
-        <span className="flex items-center gap-1.5">
-          <CheckCircle2 size={13} className="text-emerald-400" />
-          <span>Local CLI Fleet Active</span>
-        </span>
-      </div>
+      {/* Footer: how many engines can run, from the real checks */}
+      {engines.engines?.length !== 0 && (
+        <div className="p-3 border-t border-zinc-800/60 bg-zinc-950/40 text-[11px] text-zinc-500">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            disabled={!onOpenSettings}
+            className="flex items-center gap-1.5 hover:text-zinc-300 disabled:hover:text-zinc-500 transition-colors"
+          >
+            {readyCount === null ? (
+              <Loader2 size={13} className="text-sky-400 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            ) : readyCount > 0 ? (
+              <CheckCircle2 size={13} className="text-emerald-400" aria-hidden="true" />
+            ) : (
+              <AlertTriangle size={13} className="text-amber-400" aria-hidden="true" />
+            )}
+            <span>
+              {readyCount === null
+                ? 'Checking engines…'
+                : readyCount === 0
+                  ? 'No engine can run · check Settings'
+                  : `${readyCount} ${readyCount === 1 ? 'engine' : 'engines'} ready`}
+            </span>
+          </button>
+        </div>
+      )}
     </aside>
   );
 };
