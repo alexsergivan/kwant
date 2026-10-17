@@ -2666,17 +2666,25 @@ pub async fn execute_tool(
         return crate::tools::shell::execute_shell(&workspace, args).await;
     }
     if tool_name == "execute_shell" {
-        if let Some(tid) = team_id {
-            if let Some((name, workspace)) = resolve_sandbox_target_info(state, tid).await {
-                tokio::fs::create_dir_all(&workspace).await?;
-                let sandbox = state.sandbox_manager.ensure_sandbox_running(tid, &name, &workspace).await
-                    .map_err(|e| crate::tools::ToolError::Execution(e.to_string()))?;
-                let out = state.sandbox_manager.exec_in_sandbox(&sandbox.container_name,
-                    args["command"].as_str().unwrap_or(""), 30).await
-                    .map_err(|e| crate::tools::ToolError::Execution(e.to_string()))?;
-                return Ok(json!({"command":out.command,"stdout":out.stdout,"stderr":out.stderr,"exit_code":out.exit_code,"success":out.success}));
-            }
-        }
+        // VM mode: commands only ever run inside the bot's or team's sandbox. With no known
+        // target there is no sandbox to use, so refuse rather than fall back to this computer.
+        let target = match team_id {
+            Some(tid) => resolve_sandbox_target_info(state, tid).await.map(|t| (tid, t)),
+            None => None,
+        };
+        let Some((tid, (name, workspace))) = target else {
+            return Err(crate::tools::ToolError::Execution(format!(
+                "No bot or team named '{}' was found, so the command was not run. In VM mode commands only run inside a bot's or team's sandbox.",
+                team_id.unwrap_or("")
+            )));
+        };
+        tokio::fs::create_dir_all(&workspace).await?;
+        let sandbox = state.sandbox_manager.ensure_sandbox_running(tid, &name, &workspace).await
+            .map_err(|e| crate::tools::ToolError::Execution(e.to_string()))?;
+        let out = state.sandbox_manager.exec_in_sandbox(&sandbox.container_name,
+            args["command"].as_str().unwrap_or(""), 30).await
+            .map_err(|e| crate::tools::ToolError::Execution(e.to_string()))?;
+        return Ok(json!({"command":out.command,"stdout":out.stdout,"stderr":out.stderr,"exit_code":out.exit_code,"success":out.success}));
     }
 
     let runner = match controller {
