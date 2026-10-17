@@ -4,7 +4,8 @@ import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } from './components/ChatView';
 import { ThreadBar, ThreadHeader } from './components/ThreadBar';
 import { DelegationCard } from './components/DelegationCard';
-import { ListChecks, Loader2 } from 'lucide-react';
+import { QuestionCard } from './components/QuestionCard';
+import { HelpCircle, ListChecks, Loader2 } from 'lucide-react';
 import { PendingApproval } from './components/ModernApprovalCard';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
@@ -46,6 +47,15 @@ import {
 import type { PinnedItem } from './components/Instructions';
 import type { EditTab } from './components/NewAgentModal';
 import { Skill, applySkillEvent, pendingByKwant, skillsApi } from './skills';
+import {
+  Question,
+  QuestionMeta,
+  applyQuestion,
+  hydrateQuestions,
+  latestOpenQuestion,
+  questionsApi,
+  turnsAwaitingAnswer,
+} from './questions';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -135,6 +145,8 @@ export const App: React.FC = () => {
   // Set each render once the select handlers exist; the SSE handler and notification clicks go through it.
   // Opens an agent's settings on the Skills tab (set once the agents are known).
   const openSkillsRef = useRef<(kwantId: string) => void>(() => undefined);
+  // Opens the chat of an agent's newest open question; false when it has none.
+  const openQuestionRef = useRef<(kwantId: string) => boolean>(() => false);
   const openTargetRef = useRef<(t: { channel_id: string | null; kwant_id: string | null }) => boolean>(() => false);
   const showNotification = (n: NotifyEvent) => {
     const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
@@ -147,7 +159,9 @@ export const App: React.FC = () => {
           ? undefined
           : n.kind === 'skill_proposed'
             ? { label: 'Review', onClick: () => openSkillsRef.current(n.kwant_id) }
-            : { label: 'Open', onClick: () => openTargetRef.current(target) };
+            : n.kind === 'question_asked'
+              ? { label: 'Answer', onClick: () => openQuestionRef.current(n.kwant_id) || openTargetRef.current(target) }
+              : { label: 'Open', onClick: () => openTargetRef.current(target) };
       setToasts((prev) => [...prev.slice(-2), { id, title: n.title, detail: n.body, action }]);
       if (n.kind !== 'routine_failed') playSfx('alert');
       return;
@@ -158,7 +172,7 @@ export const App: React.FC = () => {
       note.onclick = () => {
         window.focus();
         if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
-        else openTargetRef.current(target);
+        else if (!(n.kind === 'question_asked' && openQuestionRef.current(n.kwant_id))) openTargetRef.current(target);
         note.close();
       };
     } catch {
@@ -238,6 +252,14 @@ export const App: React.FC = () => {
   /** Running turns after a (re)connect; chats whose reply ended meanwhile stop spinning. */
   const hydrateFromServer = async () => {
     skillsApi.list({ status: 'pending' }).then(setPendingSkills, () => undefined);
+    questionsApi.listOpen().then((list) => {
+      // Closed ones seen live stay; open ones come from the server.
+      setQuestions((prev) => {
+        const next = hydrateQuestions(list);
+        for (const q of Object.values(prev)) if (q.status !== 'open' && !next[q.id]) next[q.id] = q;
+        return next;
+      });
+    }, () => undefined);
     try {
       const { turns: list } = await threadsApi.turns();
       const map = hydrateTurns(list);
@@ -268,6 +290,10 @@ export const App: React.FC = () => {
   const [editingTab, setEditingTab] = useState<EditTab>('profile');
   // Skills waiting for review, for the counts on the agent's header and Skills tab.
   const [pendingSkills, setPendingSkills] = useState<Skill[]>([]);
+  // Agents' questions by id: open ones from the server, plus every question_updated since.
+  const [questions, setQuestions] = useState<Record<string, Question>>({});
+  const questionsRef = useRef(questions);
+  questionsRef.current = questions;
 
   // Virtual Machine & Live Browser state
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
@@ -504,6 +530,12 @@ export const App: React.FC = () => {
             if (!sk?.id) break;
             emitContinuity({ type: 'skill_updated', data: sk });
             setPendingSkills((prev) => applySkillEvent(prev, sk).filter((x) => x.status === 'pending'));
+            break;
+          }
+          case 'question_updated':
+          case 'QuestionUpdated': {
+            const q: Question | undefined = event.data?.question;
+            if (q?.id) setQuestions((prev) => applyQuestion(prev, q));
             break;
           }
           case 'memory_changed':
@@ -981,6 +1013,14 @@ export const App: React.FC = () => {
     setEditingKwant(kwant);
     playSfx('click');
   };
+  openQuestionRef.current = (kwantId: string) => {
+    const q = latestOpenQuestion(questionsRef.current, kwantId);
+    if (!q) return false;
+    if (q.thread_id) openThread(q.kwant_id, q.thread_id);
+    else openTarget({ channel_id: q.channel_id, kwant_id: q.channel_id ? null : q.kwant_id });
+    if (q.message_id) setHighlightMessageId(q.message_id);
+    return true;
+  };
   openSkillsRef.current = (kwantId: string) => {
     const k = kwants.find((x) => x.id === kwantId);
     if (k) openAgentSettings(k, 'skills');
@@ -1061,6 +1101,50 @@ export const App: React.FC = () => {
     } catch (err) {
       return `Couldn't stop it: ${errText(err)}`;
     }
+  };
+
+  const handleAnswerQuestion = async (id: string, answer: { choice: number } | { text: string }): Promise<string | void> => {
+    try {
+      const { question } = await questionsApi.answer(id, answer);
+      setQuestions((prev) => applyQuestion(prev, question));
+    } catch (err) {
+      // Answered from another tab, dismissed, or its turn was stopped: show what happened.
+      try {
+        const { question } = await questionsApi.get(id);
+        setQuestions((prev) => applyQuestion(prev, question));
+        if (question.status === 'answered') return 'This was already answered.';
+        if (question.status === 'cancelled') return 'This question was closed.';
+      } catch {
+        // keep the first error
+      }
+      return `Couldn't send your answer: ${errText(err)}`;
+    }
+  };
+  const handleDismissQuestion = async (id: string): Promise<string | void> => {
+    try {
+      const q = await questionsApi.cancel(id);
+      setQuestions((prev) => applyQuestion(prev, q));
+    } catch (err) {
+      return `Couldn't skip it: ${errText(err)}`;
+    }
+  };
+  const renderQuestion = (msg: ChatMessage, meta: QuestionMeta, flash: boolean) => {
+    const live = questions[meta.question_id];
+    const turnId = live?.turn_id;
+    const name = live ? kwantName(live.kwant_id) : undefined;
+    return (
+      <QuestionCard
+        meta={meta}
+        messageId={msg.id}
+        kwantName={name ?? (msg.sender_id && msg.sender_id.length <= 20 ? msg.sender_id : chatTitle)}
+        kwantId={live?.kwant_id}
+        live={live}
+        waiting={!!turnId && !!turns[turnId]}
+        onAnswer={handleAnswerQuestion}
+        onDismiss={handleDismissQuestion}
+        flash={flash}
+      />
+    );
   };
 
   const renderDelegation = (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => {
@@ -1545,6 +1629,9 @@ export const App: React.FC = () => {
 
   const isCurrentContextStreaming = openCtx in live;
   const openTurns = turnsIn(turns, openCtx);
+  // Turns paused on a question wait for the person; they don't make the agent "busy".
+  const awaitingTurns = turnsAwaitingAnswer(questions);
+  const awaitingHere = openTurns.some((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) && !openTurns.some((t) => t.state === 'running' && !awaitingTurns.has(t.turn_id));
   const waiting = openTurns.some((t) => t.state === 'running') ? undefined : openTurns.find((t) => t.state === 'queued');
   const queuedHere: QueuedState | null = waiting
     ? { position: queuePosition(turns, waiting.turn_id), reason: waiting.reason ?? 'agent_busy', speaker: kwantName(waiting.kwant_id) ?? live[openCtx] ?? 'The agent' }
@@ -1570,9 +1657,13 @@ export const App: React.FC = () => {
         className="inline-flex items-center gap-1.5 min-w-0 max-w-[16rem] sm:max-w-xs px-2 py-0.5 rounded-full border border-sky-500/30 bg-sky-500/10 text-[11px] text-sky-200 hover:bg-sky-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
         title={elsewhere.map((t) => describeContext(t.context_id, t.kwant_id)).join(', ')}
       >
-        <Loader2 size={10} className="shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+        {awaitingTurns.has(elsewhere[0].turn_id) ? (
+          <HelpCircle size={10} className="shrink-0 text-amber-300" aria-hidden="true" />
+        ) : (
+          <Loader2 size={10} className="shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+        )}
         <span className="truncate">
-          {elsewhere[0].state === 'queued' ? 'Waiting to work on ' : 'Working on '}
+          {elsewhere[0].state === 'queued' ? 'Waiting to work on ' : awaitingTurns.has(elsewhere[0].turn_id) ? 'Asked you a question in ' : 'Working on '}
           {describeContext(elsewhere[0].context_id, elsewhere[0].kwant_id)}
         </span>
         {elsewhere.length > 1 && <span className="shrink-0 text-sky-300/80">+{elsewhere.length - 1} more</span>}
@@ -1595,7 +1686,7 @@ export const App: React.FC = () => {
   const busyKwants: Record<string, string> = {};
   for (const t of Object.values(turns)) {
     if (t.context_id === openCtx || busyKwants[t.kwant_id]) continue;
-    busyKwants[t.kwant_id] = `${t.state === 'queued' ? 'Waiting to work on' : 'Working on'} ${describeContext(t.context_id, t.kwant_id)}`;
+    busyKwants[t.kwant_id] = `${t.state === 'queued' ? 'Waiting to work on' : awaitingTurns.has(t.turn_id) ? 'Asked you a question in' : 'Working on'} ${describeContext(t.context_id, t.kwant_id)}`;
   }
 
   const errorBar = messagesError ? (
@@ -1768,6 +1859,8 @@ export const App: React.FC = () => {
           }
           queued={queuedHere}
           renderDelegation={renderDelegation}
+          renderQuestion={renderQuestion}
+          awaitingAnswer={awaitingHere}
           contextKey={openCtx}
         />
       </div>

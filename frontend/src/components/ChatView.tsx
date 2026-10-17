@@ -10,6 +10,7 @@ import { playSfx } from '../audio/chiptune';
 import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThreads';
 import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
+import { QuestionMeta, parseQuestionMeta } from '../questions';
 
 export interface ChatMessage {
   id: string;
@@ -116,6 +117,10 @@ export interface ChatViewProps {
   queued?: QueuedState | null;
   /** Draws a delegation note or result (messages with delegation `meta`). */
   renderDelegation?: (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => React.ReactNode;
+  /** Draws an agent's question card (messages with `ask_user` meta). */
+  renderQuestion?: (msg: ChatMessage, meta: QuestionMeta, flash: boolean) => React.ReactNode;
+  /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
+  awaitingAnswer?: boolean;
   /** Changes when another chat opens, so the view jumps to its bottom. */
   contextKey?: string;
 }
@@ -250,6 +255,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   titleExtra,
   queued,
   renderDelegation,
+  renderQuestion,
+  awaitingAnswer,
   contextKey,
 }) => {
   const [internalIsVmPaneOpen, setInternalIsVmPaneOpen] = useState(false);
@@ -489,6 +496,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const renderMessage = (msg: ChatMessage) => {
     const meta = msg.meta && renderDelegation ? parseDelegationMeta(msg.meta) : null;
     if (meta && renderDelegation) return <React.Fragment key={msg.id}>{renderDelegation(msg, meta, flashId === msg.id)}</React.Fragment>;
+    const question = msg.meta && renderQuestion ? parseQuestionMeta(msg.meta) : null;
+    if (question && renderQuestion) return <React.Fragment key={msg.id}>{renderQuestion(msg, question, flashId === msg.id)}</React.Fragment>;
     const isUser = msg.sender_role === 'user';
     const isThoughtOpen = !!openThoughts[msg.id];
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
@@ -827,6 +836,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
                     Queued
                   </span>
+                ) : awaitingAnswer ? (
+                  <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
+                    Waiting for your answer
+                  </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
                     <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping motion-reduce:animate-none" aria-hidden="true" />
@@ -852,6 +866,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   </p>
                 ) : streamingText ? (
                   <MarkdownRenderer content={stripDiscussionMarkers(streamingText)} isStreaming={true} />
+                ) : awaitingAnswer ? (
+                  <p className="text-zinc-400" role="status">
+                    Paused on the question above. Answer it there; this reply carries on from it.
+                  </p>
                 ) : (
                   <span className="inline-flex gap-1 py-1.5" aria-label="Waiting for the first words">
                     {[0, 1, 2].map((i) => (
