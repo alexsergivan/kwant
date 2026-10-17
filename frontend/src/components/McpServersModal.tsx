@@ -15,7 +15,6 @@ import {
   EyeOff,
   ChevronLeft,
   Wrench,
-  Sparkles,
   CircleDashed,
   PauseCircle,
   Zap,
@@ -23,6 +22,8 @@ import {
   ShieldCheck,
   LogOut,
   Users,
+  Search,
+  ExternalLink,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import {
@@ -33,7 +34,10 @@ import {
   McpTransport,
   SecretRow,
   StoredStatus,
+  McpPreset,
   MCP_PRESETS,
+  searchPresets,
+  groupPresets,
   emptyMcpForm,
   formToPayload,
   serverToForm,
@@ -136,7 +140,7 @@ const SecretRows: React.FC<{
                 autoComplete="off"
                 value={row.value}
                 onChange={(e) => update(i, { value: e.target.value })}
-                placeholder={row.saved ? '•••••••• saved, leave blank to keep' : 'Secret value'}
+                placeholder={row.saved ? '•••••••• saved, leave blank to keep' : row.hint || 'Secret value'}
                 className={`${inputCls} pr-8 font-mono`}
               />
               <button
@@ -191,6 +195,88 @@ const ToolChips: React.FC<{ tools: Array<{ name: string; description?: string }>
   );
 };
 
+const PresetCatalog: React.FC<{
+  query: string;
+  onQuery: (q: string) => void;
+  onPick: (preset: McpPreset) => void;
+  onCustom: () => void;
+  autoFocus?: boolean;
+}> = ({ query, onQuery, onPick, onCustom, autoFocus }) => {
+  const groups = groupPresets(searchPresets(query));
+  return (
+    <div className="space-y-4 text-left">
+      <div className="relative">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" aria-hidden="true" />
+        <input
+          type="search"
+          aria-label="Search servers"
+          value={query}
+          autoFocus={autoFocus}
+          onChange={(e) => onQuery(e.target.value)}
+          placeholder={`Search ${MCP_PRESETS.length} servers, like notion or database`}
+          className={`${inputCls} pl-8`}
+        />
+      </div>
+      {groups.length === 0 && (
+        <p className="py-4 text-center text-xs text-zinc-500">
+          Nothing matches “{query.trim()}”. You can still add it as a custom server.
+        </p>
+      )}
+      {groups.map((g) => (
+        <section key={g.id} aria-labelledby={`mcp-cat-${g.id}`}>
+          <h4 id={`mcp-cat-${g.id}`} className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+            {g.label}
+          </h4>
+          <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {g.presets.map((p) => (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  onClick={() => onPick(p)}
+                  className="group w-full h-full p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 hover:bg-sky-500/5 focus-visible:border-sky-500/60 focus-visible:outline-none text-left transition-all"
+                >
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-200 group-hover:text-sky-200">
+                    <span className="text-sky-400" aria-hidden="true">
+                      {p.form.transport === 'stdio' ? <Terminal size={13} /> : <Globe size={13} />}
+                    </span>
+                    {p.label}
+                  </span>
+                  <span className="mt-1 block text-[11px] text-zinc-500 leading-snug">{p.blurb}</span>
+                  <span className="mt-2 flex flex-wrap gap-1">
+                    {(p.needs.length ? p.needs : ['Nothing to install']).map((n) => (
+                      <span
+                        key={n}
+                        className={`px-1.5 py-px rounded border text-[10px] ${
+                          n === 'Sign-in' || n === 'Token' || n === 'API key'
+                            ? 'border-amber-500/25 text-amber-300/90'
+                            : 'border-zinc-700/70 text-zinc-400'
+                        }`}
+                      >
+                        {n}
+                      </span>
+                    ))}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+      <button
+        type="button"
+        onClick={onCustom}
+        className="w-full flex items-center gap-2.5 p-3 rounded-xl border border-dashed border-zinc-700 hover:border-sky-500/40 hover:bg-sky-500/5 focus-visible:border-sky-500/60 focus-visible:outline-none text-left transition-all"
+      >
+        <Plus size={16} className="flex-shrink-0 text-sky-400" />
+        <span>
+          <span className="block text-xs font-medium text-zinc-200">Custom server</span>
+          <span className="block text-[11px] text-zinc-500">Paste a command or URL from any server’s README.</span>
+        </span>
+      </button>
+    </div>
+  );
+};
+
 export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClose, kwants = [] }) => {
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -203,6 +289,10 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   const [form, setForm] = useState<McpFormState>(emptyMcpForm());
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Catalog step before the form when adding, its search, and the preset the form came from.
+  const [picking, setPicking] = useState(false);
+  const [query, setQuery] = useState('');
+  const [presetId, setPresetId] = useState<string | null>(null);
   // Sign-in: the server whose popup is open, sign-in errors per server, and a pending disconnect.
   const [connecting, setConnecting] = useState<string | null>(null);
   const [oauthErrors, setOauthErrors] = useState<Record<string, string>>({});
@@ -267,6 +357,8 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   useEffect(() => {
     if (!isOpen) return;
     setEditing(null);
+    setPicking(false);
+    setQuery('');
     setConfirmDelete(null);
     setConfirmDisconnect(null);
     setTestResults({});
@@ -314,11 +406,12 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (editing) setEditing(null);
+      else if (picking) setPicking(false);
       else onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, editing, onClose]);
+  }, [isOpen, editing, picking, onClose]);
 
   if (!isOpen) return null;
 
@@ -389,12 +482,22 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     if (server.enabled) runTest(server.id);
   };
 
-  const openForm = (target: 'new' | McpServer, preset?: McpFormState) => {
+  const openCatalog = () => {
+    playSfx('click');
+    setEditing(null);
+    setQuery('');
+    setPicking(true);
+  };
+
+  const openForm = (target: 'new' | McpServer, preset?: McpPreset) => {
     playSfx('click');
     setFormError(null);
+    setPicking(false);
+    setPresetId(preset?.id ?? null);
     if (target === 'new') {
       setEditing('new');
-      setForm(preset ? { ...preset, env: preset.env.map((r) => ({ ...r })), headers: preset.headers.map((r) => ({ ...r })) } : emptyMcpForm());
+      const f = preset?.form;
+      setForm(f ? { ...f, env: f.env.map((r) => ({ ...r })), headers: f.headers.map((r) => ({ ...r })) } : emptyMcpForm());
     } else {
       setEditing(target.id);
       setForm(serverToForm(target));
@@ -468,6 +571,11 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   };
 
   const parsed = splitCommandLine(form.commandLine);
+  const preset = editing === 'new' && presetId ? MCP_PRESETS.find((p) => p.id === presetId) : undefined;
+
+  const renderPicker = () => (
+    <PresetCatalog query={query} onQuery={setQuery} onPick={(p) => openForm('new', p)} onCustom={() => openForm('new')} autoFocus />
+  );
 
   const renderEmpty = () => (
     <div className="text-center py-6 px-2 space-y-5">
@@ -479,32 +587,10 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         <p className="text-xs text-zinc-400 leading-relaxed">
           MCP servers are small add-ons that hand your kwants tools, like reading files, browsing the web or working with GitHub.
           Add one here and every kwant can use it; switch it off for a kwant in that kwant’s edit screen. They always ask you before using a tool.
+          Pick a popular one below and just add your key or sign in.
         </p>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-left">
-        {MCP_PRESETS.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => openForm('new', p.form)}
-            className="group p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 hover:bg-sky-500/5 text-left transition-all"
-          >
-            <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-200 group-hover:text-sky-200">
-              <Sparkles size={13} className="text-sky-400" />
-              {p.label}
-            </div>
-            <p className="mt-1 text-[11px] text-zinc-500 leading-snug">{p.blurb}</p>
-          </button>
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={() => openForm('new')}
-        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm"
-      >
-        <Plus size={14} />
-        Add your own server
-      </button>
+      <PresetCatalog query={query} onQuery={setQuery} onPick={(p) => openForm('new', p)} onCustom={() => openForm('new')} />
     </div>
   );
 
@@ -736,7 +822,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
           </p>
           <button
             type="button"
-            onClick={() => openForm('new')}
+            onClick={openCatalog}
             className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm whitespace-nowrap"
           >
             <Plus size={14} />
@@ -777,19 +863,32 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
           })}
         </div>
         {editing === 'new' && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] text-zinc-500">Or start from an example:</span>
-            {MCP_PRESETS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                title={p.blurb}
-                onClick={() => openForm('new', p.form)}
-                className="px-2 py-0.5 rounded-full border border-zinc-800 text-[11px] text-zinc-400 hover:text-sky-200 hover:border-sky-500/40 transition-colors"
-              >
-                {p.label}
-              </button>
-            ))}
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+            {preset ? (
+              <span className="text-zinc-400">
+                Filled in for <span className="text-zinc-200">{preset.label}</span>.{' '}
+                {preset.needs.includes('Sign-in')
+                  ? 'Add it, then use Connect on its card to sign in.'
+                  : preset.form.env.length + preset.form.headers.length > 0
+                    ? 'Add your key below.'
+                    : preset.form.transport === 'stdio'
+                      ? 'Check the command, then add it.'
+                      : 'Just add it.'}{' '}
+                <a
+                  href={preset.source}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-0.5 text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline"
+                >
+                  Setup guide
+                  <ExternalLink size={10} aria-hidden="true" />
+                  <span className="sr-only">(opens in a new tab)</span>
+                </a>
+              </span>
+            ) : null}
+            <button type="button" onClick={openCatalog} className="text-sky-300 hover:text-sky-200 hover:underline underline-offset-2">
+              {preset ? 'Pick a different one' : 'Or pick a popular server'}
+            </button>
           </div>
         )}
       </fieldset>
@@ -949,10 +1048,13 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       >
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-4">
           <div className="flex items-center gap-2.5 min-w-0">
-            {editing ? (
+            {editing || picking ? (
               <button
                 type="button"
-                onClick={() => setEditing(null)}
+                onClick={() => {
+                  setEditing(null);
+                  setPicking(false);
+                }}
                 aria-label="Back to servers"
                 className="w-8 h-8 flex-shrink-0 rounded-lg bg-zinc-800/60 border border-zinc-700/60 flex items-center justify-center text-zinc-300 hover:text-zinc-100"
               >
@@ -965,10 +1067,12 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             )}
             <div className="min-w-0">
               <h2 id="mcp-title" className="text-sm font-semibold text-zinc-100 truncate">
-                {editing === 'new' ? 'Add a tool server' : editing ? `Edit ${form.name || 'server'}` : 'Tools for your kwants'}
+                {editing === 'new' || picking ? 'Add a tool server' : editing ? `Edit ${form.name || 'server'}` : 'Tools for your kwants'}
               </h2>
               <p className="text-xs text-zinc-400 truncate">
-                {editing === 'new'
+                {picking
+                  ? 'Pick a popular server or add your own'
+                  : editing === 'new'
                   ? 'Pick how it connects, then fill in the details'
                   : editing
                     ? 'Saved secrets stay hidden and are kept unless you change them'
@@ -986,14 +1090,14 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
           </button>
         </div>
 
-        {loadError && !editing && (
+        {loadError && !editing && !picking && (
           <p role="alert" className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-500/5 border border-rose-500/20 text-[11px] text-rose-300">
             <AlertCircle size={13} />
             {loadError}
           </p>
         )}
 
-        {editing ? renderForm() : renderList()}
+        {editing ? renderForm() : picking ? renderPicker() : renderList()}
       </div>
     </div>
   );
