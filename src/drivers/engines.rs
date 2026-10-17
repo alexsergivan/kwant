@@ -7,7 +7,7 @@ use crate::profiles::{classify::redact_detail, Engine, FailClass, ProviderFailur
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -47,6 +47,70 @@ pub enum EngineStatus {
     Error,
     /// Not checked yet (startup).
     Checking,
+    /// Turned off in Settings: never checked, routed to or offered to Laya.
+    Disabled,
+}
+
+/// How much model a turn needs. Laya's effort picks it: low → fast, medium → balanced,
+/// high → deep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tier {
+    Fast,
+    Balanced,
+    Deep,
+}
+
+impl Tier {
+    pub fn from_effort(effort: &str) -> Self {
+        match effort {
+            "low" => Tier::Fast,
+            "high" => Tier::Deep,
+            _ => Tier::Balanced,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Tier::Fast => "fast",
+            Tier::Balanced => "balanced",
+            Tier::Deep => "deep",
+        }
+    }
+}
+
+/// A model's tier from the words in its id: "claude-haiku-4-5" and "o4-mini" are fast,
+/// "sonnet" and "gpt-6.1-sol" balanced, "opus", "fable" and "grok-4-heavy" deep. `None` when the
+/// name doesn't say ("grok-4.6", "gpt-5.5").
+pub fn tier_from_name(id: &str) -> Option<Tier> {
+    let lower = id.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let has = |names: &[&str]| words.iter().any(|w| names.contains(w));
+    if has(&["haiku", "mini", "nano", "luna", "fast", "flash", "lite"]) {
+        Some(Tier::Fast)
+    } else if has(&["opus", "fable", "astra", "heavy", "pro"]) {
+        Some(Tier::Deep)
+    } else if has(&["sonnet", "sol", "terra"]) {
+        Some(Tier::Balanced)
+    } else {
+        None
+    }
+}
+
+/// A codex model's tier from codex's own description ("Fast and affordable model for easier
+/// tasks", "Frontier intelligence…", "…workhorse model"), else from its slug.
+pub fn codex_tier(slug: &str, description: Option<&str>) -> Option<Tier> {
+    let d = description.unwrap_or_default().to_lowercase();
+    let says = |words: &[&str]| words.iter().any(|w| d.contains(w));
+    if says(&["fast", "affordable", "efficient", "lighter", "easier"]) {
+        Some(Tier::Fast)
+    } else if says(&["frontier", "most demanding", "most capable"]) {
+        Some(Tier::Deep)
+    } else if says(&["workhorse", "balanced", "everyday"]) {
+        Some(Tier::Balanced)
+    } else {
+        tier_from_name(slug)
+    }
 }
 
 impl EngineId {
@@ -82,6 +146,32 @@ impl EngineId {
     }
 
     /// The CLI and the API that run a model family.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EngineId::Claude => "claude",
+            EngineId::Codex => "codex",
+            EngineId::Grok => "grok",
+            EngineId::AnthropicApi => "anthropic_api",
+            EngineId::OpenaiApi => "openai_api",
+            EngineId::XaiApi => "xai_api",
+            EngineId::Ollama => "ollama",
+        }
+    }
+
+    pub fn parse(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|e| e.as_str() == id)
+    }
+
+    /// The model family it runs (`None` for Ollama).
+    pub fn family(self) -> Option<Engine> {
+        match self {
+            EngineId::Claude | EngineId::AnthropicApi => Some(Engine::Claude),
+            EngineId::Codex | EngineId::OpenaiApi => Some(Engine::Codex),
+            EngineId::Grok | EngineId::XaiApi => Some(Engine::Grok),
+            EngineId::Ollama => None,
+        }
+    }
+
     pub fn of_family(engine: Engine) -> (EngineId, EngineId) {
         match engine {
             Engine::Claude => (EngineId::Claude, EngineId::AnthropicApi),
@@ -96,6 +186,13 @@ pub struct EngineModel {
     pub id: String,
     pub label: String,
     pub default: bool,
+    pub tier: Option<Tier>,
+}
+
+impl EngineModel {
+    fn new(id: impl Into<String>, label: impl Into<String>, default: bool, tier: Option<Tier>) -> Self {
+        Self { id: id.into(), label: label.into(), default, tier }
+    }
 }
 
 /// One engine as `GET /api/engines` shows it.
@@ -104,6 +201,8 @@ pub struct EngineReport {
     pub id: EngineId,
     pub name: String,
     pub kind: EngineKind,
+    /// Off in Settings ⇒ status is `disabled`.
+    pub enabled: bool,
     pub status: EngineStatus,
     pub detail: Option<String>,
     pub version: Option<String>,
@@ -121,6 +220,7 @@ impl EngineReport {
             id,
             name: id.name().into(),
             kind: id.kind(),
+            enabled: true,
             status: p.status,
             detail: p.detail,
             version: p.version,
@@ -290,7 +390,7 @@ pub fn claude_cli_models() -> Vec<EngineModel> {
         ("fable", "Claude Fable (latest)", false),
     ]
     .into_iter()
-    .map(|(id, label, default)| EngineModel { id: id.into(), label: label.into(), default })
+    .map(|(id, label, default)| EngineModel::new(id, label, default, tier_from_name(id)))
     .collect()
 }
 
@@ -326,7 +426,7 @@ pub fn parse_codex_models(json: &str) -> Vec<EngineModel> {
     let Ok(v) = serde_json::from_str::<Value>(json.trim()) else {
         return Vec::new();
     };
-    let mut listed: Vec<(i64, String, String)> = v["models"]
+    let mut listed: Vec<(i64, String, String, Option<Tier>)> = v["models"]
         .as_array()
         .into_iter()
         .flatten()
@@ -334,20 +434,21 @@ pub fn parse_codex_models(json: &str) -> Vec<EngineModel> {
         .filter_map(|m| {
             let id = m["slug"].as_str()?.to_string();
             let label = m["display_name"].as_str().unwrap_or(&id).to_string();
-            Some((m["priority"].as_i64().unwrap_or(i64::MAX), id, label))
+            let tier = codex_tier(&id, m["description"].as_str());
+            Some((m["priority"].as_i64().unwrap_or(i64::MAX), id, label, tier))
         })
         .collect();
-    listed.sort();
+    listed.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     listed
         .into_iter()
         .enumerate()
-        .map(|(i, (_, id, label))| EngineModel { id, label, default: i == 0 })
+        .map(|(i, (_, id, label, tier))| EngineModel::new(id, label, i == 0, tier))
         .collect()
 }
 
 /// Used when a CLI's model list can't be read: run it without `--model`.
 fn cli_default_model(engine: &str) -> Vec<EngineModel> {
-    vec![EngineModel { id: "default".into(), label: format!("{engine} default"), default: true }]
+    vec![EngineModel::new("default", format!("{engine} default"), true, None)]
 }
 
 async fn probe_codex(bin: Option<&str>) -> Probe {
@@ -393,7 +494,8 @@ pub fn parse_grok_models(text: &str) -> (bool, Vec<EngineModel>) {
             let rest = l.strip_prefix('*').or_else(|| l.strip_prefix('-'))?.trim();
             let id = rest.split_whitespace().next()?.to_string();
             let default = rest.contains("(default)") || default_line.as_deref() == Some(id.as_str());
-            Some(EngineModel { label: id.clone(), id, default })
+            let tier = tier_from_name(&id);
+            Some(EngineModel::new(id.clone(), id, default, tier))
         })
         .collect();
     if !models.is_empty() && !models.iter().any(|m| m.default) {
@@ -461,10 +563,10 @@ pub fn parse_api_models(id: EngineId, body: &Value) -> Vec<EngineModel> {
     models
         .into_iter()
         .enumerate()
-        .map(|(i, (_, mid, label))| EngineModel {
-            default: preferred.map_or(i == 0, |d| d == mid),
-            id: mid,
-            label,
+        .map(|(i, (_, mid, label))| {
+            let default = preferred.map_or(i == 0, |d| d == mid);
+            let tier = tier_from_name(&mid);
+            EngineModel::new(mid, label, default, tier)
         })
         .collect()
 }
@@ -526,11 +628,8 @@ pub fn parse_ollama_models(body: &Value, preferred: Option<&str>) -> Vec<EngineM
     names
         .iter()
         .enumerate()
-        .map(|(i, n)| EngineModel {
-            id: n.clone(),
-            label: n.clone(),
-            default: preferred.map_or(i == 0, |p| p == n),
-        })
+        // Local models have no tiers: Laya's effort never swaps them
+        .map(|(i, n)| EngineModel::new(n.clone(), n.clone(), preferred.map_or(i == 0, |p| p == n), None))
         .collect()
 }
 
@@ -575,7 +674,22 @@ struct Mark {
 pub struct EngineRegistry {
     checked: RwLock<HashMap<EngineId, EngineReport>>,
     marks: RwLock<HashMap<EngineId, Mark>>,
+    /// Turned off in Settings (`engines_disabled`).
+    disabled: RwLock<HashSet<EngineId>>,
     running: tokio::sync::Mutex<()>,
+}
+
+/// Settings key holding the ids of engines turned off, as a JSON list.
+pub const DISABLED_SETTING: &str = "engines_disabled";
+
+/// Engine ids in a stored `engines_disabled` value; unknown ids and bad JSON are ignored.
+pub fn parse_disabled(stored: Option<&str>) -> HashSet<EngineId> {
+    stored
+        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|id| EngineId::parse(id))
+        .collect()
 }
 
 impl EngineRegistry {
@@ -585,6 +699,14 @@ impl EngineRegistry {
     }
 
     pub fn report(&self, id: EngineId) -> EngineReport {
+        if !self.is_enabled(id) {
+            let mut report = self.checked.read().unwrap().get(&id).cloned().unwrap_or_else(|| EngineReport::checking(id));
+            report.enabled = false;
+            report.status = EngineStatus::Disabled;
+            report.detail = Some("Turned off in Settings".into());
+            report.models.clear();
+            return report;
+        }
         let mut report = self
             .checked
             .read()
@@ -602,6 +724,36 @@ impl EngineRegistry {
             }
         }
         report
+    }
+
+    pub fn is_enabled(&self, id: EngineId) -> bool {
+        !self.disabled.read().unwrap().contains(&id)
+    }
+
+    /// Replaces the set of engines turned off (from Settings).
+    pub fn set_disabled(&self, ids: HashSet<EngineId>) {
+        *self.disabled.write().unwrap() = ids;
+    }
+
+    /// Turns one engine on or off; returns the ids now off, sorted, for saving.
+    pub fn set_enabled(&self, id: EngineId, enabled: bool) -> Vec<&'static str> {
+        let mut disabled = self.disabled.write().unwrap();
+        if enabled {
+            disabled.remove(&id);
+        } else {
+            disabled.insert(id);
+        }
+        let mut ids: Vec<&'static str> = disabled.iter().map(|e| e.as_str()).collect();
+        ids.sort();
+        ids
+    }
+
+    /// Checks one engine (unless it is off) and stores the result.
+    pub async fn recheck_one(&self, id: EngineId, env: &ProbeEnv) {
+        if self.is_enabled(id) {
+            let probe = probe(id, env).await;
+            self.store(vec![(id, probe)]);
+        }
     }
 
     pub fn status(&self, id: EngineId) -> EngineStatus {
@@ -639,8 +791,10 @@ impl EngineRegistry {
                 return self.snapshot();
             }
         };
+        // Engines turned off are never checked
+        let on: Vec<EngineId> = EngineId::ALL.into_iter().filter(|id| self.is_enabled(*id)).collect();
         let results = futures::future::join_all(
-            EngineId::ALL.iter().map(|id| async move { (*id, probe(*id, env).await) }),
+            on.iter().map(|id| async move { (*id, probe(*id, env).await) }),
         )
         .await;
         self.store(results);
@@ -671,6 +825,60 @@ impl EngineRegistry {
         tracing::info!(engine = ?id, status = ?status, "engine marked unavailable after a refused turn");
         self.marks.write().unwrap().insert(id, Mark { status, detail, at: now, until });
     }
+}
+
+/// The model a turn runs on one engine.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelChoice {
+    pub id: String,
+    pub label: String,
+    pub tier: Option<Tier>,
+}
+
+impl ModelChoice {
+    fn of(m: &EngineModel) -> Self {
+        Self { id: m.id.clone(), label: m.label.clone(), tier: m.tier }
+    }
+
+    /// The id to hand the CLI or API; `None` means the engine's own default (no `--model`).
+    pub fn run_id(&self) -> Option<&str> {
+        (self.id != "default").then_some(self.id.as_str())
+    }
+}
+
+/// Picks the model for a turn among `models` (best or newest first, as checks list them).
+///
+/// A pinned model runs as is when the engine lists it (or lists nothing); otherwise the model
+/// of the same tier stands in, so "sonnet" picked for the CLI still runs Sonnet on the API, and
+/// an old pin like "claude-opus-5-5" runs Opus on the CLI. Without a pin, the first model of
+/// `tier` (the default when it is of that tier), else the default.
+pub fn choose_model(models: &[EngineModel], pinned: Option<&str>, tier: Tier) -> Option<ModelChoice> {
+    let default = models.iter().find(|m| m.default).or(models.first());
+    let of_tier = |t: Tier| {
+        default
+            .filter(|d| d.tier == Some(t))
+            .or_else(|| models.iter().find(|m| m.tier == Some(t)))
+    };
+    if let Some(pin) = pinned.map(str::trim).filter(|p| !p.is_empty()) {
+        if models.is_empty() {
+            return Some(ModelChoice { id: pin.to_string(), label: pin.to_string(), tier: tier_from_name(pin) });
+        }
+        if let Some(m) = models.iter().find(|m| m.id.eq_ignore_ascii_case(pin)) {
+            return Some(ModelChoice::of(m));
+        }
+        return tier_from_name(pin).and_then(of_tier).or(default).map(ModelChoice::of);
+    }
+    of_tier(tier).or(default).map(ModelChoice::of)
+}
+
+/// The models a turn on `id` can pick from: the last check's, or for Claude Code (whose aliases
+/// never change) its aliases even when the host's own login is out and an account runs it.
+pub fn known_models(engines: &EngineRegistry, id: EngineId) -> Vec<EngineModel> {
+    let models = engines.report(id).models;
+    if models.is_empty() && id == EngineId::Claude && engines.is_enabled(id) {
+        return claude_cli_models();
+    }
+    models
 }
 
 /// Which engine a turn on `target_model` runs on without a profile, and why not when none can.
@@ -877,5 +1085,150 @@ mod tests {
         assert!(system_route(&reg, "mystery-model", None, bin).is_err());
         reg.store(vec![(EngineId::Ollama, Probe::not_installed("Ollama isn't running"))]);
         assert!(system_route(&reg, "local_ollama", None, bin).is_err());
+    }
+
+    fn tiers(models: &[EngineModel]) -> Vec<(&str, Option<Tier>)> {
+        models.iter().map(|m| (m.id.as_str(), m.tier)).collect()
+    }
+
+    #[test]
+    fn claude_cli_models_carry_their_tier() {
+        assert_eq!(
+            tiers(&claude_cli_models()),
+            [("opus", Some(Tier::Deep)), ("sonnet", Some(Tier::Balanced)), ("haiku", Some(Tier::Fast)), ("fable", Some(Tier::Deep))]
+        );
+    }
+
+    #[test]
+    fn codex_tiers_come_from_the_description_then_the_slug() {
+        // Shape of the real `codex debug models` output on this host
+        let json = r#"{"models":[
+            {"slug":"gpt-6.1-sol","display_name":"GPT-6.1 Sol","description":"Latest workhorse model","visibility":"list","priority":1},
+            {"slug":"gpt-6-astra","display_name":"GPT-6 Astra","description":"Frontier intelligence for the most demanding work","visibility":"list","priority":2},
+            {"slug":"gpt-6-luna","display_name":"GPT-6 Luna","description":"Fast and affordable model for easier tasks","visibility":"list","priority":3},
+            {"slug":"gpt-5.6-terra","display_name":"GPT-5.6 Terra","description":"Older balanced model","visibility":"list","priority":4},
+            {"slug":"gpt-5.5","display_name":"GPT-5.5","description":"Legacy coding model","visibility":"list","priority":5},
+            {"slug":"gpt-7-mini","display_name":"GPT-7 mini","visibility":"list","priority":6}]}"#;
+        assert_eq!(
+            tiers(&parse_codex_models(json)),
+            [
+                ("gpt-6.1-sol", Some(Tier::Balanced)),
+                ("gpt-6-astra", Some(Tier::Deep)),
+                ("gpt-6-luna", Some(Tier::Fast)),
+                ("gpt-5.6-terra", Some(Tier::Balanced)),
+                ("gpt-5.5", None),
+                ("gpt-7-mini", Some(Tier::Fast)),
+            ]
+        );
+    }
+
+    #[test]
+    fn grok_api_and_ollama_tiers() {
+        let (_, grok) = parse_grok_models("Default model: grok-4.6\n\nAvailable models:\n  * grok-4.6 (default)\n  - grok-4-heavy\n  - grok-4-fast\n");
+        assert_eq!(tiers(&grok), [("grok-4.6", None), ("grok-4-heavy", Some(Tier::Deep)), ("grok-4-fast", Some(Tier::Fast))]);
+
+        let anthropic = serde_json::json!({"data":[
+            {"id":"claude-opus-5-5","created_at":"2026-08-03T00:00:00Z"},
+            {"id":"claude-sonnet-5-5","created_at":"2026-08-02T00:00:00Z"},
+            {"id":"claude-haiku-5-5","created_at":"2026-08-01T00:00:00Z"}]});
+        let m = parse_api_models(EngineId::AnthropicApi, &anthropic);
+        assert_eq!(tiers(&m), [
+            ("claude-opus-5-5", Some(Tier::Deep)),
+            ("claude-sonnet-5-5", Some(Tier::Balanced)),
+            ("claude-haiku-5-5", Some(Tier::Fast)),
+        ]);
+        let openai = serde_json::json!({"data":[{"id":"gpt-6-luna","created":3},{"id":"o4-mini","created":2},{"id":"gpt-5.5","created":1}]});
+        assert_eq!(tiers(&parse_api_models(EngineId::OpenaiApi, &openai)), [("gpt-6-luna", Some(Tier::Fast)), ("o4-mini", Some(Tier::Fast)), ("gpt-5.5", None)]);
+
+        let ollama = serde_json::json!({"models":[{"name":"llama3.2:latest"},{"name":"qwen3-mini:8b"}]});
+        assert!(parse_ollama_models(&ollama, None).iter().all(|m| m.tier.is_none()), "Ollama models have no tier");
+    }
+
+    #[test]
+    fn effort_maps_to_tier() {
+        assert_eq!(Tier::from_effort("low"), Tier::Fast);
+        assert_eq!(Tier::from_effort("medium"), Tier::Balanced);
+        assert_eq!(Tier::from_effort("high"), Tier::Deep);
+        assert_eq!(Tier::from_effort("weird"), Tier::Balanced);
+        assert_eq!(serde_json::to_value(Tier::Deep).unwrap(), "deep");
+    }
+
+    fn pick(models: &[EngineModel], pin: Option<&str>, tier: Tier) -> Option<String> {
+        choose_model(models, pin, tier).map(|c| c.id)
+    }
+
+    #[test]
+    fn choose_model_maps_tier_to_each_engines_model() {
+        let claude = claude_cli_models();
+        assert_eq!(pick(&claude, None, Tier::Fast).as_deref(), Some("haiku"));
+        assert_eq!(pick(&claude, None, Tier::Balanced).as_deref(), Some("sonnet"));
+        assert_eq!(pick(&claude, None, Tier::Deep).as_deref(), Some("opus"), "the default wins when it is of the tier");
+
+        // No model of the tier: the engine default
+        let grok = vec![EngineModel::new("grok-4.6", "grok-4.6", true, None), EngineModel::new("grok-4.5", "grok-4.5", false, None)];
+        assert_eq!(pick(&grok, None, Tier::Fast).as_deref(), Some("grok-4.6"));
+        assert_eq!(choose_model(&[], None, Tier::Fast), None);
+
+        // A CLI whose list couldn't be read runs without --model
+        let unknown = cli_default_model("Codex");
+        assert_eq!(choose_model(&unknown, None, Tier::Deep).unwrap().run_id(), None);
+    }
+
+    #[test]
+    fn pinned_models_run_as_is_or_as_the_same_tier() {
+        let claude = claude_cli_models();
+        assert_eq!(pick(&claude, Some("sonnet"), Tier::Fast).as_deref(), Some("sonnet"), "a pin beats Laya's tier");
+        assert_eq!(pick(&claude, Some("HAIKU"), Tier::Deep).as_deref(), Some("haiku"));
+        // Legacy full ids land on the CLI alias of the same tier
+        assert_eq!(pick(&claude, Some("claude-opus-5-5"), Tier::Fast).as_deref(), Some("opus"));
+        assert_eq!(pick(&claude, Some("claude-sonnet-5-5"), Tier::Fast).as_deref(), Some("sonnet"));
+        // And a CLI alias pinned onto the API lands on the API's model of that tier
+        let api = vec![
+            EngineModel::new("claude-opus-5-5", "Opus", true, Some(Tier::Deep)),
+            EngineModel::new("claude-sonnet-5-5", "Sonnet", false, Some(Tier::Balanced)),
+        ];
+        assert_eq!(pick(&api, Some("sonnet"), Tier::Fast).as_deref(), Some("claude-sonnet-5-5"));
+        // Nothing listed: the pin runs as given
+        assert_eq!(pick(&[], Some("gpt-5.5"), Tier::Fast).as_deref(), Some("gpt-5.5"));
+        // Listed models but an unknown pin with no tier: the default
+        assert_eq!(pick(&api, Some("mystery"), Tier::Fast).as_deref(), Some("claude-opus-5-5"));
+    }
+
+    #[test]
+    fn disabled_setting_parses_leniently() {
+        assert_eq!(parse_disabled(Some(r#"["claude","grok","nope"]"#)), HashSet::from([EngineId::Claude, EngineId::Grok]));
+        assert!(parse_disabled(Some("not json")).is_empty());
+        assert!(parse_disabled(None).is_empty());
+    }
+
+    #[test]
+    fn disabled_engines_report_off_and_are_never_usable() {
+        let reg = EngineRegistry::default();
+        reg.store(vec![(EngineId::Claude, Probe::ready("Signed in", claude_cli_models()))]);
+        assert!(reg.report(EngineId::Claude).enabled);
+        assert_eq!(reg.set_enabled(EngineId::Grok, false), ["grok"]);
+        assert_eq!(reg.set_enabled(EngineId::Claude, false), ["claude", "grok"]);
+        let r = reg.report(EngineId::Claude);
+        assert_eq!((r.status, r.enabled, r.models.len()), (EngineStatus::Disabled, false, 0));
+        assert_eq!(serde_json::to_value(&r).unwrap()["status"], "disabled");
+        assert!(!reg.usable(EngineId::Claude, true));
+        assert!(!reg.usable(EngineId::Grok, true), "off even before its first check");
+        assert!(known_models(&reg, EngineId::Claude).is_empty());
+        let bin = |_: &str| Some("/bin/true".to_string());
+        assert!(system_route(&reg, "claude", None, bin).is_err(), "routing never picks an engine that is off");
+
+        assert_eq!(reg.set_enabled(EngineId::Claude, true), ["grok"]);
+        let r = reg.report(EngineId::Claude);
+        assert_eq!((r.status, r.enabled), (EngineStatus::Ready, true), "the last check comes back");
+    }
+
+    #[tokio::test]
+    async fn recheck_skips_engines_that_are_off() {
+        let reg = EngineRegistry::default();
+        reg.set_disabled(EngineId::ALL.into_iter().collect());
+        let reports = reg.recheck(&ProbeEnv::default()).await;
+        assert!(reports.iter().all(|r| r.status == EngineStatus::Disabled && r.checked_at.is_none()));
+        reg.recheck_one(EngineId::Claude, &ProbeEnv::default()).await;
+        assert!(reg.report(EngineId::Claude).checked_at.is_none(), "recheck_one leaves an engine that is off alone");
     }
 }

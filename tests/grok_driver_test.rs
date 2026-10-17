@@ -53,6 +53,7 @@ fn turn(mcp: Option<McpTurnContext>) -> TurnInput {
         prompt: "hi".into(),
         history: vec![],
         model_override: None,
+        model: None,
         effort_level: Some("low".into()),
         team_context: None,
         workspace_dir: None,

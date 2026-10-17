@@ -39,6 +39,26 @@ pub async fn plan(state: &AppState, engine: Option<Engine>, kwant_id: &str) -> V
         &avail,
         chrono::Utc::now(),
     )
+    .into_iter()
+    .filter(|p| profile_engine_on(state, p))
+    .collect()
+}
+
+/// The engine a profile's turns run on: its family's API for a key, else its CLI. The system
+/// profile runs on whichever host engine routing picks, so it has none of its own.
+pub fn profile_engine(p: &LlmProfile) -> Option<EngineId> {
+    let family = Engine::parse(&p.engine)?;
+    let (cli, api) = EngineId::of_family(family);
+    match p.kind.as_str() {
+        "system" => None,
+        "api_key" => Some(api),
+        _ => Some(cli),
+    }
+}
+
+/// An engine turned off in Settings is off for every account on it too.
+fn profile_engine_on(state: &AppState, p: &LlmProfile) -> bool {
+    profile_engine(p).is_none_or(|e| state.engines.is_enabled(e))
 }
 
 /// The driver for one attempt, and the engine it runs on when it's the host's own (no profile
@@ -94,6 +114,7 @@ pub async fn profile_engines(state: &AppState) -> HashSet<Engine> {
     profiles
         .iter()
         .filter(|p| p.enabled && p.kind != "system")
+        .filter(|p| profile_engine_on(state, p))
         .filter(|p| p.kind != "api_key" || with_key.contains(&p.id))
         .filter(|p| !signed_out.contains(&p.id))
         .filter(|p| {

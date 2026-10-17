@@ -80,6 +80,8 @@ pub fn heuristic_fallback_with_models(
                 confidence: 0.85,
                 provider_endpoint: Some("http://localhost:11434/v1".into()),
                 is_fallback: true,
+                tier: None,
+                model: None,
                 reasoning: format!("Local privacy keywords detected; effort={}", effort_level),
             };
         }
@@ -99,6 +101,8 @@ pub fn heuristic_fallback_with_models(
                 confidence: 0.88,
                 provider_endpoint: None,
                 is_fallback: true,
+                tier: None,
+                model: None,
                 reasoning: format!("Architectural reasoning keywords detected; effort={}", effort_level),
             };
         }
@@ -120,6 +124,8 @@ pub fn heuristic_fallback_with_models(
                 confidence: 0.82,
                 provider_endpoint: None,
                 is_fallback: true,
+                tier: None,
+                model: None,
                 reasoning: format!("Programming keywords detected; effort={}", effort_level),
             };
         }
@@ -143,6 +149,8 @@ pub fn heuristic_fallback_with_models(
         confidence: 0.75,
         provider_endpoint: None,
         is_fallback: true,
+        tier: None,
+        model: None,
         reasoning: format!("Optimal available model '{}' selected with effort={}", selected, effort_level),
     }
 }

@@ -88,6 +88,7 @@ async fn test_mock_driver_streaming() {
         prompt: "Cast fireball".into(),
         history: vec![],
         model_override: None,
+        model: None,
         effort_level: None,
         team_context: None,
         workspace_dir: None,
@@ -148,6 +149,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         prompt: "Review the system".into(),
         history: vec![],
         model_override: None,
+        model: None,
         effort_level: None,
         team_context: None,
         workspace_dir: None,
@@ -192,6 +194,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         prompt: "Review the system".into(),
         history: vec![],
         model_override: None,
+        model: None,
         effort_level: None,
         team_context: Some(TeamContext {
             id: "team-123".into(),
@@ -221,6 +224,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         prompt: "Check files".into(),
         history: vec![],
         model_override: None,
+        model: None,
         effort_level: None,
         team_context: Some(TeamContext {
             id: "team-456".into(),

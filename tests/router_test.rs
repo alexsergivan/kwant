@@ -171,6 +171,8 @@ fn pinned_preferred_model_overrides_laya_but_keeps_effort() {
         confidence: 0.7,
         provider_endpoint: None,
         is_fallback: false,
+        tier: None,
+        model: None,
         reasoning: "laya".into(),
     };
 
@@ -182,6 +184,55 @@ fn pinned_preferred_model_overrides_laya_but_keeps_effort() {
     for unpinned in ["auto", "AUTO", "", "  "] {
         assert_eq!(apply_preferred_model(laya(), unpinned).selected_model, "claude");
     }
+}
+
+#[test]
+fn preferred_model_pin_forms() {
+    use kwnt::router::{parse_pin, Pin};
+    let pin = |f: Option<&str>, m: Option<&str>| Pin { family: f.map(Into::into), model: m.map(Into::into) };
+    // auto
+    for auto in ["auto", "Auto", "", " "] {
+        assert_eq!(parse_pin(auto), pin(None, None));
+    }
+    // <engine>
+    assert_eq!(parse_pin("claude"), pin(Some("claude"), None));
+    assert_eq!(parse_pin("codex"), pin(Some("codex"), None));
+    assert_eq!(parse_pin("ollama"), pin(Some("local_ollama"), None));
+    assert_eq!(parse_pin("local_ollama"), pin(Some("local_ollama"), None), "old value");
+    // <engine>:<model> and <engine>/<model>
+    assert_eq!(parse_pin("claude:sonnet"), pin(Some("claude"), Some("sonnet")));
+    assert_eq!(parse_pin("claude/sonnet"), pin(Some("claude"), Some("sonnet")));
+    assert_eq!(parse_pin("codex/gpt-6.1-sol"), pin(Some("codex"), Some("gpt-6.1-sol")));
+    assert_eq!(parse_pin("grok:auto"), pin(Some("grok"), None));
+    assert_eq!(parse_pin("ollama/llama3.2:latest"), pin(Some("local_ollama"), Some("llama3.2:latest")));
+    assert_eq!(parse_pin("ollama:llama3.2:latest"), pin(Some("local_ollama"), Some("llama3.2:latest")));
+    // Old model-id pins keep working
+    assert_eq!(parse_pin("claude-opus-5-5"), pin(Some("claude"), Some("claude-opus-5-5")));
+}
+
+#[test]
+fn pins_set_tier_and_model_on_the_route() {
+    use kwnt::drivers::engines::Tier;
+    use kwnt::router::{apply_preferred_model, RouteDecision};
+    let laya = |effort: &str| RouteDecision {
+        selected_model: "codex".into(),
+        effort_level: effort.into(),
+        confidence: 0.7,
+        provider_endpoint: None,
+        is_fallback: false,
+        tier: None,
+        model: None,
+        reasoning: "laya".into(),
+    };
+    let auto = apply_preferred_model(laya("low"), "auto");
+    assert_eq!((auto.selected_model.as_str(), auto.tier, auto.model), ("codex", Some(Tier::Fast), None));
+
+    let engine = apply_preferred_model(laya("high"), "claude");
+    assert_eq!((engine.selected_model.as_str(), engine.tier, engine.model), ("claude", Some(Tier::Deep), None));
+
+    let model = apply_preferred_model(laya("low"), "claude:sonnet");
+    assert_eq!((model.selected_model.as_str(), model.model.as_deref()), ("claude", Some("sonnet")));
+    assert!(model.reasoning.contains("Model pinned"), "{}", model.reasoning);
 }
 
 #[test]

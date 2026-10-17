@@ -42,6 +42,10 @@ pub struct TurnInput {
     pub prompt: String,
     pub history: Vec<Message>,
     pub model_override: Option<String>,
+    /// The engine's own model id to run (`sonnet`, `gpt-6.1-sol`, `claude-opus-5-5`); `None` runs
+    /// the engine's default. CLIs get it as `--model`/`-m`, the API as the request's model.
+    #[serde(default)]
+    pub model: Option<String>,
     pub effort_level: Option<String>,
     pub team_context: Option<TeamContext>,
     pub workspace_dir: Option<std::path::PathBuf>,
@@ -282,6 +286,10 @@ pub struct TurnOutput {
     pub text: String,
     pub reasoning: Option<String>,
     pub tokens_used: usize,
+    /// The model id the provider was asked for, when the driver resolved it itself (the API
+    /// driver with no model picked for the turn).
+    #[serde(skip)]
+    pub model: Option<String>,
     /// Set when the provider refused the turn (quota, auth) before the model did anything; the
     /// driver then emitted no text and no `TurnComplete`, so the turn can move to another profile.
     #[serde(skip)]

@@ -10,16 +10,67 @@ fn is_ollama(model: &str) -> bool {
     model == "local_ollama" || model.starts_with("ollama/")
 }
 
-/// "local_ollama" is Kwant's routing id, not something Ollama can run; resolve it to a pulled model.
-async fn api_model_name(target_model: &str, url: &str) -> String {
+/// The model id to send. A model picked for the turn wins. Otherwise routing ids are resolved:
+/// "local_ollama" to a pulled model, and a bare family ("claude", "codex", "grok") to the
+/// provider's model of the effort's tier from its own model list, since none of those names is a
+/// model the provider knows. `Err` when no model can be found.
+async fn api_model_name(
+    target_model: &str,
+    picked: Option<&str>,
+    url: &str,
+    api_key: Option<&str>,
+    effort: &str,
+) -> Result<String, String> {
+    if let Some(m) = picked {
+        return Ok(m.strip_prefix("ollama/").unwrap_or(m).to_string());
+    }
     if let Some(m) = target_model.strip_prefix("ollama/") {
-        return m.to_string();
+        return Ok(m.to_string());
     }
     if target_model == "local_ollama" {
         let root = url.trim_end_matches("/v1/chat/completions");
-        return super::first_ollama_model(root).await.unwrap_or_else(|| "llama3.2".into());
+        return Ok(super::first_ollama_model(root).await.unwrap_or_else(|| "llama3.2".into()));
     }
-    target_model.to_string()
+    let engine = match target_model {
+        "claude" => super::engines::EngineId::AnthropicApi,
+        "codex" | "openai" => super::engines::EngineId::OpenaiApi,
+        "grok" => super::engines::EngineId::XaiApi,
+        model => return Ok(model.to_string()),
+    };
+    let listed = match api_key {
+        Some(key) => list_api_models(engine, url, key).await,
+        None => Vec::new(),
+    };
+    let tier = super::engines::Tier::from_effort(effort);
+    match super::engines::choose_model(&listed, None, tier) {
+        Some(m) => Ok(m.id),
+        None if engine == super::engines::EngineId::AnthropicApi => Ok(DEFAULT_CLAUDE_MODEL.into()),
+        None => Err(format!(
+            "Couldn't find a model to run on the {}: its model list didn't load. Check the key in Settings → Engines.",
+            engine.name()
+        )),
+    }
+}
+
+/// The provider's chat models, from `GET /v1/models` beside the chat endpoint `url`.
+async fn list_api_models(engine: super::engines::EngineId, url: &str, key: &str) -> Vec<super::engines::EngineModel> {
+    let base = url.split("/v1/").next().unwrap_or(url);
+    let Ok(client) = Client::builder().timeout(Duration::from_secs(10)).build() else {
+        return Vec::new();
+    };
+    let req = client.get(format!("{base}/v1/models"));
+    let req = if is_anthropic(url) {
+        req.header("x-api-key", key).header("anthropic-version", ANTHROPIC_VERSION)
+    } else {
+        req.bearer_auth(key)
+    };
+    match req.send().await {
+        Ok(r) if r.status().is_success() => match r.json::<Value>().await {
+            Ok(body) => super::engines::parse_api_models(engine, &body),
+            Err(_) => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
 }
 
 /// Anthropic Messages API version sent with every request.
@@ -417,7 +468,10 @@ impl Driver for ApiDriver {
                 _ => input.kwant.max_tokens,
             };
 
-            let model = api_model_name(target_model, &url).await;
+            let model = match api_model_name(target_model, input.model.as_deref(), &url, api_key.as_deref(), effort).await {
+                Ok(m) => m,
+                Err(why) => return Err(DriverError::Execution(why)),
+            };
             // The Anthropic Messages API has a different tool format; it is not given MCP tools yet
             let mcp = input.mcp.as_ref().filter(|_| !url.ends_with("/v1/messages"));
             // kwnt's own continuity tools are always attached; only the user's servers are worth a notice
@@ -490,8 +544,9 @@ impl Driver for ApiDriver {
                     .await;
                 return Ok(TurnOutput {
                     text,
-                    reasoning: Some(format!("Model: {} [Effort: {}]", target_model, effort)),
+                    reasoning: Some(format!("Model: {} [Effort: {}]", model, effort)),
                     tokens_used: tokens,
+                    model: Some(model.clone()),
                     ..Default::default()
                 });
             }

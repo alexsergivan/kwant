@@ -31,19 +31,83 @@ pub struct RouteDecision {
     pub provider_endpoint: Option<String>,
     pub is_fallback: bool,
     pub reasoning: String,
+    /// The model tier, from the effort (set by [`apply_preferred_model`]).
+    #[serde(default)]
+    pub tier: Option<crate::drivers::engines::Tier>,
+    /// The model to run: a pinned one first, then the one picked for the engine the turn runs on.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
-/// A bot's pinned model (anything other than "auto") always wins; Laya still decides the effort.
-pub fn apply_preferred_model(mut route: RouteDecision, preferred_model: &str) -> RouteDecision {
+/// A kwant's `preferred_model`, read.
+///
+/// - `auto` (or empty): Laya picks the engine family and the model tier.
+/// - `<family>` (`claude`, `codex`, `grok`, `ollama`/`local_ollama`): Laya picks only the tier.
+/// - `<family>/<model>` or `<family>:<model>` (`claude/sonnet`, `codex:gpt-6.1-sol`,
+///   `ollama/llama3.2:latest`): that model, fixed.
+/// - Anything else is an older pin of a model id (`claude-opus-5-5`, `gpt-5.5`): fixed to it, on
+///   the family its name belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pin {
+    /// Routing id of the family (`claude`, `codex`, `grok`, `local_ollama`); `None` = auto.
+    pub family: Option<String>,
+    /// A fixed model; `None` lets Laya pick the tier.
+    pub model: Option<String>,
+}
+
+fn family_id(name: &str) -> Option<&'static str> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "claude" => Some("claude"),
+        "codex" => Some("codex"),
+        "grok" => Some("grok"),
+        "ollama" | "local_ollama" => Some("local_ollama"),
+        _ => None,
+    }
+}
+
+pub fn parse_pin(preferred_model: &str) -> Pin {
     let pinned = preferred_model.trim();
     if pinned.is_empty() || pinned.eq_ignore_ascii_case("auto") {
-        return route;
+        return Pin { family: None, model: None };
     }
-    route.reasoning = format!(
-        "Model pinned to '{}' in the bot's settings; effort={} (Laya suggested '{}')",
-        pinned, route.effort_level, route.selected_model
-    );
-    route.selected_model = pinned.to_string();
+    if let Some(family) = family_id(pinned) {
+        return Pin { family: Some(family.into()), model: None };
+    }
+    // The first separator splits, so Ollama tags like "llama3.2:latest" stay whole
+    if let Some(i) = pinned.find(['/', ':']) {
+        if let Some(family) = family_id(&pinned[..i]) {
+            let model = pinned[i + 1..].trim();
+            let model = (!model.is_empty() && !model.eq_ignore_ascii_case("auto")).then(|| model.to_string());
+            return Pin { family: Some(family.into()), model };
+        }
+    }
+    match crate::profiles::Engine::from_model(pinned) {
+        Some(engine) => Pin { family: Some(engine.as_str().into()), model: Some(pinned.into()) },
+        // Unknown: routing says no engine runs it
+        None => Pin { family: Some(pinned.into()), model: None },
+    }
+}
+
+/// A bot's pinned engine (anything other than "auto") always wins; Laya still decides the effort,
+/// and with it the model tier unless the model is pinned too.
+pub fn apply_preferred_model(mut route: RouteDecision, preferred_model: &str) -> RouteDecision {
+    let pin = parse_pin(preferred_model);
+    route.tier = Some(crate::drivers::engines::Tier::from_effort(&route.effort_level));
+    let Some(family) = pin.family else {
+        return route;
+    };
+    route.reasoning = match &pin.model {
+        Some(model) => format!(
+            "Model pinned to '{family}' · '{model}' in the bot's settings; effort={} (Laya suggested '{}')",
+            route.effort_level, route.selected_model
+        ),
+        None => format!(
+            "Engine pinned to '{family}' in the bot's settings; effort={} picks the tier (Laya suggested '{}')",
+            route.effort_level, route.selected_model
+        ),
+    };
+    route.selected_model = family;
+    route.model = pin.model;
     route.confidence = 1.0;
     route.provider_endpoint = None;
     route
@@ -80,5 +144,7 @@ pub fn parse_laya_response(data: &serde_json::Value) -> Option<RouteDecision> {
         provider_endpoint,
         is_fallback: false,
         reasoning: format!("Laya decision router selected {} with {} effort", choice, effort_level),
+        tier: None,
+        model: None,
     })
 }

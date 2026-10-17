@@ -127,6 +127,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/profiles/:id/logout", post(profile_routes::logout))
         .route("/api/engines", get(engine_routes::list))
         .route("/api/engines/recheck", post(engine_routes::recheck))
+        .route("/api/engines/:id", post(engine_routes::set_enabled).put(engine_routes::set_enabled))
         .route("/api/laya/status", get(routes::laya_status))
         .route("/api/kwants", get(routes::list_kwants).post(routes::create_kwant))
         .route("/api/kwants/:id", put(routes::update_kwant))

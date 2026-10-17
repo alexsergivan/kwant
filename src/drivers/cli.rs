@@ -641,8 +641,11 @@ impl Driver for CliDriver {
 
         let _ = event_tx
             .send(RuntimeEvent::ThinkingDelta(format!(
-                "Invoking local {} CLI (effort: {}, binary: {})...",
-                self.tool_kind, effort, bin_path
+                "Invoking local {} CLI (model: {}, effort: {}, binary: {})...",
+                self.tool_kind,
+                input.model.as_deref().unwrap_or("default"),
+                effort,
+                bin_path
             )))
             .await;
 
@@ -696,8 +699,11 @@ impl Driver for CliDriver {
                         });
                     }
                 };
-                cmd.arg("exec")
-                    .arg("--ephemeral")
+                cmd.arg("exec");
+                if let Some(model) = &input.model {
+                    cmd.arg("-m").arg(model);
+                }
+                cmd.arg("--ephemeral")
                     .arg("--skip-git-repo-check")
                     .arg("--color")
                     .arg("never")
@@ -726,7 +732,12 @@ impl Driver for CliDriver {
                     "low" => "low",
                     _ => "medium",
                 };
-                let args: Vec<String> = vec![
+                let mut args: Vec<String> = input
+                    .model
+                    .iter()
+                    .flat_map(|m| ["-m".to_string(), m.clone()])
+                    .collect();
+                args.extend([
                     // Without an explicit effort grok uses the user's default (often xhigh), which is far too slow for chat
                     "--reasoning-effort".into(),
                     grok_effort.into(),
@@ -736,7 +747,7 @@ impl Driver for CliDriver {
                     system_prompt.clone(),
                     "-p".into(),
                     effective_prompt.clone(),
-                ];
+                ]);
                 let (text, tokens) = match self.run_grok(&bin_path, &input, args, &event_tx).await {
                     Ok(run) if run.stdout.trim().is_empty() && !run.tool_calls => {
                         match refusal(&format!("{}\n{}", run.errors.join("\n"), run.stderr)) {
@@ -786,6 +797,9 @@ impl Driver for CliDriver {
                     "low" => "low",
                     _ => "medium",
                 };
+                if let Some(model) = &input.model {
+                    cmd.arg("--model").arg(model);
+                }
                 cmd.arg("--effort").arg(claude_effort);
                 // Skip starting the user's personal MCP servers on every chat turn
                 cmd.arg("--strict-mcp-config");
@@ -1017,6 +1031,7 @@ mod tests {
                 },
             ],
             model_override: None,
+            model: None,
             effort_level: None,
             team_context: None,
             workspace_dir: None,
@@ -1057,6 +1072,7 @@ mod tests {
             prompt: "hello world".into(),
             history: vec![],
             model_override: None,
+            model: None,
             effort_level: None,
             team_context: None,
             workspace_dir: None,

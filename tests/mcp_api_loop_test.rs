@@ -99,6 +99,7 @@ fn input(mcp: Option<McpTurnContext>) -> TurnInput {
         prompt: "use the tool".into(),
         history: vec![],
         model_override: None,
+        model: None,
         effort_level: Some("low".into()),
         team_context: None,
         workspace_dir: None,

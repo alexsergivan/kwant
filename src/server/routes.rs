@@ -112,7 +112,8 @@ async fn check_binding(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::BAD_REQUEST)?;
-    match crate::profiles::Engine::from_model(preferred_model) {
+    let family = crate::router::parse_pin(preferred_model).family;
+    match family.as_deref().and_then(crate::profiles::Engine::parse) {
         Some(engine) if engine.as_str() != profile.engine => Err(StatusCode::BAD_REQUEST),
         _ => Ok(()),
     }
@@ -914,6 +915,37 @@ impl TurnEvents {
     }
 }
 
+/// The engine and model a reply ran on, saved in its `meta.ran_on`.
+struct RanOn {
+    engine: crate::drivers::engines::EngineId,
+    profile_id: Option<String>,
+    choice: Option<crate::drivers::engines::ModelChoice>,
+}
+
+impl RanOn {
+    /// `{engine, engine_name, family, model, model_label, tier, picked_by, effort, profile_id}`;
+    /// `driver_model` is what the driver itself chose when nothing was picked for it.
+    fn to_json(&self, driver_model: Option<&str>, picked_by: &str, effort: &str) -> serde_json::Value {
+        let family = self.engine.family().map_or("ollama", |f| f.as_str());
+        let (model, label, tier) = match (&self.choice, driver_model) {
+            (Some(c), _) => (Some(c.id.clone()), Some(c.label.clone()), c.tier),
+            (None, Some(m)) => (Some(m.to_string()), None, crate::drivers::engines::tier_from_name(m)),
+            (None, None) => (None, None, None),
+        };
+        serde_json::json!({
+            "engine": self.engine.as_str(),
+            "engine_name": self.engine.name(),
+            "family": family,
+            "model": model,
+            "model_label": label,
+            "tier": tier,
+            "picked_by": picked_by,
+            "effort": effort,
+            "profile_id": self.profile_id,
+        })
+    }
+}
+
 async fn run_kwant_turn_inner(
     scope: &TurnScope,
     target_kwant: &Kwant,
@@ -958,13 +990,18 @@ async fn run_kwant_turn_inner(
                 confidence: 0.8,
                 provider_endpoint: None,
                 is_fallback: true,
+                tier: None,
+                model: None,
                 reasoning: "Fallback routing".into(),
             },
         };
         let route = crate::router::apply_preferred_model(route, &target_kwant.preferred_model);
 
-        let target_model = route.selected_model;
-        let effort_level = route.effort_level;
+        let target_model = route.selected_model.clone();
+        let effort_level = route.effort_level.clone();
+        let tier = route.tier.unwrap_or(crate::drivers::engines::Tier::Balanced);
+        let pinned_model = route.model.clone();
+        let pinned_family = crate::router::parse_pin(&target_kwant.preferred_model).family.is_some();
 
         event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
             "🔮 Laya Router: model='{}', effort='{}' ({:.0}% conf) — {}",
@@ -1073,7 +1110,7 @@ async fn run_kwant_turn_inner(
             }
         }
 
-        let engine = crate::profiles::Engine::from_model(&target_model);
+        let engine = crate::profiles::Engine::parse(&target_model);
         let candidates = super::profile_turn::plan(state, engine, &target_kwant.id).await;
         let attempts: Vec<Option<LlmProfile>> = if candidates.is_empty() {
             vec![None]
@@ -1129,7 +1166,8 @@ async fn run_kwant_turn_inner(
             prompt: final_prompt,
             history,
             model_override: Some(target_model.clone()),
-            effort_level: Some(effort_level),
+            model: None,
+            effort_level: Some(effort_level.clone()),
             team_context: scope.team_context.clone(),
             workspace_dir: scope.workspace_dir.clone(),
             sandbox_id: Some(sandbox_target.clone()),
@@ -1150,6 +1188,7 @@ async fn run_kwant_turn_inner(
         let mut cancelled = false;
         let mut driver_result = None;
         let mut gave_up: Option<String> = None;
+        let mut ran_on: Option<RanOn> = None;
         for (i, profile) in attempts.iter().enumerate() {
             let (driver, host_engine) = match super::profile_turn::driver_for(
                 state,
@@ -1179,7 +1218,39 @@ async fn run_kwant_turn_inner(
                     break;
                 }
             };
-            let input = turn_input.clone();
+            // The model for the engine this attempt runs on: the pinned one, else the effort's tier
+            let runs_on = host_engine.or_else(|| profile.as_ref().and_then(super::profile_turn::profile_engine));
+            let choice = runs_on.and_then(|e| {
+                crate::drivers::engines::choose_model(
+                    &crate::drivers::engines::known_models(&state.engines, e),
+                    pinned_model.as_deref(),
+                    tier,
+                )
+            });
+            // An API account whose models weren't listed here picks its own from the tier
+            let unlisted_api = runs_on.is_some_and(|e| {
+                e.kind() == crate::drivers::engines::EngineKind::Api
+                    && state.engines.report(e).models.is_empty()
+            });
+            let mut input = turn_input.clone();
+            input.model = if unlisted_api { None } else { choice.as_ref().and_then(|c| c.run_id()).map(str::to_string) };
+            if let Some(e) = runs_on {
+                event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
+                    "Running on {} · {}{}",
+                    e.name(),
+                    input.model.as_deref().unwrap_or("default model"),
+                    choice
+                        .as_ref()
+                        .and_then(|c| c.tier)
+                        .map(|t| format!(" ({} tier)", t.as_str()))
+                        .unwrap_or_default(),
+                )));
+            }
+            ran_on = runs_on.map(|e| RanOn {
+                engine: e,
+                profile_id: profile.as_ref().map(|p| p.id.clone()),
+                choice: if unlisted_api { None } else { choice.clone() },
+            });
             let (driver_tx, mut driver_rx) = mpsc::channel(32);
             let driver_task =
                 tokio::spawn(async move { driver.stream_turn(input, driver_tx).await });
@@ -1371,7 +1442,15 @@ async fn run_kwant_turn_inner(
                     tokens_used: output.tokens_used as i64,
                     ..scope.message("kwant", &target_kwant.name, text)
                 };
-                scope.save(&asst_msg, None).await;
+                let pick = match (pinned_model.is_some(), pinned_family) {
+                    (true, _) => "pinned_model",
+                    (false, true) => "pinned_engine",
+                    (false, false) => "laya",
+                };
+                let meta = ran_on
+                    .as_ref()
+                    .map(|r| serde_json::json!({ "ran_on": r.to_json(output.model.as_deref(), pick, &effort_level) }));
+                scope.save(&asst_msg, meta).await;
             }
             return Ok(output.text);
         }

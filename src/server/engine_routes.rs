@@ -1,10 +1,14 @@
-//! `GET /api/engines` and `POST /api/engines/recheck`: whether each engine can run, why not,
-//! and the models it offers.
+//! `GET /api/engines`, `POST /api/engines/recheck` and `POST /api/engines/{id}`: whether each
+//! engine can run, why not, the models it offers, and turning one off or on.
 
 use super::AppState;
-use crate::drivers::engines::{EngineReport, ProbeEnv};
-use axum::{extract::State, Json};
-use serde::Serialize;
+use crate::drivers::engines::{parse_disabled, EngineId, EngineReport, ProbeEnv, DISABLED_SETTING};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    Json,
+};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize)]
 pub struct EnginesResponse {
@@ -22,8 +26,50 @@ pub async fn recheck(State(state): State<AppState>) -> Json<EnginesResponse> {
 }
 
 pub async fn recheck_all(state: &AppState) -> Vec<EngineReport> {
+    load_disabled(state).await;
     let env = ProbeEnv::from_settings(&state.db).await;
     state.engines.recheck(&env).await
+}
+
+/// Reads which engines are off from Settings into the registry.
+pub async fn load_disabled(state: &AppState) {
+    let stored = state.db.get_setting(DISABLED_SETTING).await.ok().flatten();
+    state.engines.set_disabled(parse_disabled(stored.as_deref()));
+}
+
+#[derive(Deserialize)]
+pub struct SetEnabled {
+    pub enabled: bool,
+}
+
+/// Saving one switch at a time keeps two quick toggles from overwriting each other.
+static SWITCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Turns an engine off (never checked, routed to or offered to Laya) or back on (checked at
+/// once). Answers with every engine, as `GET /api/engines` does.
+pub async fn set_enabled(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SetEnabled>,
+) -> Result<Json<EnginesResponse>, StatusCode> {
+    let id = EngineId::parse(&id).ok_or(StatusCode::NOT_FOUND)?;
+    {
+        let _one_at_a_time = SWITCH.lock().await;
+        load_disabled(&state).await;
+        let off = state.engines.set_enabled(id, body.enabled);
+        let saved = serde_json::to_string(&off).unwrap_or_else(|_| "[]".into());
+        if state.db.set_setting(DISABLED_SETTING, &saved).await.is_err() {
+            // Not saved: undo, so memory and Settings agree
+            state.engines.set_enabled(id, !body.enabled);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+    tracing::info!(engine = id.as_str(), enabled = body.enabled, "engine switched");
+    if body.enabled {
+        let env = ProbeEnv::from_settings(&state.db).await;
+        state.engines.recheck_one(id, &env).await;
+    }
+    Ok(Json(EnginesResponse { engines: state.engines.snapshot() }))
 }
 
 /// Checks every engine in the background, so the first turns after startup see real status.
