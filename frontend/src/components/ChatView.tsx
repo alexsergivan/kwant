@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowUp, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin } from 'lucide-react';
+import { ArrowDown, ArrowUp, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -126,6 +126,10 @@ export interface ChatViewProps {
   /** A message to scroll to and flash (from search). */
   highlightMessageId?: string | null;
   onHighlightDone?: () => void;
+  /** Set while `messages` is an older window (a search hit beyond the latest page). */
+  viewingHistory?: boolean;
+  /** Leaves that window for the latest messages. */
+  onJumpToLatest?: () => void;
   /** Under the header: the agent's conversations and the open thread's controls. */
   subHeader?: React.ReactNode;
   /** Next to the title, e.g. "Working on …" while the agent has background turns. */
@@ -268,6 +272,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onEditInstructions,
   highlightMessageId,
   onHighlightDone,
+  viewingHistory,
+  onJumpToLatest,
   subHeader,
   titleExtra,
   queued,
@@ -419,6 +425,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => {
     stickRef.current = true;
   }, [contextKey]);
+  // Back from an older window: land on the newest message
+  useEffect(() => {
+    if (!viewingHistory) stickRef.current = true;
+  }, [viewingHistory]);
   useEffect(() => {
     if (scrollRef.current && stickRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -1056,6 +1066,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <span>@{teamName} (Team)</span>
               </button>
             )}
+          </div>
+        )}
+
+        {viewingHistory && (
+          <div role="status" className="max-w-4xl mx-auto mb-2 flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl border border-sky-800/50 bg-sky-950/40 text-xs text-sky-200">
+            <span className="min-w-0">Showing older messages around the search result.</span>
+            <button
+              type="button"
+              onClick={() => {
+                playSfx('click');
+                onJumpToLatest?.();
+              }}
+              className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-lg border border-sky-700/60 text-sky-100 hover:bg-sky-900/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+            >
+              <ArrowDown size={12} aria-hidden="true" /> Jump to latest
+            </button>
           </div>
         )}
 

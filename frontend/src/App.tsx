@@ -139,6 +139,9 @@ export const App: React.FC = () => {
   const [isRoutinesOpen, setIsRoutinesOpen] = useState(false);
   const [editingChannelInstructions, setEditingChannelInstructions] = useState<Channel | null>(null);
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
+  // Older messages shown instead of the latest (a search hit beyond them). Kept apart from the
+  // cache, which live updates keep current underneath.
+  const [historyWindow, setHistoryWindow] = useState<{ ctx: string; messages: ChatMessage[] } | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastIdRef = useRef(0);
@@ -358,6 +361,7 @@ export const App: React.FC = () => {
 
   // The open chat (channel, direct chat or thread): show what's cached, then load the latest.
   useEffect(() => {
+    setHistoryWindow((w) => (w && w.ctx !== openCtx ? null : w));
     if (!openCtx) return;
     const b = streamsRef.current[openCtx];
     setStreamingText(b?.text ?? '');
@@ -842,6 +846,7 @@ export const App: React.FC = () => {
   };
 
   const handleSendMessage = async (text: string, attachments: AttachmentRef[] = []) => {
+    setHistoryWindow(null);
     const targetId = openCtx;
     const threadId = openThreadId;
     const isTargetChannel = isChannel;
@@ -1167,7 +1172,8 @@ export const App: React.FC = () => {
     );
   };
 
-  // Search result picked: open its chat, then scroll to the message if it's among the ones loaded.
+  // Search result picked: open its chat and scroll to the message, loading the messages around it
+  // when it's older than the latest page.
   const handleJump = async (hit: SearchHit) => {
     const targetId = hit.channel_id ?? hit.kwant_id;
     if (!targetId || !openTarget(hit)) {
@@ -1180,8 +1186,23 @@ export const App: React.FC = () => {
       const data: ChatMessage[] = await res.json();
       messagesCacheRef.current[targetId] = data;
       if (selectedIdRef.current === targetId) setMessages(data);
-      if (data.some((m) => m.id === hit.message_id)) setHighlightMessageId(hit.message_id);
-      else pushToast('Opened the chat', 'That message is older than the latest 100 shown here.');
+      if (data.some((m) => m.id === hit.message_id)) {
+        setHistoryWindow(null);
+        setHighlightMessageId(hit.message_id);
+        return;
+      }
+      const around = await fetch(
+        `/api/channels/${encodeURIComponent(targetId)}/messages?around=${encodeURIComponent(hit.message_id)}`,
+      );
+      if (around.status === 404) {
+        pushToast('Opened the chat', 'That message is no longer there.');
+        return;
+      }
+      if (!around.ok) throw new Error(`HTTP ${around.status}`);
+      const older: ChatMessage[] = await around.json();
+      if (selectedIdRef.current !== targetId) return;
+      setHistoryWindow({ ctx: targetId, messages: older });
+      setHighlightMessageId(hit.message_id);
     } catch {
       pushToast('Could not load that chat.');
     }
@@ -1693,6 +1714,7 @@ export const App: React.FC = () => {
     busyKwants[t.kwant_id] = `${t.state === 'queued' ? 'Waiting to work on' : awaitingTurns.has(t.turn_id) ? 'Asked you a question in' : 'Working on'} ${describeContext(t.context_id, t.kwant_id)}`;
   }
 
+  const viewingHistory = !!historyWindow && historyWindow.ctx === openCtx;
   const errorBar = messagesError ? (
     <div role="alert" className="px-3 sm:px-6 py-2 border-b border-rose-500/20 bg-rose-500/5 flex items-center gap-2 text-xs text-rose-300">
       <span>{messagesError}</span>
@@ -1799,7 +1821,9 @@ export const App: React.FC = () => {
         <ChatView
           title={chatTitle}
           subtitle={chatSubtitle}
-          messages={messages}
+          messages={viewingHistory ? historyWindow.messages : messages}
+          viewingHistory={viewingHistory}
+          onJumpToLatest={() => setHistoryWindow(null)}
           streamingText={isCurrentContextStreaming ? streamingText : ''}
           streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
           pendingApproval={pendingApproval}
