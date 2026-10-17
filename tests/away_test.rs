@@ -179,7 +179,7 @@ async fn away_lists_every_kind_filters_caps_and_marks_seen() {
         turn_id: "turn-gone".into(),
         kwant_id: lead.id.clone(),
         tool_name: format!("mcp__mail__{tool}"),
-        parameters: json!({"server": "mail", "tool": tool, "arguments": {"to": "me@example.com", "api_key": "hidden-value"}}),
+        parameters: json!({"server": "mail", "tool": tool, "arguments": {"to": "me@example.com", "api_key": "hidden-value", "command": "mysql -u bob password=hunter2"}}),
     };
     let live = state.db.save_approval(&approval("send")).await.unwrap();
     let _rx = state
@@ -231,7 +231,7 @@ async fn away_lists_every_kind_filters_caps_and_marks_seen() {
 
     let v = get(&app, "/api/away").await;
     let body = v.to_string();
-    assert!(!body.contains(SECRET) && !body.contains("hidden-value"), "secret leaked: {body}");
+    assert!(!body.contains(SECRET) && !body.contains("hidden-value") && !body.contains("hunter2"), "secret leaked: {body}");
 
     // Waiting ignores since; the stale ticket and the answered question aren't there
     assert_eq!(ids(&v["waiting"]), vec![live.id.clone(), q.id.clone()]);
@@ -247,6 +247,8 @@ async fn away_lists_every_kind_filters_caps_and_marks_seen() {
     assert_eq!(ai["status"], "pending");
     assert_eq!(ai["title"], "Use send (mail)");
     assert!(ai["summary"].as_str().unwrap().contains("to: me@example.com"));
+    // A free-text password in an ordinary argument keeps its key and loses its value
+    assert!(ai["summary"].as_str().unwrap().contains("command: mysql -u bob password=[redacted]"), "{}", ai["summary"]);
     // No live turn to follow: it opens the agent's direct chat
     assert_eq!(ai["link"]["direct_kwant_id"], lead.id.as_str());
     assert!(!ids(&v["waiting"]).contains(&stale.id));

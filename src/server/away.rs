@@ -7,7 +7,7 @@
 
 use super::AppState;
 use crate::db::away::{AwayRow, LAST_SEEN_KEY};
-use crate::profiles::classify::redact_detail;
+use crate::profiles::classify::{mask_credentials, redact_detail};
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -47,13 +47,15 @@ fn looks_secret(word: &str) -> bool {
 }
 
 /// One line for a card: the first non-empty line without markdown markers, at most
-/// [`SUMMARY_CHARS`], with any word that has a key-like part (`"sk-…"`, `key=…`) masked.
+/// [`SUMMARY_CHARS`], with free-text credentials (`password=…`) and any word that has a key-like
+/// part (`"sk-…"`) masked.
 pub fn summarize(text: &str) -> String {
     let line = text
         .lines()
         .map(|l| l.trim().trim_start_matches(['#', '>', '*', '-', ' ']).trim())
         .find(|l| !l.is_empty())
         .unwrap_or_default();
+    let line = mask_credentials(line);
     let masked: Vec<&str> = line
         .split_whitespace()
         .map(|w| {
