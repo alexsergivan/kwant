@@ -208,7 +208,7 @@ fn relative_reset(lower: &str) -> Option<Duration> {
 /// Key names (matched case-insensitively, as the whole name or its suffix, so `client_secret`,
 /// `x-api-key` and `AWS_SECRET_ACCESS_KEY` count) whose value is a credential when written as
 /// `name=value`, `name: value` or, for a `--flag`, `--name value`.
-const CREDENTIAL_KEYS: [&str; 15] = [
+const CREDENTIAL_KEYS: [&str; 16] = [
     "password",
     "passwd",
     "passphrase",
@@ -219,6 +219,7 @@ const CREDENTIAL_KEYS: [&str; 15] = [
     "api-key",
     "secret_key",
     "access_key",
+    "access_key_id",
     "private_key",
     "private-key",
     "privatekey",
@@ -235,6 +236,16 @@ const SEPARATED_CREDENTIAL_KEYS: [&str; 1] = ["pwd"];
 const SLACK_TOKEN_PREFIXES: [&str; 7] = [
     "xoxb-", "xoxp-", "xoxa-", "xoxs-", "xoxe-", "xoxr-", "xapp-",
 ];
+
+/// An AWS access key ID: `AKIA` (long-term) or `ASIA` (temporary) plus 16 uppercase letters or
+/// digits, as a whole word, so "AKIA" alone or a short `AKIA123` stays readable.
+fn is_aws_access_key_id(word: &str) -> bool {
+    word.len() == 20
+        && (word.starts_with("AKIA") || word.starts_with("ASIA"))
+        && word[4..]
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+}
 
 fn is_credential_key(name: &str) -> bool {
     let after_separator = |k: &&str, whole: bool| {
@@ -281,7 +292,8 @@ fn mask_url_passwords(text: &str) -> String {
 /// Masks free-text credentials, keeping the key: `password=hunter2`, `db_pwd: hunter2`,
 /// `"api_key":"…"`, `--password hunter2`, `Authorization: Bearer …` and a bare `Bearer …` become
 /// `password=[redacted]`, `Bearer [redacted]` and so on, a `Cookie:`/`Set-Cookie:` value is
-/// hidden to the end of the line, a Slack token (`xoxb-…`) is hidden whole, and a password in a
+/// hidden to the end of the line, a Slack token (`xoxb-…`) or AWS access key ID (`AKIA…`) is
+/// hidden whole, and a password in a
 /// URL becomes `postgres://bob:[redacted]@db`. Only a key followed by `=` or `:` (or a `--flag`
 /// followed by a value) counts, so prose like "the password field is empty" is left alone.
 pub fn mask_credentials(text: &str) -> String {
@@ -310,6 +322,7 @@ pub fn mask_credentials(text: &str) -> String {
         if SLACK_TOKEN_PREFIXES
             .iter()
             .any(|p| name.len() > p.len() && name.starts_with(p))
+            || is_aws_access_key_id(&text[start..i])
         {
             out.push_str(&text[copied..start]);
             out.push_str("[redacted]");
@@ -720,7 +733,6 @@ mod tests {
             "--token-limit 4096",
             "--password",
             "Authorization: Bearer",
-            "access_key_id=AKID",
         ] {
             assert_eq!(redact_detail(text, 500), text, "{text}");
         }
@@ -795,6 +807,49 @@ mod tests {
             assert_eq!(mask_credentials(text), want, "{text}");
             assert_eq!(redact_detail(text, 500), want, "{text}");
         }
+    }
+
+    #[test]
+    fn aws_keys_are_masked() {
+        for (text, want) in [
+            ("key AKIAIOSFODNN7EXAMPLE denied", "key [redacted] denied"),
+            ("AKIAABCDEFGHIJKLMNOP", "[redacted]"),
+            ("temp ASIAJEXAMPLEXEKEXAMP, retry", "temp [redacted], retry"),
+            (r#"{"id":"AKIAIOSFODNN7EXAMPLE"}"#, r#"{"id":"[redacted]"}"#),
+            ("AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE", "AWS_ACCESS_KEY_ID=[redacted]"),
+            ("aws_access_key_id = abc", "aws_access_key_id = [redacted]"),
+            ("access_key_id=AKID", "access_key_id=[redacted]"),
+            (
+                "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "AWS_SECRET_ACCESS_KEY=[redacted]",
+            ),
+            (r#""aws_secret_access_key": "abc""#, r#""aws_secret_access_key": "[redacted]""#),
+        ] {
+            assert_eq!(mask_credentials(text), want, "{text}");
+            assert_eq!(redact_detail(text, 500), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn aws_lookalikes_are_left_alone() {
+        for text in [
+            "AKIA",
+            "Akiane",
+            "AKIA123",
+            "ASIA pacific",
+            "AKIA-1234",
+            "ASIAN FOOD",
+            "key_id=12",
+        ] {
+            assert_eq!(mask_credentials(text), text, "{text}");
+            assert_eq!(redact_detail(text, 500), text, "{text}");
+        }
+        // wrong case or length is not a key ID; (`redact_detail` hides these anyway as long
+        // words with digits, so only `mask_credentials` is checked)
+        for text in ["akiaiosfodnn7example", "AKIAIOSFODNN7EXAMPLEX", "AKIAiosfodnn7example"] {
+            assert_eq!(mask_credentials(text), text, "{text}");
+        }
+        assert_eq!(mask_credentials("AKIAÄÖÜ1234567890 ок"), "AKIAÄÖÜ1234567890 ок");
     }
 
     #[test]
