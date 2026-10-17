@@ -7,20 +7,21 @@ use axum::{
 };
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use kwnt::{
-    broker::{ApprovalRequest, PermissionBroker},
+    broker::{ApprovalDecision, ApprovalRequest, PermissionBroker},
     config::Config,
     db::{
         continuity::NewRoutine,
-        models::{NewApproval, NewChannel, NewMessage},
+        models::{McpServer, NewApproval, NewChannel, NewMessage},
         questions::QuestionPlace,
         threads::NewDelegation,
         Database,
     },
     router::LayaRouter,
-    server::{create_router, AppState},
+    server::{create_router, mcp_runtime, turns::ActiveTurn, AppState},
     tools::ToolRunner,
 };
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use sqlx::sqlite::SqlitePoolOptions;
 use tempfile::{tempdir, TempDir};
 use tower::ServiceExt;
@@ -362,4 +363,90 @@ async fn away_lists_are_capped_at_50_newest_first() {
     // The badge counts everything, not just what fits
     assert_eq!(v["unseen"]["finished"], 60);
     assert_eq!(v["unseen"]["failed"], 60);
+}
+
+/// Asks for a tool approval the way claude's permission prompt does, from a live turn in `place`
+/// (`(context_id, thread_id)`), and returns the waiting item's link once it shows up.
+async fn live_approval_link(app: &Router, state: &AppState, kwant: &kwnt::db::models::Kwant, place: (&str, Option<&str>)) -> Value {
+    let turn_id = uuid::Uuid::new_v4().to_string();
+    let (_, token) = mcp_runtime::prepare_turn_with_self(state, kwant, Some(turn_id.clone()), None, None).await.unwrap();
+    state.turns.set_turn(ActiveTurn {
+        turn_id: turn_id.clone(),
+        kwant_id: kwant.id.clone(),
+        context_id: place.0.into(),
+        thread_id: place.1.map(Into::into),
+        state: "running".into(),
+        since: Utc::now(),
+    });
+    let ask = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",
+        "arguments": {"tool_name": "mcp__echo__echo", "input": {"text": "hi"}, "tool_use_id": "tu_1"}}});
+    let req = Request::post(format!("/api/mcp/permission/{token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(ask.to_string()))
+        .unwrap();
+    let prompt = tokio::spawn(app.clone().oneshot(req));
+
+    let mut item = None;
+    for _ in 0..200 {
+        let v = get(app, "/api/away").await;
+        if let Some(a) = v["waiting"].as_array().unwrap().iter().find(|i| i["kind"] == "approval") {
+            item = Some(a.clone());
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let item = item.expect("the approval never showed up under waiting");
+    assert_eq!(state.db.get_approval(item["id"].as_str().unwrap()).await.unwrap().unwrap().turn_id, turn_id);
+
+    assert!(state.broker.resolve(item["id"].as_str().unwrap(), ApprovalDecision::AllowOnce).await);
+    let resp = prompt.await.unwrap().unwrap();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains(r#"\"behavior\":\"allow\""#), "{}", String::from_utf8_lossy(&bytes));
+    mcp_runtime::finish_turn(state, &token).await;
+    state.turns.end_turn(&turn_id);
+    item["link"].clone()
+}
+
+#[tokio::test]
+async fn live_approvals_link_to_the_chat_their_turn_runs_in() {
+    let (app, state, _tmp) = setup().await;
+    let kwants = state.db.list_kwants().await.unwrap();
+    let (lead, spec) = (kwants[0].clone(), kwants[1].clone());
+    let echo = state
+        .db
+        .create_mcp_server(&McpServer {
+            id: String::new(),
+            name: "echo".into(),
+            transport: "stdio".into(),
+            command: Some("/usr/bin/true".into()),
+            args: vec![],
+            url: None,
+            env: BTreeMap::new(),
+            headers: BTreeMap::new(),
+            enabled: true,
+            timeout_secs: 30,
+            created_at: None,
+        })
+        .await
+        .unwrap();
+    state.db.set_kwant_mcp_servers(&lead.id, std::slice::from_ref(&echo.id)).await.unwrap();
+    let chan = state
+        .db
+        .create_channel(&NewChannel {
+            name: "ops".into(),
+            description: None,
+            lead_kwant_id: lead.id.clone(),
+            member_kwants: vec![lead.id.clone(), spec.id.clone()],
+            routing_mode: "auto".into(),
+        })
+        .await
+        .unwrap();
+    let thread = state.db.create_thread(&lead.id, "Side quest", "chat", None, "user").await.unwrap();
+
+    let link = live_approval_link(&app, &state, &lead, (&chan.id, None)).await;
+    assert_eq!(link, json!({"thread_id": null, "channel_id": chan.id, "direct_kwant_id": null}));
+    let link = live_approval_link(&app, &state, &lead, (&lead.id, Some(&thread.id))).await;
+    assert_eq!(link, json!({"thread_id": thread.id, "channel_id": null, "direct_kwant_id": null}));
+    let link = live_approval_link(&app, &state, &lead, (&lead.id, None)).await;
+    assert_eq!(link, json!({"thread_id": null, "channel_id": null, "direct_kwant_id": lead.id}));
 }
