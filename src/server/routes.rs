@@ -194,16 +194,42 @@ pub async fn create_channel(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MessagesQuery {
+    /// A window centred on this message (e.g. a search hit older than the latest page).
+    pub around: Option<String>,
+    /// The page just before this message.
+    pub before: Option<String>,
+    /// Default 100, at most [`crate::db::history::MAX_HISTORY_PAGE`].
+    pub limit: Option<i64>,
+}
+
+/// The latest 100 messages, or with `around`/`before` an older window. 404 when that
+/// message isn't in this chat.
 pub async fn list_messages(
     State(state): State<AppState>,
     Path(channel_or_kwant_id): Path<String>,
-) -> Result<Json<Vec<Message>>, StatusCode> {
-    state
-        .db
-        .list_messages(&channel_or_kwant_id, 100)
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    Query(q): Query<MessagesQuery>,
+) -> Result<Json<Vec<Message>>, (StatusCode, Json<serde_json::Value>)> {
+    let err = |status: StatusCode, m: &str| (status, Json(json!({ "error": m })));
+    let max = crate::db::history::MAX_HISTORY_PAGE;
+    let limit = match q.limit {
+        None => 100,
+        Some(n) if (1..=max).contains(&n) => n,
+        Some(_) => return Err(err(StatusCode::BAD_REQUEST, &format!("limit must be 1–{max}"))),
+    };
+    let db = &state.db;
+    let rows = match (q.around.as_deref(), q.before.as_deref()) {
+        (Some(_), Some(_)) => return Err(err(StatusCode::BAD_REQUEST, "use around or before, not both")),
+        (Some(id), None) => db.list_messages_around(&channel_or_kwant_id, id, limit).await,
+        (None, Some(id)) => db.list_messages_before(&channel_or_kwant_id, id, limit).await,
+        (None, None) => db.list_messages(&channel_or_kwant_id, limit).await.map(Some),
+    };
+    match rows {
+        Ok(Some(rows)) => Ok(Json(rows)),
+        Ok(None) => Err(err(StatusCode::NOT_FOUND, "That message isn't in this chat.")),
+        Err(_) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Could not load messages.")),
+    }
 }
 
 pub async fn list_teams(State(state): State<AppState>) -> Result<Json<Vec<Team>>, StatusCode> {
