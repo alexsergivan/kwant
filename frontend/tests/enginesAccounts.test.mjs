@@ -36,7 +36,8 @@ const profile = (over) => ({
   id: 'prf_x', engine: 'claude', name: 'Work', kind: 'cli_home', enabled: true, is_default: false, priority: 100,
   home_dir: null, has_key: false, signed_in: true, account_label: null, limited_until: null, last_error: null, ...over,
 });
-const machine = profile({ id: 'prf_system_claude', name: 'This machine', kind: 'system', signed_in: null, priority: 0 });
+// The host CLI is signed out, so This machine's own check says signed out too (src/profiles/status.rs probes it).
+const machine = profile({ id: 'prf_system_claude', name: 'This machine', kind: 'system', signed_in: false, priority: 0 });
 const personal = profile({ id: 'prf_personal', name: 'Personal', is_default: true, priority: 10 });
 
 const api = (engines) => ({ engines, error: null, rechecking: false, recheck: async () => {}, reload: async () => {}, setEnabled: async () => {}, apply: () => {} });
@@ -66,18 +67,21 @@ test('ready comes from `ready`, not the host login or the model list', () => {
 test('Oleks: one Claude card says kwants use Personal, with This machine first and signed out', () => {
   const html = panel([oleksOn]);
   assert.match(html, /Engines &amp; accounts/);
-  assert.match(html, /1 ready/);
+  // The summary replaces the headline: Claude runs on Claude Code CLI through Personal.
+  assert.match(html, /What runs your kwants/);
+  assert.match(html, /data-route="claude"[\s\S]*?Claude Code CLI[\s\S]*?>Personal</);
+  assert.match(html, /No backup account is ready\./);
   assert.match(html, /data-engine="claude" data-status="ready"/);
   assert.equal(summary(html, 'claude'), 'Kwants use Personal');
   const names = [...card(html, 'claude').matchAll(/id="account-[^"]+-name"[^>]*>([^<]+)</g)].map((x) => x[1]);
   assert.deepEqual(names, ['This machine', 'Personal']);
   // This machine: not signed in, with the Batch 9 sign-in on its row; Personal is in use.
   const rows = card(html, 'claude').split('data-account=');
-  assert.match(rows[1], /Not signed in/);
+  assert.match(rows[1], /Needs sign-in/);
   assert.match(rows[1], /Sign in with Claude<\/button>/);
   assert.match(rows[2], /Default/);
   assert.match(rows[2], /In use/);
-  assert.match(rows[2], /Signed in/);
+  assert.match(rows[2], /Ready/);
   assert.match(rows[2], /Sign out/);
   // Only one way to sign in to Claude's host login, and no "run claude auth login".
   assert.equal(html.split('Sign in with Claude</button>').length, 2);
@@ -90,7 +94,8 @@ test('switched off with Personal signed in: "Off · Turn on to use Personal"', (
   assert.equal(summary(html, 'claude'), 'Off · Turn on to use Personal');
   assert.match(html, /No engine can run right now\. Claude Code CLI is off: turn it on to use Personal\./);
   assert.match(html, /role="switch" aria-checked="false"/);
-  assert.match(html, /Not checked while off/);
+  assert.match(html, /Not checked while Claude Code CLI is off/);
+  assert.doesNotMatch(html, /What runs your kwants/);
   // Nothing to sign in to while it's off.
   assert.doesNotMatch(html, /Sign in with Claude/);
 });

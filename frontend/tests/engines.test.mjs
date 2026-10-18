@@ -109,10 +109,10 @@ test('ready engines come first; not-installed ones fold under "Not available on 
   assert.match(html, /aria-expanded="false"/);
 });
 
-test('"no API keys needed" is only claimed when only CLIs are ready', () => {
-  assert.match(panel(live), /all through your signed-in CLIs, so no API keys are needed/);
-  const withKey = live.map((e) => (e.id === 'anthropic_api' ? { ...e, status: 'ready', detail: null } : e));
-  assert.doesNotMatch(panel(withKey), /no API keys are needed/);
+test('the headline gives way to the route summary once something is ready', () => {
+  // With something ready, the route summary answers "what runs" instead of a count.
+  assert.match(panel(live), /What runs your kwants/);
+  assert.doesNotMatch(panel(live), /no API keys are needed/);
   assert.match(panel(live.map((e) => ({ ...e, status: 'signed_out' }))), /No engine can run right now/);
   assert.match(panel(null), /Checking which engines can run/);
 });

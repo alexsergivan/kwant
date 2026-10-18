@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Key, Globe, X, Sparkles, Check, Plug, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor } from 'lucide-react';
+import { Key, Globe, X, Sparkles, Check, Plug, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import {
   BROWSER_NOTIFY_KEY,
@@ -65,6 +65,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   const [xaiKey, setXaiKey] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434/v1');
+  const [keysOpen, setKeysOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -80,6 +81,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   const limitErrors = Object.fromEntries(
     LIMIT_FIELDS.map(({ key }) => [key, limits ? limitError(key, limits[key]) : null]),
   ) as Record<TurnLimitKey, string | null>;
+  const keysSaved = [anthropicKey, xaiKey, openaiKey].filter((k) => k.trim()).length;
   const limitsInvalid = Object.values(limitErrors).some(Boolean);
   const perAgentOverGlobal =
     !!limits && !limitsInvalid && Number(limits.max_turns_per_agent) > Number(limits.max_turns_global);
@@ -193,7 +195,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
-      <div role="dialog" aria-modal="true" aria-labelledby="settings-title" className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-6">
+      <div role="dialog" aria-modal="true" aria-labelledby="settings-title" className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg sm:max-w-2xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
           <div className="flex items-center gap-2.5">
@@ -201,8 +203,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               <Sparkles size={17} />
             </div>
             <div>
-              <h2 id="settings-title" className="text-sm font-semibold text-zinc-100">Fleet & Engine Settings</h2>
-              <p className="text-xs text-zinc-400">Engines, the accounts they run on, and API keys</p>
+              <h2 id="settings-title" className="text-sm font-semibold text-zinc-100">Settings</h2>
+              <p className="text-xs text-zinc-400">What runs your kwants, the accounts they use, and how they work</p>
             </div>
           </div>
 
@@ -211,7 +213,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               playSfx('click');
               onClose();
             }}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
+            aria-label="Close settings"
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
           >
             <X size={18} />
           </button>
@@ -254,12 +257,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
         {/* Cloud API Keys Form */}
         <form onSubmit={handleSave} className="space-y-4">
-          <div className="flex items-center gap-2 text-xs font-medium text-zinc-300">
-            <Key size={14} className="text-violet-400" />
-            <span>Direct Cloud API Keys (Optional)</span>
-          </div>
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60">
+          <button
+            type="button"
+            aria-expanded={keysOpen}
+            aria-controls="settings-api-keys"
+            onClick={() => setKeysOpen((v) => !v)}
+            className="w-full flex items-center gap-2 p-3 text-left rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+          >
+            <Key size={14} className="text-violet-400" aria-hidden="true" />
+            <span className="flex-1">
+              <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
+              <span className="block text-[11px] text-zinc-500">
+                Optional. {keysSaved ? `${keysSaved} saved. ` : ''}Not needed when you sign in to a CLI above.
+              </span>
+            </span>
+            {keysOpen ? <ChevronDown size={15} className="text-zinc-500" aria-hidden="true" /> : <ChevronRight size={15} className="text-zinc-500" aria-hidden="true" />}
+          </button>
 
-          <div className="space-y-3">
+          <div id="settings-api-keys" hidden={!keysOpen} className="space-y-3 px-3 pb-3">
+            <p className="text-[11px] text-zinc-500">
+              One key per provider for the API-key engines. To keep several keys for one provider, add them as accounts on its engine card above.
+            </p>
             <div>
               <label className="block text-xs font-medium text-zinc-400 mb-1">
                 Anthropic API Key
@@ -312,6 +331,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
               />
             </div>
+          </div>
           </div>
 
           {limits && (

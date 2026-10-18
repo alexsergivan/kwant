@@ -53,7 +53,8 @@ export const FAMILIES: Array<{ id: Family; label: string }> = [
 
 export const familyLabel = (f: Family) => FAMILIES.find((x) => x.id === f)?.label ?? f;
 
-export type Tone = 'ok' | 'warn' | 'error' | 'muted' | 'busy';
+/** `info`: neither good nor bad, e.g. This machine set up for another provider. */
+export type Tone = 'ok' | 'warn' | 'error' | 'muted' | 'busy' | 'info';
 
 /** Whether kwants can run on it: the server's `ready` (which counts its accounts), else the host check. */
 export const isUsable = (e: Pick<EngineInfo, 'status' | 'enabled' | 'ready'>) => e.enabled !== false && (e.ready ?? e.status === 'ready');

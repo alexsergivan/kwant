@@ -91,16 +91,47 @@ export function formatUntil(at: Date, now = Date.now()): string {
   return at.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-/** Short status for a profile: what a person needs to know before relying on it. */
-export function profileStatus(p: Profile, now = Date.now()): { tone: 'ok' | 'warn' | 'error' | 'muted'; text: string } {
-  if (!p.enabled) return { tone: 'muted', text: 'Turned off' };
+/** What the server's account label says when Claude Code is set up for another provider, not a Claude login. */
+const THIRD_PARTY_LABELS = new Set(['Amazon Bedrock', 'Google Vertex AI', 'Microsoft Foundry', 'a third-party provider', 'third_party']);
+export const isThirdPartyLabel = (label: string | null | undefined) => !!label && THIRD_PARTY_LABELS.has(label);
+const providerName = (label: string) => (label === 'third_party' ? 'a third-party provider' : label);
+
+export type AccountTone = 'ok' | 'warn' | 'error' | 'muted' | 'info';
+
+/** An account's state in the words every screen uses: a one-word chip, and a line saying who or why. */
+export interface AccountState {
+  label: 'Ready' | 'Needs sign-in' | 'Off' | 'Out of usage' | 'Other provider' | 'No key' | 'Unknown';
+  tone: AccountTone;
+  /** The email or provider when it's ready, else what to do; null when there's nothing to add. */
+  detail: string | null;
+}
+
+/** The state of an added account (This machine's comes from its engine's check; see accountStatus). */
+export function accountState(p: Profile, now = Date.now()): AccountState {
+  if (!p.enabled) return { label: 'Off', tone: 'muted', detail: 'Kwants skip this account' };
   const limit = activeLimit(p.limited_until, now);
-  if (limit) return { tone: 'warn', text: `Out of usage · back ${formatUntil(limit, now)}` };
-  if (p.last_error === 'auth') return { tone: 'error', text: 'Signed out · sign in again' };
-  if (p.kind === 'api_key') return p.has_key ? { tone: 'ok', text: 'Key saved' } : { tone: 'error', text: 'No key yet' };
-  if (p.signed_in === true) return { tone: 'ok', text: p.account_label ? `Signed in as ${p.account_label}` : 'Signed in' };
-  if (p.signed_in === false) return { tone: 'error', text: 'Not signed in' };
-  return { tone: 'muted', text: p.kind === 'system' ? 'Uses this machine’s login' : 'Sign-in unknown (CLI missing?)' };
+  if (limit) return { label: 'Out of usage', tone: 'warn', detail: `Back ${formatUntil(limit, now)}` };
+  if (p.last_error === 'auth') return { label: 'Needs sign-in', tone: 'error', detail: 'Its login stopped working. Sign in again.' };
+  if (p.kind === 'api_key') return p.has_key ? { label: 'Ready', tone: 'ok', detail: 'Key saved' } : { label: 'No key', tone: 'warn', detail: 'Add a key to use it' };
+  if (p.signed_in === true) {
+    if (isThirdPartyLabel(p.account_label)) {
+      const via = providerName(p.account_label!);
+      return p.kind === 'system'
+        ? { label: 'Other provider', tone: 'info', detail: `Runs through ${via}, not a Claude login` }
+        : { label: 'Other provider', tone: 'warn', detail: `Runs through ${via} instead of its own Claude login` };
+    }
+    return { label: 'Ready', tone: 'ok', detail: p.account_label };
+  }
+  if (p.signed_in === false) return { label: 'Needs sign-in', tone: 'warn', detail: null };
+  return { label: 'Unknown', tone: 'muted', detail: p.kind === 'system' ? 'Uses this computer’s login' : 'Couldn’t check the sign-in (is the CLI installed?)' };
+}
+
+/** Short status for a profile, e.g. "Ready · me@x.io" or "Out of usage · Back in 45 min", for pickers. */
+export function profileStatus(p: Profile, now = Date.now()): { tone: AccountTone; text: string } {
+  const s = accountState(p, now);
+  // The email tells two ready accounts apart; Off and Needs sign-in say enough on their own.
+  const withDetail = s.label === 'Out of usage' || s.label === 'Other provider' || (s.label === 'Ready' && p.kind !== 'api_key');
+  return { tone: s.tone, text: withDetail && s.detail ? `${s.label} · ${s.detail}` : s.label };
 }
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -201,6 +232,12 @@ export function accountsForCard(profiles: Profile[], card: string): Profile[] {
         a.name.localeCompare(b.name),
     );
 }
+
+/** What turn routing asks of an account (Availability::usable on the server): not out of usage, not an
+ * API-key account without its key, and not signed out on its last check. Not checked yet still counts,
+ * so the server tries it; a refused turn's "auth" error doesn't matter until a check says signed out. */
+export const accountRoutable = (p: Profile, now = Date.now()) =>
+  !activeLimit(p.limited_until, now) && !(p.kind === 'api_key' && !p.has_key) && p.signed_in !== false;
 
 /** Could run a turn as last checked: on, signed in (or keyed), not out of usage. */
 export const accountUsable = (p: Profile, now = Date.now()) =>

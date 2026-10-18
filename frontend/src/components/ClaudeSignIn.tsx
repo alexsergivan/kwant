@@ -199,7 +199,7 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
             {busy === 'start' ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <LogIn size={12} aria-hidden="true" />}
             {busy === 'start' ? 'Starting…' : 'Sign in with Claude'}
           </button>
-          <span className="text-[10.5px] text-zinc-500">Opens claude.ai in a new tab.</span>
+          <span className="text-[10.5px] text-zinc-500">Opens claude.ai in a new tab, then you paste back a one-time code.</span>
         </div>
       )}
 
@@ -253,6 +253,9 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
               Cancel
             </button>
           </div>
+          <p className="text-[10.5px] text-zinc-500 leading-snug">
+            Why a code? kwnt runs the sign-in in the background, so claude.ai can’t hand the login back by itself. The code works once and isn’t kept.
+          </p>
           <p className="sr-only" role="status">
             {state === 'verifying' ? 'Checking the code with Claude…' : ''}
           </p>

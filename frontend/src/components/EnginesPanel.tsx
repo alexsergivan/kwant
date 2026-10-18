@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronRight, Cpu, Key, Loader2, RefreshCw, Server } from 'lucide-react';
+import { AlertTriangle, ArrowRight, ChevronDown, ChevronRight, Cpu, Key, Loader2, RefreshCw, Route, Server } from 'lucide-react';
 import { EngineInfo, checkedAgo, engineSummary, isAbsent, isUsable, onlyCliReady, sortEngines, statusView } from '../engines';
 import { playSfx } from '../audio/chiptune';
 import type { EnginesApi } from '../useEngines';
@@ -8,6 +8,7 @@ import { ClaudeSignIn, ClaudeSignOut } from './ClaudeSignIn';
 import { AccountList, StatusPill } from './EngineAccounts';
 import { Profile, accountUsable, accountsForCard, activeLimit, formatUntil } from '../profiles';
 import type { ProfilesState } from '../useProfiles';
+import { RouteRow, routeSummary } from '../routing';
 
 const SUMMARY_TEXT = {
   ok: 'text-emerald-300',
@@ -15,6 +16,7 @@ const SUMMARY_TEXT = {
   error: 'text-rose-300',
   muted: 'text-zinc-400',
   busy: 'text-sky-300',
+  info: 'text-cyan-200',
 } as const;
 const KIND_ICON = { cli: Cpu, api: Key, local: Server } as const;
 
@@ -148,6 +150,39 @@ function headline(engines: EngineInfo[], profiles: Profile[] | null, now: number
     : 'No engine can run right now. Turn on an engine and sign in to one of its accounts below.';
 }
 
+/** The answer to "what will run my next kwant?": engine → account → model per family, and the fallback. */
+export const RouteSummary: React.FC<{ rows: RouteRow[]; pending: boolean }> = ({ rows, pending }) => (
+  <div data-route-summary className="rounded-xl border border-sky-500/25 bg-gradient-to-b from-sky-500/[0.07] to-transparent p-3 space-y-2.5">
+    <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-sky-200">
+      <Route size={13} aria-hidden="true" /> What runs your kwants
+    </h4>
+    <ul className="space-y-2.5">
+      {rows.map((r) => (
+        <li key={r.family} data-route={r.family} className="text-[11px] leading-snug">
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+            <span className="w-14 shrink-0 font-semibold text-zinc-100">{r.label}</span>
+            <span className="px-1.5 py-0.5 rounded-md bg-zinc-800/80 text-zinc-300">{r.engine}</span>
+            <ArrowRight size={11} className="text-zinc-500" aria-label="on" />
+            <span className={`px-1.5 py-0.5 rounded-md font-medium ${r.account.otherProvider || r.note ? 'bg-amber-500/15 text-amber-100' : 'bg-emerald-500/15 text-emerald-100'}`}>
+              {r.account.name}
+            </span>
+            {r.account.detail && <span className={r.account.otherProvider ? 'text-amber-200' : 'text-zinc-400'}>{r.account.detail}</span>}
+          </div>
+          <p className="mt-1 pl-0 sm:pl-[3.875rem] text-zinc-500">
+            {r.note && <span className="text-amber-200">{r.note} </span>}
+            {r.then.length > 0 ? `If it’s out of usage or signed out: ${r.then.join(', then ')}.` : r.note ? '' : 'No backup account is ready.'}
+            {r.defaultModel && <> Kwants on Auto get {r.defaultModel}.</>}
+          </p>
+          {r.fallback && <p className="pl-0 sm:pl-[3.875rem] text-zinc-500">{r.fallback}</p>}
+        </li>
+      ))}
+    </ul>
+    <p className="text-[10.5px] text-zinc-500 border-t border-zinc-800/80 pt-2">
+      {pending ? 'Loading accounts… ' : ''}A kwant set to a specific account in its own settings starts with that account instead.
+    </p>
+  </div>
+);
+
 /** Settings → "Engines & accounts": one card per engine with the accounts it runs on, ready ones first.
  *  `focusClaudeSignIn` changes to bring "Sign in with Claude" into view and focus it. */
 export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState; now?: number; focusClaudeSignIn?: number }> = ({
@@ -166,6 +201,7 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState;
   const absent = sorted.filter((e) => !present.includes(e));
   const lastChecked = sorted.map((e) => e.checked_at).filter(Boolean).sort().pop() ?? null;
   const ago = checkedAgo(lastChecked, now);
+  const routes = engines ? routeSummary(engines, profiles, now) : [];
 
   // An account change can change whether its engine is ready; the server re-checks accounts in the
   // background after a read, so look once more shortly after.
@@ -190,8 +226,9 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState;
   return (
     <section aria-labelledby="engines-title" className="bg-zinc-950/60 p-3 sm:p-4 rounded-xl border border-zinc-800 space-y-3">
       <div className="flex items-center gap-2">
-        <Cpu size={15} className="text-sky-400" aria-hidden="true" />
-        <h3 id="engines-title" className="text-xs font-medium text-zinc-300">Engines &amp; accounts</h3>
+        <Cpu size={15} className="shrink-0 text-sky-400" aria-hidden="true" />
+        <h3 id="engines-title" className="text-xs font-semibold text-zinc-200 whitespace-nowrap">Engines &amp; accounts</h3>
+        {ago && <span className="ml-auto min-w-0 truncate text-[10.5px] text-zinc-500" title={`Checked ${ago}`}><span className="hidden sm:inline">Checked </span>{ago}</span>}
         <button
           type="button"
           onClick={() => {
@@ -200,21 +237,24 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState;
             accounts?.reload();
           }}
           disabled={rechecking || engines === null}
-          className="ml-auto flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-medium text-zinc-300 border border-zinc-800 hover:text-sky-200 hover:border-sky-500/40 disabled:opacity-50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+          className={`${ago ? '' : 'ml-auto '}shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-medium text-zinc-300 border border-zinc-800 hover:text-sky-200 hover:border-sky-500/40 disabled:opacity-50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400`}
         >
           {rechecking ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <RefreshCw size={12} aria-hidden="true" />}
           {rechecking ? 'Checking…' : 'Re-check'}
         </button>
       </div>
 
-      <p className="text-[11px] text-zinc-400 leading-relaxed" aria-live="polite">
-        {engines === null
-          ? 'Checking which engines can run…'
-          : engines.length === 0
-            ? 'This server doesn’t report engine status yet.'
-            : headline(engines, profiles, now)}
-        {ago && <span className="text-zinc-500"> Checked {ago}.</span>}
-      </p>
+      {routes.length > 0 ? (
+        <RouteSummary rows={routes} pending={!!accounts && !profiles && !accounts.error} />
+      ) : (
+        <p className="text-[11px] text-zinc-400 leading-relaxed" aria-live="polite">
+          {engines === null
+            ? 'Checking which engines can run…'
+            : engines.length === 0
+              ? 'This server doesn’t report engine status yet.'
+              : headline(engines, profiles, now)}
+        </p>
+      )}
 
       {error && (
         <p role="alert" className="flex items-center gap-1.5 text-[11px] text-rose-300">
