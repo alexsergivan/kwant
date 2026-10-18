@@ -66,7 +66,7 @@ async fn legacy(dir: &Path) -> SqlitePool {
 /// from the Custom API change), without `space_id`, as quoted text.
 async fn snapshot(pool: &SqlitePool) -> BTreeMap<String, Vec<String>> {
     let tables: Vec<(String,)> = sqlx::query_as(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('spaces', 'llm_profile_endpoints', 'mcp_suggestions') ORDER BY name",
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('spaces', 'llm_profile_endpoints', 'mcp_suggestions', 'bot_actions') ORDER BY name",
     )
     .fetch_all(pool)
     .await

@@ -370,6 +370,13 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
 /// the API token: a request carrying one is an agent's, and agents may not install or dismiss.
 #[allow(clippy::result_large_err)]
 async fn refuse_agents(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
+    refuse_agent_tokens(state, headers, "only the person can install or dismiss suggested MCP servers").await
+}
+
+/// 403 `refusal` when the request carries an agent's turn token or any bearer that isn't the API
+/// token. A request with no token at all passes, as everywhere else (auth decides that).
+#[allow(clippy::result_large_err)]
+pub(super) async fn refuse_agent_tokens(state: &AppState, headers: &HeaderMap, refusal: &str) -> Result<(), Response> {
     let presented: Vec<&str> = headers
         .get_all(header::AUTHORIZATION)
         .iter()
@@ -379,7 +386,7 @@ async fn refuse_agents(state: &AppState, headers: &HeaderMap) -> Result<(), Resp
     for token in presented {
         let turn_token = state.self_tools.lock().await.contains_key(token) || state.mcp_sessions.lock().await.contains_key(token);
         if turn_token || !state.api_token.matches(token) {
-            return Err(error(StatusCode::FORBIDDEN, "only the person can install or dismiss suggested MCP servers"));
+            return Err(error(StatusCode::FORBIDDEN, refusal));
         }
     }
     Ok(())

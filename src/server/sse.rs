@@ -85,6 +85,11 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
             out.extend(fields(suggestion, &["kwant_id", "channel_id", "direct_kwant_id", "thread_id"], Owner::Context));
             out
         }
+        E::BotActionUpdated { action } => {
+            let mut out = fields(action, &["space_id"], Owner::Space);
+            out.extend(fields(action, &["kwant_id", "channel_id", "direct_kwant_id", "thread_id"], Owner::Context));
+            out
+        }
         E::ProfileSwitched { kwant_id, .. } | E::MemoryChanged { kwant_id } => contexts([&Some(kwant_id.clone())]),
         E::DiscussionStarted { team_id, .. }
         | E::BrowserNavigated { team_id, .. }
@@ -208,6 +213,7 @@ mod tests {
             E::SkillUpdated { skill: json!({"id": "s", "kwant_id": null, "deleted": true}) },
             E::QuestionUpdated { question: json!({"id": "q", "kwant_id": "k"}) },
             E::McpSuggestionUpdated { suggestion: json!({"id": "g", "space_id": "spc_default", "kwant_id": "k"}) },
+            E::BotActionUpdated { action: json!({"id": "b", "space_id": "spc_default", "kwant_id": "k"}) },
             E::Scoped {
                 tag: TurnTag { turn_id: s("x"), kwant_id: s("k"), context_id: s("c"), thread_id: None },
                 event: Box::new(E::TextDelta(s("x"))),
@@ -282,6 +288,7 @@ mod tests {
                 | E::SkillUpdated { .. }
                 | E::QuestionUpdated { .. }
                 | E::McpSuggestionUpdated { .. }
+                | E::BotActionUpdated { .. }
                 | E::Scoped { .. }
                 | E::ProfileSwitched { .. }
                 | E::DiscussionStarted { .. }

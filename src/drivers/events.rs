@@ -91,6 +91,10 @@ pub enum RuntimeEvent {
     /// whole record. See `crate::db::mcp_suggestions`.
     #[serde(rename = "mcp_suggestion_updated", alias = "McpSuggestionUpdated")]
     McpSuggestionUpdated { suggestion: Value },
+    /// A change an agent made from a chat was made, undone, confirmed or declined; `action` is the
+    /// whole record with its card. See `crate::db::bot_actions` and docs/bot-actions.md.
+    #[serde(rename = "bot_action_updated", alias = "BotActionUpdated")]
+    BotActionUpdated { action: Value },
     /// An event from inside one turn, tagged with the turn and its chat. On the SSE wire it is
     /// the inner event with `turn_id`, `kwant_id`, `context_id` and `thread_id` added at the top
     /// level (see [`RuntimeEvent::to_wire`]), so clients that ignore the tags still work.

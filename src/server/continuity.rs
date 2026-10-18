@@ -97,7 +97,17 @@ pub async fn prompt_block(
             - When a request needs a capability you don't have (a service, an app, live data), `mcp_search` looks for an MCP server \
             that adds it and `mcp_suggest` offers one to the user as a one-click install card. You can't install anything yourself: \
             suggest at most one or two good matches, then carry on with your reply as best you can without them. \
-            Once the user installs one, its tools are yours from your next turn."
+            Once the user installs one, its tools are yours from your next turn.\n\
+            - You can set up and manage the app yourself; when asked, do it in that same turn instead of telling the user how. \
+            When the user wants something to happen on its own (\"every morning\", \"each Friday\", \"remind me at 5\"), \
+            `routine_create` schedules it (it runs as you and replies in this chat by default); `routine_list`, `routine_update`, \
+            `routine_pause`, `routine_resume`, `routine_run_now` and `routine_delete` manage routines. `bot_list`, `bot_create` and \
+            `bot_update` add and change bots, `settings_get`/`settings_update` change non-secret settings such as the time zone, \
+            and `space_*` and `channel_*` manage your space and its channels. Each change applies at once and the user sees a card \
+            with Undo; afterwards say in one sentence what will happen. The user may undo a change later, so check with the list tools \
+            before relying on an earlier one. Deleting a bot, a space or an account only asks the user to confirm. \
+            Never handle keys, passwords or sign-ins, answer approvals, install tool servers or change the computer: those tools \
+            tell you where in Settings the user does it."
         ));
     }
     out
@@ -218,6 +228,7 @@ fn tool_list(scope: &SelfScope) -> Value {
     if let Some(list) = tools.as_array_mut() {
         list.extend(super::skills::tools());
         list.extend(super::mcp_suggest::tools());
+        list.extend(super::bot_actions::tools());
         if scope.sandbox_target.is_some() {
             list.extend(browser_tools());
         }
@@ -587,6 +598,7 @@ async fn call_tool(
         "ask_user" => super::questions::tool_ask(state, scope, args).await,
         "mcp_search" => super::mcp_suggest::tool_search(state, scope, args).await,
         "mcp_suggest" => super::mcp_suggest::tool_suggest(state, scope, args).await,
+        n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
         "list_attachments" if scope.origin.is_some() => super::attachments::tool_list(state, scope).await,
         "share_file" if scope.origin.is_some() => super::attachments::tool_share(state, scope, args).await,
         "delegate" => super::delegation::tool_delegate(state, scope, args).await,

@@ -2257,6 +2257,8 @@ pub struct SettingsResponse {
     /// Whether turns get the agents' own tools (history search, memory); see
     /// [`super::continuity::agent_tools_enabled`].
     pub agent_tools: bool,
+    /// The person's IANA time zone, "" when not set; routines agents create default to it.
+    pub timezone: String,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -2276,6 +2278,8 @@ pub struct SaveSettingsPayload {
     pub delegation_follow_up_minutes: Option<i64>,
     /// Stored as the `agent_tools` setting: "on" or "off".
     pub agent_tools: Option<bool>,
+    /// An IANA name such as "Europe/Berlin"; "" clears it.
+    pub timezone: Option<String>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -2306,6 +2310,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         max_turns_global: state.turns.limiter.limits().1,
         delegation_follow_up_minutes: super::delegation::follow_up_minutes(&state).await,
         agent_tools: super::continuity::agent_tools_enabled(&state).await,
+        timezone: state.db.get_setting(super::bot_actions::TIMEZONE_SETTING).await.ok().flatten().unwrap_or_default(),
     }))
 }
 
@@ -2339,6 +2344,13 @@ pub async fn save_settings(
     let max_minutes = super::delegation::MAX_FOLLOW_UP_MINUTES;
     if payload.delegation_follow_up_minutes.is_some_and(|m| !(0..=max_minutes).contains(&m)) {
         return bad(format!("delegation_follow_up_minutes must be 0–{max_minutes}"));
+    }
+    let timezone = payload.timezone.as_deref().map(crate::routines::canonical_tz);
+    if let Some(tz) = timezone.as_deref().filter(|t| !t.is_empty()) {
+        let probe = crate::routines::Schedule::Daily { time: "09:00".into(), tz: tz.to_string() };
+        if let Err(e) = probe.validate() {
+            return bad(e);
+        }
     }
     if let Err(e) =
         super::continuity::save_notify_settings(&state, payload.notify_webhook_url, payload.notify_on).await
@@ -2390,6 +2402,9 @@ pub async fn save_settings(
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;
+    }
+    if let Some(tz) = timezone {
+        let _ = state.db.set_setting(super::bot_actions::TIMEZONE_SETTING, &tz).await;
     }
 
     Ok(Json(json!({ "status": "saved" })))
