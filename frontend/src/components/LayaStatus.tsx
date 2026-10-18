@@ -75,7 +75,7 @@ export const LayaStatusRow: React.FC = () => {
         {laya && (
           <p className="mt-0.5 text-[11px] text-zinc-500 break-all">
             {laya.url}
-            {laya.managed ? ' (started by Kwant)' : ''}
+            {laya.managed ? ' (started by the app)' : ''}
             {laya.detail ? ` · ${laya.detail}` : ''}
           </p>
         )}

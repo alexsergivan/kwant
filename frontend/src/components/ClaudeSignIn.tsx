@@ -254,7 +254,7 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
             </button>
           </div>
           <p className="text-[10.5px] text-zinc-500 leading-snug">
-            Why a code? kwnt runs the sign-in in the background, so claude.ai can’t hand the login back by itself. The code works once and isn’t kept.
+            Why a code? The server runs the sign-in in the background, so claude.ai can’t hand the login back by itself. The code works once and isn’t kept.
           </p>
           <p className="sr-only" role="status">
             {state === 'verifying' ? 'Checking the code with Claude…' : ''}

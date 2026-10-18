@@ -426,10 +426,12 @@ export const ArchivedSpacesModal: React.FC<{ onClose: () => void; onRestored: (s
             <SpaceTile space={s} size={32} />
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium text-zinc-200 truncate">{s.name}</p>
-              <p className="text-[11px] text-zinc-500 truncate">
-                {spaceSummary(s.counts)}
-                {s.paused_routines ? ` · ${s.paused_routines} ${s.paused_routines === 1 ? 'routine' : 'routines'} paused` : ''}
-              </p>
+              <p className="text-[11px] text-zinc-500">{spaceSummary(s.counts)}</p>
+              {s.paused_routines ? (
+                <p className="text-[11px] text-amber-300/80">
+                  {s.paused_routines} {s.paused_routines === 1 ? 'routine' : 'routines'} paused
+                </p>
+              ) : null}
             </div>
             <button
               type="button"

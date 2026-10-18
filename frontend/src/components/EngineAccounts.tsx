@@ -215,7 +215,7 @@ const AddAccountForm: React.FC<{
       ) : (
         <div>
           <label htmlFor={`${id}-home`} className="block text-[11px] font-medium text-zinc-400 mb-1">
-            Config folder <span className="text-zinc-600 font-normal">· optional; leave empty and kwnt keeps its own</span>
+            Config folder <span className="text-zinc-600 font-normal">· optional; leave empty and the app keeps its own</span>
           </label>
           <input id={`${id}-home`} value={homeDir} onChange={(e) => setHomeDir(e.target.value)} placeholder="/home/me/.claude-work" className={`${input} font-mono`} />
           <p className="mt-1 text-[11px] text-zinc-500">Next, use “Sign in” on the new account to log it in.</p>
@@ -704,7 +704,7 @@ const LoginPanel: React.FC<{
           )}
           {login.needs_code && (
             <p className="text-[10.5px] text-zinc-500 leading-snug">
-              Why a code? kwnt runs the sign-in in the background, so the page can’t hand the login back by itself. The code works once and isn’t kept.
+              Why a code? The server runs the sign-in in the background, so the page can’t hand the login back by itself. The code works once and isn’t kept.
             </p>
           )}
           <p className="flex items-center gap-1.5 text-[10px] text-zinc-500">

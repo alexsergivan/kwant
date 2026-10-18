@@ -1189,7 +1189,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const serverError = async (res: Response): Promise<string | null> => {
     try {
       const body = await res.clone().json();
-      return typeof body?.error === 'string' && body.error ? body.error : null;
+      const text = typeof body?.error === 'string' ? body.error.trim() : '';
+      // The server writes lowercase fragments ("a team called x already exists…"); the UI shows sentences.
+      return text ? text[0].toUpperCase() + text.slice(1) : null;
     } catch {
       return null;
     }
@@ -1381,9 +1383,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(kwantData),
       });
-      if (res.status === 409) return `Another bot in ${space.name} is already named "${agentData.name}".`;
+      if (res.status === 409) return (await serverError(res)) ?? `Another bot in ${space.name} is already named "${agentData.name}".`;
       if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen engine.';
-      if (!res.ok) return `Couldn't save the bot (HTTP ${res.status}).`;
+      if (!res.ok) return (await serverError(res)) ?? `Couldn't save the bot (HTTP ${res.status}).`;
 
       const updated: Kwant = await res.json();
       setKwants((prev) => prev.map((k) => (k.id === updated.id ? updated : k)));
@@ -1456,9 +1458,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setMessages([]);
         return;
       }
-      if (res.status === 409) return `Another bot in ${space.name} is already named "${agentData.name}".`;
+      if (res.status === 409) return (await serverError(res)) ?? `Another bot in ${space.name} is already named "${agentData.name}".`;
       if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen engine.';
-      return `Couldn't create the bot (HTTP ${res.status}).`;
+      return (await serverError(res)) ?? `Couldn't create the bot (HTTP ${res.status}).`;
     } catch (err) {
       console.error('Failed creating bot:', err);
       return 'Could not reach the server.';

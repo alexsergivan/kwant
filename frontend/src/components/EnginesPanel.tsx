@@ -95,7 +95,7 @@ export const EngineCard: React.FC<{
             role="switch"
             aria-checked={!off}
             aria-labelledby={labelId}
-            title={off ? 'Off: kwnt never uses it' : 'On: kwnt may use it'}
+            title={off ? 'Off: bots never use it' : 'On: bots may use it'}
             onClick={() => {
               playSfx('click');
               onToggle(off);

@@ -353,7 +353,7 @@ export const validateMcpForm = (form: McpFormState): string | null => {
   if (!name) return 'Give the server a short name.';
   if (!NAME_RE.test(name) || name.includes('__'))
     return 'Use letters, numbers, - or _ for the name (no spaces, up to 48 characters).';
-  if (name.toLowerCase() === 'kwnt') return '"kwnt" is reserved, pick another name.';
+  if (name.toLowerCase() === 'kwnt') return 'That name is reserved for the built-in tools, pick another.';
   if (form.transport === 'stdio') {
     if (splitCommandLine(form.commandLine).length === 0) return 'Add the command that starts the server.';
     const bad = form.env.find((r) => r.key.trim() && !ENV_KEY_RE.test(r.key.trim()));

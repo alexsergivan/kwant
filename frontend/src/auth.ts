@@ -54,7 +54,7 @@ export function installUnauthorizedListener(): void {
 
 export async function fetchAuthStatus(): Promise<AuthStatus> {
   const res = await fetch('/api/auth/status', { cache: 'no-store' });
-  if (res.status === 403) throw new Error("This page's address isn't allowed to use the API (403). Open kwnt at its own address.");
+  if (res.status === 403) throw new Error("This page's address isn't allowed to use the API (403). Open kwant bots at its own address.");
   if (!res.ok) throw new Error(`The server answered ${res.status}.`);
   return res.json();
 }

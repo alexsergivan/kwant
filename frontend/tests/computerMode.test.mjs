@@ -115,5 +115,5 @@ test('chip names the current mode and offers the other one', () => {
 });
 
 test('local note text', () => {
-  assert.match(m.renderToStaticMarkup(m.createElement(m.LocalBrowserNote)), /Kwant is using a Chrome window on your computer\./);
+  assert.match(m.renderToStaticMarkup(m.createElement(m.LocalBrowserNote)), /Your bots are using a Chrome window on your computer\./);
 });
