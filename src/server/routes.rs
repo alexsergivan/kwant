@@ -10,7 +10,7 @@ use crate::router::{parse_mentions_with_lookup, TagMention, TeamDecision};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     Json,
 };
 use std::path::PathBuf;
@@ -40,6 +40,24 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
 
 pub async fn laya_status(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.router.status())
+}
+
+/// A `{ "error": … }` body the UI can show as it stands.
+fn api_error(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(json!({ "error": message.into() }))).into_response()
+}
+
+/// [`db_status`] with a readable body. A unique-constraint error (two writes racing past the
+/// name check) is the 409 `clash`.
+fn db_error(e: &DbError, clash: &str) -> Response {
+    match e {
+        DbError::Sqlx(sqlx::Error::Database(d)) if d.is_unique_violation() => api_error(StatusCode::CONFLICT, clash),
+        DbError::OtherSpace(m) | DbError::Conflict(m) => api_error(db_status(e), m.clone()),
+        _ => {
+            tracing::warn!(error = %e, "database write failed");
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+        }
+    }
 }
 
 /// 400 for a write that would mix spaces, 409 for a clash, 500 otherwise.
@@ -73,21 +91,49 @@ pub async fn list_kwants(
 
 /// Trims the name and rejects names that can't be @mentioned or clash with another kwant in the
 /// space. Other spaces may use the same name.
+#[allow(clippy::result_large_err)]
 async fn validate_kwant_name(
     state: &AppState,
     space: &SpaceId,
     name: &mut String,
     own_id: Option<&str>,
-) -> Result<(), StatusCode> {
+) -> Result<(), Response> {
     *name = name.trim().to_string();
-    if name.is_empty() || name.contains(char::is_whitespace) || name.contains('@') {
-        return Err(StatusCode::BAD_REQUEST);
+    if name.is_empty() {
+        return Err(api_error(StatusCode::BAD_REQUEST, "a bot needs a name"));
     }
-    let kwants = state.db.list_kwants(space).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if name.contains(char::is_whitespace) || name.contains('@') {
+        return Err(api_error(StatusCode::BAD_REQUEST, "a bot name can't contain spaces or @"));
+    }
+    let kwants = state.db.list_kwants(space).await.map_err(|e| db_error(&e, ""))?;
     if kwants.iter().any(|k| Some(k.id.as_str()) != own_id && k.name.eq_ignore_ascii_case(name)) {
-        return Err(StatusCode::CONFLICT);
+        return Err(api_error(StatusCode::CONFLICT, format!("a bot called {name} already exists in this space")));
     }
     Ok(())
+}
+
+/// Trims the name; 400 when it's empty and 409 when another team in the space has it, in any
+/// case (a name-derived folder would clash on a Mac). Other spaces may use the same name.
+#[allow(clippy::result_large_err)]
+async fn check_team_name(
+    state: &AppState,
+    space: &SpaceId,
+    name: &mut String,
+    own_id: Option<&str>,
+) -> Result<(), Response> {
+    *name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(api_error(StatusCode::BAD_REQUEST, "a team needs a name"));
+    }
+    let teams = state.db.list_teams(space).await.map_err(|e| db_error(&e, ""))?;
+    if teams.iter().any(|t| Some(t.id.as_str()) != own_id && t.name.eq_ignore_ascii_case(name)) {
+        return Err(api_error(StatusCode::CONFLICT, team_clash(name)));
+    }
+    Ok(())
+}
+
+fn team_clash(name: &str) -> String {
+    format!("a team called {name} already exists in this space")
 }
 
 /// `Some(None)` for an explicit JSON `null`, so "unset" and "leave as is" differ.
@@ -174,21 +220,21 @@ async fn kwant_view_json(state: &AppState, id: &str) -> Result<Json<KwantView>, 
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub async fn create_kwant(
     State(state): State<AppState>,
     Scope(space): Scope,
     Json(mut payload): Json<CreateKwantRequest>,
-) -> Result<Json<KwantView>, StatusCode> {
+) -> Result<Json<KwantView>, Response> {
     validate_kwant_name(&state, &space, &mut payload.base.name, None).await?;
-    check_binding(&state, &space, &payload.binding, &payload.base.preferred_model).await?;
-    let kwant = state
-        .db
-        .create_kwant(&space, &payload.base)
+    check_binding(&state, &space, &payload.binding, &payload.base.preferred_model)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    save_binding(&state, &kwant.id, &payload.binding).await?;
+        .map_err(IntoResponse::into_response)?;
+    let clash = format!("a bot called {} already exists in this space", payload.base.name);
+    let kwant = state.db.create_kwant(&space, &payload.base).await.map_err(|e| db_error(&e, &clash))?;
+    save_binding(&state, &kwant.id, &payload.binding).await.map_err(IntoResponse::into_response)?;
     ensure_general(&state, &space, &kwant.id).await;
-    kwant_view_json(&state, &kwant.id).await
+    kwant_view_json(&state, &kwant.id).await.map_err(IntoResponse::into_response)
 }
 
 /// A new space starts empty, and a channel needs a lead, so its #general (routed by Laya)
@@ -209,26 +255,30 @@ async fn ensure_general(state: &AppState, space: &SpaceId, lead: &str) {
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub async fn update_kwant(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(mut payload): Json<UpdateKwantRequest>,
-) -> Result<Json<KwantView>, StatusCode> {
+) -> Result<Json<KwantView>, Response> {
     let space = state
         .db
         .space_of_kwant(&id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|e| db_error(&e, ""))?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "bot not found"))?;
     validate_kwant_name(&state, &space, &mut payload.base.name, Some(&id)).await?;
-    check_binding(&state, &space, &payload.binding, &payload.base.preferred_model).await?;
+    check_binding(&state, &space, &payload.binding, &payload.base.preferred_model)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    let clash = format!("a bot called {} already exists in this space", payload.base.name);
     match state.db.update_kwant(&id, &payload.base).await {
         Ok(Some(_)) => {}
-        Ok(None) => return Err(StatusCode::NOT_FOUND),
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Ok(None) => return Err(api_error(StatusCode::NOT_FOUND, "bot not found")),
+        Err(e) => return Err(db_error(&e, &clash)),
     }
-    save_binding(&state, &id, &payload.binding).await?;
-    kwant_view_json(&state, &id).await
+    save_binding(&state, &id, &payload.binding).await.map_err(IntoResponse::into_response)?;
+    kwant_view_json(&state, &id).await.map_err(IntoResponse::into_response)
 }
 
 pub async fn list_channels(State(state): State<AppState>, Scope(space): Scope) -> Result<Json<Vec<Channel>>, StatusCode> {
@@ -240,17 +290,27 @@ pub async fn list_channels(State(state): State<AppState>, Scope(space): Scope) -
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+#[allow(clippy::result_large_err)]
 pub async fn create_channel(
     State(state): State<AppState>,
     Scope(space): Scope,
-    Json(payload): Json<NewChannel>,
-) -> Result<Json<Channel>, StatusCode> {
+    Json(mut payload): Json<NewChannel>,
+) -> Result<Json<Channel>, Response> {
+    payload.name = payload.name.trim().to_string();
+    if payload.name.is_empty() {
+        return Err(api_error(StatusCode::BAD_REQUEST, "a channel needs a name"));
+    }
+    let clash = format!("a channel called #{} already exists in this space", payload.name);
+    let channels = state.db.list_channels(&space).await.map_err(|e| db_error(&e, ""))?;
+    if channels.iter().any(|c| c.name.eq_ignore_ascii_case(&payload.name)) {
+        return Err(api_error(StatusCode::CONFLICT, clash));
+    }
     state
         .db
         .create_channel(&space, &payload)
         .await
         .map(Json)
-        .map_err(|e| db_status(&e))
+        .map_err(|e| db_error(&e, &clash))
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,15 +364,16 @@ pub async fn list_teams(State(state): State<AppState>, Scope(space): Scope) -> R
 pub async fn create_team(
     State(state): State<AppState>,
     Scope(space): Scope,
-    Json(payload): Json<NewTeam>,
+    Json(mut payload): Json<NewTeam>,
 ) -> Result<Json<Team>, axum::response::Response> {
+    check_team_name(&state, &space, &mut payload.name, None).await?;
     check_workspace(&state, &space, None, &payload).await?;
     state
         .db
         .create_team(&space, &payload)
         .await
         .map(Json)
-        .map_err(|e| db_status(&e).into_response())
+        .map_err(|e| db_error(&e, &team_clash(&payload.name)))
 }
 
 pub async fn get_team(
@@ -338,7 +399,7 @@ pub struct UpdateTeamPayload {
 pub async fn update_team(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(payload): Json<UpdateTeamPayload>,
+    Json(mut payload): Json<UpdateTeamPayload>,
 ) -> Result<Json<Team>, axum::response::Response> {
     let status = |s: StatusCode| s.into_response();
     if let Some(text) = &payload.instructions {
@@ -351,6 +412,7 @@ pub async fn update_team(
         Ok(None) => return Err(status(StatusCode::NOT_FOUND)),
         Err(_) => return Err(status(StatusCode::INTERNAL_SERVER_ERROR)),
     };
+    check_team_name(&state, &space, &mut payload.team.name, Some(&id)).await?;
     check_workspace(&state, &space, Some(&id), &payload.team).await?;
     match state.db.update_team(&id, &payload.team).await {
         Ok(Some(mut team)) => {
@@ -365,7 +427,7 @@ pub async fn update_team(
             Ok(Json(team))
         }
         Ok(None) => Err(status(StatusCode::NOT_FOUND)),
-        Err(e) => Err(status(db_status(&e))),
+        Err(e) => Err(db_error(&e, &team_clash(&payload.team.name))),
     }
 }
 
