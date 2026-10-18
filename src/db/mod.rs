@@ -7,6 +7,7 @@ pub mod attachments;
 pub mod questions;
 pub mod skills;
 pub mod away;
+pub mod spaces;
 
 use models::*;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
@@ -24,6 +25,9 @@ pub enum DbError {
 
     #[error("JSON serialization error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("Migration error: {0}")]
+    Migration(String),
 }
 
 #[derive(Clone, Debug)]
@@ -58,8 +62,19 @@ const STARTERS: [(&str, &str, &str, &str, &str); 3] = [
 
 impl Database {
     pub async fn init(data_dir: &Path) -> Result<Self, DbError> {
+        Self::open(data_dir, true).await
+    }
+
+    /// The database as a release from before spaces leaves it, for migration tests.
+    #[doc(hidden)]
+    pub async fn init_without_spaces(data_dir: &Path) -> Result<Self, DbError> {
+        Self::open(data_dir, false).await
+    }
+
+    async fn open(data_dir: &Path, spaces: bool) -> Result<Self, DbError> {
         std::fs::create_dir_all(data_dir)?;
         let db_path = data_dir.join("kwnt.db");
+        let fresh = !db_path.exists();
         let conn_str = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
 
         let pool = SqlitePoolOptions::new()
@@ -94,6 +109,9 @@ impl Database {
         db.migrate_attachments().await?;
         db.migrate_history().await?;
         db.migrate_away().await?;
+        if spaces {
+            db.migrate_spaces(data_dir, fresh).await?;
+        }
         db.seed_defaults().await?;
 
         Ok(db)
