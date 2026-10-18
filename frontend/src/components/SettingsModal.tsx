@@ -421,7 +421,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               <div className="flex-1">
                 <p id="browser-notify-label" className="text-xs font-medium text-zinc-200">Notify me on this computer</p>
                 <p className="text-[11px] text-zinc-500">
-                  Only while Kwant is in a background tab. Each notification names its space.
+                  Only while this tab is in the background. Each notification names its space.
                   {permission === 'denied' && <span className="text-amber-300"> Blocked by your browser; allow notifications for this site in its settings.</span>}
                   {permission === 'unsupported' && <span className="text-amber-300"> This browser can't show notifications.</span>}
                 </p>
@@ -480,7 +480,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                     ? 'A webhook is saved. Type a new URL to replace it.'
                     : settings?.notify_webhook_url === MASK && !webhookUrl.trim()
                       ? 'Saving will remove the webhook.'
-                      : 'https only. Kwant posts a short title and line, never message text.')}
+                      : 'https only. Each post has a short title and line, never message text.')}
               </p>
             </div>
 

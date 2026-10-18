@@ -31,7 +31,7 @@ export const InstructionsField: React.FC<{
         onChange={(e) => onChange(e.target.value)}
         aria-describedby={`${id}-hint ${id}-count`}
         aria-invalid={over}
-        placeholder="e.g. Answer in British English. Our repo is kwant-rust; never push to main."
+        placeholder="e.g. Answer in British English. Our repo is acme-web; never push to main."
         className={`w-full bg-zinc-950 border rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none transition-colors resize-y ${
           over ? 'border-rose-500/70 focus:border-rose-500' : 'border-zinc-800 focus:border-sky-500'
         }`}

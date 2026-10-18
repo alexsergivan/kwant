@@ -65,7 +65,7 @@ const inputCls =
   'w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors';
 
 const TRANSPORTS: Array<{ id: McpTransport; title: string; blurb: string; icon: React.ReactNode }> = [
-  { id: 'stdio', title: 'Runs on this machine', blurb: 'kwnt starts a command, like npx or uvx', icon: <Terminal size={18} /> },
+  { id: 'stdio', title: 'Runs on this machine', blurb: 'The server starts a command, like npx or uvx', icon: <Terminal size={18} /> },
   { id: 'http', title: 'Connects to a URL', blurb: 'A server already running somewhere else', icon: <Globe size={18} /> },
 ];
 
@@ -326,7 +326,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       setLoadError(null);
       return list;
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Could not reach kwnt.');
+      setLoadError(err instanceof Error ? err.message : 'Could not reach the server.');
       setServers((prev) => prev ?? []);
       return null;
     }
@@ -355,7 +355,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       const res = await fetch(`/api/mcp/servers/${id}/test`, { method: 'POST' });
       result = res.ok ? await res.json() : { ok: false, error: await readError(res) };
     } catch {
-      result = { ok: false, error: 'Could not reach kwnt.' };
+      result = { ok: false, error: 'Could not reach the server.' };
     }
     setTesting((t) => ({ ...t, [id]: false }));
     setTestResults((r) => ({ ...r, [id]: result }));
@@ -456,12 +456,12 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       });
       if (!res.ok) throw new Error(await readError(res));
       const body = await res.json();
-      if (typeof body?.authorize_url !== 'string' || !/^https?:\/\//.test(body.authorize_url)) throw new Error('kwnt didn’t return a sign-in page.');
+      if (typeof body?.authorize_url !== 'string' || !/^https?:\/\//.test(body.authorize_url)) throw new Error('The server didn’t return a sign-in page.');
       url = body.authorize_url;
     } catch (err) {
       popup?.close();
       setConnecting(null);
-      setOauthErrors((e) => ({ ...e, [server.id]: err instanceof Error ? err.message : 'Could not reach kwnt.' }));
+      setOauthErrors((e) => ({ ...e, [server.id]: err instanceof Error ? err.message : 'Could not reach the server.' }));
       playSfx('alert');
       return;
     }
@@ -489,7 +489,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     setConfirmDisconnect(null);
     const res = await fetch(`/api/mcp/servers/${server.id}/oauth`, { method: 'DELETE' }).catch(() => null);
     if (!res || !res.ok) {
-      setLoadError(res ? await readError(res) : 'Could not reach kwnt.');
+      setLoadError(res ? await readError(res) : 'Could not reach the server.');
       return;
     }
     setTestResults(({ [server.id]: _, ...rest }) => rest);
@@ -552,7 +552,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       setStatus(saved.id, null);
       runTest(saved.id);
     } catch {
-      setFormError('Could not reach kwnt.');
+      setFormError('Could not reach the server.');
     } finally {
       setSaving(false);
     }
@@ -563,7 +563,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     const res = await fetch(`/api/mcp/servers/${server.id}`, { method: 'DELETE' }).catch(() => null);
     setConfirmDelete(null);
     if (!res || !res.ok) {
-      setLoadError(res ? await readError(res) : 'Could not reach kwnt.');
+      setLoadError(res ? await readError(res) : 'Could not reach the server.');
       return;
     }
     setStatus(server.id, null);
@@ -578,7 +578,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...formToPayload(serverToForm(server)), enabled: !server.enabled }),
     }).catch(() => null);
-    if (!res || !res.ok) setLoadError(res ? await readError(res) : 'Could not reach kwnt.');
+    if (!res || !res.ok) setLoadError(res ? await readError(res) : 'Could not reach the server.');
     refresh();
   };
 
@@ -953,7 +953,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             </div>
             <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] text-amber-200/90">
               <ShieldAlert size={14} className="flex-shrink-0 mt-px text-amber-400" />
-              <span>This command runs on the kwnt machine with your user’s permissions. Only add servers you trust.</span>
+              <span>This command runs on the server’s machine with your user’s permissions. Only add servers you trust.</span>
             </div>
             <div>
               <p className="text-xs font-medium text-zinc-400 mb-1">

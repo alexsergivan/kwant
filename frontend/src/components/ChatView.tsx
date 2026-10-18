@@ -1029,7 +1029,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   <p className="text-zinc-300" role="status">
                     {queued.position ? <strong className="text-amber-200">#{queued.position} in line.</strong> : <strong className="text-amber-200">In line.</strong>}{' '}
                     {queued.reason === 'server_busy'
-                      ? 'kwnt is running as many turns as it allows right now; this one starts as soon as a slot frees up.'
+                      ? 'The server is running as many turns as it allows right now; this one starts as soon as a slot frees up.'
                       : `${queued.speaker} is busy with other work; this starts as soon as one of those finishes.`}
                   </p>
                 ) : streamingText ? (

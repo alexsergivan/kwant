@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Check, CheckCheck, CheckCircle2, Inbox, Loader2, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, Check, CheckCheck, CheckCircle2, ChevronLeft, Inbox, Loader2, RefreshCw, X } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import {
   AWAY_SECTIONS,
@@ -41,6 +41,8 @@ export interface AwayViewProps {
   busy?: string | null;
   now?: number;
   onRefresh: () => void;
+  /** Phone only: back to the chat list, since the page hides the tab bar. */
+  onBack?: () => void;
   onOpen: (item: AwayItem) => void;
   onAnswer: (item: AwayItem, choice: number) => void;
   onResolve: (item: AwayItem, decision: ApprovalDecision) => void;
@@ -50,7 +52,7 @@ const actionBtn =
   'inline-flex items-center gap-1.5 min-h-[36px] sm:min-h-[30px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400';
 
 /** The "While you were away" page: what's waiting on you, what finished and what failed. */
-export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice = null, busy = null, now = Date.now(), onRefresh, onOpen, onAnswer, onResolve }) => {
+export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice = null, busy = null, now = Date.now(), onRefresh, onBack, onOpen, onAnswer, onResolve }) => {
   const renderItem = (item: AwayItem) => {
     const { label, tone } = itemLabel(item);
     const when = relativeTime(item.timestamp, now);
@@ -121,8 +123,18 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
 
   return (
     <div className="flex-1 flex flex-col h-full bg-zinc-950 overflow-hidden">
-      <div className="h-14 border-b border-zinc-800/80 px-4 sm:px-6 flex items-center justify-between gap-3 bg-zinc-900/30 backdrop-blur-sm select-none">
-        <div className="min-w-0">
+      <div className={`h-14 border-b border-zinc-800/80 ${onBack ? 'px-2' : 'px-4'} sm:px-6 flex items-center justify-between gap-3 bg-zinc-900/30 backdrop-blur-sm select-none`}>
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Back to chats"
+            className="shrink-0 p-2 -ml-0.5 -mr-2 rounded-lg text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+          >
+            <ChevronLeft size={18} />
+          </button>
+        )}
+        <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold text-zinc-100 truncate">While you were away</h2>
           <p className="text-[11px] text-zinc-400 truncate mt-0.5">
             {data ? windowLabel(data.since, now) : 'What your bots need, finished and failed'}
@@ -209,10 +221,11 @@ export interface AwayPageProps {
   onOpen: (item: AwayItem) => void;
   /** New unseen counts for the sidebar badge. */
   onCounts: (total: number) => void;
+  onBack?: () => void;
 }
 
 /** Loads the page, marks it seen, and runs the one-tap actions. */
-export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpen, onCounts }) => {
+export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpen, onCounts, onBack }) => {
   const [data, setData] = useState<AwayResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -286,6 +299,7 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
       busy={busy}
       notice={notice}
       onRefresh={() => load().then((next) => next && onCountsRef.current(next.unseen.total))}
+      onBack={onBack}
       onOpen={onOpen}
       onAnswer={(item, choice) => act(item, () => awayApi.answer(item.id, choice))}
       onResolve={(item, decision) => act(item, () => awayApi.resolve(item.id, decision))}

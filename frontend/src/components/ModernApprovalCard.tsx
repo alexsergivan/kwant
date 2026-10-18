@@ -123,7 +123,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         {!shell && (
           <button
             onClick={() => handleDecision('always_allow')}
-            title={mcp ? 'Allow this tool for this bot until Kwant restarts' : undefined}
+            title={mcp ? 'Allow this tool for this bot until the app restarts' : undefined}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm"
           >
             <CheckCheck size={14} />
