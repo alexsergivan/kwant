@@ -114,7 +114,8 @@ pub async fn driver_for(
                 find_cli_binary(engine.as_str()),
                 Some(engine.as_str().into()),
             )
-            .with_profile_home(engine, home),
+            .with_profile_home(engine, home)
+            .with_account(p.name.clone()),
         ),
         None,
     ))

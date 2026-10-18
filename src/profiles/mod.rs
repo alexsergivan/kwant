@@ -78,9 +78,45 @@ impl Engine {
                 "CLAUDE_CODE_USE_VERTEX",
                 "CLAUDE_CODE_USE_FOUNDRY",
                 "ANTHROPIC_BASE_URL",
+                "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+                "CLAUDE_CODE_SKIP_VERTEX_AUTH",
+                "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
+                "CLAUDE_CODE_SKIP_MANTLE_AUTH",
+                "CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH",
+                "CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH",
+                "AWS_BEARER_TOKEN_BEDROCK",
+                "ANTHROPIC_GOOGLE_CLOUD_BASE_URL",
+                // Model names set for that provider (e.g. a Bedrock id for "haiku") would be
+                // sent to the profile's own API, which doesn't know them
+                "ANTHROPIC_MODEL",
+                "ANTHROPIC_SMALL_FAST_MODEL",
+                "CLAUDE_CODE_SUBAGENT_MODEL",
+                "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
+                "CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL",
+                "CLAUDE_CODE_AUTO_MODE_MODEL",
+                "CLAUDE_CODE_BG_CLASSIFIER_MODEL",
             ],
             Engine::Codex => &["OPENAI_API_KEY", "CODEX_API_KEY"],
             Engine::Grok => &["XAI_API_KEY", "GROK_AUTH_PATH"],
+        }
+    }
+
+    /// Families of variables removed like [`Self::credential_env`]: every variable in kwnt's env
+    /// starting with one of these. Covers the provider settings and per-model overrides
+    /// (`ANTHROPIC_DEFAULT_HAIKU_MODEL`, its `_NAME`, …) without listing each one.
+    pub fn credential_env_prefixes(self) -> &'static [&'static str] {
+        match self {
+            Engine::Claude => &[
+                "ANTHROPIC_DEFAULT_",
+                "ANTHROPIC_SMALL_FAST_MODEL_",
+                "ANTHROPIC_CUSTOM_MODEL_OPTION",
+                "ANTHROPIC_BEDROCK_",
+                "ANTHROPIC_VERTEX_",
+                "ANTHROPIC_FOUNDRY_",
+                "ANTHROPIC_AWS_",
+                "VERTEX_REGION_",
+            ],
+            Engine::Codex | Engine::Grok => &[],
         }
     }
 
@@ -136,18 +172,75 @@ pub enum Launch {
 pub struct CliEnv {
     pub set: Vec<(String, std::ffi::OsString)>,
     pub remove: Vec<String>,
+    /// Arguments that go before the CLI's subcommand (see [`CliEnv::command`]).
+    pub args: Vec<String>,
 }
+
+/// Values Claude Code takes as "off" for the provider and model settings a project's
+/// `.claude/settings*.json` could set. Passed with `--settings`, which outranks project and
+/// user settings, so a profile runs on its own login even in a folder set up for Bedrock.
+/// Empty means unset to Claude Code: its own model names and first-party API.
+const CLAUDE_SETTINGS_OVERRIDE: &[(&str, &str)] = &[
+    ("CLAUDE_CODE_USE_BEDROCK", "0"),
+    ("CLAUDE_CODE_USE_VERTEX", "0"),
+    ("CLAUDE_CODE_USE_FOUNDRY", "0"),
+    ("ANTHROPIC_BASE_URL", ""),
+    ("ANTHROPIC_MODEL", ""),
+    ("ANTHROPIC_DEFAULT_HAIKU_MODEL", ""),
+    ("ANTHROPIC_DEFAULT_SONNET_MODEL", ""),
+    ("ANTHROPIC_DEFAULT_OPUS_MODEL", ""),
+    ("ANTHROPIC_DEFAULT_FABLE_MODEL", ""),
+    ("ANTHROPIC_SMALL_FAST_MODEL", ""),
+    ("CLAUDE_CODE_SUBAGENT_MODEL", ""),
+];
 
 impl CliEnv {
     pub fn for_home(engine: Engine, home: &Path) -> Self {
+        Self::for_home_in(engine, home, std::env::vars_os().map(|(k, _)| k))
+    }
+
+    /// [`Self::for_home`] against the given env variable names instead of kwnt's own.
+    pub fn for_home_in(
+        engine: Engine,
+        home: &Path,
+        env_keys: impl IntoIterator<Item = std::ffi::OsString>,
+    ) -> Self {
+        let mut remove: Vec<String> = engine
+            .credential_env()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let prefixes = engine.credential_env_prefixes();
+        for key in env_keys {
+            let Some(key) = key.to_str() else { continue };
+            if prefixes.iter().any(|p| key.starts_with(p)) && !remove.iter().any(|r| r == key) {
+                remove.push(key.to_string());
+            }
+        }
+        let args = match engine {
+            Engine::Claude => {
+                let env: serde_json::Map<String, serde_json::Value> = CLAUDE_SETTINGS_OVERRIDE
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), serde_json::Value::from(*v)))
+                    .collect();
+                vec!["--settings".into(), serde_json::json!({ "env": env }).to_string()]
+            }
+            Engine::Codex | Engine::Grok => Vec::new(),
+        };
         Self {
             set: vec![(engine.home_env().to_string(), home.as_os_str().to_owned())],
-            remove: engine
-                .credential_env()
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            remove,
+            args,
         }
+    }
+
+    /// `bin` run on the profile's home: env applied and [`Self::args`] in place, ready for the
+    /// subcommand's own arguments.
+    pub fn command(&self, bin: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new(bin);
+        self.apply(&mut cmd);
+        cmd.args(&self.args);
+        cmd
     }
 
     pub fn apply(&self, cmd: &mut tokio::process::Command) {
@@ -396,8 +489,34 @@ mod tests {
         for provider in ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_BASE_URL"] {
             assert!(env.remove.contains(&provider.to_string()), "{provider}");
         }
+        // Oleks's Bedrock shell: its model names must not reach a profile's own login
+        let shell = [
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+            "ANTHROPIC_BEDROCK_BASE_URL",
+            "ANTHROPIC_VERTEX_PROJECT_ID",
+            "AWS_REGION",
+            "PATH",
+        ];
+        let env = CliEnv::for_home_in(Engine::Claude, home, shell.iter().map(|k| k.into()));
+        for k in &shell[..6] {
+            assert!(env.remove.contains(&k.to_string()), "{k}");
+        }
+        for k in ["ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"] {
+            assert!(env.remove.contains(&k.to_string()), "{k}");
+        }
+        // Ordinary tool env stays: a kwant's own AWS work still has its region
+        assert!(!env.remove.iter().any(|k| k == "AWS_REGION" || k == "PATH"));
+        // A project's .claude/settings.json can't switch it back on: --settings outranks it
+        assert_eq!(env.args[0], "--settings");
+        let over: serde_json::Value = serde_json::from_str(&env.args[1]).unwrap();
+        assert_eq!(over["env"]["CLAUDE_CODE_USE_BEDROCK"], "0");
+        assert_eq!(over["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "");
         let env = CliEnv::for_home(Engine::Codex, home);
         assert_eq!(env.set[0].0, "CODEX_HOME");
+        assert!(env.args.is_empty());
         assert!(env.remove.contains(&"OPENAI_API_KEY".to_string()));
         let env = CliEnv::for_home(Engine::Grok, home);
         assert_eq!(env.set[0].0, "GROK_HOME");

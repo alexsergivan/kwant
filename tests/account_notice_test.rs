@@ -21,10 +21,13 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
+# A profile's claude gets kwnt's provider overrides first, as `claude --settings <json> auth …`
+if [ "$1" = --settings ]; then over="$2"; shift 2; fi
+for a in "$@"; do [ "$prev" = --settings ] && over="$a"; prev="$a"; done
 case "$1" in
   auth) echo '{"loggedIn":true,"email":"fake@example.com"}'; exit 0 ;;
 esac
-echo "{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"result\":\"home=$(basename "${CLAUDE_CONFIG_DIR:-host}") bedrock=${CLAUDE_CODE_USE_BEDROCK:-none} base=${ANTHROPIC_BASE_URL:-none}\",\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}"
+echo "{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"result\":\"home=$(basename "${CLAUDE_CONFIG_DIR:-host}") bedrock=${CLAUDE_CODE_USE_BEDROCK:-none} base=${ANTHROPIC_BASE_URL:-none} haiku=${ANTHROPIC_DEFAULT_HAIKU_MODEL:-none} model=${ANTHROPIC_MODEL:-none} bedrock_url=${ANTHROPIC_BEDROCK_BASE_URL:-none} over=$(echo "$over" | grep -c 'CLAUDE_CODE_USE_BEDROCK.:.0')\",\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}"
 "#;
 
 async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -91,6 +94,10 @@ async fn personal_turn_names_its_account_and_ignores_this_machines_provider() {
     // This machine's Claude Code runs on Bedrock through a proxy; Personal must not
     std::env::set_var("CLAUDE_CODE_USE_BEDROCK", "1");
     std::env::set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:9/proxy");
+    // ...and names Bedrock models for Claude Code's aliases, as Oleks's shell does
+    std::env::set_var("ANTHROPIC_DEFAULT_HAIKU_MODEL", "eu.anthropic.claude-haiku-4-5-20251001-v1:0");
+    std::env::set_var("ANTHROPIC_MODEL", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0");
+    std::env::set_var("ANTHROPIC_BEDROCK_BASE_URL", "http://127.0.0.1:9/bedrock");
 
     let data = tmp.path().join("data");
     let db = Database::init(&data).await.unwrap();
@@ -150,10 +157,19 @@ async fn personal_turn_names_its_account_and_ignores_this_machines_provider() {
     // Ran with Personal's own home, and without this machine's provider or proxy
     assert!(text.contains(&format!("home={personal_id}")), "{text}");
     assert!(text.contains("bedrock=none base=none"), "{text}");
+    assert!(text.contains("haiku=none model=none bedrock_url=none"), "{text}");
+    // ...and a project .claude/settings.json in its folder can't turn Bedrock back on
+    assert!(text.contains("over=1"), "{text}");
     // The status line says which account, and never shows the CLI's path
     assert!(
         notes.iter().any(|n| n.starts_with("Running on Claude Code CLI · Personal · haiku")),
         "{notes:?}"
     );
     assert!(!notes.iter().any(|n| n.contains("This machine") || n.contains("binary")), "{notes:?}");
+    // The saved reasoning line names the account, not the CLI's path
+    let saved = state.db.list_messages(&kid, 10).await.unwrap();
+    let reply = saved.iter().rev().find(|m| m.sender_role == "kwant").unwrap();
+    let reasoning = reply.reasoning_content.as_deref().unwrap_or("");
+    assert!(reasoning.contains("Personal"), "{reasoning}");
+    assert!(!reasoning.contains(&bin.display().to_string()) && !reasoning.contains("/claude"), "{reasoning}");
 }
