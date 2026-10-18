@@ -42,7 +42,13 @@ export type Schedule =
   | { type: 'once'; at: string }
   | { type: 'daily'; time: string; tz: string }
   | { type: 'weekly'; time: string; weekdays: Weekday[]; tz: string }
-  | { type: 'interval'; every_minutes: number };
+  | { type: 'interval'; every_minutes: number }
+  /** Days of the month (1-31, or `'last'`); a day a month lacks runs on its last day. */
+  | { type: 'monthly'; time: string; days: MonthDay[]; tz: string }
+  /** Five fields: minute hour day-of-month month weekday. The server checks the rest. */
+  | { type: 'cron'; expression: string; tz: string };
+
+export type MonthDay = number | 'last';
 
 export type RunStatus = 'running' | 'ok' | 'error' | 'skipped';
 
@@ -59,6 +65,12 @@ export interface Routine {
   last_run_at: string | null;
   last_status: RunStatus | null;
   created_at: string;
+  /** The schedule in the server's words, e.g. "monthly on day 1 at 09:00 Europe/Berlin". */
+  schedule_text?: string;
+  /** Set when it delivers into one of its bot's threads. */
+  thread_id?: string | null;
+  /** The message a follow-up checks back on. */
+  context_message_id?: string | null;
 }
 
 export interface RoutineRun {
@@ -193,6 +205,9 @@ export interface ScheduleForm {
   weekdays: Weekday[];
   tz: string;
   everyMinutes: string;
+  monthDays: MonthDay[];
+  /** A raw five-field rule, for the "Custom" choice. */
+  cron: string;
 }
 
 /**
@@ -243,7 +258,16 @@ export function toLocalInput(d: Date): string {
 export function emptyScheduleForm(now = new Date(), tz = defaultTimeZone()): ScheduleForm {
   const soon = new Date(now.getTime() + 60 * 60 * 1000);
   soon.setMinutes(0, 0, 0);
-  return { type: 'daily', onceAt: toLocalInput(soon), time: '09:00', weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'], tz, everyMinutes: '60' };
+  return {
+    type: 'daily',
+    onceAt: toLocalInput(soon),
+    time: '09:00',
+    weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'],
+    tz,
+    everyMinutes: '60',
+    monthDays: [1],
+    cron: '0 9 * * 1-5',
+  };
 }
 
 export function formFromSchedule(s: Schedule, now = new Date()): ScheduleForm {
@@ -259,8 +283,18 @@ export function formFromSchedule(s: Schedule, now = new Date()): ScheduleForm {
       return { ...base, type: 'weekly', time: s.time, weekdays: s.weekdays };
     case 'interval':
       return { ...base, type: 'interval', everyMinutes: String(s.every_minutes) };
+    case 'monthly':
+      return { ...base, type: 'monthly', time: s.time, monthDays: s.days.length ? sortMonthDays(s.days) : base.monthDays };
+    case 'cron':
+      return { ...base, type: 'cron', cron: s.expression };
+    default:
+      return base;
   }
 }
+
+/** 1, 2, … 31, then "last". */
+export const sortMonthDays = (days: MonthDay[]): MonthDay[] =>
+  Array.from(new Set(days)).sort((a, b) => (a === 'last' ? 32 : a) - (b === 'last' ? 32 : b));
 
 /** The JSON the API takes, or a message for the first thing to fix. Mirrors the server's checks. */
 export function scheduleFromForm(f: ScheduleForm, now = Date.now()): { schedule: Schedule } | { error: string } {
@@ -272,11 +306,17 @@ export function scheduleFromForm(f: ScheduleForm, now = Date.now()): { schedule:
       return { schedule: { type: 'once', at: at.toISOString() } };
     }
     case 'daily':
-    case 'weekly': {
+    case 'weekly':
+    case 'monthly': {
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(f.time)) return { error: 'Use a time like 09:00.' };
       const tz = canonicalTimeZone(f.tz.trim());
       if (!tz) return { error: 'Pick a time zone.' };
       if (f.type === 'daily') return { schedule: { type: 'daily', time: f.time, tz } };
+      if (f.type === 'monthly') {
+        const days = sortMonthDays(f.monthDays.filter((d) => d === 'last' || (Number.isInteger(d) && d >= 1 && d <= 31)));
+        if (days.length === 0) return { error: 'Pick at least one day of the month.' };
+        return { schedule: { type: 'monthly', time: f.time, days, tz } };
+      }
       if (f.weekdays.length === 0) return { error: 'Pick at least one day.' };
       const days = WEEKDAYS.map((d) => d.id).filter((d) => f.weekdays.includes(d));
       return { schedule: { type: 'weekly', time: f.time, weekdays: days, tz } };
@@ -286,7 +326,30 @@ export function scheduleFromForm(f: ScheduleForm, now = Date.now()): { schedule:
       if (!Number.isInteger(n) || n < 5 || n > 10080) return { error: 'Repeat every 5 to 10080 minutes.' };
       return { schedule: { type: 'interval', every_minutes: n } };
     }
+    case 'cron': {
+      const expression = f.cron.trim().replace(/\s+/g, ' ');
+      if (!expression) return { error: 'Type a rule, like 0 9 * * MON#2.' };
+      if (expression.startsWith('@')) return { error: 'Shortcuts like @daily aren’t supported. Write the five parts instead.' };
+      if (expression.split(' ').length !== 5) return { error: 'A rule has five parts: minute, hour, day of month, month and weekday.' };
+      const tz = canonicalTimeZone(f.tz.trim());
+      if (!tz) return { error: 'Pick a time zone.' };
+      return { schedule: { type: 'cron', expression, tz } };
+    }
   }
+}
+
+const ordinal = (n: number) => {
+  const t = n % 100;
+  if (t >= 11 && t <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
+};
+
+/** "the 1st, 15th and last day". */
+export function monthDaysText(days: MonthDay[]): string {
+  const words = sortMonthDays(days).map((d) => (d === 'last' ? 'last day' : ordinal(d)));
+  if (words.length === 0) return 'no day';
+  const list = words.length > 1 ? `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}` : words[0];
+  return `the ${list}`;
 }
 
 export function describeSchedule(s: Schedule): string {
@@ -303,6 +366,12 @@ export function describeSchedule(s: Schedule): string {
       return s.every_minutes % 60 === 0
         ? `Every ${s.every_minutes / 60} h`
         : `Every ${s.every_minutes} min`;
+    case 'monthly':
+      return `Every month on ${monthDaysText(s.days)} at ${s.time} (${s.tz})`;
+    case 'cron':
+      return `Custom rule ${s.expression} (${s.tz})`;
+    default:
+      return 'Unknown schedule';
   }
 }
 
