@@ -139,7 +139,7 @@ async fn upgrade_from(schema: &str) {
     let db = Database::init(tmp.path()).await.unwrap();
     // Existing messages were indexed; old rows load with the new optional columns
     let hits = db
-        .search_messages(
+        .search_messages(&kwnt::db::spaces::SpaceId::default_space(),
             "zebra",
             &SearchFilter {
                 limit: 10,
@@ -182,7 +182,7 @@ async fn upgrade_from(schema: &str) {
     Database::init(tmp.path()).await.unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
     let ids: Vec<String> = db
-        .search_messages(
+        .search_messages(&kwnt::db::spaces::SpaceId::default_space(),
             "zebra",
             &SearchFilter {
                 limit: 10,
@@ -196,7 +196,7 @@ async fn upgrade_from(schema: &str) {
         .collect();
     assert_eq!(ids, vec!["m3".to_string()]);
     assert_eq!(
-        db.search_messages(
+        db.search_messages(&kwnt::db::spaces::SpaceId::default_space(),
             "giraffe",
             &SearchFilter {
                 limit: 10,
@@ -230,17 +230,17 @@ async fn upgrades_a_c1e8b3a_era_database() {
 async fn search_ranks_filters_and_marks() {
     let (app, state, _tmp) = setup().await;
     let db = &state.db;
-    let kwants = db.list_kwants().await.unwrap();
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let (k1, k2) = (&kwants[0], &kwants[1]);
     let general = db
-        .list_channels()
+        .list_channels(&kwnt::db::spaces::SpaceId::default_space())
         .await
         .unwrap()
         .into_iter()
         .find(|c| c.name == "general")
         .unwrap();
     let other = db
-        .create_channel(&NewChannel {
+        .create_channel(&kwnt::db::spaces::SpaceId::default_space(), &NewChannel {
             name: "ops".into(),
             description: None,
             lead_kwant_id: k2.id.clone(),
@@ -368,7 +368,7 @@ async fn search_ranks_filters_and_marks() {
 #[tokio::test]
 async fn memory_api_caps_and_ownership() {
     let (app, state, _tmp) = setup().await;
-    let kwants = state.db.list_kwants().await.unwrap();
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let (k1, k2) = (&kwants[0].id, &kwants[1].id);
     let mut rx = state.event_sender.subscribe();
 
@@ -485,10 +485,10 @@ async fn memory_api_caps_and_ownership() {
 async fn instructions_and_memory_reach_the_prompt() {
     let (app, state, _tmp) = setup().await;
     let db = &state.db;
-    let kwants = db.list_kwants().await.unwrap();
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let k = &kwants[0];
     let team = db
-        .create_team(&NewTeam {
+        .create_team(&kwnt::db::spaces::SpaceId::default_space(), &NewTeam {
             name: "core".into(),
             description: None,
             icon: None,
@@ -500,7 +500,7 @@ async fn instructions_and_memory_reach_the_prompt() {
         .await
         .unwrap();
     let channel = db
-        .list_channels()
+        .list_channels(&kwnt::db::spaces::SpaceId::default_space())
         .await
         .unwrap()
         .into_iter()
@@ -617,10 +617,10 @@ async fn instructions_and_memory_reach_the_prompt() {
 async fn self_tools_are_scoped_to_the_turn_and_kwant() {
     let (app, state, _tmp) = setup().await;
     let db = &state.db;
-    let kwants = db.list_kwants().await.unwrap();
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let (k1, k2) = (&kwants[0], &kwants[1]);
     let private = db
-        .create_channel(&NewChannel {
+        .create_channel(&kwnt::db::spaces::SpaceId::default_space(), &NewChannel {
             name: "secret-ops".into(),
             description: None,
             lead_kwant_id: k2.id.clone(),
@@ -865,7 +865,7 @@ fn routine(kwant_id: &str, schedule: Value) -> Value {
 #[tokio::test]
 async fn routines_api_validates_and_reports() {
     let (app, state, _tmp) = setup().await;
-    let k = state.db.list_kwants().await.unwrap()[0].id.clone();
+    let k = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
 
     for bad in [
         json!({"type": "daily", "time": "09:00"}),
@@ -971,7 +971,7 @@ async fn add_routine(
 #[tokio::test]
 async fn scheduler_skips_overlaps_and_never_replays() {
     let (_app, state, _tmp) = setup().await;
-    let k = state.db.list_kwants().await.unwrap()[0].id.clone();
+    let k = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
     let now = Utc::now();
 
     // kwnt was down for a day: an interval routine due long ago runs at most once, then moves a full step past now
@@ -1074,7 +1074,7 @@ async fn scheduler_skips_overlaps_and_never_replays() {
     // Routines of a deleted kwant go away
     sqlx_delete_kwant(&state, &k).await;
     scheduler::tick(&state, t).await;
-    assert!(state.db.list_routines().await.unwrap().is_empty());
+    assert!(state.db.list_routines(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap().is_empty());
 }
 
 async fn sqlx_delete_kwant(state: &AppState, id: &str) {
@@ -1088,7 +1088,7 @@ async fn sqlx_delete_kwant(state: &AppState, id: &str) {
 #[tokio::test]
 async fn interrupted_runs_are_failed_on_start() {
     let (_app, state, _tmp) = setup().await;
-    let k = state.db.list_kwants().await.unwrap()[0].id.clone();
+    let k = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
     let id = add_routine(
         &state,
         &k,
@@ -1113,7 +1113,7 @@ async fn interrupted_runs_are_failed_on_start() {
 #[tokio::test]
 async fn messages_load_around_and_before_a_message() {
     let (app, state, _tmp) = setup().await;
-    let kwant = state.db.list_kwants().await.unwrap().remove(0);
+    let kwant = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap().remove(0);
     let channel = |name: &str| NewChannel {
         name: name.into(),
         description: None,
@@ -1121,8 +1121,8 @@ async fn messages_load_around_and_before_a_message() {
         member_kwants: vec![kwant.id.clone()],
         routing_mode: "auto".into(),
     };
-    let chan = state.db.create_channel(&channel("history")).await.unwrap();
-    let other = state.db.create_channel(&channel("other")).await.unwrap();
+    let chan = state.db.create_channel(&kwnt::db::spaces::SpaceId::default_space(), &channel("history")).await.unwrap();
+    let other = state.db.create_channel(&kwnt::db::spaces::SpaceId::default_space(), &channel("other")).await.unwrap();
     let mut ids = Vec::new();
     for i in 0..250 {
         let m = state.db.insert_message(&msg(Some(&chan.id), None, "user", "me", &format!("m{i}"))).await.unwrap();
@@ -1306,11 +1306,11 @@ async fn settings_refuse_unknown_keys_and_save_agent_tools() {
 #[tokio::test]
 async fn notifications_are_filtered_and_content_free() {
     let (_app, state, _tmp) = setup().await;
-    let kwants = state.db.list_kwants().await.unwrap();
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let k = &kwants[0];
     let general = state
         .db
-        .list_channels()
+        .list_channels(&kwnt::db::spaces::SpaceId::default_space())
         .await
         .unwrap()
         .into_iter()

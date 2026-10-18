@@ -65,6 +65,7 @@ async fn test_mock_driver_streaming() {
     let (tx, mut rx) = mpsc::channel(16);
 
     let dummy_kwant = Kwant {
+        space_id: kwnt::db::spaces::DEFAULT_SPACE_ID.into(),
         id: "k-1".into(),
         name: "CyberMage".into(),
         title: "Arcane".into(),
@@ -125,6 +126,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
     use kwnt::drivers::TeamContext;
 
     let kwant = Kwant {
+        space_id: kwnt::db::spaces::DEFAULT_SPACE_ID.into(),
         id: "k-1".into(),
         name: "Architect".into(),
         title: "Systems Architect".into(),

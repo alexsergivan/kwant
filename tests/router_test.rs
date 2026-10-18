@@ -106,6 +106,7 @@ fn test_parse_mentions_kwant_and_team() {
 async fn test_team_orchestration_heuristic_fallback() {
     let router = LayaRouter::new("http://127.0.0.1:9999/unreachable".into());
     let team = Team {
+        space_id: kwnt::db::spaces::DEFAULT_SPACE_ID.into(),
         id: "team-1".into(),
         name: "core-engineering".into(),
         description: Some("Architecture & DevOps".into()),
@@ -119,6 +120,7 @@ async fn test_team_orchestration_heuristic_fallback() {
     };
     let members = vec![
         Kwant {
+            space_id: kwnt::db::spaces::DEFAULT_SPACE_ID.into(),
             id: "kwant-1".into(),
             name: "Architect".into(),
             title: "Systems Architect".into(),
@@ -134,6 +136,7 @@ async fn test_team_orchestration_heuristic_fallback() {
             created_at: None,
         },
         Kwant {
+            space_id: kwnt::db::spaces::DEFAULT_SPACE_ID.into(),
             id: "kwant-2".into(),
             name: "DevOps".into(),
             title: "DevOps Engineer".into(),
@@ -286,6 +289,7 @@ async fn laya_status_starts_unknown_and_updates() {
 
 fn agent(id: &str, name: &str, title: &str) -> Kwant {
     Kwant {
+        space_id: kwnt::db::spaces::DEFAULT_SPACE_ID.into(),
         id: id.into(),
         name: name.into(),
         title: title.into(),
@@ -332,6 +336,7 @@ fn test_laya_team_discussion_uses_runner_up_as_second_speaker() {
         agent("c", "DevOps", "Systems & Security Engineer"),
     ];
     let team = Team {
+        space_id: kwnt::db::spaces::DEFAULT_SPACE_ID.into(),
         id: "t".into(),
         name: "core".into(),
         description: None,

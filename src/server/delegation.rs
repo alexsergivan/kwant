@@ -5,6 +5,7 @@
 use super::routes::{scope_for, try_kwant_turn, TurnOpts};
 use super::AppState;
 use crate::db::models::{Kwant, MessageExtra, NewMessage};
+use crate::db::spaces::SpaceId;
 use crate::db::threads::{Delegation, NewDelegation, Thread, MAX_TASK_CHARS};
 use crate::drivers::RuntimeEvent;
 use axum::{
@@ -152,6 +153,11 @@ pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (S
     if req.origin_depth + 1 > MAX_DEPTH {
         return bad("This task was already delegated; it can't be delegated further.");
     }
+    // Never across spaces, with or without a member list
+    if req.specialist.space_id != req.lead.space_id {
+        return Err((StatusCode::FORBIDDEN, format!("{} isn't in this space.", req.specialist.name)));
+    }
+    let space = SpaceId::new(&req.lead.space_id);
     if let Some(allowed) = &req.allowed {
         if !allowed.iter().any(|id| id == &req.specialist.id) {
             return Err((StatusCode::FORBIDDEN, format!("{} isn't in this chat.", req.specialist.name)));
@@ -165,8 +171,11 @@ pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (S
     // The origin must exist, and a direct chat or thread origin must be the lead's own
     let team_id = if let Some(cid) = &o.channel_id {
         let channel = state.db.get_channel(cid).await.ok().flatten().ok_or((StatusCode::NOT_FOUND, "channel not found".into()))?;
+        if channel.space_id != space.as_str() {
+            return Err((StatusCode::NOT_FOUND, "channel not found".into()));
+        }
         match channel.name.strip_prefix("team-") {
-            Some(name) => state.db.list_teams().await.unwrap_or_default().into_iter().find(|t| t.name.eq_ignore_ascii_case(name)).map(|t| t.id),
+            Some(name) => state.db.list_teams(&space).await.unwrap_or_default().into_iter().find(|t| t.name.eq_ignore_ascii_case(name)).map(|t| t.id),
             None => None,
         }
     } else if let Some(kid) = &o.kwant_id {
@@ -625,10 +634,11 @@ pub async fn tool_delegate(state: &AppState, scope: &super::continuity::SelfScop
     };
     let to = args["to"].as_str().map(str::trim).unwrap_or("").trim_start_matches('@');
     let task = args["task"].as_str().unwrap_or("").to_string();
-    let kwants = state.db.list_kwants().await.unwrap_or_default();
-    let Some(lead) = kwants.iter().find(|k| k.id == scope.kwant_id).cloned() else {
+    let Some(lead) = state.db.get_kwant(&scope.kwant_id).await.ok().flatten() else {
         return ("Unknown agent.".into(), true);
     };
+    // Only the lead's own space, even when the chat has no member list
+    let kwants = state.db.list_kwants(&SpaceId::new(&lead.space_id)).await.unwrap_or_default();
     let pool: Vec<&Kwant> = if origin.member_ids.is_empty() {
         kwants.iter().filter(|k| k.id != lead.id).collect()
     } else {

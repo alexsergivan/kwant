@@ -20,6 +20,9 @@ pub struct Kwant {
     pub level: i64,
     pub turns_completed: i64,
     pub created_at: Option<DateTime<Utc>>,
+    /// The space this row belongs to.
+    #[serde(default = "crate::db::spaces::default_space_id")]
+    pub space_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +62,9 @@ pub struct Channel {
     #[serde(default)]
     #[sqlx(default)]
     pub instructions: Option<String>,
+    /// The space this row belongs to.
+    #[serde(default = "crate::db::spaces::default_space_id")]
+    pub space_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +152,9 @@ pub struct Team {
     #[serde(default)]
     #[sqlx(default)]
     pub instructions: Option<String>,
+    /// The space this row belongs to.
+    #[serde(default = "crate::db::spaces::default_space_id")]
+    pub space_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -327,6 +336,9 @@ pub struct LlmProfile {
     pub enabled: bool,
     pub is_default: bool,
     pub created_at: Option<DateTime<Utc>>,
+    /// The space this row belongs to.
+    #[serde(default = "crate::db::spaces::default_space_id")]
+    pub space_id: String,
 }
 
 #[derive(Debug, Clone)]

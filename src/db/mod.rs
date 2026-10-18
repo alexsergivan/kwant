@@ -10,6 +10,7 @@ pub mod away;
 pub mod spaces;
 
 use models::*;
+use spaces::SpaceId;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
 use std::path::Path;
 use thiserror::Error;
@@ -28,6 +29,13 @@ pub enum DbError {
 
     #[error("Migration error: {0}")]
     Migration(String),
+
+    /// A write would link rows from two spaces.
+    #[error("{0}")]
+    OtherSpace(String),
+
+    #[error("{0}")]
+    Conflict(String),
 }
 
 #[derive(Clone, Debug)]
@@ -110,9 +118,11 @@ impl Database {
         db.migrate_history().await?;
         db.migrate_away().await?;
         if spaces {
-            db.migrate_spaces(data_dir, fresh).await?;
+            let migration = db.migrate_spaces(data_dir, fresh).await?;
+            db.require_spaces_schema(&migration).await?;
+            db.ensure_one_general().await?;
+            db.seed_defaults().await?;
         }
-        db.seed_defaults().await?;
 
         Ok(db)
     }
@@ -128,7 +138,10 @@ impl Database {
                 .await?;
         }
 
-        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM kwants")
+        // Only the Default space is seeded; other spaces start empty
+        let space = SpaceId::default_space();
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM kwants WHERE space_id = ?")
+            .bind(space.as_str())
             .fetch_one(&self.pool)
             .await?;
 
@@ -147,11 +160,11 @@ impl Database {
                 .collect();
 
             for starter in starters {
-                self.create_kwant(&starter).await?;
+                self.create_kwant(&space, &starter).await?;
             }
 
             // Create initial general channel
-            let kwants = self.list_kwants().await?;
+            let kwants = self.list_kwants(&space).await?;
             if let Some(lead) = kwants.first() {
                 let chan = NewChannel {
                     name: "general".into(),
@@ -160,7 +173,7 @@ impl Database {
                     member_kwants: kwants.iter().map(|k| k.id.clone()).collect(),
                     routing_mode: "auto".into(),
                 };
-                self.create_channel(&chan).await?;
+                self.create_channel(&space, &chan).await?;
             }
         } else {
             // Smoothly migrate any legacy starter names and prompts
@@ -170,13 +183,14 @@ impl Database {
         }
 
         // Seed default team if none exists
-        let team_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM teams")
+        let team_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM teams WHERE space_id = ?")
+            .bind(space.as_str())
             .fetch_one(&self.pool)
             .await
             .unwrap_or((0,));
 
         if team_count.0 == 0 {
-            let kwants = self.list_kwants().await?;
+            let kwants = self.list_kwants(&space).await?;
             if let Some(lead) = kwants.iter().find(|k| k.name == "Architect").or_else(|| kwants.first()) {
                 let member_ids: Vec<String> = kwants.iter().map(|k| k.id.clone()).collect();
                 let default_team = NewTeam {
@@ -188,7 +202,7 @@ impl Database {
                     workspace_path: None,
                     repo_url: None,
                 };
-                self.create_team(&default_team).await?;
+                self.create_team(&space, &default_team).await?;
             }
         }
 
@@ -197,12 +211,12 @@ impl Database {
 
 
     // Kwants CRUD
-    pub async fn create_kwant(&self, input: &NewKwant) -> Result<Kwant, DbError> {
+    pub async fn create_kwant(&self, space: &SpaceId, input: &NewKwant) -> Result<Kwant, DbError> {
         let id = Uuid::new_v4().to_string();
         sqlx::query(
             r#"
-            INSERT INTO kwants (id, name, title, persona_prompt, soul, avatar_sprite, driver_type, preferred_model)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO kwants (id, name, title, persona_prompt, soul, avatar_sprite, driver_type, preferred_model, space_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
@@ -213,6 +227,7 @@ impl Database {
         .bind(&input.avatar_sprite)
         .bind(&input.driver_type)
         .bind(&input.preferred_model)
+        .bind(space.as_str())
         .execute(&self.pool)
         .await?;
 
@@ -221,8 +236,10 @@ impl Database {
             .ok_or_else(|| DbError::Sqlx(sqlx::Error::RowNotFound))
     }
 
-    pub async fn list_kwants(&self) -> Result<Vec<Kwant>, DbError> {
-        let rows = sqlx::query_as::<_, Kwant>("SELECT * FROM kwants ORDER BY created_at ASC")
+    /// The space's kwants, oldest first.
+    pub async fn list_kwants(&self, space: &SpaceId) -> Result<Vec<Kwant>, DbError> {
+        let rows = sqlx::query_as::<_, Kwant>("SELECT * FROM kwants WHERE space_id = ? ORDER BY created_at ASC")
+            .bind(space.as_str())
             .fetch_all(&self.pool)
             .await?;
         Ok(rows)
@@ -266,14 +283,20 @@ impl Database {
     }
 
     // Channels CRUD
-    pub async fn create_channel(&self, input: &NewChannel) -> Result<Channel, DbError> {
+    /// Fails with [`DbError::OtherSpace`] when the lead or a member is another space's kwant,
+    /// and [`DbError::Conflict`] for a second #general in the space.
+    pub async fn create_channel(&self, space: &SpaceId, input: &NewChannel) -> Result<Channel, DbError> {
         let id = Uuid::new_v4().to_string();
         let members_json = serde_json::to_string(&input.member_kwants)?;
+        self.check_members(space, &input.lead_kwant_id, &input.member_kwants).await?;
+        if input.name == "general" && self.general_channel(space).await?.is_some() {
+            return Err(DbError::Conflict("this space already has a #general".into()));
+        }
 
         sqlx::query(
             r#"
-            INSERT INTO channels (id, name, description, lead_kwant_id, member_kwants, routing_mode)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO channels (id, name, description, lead_kwant_id, member_kwants, routing_mode, space_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
@@ -282,6 +305,7 @@ impl Database {
         .bind(&input.lead_kwant_id)
         .bind(&members_json)
         .bind(&input.routing_mode)
+        .bind(space.as_str())
         .execute(&self.pool)
         .await?;
 
@@ -290,11 +314,32 @@ impl Database {
             .ok_or_else(|| DbError::Sqlx(sqlx::Error::RowNotFound))
     }
 
-    pub async fn list_channels(&self) -> Result<Vec<Channel>, DbError> {
-        let rows = sqlx::query_as::<_, Channel>("SELECT * FROM channels ORDER BY created_at ASC")
+    pub async fn list_channels(&self, space: &SpaceId) -> Result<Vec<Channel>, DbError> {
+        let rows = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE space_id = ? ORDER BY created_at ASC")
+            .bind(space.as_str())
             .fetch_all(&self.pool)
             .await?;
         Ok(rows)
+    }
+
+    /// The space's #general (the oldest, if an old database has several).
+    pub async fn general_channel(&self, space: &SpaceId) -> Result<Option<Channel>, DbError> {
+        Ok(sqlx::query_as::<_, Channel>(
+            "SELECT * FROM channels WHERE space_id = ? AND name = 'general' ORDER BY created_at ASC, rowid ASC LIMIT 1",
+        )
+        .bind(space.as_str())
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// Refuses a lead or member list that names another space's kwant (or no kwant at all).
+    async fn check_members(&self, space: &SpaceId, lead: &str, members: &[String]) -> Result<(), DbError> {
+        let ids: Vec<&str> = std::iter::once(lead).chain(members.iter().map(String::as_str)).collect();
+        if self.kwants_in_space(space, &ids).await? {
+            Ok(())
+        } else {
+            Err(DbError::OtherSpace("every lead and member must be a kwant in this space".into()))
+        }
     }
 
     pub async fn get_channel(&self, id: &str) -> Result<Option<Channel>, DbError> {
@@ -432,15 +477,17 @@ impl Database {
     }
 
     // Teams CRUD
-    pub async fn create_team(&self, input: &NewTeam) -> Result<Team, DbError> {
+    /// Fails with [`DbError::OtherSpace`] when the lead or a member is another space's kwant.
+    pub async fn create_team(&self, space: &SpaceId, input: &NewTeam) -> Result<Team, DbError> {
         let id = Uuid::new_v4().to_string();
         let icon = input.icon.as_deref().unwrap_or("users");
         let members_json = serde_json::to_string(&input.member_kwants)?;
+        self.check_members(space, &input.lead_kwant_id, &input.member_kwants).await?;
 
         sqlx::query(
             r#"
-            INSERT INTO teams (id, name, description, icon, lead_kwant_id, member_kwants, workspace_path, repo_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO teams (id, name, description, icon, lead_kwant_id, member_kwants, workspace_path, repo_url, space_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
@@ -451,12 +498,13 @@ impl Database {
         .bind(&members_json)
         .bind(&input.workspace_path)
         .bind(&input.repo_url)
+        .bind(space.as_str())
         .execute(&self.pool)
         .await?;
 
         // Auto-create a team channel team-{name} if it doesn't already exist
         let channel_name = format!("team-{}", input.name);
-        let channels = self.list_channels().await?;
+        let channels = self.list_channels(space).await?;
         if !channels.iter().any(|c| c.name == channel_name) {
             let chan = NewChannel {
                 name: channel_name,
@@ -465,7 +513,7 @@ impl Database {
                 member_kwants: input.member_kwants.clone(),
                 routing_mode: "auto".into(),
             };
-            self.create_channel(&chan).await?;
+            self.create_channel(space, &chan).await?;
         }
 
         self.get_team(&id)
@@ -473,8 +521,9 @@ impl Database {
             .ok_or_else(|| DbError::Sqlx(sqlx::Error::RowNotFound))
     }
 
-    pub async fn list_teams(&self) -> Result<Vec<Team>, DbError> {
-        let rows = sqlx::query_as::<_, Team>("SELECT * FROM teams ORDER BY created_at ASC")
+    pub async fn list_teams(&self, space: &SpaceId) -> Result<Vec<Team>, DbError> {
+        let rows = sqlx::query_as::<_, Team>("SELECT * FROM teams WHERE space_id = ? ORDER BY created_at ASC")
+            .bind(space.as_str())
             .fetch_all(&self.pool)
             .await?;
         Ok(rows)
@@ -488,17 +537,23 @@ impl Database {
         Ok(row)
     }
 
-    pub async fn get_team_by_name(&self, name: &str) -> Result<Option<Team>, DbError> {
-        let row = sqlx::query_as::<_, Team>("SELECT * FROM teams WHERE name = ?")
+    pub async fn get_team_by_name(&self, space: &SpaceId, name: &str) -> Result<Option<Team>, DbError> {
+        let row = sqlx::query_as::<_, Team>("SELECT * FROM teams WHERE space_id = ? AND name = ?")
+            .bind(space.as_str())
             .bind(name)
             .fetch_optional(&self.pool)
             .await?;
         Ok(row)
     }
 
+    /// Fails with [`DbError::OtherSpace`] when the lead or a member is another space's kwant.
     pub async fn update_team(&self, id: &str, input: &NewTeam) -> Result<Option<Team>, DbError> {
         let icon = input.icon.as_deref().unwrap_or("users");
         let members_json = serde_json::to_string(&input.member_kwants)?;
+        let Some(space) = self.space_of_team(id).await? else {
+            return Ok(None);
+        };
+        self.check_members(&space, &input.lead_kwant_id, &input.member_kwants).await?;
 
         let res = sqlx::query(
             r#"
@@ -524,11 +579,12 @@ impl Database {
 
         // Also update corresponding team channel if it exists
         let channel_name = format!("team-{}", input.name);
-        let _ = sqlx::query("UPDATE channels SET description = ?, lead_kwant_id = ?, member_kwants = ? WHERE name = ?")
+        let _ = sqlx::query("UPDATE channels SET description = ?, lead_kwant_id = ?, member_kwants = ? WHERE name = ? AND space_id = ?")
             .bind(&input.description)
             .bind(&input.lead_kwant_id)
             .bind(&members_json)
             .bind(&channel_name)
+            .bind(space.as_str())
             .execute(&self.pool)
             .await;
 
@@ -544,8 +600,9 @@ impl Database {
     }
 
     // MCP servers
-    pub async fn list_mcp_servers(&self) -> Result<Vec<McpServer>, DbError> {
-        let rows = sqlx::query_as::<_, McpServerRow>("SELECT * FROM mcp_servers ORDER BY name ASC")
+    pub async fn list_mcp_servers(&self, space: &SpaceId) -> Result<Vec<McpServer>, DbError> {
+        let rows = sqlx::query_as::<_, McpServerRow>("SELECT * FROM mcp_servers WHERE space_id = ? ORDER BY name ASC")
+            .bind(space.as_str())
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().map(McpServer::from_row).collect())
@@ -560,11 +617,11 @@ impl Database {
     }
 
     /// Inserts `server` with a fresh id (any id passed in is ignored).
-    pub async fn create_mcp_server(&self, server: &McpServer) -> Result<McpServer, DbError> {
+    pub async fn create_mcp_server(&self, space: &SpaceId, server: &McpServer) -> Result<McpServer, DbError> {
         let id = Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO mcp_servers (id, name, transport, command, args, url, env, headers, enabled, timeout_secs) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO mcp_servers (id, name, transport, command, args, url, env, headers, enabled, timeout_secs, space_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&server.name)
@@ -576,6 +633,7 @@ impl Database {
         .bind(serde_json::to_string(&server.headers)?)
         .bind(server.enabled)
         .bind(server.timeout_secs)
+        .bind(space.as_str())
         .execute(&self.pool)
         .await?;
         self.get_mcp_server(&id)
@@ -624,11 +682,11 @@ impl Database {
         Ok(res.rows_affected() > 0)
     }
 
-    /// The servers a kwant may use, enabled or not: every server it hasn't opted out of.
+    /// The servers a kwant may use, enabled or not: every server in its space it hasn't opted out of.
     pub async fn get_kwant_mcp_server_ids(&self, kwant_id: &str) -> Result<Vec<String>, DbError> {
         let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT s.id FROM mcp_servers s WHERE NOT EXISTS \
-             (SELECT 1 FROM kwant_mcp_disabled d WHERE d.kwant_id = ? AND d.server_id = s.id) ORDER BY s.name ASC",
+            "SELECT s.id FROM mcp_servers s WHERE s.space_id = (SELECT space_id FROM kwants WHERE id = ?1) AND NOT EXISTS \
+             (SELECT 1 FROM kwant_mcp_disabled d WHERE d.kwant_id = ?1 AND d.server_id = s.id) ORDER BY s.name ASC",
         )
         .bind(kwant_id)
         .fetch_all(&self.pool)
@@ -636,15 +694,19 @@ impl Database {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
-    /// Makes `server_ids` the kwant's servers: every other server is opted out, so ones added later
-    /// start on. Callers validate that every id exists.
+    /// Makes `server_ids` the kwant's servers: every other server in its space is opted out, so
+    /// ones added later start on. Callers validate that every id is a server in the kwant's space.
     pub async fn set_kwant_mcp_servers(&self, kwant_id: &str, server_ids: &[String]) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM kwant_mcp_disabled WHERE kwant_id = ?")
             .bind(kwant_id)
             .execute(&mut *tx)
             .await?;
-        let all: Vec<(String,)> = sqlx::query_as("SELECT id FROM mcp_servers").fetch_all(&mut *tx).await?;
+        let all: Vec<(String,)> =
+            sqlx::query_as("SELECT id FROM mcp_servers WHERE space_id = (SELECT space_id FROM kwants WHERE id = ?)")
+                .bind(kwant_id)
+                .fetch_all(&mut *tx)
+                .await?;
         for (server_id,) in all.into_iter().filter(|(id,)| !server_ids.contains(id)) {
             sqlx::query("INSERT OR IGNORE INTO kwant_mcp_disabled (kwant_id, server_id) VALUES (?, ?)")
                 .bind(kwant_id)
@@ -656,11 +718,11 @@ impl Database {
         Ok(())
     }
 
-    /// The enabled servers the kwant hasn't opted out of: what it may use on its next turn.
+    /// The enabled servers in the kwant's space it hasn't opted out of: what it may use on its next turn.
     pub async fn list_active_mcp_servers_for_kwant(&self, kwant_id: &str) -> Result<Vec<McpServer>, DbError> {
         let rows = sqlx::query_as::<_, McpServerRow>(
-            "SELECT s.* FROM mcp_servers s WHERE s.enabled = 1 AND NOT EXISTS \
-             (SELECT 1 FROM kwant_mcp_disabled d WHERE d.kwant_id = ? AND d.server_id = s.id) ORDER BY s.name ASC",
+            "SELECT s.* FROM mcp_servers s WHERE s.enabled = 1 AND s.space_id = (SELECT space_id FROM kwants WHERE id = ?1) \
+             AND NOT EXISTS (SELECT 1 FROM kwant_mcp_disabled d WHERE d.kwant_id = ?1 AND d.server_id = s.id) ORDER BY s.name ASC",
         )
         .bind(kwant_id)
         .fetch_all(&self.pool)
@@ -668,14 +730,16 @@ impl Database {
         Ok(rows.into_iter().map(McpServer::from_row).collect())
     }
 
-    /// Opt-outs by server: `server_id -> kwant ids that have it off`. Only existing kwants are listed.
+    /// Opt-outs by server: `server_id -> kwant ids that have it off`. Only the space's kwants are listed.
     pub async fn list_mcp_kwant_opt_outs(
         &self,
+        space: &SpaceId,
     ) -> Result<std::collections::HashMap<String, Vec<String>>, DbError> {
         let rows: Vec<(String, String)> = sqlx::query_as(
             "SELECT d.server_id, d.kwant_id FROM kwant_mcp_disabled d JOIN kwants k ON k.id = d.kwant_id \
-             ORDER BY k.name ASC",
+             WHERE k.space_id = ? ORDER BY k.name ASC",
         )
+        .bind(space.as_str())
         .fetch_all(&self.pool)
         .await?;
         let mut map = std::collections::HashMap::<String, Vec<String>>::new();

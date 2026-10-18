@@ -188,7 +188,7 @@ async fn sign_in_flow_end_to_end() {
     assert!(!format!("{token:?}").contains(&token.access_token));
 
     // Turns get the Bearer header; the claude CLI config carries it in its private file
-    let kwant = e.state.db.list_kwants().await.unwrap().into_iter().next().unwrap();
+    let kwant = e.state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap().into_iter().next().unwrap();
     e.state.db.set_kwant_mcp_servers(&kwant.id, std::slice::from_ref(&id)).await.unwrap();
     let (ctx, turn) = mcp_runtime::prepare_turn(&e.state, &kwant, None).await.unwrap();
     let bearer = format!("Bearer {}", token.access_token);
@@ -232,7 +232,7 @@ async fn short_lived_tokens_are_refreshed_before_use() {
     assert_ne!(first.refresh_token, second.refresh_token, "rotated refresh token is stored");
 
     // Concurrent turns refresh once each in turn, never with a spent refresh token
-    let kwant = e.state.db.list_kwants().await.unwrap().into_iter().next().unwrap();
+    let kwant = e.state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap().into_iter().next().unwrap();
     e.state.db.set_kwant_mcp_servers(&kwant.id, std::slice::from_ref(&id)).await.unwrap();
     let (a, b) = tokio::join!(mcp_runtime::prepare_turn(&e.state, &kwant, None), mcp_runtime::prepare_turn(&e.state, &kwant, None));
     for (ctx, _) in [a.unwrap(), b.unwrap()] {

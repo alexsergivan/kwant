@@ -1,5 +1,6 @@
-//! Spaces, step S0: the `spaces` table and a `space_id` on every top-level row, with everything
-//! that exists today in the Default space. Nothing reads `space_id` yet, so behaviour is unchanged.
+//! Spaces: the `spaces` table and a `space_id` on every top-level row (S0), and the lookups that
+//! keep each space to itself (S1). Lists and lookups that could reach into another space take a
+//! required [`SpaceId`], so a caller that hasn't decided its space doesn't compile.
 //!
 //! The migration runs once, gated on `PRAGMA user_version`. It first writes a full copy of the
 //! database to `<data_dir>/backups/` and does nothing else if that fails. The schema change then
@@ -9,12 +10,76 @@
 //! Default space exists: its inserts get the column default and its queries ignore the column.
 
 use super::{Database, DbError};
-use sqlx::{Connection, SqliteConnection};
+use serde::{Deserialize, Serialize};
+use sqlx::{Connection, FromRow, SqliteConnection};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// The space every row created before spaces belongs to.
 pub const DEFAULT_SPACE_ID: &str = "spc_default";
+
+/// Where a space keeps its files (team work folders, sandboxes). The Default space keeps the
+/// data dir itself, so existing folders stay where they are; others get `spaces/<id>`, with
+/// anything but ASCII letters, digits, `_` and `-` in the id replaced.
+pub fn space_data_dir(data_dir: &std::path::Path, space: &SpaceId) -> std::path::PathBuf {
+    if space.is_default() {
+        return data_dir.to_path_buf();
+    }
+    let safe: String = space
+        .as_str()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+    data_dir.join("spaces").join(safe)
+}
+
+/// The id of a space. Required by every list or lookup that could otherwise return rows from
+/// another space; build one from a row you already have (`kwant.space_id`, …) or, for requests
+/// that don't name a space yet, with [`SpaceId::default_space`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SpaceId(String);
+
+impl SpaceId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// The Default space, which holds everything from before spaces.
+    pub fn default_space() -> Self {
+        Self(DEFAULT_SPACE_ID.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.0 == DEFAULT_SPACE_ID
+    }
+}
+
+impl std::fmt::Display for SpaceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Serde default for the `space_id` field of rows read from older JSON.
+pub fn default_space_id() -> String {
+    DEFAULT_SPACE_ID.to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, PartialEq)]
+pub struct Space {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub color: Option<String>,
+    pub sort: i64,
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
 
 /// `PRAGMA user_version` once the spaces schema is in place.
 pub const SPACES_SCHEMA_VERSION: i64 = 1;
@@ -179,7 +244,29 @@ impl Database {
             .await?;
         restrict(&partial, 0o600)?;
         std::fs::rename(&partial, &path)?;
+        remove_older_pre_spaces_backups(&dir, &path);
         Ok(path)
+    }
+}
+
+/// Removes every other `kwnt-pre-spaces-*` file once a new backup is complete. Backups are only
+/// written while the database is still before spaces, so an older one is from a start whose
+/// migration failed and is superseded by the new copy; leftover `.partial` files are cut-off
+/// copies. Without this every refused restart would leave another full copy on disk. An older
+/// backup is not reused instead: the previous release may have written to the database since.
+fn remove_older_pre_spaces_backups(dir: &Path, keep: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ours = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("kwnt-pre-spaces-") && (n.ends_with(".db") || n.ends_with(".db.partial")));
+        if ours && path != keep {
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::warn!(file = %path.display(), error = %e, "could not remove an older pre-spaces backup");
+            }
+        }
     }
 }
 
@@ -306,4 +393,147 @@ async fn foreign_key_violations(conn: &mut SqliteConnection) -> Result<HashMap<(
         *counts.entry((table, parent)).or_insert(0) += 1;
     }
     Ok(counts)
+}
+
+/// What [`Database::create_space`] needs. There's no API for it before S2; tests and the
+/// later `/api/spaces` call it.
+#[derive(Debug, Clone)]
+pub struct NewSpace {
+    pub name: String,
+    pub icon: String,
+    pub color: Option<String>,
+    /// This machine's switch in the new space, for every engine.
+    pub this_machine_enabled: bool,
+}
+
+impl Database {
+    /// Fails startup when the spaces migration hasn't run: S1 queries need `space_id`.
+    pub(super) async fn require_spaces_schema(&self, migration: &SpacesMigration) -> Result<(), DbError> {
+        if self.schema_version().await? >= SPACES_SCHEMA_VERSION {
+            return Ok(());
+        }
+        let why = match migration {
+            SpacesMigration::Skipped { reason } => reason.clone(),
+            _ => "unknown".into(),
+        };
+        Err(DbError::Migration(format!(
+            "kwnt can't start: the database is still on the schema from before spaces, and this \
+             version needs spaces ({why}). Nothing was changed. Fix the cause and start kwnt again, \
+             or run the previous kwnt release, which still works on this database."
+        )))
+    }
+
+    /// One #general per space, as a unique index. A database that already has two channels called
+    /// "general" in one space keeps working without the index (the old app never stopped a user
+    /// creating a second one); [`Database::create_channel_in`] still refuses new duplicates.
+    /// Returns whether the index is in place.
+    pub(super) async fn ensure_one_general(&self) -> Result<bool, DbError> {
+        let dupes: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT space_id, COUNT(*) FROM channels WHERE name = 'general' GROUP BY space_id HAVING COUNT(*) > 1",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        if !dupes.is_empty() {
+            tracing::warn!(
+                spaces = ?dupes,
+                "Several #general channels in one space; not adding the one-#general rule until they're renamed"
+            );
+            return Ok(false);
+        }
+        sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS channels_one_general ON channels (space_id) WHERE name = 'general'")
+            .execute(&self.pool)
+            .await?;
+        Ok(true)
+    }
+
+    /// A new, empty space with its own This machine row per engine (the space's default for
+    /// each engine). Its #general and bots come with S2's create flow.
+    pub async fn create_space(&self, input: &NewSpace) -> Result<Space, DbError> {
+        let id = SpaceId::new(format!("spc_{}", uuid::Uuid::new_v4().simple()));
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("INSERT INTO spaces (id, name, icon, color, sort) VALUES (?, ?, ?, ?, (SELECT IFNULL(MAX(sort), 0) + 1 FROM spaces))")
+            .bind(id.as_str())
+            .bind(input.name.trim())
+            .bind(&input.icon)
+            .bind(&input.color)
+            .execute(&mut *tx)
+            .await?;
+        for engine in super::profiles::PROFILE_ENGINES {
+            sqlx::query(
+                "INSERT INTO llm_profiles (id, engine, name, kind, home_dir, priority, enabled, is_default, space_id)
+                 VALUES (?, ?, 'This machine', 'system', NULL, 0, ?, 1, ?)",
+            )
+            .bind(super::profiles::system_profile_id_in(&id, engine))
+            .bind(engine)
+            .bind(input.this_machine_enabled)
+            .bind(id.as_str())
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        self.get_space(&id).await?.ok_or(DbError::Sqlx(sqlx::Error::RowNotFound))
+    }
+
+    pub async fn get_space(&self, id: &SpaceId) -> Result<Option<Space>, DbError> {
+        Ok(sqlx::query_as::<_, Space>("SELECT * FROM spaces WHERE id = ?")
+            .bind(id.as_str())
+            .fetch_optional(&self.pool)
+            .await?)
+    }
+
+    pub async fn list_spaces(&self) -> Result<Vec<Space>, DbError> {
+        Ok(sqlx::query_as::<_, Space>("SELECT * FROM spaces ORDER BY sort, created_at, id")
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    async fn space_of(&self, sql: &str, id: &str) -> Result<Option<SpaceId>, DbError> {
+        let row: Option<(String,)> = sqlx::query_as(sql).bind(id).fetch_optional(&self.pool).await?;
+        Ok(row.map(|(s,)| SpaceId(s)))
+    }
+
+    pub async fn space_of_kwant(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT space_id FROM kwants WHERE id = ?", id).await
+    }
+
+    pub async fn space_of_channel(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT space_id FROM channels WHERE id = ?", id).await
+    }
+
+    pub async fn space_of_team(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT space_id FROM teams WHERE id = ?", id).await
+    }
+
+    pub async fn space_of_profile(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT space_id FROM llm_profiles WHERE id = ?", id).await
+    }
+
+    pub async fn space_of_mcp_server(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT space_id FROM mcp_servers WHERE id = ?", id).await
+    }
+
+    /// The space of whatever an event or chat id names: a channel, a kwant (its direct chat),
+    /// a thread (its kwant's space) or a team.
+    pub async fn space_of_context(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of(
+            "SELECT space_id FROM channels WHERE id = ?1
+             UNION ALL SELECT space_id FROM kwants WHERE id = ?1
+             UNION ALL SELECT k.space_id FROM threads t JOIN kwants k ON k.id = t.kwant_id WHERE t.id = ?1
+             UNION ALL SELECT space_id FROM teams WHERE id = ?1
+             LIMIT 1",
+            id,
+        )
+        .await
+    }
+
+    /// Whether every one of `kwant_ids` is a kwant in `space`. Used before a write links kwants
+    /// to a channel, team or routine, so nothing ever mixes two spaces.
+    pub async fn kwants_in_space(&self, space: &SpaceId, kwant_ids: &[&str]) -> Result<bool, DbError> {
+        for id in kwant_ids {
+            if self.space_of_kwant(id).await?.as_ref() != Some(space) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
 }

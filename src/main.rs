@@ -260,7 +260,7 @@ fn print_status(config: &Config) {
 
 async fn print_agents(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::init(&config.data_dir).await?;
-    let kwants = db.list_kwants().await?;
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await?;
     println!(
         "{:<16} {:<32} {:<8} MODEL",
         "NAME", "TITLE", "DRIVER"
@@ -280,7 +280,7 @@ async fn print_agents(config: &Config) -> Result<(), Box<dyn std::error::Error>>
 
 async fn print_teams(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::init(&config.data_dir).await?;
-    let teams = db.list_teams().await?;
+    let teams = db.list_teams(&kwnt::db::spaces::SpaceId::default_space()).await?;
     println!("{:<24} {:<8} WORKSPACE", "TEAM", "MEMBERS");
     if teams.is_empty() {
         println!("(no teams)");
@@ -298,7 +298,7 @@ async fn print_teams(config: &Config) -> Result<(), Box<dyn std::error::Error>> 
 
 async fn print_channels(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let db = Database::init(&config.data_dir).await?;
-    let channels = db.list_channels().await?;
+    let channels = db.list_channels(&kwnt::db::spaces::SpaceId::default_space()).await?;
     println!("{:<24} {:<10} DESCRIPTION", "CHANNEL", "ROUTING");
     if channels.is_empty() {
         println!("(no channels)");

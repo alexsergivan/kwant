@@ -1,6 +1,7 @@
 //! LLM profiles: several accounts per engine, which kwants are bound to and fail over between.
 
 use super::models::*;
+use super::spaces::SpaceId;
 use super::{Database, DbError};
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
@@ -14,8 +15,17 @@ pub fn system_profile_id(engine: &str) -> String {
     format!("prf_system_{engine}")
 }
 
+/// Id of an engine's This machine profile in a space. The Default space keeps the old ids.
+pub fn system_profile_id_in(space: &SpaceId, engine: &str) -> String {
+    if space.is_default() {
+        system_profile_id(engine)
+    } else {
+        format!("prf_system_{engine}_{space}")
+    }
+}
+
 const PROFILE_COLUMNS: &str =
-    "id, engine, name, kind, home_dir, priority, enabled, is_default, created_at";
+    "id, engine, name, kind, home_dir, priority, enabled, is_default, created_at, space_id";
 
 impl Database {
     /// Adds the kwant binding columns and one system profile per engine. Existing setups end up
@@ -44,11 +54,12 @@ impl Database {
         Ok(())
     }
 
-    /// All profiles, an engine's default first and then by priority.
-    pub async fn list_profiles(&self) -> Result<Vec<LlmProfile>, DbError> {
+    /// The space's profiles, an engine's default first and then by priority.
+    pub async fn list_profiles(&self, space: &SpaceId) -> Result<Vec<LlmProfile>, DbError> {
         let rows = sqlx::query_as::<_, LlmProfile>(&format!(
-            "SELECT {PROFILE_COLUMNS} FROM llm_profiles ORDER BY engine, is_default DESC, priority, created_at, id"
+            "SELECT {PROFILE_COLUMNS} FROM llm_profiles WHERE space_id = ? ORDER BY engine, is_default DESC, priority, created_at, id"
         ))
+        .bind(space.as_str())
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
@@ -65,18 +76,19 @@ impl Database {
     }
 
     /// Fails with a unique-constraint error on a duplicate name or home dir.
-    pub async fn create_profile(&self, input: &NewLlmProfile) -> Result<LlmProfile, DbError> {
+    pub async fn create_profile(&self, space: &SpaceId, input: &NewLlmProfile) -> Result<LlmProfile, DbError> {
         let id = format!("prf_{}", Uuid::new_v4().simple());
         let mut tx = self.pool.begin().await?;
         if input.is_default {
-            sqlx::query("UPDATE llm_profiles SET is_default = 0 WHERE engine = ?")
+            sqlx::query("UPDATE llm_profiles SET is_default = 0 WHERE engine = ? AND space_id = ?")
                 .bind(&input.engine)
+                .bind(space.as_str())
                 .execute(&mut *tx)
                 .await?;
         }
         sqlx::query(
-            "INSERT INTO llm_profiles (id, engine, name, kind, home_dir, priority, enabled, is_default)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO llm_profiles (id, engine, name, kind, home_dir, priority, enabled, is_default, space_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&input.engine)
@@ -86,6 +98,7 @@ impl Database {
         .bind(input.priority)
         .bind(input.enabled)
         .bind(input.is_default)
+        .bind(space.as_str())
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -104,8 +117,9 @@ impl Database {
         };
         let mut tx = self.pool.begin().await?;
         if patch.is_default == Some(true) && !existing.is_default {
-            sqlx::query("UPDATE llm_profiles SET is_default = 0 WHERE engine = ?")
+            sqlx::query("UPDATE llm_profiles SET is_default = 0 WHERE engine = ? AND space_id = ?")
                 .bind(&existing.engine)
+                .bind(&existing.space_id)
                 .execute(&mut *tx)
                 .await?;
             sqlx::query("UPDATE llm_profiles SET is_default = 1 WHERE id = ?")
@@ -125,7 +139,7 @@ impl Database {
     }
 
     /// Deletes a profile, its key and state. Kwants bound to it go back to the engine default,
-    /// and a deleted default hands that role to the system profile. Never touches the home dir.
+    /// and a deleted default hands that role to the space's system profile. Never touches the home dir.
     pub async fn delete_profile(&self, id: &str) -> Result<bool, DbError> {
         let Some(existing) = self.get_profile(id).await? else {
             return Ok(false);
@@ -141,7 +155,7 @@ impl Database {
         }
         if existing.is_default {
             sqlx::query("UPDATE llm_profiles SET is_default = 1 WHERE id = ?")
-                .bind(system_profile_id(&existing.engine))
+                .bind(system_profile_id_in(&SpaceId::new(&existing.space_id), &existing.engine))
                 .execute(&mut *tx)
                 .await?;
         }
@@ -243,21 +257,30 @@ impl Database {
 
     pub async fn list_kwant_bindings(
         &self,
+        space: &SpaceId,
     ) -> Result<HashMap<String, (Option<String>, bool)>, DbError> {
         let rows: Vec<(String, Option<String>, bool)> =
-            sqlx::query_as("SELECT id, profile_id, profile_failover FROM kwants")
+            sqlx::query_as("SELECT id, profile_id, profile_failover FROM kwants WHERE space_id = ?")
+                .bind(space.as_str())
                 .fetch_all(&self.pool)
                 .await?;
         Ok(rows.into_iter().map(|(id, p, f)| (id, (p, f))).collect())
     }
 
     /// `profile_id`: `None` leaves it, `Some(None)` clears it. `failover`: `None` leaves it.
+    /// Fails with [`DbError::OtherSpace`] for a profile outside the kwant's space.
     pub async fn set_kwant_binding(
         &self,
         kwant_id: &str,
         profile_id: Option<Option<&str>>,
         failover: Option<bool>,
     ) -> Result<(), DbError> {
+        if let Some(Some(profile)) = profile_id {
+            let kwant_space = self.space_of_kwant(kwant_id).await?;
+            if kwant_space.is_none() || self.space_of_profile(profile).await? != kwant_space {
+                return Err(DbError::OtherSpace("that account belongs to another space".into()));
+            }
+        }
         if let Some(profile_id) = profile_id {
             sqlx::query("UPDATE kwants SET profile_id = ? WHERE id = ?")
                 .bind(profile_id)
@@ -275,9 +298,9 @@ impl Database {
         Ok(())
     }
 
-    pub async fn kwant_views(&self) -> Result<Vec<KwantView>, DbError> {
-        let kwants = self.list_kwants().await?;
-        let mut bindings = self.list_kwant_bindings().await?;
+    pub async fn kwant_views(&self, space: &SpaceId) -> Result<Vec<KwantView>, DbError> {
+        let kwants = self.list_kwants(space).await?;
+        let mut bindings = self.list_kwant_bindings(space).await?;
         Ok(kwants
             .into_iter()
             .map(|kwant| {

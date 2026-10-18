@@ -265,6 +265,7 @@ fn turn(mcp: Option<McpTurnContext>) -> TurnInput {
         browser_api_url: None,
         thread_id: "t1".into(),
         kwant: Kwant {
+            space_id: kwnt::db::spaces::DEFAULT_SPACE_ID.into(),
             id: "k1".into(),
             name: "Ada".into(),
             title: "Lead".into(),

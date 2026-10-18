@@ -93,7 +93,7 @@ async fn test_teams_api_endpoints() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // 3. POST /api/teams
-    let kwants = db.list_kwants().await.unwrap();
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let new_team_payload = json!({
         "name": "qa-squad",
         "description": "Quality assurance squad",
@@ -370,9 +370,9 @@ async fn test_sandbox_password_vault_api() {
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
-    let kwants = db.list_kwants().await.unwrap();
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let team = db
-        .create_team(&kwnt::db::models::NewTeam {
+        .create_team(&kwnt::db::spaces::SpaceId::default_space(), &kwnt::db::models::NewTeam {
             name: "test-team-vault".into(),
             description: Some("Team for vault testing".into()),
             icon: None,
@@ -706,7 +706,7 @@ async fn test_channel_sandbox_target_resolution() {
     let router = LayaRouter::new(config.laya_url.clone());
     let state = AppState::new(config, db.clone(), tools, broker, router);
 
-    let channels = db.list_channels().await.unwrap();
+    let channels = db.list_channels(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let general_channel = channels.iter().find(|c| c.name == "general").expect("Seeded general channel");
 
     let resolved = resolve_sandbox_target_info(&state, &general_channel.id).await;

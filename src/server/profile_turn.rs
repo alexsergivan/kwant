@@ -3,6 +3,7 @@
 
 use super::AppState;
 use crate::db::models::LlmProfile;
+use crate::db::spaces::SpaceId;
 use crate::drivers::engines::{EngineAccount, EngineId, EngineReport, EngineStatus};
 use crate::drivers::{find_cli_binary, resolve_driver_for_model, ApiDriver, CliDriver, Driver};
 use std::collections::HashSet;
@@ -12,12 +13,12 @@ use crate::profiles::{
     ProviderFailure, SignInBar,
 };
 
-/// Every profile and what decides whether each can take a turn now, from the db and the
+/// The space's profiles and what decides whether each can take a turn now, from the db and the
 /// cached sign-in checks (never waits on a check). `None` when the db can't be read.
-async fn accounts(state: &AppState) -> Option<(Vec<LlmProfile>, Availability)> {
+async fn accounts(state: &AppState, space: &SpaceId) -> Option<(Vec<LlmProfile>, Availability)> {
     let db = &state.db;
     let (Ok(profiles), Ok(states), Ok(with_key)) = (
-        db.list_profiles().await,
+        db.list_profiles(space).await,
         db.list_profile_states().await,
         db.profile_ids_with_key().await,
     ) else {
@@ -32,14 +33,18 @@ async fn accounts(state: &AppState) -> Option<(Vec<LlmProfile>, Availability)> {
     Some((profiles, avail))
 }
 
-/// Profiles to try for a turn on `engine`, in order. Empty when the model has no profiles
-/// (e.g. Ollama) or the engine has none enabled: the turn then runs as before profiles.
+/// Profiles of the kwant's space to try for a turn on `engine`, in order. Empty when the model
+/// has no profiles (e.g. Ollama) or the engine has none enabled: the turn then runs on the
+/// host, unless [`host_off`] says This machine is off in that space.
 pub async fn plan(state: &AppState, engine: Option<Engine>, kwant_id: &str) -> Vec<LlmProfile> {
     let Some(engine) = engine else {
         return Vec::new();
     };
+    let Ok(Some(space)) = state.db.space_of_kwant(kwant_id).await else {
+        return Vec::new();
+    };
     let (Some((profiles, avail)), Ok(binding)) =
-        (accounts(state).await, state.db.get_kwant_binding(kwant_id).await)
+        (accounts(state, &space).await, state.db.get_kwant_binding(kwant_id).await)
     else {
         return Vec::new();
     };
@@ -55,6 +60,19 @@ pub async fn plan(state: &AppState, engine: Option<Engine>, kwant_id: &str) -> V
     .into_iter()
     .filter(|p| profile_engine_on(state, p))
     .collect()
+}
+
+/// Engines whose This machine profile is off in `space`. A turn on one of them never falls back
+/// to the host's own login or Settings key there; it needs one of the space's own accounts.
+pub async fn host_off(state: &AppState, space: &SpaceId) -> HashSet<Engine> {
+    let Ok(profiles) = state.db.list_profiles(space).await else {
+        return HashSet::new();
+    };
+    profiles
+        .iter()
+        .filter(|p| p.kind == "system" && !p.enabled)
+        .filter_map(|p| Engine::parse(&p.engine))
+        .collect()
 }
 
 /// The engine a profile's turns run on: its family's API for a key, else its CLI. The system
@@ -142,8 +160,8 @@ fn own_accounts<'a>(
 /// would use: these engines can run even when the host's own CLI or key can't. Routing keeps
 /// the lenient bar (an unchecked profile counts) so turns right after startup, before any
 /// sign-in check, still reach a profile that is in fact signed in.
-pub async fn profile_engines(state: &AppState) -> HashSet<Engine> {
-    let Some((profiles, avail)) = accounts(state).await else {
+pub async fn profile_engines(state: &AppState, space: &SpaceId) -> HashSet<Engine> {
+    let Some((profiles, avail)) = accounts(state, space).await else {
         return HashSet::new();
     };
     [Engine::Claude, Engine::Codex, Engine::Grok]
@@ -154,7 +172,8 @@ pub async fn profile_engines(state: &AppState) -> HashSet<Engine> {
 
 /// Whether `report`'s engine is ready and the account a kwant on it uses: the first of the
 /// engine's accounts in failover order (the default first) that can take a turn, the system
-/// profile ("This machine") counting when the engine's own login is ready. Off ⇒ not ready.
+/// profile ("This machine") counting when the engine's own login is ready. Off ⇒ not ready, and
+/// This machine turned off means the host's own login doesn't count either.
 pub fn readiness(
     report: &EngineReport,
     profiles: &[LlmProfile],
@@ -169,6 +188,8 @@ pub fn readiness(
         return (host, None);
     };
     let system = |p: &&LlmProfile| p.kind == "system";
+    let host_off = profiles.iter().any(|p| system(&p) && p.engine == family.as_str() && !p.enabled);
+    let host = host && !host_off;
     let picked = preference_order(profiles, family, None)
         .into_iter()
         .filter(|p| system(p) || profile_engine(p) == Some(report.id))
@@ -178,19 +199,14 @@ pub fn readiness(
             } else {
                 avail.admits(p, now, SignInBar::SignedIn)
             }
-        })
-        .or_else(|| {
-            // This machine turned off as a profile still runs turns when nothing else does
-            host.then(|| profiles.iter().find(|p| p.engine == family.as_str() && system(p)))
-                .flatten()
         });
     let uses = picked.map(|p| EngineAccount { profile_id: p.id.clone(), label: p.name.clone() });
     (host || uses.is_some(), uses)
 }
 
-/// Fills in `ready` and `uses` on every report.
-pub async fn with_accounts(state: &AppState, mut reports: Vec<EngineReport>) -> Vec<EngineReport> {
-    let accounts = accounts(state).await;
+/// Fills in `ready` and `uses` on every report, for `space`'s accounts.
+pub async fn with_accounts(state: &AppState, space: &SpaceId, mut reports: Vec<EngineReport>) -> Vec<EngineReport> {
+    let accounts = accounts(state, space).await;
     let now = chrono::Utc::now();
     for r in &mut reports {
         let (ready, uses) = match &accounts {
@@ -212,9 +228,11 @@ pub async fn refresh_sign_ins(state: &AppState) {
     if REFRESHING.swap(true, Ordering::AcqRel) {
         return;
     }
-    if let Ok(profiles) = state.db.list_profiles().await {
-        let keyed = super::profile_routes::keyed_ids(state, &profiles).await;
-        state.profiles.statuses(&profiles, &keyed).await;
+    for space in state.db.list_spaces().await.unwrap_or_default() {
+        if let Ok(profiles) = state.db.list_profiles(&SpaceId::new(&space.id)).await {
+            let keyed = super::profile_routes::keyed_ids(state, &profiles).await;
+            state.profiles.statuses(&profiles, &keyed).await;
+        }
     }
     REFRESHING.store(false, Ordering::Release);
 }
@@ -303,6 +321,7 @@ mod tests {
             enabled: true,
             is_default: default,
             created_at: None,
+            space_id: "spc_default".into(),
         }
     }
 
@@ -435,13 +454,15 @@ mod tests {
     }
 
     #[test]
-    fn host_ready_uses_this_machine_even_when_its_profile_is_off() {
+    fn this_machine_off_is_never_a_fallback_even_when_the_host_is_ready() {
         let r = report(EngineId::Claude, true, EngineStatus::Ready);
         let mut profiles = oleks();
         profiles[0].enabled = false;
+        assert_eq!(readiness(&r, &profiles, &Availability::default(), now()), (false, None));
+        // Another account of the space still makes it ready
         assert_eq!(
-            uses(readiness(&r, &profiles, &Availability::default(), now())),
-            (true, Some("This machine".into()))
+            uses(readiness(&r, &profiles, &signed_in(&["p_personal"]), now())),
+            (true, Some("Personal".into()))
         );
         // Ollama has no accounts: ready from its own check alone
         let o = report(EngineId::Ollama, true, EngineStatus::Ready);

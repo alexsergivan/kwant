@@ -1,6 +1,7 @@
 //! Agent continuity: pinned team/channel instructions, full-text search over messages, per-kwant
 //! memory, and routines with their run history.
 
+use super::spaces::SpaceId;
 use super::{Database, DbError};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -129,6 +130,8 @@ pub struct RoutineRow {
     pub last_run_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub last_status: Option<String>,
+    /// Its kwant's space; the channel, when set, is in the same one.
+    pub space_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
@@ -156,7 +159,7 @@ pub struct NewRoutine {
 }
 
 const ROUTINE_SELECT: &str = "SELECT r.id, r.kwant_id, r.channel_id, r.name, r.instructions, r.schedule, r.enabled, \
-     r.next_run_at, r.last_run_at, r.created_at, \
+     r.next_run_at, r.last_run_at, r.created_at, r.space_id, \
      (SELECT status FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_status \
      FROM routines r";
 
@@ -248,9 +251,11 @@ impl Database {
 
     // Search
 
-    /// Best matches first (bm25), newer first among equals. An empty result for a query with no words.
+    /// Best matches first (bm25), newer first among equals, from the space's channels, direct chats
+    /// and threads only. An empty result for a query with no words.
     pub async fn search_messages(
         &self,
+        space: &SpaceId,
         q: &str,
         filter: &SearchFilter,
     ) -> Result<Vec<SearchHit>, DbError> {
@@ -263,10 +268,16 @@ impl Database {
              snippet(messages_fts, 0, '<mark>', '</mark>', '…', 16) AS snippet, m.created_at \
              FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid \
              LEFT JOIN channels c ON c.id = m.channel_id \
+             LEFT JOIN kwants dk ON dk.id = m.direct_kwant_id \
+             LEFT JOIN threads t ON t.id = m.thread_id \
+             LEFT JOIN kwants tk ON tk.id = t.kwant_id \
              LEFT JOIN kwants k ON m.sender_role = 'kwant' AND k.name = m.sender_id \
+               AND k.space_id = COALESCE(c.space_id, dk.space_id, tk.space_id) \
              WHERE messages_fts MATCH ",
         );
         qb.push_bind(query);
+        qb.push(" AND COALESCE(c.space_id, dk.space_id, tk.space_id) = ")
+            .push_bind(space.as_str().to_string());
         if let Some(channel) = &filter.channel_id {
             qb.push(" AND m.channel_id = ").push_bind(channel.clone());
         }
@@ -391,10 +402,11 @@ impl Database {
 
     // Routines
 
-    pub async fn list_routines(&self) -> Result<Vec<RoutineRow>, DbError> {
+    pub async fn list_routines(&self, space: &SpaceId) -> Result<Vec<RoutineRow>, DbError> {
         Ok(sqlx::query_as::<_, RoutineRow>(&format!(
-            "{ROUTINE_SELECT} ORDER BY r.created_at, r.rowid"
+            "{ROUTINE_SELECT} WHERE r.space_id = ? ORDER BY r.created_at, r.rowid"
         ))
+        .bind(space.as_str())
         .fetch_all(&self.pool)
         .await?)
     }
@@ -408,11 +420,14 @@ impl Database {
         )
     }
 
+    /// The routine's space is its kwant's. Fails with [`DbError::OtherSpace`] for a channel in
+    /// another space.
     pub async fn create_routine(&self, input: &NewRoutine) -> Result<RoutineRow, DbError> {
+        let space = self.routine_space(input).await?;
         let id = Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO routines (id, kwant_id, channel_id, name, instructions, schedule, enabled, next_run_at, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO routines (id, kwant_id, channel_id, name, instructions, schedule, enabled, next_run_at, created_at, space_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&input.kwant_id)
@@ -423,6 +438,7 @@ impl Database {
         .bind(input.enabled)
         .bind(input.next_run_at)
         .bind(Utc::now())
+        .bind(space.as_str())
         .execute(&self.pool)
         .await?;
         self.get_routine(&id)
@@ -430,15 +446,28 @@ impl Database {
             .ok_or(DbError::Sqlx(sqlx::Error::RowNotFound))
     }
 
-    /// Replaces every editable field.
+    /// The kwant (and channel, when set) a routine runs as must share a space.
+    async fn routine_space(&self, input: &NewRoutine) -> Result<SpaceId, DbError> {
+        let other = || DbError::OtherSpace("the agent and channel must be in the same space".into());
+        let space = self.space_of_kwant(&input.kwant_id).await?.ok_or_else(other)?;
+        if let Some(channel) = &input.channel_id {
+            if self.space_of_channel(channel).await?.as_ref() != Some(&space) {
+                return Err(other());
+            }
+        }
+        Ok(space)
+    }
+
+    /// Replaces every editable field. The routine may move with its kwant to that kwant's space.
     pub async fn update_routine(
         &self,
         id: &str,
         input: &NewRoutine,
     ) -> Result<Option<RoutineRow>, DbError> {
+        let space = self.routine_space(input).await?;
         let res = sqlx::query(
             "UPDATE routines SET kwant_id = ?, channel_id = ?, name = ?, instructions = ?, schedule = ?, enabled = ?, \
-             next_run_at = ? WHERE id = ?",
+             next_run_at = ?, space_id = ? WHERE id = ?",
         )
         .bind(&input.kwant_id)
         .bind(&input.channel_id)
@@ -447,6 +476,7 @@ impl Database {
         .bind(&input.schedule)
         .bind(input.enabled)
         .bind(input.next_run_at)
+        .bind(space.as_str())
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -487,7 +517,7 @@ impl Database {
         Ok(res.rows_affected())
     }
 
-    /// Enabled routines due at `now`.
+    /// Enabled routines due at `now`, in every space: each one runs in its own space.
     pub async fn due_routines(&self, now: DateTime<Utc>) -> Result<Vec<RoutineRow>, DbError> {
         Ok(sqlx::query_as::<_, RoutineRow>(&format!(
             "{ROUTINE_SELECT} WHERE r.enabled = 1 AND r.next_run_at IS NOT NULL AND r.next_run_at <= ? ORDER BY r.next_run_at"

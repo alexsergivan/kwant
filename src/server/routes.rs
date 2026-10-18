@@ -2,6 +2,8 @@ use super::discussion;
 use super::AppState;
 use crate::broker::ApprovalDecision;
 use crate::db::models::*;
+use crate::db::spaces::SpaceId;
+use crate::db::DbError;
 use crate::drivers::{find_cli_binary, RoutingCandidate, RuntimeEvent, TurnInput};
 use crate::router::{parse_mentions_with_lookup, TagMention, TeamDecision};
 use axum::{
@@ -39,24 +41,44 @@ pub async fn laya_status(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.router.status())
 }
 
+/// 400 for a write that would mix spaces, 409 for a clash, 500 otherwise.
+pub(crate) fn db_status(e: &DbError) -> StatusCode {
+    match e {
+        DbError::OtherSpace(_) => StatusCode::BAD_REQUEST,
+        DbError::Conflict(_) => StatusCode::CONFLICT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// The space of a request that doesn't name one: Default, until `?space=` arrives (S2).
+pub(crate) fn request_space() -> SpaceId {
+    SpaceId::default_space()
+}
+
 pub async fn list_kwants(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<KwantView>>, StatusCode> {
     state
         .db
-        .kwant_views()
+        .kwant_views(&request_space())
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-/// Trims the name and rejects names that can't be @mentioned or clash with another kwant.
-async fn validate_kwant_name(state: &AppState, name: &mut String, own_id: Option<&str>) -> Result<(), StatusCode> {
+/// Trims the name and rejects names that can't be @mentioned or clash with another kwant in the
+/// space. Other spaces may use the same name.
+async fn validate_kwant_name(
+    state: &AppState,
+    space: &SpaceId,
+    name: &mut String,
+    own_id: Option<&str>,
+) -> Result<(), StatusCode> {
     *name = name.trim().to_string();
     if name.is_empty() || name.contains(char::is_whitespace) || name.contains('@') {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let kwants = state.db.list_kwants().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let kwants = state.db.list_kwants(space).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if kwants.iter().any(|k| Some(k.id.as_str()) != own_id && k.name.eq_ignore_ascii_case(name)) {
         return Err(StatusCode::CONFLICT);
     }
@@ -97,9 +119,10 @@ pub struct UpdateKwantRequest {
     binding: ProfileBinding,
 }
 
-/// The pinned profile must exist and be for the engine of the kwant's model.
+/// The pinned profile must exist, be in the kwant's space and be for the engine of its model.
 async fn check_binding(
     state: &AppState,
+    space: &SpaceId,
     binding: &ProfileBinding,
     preferred_model: &str,
 ) -> Result<(), StatusCode> {
@@ -112,6 +135,9 @@ async fn check_binding(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::BAD_REQUEST)?;
+    if profile.space_id != space.as_str() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let family = crate::router::parse_pin(preferred_model).family;
     match family.as_deref().and_then(crate::profiles::Engine::parse) {
         Some(engine) if engine.as_str() != profile.engine => Err(StatusCode::BAD_REQUEST),
@@ -132,7 +158,7 @@ async fn save_binding(
         .db
         .set_kwant_binding(kwant_id, profile_id, binding.profile_failover)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(|e| db_status(&e))
 }
 
 async fn kwant_view_json(state: &AppState, id: &str) -> Result<Json<KwantView>, StatusCode> {
@@ -147,11 +173,12 @@ pub async fn create_kwant(
     State(state): State<AppState>,
     Json(mut payload): Json<CreateKwantRequest>,
 ) -> Result<Json<KwantView>, StatusCode> {
-    validate_kwant_name(&state, &mut payload.base.name, None).await?;
-    check_binding(&state, &payload.binding, &payload.base.preferred_model).await?;
+    let space = request_space();
+    validate_kwant_name(&state, &space, &mut payload.base.name, None).await?;
+    check_binding(&state, &space, &payload.binding, &payload.base.preferred_model).await?;
     let kwant = state
         .db
-        .create_kwant(&payload.base)
+        .create_kwant(&space, &payload.base)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     save_binding(&state, &kwant.id, &payload.binding).await?;
@@ -163,8 +190,14 @@ pub async fn update_kwant(
     Path(id): Path<String>,
     Json(mut payload): Json<UpdateKwantRequest>,
 ) -> Result<Json<KwantView>, StatusCode> {
-    validate_kwant_name(&state, &mut payload.base.name, Some(&id)).await?;
-    check_binding(&state, &payload.binding, &payload.base.preferred_model).await?;
+    let space = state
+        .db
+        .space_of_kwant(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    validate_kwant_name(&state, &space, &mut payload.base.name, Some(&id)).await?;
+    check_binding(&state, &space, &payload.binding, &payload.base.preferred_model).await?;
     match state.db.update_kwant(&id, &payload.base).await {
         Ok(Some(_)) => {}
         Ok(None) => return Err(StatusCode::NOT_FOUND),
@@ -177,7 +210,7 @@ pub async fn update_kwant(
 pub async fn list_channels(State(state): State<AppState>) -> Result<Json<Vec<Channel>>, StatusCode> {
     state
         .db
-        .list_channels()
+        .list_channels(&request_space())
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -189,10 +222,10 @@ pub async fn create_channel(
 ) -> Result<Json<Channel>, StatusCode> {
     state
         .db
-        .create_channel(&payload)
+        .create_channel(&request_space(), &payload)
         .await
         .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(|e| db_status(&e))
 }
 
 #[derive(Debug, Deserialize)]
@@ -236,7 +269,7 @@ pub async fn list_messages(
 pub async fn list_teams(State(state): State<AppState>) -> Result<Json<Vec<Team>>, StatusCode> {
     state
         .db
-        .list_teams()
+        .list_teams(&request_space())
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -248,10 +281,10 @@ pub async fn create_team(
 ) -> Result<Json<Team>, StatusCode> {
     state
         .db
-        .create_team(&payload)
+        .create_team(&request_space(), &payload)
         .await
         .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(|e| db_status(&e))
 }
 
 pub async fn get_team(
@@ -292,7 +325,7 @@ pub async fn update_team(
             Ok(Json(team))
         }
         Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => Err(db_status(&e)),
     }
 }
 
@@ -462,7 +495,9 @@ pub(super) async fn scope_for(
     job: &super::turns::JobGuard,
     delegation_depth: i64,
 ) -> Result<TurnScope, String> {
-    let all_kwants = state.db.list_kwants().await.map_err(|_| "could not load agents".to_string())?;
+    // Teammates, the team and its folder all come from the kwant's own space
+    let space = SpaceId::new(&kwant.space_id);
+    let all_kwants = state.db.list_kwants(&space).await.map_err(|_| "could not load agents".to_string())?;
     let channel = match &channel_id {
         Some(id) => Some(
             state.db.get_channel(id).await.ok().flatten().ok_or_else(|| "the chat's channel no longer exists".to_string())?,
@@ -473,7 +508,7 @@ pub(super) async fn scope_for(
         Some(id) => Some(state.db.get_thread(id).await.ok().flatten().ok_or_else(|| "the thread no longer exists".to_string())?),
         None => None,
     };
-    let teams = state.db.list_teams().await.unwrap_or_default();
+    let teams = state.db.list_teams(&space).await.unwrap_or_default();
     let team = match (&thread, channel.as_ref().and_then(|c| c.name.strip_prefix("team-"))) {
         (Some(t), _) => t.team_id.as_ref().and_then(|id| teams.iter().find(|x| &x.id == id).cloned()),
         (None, Some(name)) => teams.iter().find(|t| t.name.eq_ignore_ascii_case(name)).cloned(),
@@ -490,8 +525,13 @@ pub(super) async fn scope_for(
     let teammates: Vec<Kwant> = member_ids.iter().filter_map(|id| all_kwants.iter().find(|k| &k.id == id).cloned()).collect();
     let workspace_dir = match &team {
         Some(t) => Some(
-            crate::tools::resolve_or_prepare_workspace(&state.config.data_dir, &t.name, t.workspace_path.as_deref(), t.repo_url.as_deref())
-                .await,
+            crate::tools::resolve_or_prepare_workspace(
+                &crate::db::spaces::space_data_dir(&state.config.data_dir, &space),
+                &t.name,
+                t.workspace_path.as_deref(),
+                t.repo_url.as_deref(),
+            )
+            .await,
         ),
         None => None,
     };
@@ -963,11 +1003,21 @@ async fn run_kwant_turn_inner(
     let cancel_token = &scope.cancel_token;
 
     {
-        let profile_engines = super::profile_turn::profile_engines(state).await;
+        let space = SpaceId::new(&target_kwant.space_id);
+        let profile_engines = super::profile_turn::profile_engines(state, &space).await;
+        let host_off = super::profile_turn::host_off(state, &space).await;
         let available_models =
-            crate::drivers::detect_available_models(&db, &state.engines, &profile_engines).await;
+            crate::drivers::detect_available_models(&db, &state.engines, &profile_engines, &host_off).await;
         if available_models.is_empty() {
-            let text = format!("⚠️ [{}] {}", target_kwant.name, crate::drivers::engines::NO_ENGINE_MESSAGE);
+            // Say why when it's this space's own switch, so nobody hunts for a broken engine
+            let text = if host_off.is_empty() {
+                format!("⚠️ [{}] {}", target_kwant.name, crate::drivers::engines::NO_ENGINE_MESSAGE)
+            } else {
+                format!(
+                    "⚠️ [{}] This machine is off in this space and no other account is on. Turn one on in Settings → Engines.",
+                    target_kwant.name
+                )
+            };
             event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
             event_broadcast.send(RuntimeEvent::TurnComplete {
                 tokens: 0,
@@ -1115,7 +1165,14 @@ async fn run_kwant_turn_inner(
         let engine = crate::profiles::Engine::parse(&target_model)
             .or_else(|| crate::profiles::Engine::from_model(&target_model));
         let candidates = super::profile_turn::plan(state, engine, &target_kwant.id).await;
-        let attempts: Vec<Option<LlmProfile>> = if candidates.is_empty() {
+        // This machine turned off in the kwant's space: no host fallback, so nothing to try
+        let host_off = match engine {
+            Some(e) => super::profile_turn::host_off(state, &SpaceId::new(&target_kwant.space_id)).await.contains(&e),
+            None => false,
+        };
+        let attempts: Vec<Option<LlmProfile>> = if candidates.is_empty() && host_off {
+            Vec::new()
+        } else if candidates.is_empty() {
             vec![None]
         } else {
             candidates.into_iter().map(Some).collect()
@@ -1192,6 +1249,21 @@ async fn run_kwant_turn_inner(
         let mut driver_result = None;
         let mut gave_up: Option<String> = None;
         let mut ran_on: Option<RanOn> = None;
+        if attempts.is_empty() {
+            let text = format!(
+                "⚠️ [{}] This machine is off in this space and no other {} account is on.",
+                target_kwant.name,
+                engine.map(|e| e.as_str()).unwrap_or("model")
+            );
+            event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
+            event_broadcast.send(RuntimeEvent::TurnComplete {
+                tokens: 0,
+                duration_ms: turn_start.elapsed().as_millis() as u64,
+                kwant_id: Some(target_kwant.id.clone()),
+                profile_id: None,
+            });
+            gave_up = Some(text);
+        }
         for (i, profile) in attempts.iter().enumerate() {
             let (driver, host_engine) = match super::profile_turn::driver_for(
                 state,
@@ -1468,6 +1540,28 @@ async fn run_kwant_turn_inner(
     }
 }
 
+/// The space a chat message belongs to: its channel's, else its direct kwant's, else its team's,
+/// else Default.
+async fn chat_space(state: &AppState, payload: &SendChatPayload) -> Result<SpaceId, DbError> {
+    let db = &state.db;
+    if let Some(id) = &payload.channel_id {
+        if let Some(space) = db.space_of_channel(id).await? {
+            return Ok(space);
+        }
+    }
+    if let Some(id) = &payload.kwant_id {
+        if let Some(space) = db.space_of_kwant(id).await? {
+            return Ok(space);
+        }
+    }
+    if let Some(id) = &payload.team_id {
+        if let Some(space) = db.space_of_team(id).await? {
+            return Ok(space);
+        }
+    }
+    Ok(request_space())
+}
+
 pub async fn send_chat(
     State(state): State<AppState>,
     Json(mut payload): Json<SendChatPayload>,
@@ -1476,15 +1570,17 @@ pub async fn send_chat(
     if let Some(thread_id) = payload.thread_id.clone() {
         return send_to_thread(state, thread_id, payload, uploads).await;
     }
+    // Everything this message can reach (mentions, teams, Laya's candidates) is in its space
+    let space = chat_space(&state, &payload).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let all_kwants = state
         .db
-        .list_kwants()
+        .list_kwants(&space)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let all_teams = state
         .db
-        .list_teams()
+        .list_teams(&space)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -1602,7 +1698,7 @@ pub async fn send_chat(
     let workspace_dir = if let Some(ref team) = active_team {
         Some(
             crate::tools::resolve_or_prepare_workspace(
-                &state.config.data_dir,
+                &crate::db::spaces::space_data_dir(&state.config.data_dir, &space),
                 &team.name,
                 team.workspace_path.as_deref(),
                 team.repo_url.as_deref(),
@@ -2309,30 +2405,32 @@ pub struct NavigatePayload {
     pub url: String,
 }
 
+/// A sandbox target by team, channel or kwant id, or by team name in the Default space. Folders
+/// are under the target's own space, so same-named teams in two spaces never share one.
 pub async fn resolve_sandbox_target_info(state: &AppState, target_id: &str) -> Option<(String, PathBuf)> {
-    if let Ok(Some(team)) = state.db.get_team(target_id).await {
+    let workspaces = |space: &str| {
+        crate::db::spaces::space_data_dir(&state.config.data_dir, &SpaceId::new(space)).join("workspaces")
+    };
+    let team_folder = |team: Team| {
         let ws = team
             .workspace_path
             .as_deref()
             .filter(|s| !s.trim().is_empty())
             .map(PathBuf::from)
-            .unwrap_or_else(|| state.config.data_dir.join("workspaces").join(&team.name));
-        Some((team.name, ws))
+            .unwrap_or_else(|| workspaces(&team.space_id).join(&team.name));
+        (team.name, ws)
+    };
+    if let Ok(Some(team)) = state.db.get_team(target_id).await {
+        Some(team_folder(team))
     } else if let Ok(Some(channel)) = state.db.get_channel(target_id).await {
         let safe_cname = channel.name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
-        let ws = state.config.data_dir.join("workspaces").join(format!("chan-{}", safe_cname));
+        let ws = workspaces(&channel.space_id).join(format!("chan-{}", safe_cname));
         Some((format!("chan-{}", safe_cname), ws))
     } else if let Ok(Some(kwant)) = state.db.get_kwant(target_id).await {
         let safe_kname = kwant.name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
-        Some((format!("bot-{}", safe_kname), state.config.data_dir.join("workspaces").join(format!("bot-{}", safe_kname))))
-    } else if let Ok(Some(team)) = state.db.get_team_by_name(target_id).await {
-        let ws = team
-            .workspace_path
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| state.config.data_dir.join("workspaces").join(&team.name));
-        Some((team.name, ws))
+        Some((format!("bot-{}", safe_kname), workspaces(&kwant.space_id).join(format!("bot-{}", safe_kname))))
+    } else if let Ok(Some(team)) = state.db.get_team_by_name(&request_space(), target_id).await {
+        Some(team_folder(team))
     } else {
         None
     }

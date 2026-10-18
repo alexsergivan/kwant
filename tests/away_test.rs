@@ -142,11 +142,11 @@ fn rfc(t: DateTime<Utc>) -> String {
 #[tokio::test]
 async fn away_lists_every_kind_filters_caps_and_marks_seen() {
     let (app, state, _tmp) = setup().await;
-    let kwants = state.db.list_kwants().await.unwrap();
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let (lead, spec) = (kwants[0].clone(), kwants[1].clone());
     let chan = state
         .db
-        .create_channel(&NewChannel {
+        .create_channel(&kwnt::db::spaces::SpaceId::default_space(), &NewChannel {
             name: "ops".into(),
             description: None,
             lead_kwant_id: lead.id.clone(),
@@ -345,7 +345,7 @@ async fn away_lists_every_kind_filters_caps_and_marks_seen() {
 #[tokio::test]
 async fn away_lists_are_capped_at_50_newest_first() {
     let (app, state, _tmp) = setup().await;
-    let kwants = state.db.list_kwants().await.unwrap();
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let (lead, spec) = (&kwants[0].id, &kwants[1].id);
     let now = Utc::now();
     let mut done = Vec::new();
@@ -412,11 +412,11 @@ async fn live_approval_link(app: &Router, state: &AppState, kwant: &kwnt::db::mo
 #[tokio::test]
 async fn live_approvals_link_to_the_chat_their_turn_runs_in() {
     let (app, state, _tmp) = setup().await;
-    let kwants = state.db.list_kwants().await.unwrap();
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let (lead, spec) = (kwants[0].clone(), kwants[1].clone());
     let echo = state
         .db
-        .create_mcp_server(&McpServer {
+        .create_mcp_server(&kwnt::db::spaces::SpaceId::default_space(), &McpServer {
             id: String::new(),
             name: "echo".into(),
             transport: "stdio".into(),
@@ -434,7 +434,7 @@ async fn live_approvals_link_to_the_chat_their_turn_runs_in() {
     state.db.set_kwant_mcp_servers(&lead.id, std::slice::from_ref(&echo.id)).await.unwrap();
     let chan = state
         .db
-        .create_channel(&NewChannel {
+        .create_channel(&kwnt::db::spaces::SpaceId::default_space(), &NewChannel {
             name: "ops".into(),
             description: None,
             lead_kwant_id: lead.id.clone(),

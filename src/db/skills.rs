@@ -2,6 +2,7 @@
 //! from something that worked (it is stored `pending`), the user reviews and enables it, and only
 //! enabled skills ever reach a prompt. A skill is text only: it has no tool list and grants nothing.
 
+use super::spaces::SpaceId;
 use super::{Database, DbError};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -39,6 +40,8 @@ pub struct Skill {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub reviewed_at: Option<DateTime<Utc>>,
+    /// Shared skills (`kwant_id` = `None`) are shared within this space only.
+    pub space_id: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -194,23 +197,30 @@ impl Database {
             .await?)
     }
 
-    /// Skills, newest first; `kwant_id` also matches the shared ones.
-    pub async fn list_skills(&self, kwant_id: Option<&str>, status: Option<&str>) -> Result<Vec<Skill>, DbError> {
+    /// The space's skills, newest first; `kwant_id` also matches the shared ones.
+    pub async fn list_skills(
+        &self,
+        space: &SpaceId,
+        kwant_id: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Vec<Skill>, DbError> {
         Ok(sqlx::query_as::<_, Skill>(
             "SELECT * FROM skills
-             WHERE (?1 IS NULL OR kwant_id = ?1 OR kwant_id IS NULL) AND (?2 IS NULL OR status = ?2)
+             WHERE space_id = ?3 AND (?1 IS NULL OR kwant_id = ?1 OR kwant_id IS NULL) AND (?2 IS NULL OR status = ?2)
              ORDER BY updated_at DESC LIMIT 500",
         )
         .bind(kwant_id)
         .bind(status)
+        .bind(space.as_str())
         .fetch_all(&self.pool)
         .await?)
     }
 
-    /// The enabled skills `kwant_id` may use: its own and the shared ones, by name.
+    /// The enabled skills `kwant_id` may use: its own and the ones shared in its space, by name.
     pub async fn enabled_skills_for(&self, kwant_id: &str) -> Result<Vec<Skill>, DbError> {
         Ok(sqlx::query_as::<_, Skill>(
-            "SELECT * FROM skills WHERE status = 'enabled' AND (kwant_id = ? OR kwant_id IS NULL) ORDER BY name",
+            "SELECT * FROM skills WHERE status = 'enabled' AND (kwant_id = ?1 OR kwant_id IS NULL)
+             AND space_id = (SELECT space_id FROM kwants WHERE id = ?1) ORDER BY name",
         )
         .bind(kwant_id)
         .fetch_all(&self.pool)
@@ -218,10 +228,11 @@ impl Database {
     }
 
     /// The live (enabled or disabled) skill called `name` for this agent, if any.
-    async fn live_skill(&self, kwant_id: Option<&str>, name: &str) -> Result<Option<Skill>, DbError> {
+    async fn live_skill(&self, space: &SpaceId, kwant_id: Option<&str>, name: &str) -> Result<Option<Skill>, DbError> {
         Ok(sqlx::query_as::<_, Skill>(
-            "SELECT * FROM skills WHERE IFNULL(kwant_id, '') = IFNULL(?, '') AND name = ? AND status IN ('enabled', 'disabled')",
+            "SELECT * FROM skills WHERE space_id = ? AND IFNULL(kwant_id, '') = IFNULL(?, '') AND name = ? AND status IN ('enabled', 'disabled')",
         )
+        .bind(space.as_str())
         .bind(kwant_id)
         .bind(name)
         .fetch_optional(&self.pool)
@@ -232,7 +243,8 @@ impl Database {
     /// revision of that skill; proposing again before review rewrites the waiting proposal.
     pub async fn propose_skill(&self, kwant_id: &str, text: SkillText) -> Result<Skill, SkillError> {
         let now = Utc::now();
-        let replaces = self.live_skill(Some(kwant_id), &text.name).await?.map(|s| s.id);
+        let space = self.space_of_kwant(kwant_id).await?.ok_or(SkillError::NotFound)?;
+        let replaces = self.live_skill(&space, Some(kwant_id), &text.name).await?.map(|s| s.id);
         let waiting = sqlx::query_as::<_, Skill>(
             "SELECT * FROM skills WHERE status = 'pending' AND kwant_id = ? AND name = ? ORDER BY created_at DESC LIMIT 1",
         )
@@ -260,8 +272,8 @@ impl Database {
         }
         let id = Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO skills (id, kwant_id, name, description, body, status, source, proposed_by, replaces_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 'pending', 'agent', ?, ?, ?, ?)",
+            "INSERT INTO skills (id, kwant_id, name, description, body, status, source, proposed_by, replaces_id, created_at, updated_at, space_id)
+             VALUES (?, ?, ?, ?, ?, 'pending', 'agent', ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(kwant_id)
@@ -272,21 +284,29 @@ impl Database {
         .bind(&replaces)
         .bind(now)
         .bind(now)
+        .bind(space.as_str())
         .execute(&self.pool)
         .await?;
         self.get_skill(&id).await?.ok_or(SkillError::NotFound)
     }
 
-    /// A skill the user wrote; it is enabled at once (the user is the reviewer).
-    pub async fn create_user_skill(&self, kwant_id: Option<&str>, text: SkillText) -> Result<Skill, SkillError> {
-        if self.live_skill(kwant_id, &text.name).await?.is_some() {
+    /// A skill the user wrote; it is enabled at once (the user is the reviewer). `kwant_id` must
+    /// be one of the space's kwants.
+    pub async fn create_user_skill(
+        &self,
+        space: &SpaceId,
+        kwant_id: Option<&str>,
+        text: SkillText,
+    ) -> Result<Skill, SkillError> {
+        self.check_skill_owner(space, kwant_id).await?;
+        if self.live_skill(space, kwant_id, &text.name).await?.is_some() {
             return Err(SkillError::Conflict(format!("a skill called {} already exists", text.name)));
         }
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         sqlx::query(
-            "INSERT INTO skills (id, kwant_id, name, description, body, status, source, created_at, updated_at, reviewed_at)
-             VALUES (?, ?, ?, ?, ?, 'enabled', 'user', ?, ?, ?)",
+            "INSERT INTO skills (id, kwant_id, name, description, body, status, source, created_at, updated_at, reviewed_at, space_id)
+             VALUES (?, ?, ?, ?, ?, 'enabled', 'user', ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(kwant_id)
@@ -296,9 +316,20 @@ impl Database {
         .bind(now)
         .bind(now)
         .bind(now)
+        .bind(space.as_str())
         .execute(&self.pool)
         .await?;
         self.get_skill(&id).await?.ok_or(SkillError::NotFound)
+    }
+
+    /// A skill's owner, when it has one, must be a kwant in the skill's space.
+    async fn check_skill_owner(&self, space: &SpaceId, kwant_id: Option<&str>) -> Result<(), SkillError> {
+        match kwant_id {
+            Some(id) if !self.kwants_in_space(space, &[id]).await? => {
+                Err(SkillError::Invalid("that agent is in another space".into()))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Enables a pending skill (with the user's edits, if any); the skill it revises is superseded.
@@ -309,6 +340,7 @@ impl Database {
         }
         let text = merged_text(&skill, edit)?;
         let kwant_id = edit.kwant_id.clone().unwrap_or(skill.kwant_id.clone());
+        self.check_skill_owner(&SpaceId::new(&skill.space_id), kwant_id.as_deref()).await?;
         let now = Utc::now();
         let mut tx = self.pool.begin().await?;
         // The revised skill steps aside; any other live skill with the target name blocks approval
@@ -320,8 +352,9 @@ impl Database {
                 .await?;
         }
         let clash: Option<(String,)> = sqlx::query_as(
-            "SELECT id FROM skills WHERE IFNULL(kwant_id, '') = IFNULL(?, '') AND name = ? AND status IN ('enabled', 'disabled') AND id != ?",
+            "SELECT id FROM skills WHERE space_id = ? AND IFNULL(kwant_id, '') = IFNULL(?, '') AND name = ? AND status IN ('enabled', 'disabled') AND id != ?",
         )
+        .bind(&skill.space_id)
         .bind(&kwant_id)
         .bind(&text.name)
         .bind(id)
@@ -376,6 +409,7 @@ impl Database {
         }
         let text = merged_text(&skill, edit)?;
         let kwant_id = edit.kwant_id.clone().unwrap_or(skill.kwant_id.clone());
+        self.check_skill_owner(&SpaceId::new(&skill.space_id), kwant_id.as_deref()).await?;
         let res = sqlx::query("UPDATE skills SET kwant_id = ?, name = ?, description = ?, body = ?, updated_at = ? WHERE id = ?")
             .bind(&kwant_id)
             .bind(&text.name)

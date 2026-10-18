@@ -443,7 +443,7 @@ async fn delegation_tools_enforce_their_rules() {
             (v["result"]["content"][0]["text"].as_str().unwrap_or("").to_string(), v["result"]["isError"] == true)
         }
     };
-    let names: Vec<String> = env.state.db.list_kwants().await.unwrap().into_iter().map(|k| k.name).collect();
+    let names: Vec<String> = env.state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap().into_iter().map(|k| k.name).collect();
     {
         let mut tools = env.state.self_tools.lock().await;
         tools.insert(

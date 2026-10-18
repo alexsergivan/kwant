@@ -3,6 +3,7 @@
 
 use super::AppState;
 use crate::db::models::{LlmProfile, LlmProfilePatch, NewLlmProfile};
+use crate::db::spaces::SpaceId;
 use crate::profiles::login::LoginView;
 use crate::profiles::{
     clean_key, clean_name, create_private_dir, managed_home, validate_user_home, Engine,
@@ -137,7 +138,7 @@ async fn load(state: &AppState, id: &str) -> Result<LlmProfile, Response> {
 
 /// `GET /api/profiles`
 pub async fn list(State(state): State<AppState>) -> Response {
-    match state.db.list_profiles().await {
+    match state.db.list_profiles(&super::routes::request_space()).await {
         Ok(profiles) => Json(views(&state, profiles).await).into_response(),
         Err(e) => db_err(e),
     }
@@ -183,16 +184,22 @@ pub async fn create(State(state): State<AppState>, Json(body): Json<CreateBody>)
         ("cli_home", None) => None,
         _ => return err(StatusCode::BAD_REQUEST, "kind must be cli_home or api_key"),
     };
-    let all = match state.db.list_profiles().await {
+    let space = super::routes::request_space();
+    let all = match state.db.list_profiles(&space).await {
         Ok(a) => a,
         Err(e) => return db_err(e),
     };
+    // Home folders stay unique across every space, so two spaces never share a sign-in
+    let mut everyone = Vec::new();
+    for s in state.db.list_spaces().await.unwrap_or_default() {
+        everyone.extend(state.db.list_profiles(&SpaceId::new(&s.id)).await.unwrap_or_default());
+    }
     if all.iter().filter(|p| p.engine == engine.as_str()).count() >= MAX_PER_ENGINE {
         return err(StatusCode::BAD_REQUEST, "too many profiles for this engine");
     }
     let home_dir = match (body.kind.as_str(), body.home_dir.as_deref()) {
         ("cli_home", Some(raw)) => {
-            let others: Vec<String> = all
+            let others: Vec<String> = everyone
                 .iter()
                 .filter_map(|p| state.profiles.home_of(p))
                 .map(|h| h.to_string_lossy().into_owned())
@@ -219,7 +226,7 @@ pub async fn create(State(state): State<AppState>, Json(body): Json<CreateBody>)
         enabled: body.enabled.unwrap_or(true),
         is_default: body.is_default.unwrap_or(false),
     };
-    let profile = match state.db.create_profile(&input).await {
+    let profile = match state.db.create_profile(&space, &input).await {
         Ok(p) => p,
         Err(e) => return db_err(e),
     };
