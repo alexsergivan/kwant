@@ -368,7 +368,7 @@ pub async fn start_run(state: &AppState, routine: RoutineRow, trigger: &str) -> 
                     channel_id: routine.channel_id.clone(),
                     title: format!("Routine \"{}\" failed", routine.name),
                     body: format!(
-                        "The routine \"{}\" did not finish. Open kwnt to see its run history.",
+                        "The routine \"{}\" did not finish. Open kwant bots to see its run history.",
                         routine.name
                     ),
                 },

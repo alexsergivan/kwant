@@ -1014,7 +1014,7 @@ async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Noti
                 kwant_id,
                 title: format!("{name} needs your approval"),
                 body: format!(
-                    "{name} wants to use {}. Open kwnt to allow or deny it.",
+                    "{name} wants to use {}. Open kwant bots to allow or deny it.",
                     clip(tool_name, 80)
                 ),
                 kwant_name: name,

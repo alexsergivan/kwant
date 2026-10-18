@@ -68,9 +68,9 @@ async fn supervise(router: LayaRouter, opts: SidecarOptions, shutdown: Cancellat
         Some(port) if opts.managed => port,
         _ => {
             let why = if opts.managed {
-                "Laya URL is not on this machine, so kwnt cannot start it"
+                "Laya URL is not on this machine, so the app cannot start it"
             } else {
-                "Laya is not answering and kwnt is not managing it; using keyword routing"
+                "Laya is not answering and the app is not managing it; using keyword routing"
             };
             router.set_status(LayaState::Offline, why, false);
             return monitor_external(router, shutdown).await;
