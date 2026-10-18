@@ -328,7 +328,7 @@ async fn delegation_without_a_member_list_stays_in_the_leads_space() {
     };
     let (text, is_error) = delegation::tool_delegate(&env.state, &scope, &json!({"to": "Remy", "task": "help"})).await;
     assert!(is_error, "{text}");
-    assert!(text.contains("No agent named 'Remy'"), "{text}");
+    assert!(text.contains("No bot named 'Remy'"), "{text}");
     assert!(text.contains("Ada") && !text.contains("Remy."), "only B's bots are offered: {text}");
 
     // The HTTP API, which takes ids: a specialist from another space is refused

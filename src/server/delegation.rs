@@ -110,7 +110,7 @@ fn meta(kind: &str, d: &Delegation, specialist: &str) -> Value {
 }
 
 async fn name_of(state: &AppState, id: &str) -> String {
-    state.db.get_kwant(id).await.ok().flatten().map(|k| k.name).unwrap_or_else(|| "An agent".into())
+    state.db.get_kwant(id).await.ok().flatten().map(|k| k.name).unwrap_or_else(|| "A bot".into())
 }
 
 // Starting
@@ -141,7 +141,7 @@ pub struct StartRequest {
 pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (StatusCode, String)> {
     let bad = |m: &str| Err((StatusCode::BAD_REQUEST, m.to_string()));
     if req.lead.id == req.specialist.id {
-        return bad("An agent can't delegate to itself.");
+        return bad("A bot can't delegate to itself.");
     }
     let task = req.task.trim();
     if task.is_empty() {
@@ -471,7 +471,7 @@ async fn thread_view(state: &AppState, t: &Thread) -> Value {
 pub async fn list_threads(State(state): State<AppState>, Path(kwant_id): Path<String>, Query(q): Query<ThreadsQuery>) -> Response {
     match state.db.get_kwant(&kwant_id).await {
         Ok(Some(_)) => {}
-        Ok(None) => return error(StatusCode::NOT_FOUND, "agent not found"),
+        Ok(None) => return error(StatusCode::NOT_FOUND, "bot not found"),
         Err(_) => return internal(),
     }
     let archived = matches!(q.include_archived.as_deref(), Some("1" | "true"));
@@ -497,7 +497,7 @@ pub async fn create_thread(
 ) -> Response {
     match state.db.get_kwant(&kwant_id).await {
         Ok(Some(_)) => {}
-        Ok(None) => return error(StatusCode::NOT_FOUND, "agent not found"),
+        Ok(None) => return error(StatusCode::NOT_FOUND, "bot not found"),
         Err(_) => return internal(),
     }
     let title = body.and_then(|b| b.0.title).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "New conversation".into());
@@ -576,7 +576,7 @@ pub struct DelegatePayload {
 pub async fn create_delegation(State(state): State<AppState>, Json(p): Json<DelegatePayload>) -> Response {
     let (lead, specialist) = match (state.db.get_kwant(&p.lead_kwant_id).await, state.db.get_kwant(&p.specialist_kwant_id).await) {
         (Ok(Some(l)), Ok(Some(s))) => (l, s),
-        (Ok(_), Ok(_)) => return error(StatusCode::NOT_FOUND, "agent not found"),
+        (Ok(_), Ok(_)) => return error(StatusCode::NOT_FOUND, "bot not found"),
         _ => return internal(),
     };
     let origin_depth = match &p.thread_id {
@@ -643,7 +643,7 @@ pub async fn tool_delegate(state: &AppState, scope: &super::continuity::SelfScop
     let to = args["to"].as_str().map(str::trim).unwrap_or("").trim_start_matches('@');
     let task = args["task"].as_str().unwrap_or("").to_string();
     let Some(lead) = state.db.get_kwant(&scope.kwant_id).await.ok().flatten() else {
-        return ("Unknown agent.".into(), true);
+        return ("Unknown bot.".into(), true);
     };
     // Only the lead's own space, even when the chat has no member list
     let kwants = state.db.list_kwants(&SpaceId::new(&lead.space_id)).await.unwrap_or_default();
@@ -654,7 +654,7 @@ pub async fn tool_delegate(state: &AppState, scope: &super::continuity::SelfScop
     };
     let Some(specialist) = kwants.iter().find(|k| k.id == to || k.name.eq_ignore_ascii_case(to)).cloned() else {
         let names: Vec<&str> = pool.iter().map(|k| k.name.as_str()).collect();
-        return (format!("No agent named '{to}'. You can delegate to: {}.", names.join(", ")), true);
+        return (format!("No bot named '{to}'. You can delegate to: {}.", names.join(", ")), true);
     };
     let req = StartRequest {
         lead,

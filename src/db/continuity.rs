@@ -60,7 +60,7 @@ impl std::fmt::Display for MemoryError {
             ),
             MemoryError::TooMany => write!(
                 f,
-                "this agent already has {MAX_MEMORIES_PER_KWANT} memories; remove one first"
+                "this bot already has {MAX_MEMORIES_PER_KWANT} memories; remove one first"
             ),
             MemoryError::NotFound => write!(f, "no such memory"),
             MemoryError::Db(_) => write!(f, "database error"),
@@ -448,7 +448,7 @@ impl Database {
 
     /// The kwant (and channel, when set) a routine runs as must share a space.
     async fn routine_space(&self, input: &NewRoutine) -> Result<SpaceId, DbError> {
-        let other = || DbError::OtherSpace("the agent and channel must be in the same space".into());
+        let other = || DbError::OtherSpace("the bot and channel must be in the same space".into());
         let space = self.space_of_kwant(&input.kwant_id).await?.ok_or_else(other)?;
         if let Some(channel) = &input.channel_id {
             if self.space_of_channel(channel).await?.as_ref() != Some(&space) {

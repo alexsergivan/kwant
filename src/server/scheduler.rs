@@ -205,7 +205,7 @@ pub async fn create(
     let explicit = super::spaces::space_param(uri.query()).is_some();
     match state.db.space_of_kwant(&input.kwant_id).await {
         Ok(Some(of)) if of == space || !explicit => {}
-        Ok(_) => return error(StatusCode::BAD_REQUEST, "the agent is in another space"),
+        Ok(_) => return error(StatusCode::BAD_REQUEST, "the bot is in another space"),
         Err(_) => return internal(),
     }
     match state.db.create_routine(&input).await {
@@ -393,12 +393,12 @@ async fn execute(state: &AppState, routine: &RoutineRow) -> Result<Option<String
         .db
         .get_kwant(&routine.kwant_id)
         .await
-        .map_err(|_| "could not load the agent".to_string())?
-        .ok_or_else(|| "the routine's agent no longer exists".to_string())?;
+        .map_err(|_| "could not load the bot".to_string())?
+        .ok_or_else(|| "the routine's bot no longer exists".to_string())?;
     // The API never makes a routine across spaces, but a row edited by hand must not run one
     // space's bot in another space's chat
     if kwant.space_id != routine.space_id {
-        return Err("the routine's agent is in another space, so it was not run".into());
+        return Err("the routine's bot is in another space, so it was not run".into());
     }
     if state.db.space_archived(&crate::db::spaces::SpaceId::new(&routine.space_id)).await.unwrap_or(true) {
         return Err("the routine's space is archived, so it was not run".into());

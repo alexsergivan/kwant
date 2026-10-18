@@ -588,3 +588,87 @@ async fn archiving_kills_a_running_cli_and_its_children_and_posts_nothing() {
     assert!(posted.iter().all(|t| !t.contains("answer ok")), "{posted:?}");
     assert!(env.state.turns.active_turns().is_empty());
 }
+
+#[tokio::test]
+async fn chat_send_with_an_explicit_space_refuses_rows_of_another_space() {
+    let env = setup().await;
+    let app = &env.app;
+    let b = env.new_space("Side").await;
+    let bea = env.bot(&b, "Bea").await;
+    env.bot(&b, "Bob").await;
+    let remy = env.bot("spc_default", "Remy").await;
+    let b_general = env.general(&b).await;
+    let d_general = env.general("spc_default").await;
+    let team_id = ok(app, "POST", "/api/teams", Some(team("alpha", &remy, None))).await["id"].as_str().unwrap().to_string();
+    let thread_id = ok(app, "POST", &format!("/api/kwants/{remy}/threads"), Some(json!({"title": "t"}))).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let send = |target: Value, tag: &str| {
+        let mut body = json!({"prompt": format!("hello STRAY_{tag}"), "sender_id": "user"});
+        body.as_object_mut().unwrap().extend(target.as_object().unwrap().clone());
+        body
+    };
+
+    // Both directions, every kind of target: 404, nothing saved, no CLI turn
+    let cases = [
+        (b.clone(), json!({"channel_id": d_general}), "dch"),
+        (b.clone(), json!({"kwant_id": remy}), "dkw"),
+        (b.clone(), json!({"team_id": team_id}), "dtm"),
+        (b.clone(), json!({"thread_id": thread_id}), "dth"),
+        ("spc_default".to_string(), json!({"channel_id": b_general}), "bch"),
+        ("spc_default".to_string(), json!({"kwant_id": bea}), "bkw"),
+    ];
+    for (space, target, tag) in &cases {
+        let (s, v) = call(app, "POST", &format!("/api/chat/send?space={space}"), Some(send(target.clone(), tag))).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "?space={space} {target}: {v}");
+        assert_eq!(v["error"], "that isn't in this space", "{v}");
+    }
+    // A channel of this space with a kwant of the other is refused too
+    let (s, _) = call(app, "POST", &format!("/api/chat/send?space={b}"), Some(send(json!({"channel_id": b_general, "kwant_id": remy}), "mix"))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // An unknown space is the usual 404
+    let (s, _) = call(app, "POST", "/api/chat/send?space=nope", Some(send(json!({"kwant_id": remy}), "unk"))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    for ctx in [&b_general, &d_general, &remy, &bea, &thread_id] {
+        let msgs = ok(app, "GET", &format!("/api/channels/{ctx}/messages"), None).await;
+        let text = msgs.to_string();
+        assert!(!text.contains("STRAY_"), "a refused send was saved in {ctx}: {text}");
+    }
+    assert_eq!(invocations_with("STRAY_"), 0, "a refused send ran a CLI turn");
+
+    // Matching or missing ?space= still sends
+    ok(app, "POST", &format!("/api/chat/send?space={b}"), Some(send(json!({"kwant_id": bea}), "okb"))).await;
+    ok(app, "POST", "/api/chat/send?space=spc_default", Some(send(json!({"kwant_id": remy}), "okd"))).await;
+    ok(app, "POST", "/api/chat/send", Some(send(json!({"kwant_id": bea}), "okn"))).await;
+    env.idle().await;
+}
+
+#[tokio::test]
+async fn server_messages_say_bot_and_general_describes_the_space() {
+    let env = setup().await;
+    let app = &env.app;
+    let general = env.general("spc_default").await;
+    let c = ok(app, "GET", &format!("/api/channels/{general}"), None).await;
+    let desc = c["description"].as_str().or(c["channel"]["description"].as_str()).unwrap_or_default().to_string();
+    assert_eq!(desc, kwnt::db::GENERAL_DESCRIPTION, "{c}");
+
+    // An unedited old seed text is replaced on the next start; an edited one is kept
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", env.data.join("kwnt.db").display())).await.unwrap();
+    sqlx::query("UPDATE channels SET description = 'Main collaboration hub for all agents' WHERE id = ?")
+        .bind(&general)
+        .execute(&pool)
+        .await
+        .unwrap();
+    Database::init(&env.data).await.unwrap();
+    let (d,): (String,) = sqlx::query_as("SELECT description FROM channels WHERE id = ?").bind(&general).fetch_one(&pool).await.unwrap();
+    assert_eq!(d, kwnt::db::GENERAL_DESCRIPTION);
+    sqlx::query("UPDATE channels SET description = 'Ours' WHERE id = ?").bind(&general).execute(&pool).await.unwrap();
+    Database::init(&env.data).await.unwrap();
+    let (d,): (String,) = sqlx::query_as("SELECT description FROM channels WHERE id = ?").bind(&general).fetch_one(&pool).await.unwrap();
+    assert_eq!(d, "Ours");
+
+    let (s, v) = call(app, "GET", "/api/kwants/nope/mcp-servers", None).await;
+    assert_eq!((s, v["error"].as_str()), (StatusCode::NOT_FOUND, Some("bot not found")), "{v}");
+}

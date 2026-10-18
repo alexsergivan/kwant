@@ -199,7 +199,7 @@ async fn ensure_general(state: &AppState, space: &SpaceId, lead: &str) {
     }
     let general = NewChannel {
         name: "general".into(),
-        description: Some("Everyone in this space. Laya picks who answers.".into()),
+        description: Some(crate::db::GENERAL_DESCRIPTION.into()),
         lead_kwant_id: lead.to_string(),
         member_kwants: vec![lead.to_string()],
         routing_mode: "auto".into(),
@@ -542,7 +542,7 @@ pub(super) async fn scope_for(
 ) -> Result<TurnScope, String> {
     // Teammates, the team and its folder all come from the kwant's own space
     let space = SpaceId::new(&kwant.space_id);
-    let all_kwants = state.db.list_kwants(&space).await.map_err(|_| "could not load agents".to_string())?;
+    let all_kwants = state.db.list_kwants(&space).await.map_err(|_| "could not load the bots".to_string())?;
     let channel = match &channel_id {
         Some(id) => Some(
             state.db.get_channel(id).await.ok().flatten().ok_or_else(|| "the chat's channel no longer exists".to_string())?,
@@ -674,7 +674,7 @@ pub(super) async fn run_routine_turn(
             Ok(reply_id)
         }
         Err(_) if job.token.is_cancelled() => Err("stopped by the user".into()),
-        Err(why) => Err(format!("the agent's turn failed: {why}")),
+        Err(why) => Err(format!("the bot's turn failed: {why}")),
     }
 }
 
@@ -1622,7 +1622,31 @@ async fn chat_space(state: &AppState, payload: &SendChatPayload) -> Result<Space
 
 pub async fn send_chat(
     State(state): State<AppState>,
-    Json(mut payload): Json<SendChatPayload>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+    Json(payload): Json<SendChatPayload>,
+) -> axum::response::Response {
+    use super::spaces::RowKind;
+    // An explicit ?space= must match every row the body names (a thread overrides the others)
+    let rows: Vec<(RowKind, Option<&str>)> = match payload.thread_id.as_deref() {
+        Some(t) => vec![(RowKind::Thread, Some(t))],
+        None => vec![
+            (RowKind::Channel, payload.channel_id.as_deref()),
+            (RowKind::Kwant, payload.kwant_id.as_deref()),
+            (RowKind::Team, payload.team_id.as_deref()),
+        ],
+    };
+    if let Err(r) = super::spaces::ids_guard(&state, query.as_deref(), &rows).await {
+        return r;
+    }
+    match send_chat_inner(state, payload).await {
+        Ok(json) => json.into_response(),
+        Err(status) => status.into_response(),
+    }
+}
+
+async fn send_chat_inner(
+    state: AppState,
+    mut payload: SendChatPayload,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let uploads = super::attachments::check_uploads(&state, &payload.attachment_ids).await?;
     if let Some(thread_id) = payload.thread_id.clone() {

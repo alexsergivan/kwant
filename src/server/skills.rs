@@ -344,7 +344,7 @@ pub async fn create(
     if let (true, Some(Some(owner))) = (super::spaces::space_param(uri.query()).is_some(), &p.kwant_id) {
         match state.db.space_of_kwant(owner).await {
             Ok(Some(of)) if of == scope.0 => {}
-            Ok(_) => return error(StatusCode::BAD_REQUEST, "that agent is in another space"),
+            Ok(_) => return error(StatusCode::BAD_REQUEST, "that bot is in another space"),
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
