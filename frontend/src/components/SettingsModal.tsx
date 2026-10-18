@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Key, Globe, X, Sparkles, Check, Plug, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor } from 'lucide-react';
+import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import {
   BROWSER_NOTIFY_KEY,
@@ -10,13 +10,11 @@ import {
   notificationPermission,
   webhookUrlError,
 } from '../continuity';
-import { playSfx } from '../audio/chiptune';
+import { isSfxMuted, playSfx, toggleSfxMute } from '../audio/chiptune';
 import { useAuth } from './AuthGate';
 import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
-import { EnginesPanel } from './EnginesPanel';
 import { useEngines } from '../useEngines';
-import { useProfiles } from '../useProfiles';
-import type { Profile } from '../profiles';
+import { LayaStatusRow } from './LayaStatus';
 
 interface SettingsData {
   anthropic_api_key: string;
@@ -40,26 +38,25 @@ interface SettingsData {
 }
 
 const LIMIT_FIELDS: { key: TurnLimitKey; label: string; hint: string }[] = [
-  { key: 'max_turns_per_agent', label: 'Replies at once per agent', hint: 'More than this and an agent’s next request waits in line.' },
-  { key: 'max_turns_global', label: 'Replies at once in total', hint: 'Across all agents; keeps the server responsive.' },
+  { key: 'max_turns_per_agent', label: 'Replies at once per bot', hint: 'More than this and a bot’s next request waits in line.' },
+  { key: 'max_turns_global', label: 'Replies at once in total', hint: 'Across all bots in every space; keeps the server responsive.' },
   { key: 'delegation_follow_up_minutes', label: 'Check on delegated work after (minutes)', hint: '0 turns the check-in off.' },
 ];
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onOpenTools?: () => void;
-  /** Gets the accounts list after every change, so kwant pickers stay current. */
-  onProfilesChanged?: (profiles: Profile[]) => void;
-  /** Changes to focus "Sign in with Claude" in Engines. */
-  focusClaudeSignIn?: number;
+  /** Tokens used in the open chat, shown under Usage. */
+  tokensUsed?: number;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onOpenTools, onProfilesChanged, focusClaudeSignIn }) => {
+/** App settings: shared by every space (keys, Laya, limits, notifications, sounds). Accounts,
+ * bots and tools are per space, in Space settings. */
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0 }) => {
   const { authRequired, signOut } = useAuth();
   const computer = useComputerMode(isOpen);
   const engines = useEngines(isOpen);
-  const accounts = useProfiles(isOpen, onProfilesChanged);
+  const [sfxMuted, setSfxMuted] = useState(isSfxMuted);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [anthropicKey, setAnthropicKey] = useState('');
   const [xaiKey, setXaiKey] = useState('');
@@ -200,11 +197,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
         <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
-              <Sparkles size={17} />
+              <Settings size={17} />
             </div>
             <div>
-              <h2 id="settings-title" className="text-sm font-semibold text-zinc-100">Settings</h2>
-              <p className="text-xs text-zinc-400">What runs your kwants, the accounts they use, and how they work</p>
+              <h2 id="settings-title" className="text-sm font-semibold text-zinc-100">App settings</h2>
+              <p className="text-xs text-zinc-400">Shared by every space. Accounts, bots and tools are in each space’s settings.</p>
             </div>
           </div>
 
@@ -220,7 +217,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           </button>
         </div>
 
-        <EnginesPanel api={engines} accounts={accounts} focusClaudeSignIn={focusClaudeSignIn} />
+        <LayaStatusRow />
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
+            <span className="flex-1 text-xs font-medium text-zinc-200 flex items-center gap-2">
+              {sfxMuted ? <VolumeX size={15} className="text-zinc-500" aria-hidden="true" /> : <Volume2 size={15} className="text-sky-400" aria-hidden="true" />}
+              <span id="sfx-label">UI sounds</span>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={!sfxMuted}
+              aria-labelledby="sfx-label"
+              onClick={() => setSfxMuted(toggleSfxMute())}
+              className={`relative shrink-0 w-9 h-5 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                !sfxMuted ? 'bg-sky-600' : 'bg-zinc-700'
+              }`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${!sfxMuted ? 'translate-x-4' : ''}`} />
+            </button>
+          </div>
+          <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
+            <Gauge size={15} className="text-zinc-500" aria-hidden="true" />
+            <span className="flex-1 text-xs font-medium text-zinc-200">Token usage, open chat</span>
+            <span className="font-mono text-xs text-zinc-300">{tokensUsed} tk</span>
+          </div>
+        </div>
 
         {computer.state.settings && (
           <div className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3">
@@ -233,26 +256,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             </div>
             <ComputerModeControl api={computer} />
           </div>
-        )}
-
-        {onOpenTools && (
-          <button
-            type="button"
-            onClick={() => {
-              playSfx('click');
-              onOpenTools();
-            }}
-            className="w-full flex items-center gap-3 p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 text-left transition-colors group"
-          >
-            <span className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
-              <Plug size={15} />
-            </span>
-            <span className="flex-1">
-              <span className="block text-xs font-medium text-zinc-200">Tools (MCP servers)</span>
-              <span className="block text-[11px] text-zinc-500">Give kwants abilities like files, web pages or GitHub</span>
-            </span>
-            <ChevronRight size={15} className="text-zinc-500 group-hover:text-sky-300" />
-          </button>
         )}
 
         {/* Cloud API Keys Form */}
@@ -269,7 +272,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             <span className="flex-1">
               <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
               <span className="block text-[11px] text-zinc-500">
-                Optional. {keysSaved ? `${keysSaved} saved. ` : ''}Not needed when you sign in to a CLI above.
+                Optional, for every space. {keysSaved ? `${keysSaved} saved. ` : ''}Not needed when a space’s bots use a signed-in CLI.
               </span>
             </span>
             {keysOpen ? <ChevronDown size={15} className="text-zinc-500" aria-hidden="true" /> : <ChevronRight size={15} className="text-zinc-500" aria-hidden="true" />}
@@ -277,7 +280,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
           <div id="settings-api-keys" hidden={!keysOpen} className="space-y-3 px-3 pb-3">
             <p className="text-[11px] text-zinc-500">
-              One key per provider for the API-key engines. To keep several keys for one provider, add them as accounts on its engine card above.
+              One key per provider for the API-key engines. To keep several keys for one provider, add them as accounts in a space’s settings → Accounts.
             </p>
             <div>
               <label className="block text-xs font-medium text-zinc-400 mb-1">
@@ -373,7 +376,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               </div>
               {perAgentOverGlobal && (
                 <p className="text-[11px] text-amber-300" role="status">
-                  The total is lower than the per-agent limit, so an agent never gets more than {limits.max_turns_global} at once.
+                  The total is lower than the per-bot limit, so a bot never gets more than {limits.max_turns_global} at once.
                 </p>
               )}
             </fieldset>
@@ -382,9 +385,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           {agentTools !== null && (
             <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
               <div className="flex-1">
-                <p id="agent-tools-label" className="text-xs font-medium text-zinc-200">Agents can use their own tools</p>
+                <p id="agent-tools-label" className="text-xs font-medium text-zinc-200">Bots can use their own tools</p>
                 <p id="agent-tools-hint" className="text-[11px] text-zinc-500">
-                  Delegating to each other, asking you questions, sharing files, skills, searching earlier chats and keeping notes. Off, agents just reply.
+                  Delegating to each other, asking you questions, sharing files, skills, searching earlier chats and keeping notes. Off, bots just reply.
                 </p>
               </div>
               <button
@@ -418,7 +421,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               <div className="flex-1">
                 <p id="browser-notify-label" className="text-xs font-medium text-zinc-200">Notify me on this computer</p>
                 <p className="text-[11px] text-zinc-500">
-                  Only while kwnt is in a background tab.
+                  Only while Kwant is in a background tab. Each notification names its space.
                   {permission === 'denied' && <span className="text-amber-300"> Blocked by your browser; allow notifications for this site in its settings.</span>}
                   {permission === 'unsupported' && <span className="text-amber-300"> This browser can't show notifications.</span>}
                 </p>
@@ -477,7 +480,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                     ? 'A webhook is saved. Type a new URL to replace it.'
                     : settings?.notify_webhook_url === MASK && !webhookUrl.trim()
                       ? 'Saving will remove the webhook.'
-                      : 'https only. kwnt posts a short title and line, never message text.')}
+                      : 'https only. Kwant posts a short title and line, never message text.')}
               </p>
             </div>
 
@@ -507,7 +510,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           {saveSuccess && (
             <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-3 py-2 rounded-lg text-xs flex items-center gap-2">
               <Check size={14} />
-              <span>Settings saved successfully to database</span>
+              <span>Saved for every space</span>
             </div>
           )}
 
@@ -540,7 +543,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               disabled={saving || !!webhookError || limitsInvalid}
               className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50"
             >
-              {saving ? 'Saving...' : 'Save Settings'}
+              {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
         </form>

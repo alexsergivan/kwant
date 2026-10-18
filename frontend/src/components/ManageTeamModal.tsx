@@ -111,7 +111,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
     playSfx('click');
     if (memberIds.includes(kwantId)) {
       if (memberIds.length <= 1) {
-        setError('A team must have at least one agent.');
+        setError('A team needs at least one bot.');
         return;
       }
       setError(null);
@@ -134,7 +134,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
       return;
     }
     if (memberIds.length === 0) {
-      setError('Select at least one agent for this team.');
+      setError('Pick at least one bot for this team.');
       return;
     }
     if (instructions.length > MAX_INSTRUCTIONS) {
@@ -159,7 +159,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
       onClose();
     } catch (err) {
       setIsSaving(false);
-      setError('Failed to update team. Please try again.');
+      setError(err instanceof Error && err.message ? err.message : 'Couldn’t save the team. Try again.');
     }
   };
 
@@ -193,7 +193,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
             </div>
             <div>
               <h3 id="manage-team-title" className="text-sm font-semibold text-zinc-100">Manage Team: @{team.name}</h3>
-              <p className="text-[11px] text-zinc-400">Configure team roster, lead agent, and permissions</p>
+              <p className="text-[11px] text-zinc-400">Members, lead and instructions</p>
             </div>
           </div>
           <button
@@ -246,7 +246,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
             value={instructions}
             onChange={setInstructions}
             label="Team instructions"
-            hint="Pinned for every kwant in this team, before each turn. Leave empty to unpin."
+            hint="Pinned for every bot in this team, before each turn. Leave empty to unpin."
             rows={4}
           />
 

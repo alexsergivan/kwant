@@ -12,7 +12,7 @@ const inputClass =
 const SourceBadge: React.FC<{ source: Memory['source'] }> = ({ source }) =>
   source === 'agent' ? (
     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/10 text-violet-300 border border-violet-500/20">
-      <Bot size={10} aria-hidden="true" /> Agent
+      <Bot size={10} aria-hidden="true" /> Bot
     </span>
   ) : (
     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sky-500/10 text-sky-300 border border-sky-500/20">

@@ -84,7 +84,7 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
           <ModernAvatar role="brand" name="Kwant" size={36} />
           <div>
             <h1 className="text-sm font-semibold">Kwant</h1>
-            <p className="text-xs text-zinc-400">your team of super-intelligent bots</p>
+            <p className="text-xs text-zinc-400">Your team of kwant bots</p>
           </div>
         </div>
         {state.kind === 'checking' && (

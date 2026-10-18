@@ -137,7 +137,7 @@ const hostAction = (e: EngineInfo, api: EnginesApi, onSignedIn: () => void, focu
 function headline(engines: EngineInfo[], profiles: Profile[] | null, now: number): string {
   const ready = engines.filter(isUsable).length;
   if (ready > 0) {
-    return `${ready} ready${onlyCliReady(engines) ? ', all through your signed-in CLIs, so no API keys are needed' : ''}. Kwants only use engines that are ready.`;
+    return `${ready} ready${onlyCliReady(engines) ? ', all through your signed-in CLIs, so no API keys are needed' : ''}. Bots only use engines that are ready.`;
   }
   // An engine that's off but has an account ready is the quickest fix.
   for (const e of sortEngines(engines)) {
@@ -154,7 +154,7 @@ function headline(engines: EngineInfo[], profiles: Profile[] | null, now: number
 export const RouteSummary: React.FC<{ rows: RouteRow[]; pending: boolean }> = ({ rows, pending }) => (
   <div data-route-summary className="rounded-xl border border-sky-500/25 bg-gradient-to-b from-sky-500/[0.07] to-transparent p-3 space-y-2.5">
     <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-sky-200">
-      <Route size={13} aria-hidden="true" /> What runs your kwants
+      <Route size={13} aria-hidden="true" /> What runs your kwant bots
     </h4>
     <ul className="space-y-2.5">
       {rows.map((r) => (
@@ -171,14 +171,14 @@ export const RouteSummary: React.FC<{ rows: RouteRow[]; pending: boolean }> = ({
           <p className="mt-1 pl-0 sm:pl-[3.875rem] text-zinc-500">
             {r.note && <span className="text-amber-200">{r.note} </span>}
             {r.then.length > 0 ? `If it’s out of usage or signed out: ${r.then.join(', then ')}.` : r.note ? '' : 'No backup account is ready.'}
-            {r.defaultModel && <> Kwants on Auto get {r.defaultModel}.</>}
+            {r.defaultModel && <> Bots on Auto get {r.defaultModel}.</>}
           </p>
           {r.fallback && <p className="pl-0 sm:pl-[3.875rem] text-zinc-500">{r.fallback}</p>}
         </li>
       ))}
     </ul>
     <p className="text-[10.5px] text-zinc-500 border-t border-zinc-800/80 pt-2">
-      {pending ? 'Loading accounts… ' : ''}A kwant set to a specific account in its own settings starts with that account instead.
+      {pending ? 'Loading accounts… ' : ''}A bot set to a specific account in its own settings starts with that account instead.
     </p>
   </div>
 );

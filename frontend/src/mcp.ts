@@ -224,7 +224,7 @@ export const MCP_PRESETS: McpPreset[] = [
     // npm @modelcontextprotocol/server-memory 1.0.0
     id: 'memory',
     label: 'Memory',
-    blurb: 'A small knowledge graph kwants can save facts to and recall later.',
+    blurb: 'A small knowledge graph bots can save facts to and recall later.',
     category: 'data',
     needs: ['Node.js'],
     source: 'https://github.com/modelcontextprotocol/servers/tree/main/src/memory',
@@ -274,7 +274,7 @@ export const MCP_PRESETS: McpPreset[] = [
     // npm @modelcontextprotocol/server-sequential-thinking 1.0.0
     id: 'sequential-thinking',
     label: 'Sequential thinking',
-    blurb: 'Helps a kwant plan step by step and revise its plan on hard problems.',
+    blurb: 'Helps a bot plan step by step and revise its plan on hard problems.',
     category: 'devtools',
     needs: ['Node.js'],
     source: 'https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking',

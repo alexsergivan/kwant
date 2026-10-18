@@ -130,7 +130,11 @@ test('empty, loading, error and expired states', () => {
 });
 
 test('sidebar entry shows the unseen badge only when there is something new', () => {
-  const base = { kwants: [], channels: [], teams: [], selectedId: '', isChannel: true, onSelectKwant: noop, onSelectChannel: noop,
+  const space = { id: 'spc_default', name: 'Default', icon: '💼', color: '#f59e0b', sort: 0, is_default: true, archived_at: null,
+    created_at: '', general_channel_id: null, counts: { bots: 0, ready_accounts: 0, unread: 0 } };
+  const base = { space, spaces: [space], onSwitchSpace: noop, onCreateSpace: noop, onOpenSpaceSettings: noop, onOpenArchived: noop,
+    onOpenSearch: noop, onOpenRoutines: noop,
+    kwants: [], channels: [], teams: [], selectedId: '', isChannel: true, onSelectKwant: noop, onSelectChannel: noop,
     onSelectTeam: noop, onSummonKwant: noop, onCreateTeam: noop, onOpenAway: noop };
   const withNew = ui.sidebar({ ...base, awayCount: 7 });
   assert.match(withNew, /While you were away/);

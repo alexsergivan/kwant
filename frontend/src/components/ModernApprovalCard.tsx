@@ -58,7 +58,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
 
       {shell ? (
         <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
-          <p className="text-zinc-300">A kwant wants to run a command on your computer.</p>
+          <p className="text-zinc-300">A bot wants to run a command on your computer.</p>
           <pre className="font-mono text-[11px] text-zinc-100 bg-zinc-950/70 border border-zinc-800 rounded-md p-2 whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
             {shell.command || '(empty command)'}
           </pre>
@@ -71,7 +71,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
       ) : mcp ? (
         <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
           <p className="text-zinc-300">
-            {mcp.kwant ? <span className="font-medium text-zinc-100">{mcp.kwant}</span> : 'A kwant'} wants to use{' '}
+            {mcp.kwant ? <span className="font-medium text-zinc-100">{mcp.kwant}</span> : 'A bot'} wants to use{' '}
             <span className="font-medium text-sky-200">{humanizeToolName(mcp.tool)}</span>
             {mcp.server && (
               <>
@@ -123,7 +123,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         {!shell && (
           <button
             onClick={() => handleDecision('always_allow')}
-            title={mcp ? 'Allow this tool for this kwant until kwnt restarts' : undefined}
+            title={mcp ? 'Allow this tool for this bot until Kwant restarts' : undefined}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm"
           >
             <CheckCheck size={14} />
