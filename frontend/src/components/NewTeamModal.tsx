@@ -339,11 +339,11 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
                     type="button"
                     onClick={() => {
                       playSfx('click');
-                      setWorkspacePath('~/dev/kwnt');
+                      setWorkspacePath('~/dev/my-app');
                     }}
                     className="px-2 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 font-mono transition-colors"
                   >
-                    ~/dev/kwnt
+                    ~/dev/my-app
                   </button>
                   <button
                     type="button"

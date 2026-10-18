@@ -49,7 +49,8 @@ export function findBareWording() {
       if (s !== null) {
         const stripped = s.replace(ALLOWED, '');
         // URLs, paths, event names and storage keys (kwnt:..., kwant.x) are not prose.
-        const prose = stripped.replace(/\S*(?:[:./_#=]\w)\S*/g, (w) => (/^[A-Za-z]+[.,;:!?)]?$/.test(w) ? w : ''));
+        // Example paths a person reads (~/dev/x) stay in.
+        const prose = stripped.replace(/(?<!\S)(?!~)\S*(?:[:./_#=]\w)\S*/g, (w) => (/^[A-Za-z]+[.,;:!?)]?$/.test(w) ? w : ''));
         const at = ts.isTemplateLiteralToken(node) ? node.parent.parent ?? node : node;
         if (BAD.test(prose) && looksVisible(s, at)) {
           const { line } = sf.getLineAndCharacterOfPosition(node.getStart());
@@ -65,6 +66,12 @@ export function findBareWording() {
 
 test('no visible text says a bare "kwant", "kwnt" or "agent"', () => {
   assert.deepEqual(findBareWording(), []);
+});
+
+test('the page title says "kwant bots"', () => {
+  const title = readFileSync(join(root, 'index.html'), 'utf8').match(/<title>([^<]*)<\/title>/)?.[1] ?? '';
+  assert.match(title, /kwant bots/);
+  assert.doesNotMatch(title.replace(/\bkwant bots?\b/gi, ''), BAD);
 });
 
 if (process.argv.includes('--list')) console.log(findBareWording().join('\n'));
