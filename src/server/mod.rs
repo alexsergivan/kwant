@@ -22,6 +22,7 @@ pub mod away;
 pub mod computer;
 pub mod mcp_suggest;
 pub mod bot_actions;
+pub mod hires;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -197,6 +198,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/bot-actions/:id/undo", post(bot_actions::undo))
         .route("/api/bot-actions/:id/confirm", post(bot_actions::confirm))
         .route("/api/bot-actions/:id/decline", post(bot_actions::decline))
+        .route("/api/hires", get(hires::list))
+        .route("/api/hires/:id/accept", post(hires::accept_route))
+        .route("/api/hires/:id/deny", post(hires::deny_route))
+        .route("/api/spaces/:id/hire-policy", get(hires::get_policy).put(hires::put_policy))
         .route("/api/channels/:id", get(continuity::get_channel).patch(continuity::patch_channel))
         .route("/api/search", get(continuity::search))
         .route("/api/kwants/:id/memories", get(continuity::list_memories).post(continuity::add_memory))

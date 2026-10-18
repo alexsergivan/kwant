@@ -107,8 +107,11 @@ pub async fn prompt_block(
             with Undo; afterwards say in one sentence what will happen. The user may undo a change later, so check with the list tools \
             before relying on an earlier one. Deleting a bot, a space or an account only asks the user to confirm. \
             Never handle keys, passwords or sign-ins, answer approvals, install tool servers or change the computer: those tools \
-            tell you where in Settings the user does it."
+            tell you where in Settings the user does it.\n\
+            - `propose_hire` proposes a new bot for work a specialist would do better; the person decides. `hire_status` shows \
+            the space's hire policy and decisions."
         ));
+        out.push_str(&super::hires::prompt_block(state, &crate::db::spaces::SpaceId::new(&kwant.space_id)).await);
     }
     out
 }
@@ -229,6 +232,7 @@ fn tool_list(scope: &SelfScope) -> Value {
         list.extend(super::skills::tools());
         list.extend(super::mcp_suggest::tools());
         list.extend(super::bot_actions::tools());
+        list.extend(super::hires::tools());
         if scope.sandbox_target.is_some() {
             list.extend(browser_tools());
         }
@@ -599,6 +603,7 @@ async fn call_tool(
         "mcp_search" => super::mcp_suggest::tool_search(state, scope, args).await,
         "mcp_suggest" => super::mcp_suggest::tool_suggest(state, scope, args).await,
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
+        n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
         "list_attachments" if scope.origin.is_some() => super::attachments::tool_list(state, scope).await,
         "share_file" if scope.origin.is_some() => super::attachments::tool_share(state, scope, args).await,
         "delegate" => super::delegation::tool_delegate(state, scope, args).await,

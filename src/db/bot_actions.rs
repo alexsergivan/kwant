@@ -234,7 +234,7 @@ impl Database {
     /// Why a kwant can't be removed without losing anything, or `None` when it can: it leads a
     /// channel or team, or has history (messages, threads, delegations, questions, files).
     pub async fn kwant_in_use(&self, id: &str) -> Result<Option<&'static str>, DbError> {
-        let checks: [(&str, &'static str); 10] = [
+        let checks: [(&str, &'static str); 11] = [
             ("SELECT COUNT(*) FROM channels WHERE lead_kwant_id = ?1", "it leads a channel"),
             ("SELECT COUNT(*) FROM teams WHERE lead_kwant_id = ?1", "it leads a team"),
             (
@@ -249,6 +249,7 @@ impl Database {
             ("SELECT COUNT(*) FROM approvals WHERE kwant_id = ?1", "it already has approvals"),
             ("SELECT COUNT(*) FROM skills WHERE kwant_id = ?1", "it already has skills"),
             ("SELECT COUNT(*) FROM mcp_suggestions WHERE kwant_id = ?1 OR direct_kwant_id = ?1", "it already suggested tools"),
+            ("SELECT COUNT(*) FROM hire_proposals WHERE kwant_id = ?1", "it already proposed hiring bots"),
         ];
         for (sql, why) in checks {
             let (n,): (i64,) = sqlx::query_as(sql).bind(id).fetch_one(&self.pool).await?;

@@ -785,6 +785,8 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
             "channel_create",
             "channel_update",
             "profile_delete",
+            "propose_hire",
+            "hire_status",
         ]
     );
 

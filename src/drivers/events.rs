@@ -95,6 +95,10 @@ pub enum RuntimeEvent {
     /// whole record with its card. See `crate::db::bot_actions` and docs/bot-actions.md.
     #[serde(rename = "bot_action_updated", alias = "BotActionUpdated")]
     BotActionUpdated { action: Value },
+    /// A bot proposed hiring a new bot, or the person decided on (or undid) a hire; `hire` is the
+    /// whole proposal with its `card`. See `crate::db::hires` and docs/bot-actions.md → "Hiring".
+    #[serde(rename = "hire_updated", alias = "HireUpdated")]
+    HireUpdated { hire: Value },
     /// An event from inside one turn, tagged with the turn and its chat. On the SSE wire it is
     /// the inner event with `turn_id`, `kwant_id`, `context_id` and `thread_id` added at the top
     /// level (see [`RuntimeEvent::to_wire`]), so clients that ignore the tags still work.

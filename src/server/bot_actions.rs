@@ -863,35 +863,84 @@ impl Ctx<'_> {
     }
 
     fn check_model(model: &str) -> Result<(), ToolResult> {
-        let pin = crate::router::parse_pin(model);
-        match pin.family.as_deref() {
-            None | Some("claude" | "codex" | "grok" | "custom" | "local_ollama") => Ok(()),
-            Some(_) => Err(fail(format!(
-                "Unknown model \"{model}\". Use \"auto\", an engine (claude, codex, grok, ollama, custom) or engine/model."
-            ))),
-        }
+        check_model(model).map_err(fail)
     }
 
     async fn bot_snapshot(&self, id: &str) -> Value {
-        let view = self.db().kwant_view(id).await.ok().flatten();
-        let mcp = self.db().get_kwant_mcp_server_ids(id).await.unwrap_or_default();
-        match view {
-            Some(v) => json!({
-                "kwant_id": v.kwant.id,
-                "name": v.kwant.name,
-                "title": v.kwant.title,
-                "instructions": v.kwant.persona_prompt,
-                "soul": v.kwant.soul,
-                "avatar": v.kwant.avatar_sprite,
-                "model": v.kwant.preferred_model,
-                "profile_id": v.profile_id,
-                "profile_failover": v.profile_failover,
-                "mcp_server_ids": mcp,
-            }),
-            None => Value::Null,
-        }
+        bot_snapshot(self.state, id).await
     }
+}
 
+/// `Err` with the reason when `model` isn't "auto", an engine or engine/model.
+pub(super) fn check_model(model: &str) -> Result<(), String> {
+    let pin = crate::router::parse_pin(model);
+    match pin.family.as_deref() {
+        None | Some("claude" | "codex" | "grok" | "custom" | "local_ollama") => Ok(()),
+        Some(_) => Err(format!(
+            "Unknown model \"{model}\". Use \"auto\", an engine (claude, codex, grok, ollama, custom) or engine/model."
+        )),
+    }
+}
+
+/// What a bot is now, for cards and Undo.
+pub(super) async fn bot_snapshot(state: &AppState, id: &str) -> Value {
+    let view = state.db.kwant_view(id).await.ok().flatten();
+    let mcp = state.db.get_kwant_mcp_server_ids(id).await.unwrap_or_default();
+    match view {
+        Some(v) => json!({
+            "kwant_id": v.kwant.id,
+            "name": v.kwant.name,
+            "title": v.kwant.title,
+            "instructions": v.kwant.persona_prompt,
+            "soul": v.kwant.soul,
+            "avatar": v.kwant.avatar_sprite,
+            "model": v.kwant.preferred_model,
+            "profile_id": v.profile_id,
+            "profile_failover": v.profile_failover,
+            "mcp_server_ids": mcp,
+        }),
+        None => Value::Null,
+    }
+}
+
+/// Creates a bot in `space` through the app's own handler. `spec`: `name`, `title`,
+/// `instructions`, `soul?`, `avatar?`, `model?`, `profile_id?`. Returns its view.
+pub(super) async fn create_bot(state: &AppState, space: &SpaceId, spec: &Value) -> Result<Value, String> {
+    let mut body = json!({
+        "name": spec["name"],
+        "title": spec["title"],
+        "persona_prompt": spec["instructions"],
+        "soul": spec["soul"].as_str().unwrap_or(""),
+        "avatar_sprite": spec["avatar"].as_str().unwrap_or("default"),
+        "driver_type": "api",
+        "preferred_model": spec["model"].as_str().unwrap_or("auto"),
+    });
+    if let Some(p) = spec["profile_id"].as_str().filter(|p| !p.is_empty()) {
+        body["profile_id"] = json!(p);
+    }
+    let payload = serde_json::from_value(body).map_err(|e| e.to_string())?;
+    let resp = super::routes::create_kwant(State(state.clone()), Scope(space.clone()), Json(payload)).await.into_response();
+    match read(resp).await {
+        Ok(v) => Ok(v),
+        Err(e) if e == "that isn't valid" => Err("the account doesn't exist in your space or is for another engine.".into()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Records an applied change that already shows on another card (a hire), without a card of its
+/// own; Undo goes through `POST /api/bot-actions/:id/undo` as usual.
+pub(super) async fn record_quiet(state: &AppState, new: &NewBotAction) -> Result<BotAction, String> {
+    let (a, _) = state.db.record_bot_action(new, |_| None).await.map_err(|e| {
+        tracing::warn!(error = %e, action = %new.action, "could not record a bot action");
+        "the change could not be logged".to_string()
+    })?;
+    let _ = state.event_sender.send(RuntimeEvent::BotActionUpdated { action: action_json(&a) });
+    tracing::info!(action_id = %a.id, kwant_id = %a.kwant_id, turn_id = ?a.turn_id, action = %a.action,
+        target = ?a.target_id, status = %a.status, "bot changed the app");
+    Ok(a)
+}
+
+impl Ctx<'_> {
     async fn bot_create(&self, args: &Value) -> ToolResult {
         if let Some(r) = refuse_extra(args, &["mcp_env", "env", "headers", "api_key", "password", "token"]) {
             return r;
@@ -907,28 +956,17 @@ impl Ctx<'_> {
         let (Some(name), Some(title), Some(instructions)) = (arg(args, "name"), arg(args, "title"), arg(args, "instructions")) else {
             return fail("name, title and instructions are required");
         };
-        let mut body = json!({
+        let spec = json!({
             "name": name,
             "title": title,
-            "persona_prompt": instructions,
+            "instructions": instructions,
             "soul": arg(args, "soul").unwrap_or(""),
-            "avatar_sprite": avatar,
-            "driver_type": "api",
-            "preferred_model": model,
+            "avatar": avatar,
+            "model": model,
+            "profile_id": arg(args, "profile_id"),
         });
-        if let Some(p) = arg(args, "profile_id") {
-            body["profile_id"] = json!(p);
-        }
-        let payload = match serde_json::from_value(body) {
-            Ok(p) => p,
-            Err(e) => return fail(format!("The bot was not created: {e}")),
-        };
-        let resp = super::routes::create_kwant(State(self.state.clone()), Scope(self.space.clone()), Json(payload)).await.into_response();
-        let view = match read(resp).await {
+        let view = match create_bot(self.state, &self.space, &spec).await {
             Ok(v) => v,
-            Err(e) if e == "that isn't valid" => {
-                return fail("The bot was not created: the account doesn't exist in your space or is for another engine.")
-            }
             Err(e) => return fail(format!("The bot was not created: {e}")),
         };
         let id = view["id"].as_str().unwrap_or("").to_string();
@@ -1518,6 +1556,12 @@ async fn undo_action(state: &AppState, a: &BotAction) -> Result<Option<String>, 
             return Ok(created["id"].as_str().map(str::to_string));
         }
         "bot_create" => delete_unused_bot(state, &target).await?,
+        "bot_hire" => {
+            delete_unused_bot(state, &target).await?;
+            if let Some(hire) = a.after_json()["hire_id"].as_str() {
+                super::hires::undone(state, hire).await;
+            }
+        }
         "bot_update" => {
             if state.db.get_kwant(&target).await.ok().flatten().is_none() {
                 return Err(error(StatusCode::CONFLICT, "the bot no longer exists"));
