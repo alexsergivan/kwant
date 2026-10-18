@@ -2056,7 +2056,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   );
 
   const away = (
-    <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount} />
+    <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount}
+      onBack={isPhone ? () => { setShowAway(false); setPhoneView('list'); } : undefined}
+    />
   );
   const chat = (
         <ChatView
