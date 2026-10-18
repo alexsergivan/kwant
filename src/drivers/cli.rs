@@ -639,15 +639,16 @@ impl Driver for CliDriver {
 
         let effort = input.effort_level.as_deref().unwrap_or("medium");
 
-        let _ = event_tx
-            .send(RuntimeEvent::ThinkingDelta(format!(
-                "Invoking local {} CLI (model: {}, effort: {}, binary: {})...",
-                self.tool_kind,
-                input.model.as_deref().unwrap_or("default"),
-                effort,
-                bin_path
-            )))
-            .await;
+        // Kept out of the chat: the turn's "Running on" notice already names the engine and
+        // account, and the same binary runs every account
+        tracing::info!(
+            cli = %self.tool_kind,
+            model = input.model.as_deref().unwrap_or("default"),
+            effort,
+            binary = %bin_path,
+            profile_home = self.profile_env.is_some(),
+            "invoking local CLI"
+        );
 
         let system_prompt = input.format_system_prompt();
         let effective_prompt = build_cli_prompt(&input);

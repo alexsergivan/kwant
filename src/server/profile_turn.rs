@@ -69,6 +69,15 @@ pub fn profile_engine(p: &LlmProfile) -> Option<EngineId> {
     }
 }
 
+/// The account a turn on `engine` runs on, for its "Running on" notice: the profile's name,
+/// else "This machine" for a CLI's own login. API keys from Settings and Ollama have none.
+pub fn account_name(profile: Option<&LlmProfile>, engine: EngineId) -> Option<String> {
+    match profile {
+        Some(p) => Some(p.name.clone()),
+        None => (engine.kind() == crate::drivers::engines::EngineKind::Cli).then(|| "This machine".into()),
+    }
+}
+
 /// An engine turned off in Settings is off for every account on it too.
 fn profile_engine_on(state: &AppState, p: &LlmProfile) -> bool {
     profile_engine(p).is_none_or(|e| state.engines.is_enabled(e))

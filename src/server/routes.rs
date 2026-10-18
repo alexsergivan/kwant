@@ -1110,7 +1110,10 @@ async fn run_kwant_turn_inner(
             }
         }
 
-        let engine = crate::profiles::Engine::parse(&target_model);
+        // A routed model id like "claude-sonnet" still runs on Claude's accounts, never
+        // straight on this machine's login
+        let engine = crate::profiles::Engine::parse(&target_model)
+            .or_else(|| crate::profiles::Engine::from_model(&target_model));
         let candidates = super::profile_turn::plan(state, engine, &target_kwant.id).await;
         let attempts: Vec<Option<LlmProfile>> = if candidates.is_empty() {
             vec![None]
@@ -1236,8 +1239,11 @@ async fn run_kwant_turn_inner(
             input.model = if unlisted_api { None } else { choice.as_ref().and_then(|c| c.run_id()).map(str::to_string) };
             if let Some(e) = runs_on {
                 event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
-                    "Running on {} · {}{}",
+                    "Running on {}{} · {}{}",
                     e.name(),
+                    super::profile_turn::account_name(profile.as_ref(), e)
+                        .map(|a| format!(" · {a}"))
+                        .unwrap_or_default(),
                     input.model.as_deref().unwrap_or("default model"),
                     choice
                         .as_ref()
