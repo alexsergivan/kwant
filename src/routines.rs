@@ -25,6 +25,76 @@ pub enum Schedule {
     },
     /// Every `every_minutes`, counted from the last run (or from when it was scheduled).
     Interval { every_minutes: i64 },
+    /// On `days` of each month at `time` in `tz`. A day the month lacks (31 in April) runs on
+    /// its last day; `"last"` is always the last day.
+    Monthly {
+        time: String,
+        days: Vec<MonthDay>,
+        tz: String,
+    },
+    /// A five-field cron `expression` (minute hour day-of-month month day-of-week) in `tz`.
+    Cron { expression: String, tz: String },
+}
+
+/// A day of the month for [`Schedule::Monthly`]: `1`..`31`, or `"last"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonthDay {
+    Day(u32),
+    Last,
+}
+
+impl Serialize for MonthDay {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            MonthDay::Day(d) => s.serialize_u32(*d),
+            MonthDay::Last => s.serialize_str("last"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MonthDay {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let bad = || D::Error::custom("days are 1-31 or \"last\"");
+        match serde_json::Value::deserialize(d)? {
+            serde_json::Value::Number(n) => n
+                .as_u64()
+                .filter(|n| (1..=31).contains(n))
+                .map(|n| MonthDay::Day(n as u32))
+                .ok_or_else(bad),
+            serde_json::Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+                "last" | "l" | "-1" => Ok(MonthDay::Last),
+                other => other
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|n| (1..=31).contains(n))
+                    .map(MonthDay::Day)
+                    .ok_or_else(bad),
+            },
+            _ => Err(bad()),
+        }
+    }
+}
+
+fn last_day_of_month(date: NaiveDate) -> u32 {
+    let (y, m) = (date.year(), date.month());
+    let first_next = if m == 12 {
+        NaiveDate::from_ymd_opt(y + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(y, m + 1, 1)
+    };
+    first_next.and_then(|d| d.pred_opt()).map_or(28, |d| d.day())
+}
+
+impl MonthDay {
+    /// Whether this is `date`'s day, with days past the month's end on its last day.
+    fn matches(self, date: NaiveDate) -> bool {
+        let last = last_day_of_month(date);
+        match self {
+            MonthDay::Last => date.day() == last,
+            MonthDay::Day(d) => date.day() == d.min(last),
+        }
+    }
 }
 
 fn parse_time(time: &str) -> Result<NaiveTime, String> {
@@ -165,6 +235,15 @@ impl Schedule {
                 weekdays,
                 tz: canonical_tz(&tz),
             },
+            Schedule::Monthly { time, days, tz } => Schedule::Monthly {
+                time,
+                days,
+                tz: canonical_tz(&tz),
+            },
+            Schedule::Cron { expression, tz } => Schedule::Cron {
+                expression: expression.split_whitespace().collect::<Vec<_>>().join(" "),
+                tz: canonical_tz(&tz),
+            },
             other => other,
         }
     }
@@ -193,6 +272,23 @@ impl Schedule {
                 } else {
                     Err(format!("every_minutes must be between {MIN_INTERVAL_MINUTES} and {MAX_INTERVAL_MINUTES}"))
                 }
+            }
+            Schedule::Monthly { time, days, tz } => {
+                parse_time(time)?;
+                parse_tz(tz)?;
+                if days.is_empty() {
+                    return Err("monthly schedules need at least one day (1-31 or \"last\")".into());
+                }
+                Ok(())
+            }
+            Schedule::Cron { expression, tz } => {
+                parse_tz(tz)?;
+                Cron::parse(expression)?;
+                // e.g. "0 9 30 2 *": valid fields, but February never has a 30th
+                if self.next_after(Utc::now(), None).is_none() {
+                    return Err(format!("the cron expression '{expression}' never runs"));
+                }
+                Ok(())
             }
         }
     }
@@ -229,7 +325,178 @@ impl Schedule {
                 }
                 next_local(after, tz, time, |d| days.contains(&d.weekday()))
             }
+            Schedule::Monthly { time, days, tz } => {
+                let (time, tz) = (parse_time(time).ok()?, parse_tz(tz).ok()?);
+                if days.is_empty() {
+                    return None;
+                }
+                next_local_within(after, &tz, 62, |d| {
+                    days.iter().any(|m| m.matches(d)).then_some(vec![time])
+                })
+            }
+            Schedule::Cron { expression, tz } => {
+                let (cron, tz) = (Cron::parse(expression).ok()?, parse_tz(tz).ok()?);
+                // Long enough for "29 Feb" across a skipped leap year (2096 to 2104)
+                next_local_within(after, &tz, 366 * 8 + 2, |d| {
+                    cron.day_matches(d).then(|| cron.times())
+                })
+            }
         }
+    }
+}
+
+/// A parsed five-field cron expression. Minute, hour, day of month (also `L` for the last
+/// day), month (also `jan`..`dec`) and day of week (0-7 with 0 and 7 Sunday, also `mon`..`sun`,
+/// `fri#2` for the second Friday, `5L` for the last Friday). Fields take `*`, lists, ranges and
+/// steps. When both day fields are restricted a day matching either runs, as in classic cron.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Cron {
+    minutes: Vec<u32>,
+    hours: Vec<u32>,
+    dom: Vec<u32>,
+    dom_last: bool,
+    dom_any: bool,
+    months: Vec<u32>,
+    dow: Vec<u32>,
+    dow_nth: Vec<(u32, u32)>,
+    dow_last: Vec<u32>,
+    dow_any: bool,
+}
+
+const MONTH_NAMES: [&str; 12] = [
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+];
+const DAY_NAMES: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+/// One cron field as sorted values in `min..=max`; `names` map to `min + index`.
+fn cron_field(field: &str, what: &str, min: u32, max: u32, names: &[&str]) -> Result<Vec<u32>, String> {
+    let bad = || format!("cron {what} field '{field}' is not valid; use numbers {min}-{max}, *, lists, ranges or steps");
+    let value = |v: &str| -> Result<u32, String> {
+        let v = v.to_ascii_lowercase();
+        if let Some(i) = names.iter().position(|n| *n == v) {
+            return Ok(min + i as u32);
+        }
+        v.parse::<u32>().ok().filter(|n| (min..=max).contains(n)).ok_or_else(bad)
+    };
+    let mut out = Vec::new();
+    for part in field.split(',') {
+        let (range, step) = match part.split_once('/') {
+            Some((r, s)) => (r, s.parse::<u32>().ok().filter(|s| *s > 0).ok_or_else(bad)?),
+            None => (part, 1),
+        };
+        let (lo, hi) = match range {
+            "*" | "?" => (min, max),
+            r => match r.split_once('-') {
+                Some((a, b)) => (value(a)?, value(b)?),
+                // "5/15" means from 5 to the end in steps of 15
+                None if part.contains('/') => (value(r)?, max),
+                None => {
+                    let v = value(r)?;
+                    (v, v)
+                }
+            },
+        };
+        if lo > hi {
+            return Err(bad());
+        }
+        out.extend((lo..=hi).step_by(step as usize));
+    }
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
+impl Cron {
+    fn parse(expression: &str) -> Result<Self, String> {
+        let fields: Vec<&str> = expression.split_whitespace().collect();
+        let [minute, hour, dom, month, dow] = fields[..] else {
+            return Err(format!(
+                "cron expression '{expression}' needs exactly five fields: minute hour day-of-month month day-of-week, e.g. \"0 9 1 * *\""
+            ));
+        };
+        let minutes = cron_field(minute, "minute", 0, 59, &[])?;
+        // At most every MIN_INTERVAL_MINUTES, like interval routines
+        let too_often = minutes.len() > 1
+            && (minutes.windows(2).any(|w| w[1] - w[0] < MIN_INTERVAL_MINUTES as u32)
+                || 60 + minutes[0] - minutes[minutes.len() - 1] < MIN_INTERVAL_MINUTES as u32);
+        if too_often {
+            return Err(format!("cron routines may run at most every {MIN_INTERVAL_MINUTES} minutes"));
+        }
+        let hours = cron_field(hour, "hour", 0, 23, &[])?;
+        let months = cron_field(month, "month", 1, 12, &MONTH_NAMES)?;
+        let dom_any = dom == "*" || dom == "?";
+        let mut dom_last = false;
+        let mut dom_days = Vec::new();
+        if !dom_any {
+            for part in dom.split(',') {
+                if part.eq_ignore_ascii_case("l") {
+                    dom_last = true;
+                } else {
+                    dom_days.extend(cron_field(part, "day-of-month", 1, 31, &[])?);
+                }
+            }
+        }
+        let dow_any = dow == "*" || dow == "?";
+        let (mut dow_days, mut dow_nth, mut dow_last) = (Vec::new(), Vec::new(), Vec::new());
+        if !dow_any {
+            let day = |v: &str| -> Result<u32, String> {
+                cron_field(v, "day-of-week", 0, 7, &DAY_NAMES)?
+                    .first()
+                    .map(|d| d % 7)
+                    .ok_or_else(|| format!("cron day-of-week '{v}' is not valid"))
+            };
+            for part in dow.split(',') {
+                if let Some((d, n)) = part.split_once('#') {
+                    let n = n.parse::<u32>().ok().filter(|n| (1..=5).contains(n)).ok_or_else(|| {
+                        format!("cron day-of-week '{part}': use #1 to #5, e.g. mon#2 for the second Monday")
+                    })?;
+                    dow_nth.push((day(d)?, n));
+                } else if let Some(d) = part.strip_suffix(['L', 'l']).filter(|d| !d.is_empty()) {
+                    dow_last.push(day(d)?);
+                } else {
+                    dow_days.extend(cron_field(part, "day-of-week", 0, 7, &DAY_NAMES)?.into_iter().map(|d| d % 7));
+                }
+            }
+        }
+        Ok(Cron {
+            minutes,
+            hours,
+            dom: dom_days,
+            dom_last,
+            dom_any,
+            months,
+            dow: dow_days,
+            dow_nth,
+            dow_last,
+            dow_any,
+        })
+    }
+
+    fn day_matches(&self, d: NaiveDate) -> bool {
+        if !self.months.contains(&d.month()) {
+            return false;
+        }
+        let last = last_day_of_month(d);
+        let dom = || self.dom.contains(&d.day()) || (self.dom_last && d.day() == last);
+        let wd = d.weekday().num_days_from_sunday();
+        let dow = || {
+            self.dow.contains(&wd)
+                || self.dow_nth.iter().any(|&(w, n)| w == wd && (d.day() - 1) / 7 + 1 == n)
+                || self.dow_last.iter().any(|&w| w == wd && d.day() + 7 > last)
+        };
+        match (self.dom_any, self.dow_any) {
+            (true, true) => true,
+            (true, false) => dow(),
+            (false, true) => dom(),
+            (false, false) => dom() || dow(),
+        }
+    }
+
+    fn times(&self) -> Vec<NaiveTime> {
+        self.hours
+            .iter()
+            .flat_map(|h| self.minutes.iter().filter_map(move |m| NaiveTime::from_hms_opt(*h, *m, 0)))
+            .collect()
     }
 }
 
@@ -254,12 +521,26 @@ fn next_local(
     time: NaiveTime,
     day_ok: impl Fn(NaiveDate) -> bool,
 ) -> Option<DateTime<Utc>> {
+    next_local_within(after, &tz, 8, |d| day_ok(d).then_some(vec![time]))
+}
+
+/// The first local time after `after` within `days` days: `times_on` gives a day's wall-clock
+/// times in order, or `None` when the day doesn't run.
+fn next_local_within(
+    after: DateTime<Utc>,
+    tz: &Zone,
+    days: u64,
+    times_on: impl Fn(NaiveDate) -> Option<Vec<NaiveTime>>,
+) -> Option<DateTime<Utc>> {
     let start = tz.date_at(after)?;
-    (0..=8)
+    (0..=days)
         .filter_map(|offset| start.checked_add_days(chrono::Days::new(offset)))
-        .filter(|d| day_ok(*d))
-        .filter_map(|d| resolve_local(&tz, d, time))
-        .find(|t| *t > after)
+        .find_map(|d| {
+            times_on(d)?
+                .into_iter()
+                .filter_map(|time| resolve_local(tz, d, time))
+                .find(|t| *t > after)
+        })
 }
 
 #[cfg(test)]
@@ -510,5 +791,152 @@ mod tests {
         }
         .validate()
         .is_err());
+    }
+
+    fn monthly(days: &str, time: &str, tz: &str) -> Schedule {
+        serde_json::from_str(&format!(r#"{{"type":"monthly","time":"{time}","days":{days},"tz":"{tz}"}}"#)).unwrap()
+    }
+
+    fn cron(expression: &str, tz: &str) -> Schedule {
+        Schedule::Cron { expression: expression.into(), tz: tz.into() }
+    }
+
+    #[test]
+    fn monthly_runs_every_month_not_once() {
+        // "the 1st of each month at 09:00 Berlin": Berlin is UTC+2 until 25 Oct, then UTC+1
+        let s = monthly("[1]", "09:00", "Europe/Berlin");
+        assert!(s.validate().is_ok());
+        let first = s.next_after(utc("2026-10-18T21:45:00Z"), None).unwrap();
+        assert_eq!(first, utc("2026-11-01T08:00:00Z"));
+        let second = s.next_after(first, Some(first)).unwrap();
+        assert_eq!(second, utc("2026-12-01T08:00:00Z"));
+        // Across spring forward: 1 April is summer time again
+        assert_eq!(
+            s.next_after(utc("2027-03-02T00:00:00Z"), None),
+            Some(utc("2027-04-01T07:00:00Z"))
+        );
+    }
+
+    #[test]
+    fn monthly_last_day_and_short_months() {
+        let last = monthly(r#"["last"]"#, "18:00", "UTC");
+        assert_eq!(last.next_after(utc("2027-02-01T00:00:00Z"), None), Some(utc("2027-02-28T18:00:00Z")));
+        assert_eq!(last.next_after(utc("2028-02-01T00:00:00Z"), None), Some(utc("2028-02-29T18:00:00Z")));
+        assert_eq!(last.next_after(utc("2026-10-31T18:00:00Z"), None), Some(utc("2026-11-30T18:00:00Z")));
+        // The 31st falls back to a short month's last day, once
+        let s = monthly("[31]", "08:00", "UTC");
+        assert_eq!(s.next_after(utc("2026-11-01T00:00:00Z"), None), Some(utc("2026-11-30T08:00:00Z")));
+        assert_eq!(s.next_after(utc("2026-11-30T08:00:00Z"), None), Some(utc("2026-12-31T08:00:00Z")));
+        // Several days, and "last" written as a string number
+        let s = monthly(r#"[15, "1"]"#, "08:00", "UTC");
+        assert_eq!(s.next_after(utc("2026-10-18T00:00:00Z"), None), Some(utc("2026-11-01T08:00:00Z")));
+        assert_eq!(s.next_after(utc("2026-11-01T08:00:00Z"), None), Some(utc("2026-11-15T08:00:00Z")));
+        assert!(serde_json::from_str::<Schedule>(r#"{"type":"monthly","time":"08:00","days":[32],"tz":"UTC"}"#).is_err());
+        assert!(serde_json::from_str::<Schedule>(r#"{"type":"monthly","time":"08:00","days":[0],"tz":"UTC"}"#).is_err());
+        assert!(monthly("[]", "08:00", "UTC").validate().is_err());
+        assert!(monthly("[1]", "8am", "UTC").validate().is_err());
+        assert!(monthly("[1]", "08:00", "Mars/Base").validate().is_err());
+        // Round-trips as stored
+        let stored = serde_json::to_value(monthly(r#"[1, "last"]"#, "08:00", "UTC")).unwrap();
+        assert_eq!(stored["days"], serde_json::json!([1, "last"]));
+    }
+
+    #[test]
+    fn monthly_at_a_skipped_local_time() {
+        // New York, 02:30 on 8 Mar 2026 doesn't exist: runs at 03:00 EDT
+        let s = monthly("[8]", "02:30", "America/New_York");
+        assert_eq!(s.next_after(utc("2026-03-01T00:00:00Z"), None), Some(utc("2026-03-08T07:00:00Z")));
+        assert_eq!(s.next_after(utc("2026-03-08T07:00:00Z"), None), Some(utc("2026-04-08T06:30:00Z")));
+    }
+
+    #[test]
+    fn cron_calendar_rules() {
+        let after = utc("2026-10-18T21:45:00Z"); // a Sunday
+        // 1st of the month at 09:00 Kyiv (UTC+2 from 25 Oct)
+        assert_eq!(cron("0 9 1 * *", "Europe/Kyiv").next_after(after, None), Some(utc("2026-11-01T07:00:00Z")));
+        // Last day of the month
+        assert_eq!(cron("0 9 L * *", "UTC").next_after(after, None), Some(utc("2026-10-31T09:00:00Z")));
+        // Weekdays at 07:30
+        let s = cron("30 7 * * mon-fri", "UTC");
+        assert_eq!(s.next_after(after, None), Some(utc("2026-10-19T07:30:00Z")));
+        assert_eq!(s.next_after(utc("2026-10-23T07:30:00Z"), None), Some(utc("2026-10-26T07:30:00Z")));
+        // Second Monday of each month; last Friday of each month
+        assert_eq!(cron("0 10 * * MON#2", "UTC").next_after(after, None), Some(utc("2026-11-09T10:00:00Z")));
+        assert_eq!(cron("0 17 * * 5L", "UTC").next_after(after, None), Some(utc("2026-10-30T17:00:00Z")));
+        // Quarterly on the 1st; Sunday as 0 and 7
+        assert_eq!(cron("0 8 1 jan,apr,jul,oct *", "UTC").next_after(after, None), Some(utc("2027-01-01T08:00:00Z")));
+        assert_eq!(cron("0 8 * * 7", "UTC").next_after(after, None), Some(utc("2026-10-25T08:00:00Z")));
+        assert_eq!(cron("0 8 * * 0", "UTC").next_after(after, None), Some(utc("2026-10-25T08:00:00Z")));
+        // Both day fields restricted: either matches (classic cron)
+        assert_eq!(cron("0 8 1 * mon", "UTC").next_after(after, None), Some(utc("2026-10-19T08:00:00Z")));
+        // Steps: every 15 minutes during 9-10 on the hour range
+        let s = cron("*/15 9-10 * * *", "UTC");
+        assert_eq!(s.next_after(utc("2026-10-19T09:50:00Z"), None), Some(utc("2026-10-19T10:00:00Z")));
+        assert_eq!(s.next_after(utc("2026-10-19T10:45:00Z"), None), Some(utc("2026-10-20T09:00:00Z")));
+        // 29 Feb only in leap years
+        assert_eq!(cron("0 0 29 2 *", "UTC").next_after(after, None), Some(utc("2028-02-29T00:00:00Z")));
+    }
+
+    #[test]
+    fn cron_across_dst() {
+        // 01:30 daily in New York around the fall-back on 1 Nov 2026: first 01:30 only
+        let s = cron("30 1 * * *", "America/New_York");
+        assert_eq!(s.next_after(utc("2026-11-01T00:00:00Z"), None), Some(utc("2026-11-01T05:30:00Z")));
+        assert_eq!(s.next_after(utc("2026-11-01T05:30:00Z"), None), Some(utc("2026-11-02T06:30:00Z")));
+        // 02:30 on spring-forward day doesn't exist: 03:00 EDT, then normal
+        let s = cron("30 2 * * *", "America/New_York");
+        assert_eq!(s.next_after(utc("2026-03-08T00:00:00Z"), None), Some(utc("2026-03-08T07:00:00Z")));
+        assert_eq!(s.next_after(utc("2026-03-08T07:00:00Z"), None), Some(utc("2026-03-09T06:30:00Z")));
+        // Every 30 minutes through the spring-forward gap: no duplicate, no stall
+        let s = cron("0,30 * * * *", "America/New_York");
+        let mut t = utc("2026-03-08T06:15:00Z"); // 01:15 EST
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            t = s.next_after(t, Some(t)).unwrap();
+            seen.push(t);
+        }
+        assert_eq!(
+            seen,
+            vec![
+                utc("2026-03-08T06:30:00Z"), // 01:30 EST
+                utc("2026-03-08T07:00:00Z"), // 03:00 EDT (02:00 and 02:30 skipped into it)
+                utc("2026-03-08T07:30:00Z"),
+                utc("2026-03-08T08:00:00Z"),
+            ]
+        );
+    }
+
+    #[test]
+    fn cron_validation() {
+        for bad in [
+            "",
+            "0 9 * *",
+            "0 9 * * * *",
+            "60 9 * * *",
+            "0 24 * * *",
+            "0 9 32 * *",
+            "0 9 * 13 *",
+            "0 9 * * 8",
+            "0 9 * * mon#6",
+            "0 9 * * funday",
+            "* * * * *",
+            "*/2 * * * *",
+            "0,58 * * * *",
+            "0 9 10-5 * *",
+            "0 9 */0 * *",
+            "@daily",
+            "0 9 30 2 *",
+        ] {
+            assert!(cron(bad, "UTC").validate().is_err(), "{bad:?}");
+        }
+        assert!(cron("0 9 1 * *", "Nowhere/Zone").validate().is_err());
+        for ok in ["0 9 1 * *", "*/5 * * * *", "0 9 L * *", "0 9 * * MON#1", "15 8 * * sat,sun", " 0  9 1 * * "] {
+            assert!(cron(ok, "Europe/Kiev").validate().is_ok(), "{ok:?}");
+        }
+        let c = cron(" 0  9 1 * * ", "Europe/Kiev").canonical();
+        assert_eq!(c, cron("0 9 1 * *", "Europe/Kyiv"));
+        let parsed: Schedule = serde_json::from_str(r#"{"type":"cron","expression":"0 9 1 * *","tz":"UTC"}"#).unwrap();
+        assert!(parsed.validate().is_ok());
+        assert!(serde_json::from_str::<Schedule>(r#"{"type":"cron","expression":"0 9 1 * *"}"#).is_err());
     }
 }

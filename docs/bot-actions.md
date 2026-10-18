@@ -14,6 +14,7 @@ to the turn's bot and its space. Code: `src/server/bot_actions.rs`, `src/db/bot_
 | `routine_pause` / `routine_resume` | `routine` | Applied, undo restores |
 | `routine_run_now` | `routine` | Logged with a card, no undo |
 | `routine_delete` | `routine` | Applied, undo recreates it (new id; the action is retargeted) |
+| `follow_up_create` | `at` (RFC 3339 with offset), `check`, `name?` | A one-off check-in by the calling bot in this chat or thread. Applied as `routine_create`, so undo deletes it |
 | `bot_list` | – | Bots, models, accounts, installed tool servers |
 | `bot_create` | `name`, `title`, `instructions`, `soul?`, `model?`, `profile_id?`, `avatar?` | Applied, undo deletes it if it has no history yet |
 | `bot_update` | `bot`, `name?`, `title?`, `instructions?`, `soul?`, `model?`, `profile_id?`, `avatar?`, `mcp_servers?` | Applied, undo restores fields, account and tool servers |
@@ -36,9 +37,14 @@ to the turn's bot and its space. Code: `src/server/bot_actions.rs`, `src/db/bot_
   - `{"type":"weekly","time":"09:30","weekdays":["mon"],"tz?"}`
   - `{"type":"interval","every_minutes":60}`
   - `{"type":"once","at":"<RFC 3339>"}`
+  - `{"type":"monthly","time":"09:00","days":[1, 15, "last"],"tz?"}`. A day past a month's end runs on that month's last day.
+  - `{"type":"cron","expression":"0 9 * * MON#2","tz?"}`. Five fields (minute hour day-of-month month weekday), with lists, ranges, steps, names, `L` (last day of month), `MON#2` and `5L`. When both day fields are set, either one matching is enough, as in classic cron. Not supported: seconds, years, `@daily`-style macros, or rules that fire more than once every 5 minutes. A rule that never fires (`0 9 30 2 *`) is refused.
+- Local times follow the zone across DST. A time that falls in the spring-forward gap runs at the first valid moment after it, and an ambiguous autumn time runs once, at its first occurrence.
 - Without `tz`, the `timezone` setting is used. If that isn't set either, the tool returns an error asking the bot to pass `tz` or ask the person.
 - Schedule and validation errors come back as tool errors (`isError: true`), and nothing changes.
-- A routine runs as its bot and delivers into its channel, or into that bot's direct chat. Created from a thread, it delivers to the thread's channel or direct chat, not into the thread.
+- A routine runs as its bot and delivers into its channel, its thread (`thread_id`, one of that bot's own threads), or that bot's direct chat. Created by a bot for itself from a thread, with no `channel` given, it delivers into that thread.
+- Follow-ups: a `once` routine a bot makes for itself (`follow_up_create`, or `routine_create` with a once schedule and no `channel`) stores `context_message_id`, the person's latest message in that chat. When it runs, if that message is no longer in the 20 messages the turn sees anyway, the prompt gets up to 6 messages around it (600 characters each), from the same chat only. The API refuses a `context_message_id` from another chat, and a `thread_id` that belongs to another bot.
+- `GET /api/routines` items also carry `schedule_text` (for example "monthly on day 1 at 09:00 Europe/Berlin"), `thread_id` and `context_message_id`.
 
 New setting: `GET/POST /api/settings` has `timezone` (IANA name; `""` means not set and clears it). Legacy names are canonicalised (Europe/Kiev → Europe/Kyiv).
 

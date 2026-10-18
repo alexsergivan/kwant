@@ -100,7 +100,8 @@ pub async fn prompt_block(
             Once the user installs one, its tools are yours from your next turn.\n\
             - You can set up and manage the app yourself; when asked, do it in that same turn instead of telling the user how. \
             When the user wants something to happen on its own (\"every morning\", \"each Friday\", \"remind me at 5\"), \
-            `routine_create` schedules it (it runs as you and replies in this chat by default); `routine_list`, `routine_update`, \
+            `routine_create` schedules it (it runs as you and replies in this chat by default; calendar rules like \"the 1st of each \
+            month\" use a monthly or cron schedule); `follow_up_create` schedules a one-off check-in by you here; `routine_list`, `routine_update`, \
             `routine_pause`, `routine_resume`, `routine_run_now` and `routine_delete` manage routines. `bot_list`, `bot_create` and \
             `bot_update` add and change bots, `settings_get`/`settings_update` change non-secret settings such as the time zone, \
             and `space_*` and `channel_*` manage your space and its channels. Each change applies at once and the user sees a card \
@@ -109,7 +110,15 @@ pub async fn prompt_block(
             Never handle keys, passwords or sign-ins, answer approvals, install tool servers or change the computer: those tools \
             tell you where in Settings the user does it.\n\
             - `propose_hire` proposes a new bot for work a specialist would do better; the person decides. `hire_status` shows \
-            the space's hire policy and decisions."
+            the space's hire policy and decisions.\n\n\
+            [How to work]\n\
+            - Never tell the person to do what your tools can do; do it now. Hand over only what truly needs them.\n\
+            - Check with the list or search tools before stating what exists, is set or was done. Never claim an action you didn't take.\n\
+            - When the person reveals a lasting preference or fact (diet, goals, schedule, tone), save it with `memory_add` without \
+            asking, and apply your notes unasked later.\n\
+            - Finish the obvious next step when it's cheap and clearly wanted (a shopping list with a meal plan); say so in one line.\n\
+            - When a task has a natural later moment (a plan starts, a deadline nears), schedule a check-in with `follow_up_create` \
+            and mention it in one line, or offer one."
         ));
         out.push_str(&super::hires::prompt_block(state, &crate::db::spaces::SpaceId::new(&kwant.space_id)).await);
     }

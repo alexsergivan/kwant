@@ -513,7 +513,7 @@ async fn get_configured_endpoint(db: &crate::db::Database, target_model: &str) -
 }
 
 /// Truncates to at most `max` bytes without splitting a UTF-8 character.
-fn truncate_chars(text: &str, max: usize) -> &str {
+pub(super) fn truncate_chars(text: &str, max: usize) -> &str {
     if text.len() <= max {
         return text;
     }
@@ -707,19 +707,20 @@ fn execute_single_turn(
     });
 }
 
-/// Runs a routine's turn as if the user had sent `prompt` to `kwant` in `channel_id` (or in
-/// their direct chat): same team context, workspace, approvals and profile failover, and the
+/// Runs a routine's turn as if the user had sent `prompt` to `kwant` in `thread_id`, in
+/// `channel_id` or in their direct chat: same team context, workspace, approvals and profile failover, and the
 /// chat's stop button cancels it. The prompt message must already be saved. Returns the id of
 /// the kwant's reply, or `Err` with why there is none.
 pub(super) async fn run_routine_turn(
     state: &AppState,
     kwant: &Kwant,
     channel_id: Option<String>,
+    thread_id: Option<String>,
     prompt: String,
 ) -> Result<Option<String>, String> {
-    let context_key = channel_id.clone().unwrap_or_else(|| kwant.id.clone());
+    let context_key = thread_id.clone().or_else(|| channel_id.clone()).unwrap_or_else(|| kwant.id.clone());
     let job = state.turns.start_job([context_key.clone()]);
-    let scope = scope_for(state, kwant, channel_id, None, &job, 0).await?;
+    let scope = scope_for(state, kwant, channel_id, thread_id, &job, 0).await?;
     let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts::default()).await;
     match reply {
         Ok(text) => {

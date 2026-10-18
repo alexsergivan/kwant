@@ -38,9 +38,10 @@ const AVATARS: [&str; 22] = [
     "teacher", "marketing", "legal", "coach", "traveler", "chef", "fitness", "party", "builder", "zen",
 ];
 
-const TOOL_NAMES: [&str; 22] = [
+const TOOL_NAMES: [&str; 23] = [
     "routine_list",
     "routine_create",
+    "follow_up_create",
     "routine_update",
     "routine_pause",
     "routine_resume",
@@ -71,12 +72,17 @@ fn schedule_schema() -> Value {
     json!({
         "type": "object",
         "description": "{\"type\":\"daily\",\"time\":\"07:00\"} | {\"type\":\"weekly\",\"time\":\"09:30\",\"weekdays\":[\"mon\",\"fri\"]} \
+            | {\"type\":\"monthly\",\"time\":\"09:00\",\"days\":[1]} (days 1-31 or \"last\") \
+            | {\"type\":\"cron\",\"expression\":\"0 9 * * mon#2\"} (5 fields; L, mon#2, 5L allowed) \
             | {\"type\":\"interval\",\"every_minutes\":60} (5-10080) | {\"type\":\"once\",\"at\":\"2026-10-20T07:00:00+02:00\"}. \
-            daily and weekly take an IANA `tz` (e.g. Europe/Berlin); without one the person's time zone from Settings is used.",
+            Use monthly or cron for calendar rules (\"1st of each month\"), never a single once. daily, weekly, monthly and cron \
+            take an IANA `tz` (e.g. Europe/Berlin); without one the person's time zone from Settings is used.",
         "properties": {
-            "type": {"type": "string", "enum": ["once", "daily", "weekly", "interval"]},
+            "type": {"type": "string", "enum": ["once", "daily", "weekly", "monthly", "cron", "interval"]},
             "time": {"type": "string", "description": "HH:MM, 24-hour"},
             "weekdays": {"type": "array", "items": {"type": "string", "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]}},
+            "days": {"type": "array", "description": "monthly: days of the month, 1-31 or \"last\"", "items": {"type": ["integer", "string"]}},
+            "expression": {"type": "string", "description": "cron: minute hour day-of-month month day-of-week"},
             "tz": {"type": "string"},
             "every_minutes": {"type": "integer"},
             "at": {"type": "string", "description": "RFC 3339 time with offset"},
@@ -110,6 +116,21 @@ pub fn tools() -> Vec<Value> {
                     "channel": {"type": "string", "description": "Where it delivers: a channel's id or name, or \"direct\" for the bot's direct chat. Default: this chat"},
                 },
                 "required": ["name", "instructions", "schedule"],
+            },
+        }),
+        json!({
+            "name": "follow_up_create",
+            "description": "Schedule a one-off check-in by you, in this same chat (or thread), at `at`. At that time you get \
+                `check` plus the exchange it follows up on, and you write to the person. Use it when you promised to check back, \
+                or the task has a natural later moment (after a first workout, before a deadline). The person sees a card with Undo.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "at": {"type": "string", "description": "When, RFC 3339 with offset, e.g. 2026-10-22T18:00:00+02:00"},
+                    "check": {"type": "string", "description": "What to ask or check then, written as a note to yourself (max 4000)"},
+                    "name": {"type": "string", "description": "Short name; default \"Follow-up: <check>\""},
+                },
+                "required": ["at", "check"],
             },
         }),
         json!({
@@ -362,6 +383,7 @@ pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value)
     match name {
         "routine_list" => cx.routine_list().await,
         "routine_create" => cx.routine_create(args).await,
+        "follow_up_create" => cx.follow_up_create(args).await,
         "routine_update" => cx.routine_update(args).await,
         "routine_pause" => cx.routine_enable(args, false).await,
         "routine_resume" => cx.routine_enable(args, true).await,
@@ -397,6 +419,14 @@ pub fn schedule_text(s: &Value) -> String {
             format!("weekly on {} at {} {}", days.join(", "), str_of("time"), str_of("tz"))
         }
         Some("interval") => format!("every {} minutes", s["every_minutes"].as_i64().unwrap_or(0)),
+        Some("monthly") => {
+            let days: Vec<String> = s["days"]
+                .as_array()
+                .map(|a| a.iter().map(|d| d.as_str().map_or_else(|| d.to_string(), |x| format!("the {x} day"))).collect())
+                .unwrap_or_default();
+            format!("monthly on day {} at {} {}", days.join(", ").replace("day the last day", "the last day"), str_of("time"), str_of("tz"))
+        }
+        Some("cron") => format!("cron \"{}\" {}", str_of("expression"), str_of("tz")),
         _ => "an unknown schedule".into(),
     }
 }
@@ -452,6 +482,25 @@ impl Ctx<'_> {
         }
     }
 
+    /// The chat this turn is in, for routines that deliver "here": `(channel, thread)`; both
+    /// empty for a direct chat. A thread is only "here" for its own bot.
+    fn here(&self, target: &Kwant) -> (Option<String>, Option<String>) {
+        let origin = self.scope.origin.as_ref();
+        match origin.and_then(|o| o.thread_id.clone()) {
+            Some(t) if target.id == self.scope.kwant_id => (None, Some(t)),
+            Some(_) => (None, None),
+            None => (origin.and_then(|o| o.channel_id.clone()), None),
+        }
+    }
+
+    /// The latest message from the person in this turn's chat: what a follow-up follows up on.
+    async fn anchor(&self) -> Option<String> {
+        let origin = self.scope.origin.as_ref()?;
+        let chat = origin.thread_id.clone().or_else(|| origin.channel_id.clone()).or_else(|| origin.direct_kwant_id.clone())?;
+        let recent = self.db().list_messages(&chat, 10).await.ok()?;
+        recent.into_iter().rev().find(|m| m.sender_role == "user" && !m.sender_id.starts_with("Routine: ")).map(|m| m.id)
+    }
+
     /// Where a routine delivers: `Some(None)` for the bot's direct chat; `None` when not given.
     async fn delivery(&self, args: &Value, target: &Kwant, default_here: bool) -> Result<Option<Option<String>>, ToolResult> {
         match arg(args, "channel") {
@@ -477,7 +526,7 @@ impl Ctx<'_> {
         if !raw.is_object() {
             return Err(fail("schedule must be an object such as {\"type\":\"daily\",\"time\":\"07:00\"}"));
         }
-        let needs_tz = matches!(raw["type"].as_str(), Some("daily" | "weekly"));
+        let needs_tz = matches!(raw["type"].as_str(), Some("daily" | "weekly" | "monthly" | "cron"));
         if needs_tz && raw["tz"].as_str().map(str::trim).unwrap_or("").is_empty() {
             match self.db().get_setting(TIMEZONE_SETTING).await.ok().flatten().filter(|t| !t.trim().is_empty()) {
                 Some(tz) => raw["tz"] = json!(tz),
@@ -510,6 +559,13 @@ impl Ctx<'_> {
         let bot = self.db().get_kwant(kwant_id).await.ok().flatten().map(|k| k.name).unwrap_or_default();
         let channels = self.db().list_channels(&self.space).await.unwrap_or_default();
         let channel_id = view["channel_id"].as_str().map(str::to_string);
+        let delivers_to = match view["thread_id"].as_str() {
+            Some(t) => match self.db().get_thread(t).await.ok().flatten() {
+                Some(t) => format!("the thread \"{}\"", t.title),
+                None => "a thread".into(),
+            },
+            None => self.where_text(&channel_id, &channels, &bot),
+        };
         json!({
             "routine_id": view["id"],
             "name": view["name"],
@@ -520,7 +576,9 @@ impl Ctx<'_> {
             "enabled": view["enabled"],
             "next_run_at": view["next_run_at"],
             "channel_id": channel_id,
-            "delivers_to": self.where_text(&channel_id, &channels, &bot),
+            "thread_id": view["thread_id"],
+            "follow_up": view["context_message_id"].is_string(),
+            "delivers_to": delivers_to,
         })
     }
 
@@ -658,9 +716,22 @@ impl Ctx<'_> {
             Ok(s) => s,
             Err(e) => return e,
         };
-        let channel_id = match self.delivery(args, &target, true).await {
+        let mut channel_id = match self.delivery(args, &target, true).await {
             Ok(c) => c,
             Err(e) => return e,
+        };
+        // "Here" in a thread is that thread, when the routine runs as the thread's bot
+        let thread_id = match arg(args, "channel") {
+            None => self.here(&target).1,
+            Some(_) => None,
+        };
+        if thread_id.is_some() {
+            channel_id = Some(None);
+        }
+        // A one-off reminder made here carries the exchange that asked for it
+        let context_message_id = match (&schedule, arg(args, "channel")) {
+            (Schedule::Once { .. }, None) if target.id == self.scope.kwant_id => self.anchor().await,
+            _ => None,
         };
         let payload = RoutinePayload {
             kwant_id: Some(target.id.clone()),
@@ -669,6 +740,8 @@ impl Ctx<'_> {
             instructions: args["instructions"].as_str().map(str::to_string),
             schedule: Some(schedule),
             enabled: Some(true),
+            thread_id: Some(thread_id),
+            context_message_id: Some(context_message_id),
         };
         let resp = super::scheduler::create(
             State(self.state.clone()),
@@ -697,6 +770,65 @@ impl Ctx<'_> {
             d["delivers_to"].as_str().unwrap_or(""),
             view["next_run_at"].as_str().unwrap_or("not scheduled"),
         );
+        self.applied("routine_create", "routine", view["id"].as_str().map(str::to_string), summary, None, d, reply).await
+    }
+
+    async fn follow_up_create(&self, args: &Value) -> ToolResult {
+        let me = match self.bot(None).await {
+            Ok(k) => k,
+            Err(e) => return e,
+        };
+        if self.scope.origin.is_none() {
+            return fail("A follow-up needs a chat to come back to; this turn has none.");
+        }
+        let Some(check) = arg(args, "check") else {
+            return fail("check is required: what to ask or check then");
+        };
+        let Some(at) = arg(args, "at") else {
+            return fail("at is required: an RFC 3339 time with offset, e.g. 2026-10-22T18:00:00+02:00");
+        };
+        let at = match chrono::DateTime::parse_from_rfc3339(at) {
+            Ok(t) => t.with_timezone(&chrono::Utc),
+            Err(_) => return fail(format!("at \"{at}\" is not an RFC 3339 time with offset, e.g. 2026-10-22T18:00:00+02:00")),
+        };
+        if at <= chrono::Utc::now() {
+            return fail("at must be in the future.");
+        }
+        let (channel, thread) = self.here(&me);
+        let name = match arg(args, "name") {
+            Some(n) => n.to_string(),
+            None => format!("Follow-up: {}", check.chars().take(60).collect::<String>()),
+        };
+        let payload = RoutinePayload {
+            kwant_id: Some(me.id.clone()),
+            channel_id: Some(channel),
+            name: Some(name),
+            instructions: Some(check.to_string()),
+            schedule: Some(Schedule::Once { at }),
+            enabled: Some(true),
+            thread_id: Some(thread),
+            context_message_id: Some(self.anchor().await),
+        };
+        let resp = super::scheduler::create(
+            State(self.state.clone()),
+            Scope(self.space.clone()),
+            space_uri("/api/routines", &self.space),
+            Json(payload),
+        )
+        .await;
+        let view = match read(resp).await {
+            Ok(v) => v,
+            Err(e) => return fail(format!("The follow-up was not scheduled: {e}")),
+        };
+        let d = self.routine_details(&view).await;
+        let summary = format!("scheduled a follow-up '{}', {}, in {}", view["name"].as_str().unwrap_or(""), d["schedule_text"].as_str().unwrap_or(""), d["delivers_to"].as_str().unwrap_or(""));
+        let reply = format!(
+            "Scheduled follow-up [{}] for {} in {}; you'll get the note and the exchange it follows up on.",
+            view["id"].as_str().unwrap_or(""),
+            view["next_run_at"].as_str().unwrap_or(""),
+            d["delivers_to"].as_str().unwrap_or(""),
+        );
+        // Recorded as a routine creation, so Undo removes it the same way
         self.applied("routine_create", "routine", view["id"].as_str().map(str::to_string), summary, None, d, reply).await
     }
 
@@ -758,6 +890,7 @@ impl Ctx<'_> {
             instructions: args["instructions"].as_str().map(str::to_string),
             schedule,
             enabled: None,
+            ..Default::default()
         };
         self.routine_patch("routine_update", row, payload, "updated").await
     }
@@ -1532,6 +1665,8 @@ fn routine_payload(before: &Value) -> Result<RoutinePayload, Response> {
         instructions: before["instructions"].as_str().map(str::to_string),
         schedule: Some(schedule),
         enabled: before["enabled"].as_bool(),
+        thread_id: Some(before["thread_id"].as_str().map(str::to_string)),
+        context_message_id: Some(before["context_message_id"].as_str().map(str::to_string)),
     })
 }
 
