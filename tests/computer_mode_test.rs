@@ -1,5 +1,6 @@
 //! Settings → Computer API and local-mode shell approval. One test function, because it changes
 //! process environment (Chrome path, display, KWNT_COMPUTER_MODE) step by step.
+//! The real-Chrome side of local mode is in `local_chrome_test.rs`.
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -34,6 +35,19 @@ async fn call(app: &axum::Router, method: &str, body: Option<Value>) -> (StatusC
         status,
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
+}
+
+async fn put_window(app: &axum::Router, body: Value) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings/computer/window")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
 async fn next_approval(rx: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>) -> (String, Value) {
@@ -73,6 +87,8 @@ async fn computer_mode_api_and_local_shell_approval() {
     let fake_chrome = tmp.path().join("fake-chrome");
     std::fs::write(&fake_chrome, "").unwrap();
     std::env::remove_var("KWNT_COMPUTER_MODE");
+    std::env::remove_var("DISPLAY");
+    std::env::remove_var("WAYLAND_DISPLAY");
     std::env::set_var("KWNT_CHROME_PATH", tmp.path().join("missing-chrome"));
 
     let db = Database::init(tmp.path()).await.unwrap();
@@ -102,6 +118,12 @@ async fn computer_mode_api_and_local_shell_approval() {
         .unwrap()
         .contains("KWNT_CHROME_PATH"));
     assert_eq!(view["reasons"]["vm"], Value::Null);
+    assert_eq!(view["window"]["visible"], false);
+    if cfg!(target_os = "linux") {
+        // no display: Chrome can still run in the app, just not as a window
+        assert_eq!(view["window"]["available"], false);
+        assert!(view["window"]["reason"].as_str().unwrap().contains("display"));
+    }
 
     // PUT: bad bodies and unavailable modes are 400 and save nothing
     for body in [
@@ -134,14 +156,29 @@ async fn computer_mode_api_and_local_shell_approval() {
     assert_eq!(call(&app, "GET", None).await.1["mode"], "vm");
     assert_eq!(state.browser_service.mode(), ComputerMode::Vm);
 
-    // with a Chrome and a display, local becomes available and switching works at runtime
+    // the window switch is local-only
+    let (status, err) = put_window(&app, json!({"visible": true})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(err["error"].as_str().unwrap().contains("Local computer"), "{err}");
+
+    // with a Chrome (no display needed), local becomes available and switching works at runtime
     std::env::set_var("KWNT_CHROME_PATH", &fake_chrome);
-    std::env::set_var("DISPLAY", ":99");
     let (status, view) = call(&app, "PUT", Some(json!({"mode": "local"}))).await;
     assert_eq!(status, StatusCode::OK, "{view}");
     assert_eq!(view["mode"], "local");
     assert_eq!(view["available"]["local"], true);
     assert_eq!(state.browser_service.mode(), ComputerMode::Local);
+
+    // a window needs a display; a bad body is 400 too. Neither changes anything.
+    for body in [json!({}), json!({"visible": "yes"})] {
+        assert_eq!(put_window(&app, body).await.0, StatusCode::BAD_REQUEST);
+    }
+    if cfg!(target_os = "linux") {
+        let (status, err) = put_window(&app, json!({"visible": true})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(err["error"].as_str().unwrap().contains("display"), "{err}");
+        assert!(!state.browser_service.local_window());
+    }
 
     // local shell: every command needs approval; a denied one does not run
     let mut rx = state.event_sender.subscribe();

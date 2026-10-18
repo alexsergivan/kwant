@@ -24,7 +24,8 @@ import {
 import { playSfx } from '../audio/chiptune';
 import { mapBrowserPoint } from '../browserViewport';
 import { useBrowserStream } from '../useBrowserStream';
-import { ComputerModeChip, ComputerModeError, LocalBrowserNote, useComputerMode } from './ComputerModeSwitch';
+import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, useComputerMode } from './ComputerModeSwitch';
+import { showsLocalWindow } from '../computerMode';
 
 export interface TerminalLogEntry {
   command: string;
@@ -85,12 +86,14 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const [newPassword, setNewPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Local mode drives a real Chrome window, so there's no stream to show. Unknown counts as vm.
+  // Local Chrome streams here like the VM, unless the person opened it as a window: then there's
+  // nothing to show. Unknown counts as vm.
   const computer = useComputerMode(isOpen);
   const isLocal = computer.state.settings?.mode === 'local';
+  const isWindow = showsLocalWindow(computer.state.settings);
 
   // Interactive Remote Control State
-  const stream = useBrowserStream(teamId, isOpen && activeTab === 'browser' && !isLocal);
+  const stream = useBrowserStream(teamId, isOpen && activeTab === 'browser' && !isWindow && !computer.windowPending);
   const isControlMode = stream.controlling;
   const isInteracting = stream.busy;
   const [quickTypeText, setQuickTypeText] = useState('');
@@ -328,9 +331,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
         <div className="flex items-center gap-1 shrink-0">
           <ComputerModeChip api={computer} />
+          <OpenWindowButton api={computer} />
 
           {/* Interactive Control Toggle */}
-          {!isLocal && (
+          {!isWindow && (
             <button
               type="button"
               onClick={() => {
@@ -463,9 +467,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
       {/* Content Area */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {activeTab === 'browser' && isLocal ? (
+        {activeTab === 'browser' && isWindow ? (
           <div className="flex-1 flex flex-col p-3 overflow-hidden">
-            <LocalBrowserNote />
+            <LocalBrowserNote api={computer} />
           </div>
         ) : activeTab === 'browser' ? (
           <div className="flex-1 flex flex-col p-3 gap-2 overflow-hidden">
@@ -615,7 +619,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 <div className="text-center p-6 text-zinc-600 text-xs">
                   <Globe size={32} className="mx-auto mb-2 opacity-40 text-zinc-500" />
                   <p>{browserReady ? 'Browser idle' : 'Browser unavailable'}</p>
-                  <p className="text-[10px] text-zinc-500 mt-1">{browserReady ? 'Enter a URL above to open a page' : 'Start Docker, then use Restart Browser below'}</p>
+                  <p className="text-[10px] text-zinc-500 mt-1">{browserReady ? 'Enter a URL above to open a page' : isLocal ? 'Check that Chrome is installed, then use Restart Browser below' : 'Start Docker, then use Restart Browser below'}</p>
                 </div>
               )}
             </div>
@@ -886,10 +890,15 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
       {/* Footer Status */}
       <div className="p-2.5 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] text-zinc-400">
-        {isLocal ? (
+        {isWindow ? (
           <div className="flex items-center gap-1.5">
             <Laptop size={12} className="text-amber-300/80" />
-            <span>Chrome on your computer</span>
+            <span>Chrome window on your computer</span>
+          </div>
+        ) : isLocal ? (
+          <div className="flex items-center gap-1.5">
+            <Laptop size={12} className={browserReady ? 'text-amber-300/80' : 'text-zinc-500'} />
+            <span>{browserReady ? 'Chrome on your computer' : 'Chrome offline'}</span>
           </div>
         ) : (
           <div className="flex items-center gap-1.5">
@@ -897,7 +906,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             <span>{browserReady ? 'Browser Ready' : 'Browser Offline'}</span>
           </div>
         )}
-        {onRestartVm && !isLocal && (
+        {onRestartVm && !isWindow && (
           <button
             type="button"
             onClick={() => {

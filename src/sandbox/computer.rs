@@ -1,5 +1,6 @@
 //! Where bots do computer work: the person's own computer ("local": their installed Chrome with a
-//! kwant-only profile, and host shell commands that each need approval) or isolated containers
+//! kwant-only profile, run without a window and streamed into the app unless the person asks for
+//! a window, and host shell commands that each need approval) or isolated containers
 //! ("vm": the Docker browser and executor). Local is the default on macOS, vm everywhere else.
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -121,19 +122,17 @@ pub fn has_display(os: &str, display: Option<&str>, wayland: Option<&str>) -> bo
     }
 }
 
-/// Why local mode cannot run here, or `None` if it can.
-pub fn local_unavailable_reason(chrome: Option<&Path>, display: bool) -> Option<String> {
-    if chrome.is_none() {
-        return Some(format!(
-            "No Chrome or Chromium was found. Install Google Chrome, or set {CHROME_PATH_ENV} to its path."
-        ));
-    }
-    if !display {
-        return Some(
-            "This computer has no screen to show a browser window on (no display).".into(),
-        );
-    }
-    None
+/// Why local mode cannot run here, or `None` if it can. No display is needed: local Chrome runs
+/// without a window and the app shows it.
+pub fn local_unavailable_reason(chrome: Option<&Path>) -> Option<String> {
+    chrome.is_none().then(|| format!(
+        "No Chrome or Chromium was found. Install Google Chrome, or set {CHROME_PATH_ENV} to its path."
+    ))
+}
+
+/// Why local Chrome cannot be opened as a window here, or `None` if it can.
+pub fn window_unavailable_reason(display: bool) -> Option<String> {
+    (!display).then(|| "This computer has no screen to show a browser window on (no display).".into())
 }
 
 /// Why vm mode cannot run here, or `None` if it can. A configured browser service URL is enough
@@ -158,13 +157,16 @@ pub fn local_chrome_path() -> Option<PathBuf> {
 
 /// [`local_unavailable_reason`] for this process's environment.
 pub fn local_reason() -> Option<String> {
-    let os = std::env::consts::OS;
-    let display = has_display(
-        os,
+    local_unavailable_reason(local_chrome_path().as_deref())
+}
+
+/// [`window_unavailable_reason`] for this process's environment.
+pub fn window_reason() -> Option<String> {
+    window_unavailable_reason(has_display(
+        std::env::consts::OS,
         std::env::var("DISPLAY").ok().as_deref(),
         std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
-    );
-    local_unavailable_reason(local_chrome_path().as_deref(), display)
+    ))
 }
 
 /// Reads the debugging port Chrome writes to `DevToolsActivePort` in its profile folder.
@@ -173,46 +175,85 @@ pub fn read_devtools_port(profile: &Path) -> Option<u16> {
     text.lines().next()?.trim().parse().ok().filter(|&p| p > 0)
 }
 
-/// Chrome's command line for local mode: a headed window with its own profile, never the
-/// person's everyday one, and a debugging port Chrome picks itself (it listens on 127.0.0.1).
-pub fn chrome_args(profile: &Path) -> Vec<String> {
-    vec![
+/// The viewport of windowless local Chrome, matching the vm browser and the in-app viewer.
+pub const HEADLESS_WINDOW_SIZE: &str = "1280,800";
+
+/// Chrome's command line for local mode: its own profile, never the person's everyday one, and a
+/// debugging port Chrome picks itself (it listens on 127.0.0.1). Without a window (`headless`)
+/// unless the person asked to see one.
+pub fn chrome_args(profile: &Path, headless: bool) -> Vec<String> {
+    let mut args = vec![
         format!("--user-data-dir={}", profile.display()),
         "--remote-debugging-port=0".into(),
         "--remote-debugging-address=127.0.0.1".into(),
         "--no-first-run".into(),
         "--no-default-browser-check".into(),
-        "about:blank".into(),
-    ]
+    ];
+    if headless {
+        args.push("--headless=new".into());
+        args.push(format!("--window-size={HEADLESS_WINDOW_SIZE}"));
+    }
+    args.push("about:blank".into());
+    args
 }
 
-async fn answers(endpoint: &str) -> bool {
-    let client = reqwest::Client::builder()
+/// Whether a running Chrome is windowless, from its `/json/version` user agent.
+pub fn is_headless_user_agent(user_agent: &str) -> bool {
+    user_agent.contains("HeadlessChrome")
+}
+
+fn client() -> reqwest::Client {
+    reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
-        .unwrap_or_default();
-    client
-        .get(format!("{endpoint}/json/version"))
-        .send()
-        .await
-        .is_ok_and(|r| r.status().is_success())
+        .unwrap_or_default()
 }
 
-/// Returns the CDP endpoint of the kwant Chrome window, reusing it while it runs and launching
-/// it (detached, so it outlives a switch or a kwant restart) when it does not.
-pub async fn ensure_local_chrome(profile: &Path) -> Result<String, String> {
-    if let Some(port) = read_devtools_port(profile) {
-        let endpoint = format!("http://127.0.0.1:{port}");
-        if answers(&endpoint).await {
-            return Ok(endpoint);
+/// The user agent of the Chrome answering at `endpoint`, or `None` if nothing answers.
+async fn user_agent(endpoint: &str) -> Option<String> {
+    let resp = client().get(format!("{endpoint}/json/version")).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let version: serde_json::Value = resp.json().await.ok()?;
+    Some(version["User-Agent"].as_str().unwrap_or_default().to_string())
+}
+
+/// The kwant Chrome running on `profile`: its CDP endpoint and whether it is windowless.
+pub async fn running_local_chrome(profile: &Path) -> Option<(String, bool)> {
+    let port = read_devtools_port(profile)?;
+    let endpoint = format!("http://127.0.0.1:{port}");
+    let agent = user_agent(&endpoint).await?;
+    Some((endpoint, is_headless_user_agent(&agent)))
+}
+
+/// Waits until the kwant Chrome on `profile` stops answering (it was asked to close).
+pub async fn wait_local_chrome_gone(profile: &Path) -> Result<(), String> {
+    for _ in 0..60 {
+        if running_local_chrome(profile).await.is_none() {
+            // Chrome drops its profile lock just after the port closes
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Err("Chrome did not close within 15 seconds.".into())
+}
+
+/// Launches the kwant Chrome on `profile` (detached, so it outlives a switch or a kwant restart)
+/// and returns its CDP endpoint. The caller makes sure none is running on this profile.
+pub async fn launch_local_chrome(profile: &Path, headless: bool) -> Result<String, String> {
+    let chrome = local_chrome_path().ok_or_else(|| local_reason().unwrap_or_default())?;
+    if !headless {
+        if let Some(reason) = window_reason() {
+            return Err(reason);
         }
     }
-    let chrome = local_chrome_path().ok_or_else(|| local_reason().unwrap_or_default())?;
     std::fs::create_dir_all(profile).map_err(|e| e.to_string())?;
-    // a stale port file from a closed window would point at nothing
+    // a stale port file from a closed Chrome would point at nothing
     let _ = std::fs::remove_file(profile.join("DevToolsActivePort"));
     let mut cmd = std::process::Command::new(&chrome);
-    cmd.args(chrome_args(profile))
+    cmd.args(chrome_args(profile, headless))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -230,11 +271,8 @@ pub async fn ensure_local_chrome(profile: &Path) -> Result<String, String> {
         let _ = child.wait();
     });
     for _ in 0..80 {
-        if let Some(port) = read_devtools_port(profile) {
-            let endpoint = format!("http://127.0.0.1:{port}");
-            if answers(&endpoint).await {
-                return Ok(endpoint);
-            }
+        if let Some((endpoint, _)) = running_local_chrome(profile).await {
+            return Ok(endpoint);
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -341,14 +379,14 @@ mod tests {
         assert!(has_display("linux", Some(":0"), None));
         assert!(has_display("linux", None, Some("wayland-0")));
 
+        // local Chrome runs without a window, so only a window needs a display
         let chrome = Path::new("/usr/bin/chromium");
-        assert_eq!(local_unavailable_reason(Some(chrome), true), None);
-        assert!(local_unavailable_reason(None, true)
+        assert_eq!(local_unavailable_reason(Some(chrome)), None);
+        assert!(local_unavailable_reason(None)
             .unwrap()
             .contains(CHROME_PATH_ENV));
-        assert!(local_unavailable_reason(Some(chrome), false)
-            .unwrap()
-            .contains("display"));
+        assert_eq!(window_unavailable_reason(true), None);
+        assert!(window_unavailable_reason(false).unwrap().contains("display"));
 
         assert_eq!(vm_unavailable_reason(true, false), None);
         assert_eq!(vm_unavailable_reason(false, true), None);
@@ -359,10 +397,24 @@ mod tests {
 
     #[test]
     fn chrome_uses_its_own_profile_and_a_loopback_port() {
-        let args = chrome_args(Path::new("/data/local-chrome"));
-        assert!(args.contains(&"--user-data-dir=/data/local-chrome".to_string()));
-        assert!(args.contains(&"--remote-debugging-port=0".to_string()));
-        assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_string()));
+        for headless in [true, false] {
+            let args = chrome_args(Path::new("/data/local-chrome"), headless);
+            assert!(args.contains(&"--user-data-dir=/data/local-chrome".to_string()));
+            assert!(args.contains(&"--remote-debugging-port=0".to_string()));
+            assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_string()));
+        }
+    }
+
+    #[test]
+    fn chrome_is_windowless_unless_a_window_is_asked_for() {
+        let args = chrome_args(Path::new("/p"), true);
+        assert!(args.contains(&"--headless=new".to_string()));
+        assert!(args.contains(&"--window-size=1280,800".to_string()));
+        let args = chrome_args(Path::new("/p"), false);
+        assert!(!args.iter().any(|a| a.starts_with("--headless")));
+        assert!(!args.iter().any(|a| a.starts_with("--window-size")));
+        assert!(is_headless_user_agent("Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/131.0 Safari/537.36"));
+        assert!(!is_headless_user_agent("Mozilla/5.0 (Macintosh) Chrome/131.0 Safari/537.36"));
     }
 
     #[test]

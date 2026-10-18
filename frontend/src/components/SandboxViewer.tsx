@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Globe, Loader2, RefreshCw, Share2, MousePointerClick } from 'lucide-react';
-import { ComputerModeChip, ComputerModeError, LocalBrowserNote, useComputerMode } from './ComputerModeSwitch';
+import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, useComputerMode } from './ComputerModeSwitch';
+import { showsLocalWindow } from '../computerMode';
 
 // Must match the sandbox Chromium --window-size (docker/entrypoint.sh)
 const VIEWPORT_W = 1280;
@@ -36,7 +37,8 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
   const lastWheelRef = useRef(0);
   const api = `/api/sandbox/${encodeURIComponent(teamId)}`;
   const computer = useComputerMode(true);
-  const isLocal = computer.state.settings?.mode === 'local';
+  // Local Chrome shows here like the VM, unless it is open as its own window.
+  const isWindow = showsLocalWindow(computer.state.settings);
 
   const applyUrl = useCallback((next?: string) => {
     if (!next || next === 'about:blank') return;
@@ -113,13 +115,13 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
 
   // Initial load + polling so page changes (loads, animations, bot actions) show up
   useEffect(() => {
-    if (isLocal) return;
+    if (isWindow) return;
     refresh();
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') refresh();
     }, POLL_MS);
     return () => window.clearInterval(timer);
-  }, [refresh, isLocal]);
+  }, [refresh, isWindow]);
 
   // Live updates when the bot (or the in-app pane) drives the same browser
   useEffect(() => {
@@ -240,6 +242,7 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
         </button>
 
         <ComputerModeChip api={computer} />
+        <OpenWindowButton api={computer} label />
 
         <div
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 flex-shrink-0"
@@ -250,7 +253,7 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
         </div>
       </header>
 
-      {!isLocal && (
+      {!isWindow && (
         <div className="px-4 py-1.5 text-[11px] text-zinc-500 border-b border-zinc-900 flex items-center gap-2">
           <MousePointerClick size={12} className={isFocused ? 'text-sky-400' : ''} />
           <span>
@@ -269,9 +272,9 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
       )}
 
       <main className="flex-1 min-h-0 flex items-center justify-center p-4 overflow-hidden">
-        {isLocal ? (
+        {isWindow ? (
           <div className="w-full max-w-md flex">
-            <LocalBrowserNote />
+            <LocalBrowserNote api={computer} />
           </div>
         ) : error && !screenshot ? (
           <div className="text-sm text-zinc-400">{error}</div>

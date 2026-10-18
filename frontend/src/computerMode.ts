@@ -3,10 +3,19 @@
 
 export type ComputerMode = 'local' | 'vm';
 
+/** Local mode only: the bots' Chrome runs without a window and shows in the app, unless the
+ *  person opened it as a real window (to sign in or solve a CAPTCHA). */
+export interface LocalWindow {
+  visible: boolean;
+  available: boolean;
+  reason: string | null;
+}
+
 export interface ComputerSettings {
   mode: ComputerMode;
   available: Record<ComputerMode, boolean>;
   reasons: Record<ComputerMode, string | null>;
+  window: LocalWindow;
 }
 
 export const COMPUTER_MODES: { id: ComputerMode; label: string; short: string; hint: string }[] = [
@@ -14,7 +23,10 @@ export const COMPUTER_MODES: { id: ComputerMode; label: string; short: string; h
   { id: 'vm', label: 'VM (isolated)', short: 'VM', hint: 'Runs in Docker containers, isolated from your files.' },
 ];
 
-export const LOCAL_BROWSER_NOTE = 'Your bots are using a Chrome window on your computer.';
+export const LOCAL_BROWSER_NOTE = "Your bots' Chrome is open as a window on your computer.";
+
+/** Whether the browser is in its own window instead of the app's live view. */
+export const showsLocalWindow = (s: ComputerSettings | null | undefined) => s?.mode === 'local' && s.window.visible;
 
 /** Fired on window after a successful switch so every open control shows the new mode. */
 export const COMPUTER_MODE_EVENT = 'kwnt:computer-mode';
@@ -27,10 +39,16 @@ export function parseComputerSettings(data: unknown): ComputerSettings | null {
   const d = data as Record<string, any>;
   if (!isMode(d.mode) || !d.available || typeof d.available !== 'object') return null;
   const reason = (m: ComputerMode) => (typeof d.reasons?.[m] === 'string' && d.reasons[m].trim() ? d.reasons[m] : null);
+  const w = d.window && typeof d.window === 'object' ? d.window : {};
   return {
     mode: d.mode,
     available: { local: d.available.local === true, vm: d.available.vm === true },
     reasons: { local: reason('local'), vm: reason('vm') },
+    window: {
+      visible: w.visible === true,
+      available: w.available === true,
+      reason: typeof w.reason === 'string' && w.reason.trim() ? w.reason : null,
+    },
   };
 }
 
@@ -86,24 +104,30 @@ export async function fetchComputerSettings(): Promise<ComputerSettings | null> 
   return parseComputerSettings(await res.json().catch(() => null));
 }
 
-export async function saveComputerMode(
-  mode: ComputerMode,
-): Promise<{ ok: true; settings: ComputerSettings } | { ok: false; error: string }> {
+type SaveResult = { ok: true; settings: ComputerSettings } | { ok: false; error: string };
+
+async function putSettings(path: string, body: unknown, failed: string): Promise<SaveResult> {
   let res: Response;
   try {
-    res = await fetch('/api/settings/computer', {
+    res = await fetch(path, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify(body),
     });
   } catch {
     return { ok: false, error: 'Could not reach the server.' };
   }
   const data = await res.json().catch(() => null);
   if (!res.ok) {
-    const msg = data && typeof data.error === 'string' && data.error.trim() ? data.error : `Switching failed (HTTP ${res.status}).`;
+    const msg = data && typeof data.error === 'string' && data.error.trim() ? data.error : `${failed} (HTTP ${res.status}).`;
     return { ok: false, error: msg };
   }
   const settings = parseComputerSettings(data);
   return settings ? { ok: true, settings } : { ok: false, error: 'The server sent an unexpected answer.' };
 }
+
+export const saveComputerMode = (mode: ComputerMode) => putSettings('/api/settings/computer', { mode }, 'Switching failed');
+
+/** Opens the bots' Chrome as a window (`true`) or puts it back in the app (`false`). */
+export const saveLocalWindow = (visible: boolean) =>
+  putSettings('/api/settings/computer/window', { visible }, visible ? 'Could not open the window' : 'Could not bring the browser back');

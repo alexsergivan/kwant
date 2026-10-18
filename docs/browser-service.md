@@ -10,26 +10,31 @@ Take Control obtains an exclusive server-side lease. Bot navigation and selector
 
 Kwnt runs bots' browser and shell commands in one of two places, chosen in **Settings → Computer** or with the browser panel's mode toggle:
 
-- **Local computer** (`local`, the default on macOS): Kwnt opens your installed Chrome or Chromium in a visible window with its own profile, `<data dir>/local-chrome`. It never uses your everyday Chrome profile. Each bot gets its own tab. Sign-ins made in that window are kept in the kwant profile and shared by its tabs. The debugging port is chosen by Chrome and listens on 127.0.0.1 only. Shell commands run on your computer in the bot's working folder, and **every command asks for your approval first**. "Always allow" applies to that one command; it is not remembered. Docker is not needed.
+- **Local computer** (`local`, the default on macOS): Kwnt runs your installed Chrome or Chromium without a window (`--headless=new`, 1280×800) with its own profile, `<data dir>/local-chrome`, and shows it live in the app's browser panel, the same way as the VM. To sign in or solve a CAPTCHA yourself, use **Open as window** in the panel: Kwnt closes the windowless Chrome and opens the same profile as a real window, with each bot's page reopened there (one profile can't be open twice). **Show it here instead**, or closing that window, brings it back into the panel. Saved sign-ins carry over; cookies that only last for a browser session do not. The window choice is not saved, so a restart goes back to the panel. Switching to VM closes the windowless Chrome; a window you opened stays open. It never uses your everyday Chrome profile. Each bot gets its own Chrome window (headless Chrome only paints the front tab of a window, so tabs would stall the other bots' screenshots). Sign-ins are kept in the kwant profile and shared by all bots. The debugging port is chosen by Chrome and listens on 127.0.0.1 only. Shell commands run on your computer in the bot's working folder, and **every command asks for your approval first**. "Always allow" applies to that one command; it is not remembered. Docker is not needed.
 - **VM (isolated)** (`vm`, the default everywhere else, including a VPS): the Docker browser and execution containers described below.
 
-Switching takes effect at once, without a restart. Kwnt disconnects from the old browser without closing it: the local Chrome window and the VM container both keep running, and switching back reuses them. Each mode keeps its own saved pages (`browser-sessions-local.json` and `browser-sessions.json`). If the local window was closed, the next browser action opens it again. Kwnt does not close the window when it stops, either.
+Switching takes effect at once, without a restart. Kwnt disconnects from the old browser: the VM container and a local Chrome window keep running, and switching back reuses them; only the windowless local Chrome is closed, as nothing would show it. Each mode keeps its own saved pages (`browser-sessions-local.json` and `browser-sessions.json`). If the local Chrome was closed, the next browser action starts it again. Kwnt does not close Chrome when it stops, and reuses a running one on the next start.
 
 Precedence: a choice saved in Settings wins; otherwise `KWNT_COMPUTER_MODE=local|vm`; otherwise the platform default. `KWNT_CHROME_PATH` names the browser binary local mode launches. Without it, Kwnt looks for Google Chrome, Chromium or Chrome Canary in `/Applications` and `~/Applications` on macOS, then for `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` or `chrome` on `PATH`.
 
-A mode that cannot run here is refused with the reason: local needs a Chrome binary and a display (always present on macOS; `DISPLAY` or `WAYLAND_DISPLAY` on Linux). VM needs Docker, or a `KWNT_BROWSER_CDP_URL` for the browser.
+A mode that cannot run here is refused with the reason: local needs a Chrome binary; only opening it as a window needs a display (always present on macOS; `DISPLAY` or `WAYLAND_DISPLAY` on Linux). VM needs Docker, or a `KWNT_BROWSER_CDP_URL` for the browser.
 
 API (same authentication as the other settings routes):
 
 ```text
 GET /api/settings/computer
-→ {"mode":"local"|"vm","available":{"local":bool,"vm":bool},"reasons":{"local":string|null,"vm":string|null}}
+→ {"mode":"local"|"vm","available":{"local":bool,"vm":bool},"reasons":{"local":string|null,"vm":string|null},
+   "window":{"visible":bool,"available":bool,"reason":string|null}}
 
 PUT /api/settings/computer  {"mode":"local"|"vm"}
 → the same shape after switching; 400 {"error":"<reason>"} for an unknown or unavailable mode
+
+PUT /api/settings/computer/window  {"visible":bool}
+→ the same shape after restarting Chrome as a window (true) or back in the app (false);
+  400 {"error":...} outside local mode or with no display for a window; 502 if Chrome could not restart
 ```
 
-Local mode gives up isolation: commands run with your user's access to your files, and the debugging port can be reached by other programs on the same computer while the kwant window is open. Use VM mode for untrusted work.
+Local mode gives up isolation: commands run with your user's access to your files, and the debugging port can be reached by other programs on the same computer while the kwant Chrome is running. Use VM mode for untrusted work.
 
 ## VM mode on a Mac or Linux VPS
 

@@ -7,17 +7,18 @@ globalThis.localStorage ??= { getItem: () => null, setItem: () => {} };
 
 const m = await loadBundled(`
   export * from './src/computerMode';
-  export { ComputerModeControl, ComputerModeChip, LocalBrowserNote } from './src/components/ComputerModeSwitch';
+  export { ComputerModeControl, ComputerModeChip, LocalBrowserNote, OpenWindowButton } from './src/components/ComputerModeSwitch';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export { createElement } from 'react';
 `);
 
-const settings = (mode, local = true, vm = true, reasons = {}) => ({
+const settings = (mode, local = true, vm = true, reasons = {}, window = {}) => ({
   mode,
   available: { local, vm },
   reasons: { local: null, vm: null, ...reasons },
+  window: { visible: false, available: false, reason: null, ...window },
 });
-const api = (state) => ({ state, select: () => {}, dismissError: () => {} });
+const api = (state, extra = {}) => ({ state, select: () => {}, dismissError: () => {}, setWindow: () => {}, windowPending: false, ...extra });
 const render = (C, state) => m.renderToStaticMarkup(m.createElement(C, { api: api(state) }));
 const ready = (s) => ({ ...m.initialSwitchState, settings: s });
 
@@ -115,5 +116,57 @@ test('chip names the current mode and offers the other one', () => {
 });
 
 test('local note text', () => {
-  assert.match(m.renderToStaticMarkup(m.createElement(m.LocalBrowserNote)), /Your bots are using a Chrome window on your computer\./);
+  assert.match(m.renderToStaticMarkup(m.createElement(m.LocalBrowserNote)), /Your bots&#x27;? Chrome is open as a window on your computer\./);
+});
+
+test('the window flag parses, defaults to the in-app view and only counts in local mode', () => {
+  const parsed = m.parseComputerSettings({
+    mode: 'local', available: { local: true, vm: false }, reasons: {},
+    window: { visible: true, available: false, reason: 'no display' },
+  });
+  assert.deepEqual(parsed.window, { visible: true, available: false, reason: 'no display' });
+  assert.equal(m.showsLocalWindow(parsed), true);
+  // older servers have no window field: local streams in the app
+  const old = m.parseComputerSettings({ mode: 'local', available: { local: true, vm: true } });
+  assert.deepEqual(old.window, { visible: false, available: false, reason: null });
+  assert.equal(m.showsLocalWindow(old), false);
+  assert.equal(m.showsLocalWindow({ ...parsed, mode: 'vm' }), false);
+  assert.equal(m.showsLocalWindow(null), false);
+});
+
+test('open-as-window button: local in-app only, disabled with the reason when no display', () => {
+  const btn = (s, extra) => m.renderToStaticMarkup(m.createElement(m.OpenWindowButton, { api: api(ready(s), extra), label: true }));
+  assert.equal(btn(settings('vm', true, true, {}, { available: true })), '');
+  assert.equal(btn(settings('local', true, true, {}, { visible: true, available: true })), '');
+  const ok = btn(settings('local', true, true, {}, { available: true }));
+  assert.match(ok, /Open as window/);
+  assert.doesNotMatch(ok, /disabled=""/);
+  const blocked = btn(settings('local', true, true, {}, { reason: 'no display' }));
+  assert.match(blocked, /disabled=""/);
+  assert.match(blocked, /Can&#x27;t open a window: no display/);
+  assert.match(btn(settings('local', true, true, {}, { available: true }), { windowPending: true }), /aria-busy="true"/);
+});
+
+test('the note offers to bring the browser back, and saveLocalWindow sends the flag', async () => {
+  let asked = null;
+  const note = m.renderToStaticMarkup(m.createElement(m.LocalBrowserNote, { api: api(ready(settings('local')), { setWindow: (v) => (asked = v) }) }));
+  assert.match(note, /Show it here instead/);
+  const realFetch = globalThis.fetch;
+  try {
+    let call;
+    globalThis.fetch = async (url, init) => { call = { url, init }; return new Response(JSON.stringify(settings('local', true, true, {}, { visible: true, available: true })), { status: 200 }); };
+    const r = await m.saveLocalWindow(true);
+    assert.equal(r.ok, true);
+    assert.equal(r.settings.window.visible, true);
+    assert.equal(call.url, '/api/settings/computer/window');
+    assert.equal(call.init.method, 'PUT');
+    assert.equal(call.init.body, '{"visible":true}');
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: 'no display' }), { status: 400 });
+    assert.deepEqual(await m.saveLocalWindow(true), { ok: false, error: 'no display' });
+    globalThis.fetch = async () => new Response('', { status: 502 });
+    assert.deepEqual(await m.saveLocalWindow(false), { ok: false, error: 'Could not bring the browser back (HTTP 502).' });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(asked, null, 'rendering alone does not switch');
 });

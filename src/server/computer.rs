@@ -47,10 +47,16 @@ async fn view(state: &AppState) -> Value {
         state.sandbox_manager.is_docker_available().await,
         state.browser_service.has_endpoint(),
     );
+    let window = computer::window_reason();
     json!({
         "mode": mode,
         "available": {"local": local.is_none(), "vm": vm.is_none()},
         "reasons": {"local": local, "vm": vm},
+        "window": {
+            "visible": mode == ComputerMode::Local && state.browser_service.local_window(),
+            "available": window.is_none(),
+            "reason": window,
+        },
     })
 }
 
@@ -91,6 +97,54 @@ pub async fn put_computer(
             )
         })?;
     apply_mode(&state).await;
+    Ok(Json(view(&state).await))
+}
+
+#[derive(Deserialize)]
+pub struct WindowPayload {
+    pub visible: bool,
+}
+
+/// `PUT /api/settings/computer/window` with `{"visible":bool}`: in local mode, shows the bots'
+/// Chrome as a real window (for a sign-in or CAPTCHA) or puts it back in the app. Each bot's open
+/// page is reopened in the other form. 400 outside local mode or with no display for a window;
+/// 502 if Chrome could not be restarted (the previous form is kept).
+pub async fn put_window(
+    State(state): State<AppState>,
+    payload: Result<Json<WindowPayload>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let fail = |status, m: String| (status, Json(json!({ "error": m })));
+    let Json(WindowPayload { visible }) = payload
+        .map_err(|_| fail(StatusCode::BAD_REQUEST, "visible must be true or false".into()))?;
+    if apply_mode(&state).await != ComputerMode::Local {
+        return Err(fail(
+            StatusCode::BAD_REQUEST,
+            "The browser runs in the VM, which has no window to open. Switch to Local computer first.".into(),
+        ));
+    }
+    if visible {
+        if let Some(reason) = computer::window_reason() {
+            return Err(fail(StatusCode::BAD_REQUEST, reason));
+        }
+    }
+    {
+        // the restarted Chrome has new pages: every controller must reconnect
+        let mut controllers = state.browser_controllers.lock().await;
+        if let Err(error) = state.browser_service.set_local_window(visible).await {
+            tracing::warn!("Could not restart local Chrome: {}", error);
+            return Err(fail(
+                StatusCode::BAD_GATEWAY,
+                format!("Could not restart Chrome: {error}"),
+            ));
+        }
+        for team_id in controllers.drain().map(|(id, _)| id) {
+            let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
+                team_id,
+                container_name: "browser-service".into(),
+                is_running: false,
+            });
+        }
+    }
     Ok(Json(view(&state).await))
 }
 

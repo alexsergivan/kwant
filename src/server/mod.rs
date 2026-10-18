@@ -157,6 +157,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/approvals/:id/resolve", post(routes::resolve_approval))
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
         .route("/api/settings/computer", get(computer::get_computer).put(computer::put_computer))
+        .route("/api/settings/computer/window", put(computer::put_window))
         .route("/api/system/directories", get(routes::list_system_directories))
         .route("/api/system/select-folder", post(routes::select_folder))
         .route("/api/sandbox/:team_id/status", get(routes::get_sandbox_status))

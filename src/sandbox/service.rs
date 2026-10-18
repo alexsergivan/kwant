@@ -18,6 +18,10 @@ pub struct BrowserService {
     endpoint: Option<String>,
     /// Local Chrome or the vm browser; changing it drops the connection (see [`Self::set_mode`]).
     mode: std::sync::RwLock<ComputerMode>,
+    /// Local mode only: whether the person asked to see the kwant Chrome as a window (to sign in
+    /// or solve a CAPTCHA). Otherwise it runs without one and the app streams it. Not saved: a
+    /// restart goes back to the in-app view.
+    local_window: std::sync::atomic::AtomicBool,
     // Serialize startup and session creation, including simultaneous status/frame requests.
     state: Mutex<Option<ServiceState>>,
 }
@@ -31,25 +35,113 @@ struct ServiceState {
 impl BrowserService {
     pub fn new(root: PathBuf, endpoint: Option<String>) -> Self {
         let mode = computer::current_mode(None);
-        Self { root, endpoint, mode: std::sync::RwLock::new(mode), state: Mutex::new(None) }
+        Self {
+            root, endpoint, mode: std::sync::RwLock::new(mode),
+            local_window: std::sync::atomic::AtomicBool::new(false), state: Mutex::new(None),
+        }
     }
 
     pub fn mode(&self) -> ComputerMode {
         *self.mode.read().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Whether local Chrome is shown as a window instead of in the app.
+    pub fn local_window(&self) -> bool {
+        self.local_window.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn local_profile(&self) -> PathBuf { self.root.join("local-chrome") }
+
+    /// Shows the local Chrome as a real window (`visible`) or runs it without one, streamed into
+    /// the app. One profile cannot be open twice, so the running Chrome is closed and started
+    /// again in the other form; each bot's open page is reopened there, and sign-ins saved in the
+    /// profile carry over. On failure the previous form is kept.
+    pub async fn set_local_window(&self, visible: bool) -> Result<(), BrowserError> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut lock = self.state.lock().await;
+        let previous = self.local_window.swap(visible, SeqCst);
+        if self.mode() != ComputerMode::Local { return Ok(()); }
+        // the page each bot had open, to reopen in the new Chrome
+        let mut urls: HashMap<String, String> = HashMap::new();
+        if let Some((endpoint, _)) = computer::running_local_chrome(&self.local_profile()).await {
+            let browser = BrowserController::at_endpoint(&endpoint, None, None, true);
+            if let Ok(targets) = browser.send_cdp_command("Target.getTargets", json!({})).await {
+                for info in targets["targetInfos"].as_array().into_iter().flatten() {
+                    if let (Some(id), Some(url)) = (info["targetId"].as_str(), info["url"].as_str()) {
+                        urls.insert(id.to_string(), url.to_string());
+                    }
+                }
+            }
+        }
+        *lock = None;
+        let mut state = match self.connect().await {
+            Ok(state) => state,
+            Err(error) => { self.local_window.store(previous, SeqCst); return Err(error); }
+        };
+        let live = state.browser.send_cdp_command("Target.getTargets", json!({})).await?;
+        let live: Vec<(String, bool)> = live["targetInfos"].as_array().into_iter().flatten()
+            .filter_map(|t| Some((t["targetId"].as_str()?.to_string(), t["type"] == "page" && t["url"] == "about:blank")))
+            .collect();
+        for session in state.sessions.values_mut() {
+            if live.iter().any(|(id, _)| *id == session.target) { continue; }
+            let url = urls.get(&session.target).filter(|u| u.starts_with("http")).map_or("about:blank", |u| u.as_str());
+            if let Ok(target) = state.browser.send_cdp_command("Target.createTarget", json!({"url": url, "newWindow": true})).await {
+                if let Some(id) = target["targetId"].as_str() { session.target = id.to_string(); }
+            }
+        }
+        // Chrome's own blank start window would sit on top of the bots' pages in the window
+        if visible && !state.sessions.is_empty() {
+            for (id, _) in live.iter().filter(|(id, blank)| *blank && !state.sessions.values().any(|s| s.target == *id)) {
+                let _ = state.browser.send_cdp_command("Target.closeTarget", json!({"targetId": id})).await;
+            }
+        }
+        self.save_sessions(&state.sessions).await?;
+        *lock = Some(state);
+        Ok(())
+    }
+
+    /// The local Chrome's endpoint, in the form asked for (window or not), starting it if needed.
+    async fn local_endpoint(&self) -> Result<String, BrowserError> {
+        let profile = self.local_profile();
+        let headless = !self.local_window();
+        if let Some((endpoint, running_headless)) = computer::running_local_chrome(&profile).await {
+            if running_headless == headless { return Ok(endpoint); }
+            // the other form is running on this profile: close it first
+            let _ = BrowserController::at_endpoint(&endpoint, None, None, true)
+                .send_cdp_command("Browser.close", json!({})).await;
+            computer::wait_local_chrome_gone(&profile).await.map_err(BrowserError::Http)?;
+        }
+        computer::launch_local_chrome(&profile, headless).await.map_err(BrowserError::Http)
+    }
+
+    async fn save_sessions(&self, sessions: &HashMap<String, SessionTarget>) -> Result<(), BrowserError> {
+        tokio::fs::create_dir_all(&self.root).await.map_err(|e| BrowserError::Http(e.to_string()))?;
+        let file = self.sessions_file();
+        tokio::fs::write(file.with_extension("tmp"), serde_json::to_vec(sessions).unwrap()).await
+            .map_err(|e| BrowserError::Http(e.to_string()))?;
+        tokio::fs::rename(file.with_extension("tmp"), file).await.map_err(|e| BrowserError::Http(e.to_string()))
+    }
+
     /// Whether a browser service URL (`KWNT_BROWSER_CDP_URL`) is configured for vm mode.
     pub fn has_endpoint(&self) -> bool { self.endpoint.is_some() }
 
-    /// Switches where the browser runs. The current connection is dropped, not the browser:
-    /// the local Chrome window and the vm container both keep running. Returns whether the
-    /// mode changed.
+    /// Switches where the browser runs. The current connection is dropped; the vm container and
+    /// a local Chrome window keep running, while a windowless local Chrome is closed, since
+    /// nothing would show it. Returns whether the mode changed.
     pub async fn set_mode(&self, mode: ComputerMode) -> bool {
         let mut lock = self.state.lock().await;
-        let mut current = self.mode.write().unwrap_or_else(|e| e.into_inner());
-        if *current == mode { return false; }
-        *current = mode;
+        let previous = {
+            let mut current = self.mode.write().unwrap_or_else(|e| e.into_inner());
+            if *current == mode { return false; }
+            std::mem::replace(&mut *current, mode)
+        };
         *lock = None;
+        if previous == ComputerMode::Local {
+            if let Some((endpoint, true)) = computer::running_local_chrome(&self.local_profile()).await {
+                let _ = BrowserController::at_endpoint(&endpoint, None, None, true)
+                    .send_cdp_command("Browser.close", json!({})).await;
+            }
+        }
         true
     }
 
@@ -106,8 +198,7 @@ impl BrowserService {
     async fn connect(&self) -> Result<ServiceState, BrowserError> {
         let local = self.mode() == ComputerMode::Local;
         let endpoint = match &self.endpoint {
-            _ if local => computer::ensure_local_chrome(&self.root.join("local-chrome")).await
-                .map_err(BrowserError::Http)?,
+            _ if local => self.local_endpoint().await?,
             Some(endpoint) => endpoint.trim_end_matches('/').to_string(),
             None => self.managed_endpoint().await?,
         };
@@ -130,7 +221,9 @@ impl BrowserService {
         if lock.is_none() { *lock = Some(self.connect().await?); }
         let mut targets = lock.as_ref().unwrap().browser.send_cdp_command("Target.getTargets", json!({})).await;
         if targets.is_err() && self.mode() == ComputerMode::Local {
-            // the person closed the Chrome window: open it again in this same call
+            // Chrome quit, or the person closed its window once done there: start it again in
+            // this same call, back in the app
+            self.local_window.store(false, std::sync::atomic::Ordering::SeqCst);
             *lock = None;
             *lock = Some(self.connect().await?);
             targets = lock.as_ref().unwrap().browser.send_cdp_command("Target.getTargets", json!({})).await;
@@ -145,8 +238,9 @@ impl BrowserService {
         let local = self.mode() == ComputerMode::Local;
         let session = if let Some(existing) = existing { existing.clone() } else if local {
             // Local pages share the kwant profile's default context, so a sign-in in the window
-            // is kept; each bot still gets its own tab. (`context` stays empty.)
-            let target = state.browser.send_cdp_command("Target.createTarget", json!({"url": "about:blank"})).await?;
+            // is kept. (`context` stays empty.) Each bot gets its own window, not a tab: Chrome
+            // only paints the front tab of a window, so a background tab's screenshot never comes.
+            let target = state.browser.send_cdp_command("Target.createTarget", json!({"url": "about:blank", "newWindow": true})).await?;
             SessionTarget { context: String::new(), target: target["targetId"].as_str()
                 .ok_or_else(|| BrowserError::Protocol("Browser page missing".into()))?.to_string() }
         } else {
@@ -168,14 +262,10 @@ impl BrowserService {
                 .ok_or_else(|| BrowserError::Protocol("Browser page missing".into()))?.to_string() }
         };
         state.sessions.insert(id.to_string(), session.clone());
-        tokio::fs::create_dir_all(&self.root).await.map_err(|e| BrowserError::Http(e.to_string()))?;
-        let file = self.sessions_file();
-        tokio::fs::write(file.with_extension("tmp"), serde_json::to_vec(&state.sessions).unwrap()).await
-            .map_err(|e| BrowserError::Http(e.to_string()))?;
-        tokio::fs::rename(file.with_extension("tmp"), file).await.map_err(|e| BrowserError::Http(e.to_string()))?;
+        self.save_sessions(&state.sessions).await?;
         let ctrl = BrowserController::at_endpoint(&state.endpoint, Some(session.target), Some(workspace.to_path_buf()), false);
-        // A real window keeps its own size; only the headless vm browser gets a fixed viewport.
-        if !local {
+        // A real window keeps its own size; a windowless browser gets the viewer's fixed viewport.
+        if !local || !self.local_window() {
             ctrl.send_cdp_command("Emulation.setDeviceMetricsOverride", json!({
                 "width": 1280, "height": 800, "deviceScaleFactor": 1, "mobile": false
             })).await?;

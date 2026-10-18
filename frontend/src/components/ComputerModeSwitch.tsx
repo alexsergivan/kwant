@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useReducer, useRef } from 'react';
-import { AlertTriangle, Box, Laptop, Loader2, X } from 'lucide-react';
+import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { AlertTriangle, AppWindow, Box, Laptop, Loader2, PanelRight, X } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import {
   COMPUTER_MODES,
@@ -13,6 +13,8 @@ import {
   modeLabel,
   otherMode,
   saveComputerMode,
+  saveLocalWindow,
+  showsLocalWindow,
   shownMode,
   switchReducer,
   unavailableReason,
@@ -23,6 +25,10 @@ export interface ComputerModeApi {
   /** Saves at once; on failure the control goes back and `state.error` says why. */
   select: (mode: ComputerMode) => void;
   dismissError: () => void;
+  /** Local mode: opens the bots' Chrome as a window, or brings it back into the app. */
+  setWindow: (visible: boolean) => void;
+  /** True while a window switch restarts Chrome. */
+  windowPending: boolean;
 }
 
 /** Loads the setting while `enabled`, and follows switches made elsewhere in this tab. */
@@ -60,8 +66,36 @@ export function useComputerMode(enabled: boolean): ComputerModeApi {
     });
   }, []);
 
+  const [windowPending, setWindowPending] = useState(false);
+  const setWindow = useCallback((visible: boolean) => {
+    if (stateRef.current.pending) return;
+    playSfx('click');
+    setWindowPending(true);
+    saveLocalWindow(visible).then((r) => {
+      setWindowPending(false);
+      if (r.ok) {
+        dispatch({ type: 'saved', settings: r.settings });
+        window.dispatchEvent(new CustomEvent(COMPUTER_MODE_EVENT, { detail: r.settings }));
+      } else {
+        dispatch({ type: 'failed', error: r.error });
+      }
+    });
+  }, []);
+
+  // Closing the window puts the browser back in the app on the server; notice that.
+  const windowOpen = enabled && showsLocalWindow(state.settings);
+  useEffect(() => {
+    if (!windowOpen) return;
+    const timer = window.setInterval(() => {
+      fetchComputerSettings()
+        .then((s) => s && dispatch({ type: 'loaded', settings: s }))
+        .catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [windowOpen]);
+
   const dismissError = useCallback(() => dispatch({ type: 'dismiss' }), []);
-  return { state, select, dismissError };
+  return { state, select, dismissError, setWindow, windowPending };
 }
 
 const ICONS: Record<ComputerMode, typeof Laptop> = { local: Laptop, vm: Box };
@@ -179,13 +213,49 @@ export const ComputerModeChip: React.FC<{ api: ComputerModeApi }> = ({ api }) =>
   );
 };
 
-/** Shown in place of the live stream while kwant drives a real Chrome window. */
-export const LocalBrowserNote: React.FC = () => (
+/** Local mode, in-app view: opens the same browser as a real window for a sign-in or CAPTCHA. */
+export const OpenWindowButton: React.FC<{ api: ComputerModeApi; label?: boolean }> = ({ api, label }) => {
+  const settings = api.state.settings;
+  if (settings?.mode !== 'local' || settings.window.visible) return null;
+  const reason = settings.window.available ? null : settings.window.reason;
+  const title = reason
+    ? `Can't open a window: ${reason}`
+    : 'Open this browser as a window on your computer, to sign in or solve a CAPTCHA yourself';
+  return (
+    <button
+      type="button"
+      onClick={() => api.setWindow(true)}
+      disabled={!!reason || api.windowPending}
+      aria-busy={api.windowPending || undefined}
+      title={title}
+      aria-label={title}
+      className="flex items-center gap-1 p-1.5 rounded-md text-zinc-400 enabled:hover:text-zinc-100 enabled:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      {api.windowPending ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <AppWindow size={13} aria-hidden="true" />}
+      {label && <span className="text-[10px] font-semibold whitespace-nowrap">Open as window</span>}
+    </button>
+  );
+};
+
+/** Shown in place of the live view while the bots' Chrome is open as a window. */
+export const LocalBrowserNote: React.FC<{ api?: ComputerModeApi }> = ({ api }) => (
   <div className="flex-1 flex items-center justify-center p-6 rounded-xl border border-zinc-800 bg-zinc-950 text-center">
     <div className="max-w-xs space-y-2">
       <Laptop size={28} className="mx-auto text-amber-300/80" aria-hidden="true" />
       <p className="text-xs font-medium text-zinc-200">{LOCAL_BROWSER_NOTE}</p>
-      <p className="text-[11px] text-zinc-500">Watch and use that window directly. Switch to VM to see a live view here instead.</p>
+      <p className="text-[11px] text-zinc-500">Sign in or finish what you need there. Closing the window, or the button below, brings it back here.</p>
+      {api && (
+        <button
+          type="button"
+          onClick={() => api.setWindow(false)}
+          disabled={api.windowPending}
+          aria-busy={api.windowPending || undefined}
+          className="inline-flex items-center gap-1.5 mt-1 px-3 py-1.5 rounded-lg text-[11px] font-semibold border border-sky-500/30 bg-sky-500/10 text-sky-200 enabled:hover:bg-sky-500/20 disabled:opacity-60"
+        >
+          {api.windowPending ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <PanelRight size={12} aria-hidden="true" />}
+          Show it here instead
+        </button>
+      )}
     </div>
   </div>
 );
