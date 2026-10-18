@@ -209,7 +209,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               {isEdit ? <Pencil size={14} /> : <Sparkles size={15} />}
             </div>
             <h3 id="agent-modal-title" className="text-sm font-semibold text-zinc-100">
-              {isEdit ? `Edit ${initial?.name}` : joinTeamName ? `New Agent for @${joinTeamName}` : 'Create New AI Agent'}
+              {isEdit ? `Edit ${initial?.name}` : joinTeamName ? `New bot for @${joinTeamName}` : 'New kwant bot'}
             </h3>
           </div>
           <button
@@ -225,7 +225,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
         </div>
 
         {isEdit && kwantId && (
-          <div className="flex p-0.5 rounded-lg bg-zinc-950 border border-zinc-800" role="tablist" aria-label="Agent settings">
+          <div className="flex p-0.5 rounded-lg bg-zinc-950 border border-zinc-800" role="tablist" aria-label="Bot settings">
             {EDIT_TABS.map(({ id, label, Icon }) => (
               <button
                 key={id}
@@ -255,12 +255,12 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
 
         {isEdit && kwantId && tab === 'memory' && (
           <div role="tabpanel" id="agent-panel-memory" aria-labelledby="agent-tab-memory">
-            <MemoryPanel kwantId={kwantId} kwantName={initial?.name ?? 'This kwant'} />
+            <MemoryPanel kwantId={kwantId} kwantName={initial?.name ?? 'This bot'} />
           </div>
         )}
         {isEdit && kwantId && tab === 'skills' && (
           <div role="tabpanel" id="agent-panel-skills" aria-labelledby="agent-tab-skills">
-            <SkillsPanel kwantId={kwantId} kwantName={initial?.name ?? 'This kwant'} />
+            <SkillsPanel kwantId={kwantId} kwantName={initial?.name ?? 'This bot'} />
           </div>
         )}
         {isEdit && kwantId && tab === 'routines' && (
@@ -323,7 +323,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
           )}
 
           <div>
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Agent Name</label>
+            <label className="block text-xs font-medium text-zinc-400 mb-1">Name</label>
             <input
               type="text"
               required
@@ -425,7 +425,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               rows={isEdit || presetId ? 6 : 3}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="What this agent does: expertise, responsibilities, and how it should work..."
+              placeholder="What this bot does: expertise, responsibilities, and how it should work..."
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none"
             />
           </div>
@@ -467,7 +467,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               disabled={submitting || !name.trim()}
               className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50"
             >
-              {isEdit ? 'Save Changes' : joinTeamName ? 'Create & Add to Team' : 'Create Agent'}
+              {isEdit ? 'Save changes' : joinTeamName ? 'Create and add to team' : 'Create bot'}
             </button>
           </div>
         </form>

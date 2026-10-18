@@ -600,10 +600,10 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         <Plug size={26} />
       </div>
       <div className="space-y-1.5 max-w-md mx-auto">
-        <h3 className="text-sm font-semibold text-zinc-100">Give your kwants new abilities</h3>
+        <h3 className="text-sm font-semibold text-zinc-100">Give your bots new abilities</h3>
         <p className="text-xs text-zinc-400 leading-relaxed">
-          MCP servers are small add-ons that hand your kwants tools, like reading files, browsing the web or working with GitHub.
-          Add one here and every kwant can use it; switch it off for a kwant in that kwant’s edit screen. They always ask you before using a tool.
+          MCP servers are small add-ons that hand your bots tools, like reading files, browsing the web or working with GitHub.
+          Add one here and every bot in this space can use it; switch it off for a bot in that bot’s edit screen. They always ask you before using a tool.
           Pick a popular one below and just add your key or sign in.
         </p>
       </div>
@@ -655,7 +655,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
                 <Users size={11} className="flex-shrink-0 mt-[3px] text-zinc-500" aria-hidden="true" />
                 <span className="min-w-0 break-words">
                   {usage.allKwants ? (
-                    server.enabled ? 'Used by all kwants' : 'All kwants get it once it’s on'
+                    server.enabled ? 'Used by every bot in this space' : 'Every bot here gets it once it’s on'
                   ) : (
                     <>
                       {server.enabled ? 'Off for: ' : 'Once it’s on, off for: '}
@@ -720,7 +720,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         <div className="mt-3 pt-2.5 border-t border-zinc-800/70 flex flex-wrap items-center justify-between gap-2">
           {confirmDisconnect === server.id ? (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-300">
-              <span>Sign out of {server.name}? Kwants can’t use its tools until you connect again.</span>
+              <span>Sign out of {server.name}? Bots can’t use its tools until you connect again.</span>
               <button
                 type="button"
                 onClick={() => setConfirmDisconnect(null)}
@@ -738,7 +738,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             </div>
           ) : confirmDelete === server.id ? (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-300">
-              <span>Delete {server.name}? Kwants using it lose these tools.</span>
+              <span>Delete {server.name}? Bots using it lose these tools.</span>
               <button
                 type="button"
                 onClick={() => setConfirmDelete(null)}
@@ -924,7 +924,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             className={`${inputCls} font-mono`}
           />
           <p className="mt-1 text-[11px] text-zinc-500">
-            Short and simple: letters, numbers, - or _. Kwants see its tools as <span className="font-mono text-zinc-400">{form.name.trim() || 'name'} · tool</span>.
+            Short and simple: letters, numbers, - or _. Bots see its tools as <span className="font-mono text-zinc-400">{form.name.trim() || 'name'} · tool</span>.
           </p>
         </div>
 
@@ -1086,7 +1086,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             )}
             <div className="min-w-0">
               <h2 id="mcp-title" className="text-sm font-semibold text-zinc-100 truncate">
-                {editing === 'new' || picking ? 'Add a tool server' : editing ? `Edit ${form.name || 'server'}` : 'Tools for your kwants'}
+                {editing === 'new' || picking ? 'Add a tool server' : editing ? `Edit ${form.name || 'server'}` : 'Tools for your kwant bots'}
               </h2>
               <p className="text-xs text-zinc-400 truncate">
                 {picking
@@ -1095,7 +1095,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
                   ? 'Pick how it connects, then fill in the details'
                   : editing
                     ? 'Saved secrets stay hidden and are kept unless you change them'
-                    : 'MCP servers your kwants can use, with your approval'}
+                    : 'MCP servers your bots can use, with your approval'}
               </p>
             </div>
           </div>

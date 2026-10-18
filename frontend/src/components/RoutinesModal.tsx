@@ -36,7 +36,7 @@ export const RoutinesModal: React.FC<{ isOpen: boolean; onClose: () => void; kwa
             </div>
             <div>
               <h2 id="routines-title" className="text-sm font-semibold text-zinc-100">Routines</h2>
-              <p className="text-xs text-zinc-400">Scheduled work for all your kwants</p>
+              <p className="text-xs text-zinc-400">Scheduled work for the bots in this space</p>
             </div>
           </div>
           <button

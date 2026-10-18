@@ -47,12 +47,17 @@ const ToastItem: React.FC<{ toast: Toast; onDismiss: (id: number) => void }> = (
   );
 };
 
-/** Short notices in the corner; screen readers hear them without moving focus. */
-export const Toasts: React.FC<{ toasts: Toast[]; onDismiss: (id: number) => void }> = ({ toasts, onDismiss }) => (
+/** Short notices in the corner; screen readers hear them without moving focus. News from other
+ *  spaces sits at the top, so it never covers the open space's own notices or the composer. */
+export const Toasts: React.FC<{ toasts: Toast[]; onDismiss: (id: number) => void; position?: 'bottom' | 'top' }> = ({
+  toasts,
+  onDismiss,
+  position = 'bottom',
+}) => (
   <div
     role="status"
     aria-live="polite"
-    className="pointer-events-none fixed bottom-4 right-4 left-4 sm:left-auto z-[60] flex flex-col items-end gap-2 sm:w-80"
+    className={`pointer-events-none fixed ${position === 'top' ? 'top-4' : 'bottom-4'} right-4 left-4 sm:left-auto z-[60] flex flex-col items-end gap-2 sm:w-80`}
   >
     {toasts.map((t) => (
       <ToastItem key={t.id} toast={t} onDismiss={onDismiss} />

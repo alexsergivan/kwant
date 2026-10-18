@@ -365,7 +365,7 @@ export const ClaudeSignOut: React.FC<{ onSignedOut: (engines: EngineInfo[]) => v
               Sign out of Claude?
             </h4>
             <div id="claude-signout-desc" className="space-y-1.5 text-xs text-zinc-300 leading-relaxed">
-              <p>Every kwant on this server will stop using Claude until you sign in again.</p>
+              <p>Every bot in this space will stop using this account until you sign in again.</p>
               <p className="text-zinc-400">This signs Claude Code out on this computer, so anything else here that uses the same Claude Code login is signed out too.</p>
             </div>
             {error && (

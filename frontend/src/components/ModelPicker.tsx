@@ -167,7 +167,7 @@ const PickHint: React.FC<{ id: string; health: ReturnType<typeof pickHealth>; on
           </p>
           <p className="text-amber-200/80">
             {health.reason ? `${health.reason.replace(/`/g, '').replace(/\.$/, '')}. ` : ''}
-            This kwant won't switch engine by itself: fix it, or pick another engine.{' '}
+            This bot won't switch engine by itself: fix it, or pick another engine.{' '}
             {health.family === 'claude' && onSignInClaude ? <SignInClaudeLink onSignInClaude={onSignInClaude} /> : <SettingsLink onOpenSettings={onOpenSettings} />}
           </p>
         </div>

@@ -1,12 +1,13 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
-import { AppHeader } from './components/AppHeader';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
+import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
+import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } from './components/ChatView';
 import { ThreadBar, ThreadHeader } from './components/ThreadBar';
 import { DelegationCard } from './components/DelegationCard';
 import { QuestionCard } from './components/QuestionCard';
 import { AwayPage } from './components/AwayView';
-import { HelpCircle, ListChecks, Loader2 } from 'lucide-react';
+import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { PendingApproval } from './components/ModernApprovalCard';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
@@ -58,20 +59,77 @@ import {
   questionsApi,
   turnsAwaitingAnswer,
 } from './questions';
-import { AwayItem, affectsAway, awayApi, awayTarget } from './away';
+import { AwayItem, affectsAway, awayApi, awayTarget, badgeText } from './away';
+import { Space, eventsUrl, spaceColor } from './spaces';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
 const NewAgentModal = lazy(() => import('./components/NewAgentModal').then((m) => ({ default: m.NewAgentModal })));
 const McpServersModal = lazy(() => import('./components/McpServersModal').then((m) => ({ default: m.McpServersModal })));
-const SettingsModal = lazy(() => import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal })));
 const ChannelInstructionsModal = lazy(() =>
   import('./components/ChannelInstructionsModal').then((m) => ({ default: m.ChannelInstructionsModal })),
 );
 const SearchModal = lazy(() => import('./components/SearchModal').then((m) => ({ default: m.SearchModal })));
 const RoutinesModal = lazy(() => import('./components/RoutinesModal').then((m) => ({ default: m.RoutinesModal })));
 
-export const App: React.FC = () => {
+/** Where to land when a space opens: a channel or a bot's direct chat. */
+export interface SpaceTarget {
+  channelId?: string;
+  botId?: string;
+}
+
+export interface SpaceAppProps {
+  space: Space;
+  spaces: Space[];
+  initialTarget: SpaceTarget | null;
+  onSwitchSpace: (id: string, to?: SpaceTarget | null) => void;
+  onCreateSpace: () => void;
+  onOpenArchived: () => void;
+  onOpenAppSettings: () => void;
+  /** Re-reads the space list (counts, #general appearing, a rename). */
+  onSpacesChanged: () => void;
+  onSpaceArchived: (space: Space) => void;
+  /** The open chat changed, for the address bar and reopening it later. */
+  onChatChange: (target: SpaceTarget) => void;
+  onTokensUsed: (n: number) => void;
+}
+
+const PHONE_QUERY = '(max-width: 767px)';
+
+/** Below 768px the space is one column: a list or a chat, with a tab bar. */
+function useIsPhone(): boolean {
+  const [phone, setPhone] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(PHONE_QUERY).matches);
+  useEffect(() => {
+    const mq = window.matchMedia?.(PHONE_QUERY);
+    if (!mq) return;
+    const on = () => setPhone(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  return phone;
+}
+
+type PhoneTab = 'chats' | 'bots' | 'inbox' | 'space';
+
+/** One space: its bots, teams, channels and chats. Remounted for every space, so nothing carries over. */
+export const SpaceApp: React.FC<SpaceAppProps> = ({
+  space,
+  spaces,
+  initialTarget,
+  onSwitchSpace,
+  onCreateSpace,
+  onOpenArchived,
+  onOpenAppSettings,
+  onSpacesChanged,
+  onSpaceArchived,
+  onChatChange,
+  onTokensUsed,
+}) => {
+  const isPhone = useIsPhone();
+  // Phones: the list (one tab of it) or the open chat.
+  const [phoneView, setPhoneView] = useState<'list' | 'chat'>(() => (initialTarget?.channelId || initialTarget?.botId ? 'chat' : 'list'));
+  const [phoneTab, setPhoneTab] = useState<PhoneTab>('chats');
+  const [loaded, setLoaded] = useState(false);
   const [kwants, setKwants] = useState<Kwant[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -80,7 +138,7 @@ export const App: React.FC = () => {
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messagesError, setMessagesError] = useState<string | null>(null);
-  // The open thread of the selected agent; null for its direct chat (and for channels).
+  // The open thread of the selected bot; null for its direct chat (and for channels).
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
   const openCtx = openThreadId || selectedId;
   const openCtxRef = useRef(openCtx);
@@ -132,19 +190,25 @@ export const App: React.FC = () => {
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [tokensUsed, setTokensUsed] = useState(0);
 
-  // Modals state
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  // Bumped when Settings closes, so open kwant forms read engine status again.
+  // Space settings: open on one tab, or closed.
+  const [spaceSettingsTab, setSpaceSettingsTab] = useState<SpaceSettingsTab | null>(null);
+  // Bumped when Space settings closes, so open bot forms read account status again.
   const [settingsClosedCount, setSettingsClosedCount] = useState(0);
-  // Set when Settings opens from a "Sign in with Claude" hint, to focus that button.
+  // Set when Accounts opens from a "Sign in with Claude" hint, to focus that button.
   const [claudeSignInFocus, setClaudeSignInFocus] = useState(0);
-  const openSettings = () => {
+  const openSpaceSettings = (tab: SpaceSettingsTab = 'general') => {
     setClaudeSignInFocus(0);
-    setIsSettingsOpen(true);
+    setSpaceSettingsTab(tab);
+    playSfx('click');
   };
+  const openSettings = () => openSpaceSettings('accounts');
   const openClaudeSignIn = () => {
     setClaudeSignInFocus(Date.now());
-    setIsSettingsOpen(true);
+    setSpaceSettingsTab('accounts');
+  };
+  const closeSpaceSettings = () => {
+    setSpaceSettingsTab(null);
+    setSettingsClosedCount((n) => n + 1);
   };
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -170,12 +234,14 @@ export const App: React.FC = () => {
   const toastIdRef = useRef(0);
   const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
   // Set each render once the select handlers exist; the SSE handler and notification clicks go through it.
-  // Opens an agent's settings on the Skills tab (set once the agents are known).
+  // Opens a bot's settings on the Skills tab (set once the bots are known).
   const openSkillsRef = useRef<(kwantId: string) => void>(() => undefined);
-  // Opens the chat of an agent's newest open question; false when it has none.
+  // Opens the chat of a bot's newest open question; false when it has none.
   const openQuestionRef = useRef<(kwantId: string) => boolean>(() => false);
   const openTargetRef = useRef<(t: { channel_id: string | null; kwant_id: string | null }) => boolean>(() => false);
   const showNotification = (n: NotifyEvent) => {
+    // Another space's news is the shell's to show, with a way to switch there.
+    if (n.space_id && n.space_id !== space.id) return;
     const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
     // Failed routines and finished or slow delegations show in the app; the OS notification is for a hidden tab.
     if (!document.hidden && (TOAST_KINDS as string[]).includes(n.kind)) {
@@ -310,15 +376,15 @@ export const App: React.FC = () => {
   };
 
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
-  // Team that a newly created agent should join (set by a team's "Add member")
+  // Team that a newly created bot should join (set by a team's "Add member")
   const [newAgentTeam, setNewAgentTeam] = useState<Team | null>(null);
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [editingKwant, setEditingKwant] = useState<Kwant | null>(null);
   const [editingTab, setEditingTab] = useState<EditTab>('profile');
-  // Skills waiting for review, for the counts on the agent's header and Skills tab.
+  // Skills waiting for review, for the counts on the bot's header and Skills tab.
   const [pendingSkills, setPendingSkills] = useState<Skill[]>([]);
-  // Agents' questions by id: open ones from the server, plus every question_updated since.
+  // Bots' questions by id: open ones from the server, plus every question_updated since.
   const [questions, setQuestions] = useState<Record<string, Question>>({});
   const questionsRef = useRef(questions);
   questionsRef.current = questions;
@@ -357,14 +423,26 @@ export const App: React.FC = () => {
         setChannels(cRes);
         setTeams(normalizedTeams);
 
-        if (cRes.length > 0) {
-          const initId = cRes[0].id;
+        // The chat asked for (a link, a notification, the last one open here) if it still exists.
+        const wantBot = initialTarget?.botId ? (kRes as Kwant[]).find((k) => k.id === initialTarget.botId) : undefined;
+        const wantChannel = initialTarget?.channelId
+          ? (cRes as Channel[]).find((c) => c.id === initialTarget.channelId)
+          : (cRes as Channel[]).find((c) => c.id === space.general_channel_id);
+        if (wantBot && !wantChannel) {
+          setSelectedId(wantBot.id);
+          selectedIdRef.current = wantBot.id;
+          setIsChannel(false);
+          isChannelRef.current = false;
+          setSelectedTeamId(null);
+        } else if (wantChannel || cRes.length > 0) {
+          const init: Channel = wantChannel ?? cRes[0];
+          const initId = init.id;
           setSelectedId(initId);
           selectedIdRef.current = initId;
           setIsChannel(true);
           isChannelRef.current = true;
           const matchedTeam = normalizedTeams.find(
-            (t) => `team-${t.name}` === cRes[0].name || t.id === cRes[0].id
+            (t) => `team-${t.name}` === init.name || t.id === init.id
           );
           setSelectedTeamId(matchedTeam ? matchedTeam.id : null);
         } else if (kRes.length > 0) {
@@ -377,6 +455,8 @@ export const App: React.FC = () => {
         }
       } catch (err) {
         console.error('Failed to load initial data:', err);
+      } finally {
+        setLoaded(true);
       }
     }
     loadInitialData();
@@ -400,7 +480,7 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openCtx]);
 
-  // An agent's conversations load when its chat opens; SSE keeps them current from then on.
+  // A bot's conversations load when its chat opens; SSE keeps them current from then on.
   useEffect(() => {
     if (!selectedId || isChannel || threadsByKwantRef.current[selectedId] !== undefined) return;
     loadThreads(selectedId);
@@ -423,7 +503,7 @@ export const App: React.FC = () => {
 
   // Connect to SSE stream
   useEffect(() => {
-    const sse = new EventSource('/api/events');
+    const sse = new EventSource(eventsUrl(space.id));
     let dropped = false;
     /** TurnComplete already refreshed these turns' chats; their turn_ended needn't again. */
     const completed = new Set<string>();
@@ -457,7 +537,7 @@ export const App: React.FC = () => {
       dropped = true;
     };
     // First connect and every reconnect: running turns from the server. After a drop, also
-    // whatever changed meanwhile in the open chat and the open agent's conversations.
+    // whatever changed meanwhile in the open chat and the open bot's conversations.
     sse.onopen = () => {
       hydrateFromServer();
       if (dropped) {
@@ -629,6 +709,9 @@ export const App: React.FC = () => {
               kwantTitle: event.data?.kwant_title,
               reason: event.data?.reason,
               mode: event.data?.mode,
+              candidateCount: typeof event.data?.candidate_count === 'number' ? event.data.candidate_count : prev?.candidateCount ?? null,
+              fallback: !!event.data?.fallback,
+              matchedTerms: Array.isArray(event.data?.matched_terms) ? event.data.matched_terms : undefined,
             }));
             if (name && (ctx || targetId) && (ctx || targetId) in liveRef.current) markLive(ctx || targetId, name);
             playSfx('blip');
@@ -876,7 +959,7 @@ export const App: React.FC = () => {
     const threadId = openThreadId;
     const isTargetChannel = isChannel;
     const targetTeam = selectedTeamId;
-    const speakerName = !isTargetChannel ? (currentKwant?.name || 'Agent') : chatTitle;
+    const speakerName = !isTargetChannel ? (currentKwant?.name || 'Bot') : chatTitle;
 
     if (!threadId) {
       discussionInProgressRef.current = false;
@@ -968,6 +1051,7 @@ export const App: React.FC = () => {
   const handleSelectTeam = (team: Team) => {
     setOpenThreadId(null);
     setShowAway(false);
+    setPhoneView('chat');
     setSelectedTeamId(team.id);
     const targetChannel = channels.find(
       (c) => c.name === `team-${team.name}` || c.id === team.id
@@ -1007,6 +1091,7 @@ export const App: React.FC = () => {
   const handleSelectChannel = (channel: Channel) => {
     setOpenThreadId(null);
     setShowAway(false);
+    setPhoneView('chat');
     setSelectedId(channel.id);
     selectedIdRef.current = channel.id;
     setIsChannel(true);
@@ -1022,6 +1107,7 @@ export const App: React.FC = () => {
   const handleSelectKwant = (kwant: Kwant) => {
     setOpenThreadId(null);
     setShowAway(false);
+    setPhoneView('chat');
     setSelectedId(kwant.id);
     selectedIdRef.current = kwant.id;
     setIsChannel(false);
@@ -1031,7 +1117,7 @@ export const App: React.FC = () => {
     playSfx('click');
   };
 
-  /** Opens a channel, or the direct chat with a kwant when there's no channel. False if it's gone. */
+  /** Opens a channel, or the direct chat with a bot when there's no channel. False if it's gone. */
   const openTarget = (t: { channel_id: string | null; kwant_id: string | null }): boolean => {
     if (t.channel_id) {
       const channel = channels.find((c) => c.id === t.channel_id);
@@ -1068,11 +1154,11 @@ export const App: React.FC = () => {
     setToasts((prev) => [...prev.slice(-2), { id, title, detail }]);
   };
 
-  /** Opens one of an agent's threads (from the thread list, a delegation card or a badge). */
+  /** Opens one of a bot's threads (from the thread list, a delegation card or a badge). */
   const openThread = (kwantId: string, threadId: string) => {
     const kwant = kwants.find((k) => k.id === kwantId);
     if (!kwant) {
-      pushToast('That agent no longer exists.');
+      pushToast('That bot no longer exists.');
       return;
     }
     knownThreadsRef.current.add(threadId);
@@ -1099,6 +1185,15 @@ export const App: React.FC = () => {
   };
 
   const errText = (err: unknown) => (err instanceof Error ? err.message : 'Something went wrong.');
+  /** The server's own `error` text, e.g. why a team name isn't allowed. */
+  const serverError = async (res: Response): Promise<string | null> => {
+    try {
+      const body = await res.clone().json();
+      return typeof body?.error === 'string' && body.error ? body.error : null;
+    } catch {
+      return null;
+    }
+  };
 
   const handleNewThread = async (): Promise<string | void> => {
     const kwantId = selectedIdRef.current;
@@ -1286,9 +1381,9 @@ export const App: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(kwantData),
       });
-      if (res.status === 409) return `Another agent is already named "${agentData.name}".`;
-      if (res.status === 400) return 'Check the name (no spaces or @) and that the profile belongs to the chosen engine.';
-      if (!res.ok) return `Saving failed (HTTP ${res.status}).`;
+      if (res.status === 409) return `Another bot in ${space.name} is already named "${agentData.name}".`;
+      if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen engine.';
+      if (!res.ok) return `Couldn't save the bot (HTTP ${res.status}).`;
 
       const updated: Kwant = await res.json();
       setKwants((prev) => prev.map((k) => (k.id === updated.id ? updated : k)));
@@ -1306,7 +1401,7 @@ export const App: React.FC = () => {
       if (mcpError) return mcpError;
       playSfx('click');
     } catch (err) {
-      console.error('Failed updating Agent:', err);
+      console.error('Failed updating bot:', err);
       return 'Could not reach the server.';
     }
   };
@@ -1345,8 +1440,15 @@ export const App: React.FC = () => {
           handleSelectTeam(team);
           return;
         }
+        // The first bot opens the space's #general; counts change either way.
+        onSpacesChanged();
+        fetch('/api/channels')
+          .then((r) => (r.ok ? r.json() : null))
+          .then((fresh: Channel[] | null) => fresh && setChannels(fresh))
+          .catch(() => undefined);
         setSelectedId(created.id);
         selectedIdRef.current = created.id;
+        setPhoneView('chat');
         setIsChannel(false);
         isChannelRef.current = false;
         setSelectedTeamId(null);
@@ -1354,11 +1456,11 @@ export const App: React.FC = () => {
         setMessages([]);
         return;
       }
-      if (res.status === 409) return `Another agent is already named "${agentData.name}".`;
-      if (res.status === 400) return 'Check the name (no spaces or @) and that the profile belongs to the chosen engine.';
-      return `Creating failed (HTTP ${res.status}).`;
+      if (res.status === 409) return `Another bot in ${space.name} is already named "${agentData.name}".`;
+      if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen engine.';
+      return `Couldn't create the bot (HTTP ${res.status}).`;
     } catch (err) {
-      console.error('Failed creating Agent:', err);
+      console.error('Failed creating bot:', err);
       return 'Could not reach the server.';
     }
   };
@@ -1413,9 +1515,13 @@ export const App: React.FC = () => {
 
         setIsNewTeamOpen(false);
         playSfx('fanfare');
+        onSpacesChanged();
+        return;
       }
+      throw new Error((await serverError(res)) ?? `Couldn't create the team (HTTP ${res.status}).`);
     } catch (err) {
       console.error('Failed creating team:', err);
+      throw err instanceof Error ? err : new Error('Could not reach the server.');
     }
   };
 
@@ -1457,9 +1563,12 @@ export const App: React.FC = () => {
 
         setEditingTeam(null);
         playSfx('fanfare');
+        return;
       }
+      throw new Error((await serverError(res)) ?? `Couldn't save the team (HTTP ${res.status}).`);
     } catch (err) {
       console.error('Failed updating team:', err);
+      throw err instanceof Error ? err : new Error('Could not reach the server.');
     }
   };
 
@@ -1481,13 +1590,14 @@ export const App: React.FC = () => {
           member_kwants: memberIds,
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error((await serverError(res)) ?? `HTTP ${res.status}`);
       const cRes = await fetch('/api/channels');
       if (cRes.ok) setChannels(await cRes.json());
       playSfx('click');
     } catch (err) {
       console.error('Failed updating team members:', err);
       setTeams(previous);
+      pushToast("Couldn't change the team.", err instanceof Error ? err.message : undefined);
     }
   };
 
@@ -1551,17 +1661,19 @@ export const App: React.FC = () => {
     : [];
 
   const chatTitle = !isChannel
-    ? currentKwant?.name || 'Agent'
+    ? currentKwant?.name || 'Bot'
     : currentTeam
     ? `@${currentTeam.name}`
     : currentChannel?.name.startsWith('team-')
     ? `@${currentChannel.name.replace(/^team-/, '')}`
     : `#${currentChannel?.name || 'general'}`;
 
-  const boundProfile = currentKwant?.profile_id ? profiles.find((p) => p.id === currentKwant.profile_id) : undefined;
+  const isGeneral = isChannel && !currentTeam && currentChannel?.name === 'general';
   const chatSubtitle = !isChannel
-    ? `${currentKwant?.title || 'Specialist'} [Laya Auto-Fleet]${boundProfile ? ` · profile: ${boundProfile.name}` : ''}`
-    : currentTeam?.description || currentChannel?.description || 'Team collaboration room';
+    ? currentKwant?.title || 'Kwant bot'
+    : isGeneral
+      ? `Laya picks who answers, from the ${kwants.length} ${kwants.length === 1 ? 'bot' : 'bots'} in ${space.name}`
+      : currentTeam?.description || currentChannel?.description || `A team in ${space.name}`;
 
   // Load container status and screenshot for active team or bot
   useEffect(() => {
@@ -1689,17 +1801,27 @@ export const App: React.FC = () => {
   };
 
 
+  useEffect(() => onTokensUsed(tokensUsed), [tokensUsed, onTokensUsed]);
+
+  // The address bar and "reopen where I was" follow the open chat.
+  const chatChangeRef = useRef(onChatChange);
+  chatChangeRef.current = onChatChange;
+  useEffect(() => {
+    if (!loaded || !selectedId) return;
+    chatChangeRef.current(isChannel ? { channelId: selectedId } : { botId: selectedId });
+  }, [loaded, selectedId, isChannel]);
+
   const isCurrentContextStreaming = openCtx in live;
   const openTurns = turnsIn(turns, openCtx);
-  // Turns paused on a question wait for the person; they don't make the agent "busy".
+  // Turns paused on a question wait for the person; they don't make the bot "busy".
   const awaitingTurns = turnsAwaitingAnswer(questions);
   const awaitingHere = openTurns.some((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) && !openTurns.some((t) => t.state === 'running' && !awaitingTurns.has(t.turn_id));
   const waiting = openTurns.some((t) => t.state === 'running') ? undefined : openTurns.find((t) => t.state === 'queued');
   const queuedHere: QueuedState | null = waiting
-    ? { position: queuePosition(turns, waiting.turn_id), reason: waiting.reason ?? 'agent_busy', speaker: kwantName(waiting.kwant_id) ?? live[openCtx] ?? 'The agent' }
+    ? { position: queuePosition(turns, waiting.turn_id), reason: waiting.reason ?? 'agent_busy', speaker: kwantName(waiting.kwant_id) ?? live[openCtx] ?? 'The bot' }
     : null;
 
-  // The agent's conversations, the open thread's controls, and "working on…" elsewhere.
+  // The bot's conversations, the open thread's controls, and "working on…" elsewhere.
   const agentThreads = currentKwant ? threadsByKwant[currentKwant.id] : undefined;
   const shownThread = openThreadId ? agentThreads?.find((t) => t.id === openThreadId) ?? null : null;
   const elsewhere = currentKwant ? backgroundTurns(turns, currentKwant.id).filter((t) => t.context_id !== openCtx) : [];
@@ -1744,7 +1866,7 @@ export const App: React.FC = () => {
         {pendingHere === 1 ? '1 skill to review' : `${pendingHere} skills to review`}
       </button>
     ) : null;
-  // Sidebar: agents busy somewhere other than the open chat.
+  // Sidebar: bots busy somewhere other than the open chat.
   const busyKwants: Record<string, string> = {};
   for (const t of Object.values(turns)) {
     if (t.context_id === openCtx || busyKwants[t.kwant_id]) continue;
@@ -1811,65 +1933,136 @@ export const App: React.FC = () => {
       discussionState.teamId === selectedTeamId ||
       (isChannel && currentTeam && discussionState.teamId === currentTeam.id));
 
-  return (
-    <div className="h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden font-sans">
-      {/* Modern App Header */}
-      <AppHeader
-        onOpenSettings={openSettings}
-        onOpenTools={() => setIsMcpOpen(true)}
-        onOpenSearch={() => setIsSearchOpen(true)}
-        onOpenRoutines={() => setIsRoutinesOpen(true)}
-        tokensUsed={tokensUsed}
-        activeModel={currentKwant?.preferred_model || 'auto'}
-      />
+  const needsSetup = loaded && kwants.length === 0;
+  const setupChecklist = (
+    <main className="flex-1 min-w-0 overflow-y-auto flex items-start sm:items-center justify-center p-4 sm:p-8" data-space-checklist>
+      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 sm:p-6 space-y-4">
+        <div className="flex items-center gap-3">
+          <SpaceTile space={space} size={40} />
+          <div className="min-w-0">
+            <h1 className="text-base font-semibold text-zinc-100 truncate">Get {space.name} ready</h1>
+            <p className="text-xs text-zinc-400">Bots, teams and accounts here stay in {space.name}.</p>
+          </div>
+        </div>
+        <ol className="space-y-2">
+          {[
+            {
+              done: (space.counts?.ready_accounts ?? 0) > 0,
+              title: 'Connect an account',
+              detail: 'Sign in with Claude, add a key, or use this machine.',
+              action: { label: 'Accounts', icon: <KeyRound size={13} />, onClick: () => openSpaceSettings('accounts') },
+            },
+            {
+              done: kwants.length > 0,
+              title: 'Add your first bot',
+              detail: `${space.name}'s #general opens with it.`,
+              action: {
+                label: 'New bot',
+                icon: <Bot size={13} />,
+                onClick: () => {
+                  setNewAgentTeam(null);
+                  setIsNewAgentOpen(true);
+                  playSfx('click');
+                },
+              },
+            },
+            { done: false, title: 'Message #general', detail: `Laya picks who answers, only from ${space.name}'s bots.` },
+          ].map((step, i) => (
+            <li key={step.title} className="flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
+              <span
+                className={`mt-0.5 w-5 h-5 shrink-0 rounded-full flex items-center justify-center text-[11px] font-semibold ${
+                  step.done ? 'bg-emerald-500 text-zinc-950' : 'bg-zinc-800 text-zinc-300'
+                }`}
+                aria-hidden="true"
+              >
+                {step.done ? <Check size={12} /> : i + 1}
+              </span>
+              <span className="flex-1 min-w-0">
+                <span className={`block text-xs font-medium ${step.done ? 'text-zinc-400 line-through' : 'text-zinc-100'}`}>
+                  {step.title}
+                  {step.done && <span className="sr-only"> (done)</span>}
+                </span>
+                <span className="block text-[11px] text-zinc-500">{step.detail}</span>
+              </span>
+              {step.action && !step.done && (
+                <button
+                  type="button"
+                  onClick={step.action.onClick}
+                  className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-300"
+                >
+                  {step.action.icon}
+                  {step.action.label}
+                </button>
+              )}
+            </li>
+          ))}
+        </ol>
+      </div>
+    </main>
+  );
 
-      {/* Main Workspace Shell */}
-      <div className="flex-1 flex overflow-hidden">
-        <Sidebar
-          onOpenSettings={openSettings}
-          onSignInClaude={openClaudeSignIn}
-          enginesRefreshKey={settingsClosedCount}
-          kwants={kwants}
-          channels={channels}
-          teams={teams}
-          selectedId={selectedId}
-          isChannel={isChannel}
-          selectedTeamId={selectedTeamId}
-          busyKwants={busyKwants}
-          onSelectKwant={handleSelectKwant}
-          onSelectChannel={handleSelectChannel}
-          onSelectTeam={handleSelectTeam}
-          onUpdateTeamMembers={handleUpdateTeamMembers}
-          onManageTeam={(team) => {
-            setEditingTeam(team);
-            playSfx('click');
-          }}
-          onEditKwant={(kwant) => {
-            openAgentSettings(kwant);
-          }}
-          onSummonKwant={(team) => {
-            setNewAgentTeam(team ?? null);
-            setIsNewAgentOpen(true);
-            playSfx('click');
-          }}
-          onCreateTeam={() => {
-            setIsNewTeamOpen(true);
-            playSfx('click');
-          }}
-          awayCount={awayCount}
-          awayActive={showAway}
-          onOpenAway={() => {
-            setShowAway(true);
-            playSfx('click');
-          }}
-        />
+  const sidebar = (section: 'all' | 'chats' | 'bots') => (
+    <Sidebar
+      space={space}
+      spaces={spaces}
+      onSwitchSpace={onSwitchSpace}
+      onCreateSpace={onCreateSpace}
+      onOpenSpaceSettings={() => openSpaceSettings('general')}
+      onOpenArchived={onOpenArchived}
+      onOpenSearch={() => setIsSearchOpen(true)}
+      onOpenRoutines={() => setIsRoutinesOpen(true)}
+      section={section}
+      phone={isPhone}
+      onOpenAccounts={openSettings}
+      onSignInClaude={openClaudeSignIn}
+      enginesRefreshKey={settingsClosedCount}
+      kwants={kwants}
+      channels={channels}
+      teams={teams}
+      selectedId={selectedId}
+      isChannel={isChannel}
+      selectedTeamId={selectedTeamId}
+      busyKwants={busyKwants}
+      onSelectKwant={handleSelectKwant}
+      onSelectChannel={handleSelectChannel}
+      onSelectTeam={handleSelectTeam}
+      onUpdateTeamMembers={handleUpdateTeamMembers}
+      onManageTeam={(team) => {
+        setEditingTeam(team);
+        playSfx('click');
+      }}
+      onEditKwant={(kwant) => {
+        openAgentSettings(kwant);
+      }}
+      onSummonKwant={(team) => {
+        setNewAgentTeam(team ?? null);
+        setIsNewAgentOpen(true);
+        playSfx('click');
+      }}
+      onCreateTeam={() => {
+        setIsNewTeamOpen(true);
+        playSfx('click');
+      }}
+      awayCount={awayCount}
+      awayActive={showAway}
+      onOpenAway={() => {
+        setShowAway(true);
+        setPhoneView('chat');
+        playSfx('click');
+      }}
+    />
+  );
 
-        {showAway ? (
-          <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount} />
-        ) : (
+  const away = (
+    <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount} />
+  );
+  const chat = (
         <ChatView
           title={chatTitle}
           subtitle={chatSubtitle}
+          spaceName={space.name}
+          isGeneral={isGeneral}
+          onBack={isPhone ? () => setPhoneView('list') : undefined}
           messages={viewingHistory ? historyWindow.messages : messages}
           viewingHistory={viewingHistory}
           onJumpToLatest={() => setHistoryWindow(null)}
@@ -1942,10 +2135,89 @@ export const App: React.FC = () => {
           awaitingAnswer={awaitingHere}
           contextKey={openCtx}
         />
-        )}
-      </div>
+  );
+  const mainPane = needsSetup ? setupChecklist : showAway ? away : !loaded ? (
+    <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
+      <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…
+    </main>
+  ) : chat;
 
-      {/* New Agent Modal */}
+  const phoneTabs: Array<{ id: PhoneTab; label: string; icon: React.ReactNode; badge?: number }> = [
+    { id: 'chats', label: 'Chats', icon: <MessageSquare size={18} /> },
+    { id: 'bots', label: 'Bots', icon: <Bot size={18} /> },
+    { id: 'inbox', label: 'Inbox', icon: <Inbox size={18} />, badge: awayCount },
+    { id: 'space', label: 'Space', icon: <Settings size={18} /> },
+  ];
+  const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
+
+  return (
+    <div className="flex-1 min-w-0 h-full flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden" data-space={space.id}>
+      {/* The open space's colour, so it's clear where a message goes */}
+      <div className="h-[3px] shrink-0" style={{ background: spaceColor(space) }} aria-hidden="true" />
+
+      {isPhone ? (
+        <>
+          {showPhoneList || needsSetup ? (
+            <div className="flex-1 min-h-0 flex flex-col">
+              {needsSetup ? (
+                <>
+                  {sidebar('chats')}
+                  {setupChecklist}
+                </>
+              ) : (
+                sidebar(phoneTab === 'bots' ? 'bots' : 'chats')
+              )}
+            </div>
+          ) : (
+            <div className="flex-1 min-h-0 flex">{mainPane}</div>
+          )}
+          {(showPhoneList || needsSetup) && (
+            <nav aria-label={`${space.name} sections`} className="shrink-0 grid grid-cols-4 border-t border-zinc-800 bg-zinc-900/95 pb-[env(safe-area-inset-bottom)]">
+              {phoneTabs.map((t) => {
+                const active = t.id === phoneTab;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    aria-current={active ? 'page' : undefined}
+                    onClick={() => {
+                      playSfx('click');
+                      if (t.id === 'inbox') {
+                        setShowAway(true);
+                        setPhoneView('chat');
+                        return;
+                      }
+                      if (t.id === 'space') {
+                        openSpaceSettings('general');
+                        return;
+                      }
+                      setPhoneTab(t.id);
+                    }}
+                    className={`relative flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500 ${
+                      active ? 'text-sky-300' : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    {t.icon}
+                    {t.label}
+                    {!!t.badge && (
+                      <span className="absolute top-1 left-1/2 ml-2 min-w-[16px] px-1 rounded-full bg-amber-500 text-zinc-950 text-[9px] font-semibold text-center">
+                        {badgeText(t.badge)}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
+          )}
+        </>
+      ) : (
+        <div className="flex-1 min-h-0 flex overflow-hidden">
+          {sidebar('all')}
+          {mainPane}
+        </div>
+      )}
+
+      {/* New bot */}
       <Suspense fallback={null}>
         <NewAgentModal
           isOpen={isNewAgentOpen}
@@ -1964,7 +2236,7 @@ export const App: React.FC = () => {
           onSubmit={handleCreateAgent}
         />
 
-        {/* Edit Agent Modal */}
+        {/* Edit a bot */}
         <NewAgentModal
           isOpen={!!editingKwant}
           initial={editingKwant}
@@ -2002,24 +2274,38 @@ export const App: React.FC = () => {
         onDeleteTeam={handleDeleteTeam}
       />
 
-      {/* Settings Modal */}
-      <Suspense fallback={null}>
-        <SettingsModal
-          isOpen={isSettingsOpen}
+      {spaceSettingsTab && (
+        <SpaceSettings
+          space={space}
+          spaces={spaces}
+          tab={spaceSettingsTab}
+          onTab={setSpaceSettingsTab}
+          onClose={closeSpaceSettings}
+          kwants={kwants}
+          channels={channels}
+          teams={teams}
           focusClaudeSignIn={claudeSignInFocus}
-          onClose={() => {
-            setIsSettingsOpen(false);
-            setSettingsClosedCount((n) => n + 1);
-          }}
-          onOpenTools={() => {
-            setIsSettingsOpen(false);
-            setIsMcpOpen(true);
-          }}
           onProfilesChanged={setProfiles}
+          pendingSkills={pendingSkillCounts}
+          onSpaceSaved={() => onSpacesChanged()}
+          onArchived={(s) => {
+            setSpaceSettingsTab(null);
+            onSpaceArchived(s);
+          }}
+          onNewBot={() => {
+            setNewAgentTeam(null);
+            setIsNewAgentOpen(true);
+          }}
+          onEditBot={(k) => openAgentSettings(k)}
+          onOpenSkills={(k) => openAgentSettings(k, 'skills')}
+          onNewTeam={() => setIsNewTeamOpen(true)}
+          onManageTeam={(t) => setEditingTeam(t)}
+          onOpenTools={() => setIsMcpOpen(true)}
+          onOpenAppSettings={onOpenAppSettings}
         />
-      </Suspense>
+      )}
 
-      {/* MCP tool servers (opened last so it sits above the agent modal) */}
+      {/* MCP tool servers (opened last so it sits above the bot form) */}
       <Suspense fallback={null}>
         <McpServersModal isOpen={isMcpOpen} onClose={() => setIsMcpOpen(false)} kwants={kwants} />
         {isSearchOpen && <SearchModal isOpen onClose={() => setIsSearchOpen(false)} kwants={kwants} onJump={handleJump} />}

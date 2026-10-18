@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { App } from './App';
+import { App } from './Shell';
 import { SandboxViewer } from './components/SandboxViewer';
 import { AuthGate } from './components/AuthGate';
 import './styles/modern.css';

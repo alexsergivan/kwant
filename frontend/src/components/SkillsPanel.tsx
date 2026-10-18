@@ -199,7 +199,7 @@ const SkillMeta: React.FC<{ skill: Skill; replaces?: Skill }> = ({ skill, replac
     )}
     {skill.kwant_id === null && (
       <Badge tone="bg-zinc-800 text-zinc-300 border-zinc-700">
-        <Globe2 size={10} aria-hidden="true" /> Every agent
+        <Globe2 size={10} aria-hidden="true" /> Every bot in this space
       </Badge>
     )}
     {skill.replaces_id && <Badge tone="bg-amber-500/10 text-amber-300 border-amber-500/20">Update to {replaces?.name ?? 'an enabled skill'}</Badge>}
@@ -337,7 +337,7 @@ const ActiveSkill: React.FC<{ skill: Skill }> = ({ skill }) => {
           <span className="flex items-center gap-1.5 text-xs font-mono font-semibold text-zinc-100 break-all">
             {open ? <ChevronDown size={12} className="shrink-0 text-zinc-500" aria-hidden="true" /> : <ChevronRight size={12} className="shrink-0 text-zinc-500" aria-hidden="true" />}
             {skill.name}
-            {skill.kwant_id === null && <Globe2 size={11} className="shrink-0 text-zinc-500" aria-label="Every agent" />}
+            {skill.kwant_id === null && <Globe2 size={11} className="shrink-0 text-zinc-500" aria-label="Every bot in this space" />}
           </span>
           {skill.description && <span className="block mt-0.5 pl-[18px] text-[11px] text-zinc-400 break-words">{skill.description}</span>}
         </button>
@@ -430,7 +430,7 @@ export const SkillsPanel: React.FC<{ kwantId: string; kwantName: string }> = ({ 
     <div className="space-y-3">
       <p className="text-[11px] text-zinc-500 leading-relaxed">
         Written steps {kwantName} follows when a request fits one. {kwantName} can propose new ones; nothing is used until you approve it. Skills
-        are instructions only and never give an agent new tools.
+        are instructions only and never give a bot new tools.
       </p>
 
       {writing ? (

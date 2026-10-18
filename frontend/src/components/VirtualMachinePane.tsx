@@ -513,7 +513,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                   target="_blank"
                   rel="noopener"
                   className="text-zinc-400 hover:text-sky-400 p-0.5 flex-shrink-0"
-                  title="Open the live sandbox browser in a new tab (shared with your agents)"
+                  title="Open the live sandbox browser in a new tab (shared with your bots)"
                 >
                   <ExternalLink size={12} />
                 </a>

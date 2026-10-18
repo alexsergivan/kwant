@@ -75,8 +75,8 @@ const RoutineForm: React.FC<{
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!f.name.trim()) return setError('Give the routine a name.');
-    if (!f.instructions.trim()) return setError('Say what the kwant should do.');
-    if (!f.kwantId) return setError('Pick a kwant.');
+    if (!f.instructions.trim()) return setError('Say what the bot should do.');
+    if (!f.kwantId) return setError('Pick a bot.');
     const built = scheduleFromForm(s);
     if ('error' in built) return setError(built.error);
     setSaving(true);
@@ -111,7 +111,7 @@ const RoutineForm: React.FC<{
         </div>
         {!fixedKwantId && (
           <div>
-            <label htmlFor={id('kwant')} className={labelClass}>Kwant</label>
+            <label htmlFor={id('kwant')} className={labelClass}>Bot</label>
             <select id={id('kwant')} value={f.kwantId} onChange={(e) => setF({ ...f, kwantId: e.target.value })} className={inputClass}>
               {kwants.map((k) => (
                 <option key={k.id} value={k.id}>{k.name}</option>
@@ -122,7 +122,7 @@ const RoutineForm: React.FC<{
         <div>
           <label htmlFor={id('channel')} className={labelClass}>Posts in</label>
           <select id={id('channel')} value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value })} className={inputClass}>
-            <option value="">Direct chat with the kwant</option>
+            <option value="">Direct chat with the bot</option>
             {channels.map((c) => (
               <option key={c.id} value={c.id}>{channelLabel(c.name)}</option>
             ))}
@@ -414,7 +414,7 @@ export const RoutinesPanel: React.FC<{ kwantId?: string; kwants: Kwant[]; channe
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] text-zinc-500 leading-relaxed">
-          A routine posts its instructions to the kwant on a schedule, then the kwant answers as usual.
+          A routine posts its instructions to the bot on a schedule, then the bot answers as usual.
         </p>
         {editing !== 'new' && (
           <button
@@ -462,7 +462,7 @@ export const RoutinesPanel: React.FC<{ kwantId?: string; kwants: Kwant[]; channe
               <RoutineRow
                 key={r.id}
                 routine={r}
-                kwantName={kwantId ? undefined : kwantName(r.kwant_id) ?? 'deleted kwant'}
+                kwantName={kwantId ? undefined : kwantName(r.kwant_id) ?? 'deleted bot'}
                 placeLabel={place(r)}
                 tick={tick}
                 onEdit={() => setEditing(r)}

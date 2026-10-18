@@ -47,7 +47,7 @@ export interface RowStatus {
 export function accountStatus(p: Profile, engine: EngineInfo, now = Date.now()): RowStatus {
   if (engine.enabled === false || engine.status === 'disabled') return { tone: 'muted', label: 'Off', detail: `Not checked while ${engine.name} is off` };
   if (p.kind !== 'system') return accountState(p, now);
-  if (!p.enabled) return { tone: 'muted', label: 'Off', detail: 'Kwants skip it while another account here is on' };
+  if (!p.enabled) return { tone: 'muted', label: 'Off', detail: 'Bots skip it while another account here is on' };
   switch (engine.status) {
     case 'ready':
       return isThirdPartyLabel(p.account_label) ? accountState(p, now) : { tone: 'ok', label: 'Ready', detail: p.account_label };
@@ -71,7 +71,7 @@ const Switch: React.FC<{ on: boolean; label: string; disabled?: boolean; onChang
     role="switch"
     aria-checked={on}
     aria-label={label}
-    title={on ? 'On: kwants may use it' : 'Off: kwants skip it'}
+    title={on ? 'On: bots may use it' : 'Off: bots skip it'}
     disabled={disabled}
     onClick={() => {
       playSfx('click');
@@ -364,7 +364,7 @@ const AccountRow: React.FC<{
               </span>
             )}
             {p.is_default && (
-              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-sky-500/15 text-[10px] text-sky-200" title="Kwants try this account first">
+              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-sky-500/15 text-[10px] text-sky-200" title="Bots try this account first">
                 <Star size={9} aria-hidden="true" /> Default
               </span>
             )}
@@ -382,7 +382,7 @@ const AccountRow: React.FC<{
         <Switch
           on={p.enabled}
           disabled={busy}
-          label={`Use ${isSystem ? KIND_LABELS.system : p.name} for kwants`}
+          label={`Use ${isSystem ? KIND_LABELS.system : p.name} for bots`}
           onChange={(on) => run(() => profilesApi.update(p.id, { enabled: on }))}
         />
       </div>
@@ -482,7 +482,7 @@ const AccountRow: React.FC<{
               onKeyDown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLInputElement).blur()}
               className="w-16 bg-zinc-950 border border-zinc-800 rounded-md px-1.5 py-0.5 text-[11px] text-zinc-100 focus:border-sky-500 focus:outline-none"
             />
-            <span className="text-zinc-500">After the default, kwants try lower numbers first.</span>
+            <span className="text-zinc-500">After the default, bots try lower numbers first.</span>
           </label>
           {p.home_dir && (
             <p className="text-[10.5px] text-zinc-500">
@@ -492,7 +492,7 @@ const AccountRow: React.FC<{
         </div>
       )}
 
-      {confirmDelete && <p className="text-[11px] text-zinc-500">Kwants pinned to it go back to the default. Its folder stays on disk.</p>}
+      {confirmDelete && <p className="text-[11px] text-zinc-500">Bots pinned to it go back to the default. Its folder stays on disk.</p>}
 
       {keyOpen && p.kind === 'api_key' && (
         <form

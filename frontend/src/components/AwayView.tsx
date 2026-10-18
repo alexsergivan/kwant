@@ -125,7 +125,7 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-zinc-100 truncate">While you were away</h2>
           <p className="text-[11px] text-zinc-400 truncate mt-0.5">
-            {data ? windowLabel(data.since, now) : 'What your agents need, finished and failed'}
+            {data ? windowLabel(data.since, now) : 'What your bots need, finished and failed'}
           </p>
         </div>
         <button

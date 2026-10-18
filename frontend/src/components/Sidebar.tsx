@@ -1,11 +1,14 @@
-import React, { useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
 import { isUsable, pickLabel } from '../engines';
 import { useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
+import { Space, spaceSummary } from '../spaces';
+import { SpaceSwitcher, SpaceTile } from './Spaces';
+import { isMac } from './LayaStatus';
 
 export interface Kwant {
   id: string;
@@ -46,14 +49,28 @@ export interface Team {
   instructions?: string | null;
 }
 
+/** What the sidebar shows: everything, or one phone tab. */
+export type SidebarSection = 'all' | 'chats' | 'bots';
+
 export interface SidebarProps {
+  space: Space;
+  spaces: Space[];
+  onSwitchSpace: (id: string) => void;
+  onCreateSpace: () => void;
+  onOpenSpaceSettings: () => void;
+  onOpenArchived: () => void;
+  onOpenSearch: () => void;
+  onOpenRoutines: () => void;
+  /** Phones show one tab at a time, full width. */
+  section?: SidebarSection;
+  phone?: boolean;
   kwants: Kwant[];
   channels: Channel[];
   teams: Team[];
   selectedId: string;
   isChannel: boolean;
   selectedTeamId?: string | null;
-  /** Agents busy outside the open chat -> "Working on …", shown under their name. */
+  /** Bots busy outside the open chat -> "Working on …", shown under their name. */
   busyKwants?: Record<string, string>;
   onSelectKwant: (kwant: Kwant) => void;
   onSelectChannel: (channel: Channel) => void;
@@ -61,20 +78,25 @@ export interface SidebarProps {
   onManageTeam?: (team: Team) => void;
   onUpdateTeamMembers?: (team: Team, memberIds: string[]) => void;
   onEditKwant?: (kwant: Kwant) => void;
-  /** Opens the new-agent form; with a team, the new agent joins it. */
+  /** Opens the new-bot form; with a team, the new bot joins it. */
   onSummonKwant: (team?: Team) => void;
   onCreateTeam: () => void;
   /** "While you were away": unseen count for the badge, whether it's open, and how to open it. */
   awayCount?: number;
   awayActive?: boolean;
   onOpenAway?: () => void;
-  /** Opens Settings → Engines from the footer. */
-  onOpenSettings?: () => void;
-  /** Opens Settings at "Sign in with Claude", when Claude being signed out is why nothing runs. */
+  /** Opens Space settings → Accounts from the footer. */
+  onOpenAccounts?: () => void;
+  /** Opens Accounts at "Sign in with Claude", when Claude being signed out is why nothing runs. */
   onSignInClaude?: () => void;
-  /** Changes when Settings closes, so the footer reads engine status again. */
+  /** Changes when Space settings closes, so the footer reads account status again. */
   enginesRefreshKey?: number;
 }
+
+const navRow = (active: boolean) =>
+  `w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+    active ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50' : 'text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/50 border border-transparent'
+  }`;
 
 export const memberIdsOf = (t: Team): string[] =>
   Array.isArray(t.member_kwants)
@@ -84,6 +106,16 @@ export const memberIdsOf = (t: Team): string[] =>
     : [];
 
 export const Sidebar: React.FC<SidebarProps> = ({
+  space,
+  spaces,
+  onSwitchSpace,
+  onCreateSpace,
+  onOpenSpaceSettings,
+  onOpenArchived,
+  onOpenSearch,
+  onOpenRoutines,
+  section = 'all',
+  phone = false,
   kwants,
   channels,
   teams = [],
@@ -102,7 +134,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   awayCount = 0,
   awayActive = false,
   onOpenAway,
-  onOpenSettings,
+  onOpenAccounts,
   onSignInClaude,
   enginesRefreshKey = 0,
 }) => {
@@ -111,19 +143,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
   useEffect(() => {
     if (enginesRefreshKey) reloadEngines();
   }, [enginesRefreshKey, reloadEngines]);
-  const readyCount = engines.engines?.filter(isUsable).length ?? null;
+  const ready = engines.engines?.filter(isUsable) ?? null;
+  const readyCount = ready?.length ?? null;
+  const runsOn = ready?.map((e) => e.uses?.label ?? e.name) ?? [];
   // Nothing can run and Claude only needs signing in: the footer goes straight to that.
   const offerClaude = readyCount === 0 && !!onSignInClaude && claudeNeedsSignIn(engines.engines);
   const [teamsOpen, setTeamsOpen] = useState(true);
-  const [fleetOpen, setFleetOpen] = useState(() => localStorage.getItem('kwant.fleetOpen') === '1');
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
   const [addingTo, setAddingTo] = useState<string | null>(null);
-
-  const toggleFleet = () => {
-    const next = !fleetOpen;
-    setFleetOpen(next);
-    localStorage.setItem('kwant.fleetOpen', next ? '1' : '0');
-  };
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const closeSwitcher = useCallback(() => setSwitcherOpen(false), []);
+  const showChats = section !== 'bots';
+  const showBots = section !== 'chats';
 
   const toggleTeam = (id: string) =>
     setCollapsedTeams((prev) => {
@@ -157,30 +188,58 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <aside className="w-64 border-r border-zinc-800/80 bg-zinc-900/40 flex flex-col h-full select-none flex-shrink-0">
-      {/* Top Header & New Agent Action */}
-      <div className="p-3 border-b border-zinc-800/60 flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Workspace</span>
+    <aside
+      aria-label={`${space.name} chats and kwant bots`}
+      className={`${phone ? 'w-full flex-1 min-h-0' : 'w-64 h-full border-r border-zinc-800/80'} bg-zinc-900/40 flex flex-col select-none flex-shrink-0`}
+    >
+      {/* The open space: tap to switch, create or open its settings */}
+      <div className="relative p-2 border-b border-zinc-800/60">
         <button
-          onClick={() => onSummonKwant()}
-          className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 rounded-md border border-sky-500/20 transition-all"
+          type="button"
+          onClick={() => {
+            playSfx('click');
+            setSwitcherOpen((v) => !v);
+          }}
+          data-space-toggle
+          aria-haspopup="menu"
+          aria-expanded={switcherOpen}
+          className="w-full flex items-center gap-2.5 px-1.5 py-1.5 rounded-lg text-left hover:bg-zinc-800/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
         >
-          <Plus size={13} />
-          <span>New Agent</span>
+          <SpaceTile space={space} size={32} />
+          <span className="flex-1 min-w-0">
+            <span className="block text-sm font-semibold text-zinc-100 truncate">{space.name}</span>
+            <span className="block text-[11px] text-zinc-500 truncate">{spaceSummary(space.counts)}</span>
+          </span>
+          <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
         </button>
+        {switcherOpen && (
+          <SpaceSwitcher
+            spaces={spaces}
+            currentId={space.id}
+            onSwitch={onSwitchSpace}
+            onCreate={onCreateSpace}
+            onOpenSpaceSettings={onOpenSpaceSettings}
+            onOpenArchived={onOpenArchived}
+            onClose={closeSwitcher}
+            sheet={phone}
+          />
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-4">
-        {onOpenAway && (
+        {showChats && (
+        <div className="space-y-0.5">
+          <button type="button" onClick={onOpenSearch} className={navRow(false)}>
+            <Search size={15} className="text-zinc-500" aria-hidden="true" />
+            <span className="truncate flex-1">Search {space.name}</span>
+            {!phone && <kbd className="shrink-0 text-[10px] font-sans text-zinc-500">{isMac ? '⌘K' : 'Ctrl K'}</kbd>}
+          </button>
+          {onOpenAway && !phone && (
           <button
             type="button"
             onClick={onOpenAway}
             aria-current={awayActive ? 'page' : undefined}
-            className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-              awayActive
-                ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50'
-                : 'text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/50 border border-transparent'
-            }`}
+            className={navRow(awayActive)}
           >
             <Inbox size={15} className={awayActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
             <span className="truncate flex-1">While you were away</span>
@@ -191,9 +250,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             )}
           </button>
+          )}
+          <button type="button" onClick={onOpenRoutines} className={navRow(false)}>
+            <CalendarClock size={15} className="text-zinc-500" aria-hidden="true" />
+            <span className="truncate flex-1">Routines</span>
+          </button>
+        </div>
         )}
 
         {/* Channels Section */}
+        {showChats && (
         <div>
           <div className="px-2 py-1 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
             Channels
@@ -212,14 +278,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }`}
                 >
                   <Hash size={15} className={active ? 'text-sky-400' : 'text-zinc-500'} />
-                  <span className="truncate">{c.name}</span>
+                  <span className="truncate flex-1">{c.name}</span>
+                  {c.name === 'general' && (
+                    <span className="shrink-0 text-[10px] px-1.5 py-px rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-200" title="Laya picks who answers here">
+                      Laya
+                    </span>
+                  )}
                 </button>
               );
             })}
+            {displayChannels.length === 0 && (
+              <div className="px-2.5 py-1.5 text-[11px] text-zinc-500">#general opens once {space.name} has a bot.</div>
+            )}
           </div>
         </div>
+        )}
 
         {/* Teams Section */}
+        {showChats && (
         <div>
           <div className="px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
             <button
@@ -237,10 +313,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               type="button"
               onClick={onCreateTeam}
               className="flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20 transition-all normal-case tracking-normal"
-              title="Create New Team"
+              title={`New team in ${space.name}`}
             >
               <Plus size={11} />
-              <span>New Team</span>
+              <span>New team</span>
             </button>
           </div>
 
@@ -417,7 +493,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               </button>
                             ))}
                             {candidates.length === 0 && (
-                              <div className="px-1.5 py-1 text-[11px] text-zinc-500">Every agent is already in this team.</div>
+                              <div className="px-1.5 py-1 text-[11px] text-zinc-500">Every bot is already in this team.</div>
                             )}
                             <button
                               type="button"
@@ -428,7 +504,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-[11px] text-sky-400 hover:bg-sky-500/10 border-t border-zinc-800 mt-0.5 pt-1.5"
                             >
                               <UserPlus size={13} />
-                              <span>Create a new agent…</span>
+                              <span>Create a new bot…</span>
                             </button>
                           </div>
                         )}
@@ -439,38 +515,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
               })}
               {teams.length === 0 && (
                 <div className="px-2.5 py-1.5 text-[11px] text-zinc-500 italic">
-                  No teams yet. Click + New Team to create.
+                  No teams in {space.name} yet.
                 </div>
               )}
             </div>
           )}
         </div>
 
-        {/* AI Agents Fleet Section */}
+        )}
+
+        {/* Every bot in this space */}
+        {showBots && (
         <div>
-          <button
-            type="button"
-            onClick={toggleFleet}
-            className="w-full px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-zinc-500 uppercase tracking-wider hover:text-zinc-300 transition-colors"
-            title={fleetOpen ? 'Collapse agent fleet' : 'Show all agents'}
-          >
-            <span className="flex items-center gap-1">
-              <ChevronDown size={12} className={`transition-transform duration-150 ${fleetOpen ? '' : '-rotate-90'}`} />
-              <span>Agent Fleet ({kwants.length})</span>
-            </span>
-            {!fleetOpen && (
-              <span className="flex items-center -space-x-1">
-                {kwants.slice(0, 6).map((k) => (
-                  <ModernAvatar key={k.id} role={k.avatar_sprite} name={k.name} size={16} kwantId={k.id} />
-                ))}
-                {kwants.length > 6 && (
-                  <span className="pl-1.5 text-[10px] font-mono normal-case text-zinc-500">+{kwants.length - 6}</span>
-                )}
-              </span>
-            )}
-          </button>
-          {fleetOpen && (
+          <div className="px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+            <h2>Kwant bots ({kwants.length})</h2>
+            <button
+              type="button"
+              onClick={() => onSummonKwant()}
+              className="flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20 transition-all normal-case tracking-normal"
+              title={`New bot in ${space.name}`}
+            >
+              <Plus size={11} />
+              <span>New bot</span>
+            </button>
+          </div>
           <div className="mt-1 space-y-1">
+            {kwants.length === 0 && (
+              <div className="px-2.5 py-1.5 text-[11px] text-zinc-500">No bots in {space.name} yet.</div>
+            )}
             {kwants.map((k) => {
               const active = !isChannel && selectedId === k.id;
               return (
@@ -525,18 +597,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
               );
             })}
           </div>
-          )}
         </div>
+        )}
       </div>
 
-      {/* Footer: how many engines can run, from the real checks */}
-      {engines.engines?.length !== 0 && (
+      {/* Footer: what this space's bots run on, from the real checks */}
+      {engines.engines?.length !== 0 && section !== 'chats' ? (
         <div className="p-3 border-t border-zinc-800/60 bg-zinc-950/40 text-[11px] text-zinc-500">
           <button
             type="button"
-            onClick={offerClaude ? onSignInClaude : onOpenSettings}
-            disabled={!onOpenSettings && !offerClaude}
-            className="flex items-center gap-1.5 hover:text-zinc-300 disabled:hover:text-zinc-500 transition-colors"
+            onClick={offerClaude ? onSignInClaude : onOpenAccounts}
+            disabled={!onOpenAccounts && !offerClaude}
+            className="w-full flex items-center gap-1.5 min-w-0 hover:text-zinc-300 disabled:hover:text-zinc-500 transition-colors"
+            title={runsOn.length > 1 ? `Runs on ${runsOn.join(', ')}` : undefined}
           >
             {readyCount === null ? (
               <Loader2 size={13} className="text-sky-400 animate-spin motion-reduce:animate-none" aria-hidden="true" />
@@ -545,18 +618,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
             ) : (
               <AlertTriangle size={13} className="text-amber-400" aria-hidden="true" />
             )}
-            <span>
+            <span className="truncate">
               {readyCount === null
-                ? 'Checking engines…'
+                ? 'Checking accounts…'
                 : readyCount === 0
                   ? offerClaude
-                    ? 'No engine can run · Sign in with Claude'
-                    : 'No engine can run · check Settings'
-                  : `${readyCount} ${readyCount === 1 ? 'engine' : 'engines'} ready`}
+                    ? 'Nothing can run here · Sign in with Claude'
+                    : 'Nothing can run here · Add an account'
+                  : `Runs on ${runsOn[0]}${runsOn.length > 1 ? ` +${runsOn.length - 1}` : ''}`}
             </span>
           </button>
         </div>
-      )}
+      ) : null}
     </aside>
   );
 };

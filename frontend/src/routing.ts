@@ -60,10 +60,10 @@ export function tryOrder(profiles: Profile[], family: Family, now = Date.now()):
 
 /** Why a turn's first account may not run, or null when it was ready on its last check. */
 function startNote(p: Profile, now: number): string | null {
-  if (activeLimit(p.limited_until, now)) return 'It’s out of usage and nothing else is ready, so kwants will stop and say so.';
-  if (p.kind === 'api_key') return p.has_key ? null : 'It has no key and nothing else is ready, so kwants will stop and say so.';
-  if (p.signed_in === false) return 'It needs sign-in and nothing else is ready, so kwants will stop and say so.';
-  if (p.signed_in === null && p.kind !== 'system') return 'Its sign-in hasn’t been checked yet. Kwants try it anyway.';
+  if (activeLimit(p.limited_until, now)) return 'It’s out of usage and nothing else is ready, so bots will stop and say so.';
+  if (p.kind === 'api_key') return p.has_key ? null : 'It has no key and nothing else is ready, so bots will stop and say so.';
+  if (p.signed_in === false) return 'It needs sign-in and nothing else is ready, so bots will stop and say so.';
+  if (p.signed_in === null && p.kind !== 'system') return 'Its sign-in hasn’t been checked yet. Bots try it anyway.';
   return null;
 }
 
@@ -98,7 +98,7 @@ export function routeSummary(engines: EngineInfo[], profiles: Profile[] | null, 
     const then = route.slice(1).map(accountName);
     const hostOff = !!host && !host.enabled;
     const fallback = hostOff && engine.kind === 'cli' && mine.some((p) => p.kind !== 'system')
-      ? `If you switch off every ${familyName(family)} account, kwants use This machine.`
+      ? `If you switch off every ${familyName(family)} account, bots in this space use This machine.`
       : null;
     const defaultModel = engine.models.find((m) => m.default)?.label ?? null;
     return [{ family, label: familyName(family), engine: engine.name, account, note, then, defaultModel, fallback }];

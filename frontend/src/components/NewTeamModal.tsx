@@ -126,7 +126,7 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
       return;
     }
     if (selectedMembers.length === 0) {
-      setError('Select at least one agent for this team.');
+      setError('Pick at least one bot for this team.');
       return;
     }
 
@@ -398,7 +398,7 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
           {/* Lead agent */}
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">
-              Team Lead Agent
+              Team lead
             </label>
             <select
               value={leadKwantId}
@@ -465,7 +465,7 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
               })}
               {kwants.length === 0 && (
                 <div className="p-3 text-center text-xs text-zinc-500">
-                  No agents available to assign.
+                  No bots to add yet.
                 </div>
               )}
             </div>

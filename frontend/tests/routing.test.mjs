@@ -44,7 +44,7 @@ test("Oleks: Claude runs on Claude Code CLI through Personal, with the This mach
   assert.deepEqual(row.account, { name: 'Personal', detail: 'oleks@example.com', otherProvider: false });
   assert.deepEqual(row.then, []);
   assert.equal(row.defaultModel, 'Claude Sonnet');
-  assert.equal(row.fallback, 'If you switch off every Claude account, kwants use This machine.');
+  assert.equal(row.fallback, 'If you switch off every Claude account, bots in this space use This machine.');
 });
 
 test('backups are listed in order', () => {

@@ -108,7 +108,7 @@ export interface AccountState {
 
 /** The state of an added account (This machine's comes from its engine's check; see accountStatus). */
 export function accountState(p: Profile, now = Date.now()): AccountState {
-  if (!p.enabled) return { label: 'Off', tone: 'muted', detail: 'Kwants skip this account' };
+  if (!p.enabled) return { label: 'Off', tone: 'muted', detail: 'Bots skip this account' };
   const limit = activeLimit(p.limited_until, now);
   if (limit) return { label: 'Out of usage', tone: 'warn', detail: `Back ${formatUntil(limit, now)}` };
   if (p.last_error === 'auth') return { label: 'Needs sign-in', tone: 'error', detail: 'Its login stopped working. Sign in again.' };
@@ -194,7 +194,7 @@ export interface ProfileSwitchedEvent {
 
 /** Toast text for a `profile_switched` event. */
 export function describeProfileSwitch(e: ProfileSwitchedEvent, kwantName: string | undefined, now = Date.now()) {
-  const who = kwantName || 'A kwant';
+  const who = kwantName || 'A bot';
   const limit = activeLimit(e.retry_at ?? null, now);
   const why =
     e.class === 'auth'

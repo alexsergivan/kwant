@@ -57,7 +57,7 @@ export const MentionPopover: React.FC<MentionPopoverProps> = ({
             <React.Fragment key={`${item.type}-${item.id}`}>
               {showSectionHeader && (
                 <div className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-2.5 py-1 select-none">
-                  {item.type === 'kwant' ? 'Agents' : 'Teams'}
+                  {item.type === 'kwant' ? 'Bots' : 'Teams'}
                 </div>
               )}
               <button
