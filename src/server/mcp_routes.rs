@@ -1,6 +1,8 @@
 //! MCP server registry and per-kwant assignment endpoints. Contract: docs/mcp-api.md.
 
+use super::spaces::Scope;
 use super::{mcp_oauth::{self, TokenUse}, AppState};
+use crate::db::spaces::SpaceId;
 use crate::db::{models::McpServer, DbError};
 use crate::mcp::{self, McpClient, McpError, McpServerInput, McpServerView};
 use axum::{
@@ -30,8 +32,8 @@ fn db_err(e: DbError) -> ApiError {
 }
 
 /// Which kwants have each server off. A read failure shows no opt-outs rather than failing the list.
-async fn opt_outs(state: &AppState) -> std::collections::HashMap<String, Vec<String>> {
-    state.db.list_mcp_kwant_opt_outs(&super::routes::request_space()).await.unwrap_or_else(|e| {
+async fn opt_outs(state: &AppState, space: &SpaceId) -> std::collections::HashMap<String, Vec<String>> {
+    state.db.list_mcp_kwant_opt_outs(space).await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "could not read MCP kwant opt-outs");
         Default::default()
     })
@@ -41,14 +43,15 @@ async fn opt_outs(state: &AppState) -> std::collections::HashMap<String, Vec<Str
 async fn view(state: &AppState, server: &McpServer) -> McpServerView {
     let mut view = McpServerView::from(server);
     view.oauth = mcp_oauth::statuses(state).await.remove(&server.id).unwrap_or_default();
-    view.disabled_for_kwants = opt_outs(state).await.remove(&server.id).unwrap_or_default();
+    let space = state.db.space_of_mcp_server(&server.id).await.ok().flatten().unwrap_or_else(SpaceId::default_space);
+    view.disabled_for_kwants = opt_outs(state, &space).await.remove(&server.id).unwrap_or_default();
     view
 }
 
-pub async fn list_servers(State(state): State<AppState>) -> ApiResult<Vec<McpServerView>> {
-    let servers = state.db.list_mcp_servers(&super::routes::request_space()).await.map_err(db_err)?;
+pub async fn list_servers(State(state): State<AppState>, Scope(space): Scope) -> ApiResult<Vec<McpServerView>> {
+    let servers = state.db.list_mcp_servers(&space).await.map_err(db_err)?;
     let mut statuses = mcp_oauth::statuses(&state).await;
-    let mut opt_outs = opt_outs(&state).await;
+    let mut opt_outs = opt_outs(&state, &space).await;
     Ok(Json(
         servers
             .iter()
@@ -68,9 +71,13 @@ pub async fn get_server(State(state): State<AppState>, Path(id): Path<String>) -
     }
 }
 
-pub async fn create_server(State(state): State<AppState>, Json(input): Json<McpServerInput>) -> ApiResult<McpServerView> {
+pub async fn create_server(
+    State(state): State<AppState>,
+    Scope(space): Scope,
+    Json(input): Json<McpServerInput>,
+) -> ApiResult<McpServerView> {
     let server = mcp::build_server(input, None).map_err(|m| err(StatusCode::BAD_REQUEST, m))?;
-    let created = state.db.create_mcp_server(&super::routes::request_space(), &server).await.map_err(db_err)?;
+    let created = state.db.create_mcp_server(&space, &server).await.map_err(db_err)?;
     Ok(Json(McpServerView::from(&created)))
 }
 

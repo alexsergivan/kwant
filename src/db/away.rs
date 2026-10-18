@@ -2,6 +2,7 @@
 //! stuck, read from the tables that already record it (questions, approvals, delegations and
 //! routine runs). Read-only apart from the user's last-seen marker.
 
+use super::spaces::SpaceId;
 use super::{Database, DbError};
 use chrono::{DateTime, Utc};
 use sqlx::FromRow;
@@ -33,7 +34,8 @@ const OPEN_QUESTIONS: &str = "
     SELECT 'question' AS kind, q.id, q.kwant_id, k.name AS kwant_name, q.question AS title, q.status,
            NULL AS body, q.created_at AS at, q.thread_id, q.channel_id, q.direct_kwant_id, q.choices
     FROM questions q LEFT JOIN kwants k ON k.id = q.kwant_id
-    WHERE q.status = 'open'";
+    WHERE q.status = 'open'
+      AND COALESCE(k.space_id, 'spc_default') = ?3";
 
 /// `?1` = since. Completed delegations report the specialist's result message.
 const DELEGATIONS_ENDED: &str = "
@@ -43,7 +45,8 @@ const DELEGATIONS_ENDED: &str = "
     FROM delegations d
     LEFT JOIN kwants k ON k.id = d.specialist_kwant_id
     LEFT JOIN messages m ON m.id = d.result_message_id
-    WHERE d.ended_at > ?1";
+    WHERE d.ended_at > ?1
+      AND COALESCE(k.space_id, 'spc_default') = ?3";
 
 /// `?1` = started before. Still running past the threshold.
 const DELEGATIONS_STUCK: &str = "
@@ -51,7 +54,8 @@ const DELEGATIONS_STUCK: &str = "
            'stuck' AS status, NULL AS body, d.started_at AS at, d.thread_id,
            NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices
     FROM delegations d LEFT JOIN kwants k ON k.id = d.specialist_kwant_id
-    WHERE d.status = 'running' AND d.started_at < ?1";
+    WHERE d.status = 'running' AND d.started_at < ?1
+      AND COALESCE(k.space_id, 'spc_default') = ?3";
 
 /// `?1` = since. A routine posts in its channel, or the kwant's direct chat when it has none.
 const ROUTINE_RUNS_ENDED: &str = "
@@ -63,7 +67,8 @@ const ROUTINE_RUNS_ENDED: &str = "
     JOIN routines rt ON rt.id = r.routine_id
     LEFT JOIN kwants k ON k.id = rt.kwant_id
     LEFT JOIN messages m ON m.id = r.message_id
-    WHERE r.ended_at > ?1";
+    WHERE r.ended_at > ?1
+      AND COALESCE(k.space_id, 'spc_default') = ?3";
 
 const FINISHED_DELEGATIONS: &str = "d.status = 'completed'";
 const FAILED_DELEGATIONS: &str = "d.status IN ('failed', 'interrupted')";
@@ -84,16 +89,21 @@ impl Database {
         Ok(())
     }
 
-    /// Open questions, newest first.
-    pub async fn away_open_questions(&self, limit: i64) -> Result<Vec<AwayRow>, DbError> {
-        Ok(sqlx::query_as(&format!("{OPEN_QUESTIONS} ORDER BY q.created_at DESC, q.rowid DESC LIMIT ?1"))
+    /// The space's open questions, newest first.
+    pub async fn away_open_questions(&self, space: &SpaceId, limit: i64) -> Result<Vec<AwayRow>, DbError> {
+        Ok(sqlx::query_as(&format!("{OPEN_QUESTIONS} ORDER BY q.created_at DESC, q.rowid DESC LIMIT ?2"))
+            .bind(Utc::now())
             .bind(limit)
+            .bind(space.as_str())
             .fetch_all(&self.pool)
             .await?)
     }
 
-    pub async fn away_count_open_questions(&self) -> Result<i64, DbError> {
-        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM questions WHERE status = 'open'")
+    pub async fn away_count_open_questions(&self, space: &SpaceId) -> Result<i64, DbError> {
+        Ok(sqlx::query_scalar(&format!("SELECT COUNT(*) FROM ({OPEN_QUESTIONS})"))
+            .bind(Utc::now())
+            .bind(0)
+            .bind(space.as_str())
             .fetch_one(&self.pool)
             .await?)
     }
@@ -119,10 +129,11 @@ impl Database {
         Ok(q.fetch_all(&self.pool).await?)
     }
 
-    /// Completed delegations and successful routine runs that ended after `since`, newest first.
-    pub async fn away_finished(&self, since: DateTime<Utc>, limit: i64) -> Result<Vec<AwayRow>, DbError> {
-        let mut rows = self.ended(DELEGATIONS_ENDED, FINISHED_DELEGATIONS, "d", since, limit).await?;
-        rows.extend(self.ended(ROUTINE_RUNS_ENDED, FINISHED_RUNS, "r", since, limit).await?);
+    /// The space's completed delegations and successful routine runs that ended after `since`,
+    /// newest first.
+    pub async fn away_finished(&self, space: &SpaceId, since: DateTime<Utc>, limit: i64) -> Result<Vec<AwayRow>, DbError> {
+        let mut rows = self.ended(DELEGATIONS_ENDED, FINISHED_DELEGATIONS, "d", space, since, limit).await?;
+        rows.extend(self.ended(ROUTINE_RUNS_ENDED, FINISHED_RUNS, "r", space, since, limit).await?);
         Ok(newest(rows, limit))
     }
 
@@ -130,16 +141,18 @@ impl Database {
     /// delegations still running that started before `stuck_before`, newest first.
     pub async fn away_failed(
         &self,
+        space: &SpaceId,
         since: DateTime<Utc>,
         stuck_before: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<AwayRow>, DbError> {
-        let mut rows = self.ended(DELEGATIONS_ENDED, FAILED_DELEGATIONS, "d", since, limit).await?;
-        rows.extend(self.ended(ROUTINE_RUNS_ENDED, FAILED_RUNS, "r", since, limit).await?);
+        let mut rows = self.ended(DELEGATIONS_ENDED, FAILED_DELEGATIONS, "d", space, since, limit).await?;
+        rows.extend(self.ended(ROUTINE_RUNS_ENDED, FAILED_RUNS, "r", space, since, limit).await?);
         rows.extend(
             sqlx::query_as::<_, AwayRow>(&format!("{DELEGATIONS_STUCK} ORDER BY d.started_at DESC, d.rowid DESC LIMIT ?2"))
                 .bind(stuck_before)
                 .bind(limit)
+                .bind(space.as_str())
                 .fetch_all(&self.pool)
                 .await?,
         );
@@ -147,18 +160,26 @@ impl Database {
     }
 
     /// Uncapped (finished, failed) counts for the same filters.
-    pub async fn away_counts(&self, since: DateTime<Utc>, stuck_before: DateTime<Utc>) -> Result<(i64, i64), DbError> {
-        let finished = self.count(DELEGATIONS_ENDED, FINISHED_DELEGATIONS, since).await?
-            + self.count(ROUTINE_RUNS_ENDED, FINISHED_RUNS, since).await?;
-        let failed = self.count(DELEGATIONS_ENDED, FAILED_DELEGATIONS, since).await?
-            + self.count(ROUTINE_RUNS_ENDED, FAILED_RUNS, since).await?
-            + self.count(DELEGATIONS_STUCK, "1", stuck_before).await?;
+    pub async fn away_counts(
+        &self,
+        space: &SpaceId,
+        since: DateTime<Utc>,
+        stuck_before: DateTime<Utc>,
+    ) -> Result<(i64, i64), DbError> {
+        let finished = self.count(DELEGATIONS_ENDED, FINISHED_DELEGATIONS, space, since).await?
+            + self.count(ROUTINE_RUNS_ENDED, FINISHED_RUNS, space, since).await?;
+        let failed = self.count(DELEGATIONS_ENDED, FAILED_DELEGATIONS, space, since).await?
+            + self.count(ROUTINE_RUNS_ENDED, FAILED_RUNS, space, since).await?
+            + self.count(DELEGATIONS_STUCK, "1", space, stuck_before).await?;
         Ok((finished, failed))
     }
 
-    async fn count(&self, sql: &str, cond: &str, t: DateTime<Utc>) -> Result<i64, DbError> {
+    async fn count(&self, sql: &str, cond: &str, space: &SpaceId, t: DateTime<Utc>) -> Result<i64, DbError> {
+        // ?2 is the listing limit: unused here, but the slots are numbered up to ?3
         Ok(sqlx::query_scalar(&format!("SELECT COUNT(*) FROM ({sql} AND {cond})"))
             .bind(t)
+            .bind(0)
+            .bind(space.as_str())
             .fetch_one(&self.pool)
             .await?)
     }
@@ -168,6 +189,7 @@ impl Database {
         sql: &str,
         cond: &str,
         alias: &str,
+        space: &SpaceId,
         since: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<AwayRow>, DbError> {
@@ -176,6 +198,7 @@ impl Database {
         ))
         .bind(since)
         .bind(limit)
+        .bind(space.as_str())
         .fetch_all(&self.pool)
         .await?)
     }
@@ -196,6 +219,7 @@ mod tests {
         let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))
             .bind(Utc::now())
             .bind(50)
+            .bind("spc_default")
             .fetch_all(&db.pool)
             .await
             .unwrap();

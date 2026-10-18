@@ -190,15 +190,23 @@ impl Database {
     }
 
     /// Questions, newest first: by status and/or chat (channel, thread or direct-chat kwant id).
-    pub async fn list_questions(&self, status: Option<&str>, context_id: Option<&str>) -> Result<Vec<Question>, DbError> {
+    /// Newest first, at most 100; `space` keeps the questions of that space's kwants (all when `None`).
+    pub async fn list_questions(
+        &self,
+        status: Option<&str>,
+        context_id: Option<&str>,
+        space: Option<&super::spaces::SpaceId>,
+    ) -> Result<Vec<Question>, DbError> {
         Ok(sqlx::query_as::<_, Question>(
             "SELECT * FROM questions
              WHERE (?1 IS NULL OR status = ?1)
                AND (?2 IS NULL OR channel_id = ?2 OR thread_id = ?2 OR direct_kwant_id = ?2)
+               AND (?3 IS NULL OR COALESCE((SELECT k.space_id FROM kwants k WHERE k.id = questions.kwant_id), 'spc_default') = ?3)
              ORDER BY created_at DESC LIMIT 100",
         )
         .bind(status)
         .bind(context_id)
+        .bind(space.map(|s| s.as_str()))
         .fetch_all(&self.pool)
         .await?)
     }

@@ -17,6 +17,7 @@ pub mod delegation;
 pub mod attachments;
 pub mod questions;
 pub mod skills;
+pub mod spaces;
 pub mod away;
 pub mod computer;
 
@@ -118,6 +119,8 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(routes::health))
         .route("/api/auth/status", get(auth::status))
+        .route("/api/spaces", get(spaces::list).post(spaces::create))
+        .route("/api/spaces/:id", get(spaces::get).patch(spaces::update))
         .route("/api/auth/session", post(auth::create_session).delete(auth::delete_session))
         .route("/api/profiles", get(profile_routes::list).post(profile_routes::create))
         .route("/api/profiles/:id", axum::routing::patch(profile_routes::update).delete(profile_routes::remove))
@@ -218,6 +221,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/away/seen", post(away::seen))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
+        .layer(axum::middleware::from_fn_with_state(state.clone(), spaces::row_guard))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))
         .with_state(state)
 }

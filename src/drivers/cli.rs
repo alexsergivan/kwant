@@ -7,6 +7,43 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+/// Kills a CLI's whole process group if its turn is dropped (cancelled, or its space archived)
+/// before the CLI exits. `kill_on_drop` only reaches the CLI itself; the tools, shells and MCP
+/// servers it started would live on. Declare it after the child, so it drops first, while the
+/// child is still unreaped and its group id can't be reused. Disarmed once the CLI has exited,
+/// so anything a finished turn deliberately left running is kept.
+pub(crate) struct ProcessGroup(Option<u32>);
+
+impl ProcessGroup {
+    pub(crate) fn of(child: &tokio::process::Child) -> Self {
+        Self(child.id())
+    }
+
+    pub(crate) fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.0.and_then(|p| i32::try_from(p).ok()).filter(|p| *p > 0) {
+            // SAFETY: kill(2) with a negative pid signals that process group; no memory involved
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+/// Starts the CLI as the leader of its own process group, for [`ProcessGroup`].
+fn own_process_group(cmd: &mut Command) {
+    #[cfg(unix)]
+    cmd.process_group(0);
+    #[cfg(not(unix))]
+    let _ = cmd;
+}
+
 static CLI_BINARY_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<String>>>> =
     std::sync::OnceLock::new();
 
@@ -355,8 +392,10 @@ impl CliDriver {
             .stderr(Stdio::piped());
         // A cancelled turn aborts this task; the CLI must not outlive it
         cmd.kill_on_drop(true);
+        own_process_group(&mut cmd);
 
         let mut child = cmd.spawn()?;
+        let mut group = ProcessGroup::of(&child);
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
         let read_stdout = async {
@@ -405,6 +444,7 @@ impl CliDriver {
         };
         let (mut run, stderr) = tokio::join!(read_stdout, read_stderr);
         run.exit_code = child.wait().await.ok().and_then(|s| s.code());
+        group.disarm();
         drop(home);
         run.stderr = stderr;
         Ok(run)
@@ -866,9 +906,11 @@ impl Driver for CliDriver {
         });
         // A cancelled turn aborts this task; the CLI must not outlive it
         cmd.kill_on_drop(true);
+        own_process_group(&mut cmd);
 
         match cmd.spawn() {
             Ok(mut child) => {
+                let mut group = ProcessGroup::of(&child);
                 let stdout_pipe = child.stdout.take();
                 let stderr_pipe = child.stderr.take();
                 let read_stdout = async {
@@ -885,6 +927,7 @@ impl Driver for CliDriver {
                 };
                 let (stdout, stderr) = tokio::join!(read_stdout, read_stderr);
                 let exit = child.wait().await.ok();
+                group.disarm();
 
                 let mut tokens = None;
                 let output_str = if let Some(ref out_file) = codex_out_file {

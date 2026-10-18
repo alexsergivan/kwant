@@ -517,10 +517,12 @@ impl Database {
         Ok(res.rows_affected())
     }
 
-    /// Enabled routines due at `now`, in every space: each one runs in its own space.
+    /// Enabled routines due by `now`, in every space that isn't archived; each runs in its own
+    /// space. An archived space's routines never run, even one switched back on by hand.
     pub async fn due_routines(&self, now: DateTime<Utc>) -> Result<Vec<RoutineRow>, DbError> {
         Ok(sqlx::query_as::<_, RoutineRow>(&format!(
-            "{ROUTINE_SELECT} WHERE r.enabled = 1 AND r.next_run_at IS NOT NULL AND r.next_run_at <= ? ORDER BY r.next_run_at"
+            "{ROUTINE_SELECT} WHERE r.enabled = 1 AND r.next_run_at IS NOT NULL AND r.next_run_at <= ? \
+             AND r.space_id NOT IN (SELECT id FROM spaces WHERE archived_at IS NOT NULL) ORDER BY r.next_run_at"
         ))
         .bind(now)
         .fetch_all(&self.pool)
@@ -530,7 +532,8 @@ impl Database {
     /// Earliest upcoming run of any enabled routine, so the scheduler can sleep until then.
     pub async fn next_routine_due(&self) -> Result<Option<DateTime<Utc>>, DbError> {
         let row: Option<(Option<DateTime<Utc>>,)> = sqlx::query_as(
-            "SELECT MIN(next_run_at) FROM routines WHERE enabled = 1 AND next_run_at IS NOT NULL",
+            "SELECT MIN(next_run_at) FROM routines WHERE enabled = 1 AND next_run_at IS NOT NULL \
+             AND space_id NOT IN (SELECT id FROM spaces WHERE archived_at IS NOT NULL)",
         )
         .fetch_optional(&self.pool)
         .await?;

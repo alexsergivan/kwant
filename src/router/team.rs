@@ -109,16 +109,33 @@ impl LayaRouter {
         lead_kwant_id: &str,
         members: &[Kwant],
     ) -> (String, String) {
+        let route = self.route_channel_query_detailed(prompt, channel_name, lead_kwant_id, members).await;
+        (route.kwant_id, route.reason)
+    }
+
+    /// [`Self::route_channel_query`] plus how the pick was made, for the UI's "why this agent".
+    pub async fn route_channel_query_detailed(
+        &self,
+        prompt: &str,
+        channel_name: &str,
+        lead_kwant_id: &str,
+        members: &[Kwant],
+    ) -> ChannelRoute {
         match self.query_laya_for_kwant(prompt, channel_name, members).await {
-            Ok(choice) => choice,
+            Ok((kwant_id, reason)) => ChannelRoute { kwant_id, reason, fallback: false, matched_terms: Vec::new() },
             Err(e) => {
                 if self.status().is_up() {
                     tracing::warn!(error = %e, url = %self.base_url, "Laya channel routing failed, using keyword fallback");
                 }
-                let (kwant, reason) = heuristic_pick_kwant(prompt, lead_kwant_id, members)
-                    .map(|(k, r)| (k.id.clone(), r))
-                    .unwrap_or_else(|| (lead_kwant_id.to_string(), "Routed to channel lead".into()));
-                (kwant, format!("{reason}. {}", self.offline_note()))
+                let (kwant_id, reason, matched_terms) = heuristic_pick_kwant(prompt, lead_kwant_id, members)
+                    .map(|(k, r)| (k.id.clone(), r, matched_terms(prompt, k)))
+                    .unwrap_or_else(|| (lead_kwant_id.to_string(), "Routed to channel lead".into(), Vec::new()));
+                ChannelRoute {
+                    kwant_id,
+                    reason: format!("{reason}. {}", self.offline_note()),
+                    fallback: true,
+                    matched_terms,
+                }
             }
         }
     }
@@ -445,7 +462,27 @@ const STOP_WORDS: &[&str] = &[
     "any", "not", "but", "out", "use", "using", "does", "did", "its", "it's", "some", "need", "want",
 ];
 
+/// A channel routing pick and how it was made.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChannelRoute {
+    pub kwant_id: String,
+    pub reason: String,
+    /// True when Laya was unreachable and keyword matching picked instead.
+    pub fallback: bool,
+    /// Prompt words found in the picked agent's name, title or persona (keyword fallback only).
+    pub matched_terms: Vec<String>,
+}
+
 fn calculate_kwant_relevance(prompt: &str, kwant: &Kwant) -> usize {
+    relevance(prompt, kwant).0
+}
+
+/// The prompt words that matched `kwant`, in prompt order, without repeats.
+pub fn matched_terms(prompt: &str, kwant: &Kwant) -> Vec<String> {
+    relevance(prompt, kwant).1
+}
+
+fn relevance(prompt: &str, kwant: &Kwant) -> (usize, Vec<String>) {
     let lower_prompt = prompt.to_lowercase();
     let words: Vec<&str> = lower_prompt
         .split(|c: char| !c.is_alphanumeric() && c != '-')
@@ -464,7 +501,9 @@ fn calculate_kwant_relevance(prompt: &str, kwant: &Kwant) -> usize {
     };
 
     let mut score = 0;
+    let mut terms: Vec<String> = Vec::new();
     for w in words {
+        let before = score;
         if matches(&name_lower, w) {
             score += 3;
         }
@@ -474,8 +513,11 @@ fn calculate_kwant_relevance(prompt: &str, kwant: &Kwant) -> usize {
         if matches(&prompt_lower, w) {
             score += 1;
         }
+        if score > before && !terms.iter().any(|t| t == w) {
+            terms.push(w.to_string());
+        }
     }
-    score
+    (score, terms)
 }
 
 fn generate_discussion_plan(speakers: &[String], members: &[Kwant]) -> Vec<String> {

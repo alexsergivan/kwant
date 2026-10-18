@@ -512,6 +512,41 @@ impl Database {
         self.space_of("SELECT space_id FROM mcp_servers WHERE id = ?", id).await
     }
 
+    pub async fn space_of_routine(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT space_id FROM routines WHERE id = ?", id).await
+    }
+
+    pub async fn space_of_skill(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT space_id FROM skills WHERE id = ?", id).await
+    }
+
+    /// A question lives in the space of the kwant that asked it.
+    pub async fn space_of_question(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT k.space_id FROM questions q JOIN kwants k ON k.id = q.kwant_id WHERE q.id = ?", id)
+            .await
+    }
+
+    pub async fn space_of_thread(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT k.space_id FROM threads t JOIN kwants k ON k.id = t.kwant_id WHERE t.id = ?", id)
+            .await
+    }
+
+    /// A delegation lives in its lead's space (its specialist is always in the same one).
+    pub async fn space_of_delegation(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT k.space_id FROM delegations d JOIN kwants k ON k.id = d.lead_kwant_id WHERE d.id = ?", id)
+            .await
+    }
+
+    pub async fn space_of_approval(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT k.space_id FROM approvals a JOIN kwants k ON k.id = a.kwant_id WHERE a.id = ?", id)
+            .await
+    }
+
+    /// Whether `space` exists and is archived.
+    pub async fn space_archived(&self, space: &SpaceId) -> Result<bool, DbError> {
+        Ok(self.get_space(space).await?.is_some_and(|s| s.archived_at.is_some()))
+    }
+
     /// The space of whatever an event or chat id names: a channel, a kwant (its direct chat),
     /// a thread (its kwant's space) or a team.
     pub async fn space_of_context(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
@@ -536,4 +571,103 @@ impl Database {
         }
         Ok(true)
     }
+
+    /// Renames or restyles a space, or moves it in the list. `None` keeps a field.
+    pub async fn update_space(&self, id: &SpaceId, input: &SpaceUpdate) -> Result<Option<Space>, DbError> {
+        let res = sqlx::query(
+            "UPDATE spaces SET name = COALESCE(?, name), icon = COALESCE(?, icon), \
+             color = CASE WHEN ? THEN ? ELSE color END, sort = COALESCE(?, sort) WHERE id = ?",
+        )
+        .bind(input.name.as_deref().map(str::trim))
+        .bind(&input.icon)
+        .bind(input.color.is_some())
+        .bind(input.color.clone().flatten())
+        .bind(input.sort)
+        .bind(id.as_str())
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_space(id).await
+    }
+
+    /// Archives a space: its enabled routines are switched off and marked, so a restore brings
+    /// back only those. The Default space can't be archived. Returns how many were paused.
+    pub async fn archive_space(&self, id: &SpaceId) -> Result<u64, DbError> {
+        if id.is_default() {
+            return Err(DbError::Conflict("the Default space can't be archived".into()));
+        }
+        let mut tx = self.pool.begin().await?;
+        let paused = sqlx::query(
+            "UPDATE routines SET enabled = 0, paused_by_archive = 1 WHERE space_id = ? AND enabled = 1",
+        )
+        .bind(id.as_str())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        sqlx::query("UPDATE spaces SET archived_at = COALESCE(archived_at, ?) WHERE id = ?")
+            .bind(chrono::Utc::now())
+            .bind(id.as_str())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(paused)
+    }
+
+    /// Restores an archived space and switches back on the routines its archive paused. Their
+    /// next runs are left for the caller to recompute. Returns how many came back.
+    pub async fn restore_space(&self, id: &SpaceId) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let resumed = sqlx::query(
+            "UPDATE routines SET enabled = 1, paused_by_archive = 0, next_run_at = NULL \
+             WHERE space_id = ? AND paused_by_archive = 1",
+        )
+        .bind(id.as_str())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        sqlx::query("UPDATE spaces SET archived_at = NULL WHERE id = ?")
+            .bind(id.as_str())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(resumed)
+    }
+
+    /// Bots in the space and routines its archive paused.
+    pub async fn space_counts(&self, id: &SpaceId) -> Result<(i64, i64), DbError> {
+        let (bots,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM kwants WHERE space_id = ?")
+            .bind(id.as_str())
+            .fetch_one(&self.pool)
+            .await?;
+        let (paused,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM routines WHERE space_id = ? AND paused_by_archive = 1")
+                .bind(id.as_str())
+                .fetch_one(&self.pool)
+                .await?;
+        Ok((bots, paused))
+    }
+
+    /// Adds `routines.paused_by_archive` if missing. Additive, so an older binary still runs.
+    pub(super) async fn migrate_space_archive(&self) -> Result<(), DbError> {
+        let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('routines')")
+            .fetch_all(&self.pool)
+            .await?;
+        if !cols.iter().any(|(c,)| c == "paused_by_archive") {
+            sqlx::query("ALTER TABLE routines ADD COLUMN paused_by_archive INTEGER NOT NULL DEFAULT 0")
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+/// A `PATCH /api/spaces/:id` body without the archive switch. `color: Some(None)` clears it.
+#[derive(Debug, Default, Clone)]
+pub struct SpaceUpdate {
+    pub name: Option<String>,
+    pub icon: Option<String>,
+    pub color: Option<Option<String>>,
+    pub sort: Option<i64>,
 }

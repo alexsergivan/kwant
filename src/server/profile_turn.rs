@@ -220,6 +220,54 @@ pub async fn with_accounts(state: &AppState, space: &SpaceId, mut reports: Vec<E
     reports
 }
 
+/// How many of `space`'s enabled accounts could take a turn now: This machine when its
+/// engine's own login is ready and the engine is on, any other account when it is signed in
+/// and its engine is on.
+pub async fn ready_accounts(state: &AppState, space: &SpaceId) -> usize {
+    let Some((profiles, avail)) = accounts(state, space).await else {
+        return 0;
+    };
+    let reports = state.engines.snapshot();
+    let host_ready = |family: Engine| {
+        let (cli, _) = EngineId::of_family(family);
+        reports.iter().any(|r| r.id == cli && r.enabled && r.status == EngineStatus::Ready)
+    };
+    let now = chrono::Utc::now();
+    profiles
+        .iter()
+        .filter(|p| p.enabled)
+        .filter(|p| match (p.kind.as_str(), Engine::parse(&p.engine)) {
+            ("system", Some(family)) => host_ready(family),
+            ("system", None) => false,
+            _ => avail.admits(p, now, SignInBar::SignedIn) && profile_engine_on(state, p),
+        })
+        .count()
+}
+
+/// The account a bot's next turn would run on, for its card: the first account failover would
+/// try, else This machine when the engine's own login may be used there. `blocked` when This
+/// machine is off in the space and no account of its own can take the turn. Bots on "auto" or
+/// on a model without accounts (Ollama) have none.
+pub async fn runs_on(state: &AppState, kwant: &crate::db::models::Kwant) -> serde_json::Value {
+    let model = kwant.preferred_model.as_str();
+    let engine = Engine::parse(model).or_else(|| Engine::from_model(model));
+    let Some(engine) = engine else {
+        return serde_json::json!({ "auto": model == "auto", "engine": null, "account": null, "profile_id": null, "blocked": false });
+    };
+    if let Some(p) = plan(state, Some(engine), &kwant.id).await.into_iter().next() {
+        return serde_json::json!({ "auto": false, "engine": engine.as_str(), "account": p.name, "profile_id": p.id, "blocked": false });
+    }
+    let space = SpaceId::new(&kwant.space_id);
+    let blocked = host_off(state, &space).await.contains(&engine);
+    serde_json::json!({
+        "auto": false,
+        "engine": engine.as_str(),
+        "account": if blocked { None } else { Some("This machine") },
+        "profile_id": null,
+        "blocked": blocked,
+    })
+}
+
 static REFRESHING: AtomicBool = AtomicBool::new(false);
 
 /// Runs the stale profile sign-in checks so `ready` is current; one run at a time, others

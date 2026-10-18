@@ -254,15 +254,20 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
-/// `GET /api/questions?status=&context_id=`: newest first (to show open cards after a reload).
-pub async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>) -> Response {
+/// `GET /api/questions?status=&context_id=&space=`: the space's questions, newest first (to show open cards after a reload).
+pub async fn list(
+    State(state): State<AppState>,
+    super::spaces::Scope(space): super::spaces::Scope,
+    Query(q): Query<ListQuery>,
+) -> Response {
     let status = q.status.filter(|s| !s.is_empty());
     if let Some(s) = &status {
         if !QUESTION_STATUSES.contains(&s.as_str()) {
             return error(StatusCode::BAD_REQUEST, "unknown status");
         }
     }
-    match state.db.list_questions(status.as_deref(), q.context_id.as_deref().filter(|c| !c.is_empty())).await {
+    let context = q.context_id.as_deref().filter(|c| !c.is_empty());
+    match state.db.list_questions(status.as_deref(), context, Some(&space)).await {
         Ok(list) => Json(list).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -354,7 +359,7 @@ async fn resume(state: &AppState, q: &Question, answer: &str) {
 /// After a turn was stopped: its questions that are still open are cancelled, so a late answer
 /// doesn't restart work the user stopped. One indexed query, only for stopped turns.
 pub async fn cancel_for_turn(state: &AppState, turn_id: &str) {
-    let open = state.db.list_questions(Some("open"), None).await.unwrap_or_default();
+    let open = state.db.list_questions(Some("open"), None, None).await.unwrap_or_default();
     for q in open.iter().filter(|q| q.turn_id.as_deref() == Some(turn_id)) {
         if let Some(tx) = state.questions.take(&q.id) {
             drop(tx);

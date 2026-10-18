@@ -626,7 +626,7 @@ async fn sse_events_carry_the_space_they_belong_to() {
     assert_eq!(next_event(&mut stream).await["space_id"], env.a.as_str());
     send(RuntimeEvent::RoutingStarted { context_id: Some(general_b), candidates: Vec::new() });
     assert_eq!(next_event(&mut stream).await["space_id"], env.b.as_str());
-    send(RuntimeEvent::DiscussionCompleted { total_turns: 1 });
+    send(RuntimeEvent::DiscussionCompleted { total_turns: 1, context_id: None });
     assert_eq!(next_event(&mut stream).await["space_id"], Value::Null, "an event with no chat is global");
 }
 

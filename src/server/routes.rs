@@ -1,4 +1,5 @@
 use super::discussion;
+use super::spaces::{check_workspace, Scope};
 use super::AppState;
 use crate::broker::ApprovalDecision;
 use crate::db::models::*;
@@ -50,20 +51,24 @@ pub(crate) fn db_status(e: &DbError) -> StatusCode {
     }
 }
 
-/// The space of a request that doesn't name one: Default, until `?space=` arrives (S2).
-pub(crate) fn request_space() -> SpaceId {
-    SpaceId::default_space()
-}
-
+/// The space's kwants, each with `runs_on`: the account its next turn would use.
 pub async fn list_kwants(
     State(state): State<AppState>,
-) -> Result<Json<Vec<KwantView>>, StatusCode> {
-    state
+    Scope(space): Scope,
+) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
+    let views = state
         .db
-        .kwant_views(&request_space())
+        .kwant_views(&space)
         .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut out = Vec::with_capacity(views.len());
+    for v in views {
+        let runs_on = super::profile_turn::runs_on(&state, &v.kwant).await;
+        let mut item = serde_json::to_value(&v).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        item["runs_on"] = runs_on;
+        out.push(item);
+    }
+    Ok(Json(out))
 }
 
 /// Trims the name and rejects names that can't be @mentioned or clash with another kwant in the
@@ -171,9 +176,9 @@ async fn kwant_view_json(state: &AppState, id: &str) -> Result<Json<KwantView>, 
 
 pub async fn create_kwant(
     State(state): State<AppState>,
+    Scope(space): Scope,
     Json(mut payload): Json<CreateKwantRequest>,
 ) -> Result<Json<KwantView>, StatusCode> {
-    let space = request_space();
     validate_kwant_name(&state, &space, &mut payload.base.name, None).await?;
     check_binding(&state, &space, &payload.binding, &payload.base.preferred_model).await?;
     let kwant = state
@@ -182,7 +187,26 @@ pub async fn create_kwant(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     save_binding(&state, &kwant.id, &payload.binding).await?;
+    ensure_general(&state, &space, &kwant.id).await;
     kwant_view_json(&state, &kwant.id).await
+}
+
+/// A new space starts empty, and a channel needs a lead, so its #general (routed by Laya)
+/// appears with its first bot. Default's comes from the seed.
+async fn ensure_general(state: &AppState, space: &SpaceId, lead: &str) {
+    if space.is_default() || !matches!(state.db.general_channel(space).await, Ok(None)) {
+        return;
+    }
+    let general = NewChannel {
+        name: "general".into(),
+        description: Some("Everyone in this space. Laya picks who answers.".into()),
+        lead_kwant_id: lead.to_string(),
+        member_kwants: vec![lead.to_string()],
+        routing_mode: "auto".into(),
+    };
+    if let Err(e) = state.db.create_channel(space, &general).await {
+        tracing::warn!(error = %e, space = %space, "could not create the space's #general");
+    }
 }
 
 pub async fn update_kwant(
@@ -207,10 +231,10 @@ pub async fn update_kwant(
     kwant_view_json(&state, &id).await
 }
 
-pub async fn list_channels(State(state): State<AppState>) -> Result<Json<Vec<Channel>>, StatusCode> {
+pub async fn list_channels(State(state): State<AppState>, Scope(space): Scope) -> Result<Json<Vec<Channel>>, StatusCode> {
     state
         .db
-        .list_channels(&request_space())
+        .list_channels(&space)
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -218,11 +242,12 @@ pub async fn list_channels(State(state): State<AppState>) -> Result<Json<Vec<Cha
 
 pub async fn create_channel(
     State(state): State<AppState>,
+    Scope(space): Scope,
     Json(payload): Json<NewChannel>,
 ) -> Result<Json<Channel>, StatusCode> {
     state
         .db
-        .create_channel(&request_space(), &payload)
+        .create_channel(&space, &payload)
         .await
         .map(Json)
         .map_err(|e| db_status(&e))
@@ -266,25 +291,28 @@ pub async fn list_messages(
     }
 }
 
-pub async fn list_teams(State(state): State<AppState>) -> Result<Json<Vec<Team>>, StatusCode> {
+pub async fn list_teams(State(state): State<AppState>, Scope(space): Scope) -> Result<Json<Vec<Team>>, StatusCode> {
     state
         .db
-        .list_teams(&request_space())
+        .list_teams(&space)
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+#[allow(clippy::result_large_err)]
 pub async fn create_team(
     State(state): State<AppState>,
+    Scope(space): Scope,
     Json(payload): Json<NewTeam>,
-) -> Result<Json<Team>, StatusCode> {
+) -> Result<Json<Team>, axum::response::Response> {
+    check_workspace(&state, &space, None, &payload).await?;
     state
         .db
-        .create_team(&request_space(), &payload)
+        .create_team(&space, &payload)
         .await
         .map(Json)
-        .map_err(|e| db_status(&e))
+        .map_err(|e| db_status(&e).into_response())
 }
 
 pub async fn get_team(
@@ -306,26 +334,38 @@ pub struct UpdateTeamPayload {
     pub instructions: Option<String>,
 }
 
+#[allow(clippy::result_large_err)]
 pub async fn update_team(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(payload): Json<UpdateTeamPayload>,
-) -> Result<Json<Team>, StatusCode> {
+) -> Result<Json<Team>, axum::response::Response> {
+    let status = |s: StatusCode| s.into_response();
     if let Some(text) = &payload.instructions {
         if super::continuity::check_instructions(text).is_err() {
-            return Err(StatusCode::BAD_REQUEST);
+            return Err(status(StatusCode::BAD_REQUEST));
         }
     }
+    let space = match state.db.space_of_team(&id).await {
+        Ok(Some(space)) => space,
+        Ok(None) => return Err(status(StatusCode::NOT_FOUND)),
+        Err(_) => return Err(status(StatusCode::INTERNAL_SERVER_ERROR)),
+    };
+    check_workspace(&state, &space, Some(&id), &payload.team).await?;
     match state.db.update_team(&id, &payload.team).await {
         Ok(Some(mut team)) => {
             if let Some(text) = &payload.instructions {
-                state.db.set_team_instructions(&id, text).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                state
+                    .db
+                    .set_team_instructions(&id, text)
+                    .await
+                    .map_err(|_| status(StatusCode::INTERNAL_SERVER_ERROR))?;
                 team.instructions = Some(text.trim().to_string()).filter(|t| !t.is_empty());
             }
             Ok(Json(team))
         }
-        Ok(None) => Err(StatusCode::NOT_FOUND),
-        Err(e) => Err(db_status(&e)),
+        Ok(None) => Err(status(StatusCode::NOT_FOUND)),
+        Err(e) => Err(status(db_status(&e))),
     }
 }
 
@@ -354,6 +394,7 @@ pub struct CancelPayload {
 /// given), or everything with no body. A direct chat's Stop leaves that agent's threads running.
 pub async fn cancel_chat(
     State(state): State<AppState>,
+    Scope(space): Scope,
     body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let key = if !body.is_empty() {
@@ -363,7 +404,11 @@ pub async fn cancel_chat(
     } else {
         None
     };
-    let cancelled = state.turns.cancel(key.as_deref());
+    // Without an id, "stop all" stops only the request's space (Default when no ?space=)
+    let cancelled = match &key {
+        Some(k) => state.turns.cancel(Some(k)),
+        None => super::spaces::stop_turns(&state, &space).await,
+    };
     if let Some(thread_id) = &key {
         super::delegation::cancel_thread_delegation(&state, thread_id).await;
     }
@@ -573,6 +618,7 @@ fn execute_single_turn(
     team_context: Option<crate::drivers::TeamContext>,
     workspace_dir: Option<std::path::PathBuf>,
     teammates: Vec<Kwant>,
+    routing: Option<serde_json::Value>,
 ) {
     let scope = TurnScope {
         channel_id: payload.channel_id.clone(),
@@ -592,7 +638,8 @@ fn execute_single_turn(
     tokio::spawn(async move {
         // Ends the job (its cancel keys) when the turn and its handoffs are done
         let _job = job;
-        if let Some(reply) = run_kwant_turn(&scope, &target_kwant, prompt.clone(), TurnOpts::default()).await {
+        let opts = TurnOpts { routing, ..TurnOpts::default() };
+        if let Some(reply) = run_kwant_turn(&scope, &target_kwant, prompt.clone(), opts).await {
             run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
         }
     });
@@ -659,7 +706,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
     let context_id = scope.context_id(&replies[0].0);
     let total = |queue_len: usize, done: usize| (1 + done + queue_len).min(1 + MAX_HANDOFFS);
     let _ = events.send(RuntimeEvent::DiscussionStarted {
-        team_id: context_id,
+        team_id: context_id.clone(),
         team_name: scope.team_keys.as_ref().map(|(_, n)| n.clone()).unwrap_or_default(),
         total_turns: total(queue.len(), 0),
         speakers: queue.iter().map(|(k, _, _)| k.id.clone()).collect(),
@@ -697,7 +744,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
         }
     }
 
-    let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: done + 1 });
+    let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: done + 1, context_id: Some(context_id.clone()) });
 }
 
 /// Runs a moderated team discussion: the lead opens (or pauses to ask the user), teammates react to
@@ -760,6 +807,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
             // Only the opening turn may navigate the bot browser for a URL in the user's message
             nav_prompt: Some(if opening { user_prompt.to_string() } else { String::new() }),
             discussion: Some(opening.then(|| discussion::question_label(&kwant.name, &team.name))),
+            routing: None,
         };
         let Some(raw) = run_kwant_turn(scope, &kwant, prompt, opts).await else {
             if scope.cancel_token.is_cancelled() {
@@ -811,11 +859,12 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
             label: Some(discussion::summary_label(&team.name, &contributors)),
             nav_prompt: Some(String::new()),
             discussion: None,
+            routing: None,
         };
         run_kwant_turn(scope, &lead, prompt, opts).await;
     }
 
-    let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: turn });
+    let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: turn, context_id: Some(team.id.clone()) });
 }
 
 /// Per-turn tweaks for turns that kwnt drives itself (team discussions).
@@ -828,6 +877,8 @@ pub(super) struct TurnOpts {
     /// Discussion reply handling: `[PASS]` replies aren't saved; `Some(label)` lets an `[ASK_USER]`
     /// reply be saved as a question for the user under that label.
     discussion: Option<Option<String>>,
+    /// How this reply's agent was picked, saved as the reply's `meta.routing`.
+    routing: Option<serde_json::Value>,
 }
 
 /// Runs one kwant turn: picks model/effort, syncs the bot browser, streams the reply and saves it.
@@ -959,11 +1010,13 @@ impl TurnEvents {
 struct RanOn {
     engine: crate::drivers::engines::EngineId,
     profile_id: Option<String>,
+    /// The account's name, or "This machine" for the host's own CLI.
+    account: Option<String>,
     choice: Option<crate::drivers::engines::ModelChoice>,
 }
 
 impl RanOn {
-    /// `{engine, engine_name, family, model, model_label, tier, picked_by, effort, profile_id}`;
+    /// `{engine, engine_name, family, model, model_label, tier, picked_by, effort, profile_id, account}`;
     /// `driver_model` is what the driver itself chose when nothing was picked for it.
     fn to_json(&self, driver_model: Option<&str>, picked_by: &str, effort: &str) -> serde_json::Value {
         let family = self.engine.family().map_or("ollama", |f| f.as_str());
@@ -982,6 +1035,7 @@ impl RanOn {
             "picked_by": picked_by,
             "effort": effort,
             "profile_id": self.profile_id,
+            "account": self.account,
         })
     }
 }
@@ -1327,6 +1381,7 @@ async fn run_kwant_turn_inner(
             ran_on = runs_on.map(|e| RanOn {
                 engine: e,
                 profile_id: profile.as_ref().map(|p| p.id.clone()),
+                account: super::profile_turn::account_name(profile.as_ref(), e),
                 choice: if unlisted_api { None } else { choice.clone() },
             });
             let (driver_tx, mut driver_rx) = mpsc::channel(32);
@@ -1525,9 +1580,12 @@ async fn run_kwant_turn_inner(
                     (false, true) => "pinned_engine",
                     (false, false) => "laya",
                 };
-                let meta = ran_on
+                let mut meta = ran_on
                     .as_ref()
                     .map(|r| serde_json::json!({ "ran_on": r.to_json(output.model.as_deref(), pick, &effort_level) }));
+                if let Some(routing) = &opts.routing {
+                    meta.get_or_insert_with(|| serde_json::json!({}))["routing"] = routing.clone();
+                }
                 scope.save(&asst_msg, meta).await;
             }
             return Ok(output.text);
@@ -1559,7 +1617,7 @@ async fn chat_space(state: &AppState, payload: &SendChatPayload) -> Result<Space
             return Ok(space);
         }
     }
-    Ok(request_space())
+    Ok(SpaceId::default_space())
 }
 
 pub async fn send_chat(
@@ -1572,6 +1630,9 @@ pub async fn send_chat(
     }
     // Everything this message can reach (mentions, teams, Laya's candidates) is in its space
     let space = chat_space(&state, &payload).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if super::spaces::ensure_active(&state, &space).await.is_err() {
+        return Err(StatusCode::CONFLICT);
+    }
     let all_kwants = state
         .db
         .list_kwants(&space)
@@ -1779,6 +1840,9 @@ pub async fn send_chat(
                     .unwrap_or(&members[0])
                     .clone();
 
+                // The team router doesn't say which path it took; Laya being down means keywords did
+                let fallback = !state.router.status().is_up();
+                let routing = routing_meta(&target_kwant, &reason, members.len(), fallback, &[]);
                 let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                     context_id: routing_context_id,
                     kwant_id: target_kwant.id.clone(),
@@ -1786,6 +1850,9 @@ pub async fn send_chat(
                     kwant_title: target_kwant.title.clone(),
                     reason: reason.clone(),
                     mode: "direct".into(),
+                    candidate_count: Some(members.len()),
+                    fallback,
+                    matched_terms: Vec::new(),
                 });
 
                 let _ = state.event_sender.send(RuntimeEvent::ThinkingDelta(format!(
@@ -1802,6 +1869,7 @@ pub async fn send_chat(
                     active_team_context,
                     workspace_dir.clone(),
                     members.clone(),
+                    Some(routing),
                 );
 
                 Ok(Json(json!({
@@ -1830,6 +1898,9 @@ pub async fn send_chat(
                             turns, lead.name
                         ),
                         mode: "discuss".into(),
+                        candidate_count: Some(members.len()),
+                        fallback: !state.router.status().is_up(),
+                        matched_terms: Vec::new(),
                     });
                 }
 
@@ -1878,6 +1949,7 @@ pub async fn send_chat(
         }
     } else {
         // Target single Kwant
+        let mut routing = None;
         let target_kwant = if let Some(kname) = kwant_mention {
             all_kwants
                 .iter()
@@ -1913,19 +1985,23 @@ pub async fn send_chat(
                         context_id: context_id.clone(),
                         candidates: routing_candidates(&members),
                     });
-                    let (chosen_id, reason) = state
+                    let route = state
                         .router
-                        .route_channel_query(&payload.prompt, &channel.name, &channel.lead_kwant_id, &members)
+                        .route_channel_query_detailed(&payload.prompt, &channel.name, &channel.lead_kwant_id, &members)
                         .await;
-                    let chosen = members.iter().find(|k| k.id == chosen_id).cloned().or(lead);
+                    let chosen = members.iter().find(|k| k.id == route.kwant_id).cloned().or(lead);
                     if let Some(ref k) = chosen {
+                        routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms));
                         let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                             context_id,
                             kwant_id: k.id.clone(),
                             kwant_name: k.name.clone(),
                             kwant_title: k.title.clone(),
-                            reason,
+                            reason: route.reason,
                             mode: "direct".into(),
+                            candidate_count: Some(members.len()),
+                            fallback: route.fallback,
+                            matched_terms: route.matched_terms,
                         });
                     }
                     chosen
@@ -1950,6 +2026,7 @@ pub async fn send_chat(
             active_team_context,
             workspace_dir,
             chat_teammates,
+            routing,
         );
 
         Ok(Json(json!({
@@ -1958,6 +2035,18 @@ pub async fn send_chat(
             "kwant": target_kwant.name
         })))
     }
+}
+
+/// A reply's `meta.routing`: who Laya picked for a channel or team message and why.
+fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String]) -> serde_json::Value {
+    json!({
+        "kwant_id": kwant.id,
+        "kwant_name": kwant.name,
+        "reason": reason,
+        "candidate_count": candidates,
+        "fallback": fallback,
+        "matched_terms": terms,
+    })
 }
 
 /// `/api/chat/send` into a thread: the thread's agent answers there, with only that thread's history.
@@ -1972,6 +2061,9 @@ async fn send_to_thread(
         return Err(StatusCode::CONFLICT);
     }
     let kwant = state.db.get_kwant(&thread.kwant_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
+    if super::spaces::ensure_active(&state, &SpaceId::new(&kwant.space_id)).await.is_err() {
+        return Err(StatusCode::CONFLICT);
+    }
     let depth = match state.db.delegation_for_thread(&thread.id).await.ok().flatten() {
         Some(d) => d.depth,
         None => 0,
@@ -2186,7 +2278,7 @@ pub async fn save_settings(
     if engines_changed {
         let state = state.clone();
         tokio::spawn(async move {
-            super::engine_routes::recheck_all(&state).await;
+            super::engine_routes::recheck_all(&state, &SpaceId::default_space()).await;
         });
     }
     if payload.max_turns_per_agent.is_some() || payload.max_turns_global.is_some() {
@@ -2429,7 +2521,7 @@ pub async fn resolve_sandbox_target_info(state: &AppState, target_id: &str) -> O
     } else if let Ok(Some(kwant)) = state.db.get_kwant(target_id).await {
         let safe_kname = kwant.name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
         Some((format!("bot-{}", safe_kname), workspaces(&kwant.space_id).join(format!("bot-{}", safe_kname))))
-    } else if let Ok(Some(team)) = state.db.get_team_by_name(&request_space(), target_id).await {
+    } else if let Ok(Some(team)) = state.db.get_team_by_name(&SpaceId::default_space(), target_id).await {
         Some(team_folder(team))
     } else {
         None

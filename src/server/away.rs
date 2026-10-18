@@ -5,8 +5,10 @@
 //! Summaries are one line of at most [`SUMMARY_CHARS`] with anything key-like masked: results
 //! and errors can carry provider text.
 
+use super::spaces::Scope;
 use super::AppState;
 use crate::db::away::{AwayRow, LAST_SEEN_KEY};
+use crate::db::spaces::SpaceId;
 use crate::profiles::classify::{mask_credentials, redact_detail};
 use axum::{
     extract::{Query, State},
@@ -174,19 +176,45 @@ fn item(row: AwayRow) -> Value {
     v
 }
 
-async fn last_seen(state: &AppState) -> Result<Option<DateTime<Utc>>, crate::db::DbError> {
+/// The space's last-seen marker. Default keeps the marker from before spaces.
+fn seen_key(space: &SpaceId) -> String {
+    match space.is_default() {
+        true => LAST_SEEN_KEY.to_string(),
+        false => format!("{LAST_SEEN_KEY}:{space}"),
+    }
+}
+
+async fn last_seen(state: &AppState, space: &SpaceId) -> Result<Option<DateTime<Utc>>, crate::db::DbError> {
     Ok(state
         .db
-        .get_setting(LAST_SEEN_KEY)
+        .get_setting(&seen_key(space))
         .await?
         .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
         .map(|t| t.with_timezone(&Utc)))
 }
 
-/// Approvals the broker still waits on, each linked to the chat its turn runs in.
-async fn waiting_approvals(state: &AppState) -> Result<Vec<AwayRow>, crate::db::DbError> {
+/// The space's unread badge: what waits on the user plus what finished or failed since they
+/// last looked, as `unseen.total` of `GET /api/away?space=` counts it.
+pub async fn unread_total(state: &AppState, space: &SpaceId) -> Result<i64, crate::db::DbError> {
+    let now = Utc::now();
+    let since = last_seen(state, space).await?.unwrap_or(now - Duration::days(DEFAULT_LOOKBACK_DAYS));
+    let waiting = state.db.away_count_open_questions(space).await? + waiting_approvals(state, space).await?.len() as i64;
+    let (finished, failed) = state.db.away_counts(space, since, now - Duration::minutes(STUCK_AFTER_MINUTES)).await?;
+    Ok(waiting + finished + failed)
+}
+
+/// The space's approvals the broker still waits on, each linked to the chat its turn runs in.
+async fn waiting_approvals(state: &AppState, space: &SpaceId) -> Result<Vec<AwayRow>, crate::db::DbError> {
     let live = state.broker.pending_ids().await;
     let mut rows = state.db.away_pending_approvals(&live).await?;
+    let mut mine = Vec::with_capacity(rows.len());
+    for row in rows.drain(..) {
+        let of = state.db.space_of_kwant(&row.kwant_id).await?.unwrap_or_else(SpaceId::default_space);
+        if &of == space {
+            mine.push(row);
+        }
+    }
+    let mut rows = mine;
     let turns = state.turns.active_turns();
     // turn_id isn't in the row; look it up by ticket
     for row in &mut rows {
@@ -211,9 +239,9 @@ pub struct AwayQuery {
 
 /// `GET /api/away?since=<RFC 3339>`: `since` defaults to the last-seen marker, else 7 days ago.
 /// Waiting items and stuck delegations are listed whatever `since` is: they still need you.
-pub async fn get(State(state): State<AppState>, Query(q): Query<AwayQuery>) -> Response {
+pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Query<AwayQuery>) -> Response {
     let now = Utc::now();
-    let Ok(seen) = last_seen(&state).await else {
+    let Ok(seen) = last_seen(&state, &space).await else {
         return internal();
     };
     let default_since = seen.unwrap_or(now - Duration::days(DEFAULT_LOOKBACK_DAYS));
@@ -227,16 +255,16 @@ pub async fn get(State(state): State<AppState>, Query(q): Query<AwayQuery>) -> R
     let stuck_before = now - Duration::minutes(STUCK_AFTER_MINUTES);
 
     let result = async {
-        let mut waiting = state.db.away_open_questions(MAX_ITEMS).await?;
-        let approvals = waiting_approvals(&state).await?;
-        let waiting_count = state.db.away_count_open_questions().await? + approvals.len() as i64;
+        let mut waiting = state.db.away_open_questions(&space, MAX_ITEMS).await?;
+        let approvals = waiting_approvals(&state, &space).await?;
+        let waiting_count = state.db.away_count_open_questions(&space).await? + approvals.len() as i64;
         waiting.extend(approvals);
         waiting.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| b.id.cmp(&a.id)));
         waiting.truncate(MAX_ITEMS as usize);
-        let finished = state.db.away_finished(since, MAX_ITEMS).await?;
-        let failed = state.db.away_failed(since, stuck_before, MAX_ITEMS).await?;
+        let finished = state.db.away_finished(&space, since, MAX_ITEMS).await?;
+        let failed = state.db.away_failed(&space, since, stuck_before, MAX_ITEMS).await?;
         // The badge counts from the marker, whatever this page asked for
-        let (unseen_finished, unseen_failed) = state.db.away_counts(default_since, stuck_before).await?;
+        let (unseen_finished, unseen_failed) = state.db.away_counts(&space, default_since, stuck_before).await?;
         Ok::<_, crate::db::DbError>((waiting, finished, failed, waiting_count, unseen_finished, unseen_failed))
     }
     .await;
@@ -261,10 +289,10 @@ pub async fn get(State(state): State<AppState>, Query(q): Query<AwayQuery>) -> R
     .into_response()
 }
 
-/// `POST /api/away/seen`: the user has looked; returns the stored marker.
-pub async fn seen(State(state): State<AppState>) -> Response {
+/// `POST /api/away/seen?space=`: the user has looked at that space; returns the stored marker.
+pub async fn seen(State(state): State<AppState>, Scope(space): Scope) -> Response {
     let now = Utc::now();
-    if state.db.set_setting(LAST_SEEN_KEY, &rfc3339(now)).await.is_err() {
+    if state.db.set_setting(&seen_key(&space), &rfc3339(now)).await.is_err() {
         return internal();
     }
     Json(json!({ "last_seen": rfc3339(now) })).into_response()

@@ -1,6 +1,7 @@
 //! `/api/profiles`: LLM accounts per engine. API keys are write-only: no response ever carries
 //! one, only `has_key`.
 
+use super::spaces::Scope;
 use super::AppState;
 use crate::db::models::{LlmProfile, LlmProfilePatch, NewLlmProfile};
 use crate::db::spaces::SpaceId;
@@ -137,8 +138,8 @@ async fn load(state: &AppState, id: &str) -> Result<LlmProfile, Response> {
 }
 
 /// `GET /api/profiles`
-pub async fn list(State(state): State<AppState>) -> Response {
-    match state.db.list_profiles(&super::routes::request_space()).await {
+pub async fn list(State(state): State<AppState>, Scope(space): Scope) -> Response {
+    match state.db.list_profiles(&space).await {
         Ok(profiles) => Json(views(&state, profiles).await).into_response(),
         Err(e) => db_err(e),
     }
@@ -158,7 +159,7 @@ pub struct CreateBody {
 }
 
 /// `POST /api/profiles`
-pub async fn create(State(state): State<AppState>, Json(body): Json<CreateBody>) -> Response {
+pub async fn create(State(state): State<AppState>, Scope(space): Scope, Json(body): Json<CreateBody>) -> Response {
     let Some(engine) = Engine::parse(&body.engine) else {
         return err(
             StatusCode::BAD_REQUEST,
@@ -184,7 +185,6 @@ pub async fn create(State(state): State<AppState>, Json(body): Json<CreateBody>)
         ("cli_home", None) => None,
         _ => return err(StatusCode::BAD_REQUEST, "kind must be cli_home or api_key"),
     };
-    let space = super::routes::request_space();
     let all = match state.db.list_profiles(&space).await {
         Ok(a) => a,
         Err(e) => return db_err(e),

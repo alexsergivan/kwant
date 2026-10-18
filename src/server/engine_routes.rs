@@ -2,7 +2,9 @@
 //! engine can run, why not, the models it offers, and turning one off or on.
 
 use super::profile_turn::{self, with_accounts};
+use super::spaces::Scope;
 use super::AppState;
+use crate::db::spaces::SpaceId;
 use crate::drivers::engines::{parse_disabled, EngineId, EngineReport, ProbeEnv, DISABLED_SETTING};
 use axum::{
     extract::{Path, State},
@@ -18,24 +20,24 @@ pub struct EnginesResponse {
 
 /// The cached checks; never waits on one. Engines not checked yet show as "checking". Stale
 /// profile sign-in checks run in the background for the next call.
-pub async fn list(State(state): State<AppState>) -> Json<EnginesResponse> {
-    let engines = with_accounts(&state, &super::routes::request_space(), state.engines.snapshot()).await;
+pub async fn list(State(state): State<AppState>, Scope(space): Scope) -> Json<EnginesResponse> {
+    let engines = with_accounts(&state, &space, state.engines.snapshot()).await;
     let bg = state.clone();
     tokio::spawn(async move { profile_turn::refresh_sign_ins(&bg).await });
     Json(EnginesResponse { engines })
 }
 
 /// Checks every engine again and answers once done (each check is capped at 10s).
-pub async fn recheck(State(state): State<AppState>) -> Json<EnginesResponse> {
-    Json(EnginesResponse { engines: recheck_all(&state).await })
+pub async fn recheck(State(state): State<AppState>, Scope(space): Scope) -> Json<EnginesResponse> {
+    Json(EnginesResponse { engines: recheck_all(&state, &space).await })
 }
 
-/// Every engine and every profile's sign-in, checked again.
-pub async fn recheck_all(state: &AppState) -> Vec<EngineReport> {
+/// Every engine and every profile's sign-in, checked again; `ready` and `uses` for `space`.
+pub async fn recheck_all(state: &AppState, space: &SpaceId) -> Vec<EngineReport> {
     load_disabled(state).await;
     let env = probe_env(state).await;
     let (engines, ()) = tokio::join!(state.engines.recheck(&env), profile_turn::refresh_sign_ins(state));
-    with_accounts(state, &super::routes::request_space(), engines).await
+    with_accounts(state, space, engines).await
 }
 
 /// What the checks run with: Settings and the env, and Claude's sign-in config dir.
@@ -61,6 +63,7 @@ static SWITCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// once). Answers with every engine, as `GET /api/engines` does.
 pub async fn set_enabled(
     State(state): State<AppState>,
+    Scope(space): Scope,
     Path(id): Path<String>,
     Json(body): Json<SetEnabled>,
 ) -> Result<Json<EnginesResponse>, StatusCode> {
@@ -81,13 +84,13 @@ pub async fn set_enabled(
         let env = probe_env(&state).await;
         state.engines.recheck_one(id, &env).await;
     }
-    Ok(Json(EnginesResponse { engines: with_accounts(&state, &super::routes::request_space(), state.engines.snapshot()).await }))
+    Ok(Json(EnginesResponse { engines: with_accounts(&state, &space, state.engines.snapshot()).await }))
 }
 
 /// Checks every engine in the background, so the first turns after startup see real status.
 pub fn spawn_startup_check(state: AppState) {
     tokio::spawn(async move {
-        let engines = recheck_all(&state).await;
+        let engines = recheck_all(&state, &SpaceId::default_space()).await;
         let ready: Vec<_> = engines
             .iter()
             .filter(|e| e.status == crate::drivers::engines::EngineStatus::Ready)
