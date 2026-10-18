@@ -586,7 +586,14 @@ impl Driver for ApiDriver {
 
         // If target is a real live API endpoint with API key or local Ollama, call HTTP streaming
         if api_key.is_some() || is_ollama(target_model) || custom {
-            let system_prompt = input.format_system_prompt();
+            // An API turn has no shell: the browser is reachable only through the tools, which the
+            // Anthropic Messages format doesn't get
+            let browser = if input.has_self_tools() && !url.ends_with("/v1/messages") {
+                super::BrowserAccess::Tools
+            } else {
+                super::BrowserAccess::Unavailable
+            };
+            let system_prompt = input.format_system_prompt_with(browser);
 
             let mut messages = vec![json!({"role": "system", "content": system_prompt})];
             for msg in &input.history {

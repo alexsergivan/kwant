@@ -1313,6 +1313,7 @@ async fn run_kwant_turn_inner(
                 cancel: Some(cancel_token.clone()),
                 turn_id: Some(tag.turn_id.clone()),
                 workspace: scope.workspace_dir.clone(),
+                sandbox_target: Some(sandbox_target.clone()),
             }
         });
         let mcp_turn = super::mcp_runtime::prepare_turn_with_self(

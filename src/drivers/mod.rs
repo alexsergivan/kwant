@@ -85,8 +85,32 @@ pub fn current_date_block(now: chrono::DateTime<chrono::FixedOffset>) -> String 
     )
 }
 
+/// How a turn's agent reaches its bot browser, which decides what the prompt tells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserAccess {
+    /// kwnt's own `browser_*` MCP tools are attached.
+    Tools,
+    /// No MCP this turn: the agent's shell calls the browser API with curl.
+    Shell,
+    /// Neither (an API turn without tools): there is no way to the browser.
+    Unavailable,
+}
+
 impl TurnInput {
+    /// Whether kwnt's own tools server (which carries the `browser_*` tools) is attached.
+    pub fn has_self_tools(&self) -> bool {
+        self.mcp
+            .as_ref()
+            .is_some_and(|c| c.servers.iter().any(|s| s.name == crate::mcp::SELF_SERVER_NAME))
+    }
+
+    /// The prompt for a CLI turn: browser tools when attached, else curl through the shell.
     pub fn format_system_prompt(&self) -> String {
+        let access = if self.has_self_tools() { BrowserAccess::Tools } else { BrowserAccess::Shell };
+        self.format_system_prompt_with(access)
+    }
+
+    pub fn format_system_prompt_with(&self, browser: BrowserAccess) -> String {
         let mut base = format!(
             "{}\n\nYou are {}, {}.",
             self.kwant.persona_prompt, self.kwant.name, self.kwant.title
@@ -127,25 +151,47 @@ impl TurnInput {
         let api = self.browser_api_url.clone().unwrap_or_else(|| {
             format!("http://127.0.0.1:{}/api/sandbox/{}", crate::config::DEFAULT_PORT, sandbox_target)
         });
+        let control_rules = "A 409 / \"taken control\" answer means the user is using the browser: stop browser actions and wait for the user to hand it back. Never bypass the control API or connect to CDP directly.\n\
+            Report browser errors honestly. Never claim a page opened unless navigation succeeded, and only describe content that appears in the returned page text. If a response has \"blocked\": true (CAPTCHA / bot check), follow its \"notice\" instead of claiming results.";
+        let browser_block = match browser {
+            BrowserAccess::Tools => format!(
+                "\n\n[Bot Browser]\n\
+                Your browser session is displayed live in the user's right panel; the user can browse in it too.\n\
+                Never open a host desktop browser (no `open <url>`, `xdg-open`, etc.) and don't use the shell or curl for it. Use ONLY your `{tools}` tools:\n\
+                - `browser_open` (url): open a page.\n\
+                - `browser_page`: read the page (url, title, text, clickable labels).\n\
+                - `browser_act` (action click_text + text, type + text, key + key, scroll + delta_y): click a button/link/field by its visible label, type into the focused field, press a key, scroll.\n\
+                Every call returns the updated page, so you rarely need a separate read. \
+                The current page state and its clickable labels are usually already in the request; act on them directly.\n\
+                {control_rules}",
+                tools = crate::mcp::SELF_SERVER_NAME,
+            ),
+            BrowserAccess::Shell => format!(
+                "\n\n[Bot Browser]\n\
+                Your browser session is displayed live in the user's right panel; the user can browse in it too. Shell execution uses a separate container.\n\
+                Browser API: {api}\n\
+                Never open a host desktop browser (no `open <url>`, `xdg-open`, etc.). Use ONLY these commands (the full API, do not search for more):\n\
+                - Open a page: curl -sS -X POST '{api}/navigate' -H 'Content-Type: application/json' -d '{{\"url\":\"<url>\"}}'\n\
+                - Read the page (url, title, text, clickable labels): curl -sS '{api}/page'\n\
+                - Click a button/link/field by its visible label: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"click_text\",\"text\":\"<label>\"}}'\n\
+                - Type into the focused field: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"type\",\"text\":\"<text>\"}}'\n\
+                - Press a key: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"key\",\"key\":\"Enter\"}}'\n\
+                - Scroll: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"scroll\",\"delta_y\":600}}'\n\
+                Every /act call returns the updated page (url, title, text, clickable), so you rarely need a separate read. \
+                The current page state and its clickable labels are usually already in the request; act on them directly.\n\
+                {control_rules}",
+                api = api,
+            ),
+            BrowserAccess::Unavailable => "\n\n[Bot Browser]\n\
+                You have no way to use the browser in the user's side panel this turn. If the user asks you to browse, say so plainly and \
+                suggest they open the page themselves (Take Control in the panel); never claim you opened or read a page."
+                .to_string(),
+        };
         let sandbox_rules = format!(
-            "\n\n[Bot Browser]\n\
-            Your browser session is displayed live in the user's right panel; the user can browse in it too. Shell execution uses a separate container.\n\
-            Browser API: {api}\n\
-            Never open a host desktop browser (no `open <url>`, `xdg-open`, etc.). Use ONLY these commands (the full API, do not search for more):\n\
-            - Open a page: curl -sS -X POST '{api}/navigate' -H 'Content-Type: application/json' -d '{{\"url\":\"<url>\"}}'\n\
-            - Read the page (url, title, text, clickable labels): curl -sS '{api}/page'\n\
-            - Click a button/link/field by its visible label: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"click_text\",\"text\":\"<label>\"}}'\n\
-            - Type into the focused field: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"type\",\"text\":\"<text>\"}}'\n\
-            - Press a key: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"key\",\"key\":\"Enter\"}}'\n\
-            - Scroll: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"scroll\",\"delta_y\":600}}'\n\
-            Every /act call returns the updated page (url, title, text, clickable), so you rarely need a separate read. \
-            The current page state and its clickable labels are usually already in the request; act on them directly.\n\
-            A 409 means the user has taken control: stop browser actions and wait for the user to return control. Never bypass the control API or connect to CDP directly.\n\
-            Report API errors honestly. Never claim a page opened unless navigation succeeded, and only describe content that appears in the returned page text. If a response has \"blocked\": true (CAPTCHA / bot check), follow its \"notice\" instead of claiming results.\n\n\
+            "{browser_block}\n\n\
             [Speed]\n\
             The user is waiting in a live chat. Respond as fast as possible: answer directly when you can, use the fewest tool calls (usually one), \
             do not explore the filesystem, read source code or plan multi-step investigations to figure out how the browser works, and keep replies short.",
-            api = api,
         );
 
         let teammates_block = if self.teammates.is_empty() {

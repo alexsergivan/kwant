@@ -158,6 +158,9 @@ pub struct SelfScope {
     pub turn_id: Option<String>,
     /// The turn's workspace (team chats): `share_file` may share files from inside it.
     pub workspace: Option<std::path::PathBuf>,
+    /// The bot browser shown in this turn's side panel (team, channel or kwant id). The
+    /// `browser_*` tools are offered only when it is set and only ever drive this one.
+    pub sandbox_target: Option<String>,
 }
 
 /// Where a turn runs, for the delegation tools: results go back to this chat.
@@ -210,6 +213,9 @@ fn tool_list(scope: &SelfScope) -> Value {
     let mut tools = memory_tools();
     if let Some(list) = tools.as_array_mut() {
         list.extend(super::skills::tools());
+        if scope.sandbox_target.is_some() {
+            list.extend(browser_tools());
+        }
         if scope.origin.is_some() {
             list.extend(delegation_tools());
             list.extend(super::attachments::tools());
@@ -219,6 +225,92 @@ fn tool_list(scope: &SelfScope) -> Value {
         }
     }
     tools
+}
+
+/// The bot browser as MCP tools, so engines whose shell can't reach kwnt (claude's permission
+/// prompt refuses Bash, codex's sandbox has no network) still drive it.
+fn browser_tools() -> Vec<Value> {
+    vec![
+        json!({
+            "name": BROWSER_OPEN,
+            "description": "Open a web page in your browser, the one shown live in the user's side panel. Returns the page you landed on (url, title, text, clickable labels); trust it over the url you asked for.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "The address to open, e.g. https://www.google.com/maps"}},
+                "required": ["url"],
+            },
+        }),
+        json!({
+            "name": BROWSER_PAGE,
+            "description": "Read the page your browser shows now: url, title, visible text and clickable labels.",
+            "inputSchema": {"type": "object", "properties": {}},
+        }),
+        json!({
+            "name": BROWSER_ACT,
+            "description": "Do one thing on the current page and get the page back. click_text clicks a button, link or field by its visible label; type types into the focused field; key presses a key (Enter, Tab, Escape, ArrowDown…); scroll scrolls by delta_y pixels (negative is up).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["click_text", "type", "key", "scroll"]},
+                    "text": {"type": "string", "description": "click_text: the label to click; type: the text to type"},
+                    "key": {"type": "string", "description": "key: the key to press"},
+                    "delta_y": {"type": "number", "description": "scroll: pixels to scroll, default 600"},
+                },
+                "required": ["action"],
+            },
+        }),
+    ]
+}
+
+pub const BROWSER_OPEN: &str = "browser_open";
+pub const BROWSER_PAGE: &str = "browser_page";
+pub const BROWSER_ACT: &str = "browser_act";
+
+/// Runs one `browser_*` tool on the turn's own sandbox through the same handlers as the HTTP
+/// browser API, so control (409), CAPTCHA notices and panel updates behave the same.
+async fn call_browser_tool(state: &AppState, target: &str, name: &str, args: &Value) -> (String, bool) {
+    use super::routes::{act_sandbox, get_sandbox_page, navigate_sandbox, InteractPayload, NavigatePayload};
+    let state = State(state.clone());
+    let target = Path(target.to_string());
+    let result = match name {
+        BROWSER_OPEN => {
+            let Some(url) = args["url"].as_str().map(str::trim).filter(|u| !u.is_empty()) else {
+                return ("url is required".into(), true);
+            };
+            navigate_sandbox(state, target, Json(NavigatePayload { url: url.to_string() })).await
+        }
+        BROWSER_PAGE => get_sandbox_page(state, target).await,
+        _ => {
+            let Some(action) = args["action"].as_str() else {
+                return ("action is required: click_text, type, key or scroll".into(), true);
+            };
+            let payload = InteractPayload {
+                action: action.to_string(),
+                x: None,
+                y: None,
+                text: args["text"].as_str().map(str::to_string),
+                key: args["key"].as_str().map(str::to_string),
+                code: None,
+                delta_x: None,
+                delta_y: args["delta_y"].as_f64(),
+            };
+            act_sandbox(state, target, Json(payload)).await
+        }
+    };
+    match result {
+        Ok(Json(page)) => {
+            let is_error = page.get("error").is_some();
+            (page.to_string(), is_error)
+        }
+        Err((StatusCode::CONFLICT, _)) => (
+            "The user has taken control of the browser. Stop browser actions and wait until they hand it back.".into(),
+            true,
+        ),
+        Err((status, Json(body))) => (
+            body["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("Browser error (HTTP {}).", status.as_u16())),
+            true,
+        ),
+    }
 }
 
 fn delegation_tools() -> Vec<Value> {
@@ -481,6 +573,10 @@ async fn call_tool(
                 Err(_) => ("database error".into(), true),
             }
         }
+        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT => match &scope.sandbox_target {
+            Some(target) => call_browser_tool(state, target, name, args).await,
+            None => (format!("Unknown tool {name}."), true),
+        },
         "skill_propose" => super::skills::tool_propose(state, scope, args).await,
         "skill_get" => super::skills::tool_get(state, scope, args).await,
         "ask_user" => super::questions::tool_ask(state, scope, args).await,
