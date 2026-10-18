@@ -2,8 +2,9 @@
 //! [`Scope`] extractor every collection endpoint takes its space from (`?space=<id>`).
 //!
 //! A missing `?space=` means the Default space. An unknown id is a 404 and an archived one a
-//! 409: a request never falls back to Default. Item endpoints (`/api/kwants/:id`, …) keep taking
-//! their space from the row.
+//! 409: a request never falls back to Default. Item endpoints (`/api/kwants/:id`, …) take
+//! their space from the row; [`row_guard`] refuses one whose explicit `?space=` names another
+//! space (404) and any change to a row of an archived space (409).
 #![allow(clippy::result_large_err)]
 
 use super::AppState;
@@ -80,6 +81,96 @@ pub async fn ensure_active(state: &AppState, space: &SpaceId) -> Result<(), Resp
         Ok(_) => Ok(()),
         Err(_) => Err(internal()),
     }
+}
+
+/// The kinds of row an item route names, by the path segments before its id.
+const ITEM_ROUTES: &[(&[&str], RowKind)] = &[
+    (&["kwants"], RowKind::Kwant),
+    (&["channels"], RowKind::Channel),
+    (&["teams"], RowKind::Team),
+    (&["sandbox"], RowKind::Team),
+    (&["routines"], RowKind::Routine),
+    (&["skills"], RowKind::Skill),
+    (&["mcp", "servers"], RowKind::McpServer),
+    (&["profiles"], RowKind::Profile),
+    (&["questions"], RowKind::Question),
+    (&["threads"], RowKind::Thread),
+    (&["delegations"], RowKind::Delegation),
+    (&["approvals"], RowKind::Approval),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RowKind {
+    Kwant,
+    Channel,
+    Team,
+    Routine,
+    Skill,
+    McpServer,
+    Profile,
+    Question,
+    Thread,
+    Delegation,
+    Approval,
+}
+
+/// The kind and id of the row an `/api/...` path names, if it is an item route.
+pub fn item_route(path: &str) -> Option<(RowKind, String)> {
+    let segs: Vec<&str> = path.strip_prefix("/api/")?.split('/').collect();
+    ITEM_ROUTES.iter().find_map(|(prefix, kind)| {
+        let id = segs.get(prefix.len()).filter(|id| !id.is_empty())?;
+        (segs[..prefix.len()] == **prefix)
+            .then(|| (*kind, percent_encoding::percent_decode_str(id).decode_utf8_lossy().into_owned()))
+    })
+}
+
+async fn space_of_row(state: &AppState, kind: RowKind, id: &str) -> Result<Option<SpaceId>, DbError> {
+    let db = &state.db;
+    match kind {
+        RowKind::Kwant => db.space_of_kwant(id).await,
+        RowKind::Channel => db.space_of_channel(id).await,
+        RowKind::Team => db.space_of_team(id).await,
+        RowKind::Routine => db.space_of_routine(id).await,
+        RowKind::Skill => db.space_of_skill(id).await,
+        RowKind::McpServer => db.space_of_mcp_server(id).await,
+        RowKind::Profile => db.space_of_profile(id).await,
+        RowKind::Question => db.space_of_question(id).await,
+        RowKind::Thread => db.space_of_thread(id).await,
+        RowKind::Delegation => db.space_of_delegation(id).await,
+        RowKind::Approval => db.space_of_approval(id).await,
+    }
+}
+
+/// Middleware for every item route (see [`ITEM_ROUTES`]). A request with an explicit `?space=`
+/// whose row lives in another space gets a 404, so a screen still showing the old space after a
+/// switch can't read or change the wrong one; without `?space=` the row decides, as before. Any
+/// change (not GET/HEAD) to a row of an archived space is a 409. Unknown rows pass through to the
+/// handler, which answers as it always did.
+pub async fn row_guard(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let Some((kind, id)) = item_route(req.uri().path()) else {
+        return next.run(req).await;
+    };
+    let row_space = match space_of_row(&state, kind, &id).await {
+        Ok(Some(space)) => space,
+        Ok(None) => return next.run(req).await,
+        Err(_) => return internal(),
+    };
+    if let Some(want) = space_param(req.uri().query()) {
+        if want.trim() != row_space.as_str() {
+            return error(StatusCode::NOT_FOUND, "that isn't in this space");
+        }
+    }
+    let read = matches!(*req.method(), axum::http::Method::GET | axum::http::Method::HEAD);
+    if !read {
+        if let Err(r) = ensure_active(&state, &row_space).await {
+            return r;
+        }
+    }
+    next.run(req).await
 }
 
 fn archived() -> Response {
@@ -306,7 +397,7 @@ pub async fn update(State(state): State<AppState>, Path(id): Path<String>, Json(
 }
 
 /// Cancels every running turn of the space's bots, channels and teams. Returns how many jobs.
-async fn stop_turns(state: &AppState, space: &SpaceId) -> usize {
+pub async fn stop_turns(state: &AppState, space: &SpaceId) -> usize {
     let mut keys: Vec<String> = Vec::new();
     keys.extend(state.db.list_kwants(space).await.unwrap_or_default().into_iter().map(|k| k.id));
     keys.extend(state.db.list_channels(space).await.unwrap_or_default().into_iter().map(|c| c.id));
@@ -372,24 +463,52 @@ pub fn normalize(path: &std::path::Path) -> PathBuf {
     out
 }
 
+/// Whether one folder is, holds or sits in the other. Compared without case, since macOS's
+/// default file system ignores it; on Linux that refuses a few folders that only differ in case.
 fn overlaps(a: &std::path::Path, b: &std::path::Path) -> bool {
-    a.starts_with(b) || b.starts_with(a)
+    let fold = |p: &std::path::Path| PathBuf::from(p.to_string_lossy().to_lowercase());
+    let (a, b) = (fold(a), fold(b));
+    a.starts_with(&b) || b.starts_with(&a)
 }
 
-/// 400 when a team's own `workspace_path` would share files with another space: the same
-/// folder as, or one inside or around, another space's work folder or one of its teams'.
+/// Why `name` can't name a team: its folder (when it has no `workspace_path`) is made from the
+/// name, so a separator, `..` or a leading dot could put it anywhere.
+pub fn bad_team_name(name: &str) -> Option<&'static str> {
+    let name = name.trim();
+    if name.contains(['/', '\\', '\0']) {
+        Some("a team name can't contain / or \\")
+    } else if name.contains("..") || name.starts_with('.') {
+        Some("a team name can't start with a dot or contain ..")
+    } else {
+        None
+    }
+}
+
+/// 400 when a team's folder would share files with another space: the same folder as, or one
+/// inside or around, another space's work folder or one of its teams'. The folder is the one the
+/// team will really use, from its `workspace_path` or else its name and repo. A new or renamed
+/// team also needs a name that is safe as a folder name.
 pub async fn check_workspace(
     state: &AppState,
     space: &SpaceId,
     team_id: Option<&str>,
-    name: &str,
-    workspace_path: Option<&str>,
+    team: &crate::db::models::NewTeam,
 ) -> Result<(), Response> {
-    if workspace_path.is_none_or(|p| p.trim().is_empty()) {
-        return Ok(());
+    let renamed = match team_id {
+        None => true,
+        Some(id) => match state.db.get_team(id).await {
+            Ok(Some(old)) => old.name != team.name,
+            Ok(None) => true,
+            Err(_) => return Err(internal()),
+        },
+    };
+    if renamed {
+        if let Some(why) = bad_team_name(&team.name) {
+            return Err(error(StatusCode::BAD_REQUEST, why));
+        }
     }
     let data_dir = normalize(&state.config.data_dir);
-    let mine = team_folder(&data_dir, space, name, workspace_path, None);
+    let mine = team_folder(&data_dir, space, &team.name, team.workspace_path.as_deref(), team.repo_url.as_deref());
     let Ok(spaces) = state.db.list_spaces().await else {
         return Err(internal());
     };

@@ -330,9 +330,23 @@ impl SkillPayload {
 }
 
 /// `POST /api/skills {name, description, body, kwant_id?}`: a skill the user wrote, enabled at once.
-pub async fn create(State(state): State<AppState>, scope: Scope, Json(p): Json<SkillPayload>) -> Response {
+pub async fn create(
+    State(state): State<AppState>,
+    scope: Scope,
+    uri: axum::http::Uri,
+    Json(p): Json<SkillPayload>,
+) -> Response {
     if let Err(r) = check_owner(&state, &p.kwant_id).await {
         return r;
+    }
+    // With an explicit ?space=, the owner must be in it (as for routines); without, the skill
+    // follows its owner
+    if let (true, Some(Some(owner))) = (super::spaces::space_param(uri.query()).is_some(), &p.kwant_id) {
+        match state.db.space_of_kwant(owner).await {
+            Ok(Some(of)) if of == scope.0 => {}
+            Ok(_) => return error(StatusCode::BAD_REQUEST, "that agent is in another space"),
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
     }
     let text = match clean_skill_text(
         p.name.as_deref().unwrap_or(""),
@@ -344,6 +358,9 @@ pub async fn create(State(state): State<AppState>, scope: Scope, Json(p): Json<S
     };
     let kwant_id = p.kwant_id.flatten();
     let space = skill_space(&state, kwant_id.as_deref(), scope).await;
+    if let Err(r) = super::spaces::ensure_active(&state, &space).await {
+        return r;
+    }
     match state.db.create_user_skill(&space, kwant_id.as_deref(), text).await {
         Ok(s) => {
             changed(&state, &s);
@@ -425,7 +442,7 @@ pub async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> Re
     match state.db.delete_skill(&id).await {
         Ok(true) => {
             let _ = state.event_sender.send(RuntimeEvent::SkillUpdated {
-                skill: json!({"id": skill.id, "kwant_id": skill.kwant_id, "deleted": true}),
+                skill: json!({"id": skill.id, "kwant_id": skill.kwant_id, "space_id": skill.space_id, "deleted": true}),
             });
             StatusCode::NO_CONTENT.into_response()
         }

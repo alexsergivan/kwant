@@ -136,6 +136,9 @@ pub enum RuntimeEvent {
     #[serde(rename = "discussion_completed", alias = "DiscussionCompleted")]
     DiscussionCompleted {
         total_turns: usize,
+        /// The channel or team the discussion ran in, so the event reaches only its space.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_id: Option<String>,
     },
     #[serde(rename = "browser_navigated", alias = "BrowserNavigated")]
     BrowserNavigated {

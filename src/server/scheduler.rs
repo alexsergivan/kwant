@@ -400,6 +400,9 @@ async fn execute(state: &AppState, routine: &RoutineRow) -> Result<Option<String
     if kwant.space_id != routine.space_id {
         return Err("the routine's agent is in another space, so it was not run".into());
     }
+    if state.db.space_archived(&crate::db::spaces::SpaceId::new(&routine.space_id)).await.unwrap_or(true) {
+        return Err("the routine's space is archived, so it was not run".into());
+    }
     if let Some(c) = &routine.channel_id {
         let channel = state
             .db

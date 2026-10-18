@@ -512,6 +512,41 @@ impl Database {
         self.space_of("SELECT space_id FROM mcp_servers WHERE id = ?", id).await
     }
 
+    pub async fn space_of_routine(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT space_id FROM routines WHERE id = ?", id).await
+    }
+
+    pub async fn space_of_skill(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT space_id FROM skills WHERE id = ?", id).await
+    }
+
+    /// A question lives in the space of the kwant that asked it.
+    pub async fn space_of_question(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT k.space_id FROM questions q JOIN kwants k ON k.id = q.kwant_id WHERE q.id = ?", id)
+            .await
+    }
+
+    pub async fn space_of_thread(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT k.space_id FROM threads t JOIN kwants k ON k.id = t.kwant_id WHERE t.id = ?", id)
+            .await
+    }
+
+    /// A delegation lives in its lead's space (its specialist is always in the same one).
+    pub async fn space_of_delegation(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT k.space_id FROM delegations d JOIN kwants k ON k.id = d.lead_kwant_id WHERE d.id = ?", id)
+            .await
+    }
+
+    pub async fn space_of_approval(&self, id: &str) -> Result<Option<SpaceId>, DbError> {
+        self.space_of("SELECT k.space_id FROM approvals a JOIN kwants k ON k.id = a.kwant_id WHERE a.id = ?", id)
+            .await
+    }
+
+    /// Whether `space` exists and is archived.
+    pub async fn space_archived(&self, space: &SpaceId) -> Result<bool, DbError> {
+        Ok(self.get_space(space).await?.is_some_and(|s| s.archived_at.is_some()))
+    }
+
     /// The space of whatever an event or chat id names: a channel, a kwant (its direct chat),
     /// a thread (its kwant's space) or a team.
     pub async fn space_of_context(&self, id: &str) -> Result<Option<SpaceId>, DbError> {

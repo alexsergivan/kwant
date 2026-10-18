@@ -303,7 +303,7 @@ async fn two_spaces_end_to_end_through_the_api() {
         StatusCode::NOT_FOUND
     );
 
-    // SSE ?space=B: B's events and global ones only
+    // SSE ?space=B: only B's events
     let resp = app
         .clone()
         .oneshot(Request::builder().uri(format!("/api/events?space={b}")).body(Body::empty()).unwrap())
@@ -318,9 +318,13 @@ async fn two_spaces_end_to_end_through_the_api() {
     send(RuntimeEvent::MemoryChanged { kwant_id: bea_id.clone() });
     let first = next_event(&mut stream).await;
     assert_eq!(first["space_id"], b.as_str(), "A's event was filtered out: {first}");
+    // Fail closed: an event with no space never reaches a scoped stream
     send(RuntimeEvent::MemoryChanged { kwant_id: remy_id.clone() });
-    send(RuntimeEvent::DiscussionCompleted { total_turns: 1 });
-    assert_eq!(next_event(&mut stream).await["space_id"], Value::Null, "global events pass");
+    send(RuntimeEvent::DiscussionCompleted { total_turns: 1, context_id: None });
+    send(RuntimeEvent::MemoryChanged { kwant_id: bea_id.clone() });
+    let next = next_event(&mut stream).await;
+    assert_eq!(next["space_id"], b.as_str(), "a space-less event leaked: {next}");
+    assert_eq!(next["data"]["kwant_id"], bea_id.as_str(), "{next}");
 
     // The spaces list shows both, Default first
     let list = ok(app, "GET", "/api/spaces", None).await;

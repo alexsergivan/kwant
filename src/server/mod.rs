@@ -221,6 +221,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/away/seen", post(away::seen))
         .route("/api/events", get(sse::sse_handler))
         .fallback(crate::embedded::static_handler)
+        .layer(axum::middleware::from_fn_with_state(state.clone(), spaces::row_guard))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))
         .with_state(state)
 }

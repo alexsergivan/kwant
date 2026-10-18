@@ -306,7 +306,7 @@ pub async fn create_team(
     Scope(space): Scope,
     Json(payload): Json<NewTeam>,
 ) -> Result<Json<Team>, axum::response::Response> {
-    check_workspace(&state, &space, None, &payload.name, payload.workspace_path.as_deref()).await?;
+    check_workspace(&state, &space, None, &payload).await?;
     state
         .db
         .create_team(&space, &payload)
@@ -351,7 +351,7 @@ pub async fn update_team(
         Ok(None) => return Err(status(StatusCode::NOT_FOUND)),
         Err(_) => return Err(status(StatusCode::INTERNAL_SERVER_ERROR)),
     };
-    check_workspace(&state, &space, Some(&id), &payload.team.name, payload.team.workspace_path.as_deref()).await?;
+    check_workspace(&state, &space, Some(&id), &payload.team).await?;
     match state.db.update_team(&id, &payload.team).await {
         Ok(Some(mut team)) => {
             if let Some(text) = &payload.instructions {
@@ -394,6 +394,7 @@ pub struct CancelPayload {
 /// given), or everything with no body. A direct chat's Stop leaves that agent's threads running.
 pub async fn cancel_chat(
     State(state): State<AppState>,
+    Scope(space): Scope,
     body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let key = if !body.is_empty() {
@@ -403,7 +404,11 @@ pub async fn cancel_chat(
     } else {
         None
     };
-    let cancelled = state.turns.cancel(key.as_deref());
+    // Without an id, "stop all" stops only the request's space (Default when no ?space=)
+    let cancelled = match &key {
+        Some(k) => state.turns.cancel(Some(k)),
+        None => super::spaces::stop_turns(&state, &space).await,
+    };
     if let Some(thread_id) = &key {
         super::delegation::cancel_thread_delegation(&state, thread_id).await;
     }
@@ -701,7 +706,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
     let context_id = scope.context_id(&replies[0].0);
     let total = |queue_len: usize, done: usize| (1 + done + queue_len).min(1 + MAX_HANDOFFS);
     let _ = events.send(RuntimeEvent::DiscussionStarted {
-        team_id: context_id,
+        team_id: context_id.clone(),
         team_name: scope.team_keys.as_ref().map(|(_, n)| n.clone()).unwrap_or_default(),
         total_turns: total(queue.len(), 0),
         speakers: queue.iter().map(|(k, _, _)| k.id.clone()).collect(),
@@ -739,7 +744,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
         }
     }
 
-    let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: done + 1 });
+    let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: done + 1, context_id: Some(context_id.clone()) });
 }
 
 /// Runs a moderated team discussion: the lead opens (or pauses to ask the user), teammates react to
@@ -859,7 +864,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
         run_kwant_turn(scope, &lead, prompt, opts).await;
     }
 
-    let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: turn });
+    let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: turn, context_id: Some(team.id.clone()) });
 }
 
 /// Per-turn tweaks for turns that kwnt drives itself (team discussions).
