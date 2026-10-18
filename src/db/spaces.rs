@@ -169,11 +169,16 @@ impl Database {
             path = dir.join(format!("kwnt-pre-spaces-{stamp}-{n}.db"));
             n += 1;
         }
+        // Write under a `.partial` name and rename once complete, so a kill mid-copy never
+        // leaves a truncated file that looks like a real backup.
+        let partial = path.with_extension("db.partial");
+        let _ = std::fs::remove_file(&partial);
         sqlx::query("VACUUM INTO ?")
-            .bind(path.to_string_lossy().into_owned())
+            .bind(partial.to_string_lossy().into_owned())
             .execute(&self.pool)
             .await?;
-        restrict(&path, 0o600)?;
+        restrict(&partial, 0o600)?;
+        std::fs::rename(&partial, &path)?;
         Ok(path)
     }
 }
