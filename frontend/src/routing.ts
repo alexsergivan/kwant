@@ -39,9 +39,18 @@ const hostName = 'This machine';
 const accountName = (p: Profile) => (p.kind === 'system' ? hostName : p.name);
 const familyName = (f: Family) => FAMILIES.find((x) => x.id === f)!.label.replace(/ \(.*\)$/, '');
 
+/** "localhost:23333" for a Custom API account, to tell its servers apart. */
+const customHost = (p: Profile) => {
+  try {
+    return p.custom ? new URL(p.custom.base_url).host : 'Custom API';
+  } catch {
+    return 'Custom API';
+  }
+};
+
 function describe(p: Profile): RouteAccount {
   const otherProvider = isThirdPartyLabel(p.account_label);
-  const detail = p.kind === 'api_key' ? 'API key' : otherProvider ? `via ${p.account_label === 'third_party' ? 'another provider' : p.account_label}` : p.account_label;
+  const detail = p.kind === 'custom_api' ? customHost(p) : p.kind === 'api_key' ? 'API key' : otherProvider ? `via ${p.account_label === 'third_party' ? 'another provider' : p.account_label}` : p.account_label;
   return { name: accountName(p), detail, otherProvider };
 }
 
@@ -61,6 +70,7 @@ export function tryOrder(profiles: Profile[], family: Family, now = Date.now()):
 /** Why a turn's first account may not run, or null when it was ready on its last check. */
 function startNote(p: Profile, now: number): string | null {
   if (activeLimit(p.limited_until, now)) return 'It’s out of usage and nothing else is ready, so bots will stop and say so.';
+  if (p.kind === 'custom_api') return p.custom?.status && p.custom.status !== 'ready' ? 'Its server didn’t answer the last check and nothing else is ready, so bots will stop and say so.' : null;
   if (p.kind === 'api_key') return p.has_key ? null : 'It has no key and nothing else is ready, so bots will stop and say so.';
   if (p.signed_in === false) return 'It needs sign-in and nothing else is ready, so bots will stop and say so.';
   if (p.signed_in === null && p.kind !== 'system') return 'Its sign-in hasn’t been checked yet. Bots try it anyway.';

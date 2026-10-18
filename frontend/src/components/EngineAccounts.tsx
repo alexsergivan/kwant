@@ -1,8 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, KeyRound, Loader2, LogIn, LogOut, Pencil, Plus, Star, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, KeyRound, Loader2, LogIn, LogOut, Pencil, Plus, RefreshCw, Server, Star, Trash2, Wrench } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import type { EngineInfo, Tone } from '../engines';
-import { KIND_LABELS, Login, Profile, accountState, isLoginDone, isThirdPartyLabel, newAccountFor, profilesApi, safeExternalUrl } from '../profiles';
+import {
+  CUSTOM_PRESETS,
+  CustomProtocol,
+  KIND_LABELS,
+  Login,
+  NewAccountSpec,
+  PROTOCOLS,
+  Profile,
+  accountState,
+  isLoginDone,
+  isThirdPartyLabel,
+  newAccountFor,
+  profilesApi,
+  protocolLabel,
+  safeExternalUrl,
+} from '../profiles';
 
 const input =
   'w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors';
@@ -117,7 +132,9 @@ export const AccountList: React.FC<{
           ))}
         </ul>
       ) : (
-        <p className="text-[11px] text-zinc-500">{spec?.kind === 'api_key' ? 'No accounts with a key yet.' : 'No accounts yet.'}</p>
+        <p className="text-[11px] text-zinc-500">
+          {spec?.kind === 'custom_api' ? 'No servers yet.' : spec?.kind === 'api_key' ? 'No accounts with a key yet.' : 'No accounts yet.'}
+        </p>
       )}
       {spec &&
         (adding ? (
@@ -143,7 +160,8 @@ export const AccountList: React.FC<{
             }}
             className={quietBtn}
           >
-            <Plus size={12} aria-hidden="true" /> {spec.kind === 'api_key' ? 'Add an account with a key' : 'Add account'}
+            <Plus size={12} aria-hidden="true" />{' '}
+            {spec.kind === 'custom_api' ? 'Add a custom server' : spec.kind === 'api_key' ? 'Add an account with a key' : 'Add account'}
           </button>
         ))}
     </div>
@@ -151,7 +169,16 @@ export const AccountList: React.FC<{
 };
 
 const AddAccountForm: React.FC<{
-  spec: { engine: Profile['engine']; kind: 'cli_home' | 'api_key' };
+  spec: NewAccountSpec;
+  onCancel: () => void;
+  onCreated: () => void;
+}> = ({ spec, onCancel, onCreated }) =>
+  spec.kind === 'custom_api' ? <CustomServerForm onCancel={onCancel} onSaved={onCreated} /> : <KeyOrLoginForm spec={spec as KeyOrLoginSpec} onCancel={onCancel} onCreated={onCreated} />;
+
+type KeyOrLoginSpec = { engine: Profile['engine']; kind: 'cli_home' | 'api_key' };
+
+const KeyOrLoginForm: React.FC<{
+  spec: KeyOrLoginSpec;
   onCancel: () => void;
   onCreated: () => void;
 }> = ({ spec, onCancel, onCreated }) => {
@@ -242,6 +269,229 @@ const AddAccountForm: React.FC<{
   );
 };
 
+const OTHER_MODEL = '\u0000other';
+
+/** Adds a Custom API account, or edits its server (`account`): format, address, model, and its key when new. */
+export const CustomServerForm: React.FC<{
+  account?: Profile;
+  onCancel: () => void;
+  onSaved: () => void;
+}> = ({ account, onCancel, onSaved }) => {
+  const editing = !!account;
+  const c = account?.custom ?? null;
+  const [name, setName] = useState('');
+  const [protocol, setProtocol] = useState<CustomProtocol>(c?.protocol ?? 'openai-chat');
+  const [baseUrl, setBaseUrl] = useState(c?.base_url ?? '');
+  const [apiKey, setApiKey] = useState('');
+  const [model, setModel] = useState(c?.model ?? '');
+  const [isDefault, setIsDefault] = useState(false);
+  const [preset, setPreset] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const id = account ? `custom-${account.id}` : 'new-custom';
+  const listed = c?.status === 'ready' ? c.models : [];
+  const [typing, setTyping] = useState(!!c?.model && !listed.some((m) => m.id === c.model));
+  const active = CUSTOM_PRESETS.find((p) => p.id === preset);
+
+  const applyPreset = (id: string) => {
+    const p = CUSTOM_PRESETS.find((x) => x.id === id);
+    if (!p) return;
+    playSfx('click');
+    const proto = p.urls[protocol] ? protocol : 'openai-chat';
+    setPreset(id);
+    setProtocol(proto);
+    setBaseUrl(p.urls[proto] ?? '');
+    if (!editing && !name.trim()) setName(p.name);
+  };
+  // Switching format keeps a preset's address in step (Agent Maestro serves both at different paths).
+  const changeProtocol = (next: CustomProtocol) => {
+    setProtocol(next);
+    const from = CUSTOM_PRESETS.find((p) => p.urls[protocol] === baseUrl.trim());
+    if (from?.urls[next]) setBaseUrl(from.urls[next]!);
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const url = baseUrl.trim();
+    if (!url || (!editing && !name.trim())) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (account) {
+        const body: { protocol?: CustomProtocol; base_url?: string; model?: string } = {};
+        if (protocol !== c?.protocol) body.protocol = protocol;
+        if (url !== c?.base_url) body.base_url = url;
+        if (model.trim() !== (c?.model ?? '')) body.model = model.trim();
+        await (Object.keys(body).length ? profilesApi.update(account.id, body) : profilesApi.check(account.id));
+      } else {
+        await profilesApi.create({
+          engine: 'custom',
+          kind: 'custom_api',
+          name: name.trim(),
+          protocol,
+          base_url: url,
+          is_default: isDefault,
+          ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+          ...(model.trim() ? { model: model.trim() } : {}),
+        });
+      }
+      setApiKey('');
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save the server.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={submit}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          onCancel();
+        }
+      }}
+      data-custom-form={editing ? 'edit' : 'new'}
+      className="bg-zinc-950/60 border border-sky-500/30 rounded-lg p-3 space-y-3"
+      aria-label={editing ? `Server for ${account!.name}` : 'New custom server'}
+    >
+      <div>
+        <p className="text-[11px] font-medium text-zinc-400 mb-1">Fill in for</p>
+        <div className="flex flex-wrap gap-1.5">
+          {CUSTOM_PRESETS.map((p) => (
+            <button key={p.id} type="button" aria-pressed={preset === p.id} onClick={() => applyPreset(p.id)} className={preset === p.id ? primaryBtn : quietBtn}>
+              {p.id === 'maestro' ? `Use ${p.label}` : p.label}
+            </button>
+          ))}
+        </div>
+        {active && <p className="mt-1 text-[11px] text-zinc-500">{active.note}</p>}
+      </div>
+
+      {!editing && (
+        <div>
+          <label htmlFor={`${id}-name`} className="block text-[11px] font-medium text-zinc-400 mb-1">
+            Name <span className="text-zinc-600 font-normal">· shown on replies as “ran on …”</span>
+          </label>
+          <input id={`${id}-name`} autoFocus required maxLength={60} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Copilot" className={input} />
+        </div>
+      )}
+
+      <fieldset>
+        <legend className="block text-[11px] font-medium text-zinc-400 mb-1">Format</legend>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          {PROTOCOLS.map((p) => (
+            <label
+              key={p.id}
+              className={`flex items-start gap-2 rounded-lg border px-2.5 py-2 text-[11px] cursor-pointer ${
+                protocol === p.id ? 'border-sky-500/50 bg-sky-500/10 text-zinc-100' : 'border-zinc-800 text-zinc-300 hover:border-zinc-700'
+              }`}
+            >
+              <input type="radio" name={`${id}-protocol`} value={p.id} checked={protocol === p.id} onChange={() => changeProtocol(p.id)} className="mt-0.5 accent-sky-500" />
+              <span>
+                <span className="block font-medium">{p.label}</span>
+                <span className="block text-zinc-500">{p.hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      <div>
+        <label htmlFor={`${id}-url`} className="block text-[11px] font-medium text-zinc-400 mb-1">
+          Server address
+        </label>
+        <input
+          id={`${id}-url`}
+          required
+          inputMode="url"
+          autoComplete="off"
+          spellCheck={false}
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder={protocol === 'anthropic-messages' ? 'http://localhost:23333/api/anthropic' : 'http://localhost:23333/api/openai/v1'}
+          aria-describedby={`${id}-url-hint`}
+          className={`${input} font-mono`}
+        />
+        <p id={`${id}-url-hint`} className="mt-1 text-[11px] text-zinc-500">
+          The API’s root. A pasted …/chat/completions or …/messages address works too.
+        </p>
+      </div>
+
+      {!editing && (
+        <div>
+          <label htmlFor={`${id}-key`} className="block text-[11px] font-medium text-zinc-400 mb-1">
+            API key <span className="text-zinc-600 font-normal">· optional, never shown again</span>
+          </label>
+          <input id={`${id}-key`} type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={(e) => setApiKey(e.target.value)} className={input} />
+        </div>
+      )}
+
+      <div>
+        <label htmlFor={`${id}-model`} className="block text-[11px] font-medium text-zinc-400 mb-1">
+          Model <span className="text-zinc-600 font-normal">· optional; bots can pick their own</span>
+        </label>
+        {listed.length > 0 && !typing ? (
+          <select
+            id={`${id}-model`}
+            value={model}
+            onChange={(e) => {
+              if (e.target.value === OTHER_MODEL) {
+                setTyping(true);
+                setModel('');
+              } else setModel(e.target.value);
+            }}
+            className={input}
+          >
+            <option value="">Let the server’s list decide</option>
+            {listed.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label === m.id ? m.id : `${m.label} (${m.id})`}
+              </option>
+            ))}
+            <option value={OTHER_MODEL}>Another model id…</option>
+          </select>
+        ) : (
+          <input
+            id={`${id}-model`}
+            autoComplete="off"
+            spellCheck={false}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="e.g. gpt-4.1"
+            className={`${input} font-mono`}
+          />
+        )}
+        <p className="mt-1 text-[11px] text-zinc-500">
+          {editing && listed.length > 0 ? `${listed.length === 1 ? '1 model' : `${listed.length} models`} on this server.` : 'Needed only if the server doesn’t list its models.'}
+        </p>
+      </div>
+
+      {!editing && (
+        <label className="flex items-center gap-2 text-[11px] text-zinc-300">
+          <input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} className="accent-sky-500" />
+          Make it the default
+        </label>
+      )}
+      {error && (
+        <p className="text-[11px] text-rose-300" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {busy && <span className="text-[11px] text-zinc-500 mr-auto">Checking the server…</span>}
+        <button type="button" onClick={onCancel} className={quietBtn}>
+          Cancel
+        </button>
+        <button type="submit" disabled={busy || !baseUrl.trim() || (!editing && !name.trim())} className={primaryBtn}>
+          {busy && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />} {editing ? 'Save and check' : 'Add server'}
+        </button>
+      </div>
+    </form>
+  );
+};
+
 const AccountRow: React.FC<{
   profile: Profile;
   engine: EngineInfo;
@@ -259,7 +509,10 @@ const AccountRow: React.FC<{
   const [keyValue, setKeyValue] = useState('');
   const [login, setLogin] = useState<Login | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [editingServer, setEditingServer] = useState(false);
   const status = accountStatus(p, engine);
+  const isCustom = p.kind === 'custom_api';
+  const hasKeySlot = p.kind === 'api_key' || isCustom;
   const isSystem = p.kind === 'system';
   const nameId = `account-${p.id}-name`;
 
@@ -301,7 +554,14 @@ const AccountRow: React.FC<{
 
   const off = status.label === 'Off';
   const isClaude = p.engine === 'claude';
-  const kindText = isSystem ? `The ${engine.name.replace(/ CLI$/, '')} login on this computer` : p.kind === 'api_key' ? 'API key' : `${engine.name.replace(/ CLI$/, '')} subscription`;
+  const kindText = isSystem
+    ? `The ${engine.name.replace(/ CLI$/, '')} login on this computer`
+    : isCustom
+      ? `${protocolLabel(p.custom?.protocol ?? '')}${p.has_key ? ' · key saved' : ''}`
+      : p.kind === 'api_key'
+        ? 'API key'
+        : `${engine.name.replace(/ CLI$/, '')} subscription`;
+  const statusText = status.tone === 'error' ? 'text-rose-300' : status.tone === 'warn' ? 'text-amber-200' : status.tone === 'ok' ? 'text-zinc-200' : '';
   const needsSignIn = p.kind === 'cli_home' && !p.signed_in && !login;
 
   return (
@@ -371,10 +631,28 @@ const AccountRow: React.FC<{
             {inUse && <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-[10px] font-medium text-emerald-200">In use</span>}
           </div>
           <p className="text-[11px] leading-snug text-zinc-400 break-words">
-            {status.detail && <span className={status.tone === 'warn' || status.tone === 'error' ? 'text-amber-200' : status.tone === 'ok' ? 'text-zinc-200' : ''}>{status.detail}</span>}
+            {status.detail && <span className={isCustom ? statusText : status.tone === 'warn' || status.tone === 'error' ? 'text-amber-200' : status.tone === 'ok' ? 'text-zinc-200' : ''}>{status.detail}</span>}
             {status.detail && <span className="text-zinc-600"> · </span>}
             <span className="text-zinc-500">{kindText}</span>
           </p>
+          {isCustom && p.custom && (
+            <div className="space-y-1 pt-0.5">
+              <p className="flex items-center gap-1 text-[11px] text-zinc-500 min-w-0">
+                <Server size={11} className="shrink-0" aria-hidden="true" />
+                <span className="font-mono text-zinc-400 break-all select-text" data-custom-url>
+                  {p.custom.base_url}
+                </span>
+              </p>
+              <p className="text-[11px] text-zinc-500">
+                Model: <span className="text-zinc-300">{p.custom.model ?? (p.custom.models.length ? 'each bot’s pick, else the server’s first' : 'none set')}</span>
+              </p>
+              {!p.custom.supports_tools && (
+                <p data-no-tools className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/25 text-[10.5px] text-amber-200">
+                  <Wrench size={10} aria-hidden="true" /> No tools (Anthropic format)
+                </p>
+              )}
+            </div>
+          )}
         </div>
         <StatusPill tone={status.tone} className="mt-px">
           {status.label}
@@ -411,12 +689,34 @@ const AccountRow: React.FC<{
             <LogOut size={11} aria-hidden="true" /> Sign out
           </button>
         )}
-        {p.kind === 'api_key' && (
-          <button type="button" disabled={busy} onClick={() => setKeyOpen((v) => !v)} className={p.has_key ? quietBtn : primaryBtn} aria-expanded={keyOpen}>
+        {isCustom && (
+          <>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => run(() => profilesApi.check(p.id))}
+              className={p.custom?.status && p.custom.status !== 'ready' ? primaryBtn : quietBtn}
+            >
+              <RefreshCw size={11} aria-hidden="true" /> Check again
+            </button>
+            <button type="button" disabled={busy} onClick={() => setEditingServer((v) => !v)} className={quietBtn} aria-expanded={editingServer}>
+              <Pencil size={11} aria-hidden="true" /> Edit server
+            </button>
+          </>
+        )}
+        {hasKeySlot && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setKeyOpen((v) => !v)}
+            // A key is optional on a custom server, unless its server just refused the one it has.
+            className={p.custom?.status === 'key_rejected' || (!isCustom && !p.has_key) ? primaryBtn : quietBtn}
+            aria-expanded={keyOpen}
+          >
             <KeyRound size={11} aria-hidden="true" /> {p.has_key ? 'Replace key' : 'Add key'}
           </button>
         )}
-        {p.kind === 'api_key' && p.has_key && (
+        {hasKeySlot && p.has_key && (
           <button type="button" disabled={busy} onClick={() => run(() => profilesApi.removeKey(p.id))} className={quietBtn}>
             Remove key
           </button>
@@ -492,9 +792,24 @@ const AccountRow: React.FC<{
         </div>
       )}
 
-      {confirmDelete && <p className="text-[11px] text-zinc-500">Bots pinned to it go back to the default. Its folder stays on disk.</p>}
+      {confirmDelete && (
+        <p className="text-[11px] text-zinc-500">
+          {isCustom ? 'Bots pinned to it go back to the default. Its server settings and key are removed.' : 'Bots pinned to it go back to the default. Its folder stays on disk.'}
+        </p>
+      )}
 
-      {keyOpen && p.kind === 'api_key' && (
+      {editingServer && isCustom && (
+        <CustomServerForm
+          account={p}
+          onCancel={() => setEditingServer(false)}
+          onSaved={async () => {
+            setEditingServer(false);
+            await onChanged();
+          }}
+        />
+      )}
+
+      {keyOpen && hasKeySlot && (
         <form
           className="flex items-center gap-1.5"
           onSubmit={(e) => {

@@ -581,7 +581,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           <Pencil size={11} />
                         </button>
                       )}
-                      <span className="text-[10px] text-zinc-500 font-mono uppercase bg-zinc-900 px-1 py-0.2 rounded border border-zinc-800">
+                      {/* Capped, so a long model id (Custom API) leaves room for the bot's name. */}
+                      <span
+                        className="max-w-[60%] truncate whitespace-nowrap text-[10px] text-zinc-500 font-mono uppercase bg-zinc-900 px-1 py-0.2 rounded border border-zinc-800"
+                        title={k.preferred_model === 'auto' ? 'Laya' : pickLabel(k.preferred_model)}
+                      >
                         {k.preferred_model === 'auto' ? 'Laya' : pickLabel(k.preferred_model)}
                       </span>
                     </div>

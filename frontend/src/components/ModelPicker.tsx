@@ -1,8 +1,11 @@
 import React, { useId } from 'react';
 import { AlertTriangle, ChevronRight, Loader2 } from 'lucide-react';
 import { claudeNeedsSignIn } from '../claudeLogin';
+import { Profile, readyCustomAccounts } from '../profiles';
 import {
+  CustomSource,
   EngineInfo,
+  EngineModel,
   FAMILIES,
   Family,
   FamilyOption,
@@ -24,21 +27,39 @@ interface ModelPickerProps {
   onOpenSettings?: () => void;
   /** Opens Settings at "Sign in with Claude". */
   onSignInClaude?: () => void;
+  /** The space's accounts: Custom API models come from each account's own server. */
+  profiles?: Profile[];
+  /** The bot's pinned account, and how to change it, so a Custom API model picks its account too. */
+  profileId?: string | null;
+  onPickAccount?: (profileId: string | null) => void;
 }
+
+/** A ready Custom API account's models, with its own model first when its server doesn't list it. */
+const customModels = (p: Profile): EngineModel[] => {
+  const listed: EngineModel[] = (p.custom?.models ?? []).map((m) => ({ id: m.id, label: m.label, tier: m.tier, default: m.default }));
+  const own = p.custom?.model;
+  return own && !listed.some((m) => m.id === own) ? [{ id: own, label: own, default: true }, ...listed] : listed;
+};
+
+/** A Custom API option's value: the account and the model, so the same model on two servers stays apart. */
+const SEP = '\n';
 
 const SELECT =
   'w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none transition-colors disabled:opacity-50';
 
 /** One Engine → Model choice used wherever a kwant's model is set. Only engines that can run are offered. */
-export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange, engines, onOpenSettings, onSignInClaude }) => {
+export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange, engines, onOpenSettings, onSignInClaude, profiles, profileId, onPickAccount }) => {
   const id = useId();
   const pick = parsePick(value);
+  const customAccounts = readyCustomAccounts(profiles);
+  const custom: CustomSource[] = customAccounts.map((p) => ({ name: p.name, models: customModels(p) }));
   // A server without engine checks: offer every family, as before.
   const options: FamilyOption[] =
     engines && engines.length === 0
-      ? FAMILIES.map((f) => ({ id: f.id, label: f.label, via: [], models: [] }))
-      : familyOptions(engines ?? []);
-  const health = engines && engines.length === 0 ? ({ kind: 'ok' } as const) : pickHealth(value, engines);
+      ? // An older server has no Custom API.
+        FAMILIES.filter((f) => f.id !== 'custom').map((f) => ({ id: f.id, label: f.label, via: [], models: [] }))
+      : familyOptions(engines ?? [], custom);
+  const health = engines && engines.length === 0 ? ({ kind: 'ok' } as const) : pickHealth(value, engines, custom);
   const family = pick.family;
   const current = family && family !== 'auto' ? options.find((o) => o.id === family) : undefined;
   const staleFamily = family && family !== 'auto' && !current ? family : null;
@@ -47,6 +68,19 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange, engin
 
   const pickFamily = (f: string) => onChange(f === 'auto' ? 'auto' : encodePick(f as Family, null));
   const pickModel = (m: string) => family && family !== 'auto' && onChange(encodePick(family, m || null));
+
+  // Custom API: one group per account, and picking a model pins its account as well.
+  const byAccount = family === 'custom' && customAccounts.length > 0;
+  const owner = byAccount && pick.model
+    ? customAccounts.find((p) => p.id === profileId && customModels(p).some((m) => m.id === pick.model)) ??
+      customAccounts.find((p) => customModels(p).some((m) => m.id === pick.model))
+    : undefined;
+  const pickCustom = (v: string) => {
+    if (!v) return onChange('custom');
+    const [pid, ...rest] = v.split(SEP);
+    onChange(encodePick('custom', rest.join(SEP)));
+    onPickAccount?.(pid);
+  };
 
   const hintId = `${id}-hint`;
   const describedBy = health.kind !== 'ok' ? hintId : undefined;
@@ -81,6 +115,27 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange, engin
           <label htmlFor={`${id}-model`} className="block text-xs font-medium text-zinc-400 mb-1">
             Model
           </label>
+          {byAccount ? (
+            <select
+              id={`${id}-model`}
+              value={owner && pick.model ? `${owner.id}${SEP}${pick.model}` : pick.model ?? ''}
+              onChange={(e) => pickCustom(e.target.value)}
+              aria-describedby={describedBy}
+              className={`${SELECT} ${health.kind === 'model_missing' ? 'border-amber-500/60' : ''}`}
+            >
+              <option value="">Each account’s own model</option>
+              {customAccounts.map((p) => (
+                <optgroup key={p.id} label={p.name}>
+                  {customModels(p).map((m) => (
+                    <option key={m.id} value={`${p.id}${SEP}${m.id}`}>
+                      {`${m.label} · ${p.name}`}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+              {pick.model && !owner && <option value={pick.model}>{`${pick.model} (not offered now)`}</option>}
+            </select>
+          ) : (
           <select
             id={`${id}-model`}
             value={pick.model ?? ''}
@@ -101,6 +156,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange, engin
             ))}
             {staleModel && <option value={staleModel}>{`${staleModel} (not offered now)`}</option>}
           </select>
+          )}
         </div>
       </div>
 

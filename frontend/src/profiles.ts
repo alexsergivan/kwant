@@ -1,7 +1,27 @@
 // LLM profiles: one account per engine (a work and a personal Claude, say). Keys are write-only.
 
-export type Engine = 'claude' | 'codex' | 'grok';
-export type ProfileKind = 'system' | 'cli_home' | 'api_key';
+export type Engine = 'claude' | 'codex' | 'grok' | 'custom';
+export type ProfileKind = 'system' | 'cli_home' | 'api_key' | 'custom_api';
+
+/** How a Custom API account's server talks: OpenAI chat completions or Anthropic Messages. */
+export type CustomProtocol = 'openai-chat' | 'anthropic-messages';
+export type CustomStatus = 'ready' | 'unreachable' | 'key_rejected' | 'error';
+
+/** A Custom API account's server, as the server last checked it (GET {base}/models). */
+export interface CustomServer {
+  protocol: CustomProtocol;
+  base_url: string;
+  /** The model it runs when the bot doesn't pin one; null lets the server's list decide. */
+  model: string | null;
+  /** null: not checked yet. */
+  status: CustomStatus | null;
+  /** "Connected · 12 models", or the server's own words for what went wrong. */
+  detail: string | null;
+  models: Array<{ id: string; label: string; tier: 'fast' | 'balanced' | 'deep' | null; default: boolean }>;
+  checked_at: string | null;
+  /** MCP tools reach bots on it (OpenAI format only). */
+  supports_tools: boolean;
+}
 
 export interface Profile {
   id: string;
@@ -18,6 +38,8 @@ export interface Profile {
   account_label: string | null;
   limited_until: string | null;
   last_error: 'quota' | 'auth' | null;
+  /** Custom API accounts only. */
+  custom?: CustomServer | null;
 }
 
 export type LoginStatus = 'starting' | 'waiting' | 'succeeded' | 'failed' | 'expired' | 'cancelled';
@@ -37,17 +59,40 @@ export const ENGINES: Array<{ id: Engine; label: string }> = [
   { id: 'claude', label: 'Claude' },
   { id: 'codex', label: 'Codex (OpenAI)' },
   { id: 'grok', label: 'Grok (xAI)' },
+  { id: 'custom', label: 'Custom API' },
 ];
 
 export const KIND_LABELS: Record<ProfileKind, string> = {
   system: 'This machine',
   cli_home: 'Subscription',
   api_key: 'API key',
+  custom_api: 'Custom API',
 };
+
+export const PROTOCOLS: Array<{ id: CustomProtocol; label: string; hint: string }> = [
+  { id: 'openai-chat', label: 'OpenAI-compatible', hint: 'Bots can use tools' },
+  { id: 'anthropic-messages', label: 'Anthropic-compatible', hint: 'No tools' },
+];
+export const protocolLabel = (p: CustomProtocol | string) => PROTOCOLS.find((x) => x.id === p)?.label ?? p;
+
+/** Well-known servers, to fill the form. Agent Maestro serves GitHub Copilot's models from VS Code on the Mac. */
+export const CUSTOM_PRESETS: Array<{ id: string; label: string; name: string; urls: Partial<Record<CustomProtocol, string>>; needsKey: boolean; note: string }> = [
+  {
+    id: 'maestro',
+    label: 'Agent Maestro',
+    name: 'Copilot',
+    urls: { 'openai-chat': 'http://localhost:23333/api/openai/v1', 'anthropic-messages': 'http://localhost:23333/api/anthropic' },
+    needsKey: false,
+    note: 'GitHub Copilot models from VS Code. Keep VS Code open with Agent Maestro running.',
+  },
+  { id: 'openrouter', label: 'OpenRouter', name: 'OpenRouter', urls: { 'openai-chat': 'https://openrouter.ai/api/v1' }, needsKey: true, note: 'Needs an OpenRouter API key.' },
+  { id: 'lmstudio', label: 'LM Studio', name: 'LM Studio', urls: { 'openai-chat': 'http://localhost:1234/v1' }, needsKey: false, note: 'Start LM Studio’s local server first.' },
+];
 
 /** The engine a kwant's model runs on, like the server's `Engine::from_model`; null for auto and Ollama. */
 export function engineOfModel(model: string | null | undefined): Engine | null {
   if (!model) return null;
+  if (model === 'custom' || model.startsWith('custom:') || model.startsWith('custom/')) return 'custom';
   if (model.includes('claude')) return 'claude';
   if (model.includes('grok')) return 'grok';
   if (model.includes('codex') || model.includes('gpt') || model.includes('openai')) return 'codex';
@@ -100,7 +145,7 @@ export type AccountTone = 'ok' | 'warn' | 'error' | 'muted' | 'info';
 
 /** An account's state in the words every screen uses: a one-word chip, and a line saying who or why. */
 export interface AccountState {
-  label: 'Ready' | 'Needs sign-in' | 'Off' | 'Out of usage' | 'Other provider' | 'No key' | 'Unknown';
+  label: 'Ready' | 'Needs sign-in' | 'Off' | 'Out of usage' | 'Other provider' | 'No key' | 'Unknown' | 'Can’t connect' | 'Key rejected' | 'Error' | 'Not checked';
   tone: AccountTone;
   /** The email or provider when it's ready, else what to do; null when there's nothing to add. */
   detail: string | null;
@@ -112,6 +157,7 @@ export function accountState(p: Profile, now = Date.now()): AccountState {
   const limit = activeLimit(p.limited_until, now);
   if (limit) return { label: 'Out of usage', tone: 'warn', detail: `Back ${formatUntil(limit, now)}` };
   if (p.last_error === 'auth') return { label: 'Needs sign-in', tone: 'error', detail: 'Its login stopped working. Sign in again.' };
+  if (p.kind === 'custom_api') return customState(p.custom ?? null);
   if (p.kind === 'api_key') return p.has_key ? { label: 'Ready', tone: 'ok', detail: 'Key saved' } : { label: 'No key', tone: 'warn', detail: 'Add a key to use it' };
   if (p.signed_in === true) {
     if (isThirdPartyLabel(p.account_label)) {
@@ -126,11 +172,27 @@ export function accountState(p: Profile, now = Date.now()): AccountState {
   return { label: 'Unknown', tone: 'muted', detail: p.kind === 'system' ? 'Uses this computer’s login' : 'Couldn’t check the sign-in (is the CLI installed?)' };
 }
 
+/** A Custom API account's check, with the server's own words when it failed. */
+function customState(c: CustomServer | null): AccountState {
+  switch (c?.status) {
+    case 'ready':
+      return { label: 'Ready', tone: 'ok', detail: c.detail ?? 'Connected' };
+    case 'unreachable':
+      return { label: 'Can’t connect', tone: 'error', detail: c.detail ?? 'Nothing is answering at its address.' };
+    case 'key_rejected':
+      return { label: 'Key rejected', tone: 'error', detail: c.detail ?? 'The server refused the key. Replace it.' };
+    case 'error':
+      return { label: 'Error', tone: 'error', detail: c.detail ?? 'The check failed.' };
+    default:
+      return { label: 'Not checked', tone: 'muted', detail: 'Press Check again' };
+  }
+}
+
 /** Short status for a profile, e.g. "Ready · me@x.io" or "Out of usage · Back in 45 min", for pickers. */
 export function profileStatus(p: Profile, now = Date.now()): { tone: AccountTone; text: string } {
   const s = accountState(p, now);
   // The email tells two ready accounts apart; Off and Needs sign-in say enough on their own.
-  const withDetail = s.label === 'Out of usage' || s.label === 'Other provider' || (s.label === 'Ready' && p.kind !== 'api_key');
+  const withDetail = s.label === 'Out of usage' || s.label === 'Other provider' || (s.label === 'Ready' && p.kind !== 'api_key' && p.kind !== 'custom_api');
   return { tone: s.tone, text: withDetail && s.detail ? `${s.label} · ${s.detail}` : s.label };
 }
 
@@ -162,15 +224,23 @@ export const profilesApi = {
   create: (body: {
     engine: Engine;
     name: string;
-    kind: 'cli_home' | 'api_key';
+    kind: 'cli_home' | 'api_key' | 'custom_api';
     home_dir?: string;
     priority?: number;
     enabled?: boolean;
     is_default?: boolean;
     api_key?: string;
+    protocol?: CustomProtocol;
+    base_url?: string;
+    model?: string;
   }) => request<Profile>('POST', '/api/profiles', body),
-  update: (id: string, body: { name?: string; priority?: number; enabled?: boolean; is_default?: boolean }) =>
-    request<Profile>('PATCH', `/api/profiles/${enc(id)}`, body),
+  /** `protocol`, `base_url` and `model` ("" clears it) are for Custom API accounts, and re-check the server. */
+  update: (
+    id: string,
+    body: { name?: string; priority?: number; enabled?: boolean; is_default?: boolean; protocol?: CustomProtocol; base_url?: string; model?: string },
+  ) => request<Profile>('PATCH', `/api/profiles/${enc(id)}`, body),
+  /** Checks a Custom API account's server again now. */
+  check: (id: string) => request<Profile>('POST', `/api/profiles/${enc(id)}/check`),
   remove: (id: string) => request<void>('DELETE', `/api/profiles/${enc(id)}`),
   setKey: (id: string, apiKey: string) => request<void>('PUT', `/api/profiles/${enc(id)}/key`, { api_key: apiKey }),
   removeKey: (id: string) => request<void>('DELETE', `/api/profiles/${enc(id)}/key`),
@@ -207,18 +277,27 @@ export function describeProfileSwitch(e: ProfileSwitchedEvent, kwantName: string
 
 // ---- Accounts on the "Engines & accounts" cards ----
 
-type EngineCardId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'ollama';
-const API_CARD: Record<Engine, EngineCardId> = { claude: 'anthropic_api', codex: 'openai_api', grok: 'xai_api' };
+type EngineCardId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'ollama' | 'custom_api';
+type KeyedEngine = Exclude<Engine, 'custom'>;
+const API_CARD: Record<KeyedEngine, EngineCardId> = { claude: 'anthropic_api', codex: 'openai_api', grok: 'xai_api' };
 
-/** The engine card an account sits on: API-key accounts on the API engine, the rest on the CLI. */
-export const cardOf = (p: Pick<Profile, 'engine' | 'kind'>): EngineCardId => (p.kind === 'api_key' ? API_CARD[p.engine] : p.engine);
+/** The engine card an account sits on: API-key accounts on the API engine, Custom API on its own, the rest on the CLI. */
+export const cardOf = (p: Pick<Profile, 'engine' | 'kind'>): EngineCardId =>
+  p.engine === 'custom' ? 'custom_api' : p.kind === 'api_key' ? API_CARD[p.engine] : p.engine;
+
+export type NewAccountSpec = { engine: Engine; kind: 'cli_home' | 'api_key' | 'custom_api' };
 
 /** The account family and kind a new account on this card gets; null where accounts can't be added. */
-export function newAccountFor(card: string): { engine: Engine; kind: 'cli_home' | 'api_key' } | null {
+export function newAccountFor(card: string): NewAccountSpec | null {
   if (card === 'claude' || card === 'codex' || card === 'grok') return { engine: card, kind: 'cli_home' };
-  const api = (Object.keys(API_CARD) as Engine[]).find((e) => API_CARD[e] === card);
+  if (card === 'custom_api') return { engine: 'custom', kind: 'custom_api' };
+  const api = (Object.keys(API_CARD) as KeyedEngine[]).find((e) => API_CARD[e] === card);
   return api ? { engine: api, kind: 'api_key' } : null;
 }
+
+/** The space's Custom API accounts that answered their last check and are on, default first. */
+export const readyCustomAccounts = (profiles: Profile[] | null | undefined): Profile[] =>
+  profilesForEngine(profiles ?? [], 'custom').filter((p) => p.enabled && p.custom?.status === 'ready');
 
 /** A card's accounts: "This machine" first, then the order turns try them (default, then priority). */
 export function accountsForCard(profiles: Profile[], card: string): Profile[] {
@@ -237,8 +316,11 @@ export function accountsForCard(profiles: Profile[], card: string): Profile[] {
  * API-key account without its key, and not signed out on its last check. Not checked yet still counts,
  * so the server tries it; a refused turn's "auth" error doesn't matter until a check says signed out. */
 export const accountRoutable = (p: Profile, now = Date.now()) =>
-  !activeLimit(p.limited_until, now) && !(p.kind === 'api_key' && !p.has_key) && p.signed_in !== false;
+  !activeLimit(p.limited_until, now) && !(p.kind === 'api_key' && !p.has_key) && p.signed_in !== false && (p.kind !== 'custom_api' || !p.custom?.status || p.custom.status === 'ready');
 
 /** Could run a turn as last checked: on, signed in (or keyed), not out of usage. */
 export const accountUsable = (p: Profile, now = Date.now()) =>
-  p.enabled && !activeLimit(p.limited_until, now) && p.last_error !== 'auth' && (p.kind === 'api_key' ? p.has_key : p.signed_in === true);
+  p.enabled &&
+  !activeLimit(p.limited_until, now) &&
+  p.last_error !== 'auth' &&
+  (p.kind === 'custom_api' ? p.custom?.status === 'ready' : p.kind === 'api_key' ? p.has_key : p.signed_in === true);

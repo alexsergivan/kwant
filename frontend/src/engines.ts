@@ -1,7 +1,7 @@
 // Engines: whether each way of running a model (a CLI, an API key, Ollama) can run right now, from
 // GET /api/engines, and the shared Engine → Model choice stored in a kwant's preferred_model.
 
-export type EngineId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'ollama';
+export type EngineId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'ollama' | 'custom_api';
 export type EngineKind = 'cli' | 'api' | 'local';
 export type EngineStatus = 'ready' | 'signed_out' | 'not_installed' | 'error' | 'checking' | 'disabled';
 export type Tier = 'fast' | 'balanced' | 'deep';
@@ -32,7 +32,7 @@ export interface EngineInfo {
 }
 
 /** What a kwant picks: the model family, whichever of its engines (CLI or key) can run it. */
-export type Family = 'claude' | 'codex' | 'grok' | 'ollama';
+export type Family = 'claude' | 'codex' | 'grok' | 'ollama' | 'custom';
 
 export const FAMILY_OF: Record<EngineId, Family> = {
   claude: 'claude',
@@ -42,6 +42,7 @@ export const FAMILY_OF: Record<EngineId, Family> = {
   grok: 'grok',
   xai_api: 'grok',
   ollama: 'ollama',
+  custom_api: 'custom',
 };
 
 export const FAMILIES: Array<{ id: Family; label: string }> = [
@@ -49,6 +50,7 @@ export const FAMILIES: Array<{ id: Family; label: string }> = [
   { id: 'codex', label: 'Codex (OpenAI)' },
   { id: 'grok', label: 'Grok (xAI)' },
   { id: 'ollama', label: 'Ollama (local)' },
+  { id: 'custom', label: 'Custom API' },
 ];
 
 export const familyLabel = (f: Family) => FAMILIES.find((x) => x.id === f)?.label ?? f;
@@ -59,7 +61,7 @@ export type Tone = 'ok' | 'warn' | 'error' | 'muted' | 'busy' | 'info';
 /** Whether kwants can run on it: the server's `ready` (which counts its accounts), else the host check. */
 export const isUsable = (e: Pick<EngineInfo, 'status' | 'enabled' | 'ready'>) => e.enabled !== false && (e.ready ?? e.status === 'ready');
 
-export function statusView(e: Pick<EngineInfo, 'status' | 'enabled' | 'ready'> & { kind?: EngineKind }): { label: string; tone: Tone } {
+export function statusView(e: Pick<EngineInfo, 'status' | 'enabled' | 'ready'> & { kind?: EngineKind; id?: EngineId }): { label: string; tone: Tone } {
   if (e.enabled === false || e.status === 'disabled') return { label: 'Off', tone: 'muted' };
   if (isUsable(e)) return { label: 'Ready', tone: 'ok' };
   switch (e.status) {
@@ -69,7 +71,7 @@ export function statusView(e: Pick<EngineInfo, 'status' | 'enabled' | 'ready'> &
       return { label: 'Not signed in', tone: 'warn' };
     case 'not_installed':
       // An API engine without a key, or Ollama that isn't running, isn't "installed" either way.
-      return { label: e.kind === 'api' ? 'No key' : e.kind === 'local' ? 'Not running' : 'Not installed', tone: 'muted' };
+      return { label: e.id === 'custom_api' ? 'No server' : e.kind === 'api' ? 'No key' : e.kind === 'local' ? 'Not running' : 'Not installed', tone: 'muted' };
     case 'error':
       return { label: 'Error', tone: 'error' };
     default:
@@ -137,6 +139,8 @@ export function parsePick(value: string | null | undefined): KwantPick {
   const v = (value ?? '').trim();
   if (!v || v.toLowerCase() === 'auto') return { family: 'auto', model: null };
   if (v === 'local_ollama' || v === 'ollama') return { family: 'ollama', model: null };
+  // "custom:<model>" (the server's form) or "custom/<model>"; model ids may hold either character.
+  if (/^custom[:/]/.test(v)) return { family: 'custom', model: v.slice(7).trim() || null };
   const slash = v.indexOf('/');
   if (slash > 0) {
     const head = v.slice(0, slash);
@@ -158,7 +162,7 @@ export function parsePick(value: string | null | undefined): KwantPick {
 export function encodePick(family: Family | 'auto', model: string | null): string {
   if (family === 'auto') return 'auto';
   if (!model) return family === 'ollama' ? 'local_ollama' : family;
-  return `${family}/${model}`;
+  return family === 'custom' ? `custom:${model}` : `${family}/${model}`;
 }
 
 export interface FamilyOption {
@@ -170,11 +174,24 @@ export interface FamilyOption {
   models: EngineModel[];
 }
 
-/** Families with at least one engine that can run, in FAMILIES order. */
-export function familyOptions(engines: EngineInfo[]): FamilyOption[] {
-  return FAMILIES.flatMap(({ id, label }) => {
+/** A ready Custom API account's models, which the engine list doesn't carry (they're per account). */
+export interface CustomSource {
+  name: string;
+  models: EngineModel[];
+}
+
+/** Families with at least one engine that can run, in FAMILIES order. Custom API lists its accounts
+ *  (`custom`) as its "via" and their models, since each account has its own server. */
+export function familyOptions(engines: EngineInfo[], custom: CustomSource[] = []): FamilyOption[] {
+  return FAMILIES.flatMap(({ id, label }): FamilyOption[] => {
     const usable = engines.filter((e) => FAMILY_OF[e.id] === id && isUsable(e));
-    if (usable.length === 0) return [];
+    // A ready Custom API account is proof enough while the engine list catches up.
+    if (usable.length === 0 && !(id === 'custom' && custom.length > 0)) return [];
+    if (id === 'custom') {
+      const seen = new Set<string>();
+      const models = custom.flatMap((a) => a.models).filter((m) => !seen.has(m.id) && !!seen.add(m.id));
+      return [{ id, label, via: custom.length ? custom.map((a) => a.name) : usable.map((e) => e.name), models }];
+    }
     const seen = new Set<string>();
     let hasDefault = false;
     const models: EngineModel[] = [];
@@ -202,9 +219,9 @@ export type PickHealth =
   | { kind: 'unknown'; value: string };
 
 /** Whether a saved pick can run with the engines as last checked. `engines` null while loading. */
-export function pickHealth(value: string, engines: EngineInfo[] | null): PickHealth {
+export function pickHealth(value: string, engines: EngineInfo[] | null, custom: CustomSource[] = []): PickHealth {
   if (!engines) return { kind: 'loading' };
-  const options = familyOptions(engines);
+  const options = familyOptions(engines, custom);
   const pick = parsePick(value);
   if (pick.family === 'auto') return options.length ? { kind: 'ok' } : { kind: 'none_ready' };
   if (pick.family === null) return { kind: 'unknown', value };
@@ -306,6 +323,10 @@ export function engineSummary(e: EngineInfo, accounts: SummaryAccount[] = []): {
     case 'checking':
       return { text: 'Checking…', tone: 'busy' };
     case 'not_installed':
+      if (e.id === 'custom_api')
+        return accounts.length
+          ? { text: 'None of its servers answered · Check them below', tone: 'warn' }
+          : { text: 'Add a server below: Agent Maestro (GitHub Copilot), OpenRouter, LM Studio or any OpenAI- or Anthropic-compatible one', tone: 'muted' };
       if (e.kind === 'api') return { text: 'No key yet · Add a key below to use it', tone: 'muted' };
       return { text: e.detail ?? (e.kind === 'local' ? 'Not running on this computer' : 'Not installed on this computer'), tone: 'muted' };
     case 'error':

@@ -370,7 +370,16 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
             </div>
           </div>
 
-          <ModelPicker value={model} onChange={setModel} engines={engines.engines} onOpenSettings={onOpenSettings} onSignInClaude={onSignInClaude} />
+          <ModelPicker
+            value={model}
+            onChange={setModel}
+            engines={engines.engines}
+            onOpenSettings={onOpenSettings}
+            onSignInClaude={onSignInClaude}
+            profiles={profiles}
+            profileId={profileId}
+            onPickAccount={setProfileId}
+          />
 
           {engine && (
             <div>

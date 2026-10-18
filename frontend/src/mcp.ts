@@ -486,6 +486,10 @@ export interface EngineKeys {
 export const mcpSupportFor = (preferredModel: string, keys: EngineKeys): { supported: boolean; note: string | null } => {
   const model = (preferredModel || 'auto').toLowerCase();
   if (model === 'local_ollama' || model.startsWith('ollama/')) return { supported: true, note: null };
+  // A Custom API pin, before the name checks: its model ids often say gpt or claude.
+  if (model === 'custom' || /^custom[:/]/.test(model)) {
+    return { supported: true, note: 'Tools work through an OpenAI-compatible server. An Anthropic-compatible one runs without them.' };
+  }
   if (model.includes('claude')) {
     return keys.anthropic
       ? { supported: false, note: 'With an Anthropic API key set, Claude runs through the Anthropic API, which can’t use MCP tools yet. Remove the key to use the Claude Code CLI instead.' }
