@@ -82,6 +82,8 @@ export interface SpaceAppProps {
   space: Space;
   spaces: Space[];
   initialTarget: SpaceTarget | null;
+  /** Space settings open on this tab when the space mounts (Accounts, right after creating it). */
+  initialSettingsTab?: SpaceSettingsTab | null;
   onSwitchSpace: (id: string, to?: SpaceTarget | null) => void;
   onCreateSpace: () => void;
   onOpenArchived: () => void;
@@ -116,6 +118,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   space,
   spaces,
   initialTarget,
+  initialSettingsTab = null,
   onSwitchSpace,
   onCreateSpace,
   onOpenArchived,
@@ -191,7 +194,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [tokensUsed, setTokensUsed] = useState(0);
 
   // Space settings: open on one tab, or closed.
-  const [spaceSettingsTab, setSpaceSettingsTab] = useState<SpaceSettingsTab | null>(null);
+  const [spaceSettingsTab, setSpaceSettingsTab] = useState<SpaceSettingsTab | null>(initialSettingsTab);
   // Bumped when Space settings closes, so open bot forms read account status again.
   const [settingsClosedCount, setSettingsClosedCount] = useState(0);
   // Set when Accounts opens from a "Sign in with Claude" hint, to focus that button.
@@ -209,6 +212,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const closeSpaceSettings = () => {
     setSpaceSettingsTab(null);
     setSettingsClosedCount((n) => n + 1);
+    // Accounts may have changed: the getting-started list counts the ready ones.
+    onSpacesChanged();
   };
   const [isMcpOpen, setIsMcpOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -1936,6 +1941,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       (isChannel && currentTeam && discussionState.teamId === currentTeam.id));
 
   const needsSetup = loaded && kwants.length === 0;
+  const readyAccounts = space.counts?.ready_accounts ?? 0;
   const setupChecklist = (
     <main className="flex-1 min-w-0 overflow-y-auto flex items-start sm:items-center justify-center p-4 sm:p-8" data-space-checklist>
       <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 sm:p-6 space-y-4">
@@ -1948,12 +1954,21 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         </div>
         <ol className="space-y-2">
           {[
-            {
-              done: (space.counts?.ready_accounts ?? 0) > 0,
-              title: 'Connect an account',
-              detail: 'Sign in with Claude, add a key, or use this machine.',
-              action: { label: 'Accounts', icon: <KeyRound size={13} />, onClick: () => openSpaceSettings('accounts') },
-            },
+            readyAccounts > 0
+              ? {
+                  done: true,
+                  // Still offered once This machine is ready: more accounts and API keys go here too.
+                  keepAction: true,
+                  title: readyAccounts === 1 ? '1 account ready' : `${readyAccounts} accounts ready`,
+                  detail: 'Add another Claude, Codex or Grok sign-in, or an API key.',
+                  action: { label: 'Add an account', icon: <KeyRound size={13} />, onClick: () => openSpaceSettings('accounts') },
+                }
+              : {
+                  done: false,
+                  title: 'Add an account',
+                  detail: 'Sign in with Claude, Codex or Grok, add an API key, or use this machine.',
+                  action: { label: 'Add an account', icon: <KeyRound size={13} />, onClick: () => openSpaceSettings('accounts') },
+                },
             {
               done: kwants.length > 0,
               title: 'Add your first bot',
@@ -1969,7 +1984,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               },
             },
             { done: false, title: 'Message #general', detail: `Laya picks who answers, only from ${space.name}'s bots.` },
-          ].map((step, i) => (
+          ].map((step: { done: boolean; keepAction?: boolean; title: string; detail: string; action?: { label: string; icon: React.ReactNode; onClick: () => void } }, i) => (
             <li key={step.title} className="flex items-start gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
               <span
                 className={`mt-0.5 w-5 h-5 shrink-0 rounded-full flex items-center justify-center text-[11px] font-semibold ${
@@ -1980,17 +1995,19 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 {step.done ? <Check size={12} /> : i + 1}
               </span>
               <span className="flex-1 min-w-0">
-                <span className={`block text-xs font-medium ${step.done ? 'text-zinc-400 line-through' : 'text-zinc-100'}`}>
+                <span className={`block text-xs font-medium ${step.done ? (step.keepAction ? 'text-zinc-300' : 'text-zinc-400 line-through') : 'text-zinc-100'}`}>
                   {step.title}
                   {step.done && <span className="sr-only"> (done)</span>}
                 </span>
                 <span className="block text-[11px] text-zinc-500">{step.detail}</span>
               </span>
-              {step.action && !step.done && (
+              {step.action && (!step.done || step.keepAction) && (
                 <button
                   type="button"
                   onClick={step.action.onClick}
-                  className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-300"
+                  className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-300 ${
+                    step.done ? 'text-zinc-200 border border-zinc-700 hover:border-sky-500/50 hover:text-sky-200' : 'text-white bg-sky-600 hover:bg-sky-500'
+                  }`}
                 >
                   {step.action.icon}
                   {step.action.label}

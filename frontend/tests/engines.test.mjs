@@ -91,7 +91,7 @@ test('the reason shows when an engine is not ready, with its command as code', (
   assert.match(html, /Checked 2 min ago/);
 });
 
-test('ready engines come first; not-installed ones fold under "Not available on this computer"', () => {
+test('ready engines come first; not-installed CLIs and Ollama fold under "Not available on this computer"', () => {
   const sorted = m.sortEngines([
     engine('ollama', { status: 'not_installed' }),
     engine('codex', { status: 'signed_out' }),
@@ -104,8 +104,9 @@ test('ready engines come first; not-installed ones fold under "Not available on 
 
   const html = panel(live);
   const order = [...html.matchAll(/data-engine="([a-z_]+)"/g)].map((x) => x[1]);
-  assert.deepEqual(order, ['claude', 'codex', 'grok'], 'absent ones are folded away by default');
-  assert.match(html, /Not available on this computer \(4\)/);
+  // An API engine with no key isn't absent: its card is where the key goes, so it stays out.
+  assert.deepEqual(order, ['claude', 'codex', 'grok', 'anthropic_api', 'openai_api', 'xai_api'], 'only Ollama is folded away');
+  assert.match(html, /Not available on this computer \(1\)/);
   assert.match(html, /aria-expanded="false"/);
 });
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Archive, Check, Loader2, Plus, RotateCcw, Settings, X, AlertTriangle } from 'lucide-react';
+import { Archive, Check, Loader2, Plus, RotateCcw, Settings, X, AlertTriangle, KeyRound } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import {
   SPACE_COLORS,
@@ -236,7 +236,8 @@ interface NewSpaceProps {
   /** Every space, archived ones too, for taken names and colours. */
   spaces: Space[];
   onClose: () => void;
-  onCreated: (space: Space) => void;
+  /** `addAccounts`: open the new space's Accounts next. */
+  onCreated: (space: Space, addAccounts: boolean) => void;
 }
 
 export const NewSpaceModal: React.FC<NewSpaceProps> = ({ spaces, onClose, onCreated }) => {
@@ -245,6 +246,7 @@ export const NewSpaceModal: React.FC<NewSpaceProps> = ({ spaces, onClose, onCrea
   const [icon, setIcon] = useState(() => SPACE_ICONS.find((i) => !spaces.some((s) => s.icon === i)) ?? SPACE_ICONS[0]);
   const [color, setColor] = useState(() => firstUnusedColor(spaces));
   const [thisMachine, setThisMachine] = useState(true);
+  const [addAccounts, setAddAccounts] = useState(true);
   const [touched, setTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -261,7 +263,7 @@ export const NewSpaceModal: React.FC<NewSpaceProps> = ({ spaces, onClose, onCrea
     try {
       const space = await spacesApi.create({ name: name.trim(), icon, color, this_machine_enabled: thisMachine });
       playSfx('coin');
-      onCreated(space);
+      onCreated(space, addAccounts);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Couldn’t create the space.');
       setSaving(false);
@@ -349,6 +351,18 @@ export const NewSpaceModal: React.FC<NewSpaceProps> = ({ spaces, onClose, onCrea
             <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${thisMachine ? 'translate-x-4' : ''}`} />
           </button>
         </div>
+
+        <label className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800 cursor-pointer">
+          <input type="checkbox" checked={addAccounts} onChange={(e) => setAddAccounts(e.target.checked)} className="mt-0.5 accent-sky-500" aria-describedby="space-add-accounts-detail" />
+          <span className="flex-1">
+            <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-200">
+              <KeyRound size={12} className="text-sky-400" aria-hidden="true" /> Add accounts next
+            </span>
+            <span id="space-add-accounts-detail" className="block text-[11px] text-zinc-500">
+              Sign in to more Claude, Codex or Grok accounts, or add an Anthropic, OpenAI or xAI API key. They stay in this space.
+            </span>
+          </span>
+        </label>
 
         <fieldset className="space-y-1.5">
           <legend className="text-xs font-medium text-zinc-300 mb-1.5">Start with</legend>
