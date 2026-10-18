@@ -244,7 +244,29 @@ impl Database {
             .await?;
         restrict(&partial, 0o600)?;
         std::fs::rename(&partial, &path)?;
+        remove_older_pre_spaces_backups(&dir, &path);
         Ok(path)
+    }
+}
+
+/// Removes every other `kwnt-pre-spaces-*` file once a new backup is complete. Backups are only
+/// written while the database is still before spaces, so an older one is from a start whose
+/// migration failed and is superseded by the new copy; leftover `.partial` files are cut-off
+/// copies. Without this every refused restart would leave another full copy on disk. An older
+/// backup is not reused instead: the previous release may have written to the database since.
+fn remove_older_pre_spaces_backups(dir: &Path, keep: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ours = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("kwnt-pre-spaces-") && (n.ends_with(".db") || n.ends_with(".db.partial")));
+        if ours && path != keep {
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::warn!(file = %path.display(), error = %e, "could not remove an older pre-spaces backup");
+            }
+        }
     }
 }
 

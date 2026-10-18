@@ -249,6 +249,35 @@ async fn failed_schema_change_rolls_back_everything_and_refuses_startup() {
 }
 
 #[tokio::test]
+async fn repeated_failed_starts_keep_one_current_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = legacy(tmp.path()).await;
+    exec(&pool, "ALTER TABLE mcp_servers ADD COLUMN local_note TEXT").await;
+    // A copy cut off by a kill from an earlier start
+    std::fs::create_dir_all(tmp.path().join("backups")).unwrap();
+    std::fs::write(tmp.path().join("backups/kwnt-pre-spaces-20200101T000000Z.db.partial"), "cut off").unwrap();
+
+    refused_start(tmp.path()).await;
+    assert_eq!(backups(tmp.path()).len(), 1, "{:?}", backups(tmp.path()));
+    // The previous release may write in between: the next backup must hold that, not the old copy
+    exec(&pool, "INSERT INTO settings (key, value) VALUES ('written_between_starts', 'yes')").await;
+    let before = snapshot(&pool).await;
+    refused_start(tmp.path()).await;
+
+    let files = backups(tmp.path());
+    assert_eq!(files.len(), 1, "two failed starts leave one backup: {files:?}");
+    assert!(files[0].extension().is_some_and(|e| e == "db"), "{files:?}");
+    let backup = raw(&files[0]).await;
+    assert_eq!(scalar_i64(&backup, "PRAGMA user_version").await, 0);
+    assert_eq!(snapshot(&backup).await, before);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&files[0]).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+}
+
+#[tokio::test]
 async fn foreign_key_problems_already_in_the_data_do_not_block_it() {
     let tmp = tempfile::tempdir().unwrap();
     let pool = legacy(tmp.path()).await;

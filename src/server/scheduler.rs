@@ -377,9 +377,21 @@ async fn execute(state: &AppState, routine: &RoutineRow) -> Result<Option<String
         .await
         .map_err(|_| "could not load the agent".to_string())?
         .ok_or_else(|| "the routine's agent no longer exists".to_string())?;
+    // The API never makes a routine across spaces, but a row edited by hand must not run one
+    // space's bot in another space's chat
+    if kwant.space_id != routine.space_id {
+        return Err("the routine's agent is in another space, so it was not run".into());
+    }
     if let Some(c) = &routine.channel_id {
-        if state.db.get_channel(c).await.ok().flatten().is_none() {
-            return Err("the routine's channel no longer exists".into());
+        let channel = state
+            .db
+            .get_channel(c)
+            .await
+            .ok()
+            .flatten()
+            .ok_or_else(|| "the routine's channel no longer exists".to_string())?;
+        if channel.space_id != routine.space_id {
+            return Err("the routine's channel is in another space, so it was not run".into());
         }
     }
     let message = crate::db::models::NewMessage {

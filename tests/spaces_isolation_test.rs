@@ -690,3 +690,69 @@ async fn a_second_general_in_a_space_is_refused_but_each_space_has_its_own() {
         .await;
     assert!(matches!(mixed, Err(kwnt::db::DbError::OtherSpace(_))));
 }
+
+// Routines edited by hand across spaces
+
+/// Inserts a routine straight into the db, as the API refuses to make one across spaces, and
+/// runs a scheduler tick. Returns its runs once the run has finished.
+async fn tick_routine(env: &Env, id: &str, kwant_id: &str, channel_id: Option<&str>, space: &SpaceId, tag: &str) -> Vec<kwnt::db::continuity::RoutineRun> {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .connect(&format!("sqlite://{}", env.data.join("kwnt.db").display()))
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO routines (id, kwant_id, channel_id, name, instructions, schedule, enabled, next_run_at, created_at, space_id) \
+         VALUES (?, ?, ?, 'Evil', ?, '{\"type\":\"interval\",\"every_minutes\":60}', 1, '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z', ?)",
+    )
+    .bind(id)
+    .bind(kwant_id)
+    .bind(channel_id)
+    .bind(format!("REPLYTAG:{tag}"))
+    .bind(space.as_str())
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kwnt::server::scheduler::tick(&env.state, chrono::Utc::now()).await, 1);
+    let mut runs = Vec::new();
+    wait_for("the run to finish", || {
+        let db = env.state.db.clone();
+        let id = id.to_string();
+        async move {
+            let r = db.list_routine_runs(&id, 10).await.unwrap();
+            let done = r.iter().all(|r| r.status != "running") && !r.is_empty();
+            done
+        }
+    })
+    .await;
+    runs.extend(env.state.db.list_routine_runs(id, 10).await.unwrap());
+    runs
+}
+
+#[tokio::test]
+async fn the_scheduler_does_not_run_a_routine_whose_bot_and_channel_are_in_different_spaces() {
+    let env = setup(true).await;
+    let general_a = env.general(&env.a).await;
+    let before = env.messages(&general_a).await.len();
+    let runs = tick_routine(&env, "rx_channel", &env.ada_b.id, Some(&general_a), &env.a, "xspace_channel").await;
+
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, "error");
+    assert!(runs[0].error.as_deref().unwrap_or("").contains("another space"), "{:?}", runs[0].error);
+    assert!(calls_with("xspace_channel").is_empty(), "B's bot never ran");
+    assert_eq!(env.messages(&general_a).await.len(), before, "nothing was posted in A's #general");
+    assert!(env.messages(&env.ada_b.id).await.is_empty());
+}
+
+#[tokio::test]
+async fn the_scheduler_does_not_run_a_direct_chat_routine_for_a_bot_in_another_space() {
+    let env = setup(true).await;
+    // A direct-chat routine filed under A whose bot is B's Ada
+    let runs = tick_routine(&env, "rx_direct", &env.ada_b.id, None, &env.a, "xspace_direct").await;
+
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, "error");
+    assert!(runs[0].error.as_deref().unwrap_or("").contains("another space"), "{:?}", runs[0].error);
+    assert!(calls_with("xspace_direct").is_empty(), "B's bot never ran");
+    assert!(env.messages(&env.ada_b.id).await.is_empty(), "nothing was posted in B's direct chat");
+    assert!(env.messages(&env.ada_a.id).await.is_empty());
+}
