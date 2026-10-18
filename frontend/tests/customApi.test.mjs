@@ -6,7 +6,7 @@ globalThis.localStorage ??= { getItem: () => null, setItem: () => {} };
 
 const m = await loadBundled(`
   export * from './src/engines';
-  export { accountState, engineOfModel, readyCustomAccounts, accountUsable, CUSTOM_PRESETS } from './src/profiles';
+  export { accountState, engineOfModel, readyCustomAccounts, accountUsable, CUSTOM_PRESETS, customKindText, customModelText } from './src/profiles';
   export { EnginesPanel } from './src/components/EnginesPanel';
   export { CustomServerForm } from './src/components/EngineAccounts';
   export { ModelPicker } from './src/components/ModelPicker';
@@ -82,6 +82,26 @@ test('the Custom API card lists several servers with status, checks and the no-t
   assert.equal((html.match(/data-no-tools/g) ?? []).length, 1);
   assert.match(html, /No tools \(Anthropic format\)/);
   assert.match(html, /data-custom-url="true"[^>]*>http:\/\/localhost:23333\/api\/anthropic\/v1</);
+});
+
+test('a refused key reads as refused, without a model line it can\'t vouch for', () => {
+  assert.equal(m.customKindText(badKey), 'OpenAI-compatible · key refused');
+  assert.equal(m.customKindText({ ...copilot, has_key: true }), 'OpenAI-compatible · key saved');
+  assert.equal(m.customKindText(copilot), 'OpenAI-compatible');
+  // The server answered 401, so whatever list it has isn't known to work.
+  assert.equal(m.customModelText({ ...badKey.custom, models: copilot.custom.models }), null);
+  assert.equal(m.customModelText(down.custom), null);
+  assert.equal(m.customModelText(copilot.custom), 'each bot’s pick, else the server’s first');
+  assert.equal(m.customModelText(server({ models: [] })), 'none set');
+  // A model the person chose is shown whatever the status.
+  assert.equal(m.customModelText({ ...badKey.custom, model: 'gpt-4.1' }), 'gpt-4.1');
+
+  const html = panel([customEngine()], [{ ...badKey, custom: { ...badKey.custom, models: copilot.custom.models } }]);
+  assert.match(html, /key refused/);
+  assert.doesNotMatch(html, /key saved/);
+  assert.doesNotMatch(html, /data-custom-model/);
+  assert.doesNotMatch(html, /none set/);
+  assert.match(panel([customEngine({ ready: true })], [copilot]), /data-custom-model/);
 });
 
 test('without servers the card invites one, naming Agent Maestro', () => {

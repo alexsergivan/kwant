@@ -28,6 +28,19 @@ export const LOCAL_BROWSER_NOTE = "Your bots' Chrome is open as a window on your
 /** Whether the browser is in its own window instead of the app's live view. */
 export const showsLocalWindow = (s: ComputerSettings | null | undefined) => s?.mode === 'local' && s.window.visible;
 
+/** A tab the bot hasn't opened anything in yet. Its frame is an empty page (black on macOS), so the panel shows "Browser idle". */
+export const isBlankPage = (url: string | null | undefined) => {
+  const u = (url ?? '').trim();
+  return u === '' || u === 'about:blank';
+};
+
+/** The browser panel's footer: where Chrome runs and where you see it. */
+export function browserFooterLabel(s: ComputerSettings | null | undefined, ready: boolean): string {
+  if (s?.mode !== 'local') return ready ? 'Browser Ready' : 'Browser Offline';
+  if (s.window.visible) return 'Chrome window on your computer';
+  return ready ? 'Chrome shown here (no window)' : 'Chrome offline';
+}
+
 /** Fired on window after a successful switch so every open control shows the new mode. */
 export const COMPUTER_MODE_EVENT = 'kwnt:computer-mode';
 

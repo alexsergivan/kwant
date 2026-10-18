@@ -113,9 +113,20 @@ pub fn models_url(base: &str) -> String {
     format!("{base}/models")
 }
 
-/// The message for a server that doesn't answer at all.
+/// The message for a server that doesn't answer at all. It names Agent Maestro only for its
+/// address (localhost:23333 or its `/api/openai` / `/api/anthropic` paths).
 pub fn not_answering(base: &str) -> String {
-    format!("Nothing is answering at {base}. Is Agent Maestro / the server running?")
+    let server = if is_agent_maestro(base) { "Agent Maestro" } else { "the server" };
+    format!("Nothing is answering at {base}. Is {server} running?")
+}
+
+fn is_agent_maestro(base: &str) -> bool {
+    let lower = base.to_ascii_lowercase();
+    let rest = lower.split_once("://").map_or(lower.as_str(), |(_, r)| r);
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let local = ["localhost:23333", "127.0.0.1:23333", "[::1]:23333"].contains(&authority);
+    let path = format!("/{path}");
+    local || path.starts_with("/api/openai") || path.starts_with("/api/anthropic")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -317,6 +328,21 @@ mod tests {
         ] {
             let err = normalize_base(bad, oa).unwrap_err();
             assert!(!err.contains("sk-secret"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn only_agent_maestro_addresses_name_agent_maestro() {
+        for base in [
+            "http://localhost:23333/api/openai/v1",
+            "http://127.0.0.1:23333/api/anthropic/v1",
+            "http://localhost:23333/v1",
+            "http://192.168.1.5:9000/api/openai/v1",
+        ] {
+            assert_eq!(not_answering(base), format!("Nothing is answering at {base}. Is Agent Maestro running?"));
+        }
+        for base in ["http://localhost:1234/v1", "https://openrouter.ai/api/v1", "http://localhost:233330/v1"] {
+            assert_eq!(not_answering(base), format!("Nothing is answering at {base}. Is the server running?"));
         }
     }
 

@@ -172,6 +172,20 @@ export function accountState(p: Profile, now = Date.now()): AccountState {
   return { label: 'Unknown', tone: 'muted', detail: p.kind === 'system' ? 'Uses this computer’s login' : 'Couldn’t check the sign-in (is the CLI installed?)' };
 }
 
+/** The format and key note under a Custom API account's name; "key refused" once the server turned the key down. */
+export function customKindText(p: Pick<Profile, 'has_key' | 'custom'>): string {
+  const format = protocolLabel(p.custom?.protocol ?? '');
+  if (!p.has_key) return format;
+  return `${format} · ${p.custom?.status === 'key_rejected' ? 'key refused' : 'key saved'}`;
+}
+
+/** The "Model:" line for a Custom API account, or null when it would say nothing true (the server isn't answering). */
+export function customModelText(c: CustomServer): string | null {
+  if (c.model) return c.model;
+  if (c.status !== 'ready') return null;
+  return c.models.length ? 'each bot’s pick, else the server’s first' : 'none set';
+}
+
 /** A Custom API account's check, with the server's own words when it failed. */
 function customState(c: CustomServer | null): AccountState {
   switch (c?.status) {

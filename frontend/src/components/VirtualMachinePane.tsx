@@ -25,7 +25,7 @@ import { playSfx } from '../audio/chiptune';
 import { mapBrowserPoint } from '../browserViewport';
 import { useBrowserStream } from '../useBrowserStream';
 import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, useComputerMode } from './ComputerModeSwitch';
-import { showsLocalWindow } from '../computerMode';
+import { browserFooterLabel, isBlankPage, showsLocalWindow } from '../computerMode';
 
 export interface TerminalLogEntry {
   command: string;
@@ -102,7 +102,15 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const imageRef = useRef<HTMLImageElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
 
-  const currentScreenshot = stream.frame?.image || screenshotBase64;
+  // Once the stream reports where the tab is, trust it; before that, the last URL the app heard of.
+  const pageUrl = stream.location ? stream.location.url : activeUrl;
+  const currentScreenshot = isBlankPage(pageUrl) ? null : stream.frame?.image || screenshotBase64;
+  // A hidden frame never loads, so acknowledge it here or the stream stalls waiting for the ack.
+  const blankFrameId = isBlankPage(pageUrl) ? stream.frame?.id : undefined;
+  const { acknowledgeFrame } = stream;
+  useEffect(() => {
+    if (blankFrameId !== undefined) acknowledgeFrame(blankFrameId);
+  }, [blankFrameId, acknowledgeFrame]);
   const controlError = stream.error || (!stream.connected ? browserError : null);
   // A live stream is ready; otherwise trust isRunning only while no error says the service is down.
   const browserReady = stream.connected || (isRunning && !controlError);
@@ -890,22 +898,14 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
       {/* Footer Status */}
       <div className="p-2.5 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] text-zinc-400">
-        {isWindow ? (
-          <div className="flex items-center gap-1.5">
-            <Laptop size={12} className="text-amber-300/80" />
-            <span>Chrome window on your computer</span>
-          </div>
-        ) : isLocal ? (
-          <div className="flex items-center gap-1.5">
-            <Laptop size={12} className={browserReady ? 'text-amber-300/80' : 'text-zinc-500'} />
-            <span>{browserReady ? 'Chrome on your computer' : 'Chrome offline'}</span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5" data-browser-footer>
+          {isLocal ? (
+            <Laptop size={12} className={browserReady || isWindow ? 'text-amber-300/80' : 'text-zinc-500'} />
+          ) : (
             <Cpu size={12} className={browserReady ? 'text-emerald-400' : 'text-zinc-500'} />
-            <span>{browserReady ? 'Browser Ready' : 'Browser Offline'}</span>
-          </div>
-        )}
+          )}
+          <span>{browserFooterLabel(computer.state.settings, browserReady)}</span>
+        </div>
         {onRestartVm && !isWindow && (
           <button
             type="button"

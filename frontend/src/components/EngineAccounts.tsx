@@ -15,7 +15,8 @@ import {
   isThirdPartyLabel,
   newAccountFor,
   profilesApi,
-  protocolLabel,
+  customKindText,
+  customModelText,
   safeExternalUrl,
 } from '../profiles';
 
@@ -557,7 +558,7 @@ const AccountRow: React.FC<{
   const kindText = isSystem
     ? `The ${engine.name.replace(/ CLI$/, '')} login on this computer`
     : isCustom
-      ? `${protocolLabel(p.custom?.protocol ?? '')}${p.has_key ? ' · key saved' : ''}`
+      ? customKindText(p)
       : p.kind === 'api_key'
         ? 'API key'
         : `${engine.name.replace(/ CLI$/, '')} subscription`;
@@ -643,9 +644,11 @@ const AccountRow: React.FC<{
                   {p.custom.base_url}
                 </span>
               </p>
-              <p className="text-[11px] text-zinc-500">
-                Model: <span className="text-zinc-300">{p.custom.model ?? (p.custom.models.length ? 'each bot’s pick, else the server’s first' : 'none set')}</span>
-              </p>
+              {customModelText(p.custom) !== null && (
+                <p className="text-[11px] text-zinc-500" data-custom-model>
+                  Model: <span className="text-zinc-300">{customModelText(p.custom)}</span>
+                </p>
+              )}
               {!p.custom.supports_tools && (
                 <p data-no-tools className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/25 text-[10.5px] text-amber-200">
                   <Wrench size={10} aria-hidden="true" /> No tools (Anthropic format)

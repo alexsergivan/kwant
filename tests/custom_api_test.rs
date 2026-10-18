@@ -450,7 +450,7 @@ async fn a_server_that_is_not_running_says_so() {
         )
         .await;
     assert_eq!(s, StatusCode::CREATED, "{acct}");
-    let expected = format!("Nothing is answering at http://127.0.0.1:{port}/v1. Is Agent Maestro / the server running?");
+    let expected = format!("Nothing is answering at http://127.0.0.1:{port}/v1. Is the server running?");
     assert_eq!(acct["custom"]["status"], "unreachable", "{acct}");
     assert_eq!(acct["custom"]["detail"], expected.as_str());
     assert_eq!(acct["has_key"], false);

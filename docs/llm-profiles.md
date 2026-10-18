@@ -40,8 +40,8 @@ several; they belong to that space only. The base URL is cut back to the API roo
 `…/chat/completions` or `…/messages` is removed; Anthropic gets `/v1` added), must be http(s), and
 may not carry a user, password, query or fragment, so a key never sits in it. The account is
 checked with `GET {base}/models` when it is created or changed, on `POST …/check`, and again
-when the account list or the Engines page is read and the last check is over a minute old: `ready`, `unreachable` ("Nothing is answering at <url>. Is Agent Maestro /
-the server running?"), `key_rejected` or `error`, with a readable `detail`. A server that lists
+when the account list or the Engines page is read and the last check is over a minute old: `ready`, `unreachable` ("Nothing is answering at <url>. Is the server running?", naming Agent Maestro
+instead for its address), `key_rejected` or `error`, with a readable `detail`. A server that lists
 no models is ready when the account has a `model`. A turn runs the bot's pinned model
 (`custom:<model id>`) as is, else the account's `model`, else the first listed model for the
 effort's tier; replies stream. MCP tools are offered on `openai-chat` only (`supports_tools`);
