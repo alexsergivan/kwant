@@ -125,7 +125,7 @@ async fn turns_skip_engines_that_cannot_run() {
     let (s, v) = call(&app, "GET", "/api/engines", None).await;
     assert_eq!(s, StatusCode::OK);
     let engines = v["engines"].as_array().unwrap();
-    assert_eq!(engines.len(), 7);
+    assert_eq!(engines.len(), 8, "7 engines + Custom API");
     assert!(engines.iter().all(|e| e["status"] == "checking" && e["checked_at"].is_null()));
 
     // 1. Re-check: only the fake claude is ready; the shape is the agreed contract
@@ -146,6 +146,10 @@ async fn turns_skip_engines_that_cannot_run() {
         assert!(e["detail"].is_string());
         assert_eq!(e["models"], json!([]));
     }
+    // Custom API has no CLI: it runs on the space's accounts and says where to add one
+    let custom = by_id(&v, "custom_api");
+    assert_eq!((custom["name"].clone(), custom["kind"].clone(), custom["status"].clone()), (json!("Custom API"), json!("api"), json!("not_installed")));
+    assert!(custom["detail"].as_str().unwrap().contains("Custom API accounts"), "{custom}");
     let (_, listed) = call(&app, "GET", "/api/engines", None).await;
     assert_eq!(listed, v);
     // The old Settings fields stay

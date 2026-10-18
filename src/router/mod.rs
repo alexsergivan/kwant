@@ -60,6 +60,7 @@ fn family_id(name: &str) -> Option<&'static str> {
         "claude" => Some("claude"),
         "codex" => Some("codex"),
         "grok" => Some("grok"),
+        "custom" => Some("custom"),
         "ollama" | "local_ollama" => Some("local_ollama"),
         _ => None,
     }

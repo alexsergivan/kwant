@@ -21,6 +21,9 @@ pub enum Engine {
     Claude,
     Codex,
     Grok,
+    /// A Custom API account: any OpenAI-compatible or Anthropic-compatible server (Agent
+    /// Maestro, OpenRouter, LM Studio, …). Only ever runs on the space's own accounts.
+    Custom,
 }
 
 impl Engine {
@@ -29,6 +32,7 @@ impl Engine {
             "claude" => Some(Engine::Claude),
             "codex" => Some(Engine::Codex),
             "grok" => Some(Engine::Grok),
+            "custom" => Some(Engine::Custom),
             _ => None,
         }
     }
@@ -36,7 +40,10 @@ impl Engine {
     /// The engine a routed model id runs on, matching how drivers pick a CLI or API.
     /// Models of other providers (Ollama) have no profiles.
     pub fn from_model(model: &str) -> Option<Self> {
-        if model.contains("claude") {
+        // "custom:claude-sonnet-4.6" runs on a Custom API account, not on Claude's
+        if model == "custom" || model.starts_with("custom:") || model.starts_with("custom/") {
+            Some(Engine::Custom)
+        } else if model.contains("claude") {
             Some(Engine::Claude)
         } else if model.contains("grok") {
             Some(Engine::Grok)
@@ -52,6 +59,7 @@ impl Engine {
             Engine::Claude => "claude",
             Engine::Codex => "codex",
             Engine::Grok => "grok",
+            Engine::Custom => "custom",
         }
     }
 
@@ -61,6 +69,8 @@ impl Engine {
             Engine::Claude => "CLAUDE_CONFIG_DIR",
             Engine::Codex => "CODEX_HOME",
             Engine::Grok => "GROK_HOME",
+            // No CLI; never set (see `system_home`)
+            Engine::Custom => "KWNT_CUSTOM_API_HOME",
         }
     }
 
@@ -98,6 +108,7 @@ impl Engine {
             ],
             Engine::Codex => &["OPENAI_API_KEY", "CODEX_API_KEY"],
             Engine::Grok => &["XAI_API_KEY", "GROK_AUTH_PATH"],
+            Engine::Custom => &[],
         }
     }
 
@@ -116,7 +127,7 @@ impl Engine {
                 "ANTHROPIC_AWS_",
                 "VERTEX_REGION_",
             ],
-            Engine::Codex | Engine::Grok => &[],
+            Engine::Codex | Engine::Grok | Engine::Custom => &[],
         }
     }
 
@@ -126,6 +137,8 @@ impl Engine {
             Engine::Claude => "anthropic_api_key",
             Engine::Codex => "openai_api_key",
             Engine::Grok => "xai_api_key",
+            // Never stored: a Custom API key lives with its account only
+            Engine::Custom => "custom_api_key",
         }
     }
 
@@ -135,11 +148,15 @@ impl Engine {
             Engine::Claude => "claude",
             Engine::Codex => "codex",
             Engine::Grok => "grok",
+            Engine::Custom => "custom",
         }
     }
 
     /// The CLI's own config dir when kwnt doesn't set one: what the system profile uses.
     pub fn system_home(self) -> Option<PathBuf> {
+        if self == Engine::Custom {
+            return None;
+        }
         let from_env = std::env::var_os(self.home_env())
             .filter(|v| !v.is_empty())
             .map(PathBuf::from);
@@ -149,6 +166,7 @@ impl Engine {
                     Engine::Claude => ".claude",
                     Engine::Codex => ".codex",
                     Engine::Grok => ".grok",
+                    Engine::Custom => unreachable!("Custom API has no CLI home"),
                 })
             })
         })
@@ -225,7 +243,7 @@ impl CliEnv {
                     .collect();
                 vec!["--settings".into(), serde_json::json!({ "env": env }).to_string()]
             }
-            Engine::Codex | Engine::Grok => Vec::new(),
+            Engine::Codex | Engine::Grok | Engine::Custom => Vec::new(),
         };
         Self {
             set: vec![(engine.home_env().to_string(), home.as_os_str().to_owned())],

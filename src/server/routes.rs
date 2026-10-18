@@ -1124,7 +1124,11 @@ async fn run_kwant_turn_inner(
         let host_off = super::profile_turn::host_off(state, &space).await;
         let available_models =
             crate::drivers::detect_available_models(&db, &state.engines, &profile_engines, &host_off).await;
-        if available_models.is_empty() {
+        // A bot pinned to Custom API runs on its account even when that account's last check
+        // failed, so the reply says what is wrong with it (no account, server down, key refused)
+        let pinned_custom = crate::router::parse_pin(&target_kwant.preferred_model).family.as_deref()
+            == Some(crate::profiles::Engine::Custom.as_str());
+        if available_models.is_empty() && !pinned_custom {
             // Say why when it's this space's own switch, so nobody hunts for a broken engine
             let text = if host_off.is_empty() {
                 format!("⚠️ [{}] {}", target_kwant.name, crate::drivers::engines::NO_ENGINE_MESSAGE)
@@ -1411,18 +1415,23 @@ async fn run_kwant_turn_inner(
             };
             // The model for the engine this attempt runs on: the pinned one, else the effort's tier
             let runs_on = host_engine.or_else(|| profile.as_ref().and_then(super::profile_turn::profile_engine));
-            let choice = runs_on.and_then(|e| {
-                crate::drivers::engines::choose_model(
-                    &crate::drivers::engines::known_models(&state.engines, e),
-                    pinned_model.as_deref(),
-                    tier,
-                )
-            });
+            let custom = profile.as_ref().filter(|p| p.kind == "custom_api");
+            let choice = match custom {
+                Some(p) => super::profile_turn::custom_model(state, p, pinned_model.as_deref(), tier).await,
+                None => runs_on.and_then(|e| {
+                    crate::drivers::engines::choose_model(
+                        &crate::drivers::engines::known_models(&state.engines, e),
+                        pinned_model.as_deref(),
+                        tier,
+                    )
+                }),
+            };
             // An API account whose models weren't listed here picks its own from the tier
-            let unlisted_api = runs_on.is_some_and(|e| {
-                e.kind() == crate::drivers::engines::EngineKind::Api
-                    && state.engines.report(e).models.is_empty()
-            });
+            let unlisted_api = custom.is_none()
+                && runs_on.is_some_and(|e| {
+                    e.kind() == crate::drivers::engines::EngineKind::Api
+                        && state.engines.report(e).models.is_empty()
+                });
             let mut input = turn_input.clone();
             input.model = if unlisted_api { None } else { choice.as_ref().and_then(|c| c.run_id()).map(str::to_string) };
             if let Some(e) = runs_on {

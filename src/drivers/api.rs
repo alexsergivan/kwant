@@ -101,7 +101,7 @@ impl std::fmt::Display for ApiError {
 }
 
 /// The provider's own error message out of an error body (OpenAI and Anthropic shapes), redacted.
-fn error_message(body: &str) -> String {
+pub(crate) fn error_message(body: &str) -> String {
     let parsed = serde_json::from_str::<Value>(body).ok();
     let msg = parsed.as_ref().and_then(|v| {
         let err = &v["error"];
@@ -157,6 +157,116 @@ fn anthropic_body(model: &str, messages: &[Value], max_tokens: i64) -> Value {
     })
 }
 
+/// The reply text of a non-streamed call, OpenAI or Anthropic shaped.
+fn reply_text(reply: &Value) -> Option<String> {
+    let anthropic_text = reply["content"].as_array().map(|blocks| {
+        blocks
+            .iter()
+            .filter_map(|b| b["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("")
+    });
+    reply["choices"][0]["message"]["content"]
+        .as_str()
+        .map(str::to_string)
+        .or(anthropic_text)
+}
+
+/// Tokens a reply used, from OpenAI's `total_tokens` or Anthropic's input + output.
+fn usage_tokens(usage: &Value) -> Option<u64> {
+    usage["total_tokens"]
+        .as_u64()
+        .or_else(|| Some(usage["input_tokens"].as_u64()? + usage["output_tokens"].as_u64().unwrap_or(0)))
+}
+
+/// Reads a streamed reply (server-sent events, OpenAI or Anthropic shaped), sending each piece
+/// of text as it arrives. A server that answers with one JSON body instead is read whole. Returns
+/// the full text and tokens used; a stream cut off midway keeps what arrived, with a note.
+async fn stream_reply(
+    mut resp: reqwest::Response,
+    anthropic: bool,
+    event_tx: &mpsc::Sender<RuntimeEvent>,
+) -> (String, usize) {
+    let is_sse = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("text/event-stream"));
+    if !is_sse {
+        let reply = resp.json::<Value>().await.unwrap_or(Value::Null);
+        let text = reply_text(&reply).unwrap_or_else(|| "No response content".into());
+        let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
+        return (text, usage_tokens(&reply["usage"]).unwrap_or(45) as usize);
+    }
+    let mut text = String::new();
+    let mut input_tokens = 0u64;
+    let mut output_tokens = 0u64;
+    let mut total_tokens: Option<u64> = None;
+    let mut pending: Vec<u8> = Vec::new();
+    let mut failure: Option<String> = None;
+    'read: loop {
+        let chunk = match resp.chunk().await {
+            Ok(Some(c)) => c,
+            Ok(None) => break,
+            Err(_) => {
+                failure = Some("the stream was cut off".into());
+                break;
+            }
+        };
+        pending.extend_from_slice(&chunk);
+        while let Some(end) = pending.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            let line = String::from_utf8_lossy(&line);
+            let Some(data) = line.trim().strip_prefix("data:").map(str::trim) else {
+                continue;
+            };
+            if data == "[DONE]" {
+                break 'read;
+            }
+            let Ok(event) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+            if event.get("error").is_some_and(|e| !e.is_null()) {
+                failure = Some(error_message(data));
+                break 'read;
+            }
+            let piece = if anthropic {
+                match event["type"].as_str() {
+                    Some("message_start") => {
+                        input_tokens = event["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0);
+                        None
+                    }
+                    Some("message_delta") => {
+                        output_tokens = event["usage"]["output_tokens"].as_u64().unwrap_or(output_tokens);
+                        None
+                    }
+                    Some("content_block_delta") => event["delta"]["text"].as_str(),
+                    _ => None,
+                }
+            } else {
+                if let Some(t) = usage_tokens(&event["usage"]) {
+                    total_tokens = Some(t);
+                }
+                event["choices"][0]["delta"]["content"].as_str()
+            };
+            if let Some(piece) = piece.filter(|p| !p.is_empty()) {
+                text.push_str(piece);
+                let _ = event_tx.send(RuntimeEvent::TextDelta(piece.to_string())).await;
+            }
+        }
+    }
+    if let Some(why) = failure {
+        let note = format!("{}⚠️ The reply stopped early: {why}", if text.is_empty() { "" } else { "\n\n" });
+        text.push_str(&note);
+        let _ = event_tx.send(RuntimeEvent::TextDelta(note)).await;
+    } else if text.is_empty() {
+        text = "No response content".into();
+        let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
+    }
+    let tokens = total_tokens.unwrap_or(input_tokens + output_tokens);
+    (text, if tokens == 0 { 45 } else { tokens as usize })
+}
+
 struct ChatRequest<'a> {
     url: &'a str,
     api_key: Option<&'a str>,
@@ -165,6 +275,8 @@ struct ChatRequest<'a> {
     max_tokens: i64,
     /// Model calls allowed this turn; each round of MCP tool calls costs one.
     max_calls: usize,
+    /// Stream the reply as it is written (rounds without tools only).
+    stream: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -174,6 +286,9 @@ pub struct ApiDriver {
     endpoint: Option<String>,
     /// Whether a missing key may come from the provider's env var (not for profiles).
     env_keys: bool,
+    /// A Custom API account's base URL: no key needed, replies streamed, and a server that
+    /// doesn't answer is named in the error.
+    custom_base: Option<String>,
 }
 
 impl ApiDriver {
@@ -183,6 +298,17 @@ impl ApiDriver {
             api_key,
             endpoint,
             env_keys: true,
+            custom_base: None,
+        }
+    }
+
+    /// A Custom API account's driver: turns go to `chat_url` (see [`super::custom::chat_url`])
+    /// with the account's own key, or none; never a host key.
+    pub fn for_custom(api_key: Option<String>, chat_url: String, base: String) -> Self {
+        Self {
+            env_keys: false,
+            custom_base: Some(base),
+            ..Self::new(api_key, Some(chat_url))
         }
     }
 
@@ -227,7 +353,8 @@ impl ApiDriver {
 }
 
 impl ApiDriver {
-    async fn post_chat(&self, request: &ChatRequest<'_>, body: &Value) -> Result<Value, ApiError> {
+    /// Sends one model call; `Err` for no answer or an error status, with the provider's message.
+    async fn send_chat(&self, request: &ChatRequest<'_>, body: &Value) -> Result<reqwest::Response, ApiError> {
         let mut req = self
             .client
             .post(request.url)
@@ -243,10 +370,10 @@ impl ApiDriver {
         }
         let resp = req.send().await.map_err(|e| ApiError {
             status: None,
-            message: if e.is_timeout() {
-                "request timed out".into()
-            } else {
-                "connection failed".into()
+            message: match (&self.custom_base, e.is_timeout()) {
+                (_, true) => "request timed out".into(),
+                (Some(base), false) => super::custom::not_answering(base),
+                (None, false) => "connection failed".into(),
             },
             retry_after: None,
         })?;
@@ -264,6 +391,11 @@ impl ApiDriver {
                 retry_after,
             });
         }
+        Ok(resp)
+    }
+
+    async fn post_chat(&self, request: &ChatRequest<'_>, body: &Value) -> Result<Value, ApiError> {
+        let resp = self.send_chat(request, body).await?;
         resp.json::<Value>().await.map_err(|_| ApiError {
             status: None,
             message: "invalid response from the model API".into(),
@@ -277,9 +409,17 @@ impl ApiDriver {
         request: &ChatRequest<'_>,
         body: &Value,
     ) -> Result<Value, ApiError> {
+        self.with_retry(|| self.post_chat(request, body)).await
+    }
+
+    async fn with_retry<T, F, Fut>(&self, call: F) -> Result<T, ApiError>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T, ApiError>>,
+    {
         let mut attempt = 0;
         loop {
-            match self.post_chat(request, body).await {
+            match call().await {
                 Ok(v) => return Ok(v),
                 Err(e) => {
                     let class = crate::profiles::classify(e.status, &e.message, chrono::Utc::now())
@@ -308,10 +448,26 @@ impl ApiDriver {
         session: Option<&McpToolSession>,
         caller: &Caller,
         event_tx: &mpsc::Sender<RuntimeEvent>,
-    ) -> Result<(String, usize), ApiError> {
+    ) -> Result<(String, usize, bool), ApiError> {
         let tools = session.map(|s| s.openai_tools()).unwrap_or_default();
         let max_calls = request.max_calls.max(1);
         let mut tokens = 0usize;
+        if request.stream && tools.is_empty() {
+            let mut body = if is_anthropic(request.url) {
+                anthropic_body(request.model, &messages, request.max_tokens)
+            } else {
+                json!({
+                    "model": request.model,
+                    "messages": messages,
+                    "temperature": request.temperature,
+                    "max_tokens": request.max_tokens,
+                })
+            };
+            body["stream"] = json!(true);
+            let resp = self.with_retry(|| self.send_chat(request, &body)).await?;
+            let (text, tokens) = stream_reply(resp, is_anthropic(request.url), event_tx).await;
+            return Ok((text, tokens, true));
+        }
         for round in 0..max_calls {
             let body = if is_anthropic(request.url) {
                 anthropic_body(request.model, &messages, request.max_tokens)
@@ -335,37 +491,20 @@ impl ApiDriver {
                     return Ok((
                         format!("⚠️ The model request failed after running tools: {e}"),
                         tokens,
+                        false,
                     ))
                 }
             };
-            let usage = &reply["usage"];
-            tokens += usage["total_tokens"]
-                .as_u64()
-                .or_else(|| {
-                    Some(
-                        usage["input_tokens"].as_u64()?
-                            + usage["output_tokens"].as_u64().unwrap_or(0),
-                    )
-                })
-                .unwrap_or(45) as usize;
+            tokens += usage_tokens(&reply["usage"]).unwrap_or(45) as usize;
             let message = &reply["choices"][0]["message"];
-            let anthropic_text = reply["content"].as_array().map(|blocks| {
-                blocks
-                    .iter()
-                    .filter_map(|b| b["text"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("")
-            });
-            let content = message["content"]
-                .as_str()
-                .map(str::to_string)
-                .or(anthropic_text);
+            let content = reply_text(&reply);
             let calls = message["tool_calls"].as_array().filter(|c| !c.is_empty());
 
             let (Some(calls), Some(session)) = (calls, session) else {
                 return Ok((
                     content.unwrap_or_else(|| "No response content".into()),
                     tokens,
+                    false,
                 ));
             };
             if round + 1 == max_calls {
@@ -374,7 +513,7 @@ impl ApiDriver {
                     Some(c) => format!("{c}\n\n{note}"),
                     None => note,
                 };
-                return Ok((text, tokens));
+                return Ok((text, tokens, false));
             }
 
             if let Some(c) = content.as_deref().filter(|c| !c.trim().is_empty()) {
@@ -436,7 +575,8 @@ impl Driver for ApiDriver {
             .unwrap_or(&input.kwant.preferred_model);
 
         let (url, api_key) = self.resolve_endpoint_and_key(target_model);
-        if !self.env_keys && api_key.is_none() {
+        let custom = self.custom_base.is_some();
+        if !self.env_keys && api_key.is_none() && !custom {
             return Ok(TurnOutput::refused(crate::profiles::ProviderFailure {
                 class: crate::profiles::FailClass::Auth,
                 retry_at: None,
@@ -445,7 +585,7 @@ impl Driver for ApiDriver {
         }
 
         // If target is a real live API endpoint with API key or local Ollama, call HTTP streaming
-        if api_key.is_some() || is_ollama(target_model) {
+        if api_key.is_some() || is_ollama(target_model) || custom {
             let system_prompt = input.format_system_prompt();
 
             let mut messages = vec![json!({"role": "system", "content": system_prompt})];
@@ -468,6 +608,11 @@ impl Driver for ApiDriver {
                 _ => input.kwant.max_tokens,
             };
 
+            if custom && input.model.is_none() {
+                return Err(DriverError::Execution(
+                    "This Custom API account has no model to run: enter a model id for it under Space settings → Accounts, or pin one on the bot (\"custom:<model>\").".into(),
+                ));
+            }
             let model = match api_model_name(target_model, input.model.as_deref(), &url, api_key.as_deref(), effort).await {
                 Ok(m) => m,
                 Err(why) => return Err(DriverError::Execution(why)),
@@ -481,7 +626,7 @@ impl Driver for ApiDriver {
                 .is_some_and(|c| c.servers.iter().any(|s| s.name != crate::mcp::SELF_SERVER_NAME));
             if has_user_servers && mcp.is_none() {
                 let _ = event_tx
-                    .send(RuntimeEvent::ThinkingDelta("MCP tools aren't offered on the Anthropic API endpoint; running without them.".into()))
+                    .send(RuntimeEvent::ThinkingDelta("MCP tools aren't offered over the Anthropic Messages API; running without them.".into()))
                     .await;
             }
             let session = match mcp {
@@ -502,6 +647,7 @@ impl Driver for ApiDriver {
                 temperature: input.kwant.temperature,
                 max_tokens,
                 max_calls: mcp.map(|c| c.max_tool_iterations).unwrap_or(1),
+                stream: custom,
             };
             let caller = Caller {
                 kwant_id: input.kwant.id.clone(),
@@ -512,7 +658,7 @@ impl Driver for ApiDriver {
             if let Some(session) = session {
                 session.shutdown().await;
             }
-            let (text, tokens) = match outcome {
+            let (text, tokens, streamed) = match outcome {
                 Ok(done) => done,
                 Err(e) => {
                     let now = chrono::Utc::now();
@@ -527,13 +673,16 @@ impl Driver for ApiDriver {
                         }
                         _ => {
                             tracing::warn!(status = ?e.status, "model API call failed");
-                            (format!("⚠️ The model request failed: {e}"), 0)
+                            (format!("⚠️ The model request failed: {e}"), 0, false)
                         }
                     }
                 }
             };
             {
-                let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
+                // A streamed reply was sent piece by piece already
+                if !streamed {
+                    let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
+                }
                 let _ = event_tx
                     .send(RuntimeEvent::TurnComplete {
                         tokens,
@@ -634,6 +783,7 @@ mod tests {
             temperature: 0.7,
             max_tokens: 100,
             max_calls: 1,
+            stream: false,
         }
     }
 
@@ -654,7 +804,7 @@ mod tests {
             kwant_name: "K".into(),
             turn_id: "t".into(),
         };
-        let (text, tokens) = driver
+        let (text, tokens, streamed) = driver
             .chat_loop(
                 &request(&url, "sk-ant-test-key"),
                 messages,
@@ -666,6 +816,7 @@ mod tests {
             .unwrap();
         assert_eq!(text, "Hi there");
         assert_eq!(tokens, 7);
+        assert!(!streamed, "a request without stream is read whole");
 
         let (headers, body) = seen.lock().unwrap()[0].clone();
         assert_eq!(headers["x-api-key"], "sk-ant-test-key");
@@ -673,6 +824,7 @@ mod tests {
         assert!(headers.get("authorization").is_none());
         assert_eq!(body["model"], DEFAULT_CLAUDE_MODEL);
         assert_eq!(body["system"], "be brief");
+        assert!(body.get("stream").is_none(), "existing API-key turns are not streamed");
         assert!(body.get("temperature").is_none());
         let roles: Vec<&str> = body["messages"]
             .as_array()

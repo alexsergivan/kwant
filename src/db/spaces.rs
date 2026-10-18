@@ -341,7 +341,7 @@ async fn migrate_in_transaction(conn: &mut SqliteConnection) -> Result<(), DbErr
 /// SQLite's documented rebuild: create the new table, copy every row, drop the old one and
 /// rename. Child tables refer to the parent by name, so their foreign keys follow the rename.
 /// Refuses to drop a column the new table doesn't have, rather than lose data.
-async fn rebuild(conn: &mut SqliteConnection, table: &str, create: &str, after: &[&str]) -> Result<(), DbError> {
+pub(super) async fn rebuild(conn: &mut SqliteConnection, table: &str, create: &str, after: &[&str]) -> Result<(), DbError> {
     let new_table = format!("{table}__spaces_new");
     sqlx::query(create).execute(&mut *conn).await?;
 
@@ -385,7 +385,7 @@ async fn columns(conn: &mut SqliteConnection, table: &str) -> Result<Vec<String>
 }
 
 /// `PRAGMA foreign_key_check` counted per (table, parent). Not per rowid: a rebuild renumbers them.
-async fn foreign_key_violations(conn: &mut SqliteConnection) -> Result<HashMap<(String, String), usize>, DbError> {
+pub(super) async fn foreign_key_violations(conn: &mut SqliteConnection) -> Result<HashMap<(String, String), usize>, DbError> {
     let rows: Vec<(String, Option<i64>, String, i64)> =
         sqlx::query_as("PRAGMA foreign_key_check").fetch_all(&mut *conn).await?;
     let mut counts = HashMap::new();

@@ -28,6 +28,8 @@ pub enum EngineId {
     OpenaiApi,
     XaiApi,
     Ollama,
+    /// The space's Custom API accounts (OpenAI-compatible or Anthropic-compatible servers).
+    CustomApi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -115,7 +117,7 @@ pub fn codex_tier(slug: &str, description: Option<&str>) -> Option<Tier> {
 
 impl EngineId {
     /// Every engine, in the order the API lists them.
-    pub const ALL: [EngineId; 7] = [
+    pub const ALL: [EngineId; 8] = [
         EngineId::Claude,
         EngineId::Codex,
         EngineId::Grok,
@@ -123,6 +125,7 @@ impl EngineId {
         EngineId::OpenaiApi,
         EngineId::XaiApi,
         EngineId::Ollama,
+        EngineId::CustomApi,
     ];
 
     pub fn name(self) -> &'static str {
@@ -134,13 +137,16 @@ impl EngineId {
             EngineId::OpenaiApi => "OpenAI API",
             EngineId::XaiApi => "xAI API",
             EngineId::Ollama => "Ollama",
+            EngineId::CustomApi => "Custom API",
         }
     }
 
     pub fn kind(self) -> EngineKind {
         match self {
             EngineId::Claude | EngineId::Codex | EngineId::Grok => EngineKind::Cli,
-            EngineId::AnthropicApi | EngineId::OpenaiApi | EngineId::XaiApi => EngineKind::Api,
+            EngineId::AnthropicApi | EngineId::OpenaiApi | EngineId::XaiApi | EngineId::CustomApi => {
+                EngineKind::Api
+            }
             EngineId::Ollama => EngineKind::Local,
         }
     }
@@ -155,6 +161,7 @@ impl EngineId {
             EngineId::OpenaiApi => "openai_api",
             EngineId::XaiApi => "xai_api",
             EngineId::Ollama => "ollama",
+            EngineId::CustomApi => "custom_api",
         }
     }
 
@@ -168,15 +175,18 @@ impl EngineId {
             EngineId::Claude | EngineId::AnthropicApi => Some(Engine::Claude),
             EngineId::Codex | EngineId::OpenaiApi => Some(Engine::Codex),
             EngineId::Grok | EngineId::XaiApi => Some(Engine::Grok),
+            EngineId::CustomApi => Some(Engine::Custom),
             EngineId::Ollama => None,
         }
     }
 
+    /// For Custom API both are [`EngineId::CustomApi`]: it has no CLI.
     pub fn of_family(engine: Engine) -> (EngineId, EngineId) {
         match engine {
             Engine::Claude => (EngineId::Claude, EngineId::AnthropicApi),
             Engine::Codex => (EngineId::Codex, EngineId::OpenaiApi),
             Engine::Grok => (EngineId::Grok, EngineId::XaiApi),
+            Engine::Custom => (EngineId::CustomApi, EngineId::CustomApi),
         }
     }
 }
@@ -342,6 +352,9 @@ pub async fn probe_within(id: EngineId, env: &ProbeEnv, limit: Duration) -> Prob
             EngineId::Grok => probe_grok(env.grok_bin.as_deref()).await,
             EngineId::AnthropicApi | EngineId::OpenaiApi | EngineId::XaiApi => probe_api(id, env).await,
             EngineId::Ollama => probe_ollama(env).await,
+            // Nothing on the host to check: each account is checked on its own (see
+            // `drivers::custom`), and a space's report is ready through its accounts
+            EngineId::CustomApi => Probe::new(EngineStatus::NotInstalled, Some(CUSTOM_API_DETAIL.into())),
         }
     };
     // Dropping the check kills its commands (kill_on_drop) and aborts its requests.
@@ -854,6 +867,13 @@ impl EngineRegistry {
     }
 }
 
+/// What Engines says about Custom API, which has nothing on the host to check.
+pub const CUSTOM_API_DETAIL: &str = "Runs on this space's Custom API accounts: add one under Space settings → Accounts";
+
+/// A turn on Custom API with no account of the space that can take it.
+pub const NO_CUSTOM_ACCOUNT: &str =
+    "No Custom API account is on in this space. Add one under Space settings → Accounts.";
+
 /// The model a turn runs on one engine.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelChoice {
@@ -948,6 +968,10 @@ pub fn system_route(
     let Some(family) = Engine::from_model(target_model) else {
         return Err(format!("No engine runs the model '{target_model}'. Pick another in the bot's settings."));
     };
+    // Never the host's env keys or CLIs: only the space's own accounts run it
+    if family == Engine::Custom {
+        return Err(NO_CUSTOM_ACCOUNT.into());
+    }
     let (cli, api) = EngineId::of_family(family);
     if let Some(key) = key_for(api, configured_key) {
         if engines.usable(api, true) {

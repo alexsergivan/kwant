@@ -115,6 +115,13 @@ pub async fn driver_for(
             .map(|(d, e)| (d, Some(e)));
     };
     let engine = Engine::parse(&p.engine).unwrap_or(Engine::Claude);
+    if p.kind == "custom_api" {
+        let (endpoint, key) = custom_endpoint(state, p).await?;
+        let protocol = crate::drivers::custom::Protocol::parse(&endpoint.protocol)
+            .ok_or_else(|| format!("Custom API account \"{}\" has an unknown protocol", p.name))?;
+        let chat = crate::drivers::custom::chat_url(&endpoint.base_url, protocol);
+        return Ok((Box::new(ApiDriver::for_custom(key, chat, endpoint.base_url)), None));
+    }
     if p.kind == "api_key" {
         let key = state
             .db
@@ -137,6 +144,75 @@ pub async fn driver_for(
         ),
         None,
     ))
+}
+
+/// A Custom API account's server and key. `Err` when its server was never saved.
+pub async fn custom_endpoint(
+    state: &AppState,
+    p: &LlmProfile,
+) -> Result<(crate::db::custom_api::ProfileEndpoint, Option<String>), String> {
+    let endpoint = state
+        .db
+        .get_profile_endpoint(&p.id)
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| format!("Custom API account \"{}\" has no server set", p.name))?;
+    let key = state.db.get_profile_key(&p.id).await.ok().flatten().map(|k| k.0);
+    Ok((endpoint, key))
+}
+
+/// Checks a Custom API account against its server (GET {base}/models) and caches the result.
+/// Reuses a fresh check unless `force`.
+pub async fn refresh_custom(
+    state: &AppState,
+    p: &LlmProfile,
+    force: bool,
+) -> Option<crate::drivers::custom::CustomCheck> {
+    use crate::drivers::custom::{check, CheckStatus, CustomCheck, Protocol};
+    if p.kind != "custom_api" {
+        return None;
+    }
+    if !force {
+        if let Some(c) = state.profiles.custom_check(&p.id) {
+            return Some(c);
+        }
+    }
+    let result = match custom_endpoint(state, p).await {
+        Ok((endpoint, key)) => match Protocol::parse(&endpoint.protocol) {
+            Some(proto) => check(proto, &endpoint.base_url, key.as_deref(), endpoint.model.as_deref()).await,
+            None => CustomCheck::new(CheckStatus::Error, "Unknown protocol", Vec::new()),
+        },
+        Err(e) => CustomCheck::new(CheckStatus::Error, e, Vec::new()),
+    };
+    state.profiles.set_custom(&p.id, result.clone());
+    Some(result)
+}
+
+/// The model a turn on a Custom API account runs: the bot's pinned model as is (the server
+/// knows its own ids best), else the account's own model, else the one its server lists for the
+/// tier. `None` when none is known; the driver then says so.
+pub async fn custom_model(
+    state: &AppState,
+    p: &LlmProfile,
+    pinned: Option<&str>,
+    tier: crate::drivers::engines::Tier,
+) -> Option<crate::drivers::engines::ModelChoice> {
+    use crate::drivers::engines::{choose_model, ModelChoice};
+    let named = |id: &str| ModelChoice {
+        id: id.to_string(),
+        label: id.to_string(),
+        tier: crate::drivers::engines::tier_from_name(id),
+    };
+    if let Some(pin) = pinned.map(str::trim).filter(|m| !m.is_empty()) {
+        return Some(named(pin));
+    }
+    let stored = state.db.get_profile_endpoint(&p.id).await.ok().flatten().and_then(|e| e.model);
+    if let Some(m) = stored {
+        return Some(named(&m));
+    }
+    let models = refresh_custom(state, p, false).await.map(|c| c.models).unwrap_or_default();
+    choose_model(&models, None, tier)
 }
 
 /// `family`'s own accounts (not the system profile) that pass `bar` and whose engine is on,
@@ -164,7 +240,7 @@ pub async fn profile_engines(state: &AppState, space: &SpaceId) -> HashSet<Engin
     let Some((profiles, avail)) = accounts(state, space).await else {
         return HashSet::new();
     };
-    [Engine::Claude, Engine::Codex, Engine::Grok]
+    [Engine::Claude, Engine::Codex, Engine::Grok, Engine::Custom]
         .into_iter()
         .filter(|f| !own_accounts(state, &profiles, *f, &avail, SignInBar::NotSignedOut).is_empty())
         .collect()
@@ -189,7 +265,8 @@ pub fn readiness(
     };
     let system = |p: &&LlmProfile| p.kind == "system";
     let host_off = profiles.iter().any(|p| system(&p) && p.engine == family.as_str() && !p.enabled);
-    let host = host && !host_off;
+    // Custom API runs only on the space's own accounts, never on anything of the host's
+    let host = host && !host_off && family != Engine::Custom;
     let picked = preference_order(profiles, family, None)
         .into_iter()
         .filter(|p| system(p) || profile_engine(p) == Some(report.id))
@@ -280,6 +357,9 @@ pub async fn refresh_sign_ins(state: &AppState) {
         if let Ok(profiles) = state.db.list_profiles(&SpaceId::new(&space.id)).await {
             let keyed = super::profile_routes::keyed_ids(state, &profiles).await;
             state.profiles.statuses(&profiles, &keyed).await;
+            for p in profiles.iter().filter(|p| p.kind == "custom_api" && p.enabled) {
+                refresh_custom(state, p, false).await;
+            }
         }
     }
     REFRESHING.store(false, Ordering::Release);
@@ -511,6 +591,16 @@ mod tests {
         assert_eq!(
             uses(readiness(&r, &profiles, &signed_in(&["p_personal"]), now())),
             (true, Some("Personal".into()))
+        );
+        // Custom API is ready only through a checked account of the space, never the host
+        let c = report(EngineId::CustomApi, true, EngineStatus::Ready);
+        let mut maestro = profile("p_maestro", "Maestro", "custom_api", 10, true);
+        maestro.engine = "custom".into();
+        assert_eq!(readiness(&c, &[], &Availability::default(), now()), (false, None));
+        assert_eq!(readiness(&c, std::slice::from_ref(&maestro), &Availability::default(), now()), (false, None));
+        assert_eq!(
+            uses(readiness(&c, std::slice::from_ref(&maestro), &signed_in(&["p_maestro"]), now())),
+            (true, Some("Maestro".into()))
         );
         // Ollama has no accounts: ready from its own check alone
         let o = report(EngineId::Ollama, true, EngineStatus::Ready);

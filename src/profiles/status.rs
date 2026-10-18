@@ -29,6 +29,8 @@ pub struct ProfileManager {
     pub data_dir: PathBuf,
     pub logins: LoginManager,
     cache: Mutex<HashMap<String, (Instant, ProfileStatus)>>,
+    /// The last check of each Custom API account: its status and the models it lists.
+    custom: Mutex<HashMap<String, (Instant, crate::drivers::custom::CustomCheck)>>,
 }
 
 impl ProfileManager {
@@ -37,6 +39,7 @@ impl ProfileManager {
             data_dir,
             logins: LoginManager::default(),
             cache: Mutex::new(HashMap::new()),
+            custom: Mutex::new(HashMap::new()),
         }
     }
 
@@ -59,6 +62,37 @@ impl ProfileManager {
 
     pub fn invalidate(&self, id: &str) {
         self.cache.lock().unwrap().remove(id);
+        self.custom.lock().unwrap().remove(id);
+    }
+
+    /// Records a Custom API account's check; "ready" counts as signed in.
+    pub fn set_custom(&self, id: &str, check: crate::drivers::custom::CustomCheck) {
+        self.set_status(
+            id,
+            ProfileStatus {
+                signed_in: Some(check.ready()),
+                account_label: Some(check.detail.clone()),
+            },
+        );
+        self.custom
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), (Instant::now(), check));
+    }
+
+    /// A Custom API account's last check, if still fresh.
+    pub fn custom_check(&self, id: &str) -> Option<crate::drivers::custom::CustomCheck> {
+        self.custom
+            .lock()
+            .unwrap()
+            .get(id)
+            .filter(|(at, _)| at.elapsed() < STATUS_TTL)
+            .map(|(_, c)| c.clone())
+    }
+
+    /// A Custom API account's last check, however old.
+    pub fn last_custom_check(&self, id: &str) -> Option<crate::drivers::custom::CustomCheck> {
+        self.custom.lock().unwrap().get(id).map(|(_, c)| c.clone())
     }
 
     /// Profiles whose last check said signed out, for failover to skip.
@@ -105,6 +139,13 @@ impl ProfileManager {
                             account_label: has.then(|| "API key".to_string()),
                         },
                     );
+                    continue;
+                }
+                if p.kind == "custom_api" {
+                    // Checked over HTTP by the caller (`profile_turn::refresh_custom`), never by a CLI
+                    if let Some((_, s)) = cache.get(&p.id) {
+                        out.insert(p.id.clone(), s.clone());
+                    }
                     continue;
                 }
                 match cache.get(&p.id) {

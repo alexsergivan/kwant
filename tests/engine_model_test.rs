@@ -201,7 +201,7 @@ async fn laya_picks_model_tier_pins_and_engine_switches() {
     assert_eq!(s, StatusCode::NOT_FOUND);
     let (s, v) = call(&app, "POST", "/api/engines/codex", Some(json!({"enabled": false}))).await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    assert_eq!(v["engines"].as_array().unwrap().len(), 7, "the full GET /api/engines shape");
+    assert_eq!(v["engines"].as_array().unwrap().len(), 8, "the full GET /api/engines shape");
     let codex = by_id(&v, "codex");
     assert_eq!((codex["status"].clone(), codex["enabled"].clone(), codex["models"].clone()), (json!("disabled"), json!(false), json!([])));
     assert_eq!((codex["ready"].clone(), codex["uses"].clone()), (json!(false), Value::Null));

@@ -211,6 +211,24 @@ fn preferred_model_pin_forms() {
     assert_eq!(parse_pin("ollama:llama3.2:latest"), pin(Some("local_ollama"), Some("llama3.2:latest")));
     // Old model-id pins keep working
     assert_eq!(parse_pin("claude-opus-5-5"), pin(Some("claude"), Some("claude-opus-5-5")));
+    // Custom API: the model id stays whole, even an OpenRouter one with its own slash
+    assert_eq!(parse_pin("custom"), pin(Some("custom"), None));
+    assert_eq!(parse_pin("custom:gpt-4.1"), pin(Some("custom"), Some("gpt-4.1")));
+    assert_eq!(parse_pin("custom:openai/gpt-4o"), pin(Some("custom"), Some("openai/gpt-4o")));
+    assert_eq!(parse_pin("custom/claude-sonnet-4"), pin(Some("custom"), Some("claude-sonnet-4")));
+    // A Claude model on a Custom API account is still Custom API, never the Claude engine
+    assert_eq!(
+        kwnt::profiles::Engine::from_model("custom:claude-sonnet-4"),
+        Some(kwnt::profiles::Engine::Custom)
+    );
+}
+
+#[test]
+fn custom_api_never_runs_on_the_hosts_keys_or_clis() {
+    use kwnt::drivers::engines::{system_route, EngineRegistry, NO_CUSTOM_ACCOUNT};
+    let engines = EngineRegistry::default();
+    let route = system_route(&engines, "custom", Some("sk-host-setting-key".into()), |_| Some("/usr/bin/claude".into()));
+    assert_eq!(route, Err(NO_CUSTOM_ACCOUNT.to_string()));
 }
 
 #[test]

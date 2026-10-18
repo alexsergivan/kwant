@@ -155,6 +155,9 @@ impl LoginManager {
             Engine::Claude => cmd.args(["auth", "login", "--claudeai"]),
             Engine::Codex => cmd.args(["login", "--device-auth"]),
             Engine::Grok => cmd.args(["login", "--device-auth"]),
+            Engine::Custom => {
+                return Err(StartError::Failed("Custom API accounts use an API key, not a sign-in".into()))
+            }
         };
         if home.is_dir() {
             cmd.current_dir(home);

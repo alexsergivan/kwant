@@ -1,7 +1,8 @@
 //! Spaces S0: the migration keeps every row, backs up first, runs once and leaves the old schema
 //! when it can't finish.
 
-use kwnt::db::spaces::{DEFAULT_SPACE_ID, SPACES_SCHEMA_VERSION};
+use kwnt::db::custom_api::CUSTOM_API_SCHEMA_VERSION;
+use kwnt::db::spaces::DEFAULT_SPACE_ID;
 use kwnt::db::Database;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::collections::BTreeMap;
@@ -61,10 +62,11 @@ async fn legacy(dir: &Path) -> SqlitePool {
     pool
 }
 
-/// Every row of every table except `spaces`, without `space_id`, as quoted text.
+/// Every row of every table except `spaces` and `llm_profile_endpoints` (both new, the second
+/// from the Custom API change), without `space_id`, as quoted text.
 async fn snapshot(pool: &SqlitePool) -> BTreeMap<String, Vec<String>> {
     let tables: Vec<(String,)> = sqlx::query_as(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'spaces' ORDER BY name",
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('spaces', 'llm_profile_endpoints') ORDER BY name",
     )
     .fetch_all(pool)
     .await
@@ -112,7 +114,7 @@ async fn migration_keeps_every_row_and_id_and_backs_up_first() {
     assert_eq!(scalar_i64(&pool, "PRAGMA user_version").await, 0);
 
     let db = Database::init(tmp.path()).await.unwrap();
-    assert_eq!(db.schema_version().await.unwrap(), SPACES_SCHEMA_VERSION);
+    assert_eq!(db.schema_version().await.unwrap(), CUSTOM_API_SCHEMA_VERSION);
 
     let after = snapshot(&pool).await;
     assert_eq!(before, after, "every row and id survives, nothing added or lost");
@@ -186,7 +188,7 @@ async fn migration_runs_once() {
 
     for _ in 0..2 {
         let db = Database::init(tmp.path()).await.unwrap();
-        assert_eq!(db.schema_version().await.unwrap(), SPACES_SCHEMA_VERSION);
+        assert_eq!(db.schema_version().await.unwrap(), CUSTOM_API_SCHEMA_VERSION);
     }
     assert_eq!(snapshot(&pool).await, first);
     let again: Vec<(String,)> = sqlx::query_as("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").fetch_all(&pool).await.unwrap();
@@ -223,7 +225,7 @@ async fn backup_failure_refuses_startup_leaves_the_old_schema_and_retries_next_s
 
     std::fs::remove_file(tmp.path().join("backups")).unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    assert_eq!(db.schema_version().await.unwrap(), SPACES_SCHEMA_VERSION);
+    assert_eq!(db.schema_version().await.unwrap(), CUSTOM_API_SCHEMA_VERSION);
     assert_eq!(backups(tmp.path()).len(), 1);
 }
 
@@ -289,7 +291,7 @@ async fn foreign_key_problems_already_in_the_data_do_not_block_it() {
     assert_eq!(count(pool.clone()).await, 2);
 
     let db = Database::init(tmp.path()).await.unwrap();
-    assert_eq!(db.schema_version().await.unwrap(), SPACES_SCHEMA_VERSION);
+    assert_eq!(db.schema_version().await.unwrap(), CUSTOM_API_SCHEMA_VERSION);
     assert_eq!(count(pool.clone()).await, 2, "the same two, none new");
 }
 
@@ -325,7 +327,7 @@ async fn names_are_unique_per_space() {
 async fn fresh_database_starts_with_spaces_and_no_backup() {
     let tmp = tempfile::tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    assert_eq!(db.schema_version().await.unwrap(), SPACES_SCHEMA_VERSION);
+    assert_eq!(db.schema_version().await.unwrap(), CUSTOM_API_SCHEMA_VERSION);
     assert!(backups(tmp.path()).is_empty());
 
     let pool = raw(&tmp.path().join("kwnt.db")).await;

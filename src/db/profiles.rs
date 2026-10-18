@@ -144,7 +144,14 @@ impl Database {
         let Some(existing) = self.get_profile(id).await? else {
             return Ok(false);
         };
+        let endpoints = self.custom_api_ready().await;
         let mut tx = self.pool.begin().await?;
+        if endpoints {
+            sqlx::query("DELETE FROM llm_profile_endpoints WHERE profile_id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
         for sql in [
             "DELETE FROM llm_profile_secrets WHERE profile_id = ?",
             "DELETE FROM llm_profile_state WHERE profile_id = ?",

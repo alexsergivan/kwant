@@ -8,6 +8,7 @@ pub mod questions;
 pub mod skills;
 pub mod away;
 pub mod spaces;
+pub mod custom_api;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -128,6 +129,7 @@ impl Database {
             db.ensure_one_general().await?;
             db.seed_defaults().await?;
             db.migrate_space_archive().await?;
+            db.migrate_custom_api().await?;
         }
 
         Ok(db)

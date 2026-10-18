@@ -57,6 +57,27 @@ pub struct ProfileOut {
     pub limited_until: Option<chrono::DateTime<chrono::Utc>>,
     /// "quota" or "auth" from the last refused turn.
     pub last_error: Option<String>,
+    /// A Custom API account's server and last check; `None` for every other kind.
+    pub custom: Option<CustomOut>,
+}
+
+/// A Custom API account's server, as the API shows it (never its key).
+#[derive(Debug, Serialize)]
+pub struct CustomOut {
+    /// "openai-chat" or "anthropic-messages".
+    pub protocol: String,
+    pub base_url: String,
+    /// The model entered by hand, if any.
+    pub model: Option<String>,
+    /// "ready", "unreachable", "key_rejected" or "error"; `None` before the first check.
+    pub status: Option<crate::drivers::custom::CheckStatus>,
+    /// Readable: "Connected · 12 models", or why not.
+    pub detail: Option<String>,
+    /// What the server listed at the last check.
+    pub models: Vec<crate::drivers::engines::EngineModel>,
+    pub checked_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether turns on it can call MCP tools (OpenAI chat: yes; Anthropic Messages: not yet).
+    pub supports_tools: bool,
 }
 
 /// Profiles that count as signed in through a key: their own, or for a system profile the
@@ -87,6 +108,15 @@ pub(super) async fn keyed_ids(state: &AppState, profiles: &[LlmProfile]) -> Hash
 }
 
 async fn views(state: &AppState, profiles: Vec<LlmProfile>) -> Vec<ProfileOut> {
+    let endpoints = state.db.list_profile_endpoints().await.unwrap_or_default();
+    // Stale checks of Custom API accounts run together, each bounded by its own timeout
+    futures::future::join_all(
+        profiles
+            .iter()
+            .filter(|p| p.kind == "custom_api")
+            .map(|p| super::profile_turn::refresh_custom(state, p, false)),
+    )
+    .await;
     let own_keys = state.db.profile_ids_with_key().await.unwrap_or_default();
     let keyed = keyed_ids(state, &profiles).await;
     let states = state.db.list_profile_states().await.unwrap_or_default();
@@ -96,7 +126,22 @@ async fn views(state: &AppState, profiles: Vec<LlmProfile>) -> Vec<ProfileOut> {
         .map(|p| {
             let st = states.get(&p.id);
             let status = statuses.get(&p.id).cloned().unwrap_or_default();
+            let custom = endpoints.get(&p.id).map(|e| {
+                let check = state.profiles.last_custom_check(&p.id);
+                CustomOut {
+                    supports_tools: crate::drivers::custom::Protocol::parse(&e.protocol)
+                        .is_some_and(|p| p.supports_tools()),
+                    protocol: e.protocol.clone(),
+                    base_url: e.base_url.clone(),
+                    model: e.model.clone(),
+                    status: check.as_ref().map(|c| c.status),
+                    detail: check.as_ref().map(|c| c.detail.clone()),
+                    checked_at: check.as_ref().map(|c| c.checked_at),
+                    models: check.map(|c| c.models).unwrap_or_default(),
+                }
+            });
             ProfileOut {
+                custom,
                 home_dir: state
                     .profiles
                     .home_of(&p)
@@ -156,6 +201,44 @@ pub struct CreateBody {
     enabled: Option<bool>,
     is_default: Option<bool>,
     api_key: Option<String>,
+    /// Custom API only: "openai-chat" or "anthropic-messages".
+    protocol: Option<String>,
+    /// Custom API only: the server's API root, e.g. `http://localhost:23333/api/openai/v1`.
+    base_url: Option<String>,
+    /// Custom API only: a model id, for servers that don't list theirs.
+    model: Option<String>,
+}
+
+/// A Custom API account's server from a create or patch body, validated.
+#[allow(clippy::result_large_err)]
+fn custom_endpoint(
+    profile_id: &str,
+    protocol: Option<&str>,
+    base_url: Option<&str>,
+    model: Option<&str>,
+    current: Option<&crate::db::custom_api::ProfileEndpoint>,
+) -> Result<crate::db::custom_api::ProfileEndpoint, Response> {
+    use crate::drivers::custom::{clean_model, normalize_base, Protocol};
+    let protocol = match protocol.or(current.map(|c| c.protocol.as_str())) {
+        Some(raw) => Protocol::parse(raw).ok_or_else(|| {
+            err(StatusCode::BAD_REQUEST, "protocol must be openai-chat or anthropic-messages")
+        })?,
+        None => return Err(err(StatusCode::BAD_REQUEST, "protocol is required")),
+    };
+    let base_url = match base_url.or(current.map(|c| c.base_url.as_str())) {
+        Some(raw) => normalize_base(raw, protocol).map_err(|e| err(StatusCode::BAD_REQUEST, e))?,
+        None => return Err(err(StatusCode::BAD_REQUEST, "base_url is required")),
+    };
+    let model = match model {
+        Some(raw) => clean_model(raw).map_err(|e| err(StatusCode::BAD_REQUEST, e))?,
+        None => current.and_then(|c| c.model.clone()),
+    };
+    Ok(crate::db::custom_api::ProfileEndpoint {
+        profile_id: profile_id.to_string(),
+        protocol: protocol.as_str().into(),
+        base_url,
+        model,
+    })
 }
 
 /// `POST /api/profiles`
@@ -163,19 +246,41 @@ pub async fn create(State(state): State<AppState>, Scope(space): Scope, Json(bod
     let Some(engine) = Engine::parse(&body.engine) else {
         return err(
             StatusCode::BAD_REQUEST,
-            "engine must be claude, codex or grok",
+            "engine must be claude, codex, grok or custom",
         );
+    };
+    let is_custom = engine == Engine::Custom;
+    if is_custom != (body.kind == "custom_api") {
+        return err(StatusCode::BAD_REQUEST, "engine custom goes with kind custom_api, and only with it");
+    }
+    if !is_custom && (body.protocol.is_some() || body.base_url.is_some() || body.model.is_some()) {
+        return err(StatusCode::BAD_REQUEST, "protocol, base_url and model only go with kind custom_api");
+    }
+    if is_custom && !state.db.custom_api_ready().await {
+        return err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Custom API accounts are unavailable: the database couldn't be updated for them (see the log)",
+        );
+    }
+    // Validated before anything is stored; the id is filled in once the profile exists
+    let endpoint = if is_custom {
+        match custom_endpoint("", body.protocol.as_deref(), body.base_url.as_deref(), body.model.as_deref(), None) {
+            Ok(e) => Some(e),
+            Err(r) => return r,
+        }
+    } else {
+        None
     };
     let name = match clean_name(&body.name) {
         Ok(n) => n,
         Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
     let key = match (body.kind.as_str(), body.api_key.as_deref()) {
-        ("api_key", Some(k)) => match clean_key(k) {
+        ("api_key" | "custom_api", Some(k)) => match clean_key(k) {
             Ok(k) => Some(k),
             Err(e) => return err(StatusCode::BAD_REQUEST, e),
         },
-        ("api_key", None) => None,
+        ("api_key" | "custom_api", None) => None,
         ("cli_home", Some(_)) => {
             return err(
                 StatusCode::BAD_REQUEST,
@@ -183,7 +288,7 @@ pub async fn create(State(state): State<AppState>, Scope(space): Scope, Json(bod
             )
         }
         ("cli_home", None) => None,
-        _ => return err(StatusCode::BAD_REQUEST, "kind must be cli_home or api_key"),
+        _ => return err(StatusCode::BAD_REQUEST, "kind must be cli_home, api_key or custom_api"),
     };
     let all = match state.db.list_profiles(&space).await {
         Ok(a) => a,
@@ -209,7 +314,7 @@ pub async fn create(State(state): State<AppState>, Scope(space): Scope, Json(bod
                 Err(e) => return err(StatusCode::BAD_REQUEST, e),
             }
         }
-        ("api_key", Some(_)) => {
+        ("api_key" | "custom_api", Some(_)) => {
             return err(
                 StatusCode::BAD_REQUEST,
                 "home_dir only goes with kind cli_home",
@@ -240,12 +345,21 @@ pub async fn create(State(state): State<AppState>, Scope(space): Scope, Json(bod
             );
         }
     }
+    if let Some(mut endpoint) = endpoint {
+        endpoint.profile_id = profile.id.clone();
+        if let Err(e) = state.db.set_profile_endpoint(&endpoint).await {
+            let _ = state.db.delete_profile(&profile.id).await;
+            return db_err(e);
+        }
+    }
     if let Some(key) = key {
         if let Err(e) = state.db.set_profile_key(&profile.id, &key).await {
             let _ = state.db.delete_profile(&profile.id).await;
             return db_err(e);
         }
     }
+    // Checked at once, so the response already says whether the server answers
+    super::profile_turn::refresh_custom(&state, &profile, true).await;
     let mut resp = view_of(&state, &profile.id).await;
     *resp.status_mut() = StatusCode::CREATED;
     resp
@@ -258,6 +372,11 @@ pub struct PatchBody {
     priority: Option<i64>,
     enabled: Option<bool>,
     is_default: Option<bool>,
+    /// Custom API only.
+    protocol: Option<String>,
+    base_url: Option<String>,
+    /// Custom API only: `""` clears it.
+    model: Option<String>,
 }
 
 /// `PATCH /api/profiles/:id`
@@ -286,6 +405,31 @@ pub async fn update(
             "the default profile can't be disabled",
         );
     }
+    let server_change = body.protocol.is_some() || body.base_url.is_some() || body.model.is_some();
+    if server_change {
+        if existing.kind != "custom_api" {
+            return err(StatusCode::BAD_REQUEST, "protocol, base_url and model only go with kind custom_api");
+        }
+        let current = match state.db.get_profile_endpoint(&id).await {
+            Ok(c) => c,
+            Err(e) => return db_err(e),
+        };
+        let endpoint = match custom_endpoint(
+            &id,
+            body.protocol.as_deref(),
+            body.base_url.as_deref(),
+            body.model.as_deref(),
+            current.as_ref(),
+        ) {
+            Ok(e) => e,
+            Err(r) => return r,
+        };
+        if let Err(e) = state.db.set_profile_endpoint(&endpoint).await {
+            return db_err(e);
+        }
+        let _ = state.db.clear_profile_state(&id).await;
+        state.profiles.invalidate(&id);
+    }
     let patch = LlmProfilePatch {
         name,
         priority: body.priority.map(|p| p.clamp(0, 10_000)),
@@ -293,7 +437,12 @@ pub async fn update(
         is_default: body.is_default,
     };
     match state.db.update_profile(&id, &patch).await {
-        Ok(Some(_)) => view_of(&state, &id).await,
+        Ok(Some(p)) => {
+            if server_change {
+                super::profile_turn::refresh_custom(&state, &p, true).await;
+            }
+            view_of(&state, &id).await
+        }
         Ok(None) => err(StatusCode::NOT_FOUND, "no such profile"),
         Err(e) => db_err(e),
     }
@@ -337,8 +486,8 @@ pub async fn set_key(
         Ok(p) => p,
         Err(r) => return r,
     };
-    if existing.kind != "api_key" {
-        return err(StatusCode::BAD_REQUEST, "only api_key profiles hold a key");
+    if existing.kind != "api_key" && existing.kind != "custom_api" {
+        return err(StatusCode::BAD_REQUEST, "only api_key and custom_api profiles hold a key");
     }
     let key = match clean_key(&body.api_key) {
         Ok(k) => k,
@@ -350,6 +499,20 @@ pub async fn set_key(
     let _ = state.db.clear_profile_state(&id).await;
     state.profiles.invalidate(&id);
     StatusCode::NO_CONTENT.into_response()
+}
+
+/// `POST /api/profiles/:id/check`: checks a Custom API account's server again now and returns
+/// the account.
+pub async fn check(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let p = match load(&state, &id).await {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    if p.kind != "custom_api" {
+        return err(StatusCode::BAD_REQUEST, "only custom_api profiles are checked this way");
+    }
+    super::profile_turn::refresh_custom(&state, &p, true).await;
+    view_of(&state, &id).await
 }
 
 /// `DELETE /api/profiles/:id/key`

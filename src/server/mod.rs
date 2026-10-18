@@ -125,6 +125,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/profiles", get(profile_routes::list).post(profile_routes::create))
         .route("/api/profiles/:id", axum::routing::patch(profile_routes::update).delete(profile_routes::remove))
         .route("/api/profiles/:id/key", put(profile_routes::set_key).delete(profile_routes::delete_key))
+        .route("/api/profiles/:id/check", post(profile_routes::check))
         .route("/api/profiles/:id/login", post(profile_routes::start_login))
         .route(
             "/api/profiles/:id/login/:flow_id",

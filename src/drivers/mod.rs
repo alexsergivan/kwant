@@ -1,5 +1,6 @@
 pub mod api;
 pub mod cli;
+pub mod custom;
 pub mod engines;
 pub mod events;
 pub mod grok;
@@ -254,12 +255,23 @@ pub async fn detect_available_models(
             Engine::Claude => "Claude",
             Engine::Grok => "Grok",
             Engine::Codex => "OpenAI Codex",
+            Engine::Custom => unreachable!("Custom API is offered below"),
         };
         available.push(ModelDescriptor {
             id: family.as_str().into(),
             display_name: model.unwrap_or_else(|| fallback_name.into()),
             capability_desc: if engine == Some(api) { api_desc } else { cli_desc }.into(),
             is_cli: engine != Some(api),
+        });
+    }
+
+    // Custom API: only through the space's own accounts, never the host's
+    if profile_engines.contains(&Engine::Custom) && engines.is_enabled(EngineId::CustomApi) {
+        available.push(ModelDescriptor {
+            id: Engine::Custom.as_str().into(),
+            display_name: "Custom API".into(),
+            capability_desc: "this space's own model server (Agent Maestro, OpenRouter, LM Studio …): general questions, coding and writing".into(),
+            is_cli: false,
         });
     }
 
