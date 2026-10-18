@@ -90,13 +90,13 @@ export type NotifyKind =
   | 'skill_proposed'
   | 'question_asked';
 export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
-  { id: 'turn_finished', label: 'A kwant finished replying' },
-  { id: 'approval_needed', label: 'A kwant needs your approval' },
+  { id: 'turn_finished', label: 'A bot finished replying' },
+  { id: 'approval_needed', label: 'A bot needs your approval' },
   { id: 'routine_failed', label: 'A routine failed' },
   { id: 'delegation_finished', label: 'A delegated task finished' },
   { id: 'delegation_stalled', label: 'A delegated task is taking long' },
-  { id: 'skill_proposed', label: 'A kwant proposed a skill to review' },
-  { id: 'question_asked', label: 'A kwant has a question for you' },
+  { id: 'skill_proposed', label: 'A bot proposed a skill to review' },
+  { id: 'question_asked', label: 'A bot has a question for you' },
 ];
 
 /** Kinds also shown as an in-app toast while kwnt is visible (the others only matter in the background). */
@@ -109,6 +109,9 @@ export interface NotifyEvent {
   channel_id: string | null;
   title: string;
   body: string;
+  /** The space it happened in (servers with spaces). */
+  space_id?: string;
+  space_name?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +171,7 @@ export function groupHits(hits: SearchHit[], kwantName: (id: string) => string |
     if (!g) {
       const label = h.channel_id
         ? channelLabel(h.channel_name ?? h.channel_id)
-        : `Direct chat · ${(h.kwant_id && kwantName(h.kwant_id)) || 'kwant'}`;
+        : `Direct chat · ${(h.kwant_id && kwantName(h.kwant_id)) || 'bot'}`;
       g = { key, channel_id: h.channel_id, kwant_id: h.channel_id ? null : h.kwant_id, label, hits: [] };
       groups.set(key, g);
     }

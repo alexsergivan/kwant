@@ -11,7 +11,7 @@ interface KwantToolsPickerProps {
 }
 
 /**
- * "Tools this kwant can use": one switch per registered MCP server. Every server is on for every
+ * "Tools this bot can use": one switch per registered MCP server. Every server is on for every
  * kwant unless switched off here. A server paused in Tools shows greyed and keeps this kwant's
  * choice, so turning it back on there restores it.
  */
@@ -47,7 +47,7 @@ export const KwantToolsPicker: React.FC<KwantToolsPickerProps> = ({ model, selec
     <div>
       <div className="flex items-center justify-between mb-1">
         <label className="text-xs font-medium text-zinc-400">
-          Tools this kwant can use <span className="text-zinc-600 font-normal">· asks you before each use</span>
+          Tools this bot can use <span className="text-zinc-600 font-normal">· asks you before each use</span>
         </label>
         {onManageServers && servers && servers.length > 0 && (
           <button type="button" onClick={onManageServers} className="text-[11px] text-sky-300 hover:text-sky-200">
@@ -58,7 +58,7 @@ export const KwantToolsPicker: React.FC<KwantToolsPickerProps> = ({ model, selec
 
       {servers && servers.length > 0 && (
         <p className="mb-1.5 text-[11px] text-zinc-500 leading-snug">
-          Every tool server is on by default, including ones you add later. Switch off any this kwant shouldn’t have
+          Every tool server is on by default, including ones you add later. Switch off any this bot shouldn’t have
           {offCount > 0 && <span className="text-zinc-400"> · {offCount} off</span>}.
         </p>
       )}
@@ -116,7 +116,7 @@ export const KwantToolsPicker: React.FC<KwantToolsPickerProps> = ({ model, selec
                     <span className="block text-xs text-zinc-200 truncate">{s.name}</span>
                     {paused && (
                       <span className="block text-[10px] text-zinc-500">
-                        Paused in Tools{selected.includes(s.id) ? '. This kwant gets it once it’s on.' : ''}
+                        Paused in Tools{selected.includes(s.id) ? '. This bot gets it once it’s on.' : ''}
                       </span>
                     )}
                   </span>

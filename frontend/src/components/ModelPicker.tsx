@@ -167,7 +167,7 @@ const PickHint: React.FC<{ id: string; health: ReturnType<typeof pickHealth>; on
           </p>
           <p className="text-amber-200/80">
             {health.reason ? `${health.reason.replace(/`/g, '').replace(/\.$/, '')}. ` : ''}
-            This kwant won't switch engine by itself: fix it, or pick another engine.{' '}
+            This bot won't switch engine by itself: fix it, or pick another engine.{' '}
             {health.family === 'claude' && onSignInClaude ? <SignInClaudeLink onSignInClaude={onSignInClaude} /> : <SettingsLink onOpenSettings={onOpenSettings} />}
           </p>
         </div>
@@ -183,7 +183,7 @@ const PickHint: React.FC<{ id: string; health: ReturnType<typeof pickHealth>; on
       return (
         <p id={id} role="status" className="flex items-start gap-1.5 text-[11px] text-amber-300">
           <AlertTriangle size={12} className="mt-px shrink-0" />
-          “{health.value}” isn't a model kwnt knows. Pick an engine above.
+          “{health.value}” isn't a model the app knows. Pick an engine above.
         </p>
       );
   }

@@ -9,6 +9,11 @@ pub mod skills;
 pub mod away;
 pub mod spaces;
 
+/// What a space's #general says about itself.
+pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
+/// Default's #general description before the "kwant bots" wording; replaced only if unchanged.
+const OLD_GENERAL_DESCRIPTION: &str = "Main collaboration hub for all agents";
+
 use models::*;
 use spaces::SpaceId;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
@@ -169,7 +174,7 @@ impl Database {
             if let Some(lead) = kwants.first() {
                 let chan = NewChannel {
                     name: "general".into(),
-                    description: Some("Main collaboration hub for all agents".into()),
+                    description: Some(GENERAL_DESCRIPTION.into()),
                     lead_kwant_id: lead.id.clone(),
                     member_kwants: kwants.iter().map(|k| k.id.clone()).collect(),
                     routing_mode: "auto".into(),
@@ -177,6 +182,12 @@ impl Database {
                 self.create_channel(&space, &chan).await?;
             }
         } else {
+            // The old seeded #general text, if nobody edited it
+            let _ = sqlx::query("UPDATE channels SET description = ? WHERE name = 'general' AND description = ?")
+                .bind(GENERAL_DESCRIPTION)
+                .bind(OLD_GENERAL_DESCRIPTION)
+                .execute(&self.pool)
+                .await;
             // Smoothly migrate any legacy starter names and prompts
             let _ = sqlx::query("UPDATE kwants SET name = 'Architect', title = 'Systems Architect', avatar_sprite = 'architect', persona_prompt = 'You are the Architect, an expert in deep systems architecture, software design, and complex multi-file engineering. You give structured, thorough, and highly insightful technical advice.' WHERE name IN ('CyberMage', 'Architect') AND persona_prompt LIKE '%CyberMage%'").execute(&self.pool).await;
             let _ = sqlx::query("UPDATE kwants SET name = 'TechLead', title = 'Staff Engineer & Prototyper', avatar_sprite = 'tech_lead', persona_prompt = 'You are the Tech Lead, a sharp, pragmatic engineer who excels in fast reasoning, rapid prototyping, and clear technical communication.' WHERE name IN ('PixelNinja', 'TechLead') AND persona_prompt LIKE '%PixelNinja%'").execute(&self.pool).await;
@@ -339,7 +350,7 @@ impl Database {
         if self.kwants_in_space(space, &ids).await? {
             Ok(())
         } else {
-            Err(DbError::OtherSpace("every lead and member must be a kwant in this space".into()))
+            Err(DbError::OtherSpace("every lead and member must be a bot in this space".into()))
         }
     }
 
@@ -358,38 +369,8 @@ impl Database {
 
     /// [`Self::insert_message`] into a thread and/or with kwnt's own `meta`.
     pub async fn insert_message_with(&self, input: &NewMessage, extra: &MessageExtra) -> Result<Message, DbError> {
-        let id = Uuid::new_v4().to_string();
-        let tools_json = input
-            .tool_calls
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()?;
-
-        sqlx::query(
-            r#"
-            INSERT INTO messages (id, channel_id, direct_kwant_id, sender_role, sender_id, text, reasoning_content, tool_calls, tokens_used, thread_id, meta)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&id)
-        .bind(&input.channel_id)
-        .bind(&input.direct_kwant_id)
-        .bind(&input.sender_role)
-        .bind(&input.sender_id)
-        .bind(&input.text)
-        .bind(&input.reasoning_content)
-        .bind(&tools_json)
-        .bind(input.tokens_used)
-        .bind(&extra.thread_id)
-        .bind(extra.meta.as_ref().map(|m| m.to_string()))
-        .execute(&self.pool)
-        .await?;
-
-        let row = sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?")
-            .bind(&id)
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(row)
+        let mut conn = self.pool.acquire().await?;
+        insert_message_on(&mut conn, input, extra).await
     }
 
     pub async fn list_messages(&self, channel_or_kwant_id: &str, limit: i64) -> Result<Vec<Message>, DbError> {
@@ -847,3 +828,41 @@ impl Database {
     }
 }
 
+/// Inserts one message on `conn`, so it can be part of a caller's transaction.
+pub(crate) async fn insert_message_on(
+    conn: &mut sqlx::SqliteConnection,
+    input: &NewMessage,
+    extra: &MessageExtra,
+) -> Result<Message, DbError> {
+    let id = Uuid::new_v4().to_string();
+    let tools_json = input
+        .tool_calls
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO messages (id, channel_id, direct_kwant_id, sender_role, sender_id, text, reasoning_content, tool_calls, tokens_used, thread_id, meta)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&id)
+    .bind(&input.channel_id)
+    .bind(&input.direct_kwant_id)
+    .bind(&input.sender_role)
+    .bind(&input.sender_id)
+    .bind(&input.text)
+    .bind(&input.reasoning_content)
+    .bind(&tools_json)
+    .bind(input.tokens_used)
+    .bind(&extra.thread_id)
+    .bind(extra.meta.as_ref().map(|m| m.to_string()))
+    .execute(&mut *conn)
+    .await?;
+
+    Ok(sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&mut *conn)
+        .await?)
+}

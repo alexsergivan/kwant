@@ -119,7 +119,7 @@ async fn failed_routine_run_records_the_engine_error() {
     let id = r["id"].as_str().unwrap().to_string();
 
     let error = run_once(&app, &id).await;
-    assert!(error.starts_with("the agent's turn failed: "), "{error}");
+    assert!(error.starts_with("the bot's turn failed: "), "{error}");
     assert!(error.contains("is signed out"), "{error}");
     assert!(error.chars().count() <= 600, "{error}");
 

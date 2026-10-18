@@ -327,7 +327,7 @@ async fn decide(session: &PermissionSession, args: &Value) -> Value {
     let target = mcp::split_tool_name(tool_name)
         .filter(|(server, _)| session.ctx.servers.iter().any(|s| s.name == *server));
     let Some((server, tool)) = target else {
-        return json!({"behavior": "deny", "message": format!("{tool_name} is not available to this kwant.")});
+        return json!({"behavior": "deny", "message": format!("{tool_name} is not available to this bot.")});
     };
     let approval = session.ctx.approver.approve(ToolApprovalRequest {
         kwant_id: session.kwant_id.clone(),

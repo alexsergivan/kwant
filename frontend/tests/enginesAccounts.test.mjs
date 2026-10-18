@@ -64,15 +64,15 @@ test('ready comes from `ready`, not the host login or the model list', () => {
   assert.ok(m.claudeNeedsSignIn([{ ...oleksOn, ready: false, uses: null }]));
 });
 
-test('Oleks: one Claude card says kwants use Personal, with This machine first and signed out', () => {
+test('Oleks: one Claude card says bots use Personal, with This machine first and signed out', () => {
   const html = panel([oleksOn]);
   assert.match(html, /Engines &amp; accounts/);
   // The summary replaces the headline: Claude runs on Claude Code CLI through Personal.
-  assert.match(html, /What runs your kwants/);
+  assert.match(html, /What runs your kwant bots/);
   assert.match(html, /data-route="claude"[\s\S]*?Claude Code CLI[\s\S]*?>Personal</);
   assert.match(html, /No backup account is ready\./);
   assert.match(html, /data-engine="claude" data-status="ready"/);
-  assert.equal(summary(html, 'claude'), 'Kwants use Personal');
+  assert.equal(summary(html, 'claude'), 'Bots use Personal');
   const names = [...card(html, 'claude').matchAll(/id="account-[^"]+-name"[^>]*>([^<]+)</g)].map((x) => x[1]);
   assert.deepEqual(names, ['This machine', 'Personal']);
   // This machine: not signed in, with the Batch 9 sign-in on its row; Personal is in use.
@@ -95,7 +95,7 @@ test('switched off with Personal signed in: "Off · Turn on to use Personal"', (
   assert.match(html, /No engine can run right now\. Claude Code CLI is off: turn it on to use Personal\./);
   assert.match(html, /role="switch" aria-checked="false"/);
   assert.match(html, /Not checked while Claude Code CLI is off/);
-  assert.doesNotMatch(html, /What runs your kwants/);
+  assert.doesNotMatch(html, /What runs your kwant bots/);
   // Nothing to sign in to while it's off.
   assert.doesNotMatch(html, /Sign in with Claude/);
 });
@@ -127,7 +127,7 @@ test('API-key accounts sit on the API engine card; an engine missing but with an
   const apiEngine = engine('anthropic_api', { status: 'not_installed', ready: true, uses: { profile_id: 'prf_key', label: 'Team key' } });
   const html = panel([oleksOn, apiEngine, engine('ollama', { status: 'not_installed', ready: false })], [machine, personal, key]);
   assert.match(html, /data-engine="anthropic_api" data-status="ready"/);
-  assert.equal(summary(html, 'anthropic_api'), 'Kwants use Team key');
+  assert.equal(summary(html, 'anthropic_api'), 'Bots use Team key');
   assert.match(html, /Not available on this computer \(1\)/);
   // Ollama has no accounts section.
   assert.doesNotMatch(html, /Ollama accounts/);

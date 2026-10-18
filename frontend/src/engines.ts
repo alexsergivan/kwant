@@ -300,7 +300,7 @@ export function engineSummary(e: EngineInfo, accounts: SummaryAccount[] = []): {
     if (next) return { text: `Off · Turn on to use ${next.name}`, tone: 'muted' };
     return { text: e.kind === 'local' || accounts.length === 0 ? 'Off · Turn on to use it' : 'Off · Turn on, then sign in to an account', tone: 'muted' };
   }
-  if (isUsable(e)) return e.uses ? { text: `Kwants use ${e.uses.label}`, tone: 'ok' } : { text: 'Kwants can use it', tone: 'ok' };
+  if (isUsable(e)) return e.uses ? { text: `Bots use ${e.uses.label}`, tone: 'ok' } : { text: 'Bots can use it', tone: 'ok' };
   switch (e.status) {
     case 'checking':
       return { text: 'Checking…', tone: 'busy' };

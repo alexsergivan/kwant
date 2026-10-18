@@ -73,7 +73,7 @@ export const ChannelInstructionsModal: React.FC<{
           onChange={setText}
           autoFocus
           label="Channel instructions"
-          hint="Every kwant reads these before each turn in this channel. Leave empty to unpin."
+          hint="Every bot reads these before each turn in this channel. Leave empty to unpin."
           rows={7}
         />
         {error && (

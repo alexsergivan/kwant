@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowDown, ArrowUp, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, Cpu, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin } from 'lucide-react';
+import { ArrowDown, ArrowUp, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -28,6 +28,7 @@ import {
 } from '../attachments';
 import { FileTiles, UploadChip } from './Attachments';
 import { ranOnLabel } from '../engines';
+import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
 
 export interface ChatMessage {
   id: string;
@@ -82,11 +83,21 @@ export interface RoutingState {
   kwantTitle?: string;
   reason?: string;
   mode?: 'direct' | 'discuss' | string;
+  /** How many bots Laya chose from, and whether keyword matching stood in for her. */
+  candidateCount?: number | null;
+  fallback?: boolean;
+  matchedTerms?: string[];
 }
 
 export interface ChatViewProps {
   title: string;
   subtitle: string;
+  /** The open space, for "Message #general in Work" and Laya's lines. */
+  spaceName?: string;
+  /** #general, where Laya picks who answers. */
+  isGeneral?: boolean;
+  /** Phones: back to the list. */
+  onBack?: () => void;
   messages: ChatMessage[];
   streamingText: string;
   streamingThinking: string;
@@ -131,15 +142,15 @@ export interface ChatViewProps {
   viewingHistory?: boolean;
   /** Leaves that window for the latest messages. */
   onJumpToLatest?: () => void;
-  /** Under the header: the agent's conversations and the open thread's controls. */
+  /** Under the header: the bot's conversations and the open thread's controls. */
   subHeader?: React.ReactNode;
-  /** Next to the title, e.g. "Working on …" while the agent has background turns. */
+  /** Next to the title, e.g. "Working on …" while the bot has background turns. */
   titleExtra?: React.ReactNode;
   /** Set while the open chat's turn waits in the queue. */
   queued?: QueuedState | null;
   /** Draws a delegation note or result (messages with delegation `meta`). */
   renderDelegation?: (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => React.ReactNode;
-  /** Draws an agent's question card (messages with `ask_user` meta). */
+  /** Draws a bot's question card (messages with `ask_user` meta). */
   renderQuestion?: (msg: ChatMessage, meta: QuestionMeta, flash: boolean) => React.ReactNode;
   /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
   awaitingAnswer?: boolean;
@@ -165,9 +176,11 @@ export const renderFormattedText = (text: string): React.ReactNode => {
   });
 };
 
-const LayaRoutingCard: React.FC<{ routing: RoutingState }> = ({ routing }) => {
+const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> = ({ routing, spaceName }) => {
   const deciding = routing.phase === 'deciding';
   const isDiscuss = routing.mode === 'discuss';
+  const pool = routing.candidateCount ?? (routing.candidates.length || null);
+  const where = spaceName ? ` in ${spaceName}` : '';
 
   return (
     <div className="flex items-start gap-3.5 w-full max-w-5xl" aria-live="polite">
@@ -182,7 +195,9 @@ const LayaRoutingCard: React.FC<{ routing: RoutingState }> = ({ routing }) => {
         <div className="px-4 py-3 rounded-2xl rounded-tl-sm bg-violet-950/20 border border-violet-500/20 text-sm text-zinc-200 shadow-sm w-full">
           {deciding ? (
             <div className="flex items-center gap-2">
-              <span>Choosing who's best to answer your question</span>
+              <span>
+                {pool ? `Choosing from ${pool} ${pool === 1 ? 'bot' : 'bots'}${where}` : `Choosing who's best to answer${where}`}
+              </span>
               <span className="inline-flex gap-0.5" aria-hidden="true">
                 {[0, 1, 2].map((i) => (
                   <span
@@ -201,6 +216,7 @@ const LayaRoutingCard: React.FC<{ routing: RoutingState }> = ({ routing }) => {
                 {routing.kwantTitle && <span className="text-zinc-400 text-xs">({routing.kwantTitle})</span>}
               </div>
               {routing.reason && <span className="text-xs text-zinc-400">{routing.reason}</span>}
+              {routing.fallback && <span className="text-xs text-amber-300/90">Picked by keywords (Laya is offline)</span>}
             </div>
           )}
 
@@ -238,6 +254,9 @@ const LayaRoutingCard: React.FC<{ routing: RoutingState }> = ({ routing }) => {
 export const ChatView: React.FC<ChatViewProps> = ({
   title,
   subtitle,
+  spaceName,
+  isGeneral,
+  onBack,
   messages,
   streamingText,
   streamingThinking,
@@ -618,10 +637,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (question && renderQuestion) return <React.Fragment key={msg.id}>{renderQuestion(msg, question, flashId === msg.id)}</React.Fragment>;
     const isUser = msg.sender_role === 'user';
     const files = msg.meta ? parseAttachments(msg.meta) : [];
-    // An agent's share_file note: the file tiles say it all.
+    // A bot's share_file note: the file tiles say it all.
     const filesOnly = files.length > 0 && isSharedFileMessage(msg.meta);
     const isThoughtOpen = !!openThoughts[msg.id];
     const ranOn = isUser ? null : ranOnLabel(msg.meta);
+    const account = isUser ? null : ranOnAccount(msg.meta);
+    const routed = isUser || !isGeneral ? null : parseRoutingMeta(msg.meta);
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
 
     return (
@@ -647,10 +668,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 {ranOn}
               </span>
             )}
+            {account && <span className="text-zinc-500 text-[10px] truncate max-w-[12rem]">ran on {account}</span>}
             {msg.tokens_used ? (
               <span className="text-zinc-500 font-mono text-[10px]">({msg.tokens_used} tokens)</span>
             ) : null}
           </div>
+
+          {routed && (
+            <p className={`-mt-1 mb-1.5 text-[11px] ${routed.fallback ? 'text-amber-300/80' : 'text-violet-300/80'} break-words`} data-routing-line>
+              <Sparkles size={10} className="inline -mt-0.5 mr-1" aria-hidden="true" />
+              {routingLine(routed, spaceName ?? 'this space')}
+            </p>
+          )}
 
           {/* Collapsible Reasoning Disclosure */}
           {msg.reasoning_content && (
@@ -658,10 +687,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={() => toggleThought(msg.id)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-mono text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer shadow-sm group"
+                className="max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-mono text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer shadow-sm group"
               >
                 <Sparkles size={13} className="text-violet-400 group-hover:rotate-12 transition-transform flex-shrink-0" />
-                <span className="truncate max-w-xs sm:max-w-md">
+                <span className="truncate min-w-0 sm:max-w-md">
                   {msg.reasoning_content.split('\n')[0].replace(/^🔮\s*/, '')}
                 </span>
                 {isThoughtOpen ? <ChevronDown size={13} className="text-zinc-500 flex-shrink-0" /> : <ChevronRight size={13} className="text-zinc-500 flex-shrink-0" />}
@@ -725,9 +754,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   return (
     <div className="flex-1 flex flex-col h-full bg-zinc-950 overflow-hidden">
-      {/* Channel / Agent Header */}
-      <div className="h-14 border-b border-zinc-800/80 px-6 flex items-center justify-between bg-zinc-900/30 backdrop-blur-sm select-none">
-        <div>
+      {/* Channel / bot header */}
+      <div className="h-14 shrink-0 border-b border-zinc-800/80 px-2 sm:px-6 gap-2 flex items-center justify-between bg-zinc-900/30 backdrop-blur-sm select-none">
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Back to chats"
+            className="shrink-0 p-2 -ml-0.5 rounded-lg text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+          >
+            <ChevronLeft size={18} />
+          </button>
+        )}
+        <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2 min-w-0">
             <span className="truncate">{title}</span>
             {titleExtra}
@@ -735,7 +774,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <p className="text-[11px] text-zinc-400 truncate max-w-lg mt-0.5">{subtitle}</p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           {/* Active Team Workspace Badge */}
           {(workspacePath || repoUrl) && (
             <div
@@ -756,8 +795,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
 
           {teamMembers && teamMembers.length > 0 && (
-            <div className="flex items-center gap-2 pl-3 border-l border-zinc-800">
-              <div className="flex -space-x-2 items-center px-1 py-1 -my-0.5">
+            <div className="flex items-center gap-2 sm:pl-3 sm:border-l border-zinc-800">
+              <div className="hidden sm:flex -space-x-2 items-center px-1 py-1 -my-0.5">
                 {teamMembers.map((member) => (
                   <div
                     key={member.id}
@@ -773,10 +812,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   type="button"
                   onClick={onManageTeam}
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
-                  title="Manage Team members and settings"
+                  title="Team members and settings"
+                  aria-label="Manage team"
                 >
                   <Settings2 size={12} className="text-zinc-400" />
-                  <span>Manage</span>
+                  <span className="hidden sm:inline">Manage</span>
                 </button>
               )}
             </div>
@@ -787,7 +827,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               type="button"
               onClick={onEditInstructions}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
-              title="Pin instructions every kwant reads in this channel"
+              title="Pin instructions every bot reads in this channel"
               aria-label="Pin instructions"
             >
               <Pin size={12} className="text-amber-300" />
@@ -801,9 +841,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
               onClick={onEditKwant}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
               title={`Edit ${title}'s name, avatar, model and persona`}
+              aria-label={`Edit ${title}`}
             >
               <Pencil size={12} className="text-zinc-400" />
-              <span>Edit</span>
+              <span className="hidden sm:inline">Edit</span>
             </button>
           )}
 
@@ -830,16 +871,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 ? 'text-sky-300 bg-sky-500/20 border-sky-500/40'
                 : 'text-zinc-300 bg-zinc-900 hover:bg-zinc-800 border-zinc-700/60 hover:text-zinc-100'
             }`}
-            title="Toggle Bot Browser Pane"
+            title="Show or hide the bot's browser"
+            aria-label="Bot browser"
+            aria-pressed={vmOpen}
           >
-            <span className="text-xs">🖥️</span>
-            <span>Bot Browser</span>
+            <span className="text-xs" aria-hidden="true">🖥️</span>
+            <span className="hidden sm:inline">Bot browser</span>
           </button>
-
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-sky-400 bg-sky-500/10 border border-sky-500/20 shadow-sm">
-            <Cpu size={13} />
-            <span>Laya Auto-Fleet</span>
-          </div>
         </div>
       </div>
 
@@ -935,7 +973,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         {/* Laya routing: which agent will answer */}
         {isStreaming && routingState && !discussionState?.inProgress && (
-          <LayaRoutingCard routing={routingState} />
+          <LayaRoutingCard routing={routingState} spaceName={spaceName} />
         )}
 
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
@@ -991,7 +1029,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   <p className="text-zinc-300" role="status">
                     {queued.position ? <strong className="text-amber-200">#{queued.position} in line.</strong> : <strong className="text-amber-200">In line.</strong>}{' '}
                     {queued.reason === 'server_busy'
-                      ? 'kwnt is running as many turns as it allows right now; this one starts as soon as a slot frees up.'
+                      ? 'The server is running as many turns as it allows right now; this one starts as soon as a slot frees up.'
                       : `${queued.speaker} is busy with other work; this starts as soon as one of those finishes.`}
                   </p>
                 ) : streamingText ? (
@@ -1159,7 +1197,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 checkMention(inputVal, (e.target as HTMLTextAreaElement).selectionStart);
               }
             }}
-            placeholder={`Message ${title}... (Enter to send, Shift+Enter for newline, @ to mention)`}
+            placeholder={spaceName ? `Message ${title} in ${spaceName}` : `Message ${title}`}
+            title="Enter to send, Shift+Enter for a new line, @ to mention"
+
             className="flex-1 min-w-0 bg-transparent px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-40 leading-relaxed font-sans"
           />
           <input

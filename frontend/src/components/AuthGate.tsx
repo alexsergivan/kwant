@@ -40,7 +40,7 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
       const s = await fetchAuthStatus();
       setState(s.auth_required && !s.authenticated ? { kind: 'locked', notice } : { kind: 'ready', authRequired: s.auth_required });
     } catch (e) {
-      setState({ kind: 'offline', message: e instanceof Error && e.message !== 'Failed to fetch' ? e.message : "Can't reach kwnt. Is it running?" });
+      setState({ kind: 'offline', message: e instanceof Error && e.message !== 'Failed to fetch' ? e.message : "Can't reach the kwant bots server. Is it running?" });
     } finally {
       checking.current = false;
     }
@@ -81,10 +81,10 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
     <div className="min-h-screen w-screen flex items-center justify-center bg-zinc-950 text-zinc-100 p-4 font-sans">
       <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-5">
         <div className="flex items-center gap-3">
-          <ModernAvatar role="brand" name="Kwant" size={36} />
+          <ModernAvatar role="brand" name="kwant bots" size={36} />
           <div>
-            <h1 className="text-sm font-semibold">Kwant</h1>
-            <p className="text-xs text-zinc-400">your team of super-intelligent bots</p>
+            <h1 className="text-sm font-semibold">kwant bots</h1>
+            <p className="text-xs text-zinc-400">Your team of AI bots</p>
           </div>
         </div>
         {state.kind === 'checking' && (
@@ -145,7 +145,7 @@ const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void }> = (
           <KeyRound size={15} className="text-sky-400" /> Enter your access token
         </h2>
         <p className="text-xs text-zinc-400 leading-relaxed">
-          This kwnt is reachable from other machines, so it needs its token once per browser. Get it on the server:
+          This server is reachable from other machines, so it needs its token once per browser. Get it on the server:
         </p>
         <div className="space-y-1 text-[11px] font-mono text-zinc-300">
           <p className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 rounded-md px-2 py-1">
@@ -187,7 +187,7 @@ const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void }> = (
       >
         {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} Continue
       </button>
-      <p className="text-[11px] text-zinc-500">The browser keeps you signed in for a year. Anyone with the token controls this kwnt.</p>
+      <p className="text-[11px] text-zinc-500">The browser keeps you signed in for a year. Anyone with the token controls this server.</p>
     </form>
   );
 };

@@ -143,7 +143,7 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
   }, [teamId, applyUrl]);
 
   useEffect(() => {
-    document.title = `${title || url || 'Sandbox browser'} · Kwant sandbox`;
+    document.title = `${title || url || 'Sandbox browser'} · kwant bots browser`;
   }, [title, url]);
 
   const toViewport = (clientX: number, clientY: number) => {
@@ -243,10 +243,10 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
 
         <div
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 flex-shrink-0"
-          title="This is the same browser your agents use. They will see the current page on their next reply."
+          title="This is the same browser your bots use. They will see the current page on their next reply."
         >
           <Share2 size={12} />
-          <span>Shared with your agents</span>
+          <span>Shared with your bots</span>
         </div>
       </header>
 
@@ -256,7 +256,7 @@ export const SandboxViewer: React.FC<{ teamId: string }> = ({ teamId }) => {
           <span>
             {isFocused
               ? 'Controlling the sandbox: clicks, scrolling, typing and paste go to the page.'
-              : 'Click the page to take control. Your agents will see wherever you leave this browser.'}
+              : 'Click the page to take control. Your bots will see wherever you leave this browser.'}
           </span>
           {title && <span className="ml-auto truncate text-zinc-400">{title}</span>}
         </div>

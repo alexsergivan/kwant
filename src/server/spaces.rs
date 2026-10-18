@@ -173,6 +173,25 @@ pub async fn row_guard(
     next.run(req).await
 }
 
+/// For a body that names rows instead of a path (`POST /api/chat/send`): with an explicit
+/// `?space=`, every named row that exists must live in that space, else 404 as in [`row_guard`].
+/// Unknown rows pass, so the handler answers as it always did; without `?space=` nothing is checked.
+pub async fn ids_guard(state: &AppState, query: Option<&str>, rows: &[(RowKind, Option<&str>)]) -> Result<(), Response> {
+    let Some(want) = space_param(query) else {
+        return Ok(());
+    };
+    let want = active_space(state, &want).await?;
+    for (kind, id) in rows {
+        let Some(id) = id else { continue };
+        match space_of_row(state, *kind, id).await {
+            Ok(Some(space)) if space != want => return Err(error(StatusCode::NOT_FOUND, "that isn't in this space")),
+            Ok(_) => {}
+            Err(_) => return Err(internal()),
+        }
+    }
+    Ok(())
+}
+
 fn archived() -> Response {
     error(StatusCode::CONFLICT, "this space is archived; restore it first")
 }

@@ -14,7 +14,7 @@ export const COMPUTER_MODES: { id: ComputerMode; label: string; short: string; h
   { id: 'vm', label: 'VM (isolated)', short: 'VM', hint: 'Runs in Docker containers, isolated from your files.' },
 ];
 
-export const LOCAL_BROWSER_NOTE = 'Kwant is using a Chrome window on your computer.';
+export const LOCAL_BROWSER_NOTE = 'Your bots are using a Chrome window on your computer.';
 
 /** Fired on window after a successful switch so every open control shows the new mode. */
 export const COMPUTER_MODE_EVENT = 'kwnt:computer-mode';

@@ -222,7 +222,7 @@ export const ThreadHeader: React.FC<ThreadHeaderProps> = ({ thread, badge, deleg
           {thread.title}
         </h3>
         <span className="text-zinc-500 shrink-0 hidden sm:inline">
-          {thread.kind === 'delegation' ? `Delegated by ${delegatedBy ?? 'another agent'}` : 'Separate conversation'}
+          {thread.kind === 'delegation' ? `Delegated by ${delegatedBy ?? 'another bot'}` : 'Separate conversation'}
         </span>
         {badge && <StatusBadge badge={badge} />}
         {thread.archived && <span className="text-[10px] text-zinc-500">Archived</span>}

@@ -111,7 +111,7 @@ test('ready engines come first; not-installed ones fold under "Not available on 
 
 test('the headline gives way to the route summary once something is ready', () => {
   // With something ready, the route summary answers "what runs" instead of a count.
-  assert.match(panel(live), /What runs your kwants/);
+  assert.match(panel(live), /What runs your kwant bots/);
   assert.doesNotMatch(panel(live), /no API keys are needed/);
   assert.match(panel(live.map((e) => ({ ...e, status: 'signed_out' }))), /No engine can run right now/);
   assert.match(panel(null), /Checking which engines can run/);
@@ -177,7 +177,7 @@ test('a saved engine that can no longer run stays selected with a warning', () =
   assert.ok(options(html, 0).some(([v, l]) => v === 'codex' && l === 'Codex (OpenAI) (can&#x27;t run now)'));
   assert.match(html, /<option value="codex" selected="">/);
   assert.match(html, /Codex \(OpenAI\) can(&#x27;|')t run right now/);
-  assert.match(html, /Not signed in: run codex login\. This kwant won(&#x27;|')t switch engine by itself/);
+  assert.match(html, /Not signed in: run codex login\. This bot won(&#x27;|')t switch engine by itself/);
   assert.match(html, /aria-invalid="true"/);
   assert.deepEqual(m.pickHealth('codex', live), { kind: 'engine_unavailable', family: 'codex', reason: 'Not signed in: run `codex login`' });
   // A model the engine stopped offering.

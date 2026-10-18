@@ -1,6 +1,7 @@
 //! Questions an agent asked the user mid-turn (`ask_user`): a question, 2–5 choices, and always a
 //! free-text answer. A question is `open` until answered, dismissed or its turn is stopped.
 
+use super::models::{Message, MessageExtra, NewMessage};
 use super::{Database, DbError};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -151,17 +152,27 @@ impl Database {
         question: &str,
         choices: &[String],
     ) -> Result<Question, QuestionError> {
-        let open: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM questions WHERE kwant_id = ? AND status = 'open'")
-            .bind(&place.kwant_id)
-            .fetch_one(&self.pool)
-            .await?;
-        if open >= MAX_OPEN_PER_KWANT {
-            return Err(QuestionError::TooManyOpen);
-        }
+        let (q, _) = self.create_question_with_card(place, question, choices, |_| None).await?;
+        Ok(q)
+    }
+
+    /// Saves a question together with the chat message that shows it (built by `card` from the
+    /// new question), in one transaction: nobody can see the question before its card exists.
+    pub async fn create_question_with_card(
+        &self,
+        place: &QuestionPlace,
+        question: &str,
+        choices: &[String],
+        card: impl FnOnce(&Question) -> Option<(NewMessage, MessageExtra)>,
+    ) -> Result<(Question, Option<Message>), QuestionError> {
+        // The first statement writes, so the transaction takes SQLite's write lock up front
+        // (waiting on busy_timeout) instead of failing to upgrade a read lock under load
+        let mut tx = self.pool.begin().await?;
         let id = Uuid::new_v4().to_string();
-        sqlx::query(
+        let inserted = sqlx::query(
             "INSERT INTO questions (id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, question, choices, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?
+             WHERE (SELECT COUNT(*) FROM questions WHERE kwant_id = ? AND status = 'open') < ?",
         )
         .bind(&id)
         .bind(&place.kwant_id)
@@ -172,9 +183,24 @@ impl Database {
         .bind(question)
         .bind(serde_json::to_string(choices).unwrap_or_else(|_| "[]".into()))
         .bind(Utc::now())
-        .execute(&self.pool)
+        .bind(&place.kwant_id)
+        .bind(MAX_OPEN_PER_KWANT)
+        .execute(&mut *tx)
         .await?;
-        self.get_question(&id).await?.ok_or(QuestionError::Db)
+        if inserted.rows_affected() == 0 {
+            return Err(QuestionError::TooManyOpen);
+        }
+        let get = "SELECT * FROM questions WHERE id = ?";
+        let mut q = sqlx::query_as::<_, Question>(get).bind(&id).fetch_one(&mut *tx).await?;
+        let mut message = None;
+        if let Some((msg, extra)) = card(&q) {
+            let saved = super::insert_message_on(&mut tx, &msg, &extra).await?;
+            sqlx::query("UPDATE questions SET message_id = ? WHERE id = ?").bind(&saved.id).bind(&id).execute(&mut *tx).await?;
+            q = sqlx::query_as::<_, Question>(get).bind(&id).fetch_one(&mut *tx).await?;
+            message = Some(saved);
+        }
+        tx.commit().await?;
+        Ok((q, message))
     }
 
     pub async fn get_question(&self, id: &str) -> Result<Option<Question>, DbError> {
@@ -182,11 +208,6 @@ impl Database {
             .bind(id)
             .fetch_optional(&self.pool)
             .await?)
-    }
-
-    pub async fn set_question_message(&self, id: &str, message_id: &str) -> Result<(), DbError> {
-        sqlx::query("UPDATE questions SET message_id = ? WHERE id = ?").bind(message_id).bind(id).execute(&self.pool).await?;
-        Ok(())
     }
 
     /// Questions, newest first: by status and/or chat (channel, thread or direct-chat kwant id).

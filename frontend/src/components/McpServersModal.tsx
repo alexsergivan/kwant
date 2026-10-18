@@ -65,7 +65,7 @@ const inputCls =
   'w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors';
 
 const TRANSPORTS: Array<{ id: McpTransport; title: string; blurb: string; icon: React.ReactNode }> = [
-  { id: 'stdio', title: 'Runs on this machine', blurb: 'kwnt starts a command, like npx or uvx', icon: <Terminal size={18} /> },
+  { id: 'stdio', title: 'Runs on this machine', blurb: 'The server starts a command, like npx or uvx', icon: <Terminal size={18} /> },
   { id: 'http', title: 'Connects to a URL', blurb: 'A server already running somewhere else', icon: <Globe size={18} /> },
 ];
 
@@ -326,7 +326,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       setLoadError(null);
       return list;
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Could not reach kwnt.');
+      setLoadError(err instanceof Error ? err.message : 'Could not reach the server.');
       setServers((prev) => prev ?? []);
       return null;
     }
@@ -355,7 +355,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       const res = await fetch(`/api/mcp/servers/${id}/test`, { method: 'POST' });
       result = res.ok ? await res.json() : { ok: false, error: await readError(res) };
     } catch {
-      result = { ok: false, error: 'Could not reach kwnt.' };
+      result = { ok: false, error: 'Could not reach the server.' };
     }
     setTesting((t) => ({ ...t, [id]: false }));
     setTestResults((r) => ({ ...r, [id]: result }));
@@ -456,12 +456,12 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       });
       if (!res.ok) throw new Error(await readError(res));
       const body = await res.json();
-      if (typeof body?.authorize_url !== 'string' || !/^https?:\/\//.test(body.authorize_url)) throw new Error('kwnt didn’t return a sign-in page.');
+      if (typeof body?.authorize_url !== 'string' || !/^https?:\/\//.test(body.authorize_url)) throw new Error('The server didn’t return a sign-in page.');
       url = body.authorize_url;
     } catch (err) {
       popup?.close();
       setConnecting(null);
-      setOauthErrors((e) => ({ ...e, [server.id]: err instanceof Error ? err.message : 'Could not reach kwnt.' }));
+      setOauthErrors((e) => ({ ...e, [server.id]: err instanceof Error ? err.message : 'Could not reach the server.' }));
       playSfx('alert');
       return;
     }
@@ -489,7 +489,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     setConfirmDisconnect(null);
     const res = await fetch(`/api/mcp/servers/${server.id}/oauth`, { method: 'DELETE' }).catch(() => null);
     if (!res || !res.ok) {
-      setLoadError(res ? await readError(res) : 'Could not reach kwnt.');
+      setLoadError(res ? await readError(res) : 'Could not reach the server.');
       return;
     }
     setTestResults(({ [server.id]: _, ...rest }) => rest);
@@ -552,7 +552,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       setStatus(saved.id, null);
       runTest(saved.id);
     } catch {
-      setFormError('Could not reach kwnt.');
+      setFormError('Could not reach the server.');
     } finally {
       setSaving(false);
     }
@@ -563,7 +563,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     const res = await fetch(`/api/mcp/servers/${server.id}`, { method: 'DELETE' }).catch(() => null);
     setConfirmDelete(null);
     if (!res || !res.ok) {
-      setLoadError(res ? await readError(res) : 'Could not reach kwnt.');
+      setLoadError(res ? await readError(res) : 'Could not reach the server.');
       return;
     }
     setStatus(server.id, null);
@@ -578,7 +578,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...formToPayload(serverToForm(server)), enabled: !server.enabled }),
     }).catch(() => null);
-    if (!res || !res.ok) setLoadError(res ? await readError(res) : 'Could not reach kwnt.');
+    if (!res || !res.ok) setLoadError(res ? await readError(res) : 'Could not reach the server.');
     refresh();
   };
 
@@ -600,10 +600,10 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         <Plug size={26} />
       </div>
       <div className="space-y-1.5 max-w-md mx-auto">
-        <h3 className="text-sm font-semibold text-zinc-100">Give your kwants new abilities</h3>
+        <h3 className="text-sm font-semibold text-zinc-100">Give your bots new abilities</h3>
         <p className="text-xs text-zinc-400 leading-relaxed">
-          MCP servers are small add-ons that hand your kwants tools, like reading files, browsing the web or working with GitHub.
-          Add one here and every kwant can use it; switch it off for a kwant in that kwant’s edit screen. They always ask you before using a tool.
+          MCP servers are small add-ons that hand your bots tools, like reading files, browsing the web or working with GitHub.
+          Add one here and every bot in this space can use it; switch it off for a bot in that bot’s edit screen. They always ask you before using a tool.
           Pick a popular one below and just add your key or sign in.
         </p>
       </div>
@@ -655,7 +655,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
                 <Users size={11} className="flex-shrink-0 mt-[3px] text-zinc-500" aria-hidden="true" />
                 <span className="min-w-0 break-words">
                   {usage.allKwants ? (
-                    server.enabled ? 'Used by all kwants' : 'All kwants get it once it’s on'
+                    server.enabled ? 'Used by every bot in this space' : 'Every bot here gets it once it’s on'
                   ) : (
                     <>
                       {server.enabled ? 'Off for: ' : 'Once it’s on, off for: '}
@@ -720,7 +720,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
         <div className="mt-3 pt-2.5 border-t border-zinc-800/70 flex flex-wrap items-center justify-between gap-2">
           {confirmDisconnect === server.id ? (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-300">
-              <span>Sign out of {server.name}? Kwants can’t use its tools until you connect again.</span>
+              <span>Sign out of {server.name}? Bots can’t use its tools until you connect again.</span>
               <button
                 type="button"
                 onClick={() => setConfirmDisconnect(null)}
@@ -738,7 +738,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             </div>
           ) : confirmDelete === server.id ? (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-300">
-              <span>Delete {server.name}? Kwants using it lose these tools.</span>
+              <span>Delete {server.name}? Bots using it lose these tools.</span>
               <button
                 type="button"
                 onClick={() => setConfirmDelete(null)}
@@ -924,7 +924,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             className={`${inputCls} font-mono`}
           />
           <p className="mt-1 text-[11px] text-zinc-500">
-            Short and simple: letters, numbers, - or _. Kwants see its tools as <span className="font-mono text-zinc-400">{form.name.trim() || 'name'} · tool</span>.
+            Short and simple: letters, numbers, - or _. Bots see its tools as <span className="font-mono text-zinc-400">{form.name.trim() || 'name'} · tool</span>.
           </p>
         </div>
 
@@ -953,7 +953,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             </div>
             <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] text-amber-200/90">
               <ShieldAlert size={14} className="flex-shrink-0 mt-px text-amber-400" />
-              <span>This command runs on the kwnt machine with your user’s permissions. Only add servers you trust.</span>
+              <span>This command runs on the server’s machine with your user’s permissions. Only add servers you trust.</span>
             </div>
             <div>
               <p className="text-xs font-medium text-zinc-400 mb-1">
@@ -1086,7 +1086,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             )}
             <div className="min-w-0">
               <h2 id="mcp-title" className="text-sm font-semibold text-zinc-100 truncate">
-                {editing === 'new' || picking ? 'Add a tool server' : editing ? `Edit ${form.name || 'server'}` : 'Tools for your kwants'}
+                {editing === 'new' || picking ? 'Add a tool server' : editing ? `Edit ${form.name || 'server'}` : 'Tools for your kwant bots'}
               </h2>
               <p className="text-xs text-zinc-400 truncate">
                 {picking
@@ -1095,7 +1095,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
                   ? 'Pick how it connects, then fill in the details'
                   : editing
                     ? 'Saved secrets stay hidden and are kept unless you change them'
-                    : 'MCP servers your kwants can use, with your approval'}
+                    : 'MCP servers your bots can use, with your approval'}
               </p>
             </div>
           </div>

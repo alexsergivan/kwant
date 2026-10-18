@@ -1,5 +1,7 @@
 // API token handling: the `#kwnt_token=` link, the session cookie and 401s from any `/api` call.
 
+import { getCurrentSpace, withSpace } from './spaces';
+
 /** Fired on `window` when an `/api` call answers 401 (the token is missing or no longer valid). */
 export const UNAUTHORIZED_EVENT = 'kwnt:unauthorized';
 
@@ -33,12 +35,14 @@ export function isGuardedApiUrl(url: string, origin: string): boolean {
 
 let installed = false;
 
-/** Wraps `window.fetch` so every component's `/api` 401 reaches the auth gate. */
+/** Wraps `window.fetch` so every component's `/api` 401 reaches the auth gate, and space-scoped
+ * `/api` calls carry the open space as `?space=`. */
 export function installUnauthorizedListener(): void {
   if (installed || typeof window === 'undefined') return;
   installed = true;
   const original = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (typeof input === 'string') input = withSpace(input, window.location.origin, getCurrentSpace());
     const res = await original(input, init);
     if (res.status === 401) {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -50,7 +54,7 @@ export function installUnauthorizedListener(): void {
 
 export async function fetchAuthStatus(): Promise<AuthStatus> {
   const res = await fetch('/api/auth/status', { cache: 'no-store' });
-  if (res.status === 403) throw new Error("This page's address isn't allowed to use the API (403). Open kwnt at its own address.");
+  if (res.status === 403) throw new Error("This page's address isn't allowed to use the API (403). Open kwant bots at its own address.");
   if (!res.ok) throw new Error(`The server answered ${res.status}.`);
   return res.json();
 }

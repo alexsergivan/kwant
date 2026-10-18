@@ -173,7 +173,7 @@ pub async fn test_server(State(state): State<AppState>, Path(id): Path<String>) 
 
 pub async fn get_kwant_servers(State(state): State<AppState>, Path(kwant_id): Path<String>) -> ApiResult<Value> {
     if state.db.get_kwant(&kwant_id).await.map_err(db_err)?.is_none() {
-        return Err(err(StatusCode::NOT_FOUND, "kwant not found"));
+        return Err(err(StatusCode::NOT_FOUND, "bot not found"));
     }
     let ids = state.db.get_kwant_mcp_server_ids(&kwant_id).await.map_err(db_err)?;
     Ok(Json(json!({ "server_ids": ids })))
@@ -190,7 +190,7 @@ pub async fn set_kwant_servers(
     Json(body): Json<AssignServers>,
 ) -> ApiResult<Value> {
     let Some(space) = state.db.space_of_kwant(&kwant_id).await.map_err(db_err)? else {
-        return Err(err(StatusCode::NOT_FOUND, "kwant not found"));
+        return Err(err(StatusCode::NOT_FOUND, "bot not found"));
     };
     // Only servers in the kwant's own space can be assigned to it
     let known: Vec<String> = state.db.list_mcp_servers(&space).await.map_err(db_err)?.into_iter().map(|s| s.id).collect();

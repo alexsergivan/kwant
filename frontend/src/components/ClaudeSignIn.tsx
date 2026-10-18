@@ -254,7 +254,7 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
             </button>
           </div>
           <p className="text-[10.5px] text-zinc-500 leading-snug">
-            Why a code? kwnt runs the sign-in in the background, so claude.ai can’t hand the login back by itself. The code works once and isn’t kept.
+            Why a code? The server runs the sign-in in the background, so claude.ai can’t hand the login back by itself. The code works once and isn’t kept.
           </p>
           <p className="sr-only" role="status">
             {state === 'verifying' ? 'Checking the code with Claude…' : ''}
@@ -365,7 +365,7 @@ export const ClaudeSignOut: React.FC<{ onSignedOut: (engines: EngineInfo[]) => v
               Sign out of Claude?
             </h4>
             <div id="claude-signout-desc" className="space-y-1.5 text-xs text-zinc-300 leading-relaxed">
-              <p>Every kwant on this server will stop using Claude until you sign in again.</p>
+              <p>Every bot in this space will stop using this account until you sign in again.</p>
               <p className="text-zinc-400">This signs Claude Code out on this computer, so anything else here that uses the same Claude Code login is signed out too.</p>
             </div>
             {error && (

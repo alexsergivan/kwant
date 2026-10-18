@@ -959,7 +959,7 @@ async fn kwant_name(state: &AppState, id: &str) -> String {
         .ok()
         .flatten()
         .map(|k| k.name)
-        .unwrap_or_else(|| "An agent".into())
+        .unwrap_or_else(|| "A bot".into())
 }
 
 async fn place(state: &AppState, context_id: Option<&str>) -> (Option<String>, String) {
@@ -1014,7 +1014,7 @@ async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Noti
                 kwant_id,
                 title: format!("{name} needs your approval"),
                 body: format!(
-                    "{name} wants to use {}. Open kwnt to allow or deny it.",
+                    "{name} wants to use {}. Open kwant bots to allow or deny it.",
                     clip(tool_name, 80)
                 ),
                 kwant_name: name,

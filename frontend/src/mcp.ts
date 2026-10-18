@@ -224,7 +224,7 @@ export const MCP_PRESETS: McpPreset[] = [
     // npm @modelcontextprotocol/server-memory 1.0.0
     id: 'memory',
     label: 'Memory',
-    blurb: 'A small knowledge graph kwants can save facts to and recall later.',
+    blurb: 'A small knowledge graph bots can save facts to and recall later.',
     category: 'data',
     needs: ['Node.js'],
     source: 'https://github.com/modelcontextprotocol/servers/tree/main/src/memory',
@@ -274,7 +274,7 @@ export const MCP_PRESETS: McpPreset[] = [
     // npm @modelcontextprotocol/server-sequential-thinking 1.0.0
     id: 'sequential-thinking',
     label: 'Sequential thinking',
-    blurb: 'Helps a kwant plan step by step and revise its plan on hard problems.',
+    blurb: 'Helps a bot plan step by step and revise its plan on hard problems.',
     category: 'devtools',
     needs: ['Node.js'],
     source: 'https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking',
@@ -353,7 +353,7 @@ export const validateMcpForm = (form: McpFormState): string | null => {
   if (!name) return 'Give the server a short name.';
   if (!NAME_RE.test(name) || name.includes('__'))
     return 'Use letters, numbers, - or _ for the name (no spaces, up to 48 characters).';
-  if (name.toLowerCase() === 'kwnt') return '"kwnt" is reserved, pick another name.';
+  if (name.toLowerCase() === 'kwnt') return 'That name is reserved for the built-in tools, pick another.';
   if (form.transport === 'stdio') {
     if (splitCommandLine(form.commandLine).length === 0) return 'Add the command that starts the server.';
     const bad = form.env.find((r) => r.key.trim() && !ENV_KEY_RE.test(r.key.trim()));
