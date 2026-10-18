@@ -90,6 +90,30 @@ async fn ask_pauses_the_turn_and_a_choice_resumes_it() {
     assert_eq!(s, StatusCode::CONFLICT);
 }
 
+/// The question, its card and its waiting turn appear together: polled as fast as possible,
+/// the first sighting of an open question already has its card message and a live waiter.
+#[tokio::test]
+async fn a_question_is_never_visible_without_its_card_and_waiter() {
+    let env = setup().await;
+    send_direct(&env, &env.a, &format!("Go? {} REPLYTAG:r1", ask_marker("Deploy now?", &["yes", "no"])), json!({})).await;
+    let q = loop {
+        let (s, list) = call(&env.app, "GET", &format!("/api/questions?status=open&context_id={}", env.a), None).await;
+        assert_eq!(s, StatusCode::OK);
+        if let Some(q) = list.as_array().and_then(|l| l.first()) {
+            break q.clone();
+        }
+        tokio::task::yield_now().await;
+    };
+    let id = q["id"].as_str().unwrap().to_string();
+    let mid = q["message_id"].as_str().unwrap_or_else(|| panic!("open question without its card: {q}")).to_string();
+    assert!(question(&env, &id).await["waiting"].as_bool().unwrap(), "open question without a waiting turn");
+    assert!(messages(&env, &env.a).await.iter().any(|m| m.id == mid), "card message missing");
+    let (s, v) = call(&env.app, "POST", &format!("/api/questions/{id}/answer"), Some(json!({"choice": 0}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["resumed"], "turn", "an immediate answer resumes the waiting turn");
+    wait_reply(&env, &env.a, "answer r1").await;
+}
+
 #[tokio::test]
 async fn the_agent_keeps_working_elsewhere_while_it_waits() {
     let env = setup().await;

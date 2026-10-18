@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Parser, Debug)]
-#[command(name = "kwnt", author, version, about = "Kwants: Multi-Agent AI Platform in Rust")]
+#[command(name = "kwnt", author, version, about = "kwant bots: your team of AI bots")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -162,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Starting Kwant..."
             );
             println!(
-                "⚡ Kwant: your team of super-intelligent bots (kwants), listening at http://{}",
+                "⚡ kwant bots: your team of super-intelligent bots, listening at http://{}",
                 addr
             );
             if !is_loopback_bind(&config.host) {
@@ -195,7 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::McpEchoServer) => unreachable!("handled before config loading"),
         Some(Commands::McpOauthMockServer { .. }) => unreachable!("handled before config loading"),
         None => {
-            println!("⚡ Kwant: your team of super-intelligent bots (kwants)");
+            println!("⚡ kwant bots: your team of super-intelligent bots");
             println!("Run `kwnt serve` to start the server, or `kwnt --help` for options.");
         }
     }
@@ -243,7 +243,7 @@ fn print_status(config: &Config) {
         format!("{} (absent)", config_path.display())
     };
 
-    println!("Kwant");
+    println!("kwant bots");
     println!("  host       {}", config.host);
     println!("  port       {}", config.port);
     println!("  data dir   {}", config.data_dir.display());
@@ -266,7 +266,7 @@ async fn print_agents(config: &Config) -> Result<(), Box<dyn std::error::Error>>
         "NAME", "TITLE", "DRIVER"
     );
     if kwants.is_empty() {
-        println!("(no agents)");
+        println!("(no bots)");
         return Ok(());
     }
     for kwant in kwants {

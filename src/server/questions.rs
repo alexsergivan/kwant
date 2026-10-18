@@ -185,20 +185,41 @@ pub async fn tool_ask(state: &AppState, scope: &SelfScope, args: &Value) -> (Str
         thread_id: origin.thread_id.clone(),
         turn_id: scope.turn_id.clone(),
     };
-    let mut q = match state.db.create_question(&place, &question, &choices).await {
-        Ok(q) => q,
-        Err(QuestionError::Db) => return ("Could not save the question.".into(), true),
-        Err(e) => return (e.to_string(), true),
-    };
-    // Waiting before the card exists, so a very fast answer can't miss the turn
-    let hub = &state.questions;
-    let mut rx = hub.register(&q.id);
-    let _guard = WaiterGuard { hub, id: q.id.clone() };
+    // The question, its card and the waiter appear together: the waiter is registered inside the
+    // transaction, so neither a list poll nor a very fast answer can see one without the others.
     // The text keeps the choices readable in history and for older clients; the card uses meta
-    let text = format!("{}\n\nChoices: {}", q.question, choices.join(" · "));
-    if let Some(mid) = save_message(state, &q, "kwant", &scope.kwant_id, text, card_meta(&q)).await {
-        let _ = state.db.set_question_message(&q.id, &mid).await;
-        q.message_id = Some(mid);
+    let hub = &state.questions;
+    let mut waiter = None;
+    let created = state
+        .db
+        .create_question_with_card(&place, &question, &choices, |q| {
+            waiter = Some((q.id.clone(), hub.register(&q.id)));
+            let text = format!("{}\n\nChoices: {}", q.question, choices.join(" · "));
+            let (msg, extra) = place_message(q, "kwant", &scope.kwant_id, text);
+            Some((msg, MessageExtra { meta: Some(card_meta(q)), ..extra }))
+        })
+        .await;
+    let (q, card) = match created {
+        Ok(v) => v,
+        Err(e) => {
+            if let Some((id, _)) = waiter {
+                hub.take(&id);
+            }
+            return match e {
+                QuestionError::Db => ("Could not save the question.".into(), true),
+                e => (e.to_string(), true),
+            };
+        }
+    };
+    let Some((_, mut rx)) = waiter else {
+        return ("Could not save the question.".into(), true);
+    };
+    let _guard = WaiterGuard { hub, id: q.id.clone() };
+    if let Some(card) = card {
+        if let Some(t) = &q.thread_id {
+            let _ = state.db.touch_thread(t).await;
+        }
+        let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&card).unwrap_or(Value::Null) });
     }
     changed(state, &q).await;
     notify(

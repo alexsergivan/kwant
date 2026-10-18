@@ -263,7 +263,7 @@ pub fn heuristic_pick_kwant<'a>(
         Some((
             lead,
             format!(
-                "No agent here lists skills matching this request, so {} ({}) is taking it as channel lead",
+                "No bot here lists skills matching this request, so {} ({}) is taking it as channel lead",
                 lead.name, lead.title
             ),
         ))

@@ -222,7 +222,8 @@ async fn a_wrong_code_fails_without_echoing_cli_output_and_allows_a_retry() {
     assert_eq!(v["state"], "failed", "{v}");
     let detail = v["detail"].as_str().unwrap();
     assert!(detail.contains("didn't accept that code"), "{v}");
-    assert!(!v.to_string().contains("WRONGCODE999") && !v.to_string().contains("400"), "{v}");
+    // The CLI's HTTP status stays out of the text (not the whole body: a random session id can hold "400")
+    assert!(!v.to_string().contains("WRONGCODE999") && !detail.contains("400"), "{v}");
     assert!(!env.home.join(".credentials.json").exists());
     let (_, engines) = call(app, "GET", "/api/engines", None).await;
     assert_ne!(claude_status(&engines), "ready");

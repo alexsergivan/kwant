@@ -959,7 +959,7 @@ async fn kwant_name(state: &AppState, id: &str) -> String {
         .ok()
         .flatten()
         .map(|k| k.name)
-        .unwrap_or_else(|| "An agent".into())
+        .unwrap_or_else(|| "A bot".into())
 }
 
 async fn place(state: &AppState, context_id: Option<&str>) -> (Option<String>, String) {

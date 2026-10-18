@@ -326,7 +326,7 @@ impl Database {
     async fn check_skill_owner(&self, space: &SpaceId, kwant_id: Option<&str>) -> Result<(), SkillError> {
         match kwant_id {
             Some(id) if !self.kwants_in_space(space, &[id]).await? => {
-                Err(SkillError::Invalid("that agent is in another space".into()))
+                Err(SkillError::Invalid("that bot is in another space".into()))
             }
             _ => Ok(()),
         }

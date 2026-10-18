@@ -155,7 +155,7 @@ fn item(row: AwayRow) -> Value {
         "kind": row.kind,
         "id": row.id,
         "kwant_id": row.kwant_id,
-        "kwant_name": row.kwant_name.unwrap_or_else(|| "An agent".into()),
+        "kwant_name": row.kwant_name.unwrap_or_else(|| "A bot".into()),
         "title": title,
         "summary": summary,
         "status": row.status,
