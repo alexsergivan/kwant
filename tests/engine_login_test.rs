@@ -33,6 +33,8 @@ const GOOD: &str = "GOODCODE123#STATE987";
 
 /// Prints a link, writes its pid, and signs in (writes `.credentials.json`) only for [`GOOD`].
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
+# A profile's claude gets kwnt's provider overrides first, as `claude --settings <json> auth …`
+if [ "$1" = --settings ]; then over="$2"; shift 2; fi
 case "$1 $2" in
   "--version "*) echo "9.9.9 (Claude Code)" ;;
   "auth status")

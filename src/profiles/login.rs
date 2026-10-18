@@ -150,13 +150,12 @@ impl LoginManager {
                 return Err(StartError::Busy(Box::new(f.view.lock().unwrap().clone())));
             }
         }
-        let mut cmd = tokio::process::Command::new(bin);
+        let mut cmd = env.command(bin);
         match engine {
             Engine::Claude => cmd.args(["auth", "login", "--claudeai"]),
             Engine::Codex => cmd.args(["login", "--device-auth"]),
             Engine::Grok => cmd.args(["login", "--device-auth"]),
         };
-        env.apply(&mut cmd);
         if home.is_dir() {
             cmd.current_dir(home);
         }

@@ -157,14 +157,14 @@ pub async fn probe(engine: Engine, home: Option<&Path>) -> ProfileStatus {
             account_label: Some(format!("{} CLI not installed", engine.as_str())),
         };
     };
-    let mut cmd = tokio::process::Command::new(bin);
+    let mut cmd = match home {
+        Some(home) => super::CliEnv::for_home(engine, home).command(bin),
+        None => tokio::process::Command::new(bin),
+    };
     match engine {
         Engine::Claude => cmd.args(["auth", "status", "--json"]),
         _ => cmd.args(["login", "status"]),
     };
-    if let Some(home) = home {
-        super::CliEnv::for_home(engine, home).apply(&mut cmd);
-    }
     cmd.env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -500,12 +500,11 @@ pub async fn logout(State(state): State<AppState>, Path(id): Path<String>) -> Re
                     format!("the {} CLI is not installed", engine.as_str()),
                 );
             };
-            let mut cmd = tokio::process::Command::new(bin);
+            let mut cmd = crate::profiles::CliEnv::for_home(engine, &home).command(bin);
             match engine {
                 Engine::Claude => cmd.args(["auth", "logout"]),
                 _ => cmd.arg("logout"),
             };
-            crate::profiles::CliEnv::for_home(engine, &home).apply(&mut cmd);
             cmd.stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())

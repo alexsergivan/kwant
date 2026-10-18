@@ -204,6 +204,8 @@ pub struct CliDriver {
     /// Set when the turn runs on a `cli_home` profile: points the CLI at the profile's home and
     /// removes credential variables that would override its login.
     pub profile_env: Option<crate::profiles::CliEnv>,
+    /// The account the turn runs on, named in the turn's reasoning line.
+    pub account: Option<String>,
 }
 
 impl CliDriver {
@@ -215,6 +217,7 @@ impl CliDriver {
             tool_kind: kind,
             grok_home: None,
             profile_env: None,
+            account: None,
         }
     }
 
@@ -230,6 +233,17 @@ impl CliDriver {
             self.grok_home = Some(home);
         }
         self
+    }
+
+    pub fn with_account(mut self, name: impl Into<String>) -> Self {
+        self.account = Some(name.into());
+        self
+    }
+
+    /// The turn's reasoning line: CLI, account and effort, never the binary's path.
+    fn executed_via(&self, effort: &str) -> String {
+        let account = self.account.as_deref().unwrap_or("This machine");
+        format!("Executed via {} CLI · {} [Effort: {}]", self.tool_kind, account, effort)
     }
 
     pub fn with_grok_home(mut self, dir: std::path::PathBuf) -> Self {
@@ -766,8 +780,8 @@ impl Driver for CliDriver {
                     Err(e) => {
                         tracing::warn!(error = %e, binary = %bin_path, "grok run failed");
                         let msg = format!(
-                            "⚠️ [{}] Execution error for CLI `{}`: {}",
-                            input.kwant.name, bin_path, e
+                            "⚠️ [{}] Execution error for {} CLI: {}",
+                            input.kwant.name, self.tool_kind, e
                         );
                         let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
                         (msg, 15)
@@ -783,10 +797,7 @@ impl Driver for CliDriver {
                     .await;
                 return Ok(TurnOutput {
                     text,
-                    reasoning: Some(format!(
-                        "Executed via {} CLI ({}) [Effort: {}]",
-                        self.tool_kind, bin_path, effort
-                    )),
+                    reasoning: Some(self.executed_via(effort)),
                     tokens_used: tokens,
                     ..Default::default()
                 });
@@ -836,6 +847,8 @@ impl Driver for CliDriver {
         }
         if let Some(env) = &self.profile_env {
             env.apply(&mut cmd);
+            // claude -p has no subcommand, so its overrides can follow the other options
+            cmd.args(&env.args);
         }
 
         // codex's reply comes from its -o file; an unread pipe could fill up and stall the CLI
@@ -900,7 +913,8 @@ impl Driver for CliDriver {
                         // A failed run with no output is an error, not an empty reply
                         None if stdout.trim().is_empty() && !exit.is_some_and(|s| s.success()) => {
                             let status = exit.and_then(|s| s.code()).map_or("a signal".to_string(), |c| format!("status {c}"));
-                            return Err(DriverError::Execution(format!("{bin_path} exited with {status} and no output")));
+                            tracing::warn!(binary = %bin_path, %status, "CLI exited with no output");
+                            return Err(DriverError::Execution(format!("{} CLI exited with {status} and no output", self.tool_kind)));
                         }
                         // Not JSON (an older claude): its plain text is the reply
                         None => stdout,
@@ -924,10 +938,7 @@ impl Driver for CliDriver {
 
                 Ok(TurnOutput {
                     text: output_str,
-                    reasoning: Some(format!(
-                        "Executed via {} CLI ({}) [Effort: {}]",
-                        self.tool_kind, bin_path, effort
-                    )),
+                    reasoning: Some(self.executed_via(effort)),
                     tokens_used: tokens,
                     ..Default::default()
                 })
@@ -935,8 +946,8 @@ impl Driver for CliDriver {
             Err(e) => {
                 tracing::warn!(error = %e, binary = %bin_path, "CLI binary execution failed");
                 let msg = format!(
-                    "⚠️ [{}] Execution error for CLI `{}`: {}",
-                    input.kwant.name, bin_path, e
+                    "⚠️ [{}] Execution error for {} CLI: {}",
+                    input.kwant.name, self.tool_kind, e
                 );
                 let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
                 let _ = event_tx

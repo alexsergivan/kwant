@@ -20,6 +20,8 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
+# A profile's claude gets kwnt's provider overrides first, as `claude --settings <json> auth …`
+if [ "$1" = --settings ]; then over="$2"; shift 2; fi
 case "$1" in
   auth) echo '{"loggedIn":true,"email":"fake@example.com"}'; exit 0 ;;
 esac
