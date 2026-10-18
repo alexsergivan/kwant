@@ -163,3 +163,18 @@ test('the kwant form takes Claude as ready through Personal, even with no model 
   const off = [{ ...oleksOn, enabled: false, status: 'disabled', ready: false }, engine('anthropic_api', { status: 'not_installed', ready: false, detail: 'No API key: add one in Settings' })];
   assert.deepEqual(m.pickHealth('claude', off), { kind: 'engine_unavailable', family: 'claude', reason: 'Switched off in Settings' });
 });
+
+test('a new space with no keys still offers every engine an account can be added to', () => {
+  // What a fresh space sees: the CLIs signed in on this machine, no API keys, Ollama not running.
+  const noKey = (id) => engine(id, { status: 'not_installed', detail: 'No API key: add one in Settings', ready: false, uses: null });
+  const html = panel(
+    [oleksOn, engine('codex'), noKey('anthropic_api'), noKey('openai_api'), noKey('xai_api'), engine('ollama', { status: 'not_installed', ready: false })],
+    [machine],
+  );
+  for (const id of ['anthropic_api', 'openai_api', 'xai_api']) {
+    assert.match(card(html, id), /Add an account with a key/, `${id} offers a key account without opening a fold`);
+    assert.equal(summary(html, id), 'No key yet · Add a key below to use it');
+  }
+  assert.match(card(html, 'codex'), /> Add account</);
+  assert.match(html, /Not available on this computer \(1\)/, 'only Ollama is folded away');
+});

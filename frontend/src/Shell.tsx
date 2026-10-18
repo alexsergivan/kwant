@@ -4,6 +4,7 @@
 import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { SpaceApp, SpaceTarget } from './App';
+import type { SpaceSettingsTab } from './components/SpaceSettings';
 import { ArchivedSpacesModal, NewSpaceModal, SpaceRail } from './components/Spaces';
 import { Toasts, Toast } from './components/Toasts';
 import { playSfx } from './audio/chiptune';
@@ -33,6 +34,8 @@ export const App: React.FC = () => {
   // Where to land in the space being opened (a link, a notification, the last chat there).
   const [target, setTarget] = useState<SpaceTarget | null>(null);
   const [creating, setCreating] = useState<Space[] | null>(null);
+  // Space settings tab the next space opens on: Accounts right after "Add accounts next".
+  const [startTab, setStartTab] = useState<SpaceSettingsTab | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [appSettingsOpen, setAppSettingsOpen] = useState(false);
   const [tokensUsed, setTokensUsed] = useState(0);
@@ -57,6 +60,7 @@ export const App: React.FC = () => {
   /** Opens a space: the request scope changes before the new space renders. */
   const open = useCallback((id: string, to?: SpaceTarget | null, replace = false) => {
     const t = to ?? lastChat(id) ?? null;
+    setStartTab(null);
     setCurrentSpace(id);
     rememberSpace(id);
     setTarget(t);
@@ -211,6 +215,7 @@ export const App: React.FC = () => {
         space={current}
         spaces={spaces}
         initialTarget={target}
+        initialSettingsTab={startTab}
         onSwitchSpace={switchTo}
         onCreateSpace={openCreate}
         onOpenArchived={() => setShowArchived(true)}
@@ -236,10 +241,11 @@ export const App: React.FC = () => {
         <NewSpaceModal
           spaces={creating}
           onClose={() => setCreating(null)}
-          onCreated={(s) => {
+          onCreated={(s, addAccounts) => {
             setCreating(null);
             setSpaces((prev) => (prev ? [...prev, s] : [s]));
             open(s.id, null);
+            if (addAccounts) setStartTab('accounts');
             reload();
           }}
         />

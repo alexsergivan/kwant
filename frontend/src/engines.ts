@@ -88,8 +88,9 @@ export function sortEngines(list: EngineInfo[]): EngineInfo[] {
     .map(({ e }) => e);
 }
 
-/** Engines that aren't on this computer at all, to fold away. An API engine with no key is "not installed". */
-export const isAbsent = (e: EngineInfo) => e.status === 'not_installed' && e.enabled !== false && !isUsable(e);
+/** Engines that aren't on this computer at all, to fold away. An API engine with no key reports "not
+ *  installed" too, but it stays out: adding a key on its card is how it becomes usable. */
+export const isAbsent = (e: EngineInfo) => e.status === 'not_installed' && e.kind !== 'api' && e.enabled !== false && !isUsable(e);
 
 /** Whether only CLIs can run things right now (so "no API keys needed" is true). */
 export const onlyCliReady = (list: EngineInfo[]) => {
