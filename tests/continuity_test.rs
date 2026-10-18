@@ -760,7 +760,9 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
             "memory_update",
             "memory_remove",
             "skill_propose",
-            "skill_get"
+            "skill_get",
+            "mcp_search",
+            "mcp_suggest"
         ]
     );
 

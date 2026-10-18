@@ -20,6 +20,7 @@ pub mod skills;
 pub mod spaces;
 pub mod away;
 pub mod computer;
+pub mod mcp_suggest;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -68,6 +69,8 @@ pub struct AppState {
     pub questions: Arc<questions::QuestionHub>,
     /// "Sign in with Claude" for the Claude engine.
     pub claude_login: Arc<engine_login::ClaudeLogin>,
+    /// The MCP Registry agents search and suggest servers from (`KWNT_MCP_REGISTRY_URL`).
+    pub mcp_registry: Arc<crate::mcp::registry::McpRegistry>,
 }
 
 impl AppState {
@@ -105,6 +108,7 @@ impl AppState {
             scheduler_wake: Default::default(),
             questions: Default::default(),
             claude_login: Default::default(),
+            mcp_registry: Arc::new(crate::mcp::registry::McpRegistry::from_env()),
         }
     }
 
@@ -185,6 +189,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/gateway", post(mcp_runtime::gateway_endpoint))
         .route("/api/mcp/gateway/grok", post(mcp_runtime::gateway_grok_endpoint))
         .route("/api/mcp/self", post(continuity::self_endpoint))
+        .route("/api/mcp/suggestions", get(mcp_suggest::list))
+        .route("/api/mcp/suggestions/:id/install", post(mcp_suggest::install))
+        .route("/api/mcp/suggestions/:id/dismiss", post(mcp_suggest::dismiss))
         .route("/api/channels/:id", get(continuity::get_channel).patch(continuity::patch_channel))
         .route("/api/search", get(continuity::search))
         .route("/api/kwants/:id/memories", get(continuity::list_memories).post(continuity::add_memory))

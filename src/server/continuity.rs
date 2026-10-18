@@ -93,7 +93,11 @@ pub async fn prompt_block(
             - `search_history` finds earlier messages in chats you can see; use it when the user refers to something said before that isn't in this conversation.\n\
             - `memory_add`, `memory_update` and `memory_remove` keep your notes. Save only durable facts worth knowing in later chats \
             (preferences, decisions, names), one short fact per note, never secrets or passwords. \
-            They never need the user's approval."
+            They never need the user's approval.\n\
+            - When a request needs a capability you don't have (a service, an app, live data), `mcp_search` looks for an MCP server \
+            that adds it and `mcp_suggest` offers one to the user as a one-click install card. You can't install anything yourself: \
+            suggest at most one or two good matches, then carry on with your reply as best you can without them. \
+            Once the user installs one, its tools are yours from your next turn."
         ));
     }
     out
@@ -213,6 +217,7 @@ fn tool_list(scope: &SelfScope) -> Value {
     let mut tools = memory_tools();
     if let Some(list) = tools.as_array_mut() {
         list.extend(super::skills::tools());
+        list.extend(super::mcp_suggest::tools());
         if scope.sandbox_target.is_some() {
             list.extend(browser_tools());
         }
@@ -580,6 +585,8 @@ async fn call_tool(
         "skill_propose" => super::skills::tool_propose(state, scope, args).await,
         "skill_get" => super::skills::tool_get(state, scope, args).await,
         "ask_user" => super::questions::tool_ask(state, scope, args).await,
+        "mcp_search" => super::mcp_suggest::tool_search(state, scope, args).await,
+        "mcp_suggest" => super::mcp_suggest::tool_suggest(state, scope, args).await,
         "list_attachments" if scope.origin.is_some() => super::attachments::tool_list(state, scope).await,
         "share_file" if scope.origin.is_some() => super::attachments::tool_share(state, scope, args).await,
         "delegate" => super::delegation::tool_delegate(state, scope, args).await,

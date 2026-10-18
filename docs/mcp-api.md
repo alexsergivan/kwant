@@ -145,6 +145,49 @@ OAuth-protected mock MCP server at `http://127.0.0.1:<port>/mcp` whose sign-in p
 Body: `{"server_ids": ["…"]}` (replaces the whole assignment; `[]` clears it).
 `200` → `{"server_ids": [...]}`. `400` unknown server id. `404` unknown kwant.
 
+## Suggestions (agents find servers, the person installs them)
+
+Agents get two tools on `kwnt_tools` (always on, every turn):
+
+- `mcp_search {query}`: searches the official MCP Registry (`KWNT_MCP_REGISTRY_URL`, default
+  `https://registry.modelcontextprotocol.io`; 8 s timeout, results cached 10 min). Each hit says what would run
+  (`transport`, `runs`, `runs_on_users_computer`), what the person must provide (`needs`), or `not_one_click` with the
+  reason, and `status` (`available` with the tool prefix, `installed_but_off`, `suggested`) when the space already has it.
+  Registry text is returned as untrusted data.
+- `mcp_suggest {registry_id, reason}`: records a pending suggestion and posts a card into the chat the turn runs in.
+  It installs nothing. At most 3 per turn, 10 pending per agent, one pending per registry entry per agent; an entry
+  that is already installed or isn't one-click is refused with a note.
+
+Only these become one-click plans (the plan is stored with the suggestion; install runs exactly that):
+remote `streamable-http` (https, or http on loopback, no templated URL); `npm` → `npx -y <id>@<version>`;
+`pypi` → `uvx <id>==<version>`; `oci` → `docker run -i --rm -e NAME… <image>:<version>`. Exact versions only,
+default npm/PyPI registries only, no shell, arguments only from fixed registry values. stdio plans are marked
+`runs_on_your_computer: true`.
+
+### `GET /api/mcp/suggestions?space=&status=&kwant_id=`
+Newest first. Each item is the suggestion record plus `card` (same shape as the message meta below).
+
+### `POST /api/mcp/suggestions/:id/install` `{env?: {NAME: value}, headers?: {Name: value}}`
+Person only: a bearer that is an agent turn/gateway token or isn't the API token gets 403. Keys must be the plan's
+`inputs`; required ones must be present (400 otherwise). For an input with a `template` such as `Bearer {api_key}`
+the person types just the value. Creates the server (named after the entry, `-2`… if taken), enables it only for the
+suggesting agent, then tests it.
+- 200 `{suggestion, server, test, oauth_required}`; `server` is the masked server object with `disabled_for_kwants`.
+  When `oauth_required` is true the server is kept; continue with `POST /api/mcp/servers/:id/oauth/start`.
+- 422 `{error, suggestion, test}`: the test failed; the server is removed, the suggestion stays `pending` with `last_error`.
+- 404 unknown, 409 not pending (or the agent was deleted).
+The agent's next turn has the tools; no restart.
+
+### `POST /api/mcp/suggestions/:id/dismiss`
+Person only (as above). 200 with the suggestion, 409 if not pending.
+
+### Card
+A message from the agent with `meta.kind = "mcp_suggestion"`: `suggestion_id, kwant_id, registry_name, version, title,
+description, reason, repository_url, transport, url, command, args, package, runs_on_your_computer, fixed_env,
+fixed_headers` (names only), `inputs[{name, kind: "env"|"header", description, required, secret, template, placeholder}],
+status (pending|installing|installed|dismissed), server_id, last_error`. Changes arrive as SSE `mcp_suggestion_updated
+{suggestion}` and the message meta is updated in place.
+
 ## Agent runtime
 
 - **Tool names** are `mcp__<server>__<tool>`.
