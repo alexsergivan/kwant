@@ -207,11 +207,13 @@ pub async fn first_ollama_model(root: &str) -> Option<String> {
 
 /// The model families a turn can run on right now, for routing: a family counts when its API key
 /// or CLI passed its check (see [`engines`]), or when `profile_engines` has a usable profile for
-/// it. Empty when nothing can run; there is no made-up fallback.
+/// it. `host_off` families (This machine off in the space) only count through `profile_engines`.
+/// Empty when nothing can run; there is no made-up fallback.
 pub async fn detect_available_models(
     db: &crate::db::Database,
     engines: &engines::EngineRegistry,
     profile_engines: &std::collections::HashSet<crate::profiles::Engine>,
+    host_off: &std::collections::HashSet<crate::profiles::Engine>,
 ) -> Vec<ModelDescriptor> {
     use crate::profiles::Engine;
     use engines::{EngineId, SystemRoute};
@@ -237,7 +239,9 @@ pub async fn detect_available_models(
         let key = db.get_setting(family.key_setting()).await.ok().flatten();
         let route = engines::system_route(engines, family.as_str(), key, find_cli_binary);
         let engine = match &route {
-            Ok(SystemRoute::Api { engine, .. }) | Ok(SystemRoute::Cli { engine, .. }) => Some(*engine),
+            Ok(SystemRoute::Api { engine, .. }) | Ok(SystemRoute::Cli { engine, .. }) if !host_off.contains(&family) => {
+                Some(*engine)
+            }
             _ => None,
         };
         if engine.is_none() && !profile_engines.contains(&family) {

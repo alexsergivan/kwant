@@ -103,7 +103,7 @@ async fn stream_input_control_lease_and_origin_protection() {
     let tmp = tempfile::tempdir().unwrap();
     let config = Config {data_dir:tmp.path().into(),browser_cdp_url:Some(format!("http://127.0.0.1:{}",mock.port)),..Config::default()};
     let db = Database::init(tmp.path()).await.unwrap();
-    let id=db.list_kwants().await.unwrap()[0].id.clone();
+    let id=db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
     let state=AppState::new(config.clone(),db,ToolRunner::new(tmp.path().join("workspace")),PermissionBroker::new(),LayaRouter::new(config.laya_url));
     let ctrl=kwnt::server::routes::get_or_create_browser_controller(&state,&id).await.unwrap();
     assert!(state.sandbox_manager.get_sandbox(&id).await.is_none(),"browser must not start an execution container");
@@ -159,7 +159,7 @@ async fn live_chromium_stream_and_isolated_sessions() {
     let tmp = tempfile::tempdir().unwrap();
     let config = Config { data_dir: tmp.path().into(), ..Config::default() };
     let db = Database::init(tmp.path()).await.unwrap();
-    let bots = db.list_kwants().await.unwrap();
+    let bots = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let id = bots[0].id.clone();
     let state = AppState::new(config.clone(), db, ToolRunner::new(tmp.path().join("workspace")), PermissionBroker::new(), LayaRouter::new(config.laya_url));
     let ctrl = kwnt::server::routes::get_or_create_browser_controller(&state, &id).await.expect("real Chromium session");

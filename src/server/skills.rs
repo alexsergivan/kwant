@@ -221,6 +221,17 @@ fn unified(lines: &[DiffLine]) -> String {
 
 // Routes
 
+/// The space a skill request is about: the kwant's, or the request's when it names none.
+async fn skill_space(state: &AppState, kwant_id: Option<&str>) -> crate::db::spaces::SpaceId {
+    match kwant_id {
+        Some(id) => match state.db.space_of_kwant(id).await {
+            Ok(Some(space)) => space,
+            _ => super::routes::request_space(),
+        },
+        None => super::routes::request_space(),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct SkillsQuery {
     pub kwant_id: Option<String>,
@@ -235,7 +246,9 @@ pub async fn list(State(state): State<AppState>, Query(q): Query<SkillsQuery>) -
             return error(StatusCode::BAD_REQUEST, format!("unknown status '{s}'"));
         }
     }
-    match state.db.list_skills(q.kwant_id.as_deref().filter(|s| !s.is_empty()), status.as_deref()).await {
+    let kwant_id = q.kwant_id.as_deref().filter(|s| !s.is_empty());
+    let space = skill_space(&state, kwant_id).await;
+    match state.db.list_skills(&space, kwant_id, status.as_deref()).await {
         Ok(list) => Json(list).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -327,7 +340,9 @@ pub async fn create(State(state): State<AppState>, Json(p): Json<SkillPayload>) 
         Ok(t) => t,
         Err(e) => return skill_error(e),
     };
-    match state.db.create_user_skill(p.kwant_id.flatten().as_deref(), text).await {
+    let kwant_id = p.kwant_id.flatten();
+    let space = skill_space(&state, kwant_id.as_deref()).await;
+    match state.db.create_user_skill(&space, kwant_id.as_deref(), text).await {
         Ok(s) => {
             changed(&state, &s);
             (StatusCode::CREATED, Json(s)).into_response()
@@ -519,6 +534,7 @@ mod tests {
             created_at: now,
             updated_at: now,
             reviewed_at: None,
+            space_id: "spc_default".into(),
         }
     }
 

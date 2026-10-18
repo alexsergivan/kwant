@@ -77,18 +77,18 @@ async fn turn_servers(state: &AppState, kwant_id: &str) -> Vec<String> {
 async fn servers_are_on_for_every_kwant_until_opted_out() {
     let (state, app, _tmp) = env().await;
     let db = &state.db;
-    let kwants = db.list_kwants().await.unwrap();
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let (a, b) = (kwants[0].id.clone(), kwants[1].id.clone());
 
     // A server added after the kwants exist is on for all of them, with nothing assigned
-    let notion_id = db.create_mcp_server(&server("notion", true)).await.unwrap().id;
-    let off_id = db.create_mcp_server(&server("off", false)).await.unwrap().id;
+    let notion_id = db.create_mcp_server(&kwnt::db::spaces::SpaceId::default_space(), &server("notion", true)).await.unwrap().id;
+    let off_id = db.create_mcp_server(&kwnt::db::spaces::SpaceId::default_space(), &server("off", false)).await.unwrap().id;
     for k in [&a, &b] {
         assert_eq!(turn_servers(&state, k).await, vec!["notion"], "globally disabled servers stay out");
     }
     // ...and for a kwant created later
     let late = db
-        .create_kwant(&NewKwant {
+        .create_kwant(&kwnt::db::spaces::SpaceId::default_space(), &NewKwant {
             name: "Late".into(),
             title: "t".into(),
             persona_prompt: "p".into(),
@@ -125,7 +125,7 @@ async fn servers_are_on_for_every_kwant_until_opted_out() {
     assert!(turn_servers(&state, &a).await.is_empty());
 
     // A server added after the opt-out is on for a too
-    let github_id = db.create_mcp_server(&server("github", true)).await.unwrap().id;
+    let github_id = db.create_mcp_server(&kwnt::db::spaces::SpaceId::default_space(), &server("github", true)).await.unwrap().id;
     assert_eq!(turn_servers(&state, &a).await, vec!["github"]);
 
     // The server list says who has each server off
@@ -139,7 +139,7 @@ async fn servers_are_on_for_every_kwant_until_opted_out() {
     // Turning it back on clears the opt-out
     call(&app, "PUT", &uri, Some(json!({"server_ids": [notion_id, off_id, github_id]}))).await;
     assert_eq!(turn_servers(&state, &a).await, vec!["github", "notion"]);
-    assert!(db.list_mcp_kwant_opt_outs().await.unwrap().is_empty());
+    assert!(db.list_mcp_kwant_opt_outs(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap().is_empty());
 
     // Validation is unchanged
     let (status, _) = call(&app, "PUT", &uri, Some(json!({"server_ids": ["nope"]}))).await;
@@ -152,19 +152,19 @@ async fn servers_are_on_for_every_kwant_until_opted_out() {
 async fn deleting_a_server_removes_its_opt_outs() {
     let (state, app, _tmp) = env().await;
     let db = &state.db;
-    let kwants = db.list_kwants().await.unwrap();
-    let notion_id = db.create_mcp_server(&server("notion", true)).await.unwrap().id;
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let notion_id = db.create_mcp_server(&kwnt::db::spaces::SpaceId::default_space(), &server("notion", true)).await.unwrap().id;
     for k in &kwants {
         db.set_kwant_mcp_servers(&k.id, &[]).await.unwrap();
     }
-    assert_eq!(db.list_mcp_kwant_opt_outs().await.unwrap()[&notion_id].len(), kwants.len());
+    assert_eq!(db.list_mcp_kwant_opt_outs(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[&notion_id].len(), kwants.len());
 
     let (status, _) = call(&app, "DELETE", &format!("/api/mcp/servers/{notion_id}"), None).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(db.list_mcp_kwant_opt_outs().await.unwrap().is_empty(), "no orphaned opt-out rows");
+    assert!(db.list_mcp_kwant_opt_outs(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap().is_empty(), "no orphaned opt-out rows");
 
     // A server added again starts on for everyone
-    db.create_mcp_server(&server("notion", true)).await.unwrap();
+    db.create_mcp_server(&kwnt::db::spaces::SpaceId::default_space(), &server("notion", true)).await.unwrap();
     for k in &kwants {
         assert_eq!(turn_servers(&state, &k.id).await, vec!["notion"]);
     }

@@ -31,6 +31,14 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+/// A routine whose agent and channel are in different spaces is a 400; anything else is a 500.
+fn db_error(e: crate::db::DbError) -> Response {
+    match e {
+        crate::db::DbError::OtherSpace(m) => (StatusCode::BAD_REQUEST, m).into_response(),
+        _ => internal(),
+    }
+}
+
 fn internal() -> Response {
     StatusCode::INTERNAL_SERVER_ERROR.into_response()
 }
@@ -164,7 +172,7 @@ async fn build(
 }
 
 pub async fn list(State(state): State<AppState>) -> Response {
-    match state.db.list_routines().await {
+    match state.db.list_routines(&super::routes::request_space()).await {
         Ok(list) => {
             Json(list.into_iter().map(RoutineView::from).collect::<Vec<_>>()).into_response()
         }
@@ -190,7 +198,7 @@ pub async fn create(State(state): State<AppState>, Json(p): Json<RoutinePayload>
             state.scheduler_wake.notify_one();
             (StatusCode::CREATED, Json(RoutineView::from(r))).into_response()
         }
-        Err(_) => internal(),
+        Err(e) => db_error(e),
     }
 }
 
@@ -214,7 +222,7 @@ pub async fn update(
             Json(RoutineView::from(r)).into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => internal(),
+        Err(e) => db_error(e),
     }
 }
 
@@ -405,7 +413,11 @@ async fn execute(state: &AppState, routine: &RoutineRow) -> Result<Option<String
 /// Moves every missed or unset next run to its first slot after `now`: runs missed while kwnt was
 /// down are dropped, and a `once` routine whose time has passed is switched off.
 pub async fn reschedule_all(state: &AppState, now: DateTime<Utc>) {
-    let routines = state.db.list_routines().await.unwrap_or_default();
+    let mut routines = Vec::new();
+    for space in state.db.list_spaces().await.unwrap_or_default() {
+        let space = crate::db::spaces::SpaceId::new(&space.id);
+        routines.extend(state.db.list_routines(&space).await.unwrap_or_default());
+    }
     // A slot still ahead is kept: recomputing it would push interval routines back on every restart
     for r in routines
         .into_iter()

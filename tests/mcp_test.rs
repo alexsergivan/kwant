@@ -158,7 +158,7 @@ async fn registry_crud_masks_secrets() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     // Assignment: only enabled servers are active for the kwant
-    let kwant_id = db.list_kwants().await.unwrap()[0].id.clone();
+    let kwant_id = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
     let uri = format!("/api/kwants/{kwant_id}/mcp-servers");
     let (status, _) = call(&app, "PUT", &uri, Some(json!({"server_ids": ["nope"]}))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

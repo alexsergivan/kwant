@@ -992,6 +992,7 @@ mod tests {
     #[test]
     fn test_build_cli_prompt_with_history() {
         let kwant = Kwant {
+            space_id: crate::db::spaces::DEFAULT_SPACE_ID.into(),
             id: "k1".into(),
             name: "Architect".into(),
             title: "Lead".into(),
@@ -1062,6 +1063,7 @@ mod tests {
     #[test]
     fn test_build_cli_prompt_without_history() {
         let kwant = Kwant {
+            space_id: crate::db::spaces::DEFAULT_SPACE_ID.into(),
             id: "k1".into(),
             name: "Architect".into(),
             title: "Lead".into(),

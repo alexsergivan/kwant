@@ -446,6 +446,7 @@ mod tests {
 
     fn profile(id: &str, engine: &str, kind: &str, priority: i64, default: bool) -> LlmProfile {
         LlmProfile {
+            space_id: crate::db::spaces::DEFAULT_SPACE_ID.into(),
             id: id.into(),
             engine: engine.into(),
             name: id.into(),

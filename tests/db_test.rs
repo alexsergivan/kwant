@@ -16,10 +16,10 @@ async fn test_db_init_and_crud() {
         preferred_model: "auto".into(),
     };
 
-    let kwant = db.create_kwant(&new_kwant).await.unwrap();
+    let kwant = db.create_kwant(&kwnt::db::spaces::SpaceId::default_space(), &new_kwant).await.unwrap();
     assert_eq!(kwant.name, "PixelMage");
 
-    let list = db.list_kwants().await.unwrap();
+    let list = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     // Default seeded kwants (3) + 1 newly created = 4
     assert!(list.iter().any(|k| k.name == "PixelMage"));
     assert!(list.len() >= 4);
@@ -30,16 +30,16 @@ async fn test_db_init_and_crud() {
 
     // Channels
     let new_chan = NewChannel {
-        name: "general".into(),
+        name: "tavern".into(),
         description: Some("Guild Tavern".into()),
         lead_kwant_id: kwant.id.clone(),
         member_kwants: vec![kwant.id.clone()],
         routing_mode: "auto".into(),
     };
-    let chan = db.create_channel(&new_chan).await.unwrap();
-    assert_eq!(chan.name, "general");
+    let chan = db.create_channel(&kwnt::db::spaces::SpaceId::default_space(), &new_chan).await.unwrap();
+    assert_eq!(chan.name, "tavern");
 
-    let channels = db.list_channels().await.unwrap();
+    let channels = db.list_channels(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     assert!(!channels.is_empty());
 
     // Messages
@@ -119,11 +119,11 @@ async fn test_team_crud_and_seed() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db = Database::init(temp_dir.path()).await.unwrap();
 
-    let teams = db.list_teams().await.unwrap();
+    let teams = db.list_teams(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     assert!(!teams.is_empty(), "Default seed team should exist");
     assert_eq!(teams[0].name, "core-engineering");
 
-    let kwants = db.list_kwants().await.unwrap();
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let new_team = NewTeam {
         name: "infra-sec".into(),
         description: Some("Security and cloud infrastructure".into()),
@@ -133,10 +133,10 @@ async fn test_team_crud_and_seed() {
         workspace_path: None,
         repo_url: None,
     };
-    let created = db.create_team(&new_team).await.unwrap();
+    let created = db.create_team(&kwnt::db::spaces::SpaceId::default_space(), &new_team).await.unwrap();
     assert_eq!(created.name, "infra-sec");
 
-    let fetched = db.get_team_by_name("infra-sec").await.unwrap();
+    let fetched = db.get_team_by_name(&kwnt::db::spaces::SpaceId::default_space(), "infra-sec").await.unwrap();
     assert!(fetched.is_some());
     assert_eq!(fetched.unwrap().id, created.id);
 
@@ -144,7 +144,7 @@ async fn test_team_crud_and_seed() {
     assert!(by_id.is_some());
     assert_eq!(by_id.unwrap().name, "infra-sec");
 
-    let channels = db.list_channels().await.unwrap();
+    let channels = db.list_channels(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     assert!(channels.iter().any(|c| c.name == "team-infra-sec"));
     assert!(channels.iter().any(|c| c.name == "team-core-engineering"));
 
@@ -159,7 +159,7 @@ async fn test_team_with_workspace_and_repo() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db = Database::init(temp_dir.path()).await.unwrap();
 
-    let kwants = db.list_kwants().await.unwrap();
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     let new_team = NewTeam {
         name: "dev-squad".into(),
         description: Some("Frontend and backend app development".into()),
@@ -169,7 +169,7 @@ async fn test_team_with_workspace_and_repo() {
         workspace_path: Some("/Users/dev/my-project".into()),
         repo_url: Some("https://github.com/my-org/my-project.git".into()),
     };
-    let created = db.create_team(&new_team).await.unwrap();
+    let created = db.create_team(&kwnt::db::spaces::SpaceId::default_space(), &new_team).await.unwrap();
     assert_eq!(created.workspace_path.as_deref(), Some("/Users/dev/my-project"));
     assert_eq!(created.repo_url.as_deref(), Some("https://github.com/my-org/my-project.git"));
 
@@ -194,7 +194,7 @@ async fn test_team_with_workspace_and_repo() {
 async fn test_starter_souls_seeded_and_user_edits_survive_restart() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
-    let starters = db.list_kwants().await.unwrap();
+    let starters = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     assert_eq!(starters.len(), 3);
     assert!(starters.iter().all(|k| !k.soul.trim().is_empty()), "every starter has a soul");
 
@@ -219,7 +219,7 @@ async fn test_starter_souls_seeded_and_user_edits_survive_restart() {
     drop(db);
 
     let db = Database::init(tmp.path()).await.unwrap();
-    let after = db.list_kwants().await.unwrap();
+    let after = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
     // An untouched starter without a soul (as in pre-soul databases) gets one back
     assert!(!after.iter().find(|k| k.name == "Architect").unwrap().soul.is_empty());
     // A starter whose persona the user rewrote is left alone

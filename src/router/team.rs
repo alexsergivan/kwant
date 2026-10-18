@@ -506,6 +506,7 @@ mod tests {
 
     fn make_test_fixture() -> (Team, Vec<Kwant>) {
         let team = Team {
+            space_id: crate::db::spaces::DEFAULT_SPACE_ID.into(),
             id: "team-1".into(),
             name: "core-engineering".into(),
             description: Some("Architecture & DevOps".into()),
@@ -519,6 +520,7 @@ mod tests {
         };
         let members = vec![
             Kwant {
+                space_id: crate::db::spaces::DEFAULT_SPACE_ID.into(),
                 id: "kwant-1".into(),
                 name: "Architect".into(),
                 title: "Systems Architect".into(),
@@ -534,6 +536,7 @@ mod tests {
                 created_at: None,
             },
             Kwant {
+                space_id: crate::db::spaces::DEFAULT_SPACE_ID.into(),
                 id: "kwant-2".into(),
                 name: "DevOps".into(),
                 title: "DevOps Engineer".into(),

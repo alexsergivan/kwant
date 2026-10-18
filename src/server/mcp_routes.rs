@@ -31,7 +31,7 @@ fn db_err(e: DbError) -> ApiError {
 
 /// Which kwants have each server off. A read failure shows no opt-outs rather than failing the list.
 async fn opt_outs(state: &AppState) -> std::collections::HashMap<String, Vec<String>> {
-    state.db.list_mcp_kwant_opt_outs().await.unwrap_or_else(|e| {
+    state.db.list_mcp_kwant_opt_outs(&super::routes::request_space()).await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "could not read MCP kwant opt-outs");
         Default::default()
     })
@@ -46,7 +46,7 @@ async fn view(state: &AppState, server: &McpServer) -> McpServerView {
 }
 
 pub async fn list_servers(State(state): State<AppState>) -> ApiResult<Vec<McpServerView>> {
-    let servers = state.db.list_mcp_servers().await.map_err(db_err)?;
+    let servers = state.db.list_mcp_servers(&super::routes::request_space()).await.map_err(db_err)?;
     let mut statuses = mcp_oauth::statuses(&state).await;
     let mut opt_outs = opt_outs(&state).await;
     Ok(Json(
@@ -70,7 +70,7 @@ pub async fn get_server(State(state): State<AppState>, Path(id): Path<String>) -
 
 pub async fn create_server(State(state): State<AppState>, Json(input): Json<McpServerInput>) -> ApiResult<McpServerView> {
     let server = mcp::build_server(input, None).map_err(|m| err(StatusCode::BAD_REQUEST, m))?;
-    let created = state.db.create_mcp_server(&server).await.map_err(db_err)?;
+    let created = state.db.create_mcp_server(&super::routes::request_space(), &server).await.map_err(db_err)?;
     Ok(Json(McpServerView::from(&created)))
 }
 
@@ -182,10 +182,11 @@ pub async fn set_kwant_servers(
     Path(kwant_id): Path<String>,
     Json(body): Json<AssignServers>,
 ) -> ApiResult<Value> {
-    if state.db.get_kwant(&kwant_id).await.map_err(db_err)?.is_none() {
+    let Some(space) = state.db.space_of_kwant(&kwant_id).await.map_err(db_err)? else {
         return Err(err(StatusCode::NOT_FOUND, "kwant not found"));
-    }
-    let known: Vec<String> = state.db.list_mcp_servers().await.map_err(db_err)?.into_iter().map(|s| s.id).collect();
+    };
+    // Only servers in the kwant's own space can be assigned to it
+    let known: Vec<String> = state.db.list_mcp_servers(&space).await.map_err(db_err)?.into_iter().map(|s| s.id).collect();
     if let Some(unknown) = body.server_ids.iter().find(|id| !known.contains(id)) {
         return Err(err(StatusCode::BAD_REQUEST, format!("unknown MCP server id '{unknown}'")));
     }

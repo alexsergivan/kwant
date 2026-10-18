@@ -288,8 +288,8 @@ async fn skills_never_grant_tools_and_stay_with_their_agent() {
 async fn skills_migration_is_idempotent_and_additive() {
     let tmp = tempfile::tempdir().unwrap();
     let db = kwnt::db::Database::init(tmp.path()).await.unwrap();
-    db.create_user_skill(None, kwnt::db::skills::clean_skill_text("keep-me", "d", "b").unwrap()).await.unwrap();
+    db.create_user_skill(&kwnt::db::spaces::SpaceId::default_space(), None, kwnt::db::skills::clean_skill_text("keep-me", "d", "b").unwrap()).await.unwrap();
     drop(db);
     let db = kwnt::db::Database::init(tmp.path()).await.unwrap();
-    assert_eq!(db.list_skills(None, Some("enabled")).await.unwrap().len(), 1);
+    assert_eq!(db.list_skills(&kwnt::db::spaces::SpaceId::default_space(), None, Some("enabled")).await.unwrap().len(), 1);
 }

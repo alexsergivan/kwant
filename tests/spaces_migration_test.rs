@@ -141,7 +141,7 @@ async fn migration_keeps_every_row_and_id_and_backs_up_first() {
             ("prf_system_grok".into(), 0, 1, 1),
         ]
     );
-    let claude_default = db.list_profiles().await.unwrap().into_iter().find(|p| p.engine == "claude" && p.is_default);
+    let claude_default = db.list_profiles(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap().into_iter().find(|p| p.engine == "claude" && p.is_default);
     assert_eq!(claude_default.map(|p| p.id), Some("prf_personal".into()));
 
     let fk: Vec<(String, Option<i64>, String, i64)> = sqlx::query_as("PRAGMA foreign_key_check").fetch_all(&pool).await.unwrap();
@@ -195,25 +195,31 @@ async fn migration_runs_once() {
     assert_eq!(backups(tmp.path()).len(), 1, "no second backup");
 }
 
+/// Starts kwnt on `dir`, expecting it to refuse; returns the reason it gave.
+async fn refused_start(dir: &std::path::Path) -> String {
+    match Database::init(dir).await {
+        Ok(_) => panic!("startup should refuse a database below schema version 1"),
+        Err(e) => e.to_string(),
+    }
+}
+
 #[tokio::test]
-async fn backup_failure_leaves_the_old_schema_and_retries_next_start() {
+async fn backup_failure_refuses_startup_leaves_the_old_schema_and_retries_next_start() {
     let tmp = tempfile::tempdir().unwrap();
     let pool = legacy(tmp.path()).await;
     let before = snapshot(&pool).await;
     // A file where the backups folder should go makes the backup fail
     std::fs::write(tmp.path().join("backups"), "not a folder").unwrap();
 
-    let db = Database::init(tmp.path()).await.expect("startup still succeeds");
-    assert_eq!(db.schema_version().await.unwrap(), 0);
+    // Startup refuses rather than run without spaces, and leaves the old schema as it was
+    let refused = refused_start(tmp.path()).await;
+    assert!(refused.contains("can't start"), "{refused}");
+    assert!(refused.contains("Nothing was changed"), "{refused}");
     assert_eq!(scalar_i64(&pool, "SELECT COUNT(*) FROM sqlite_master WHERE name = 'spaces'").await, 0);
     for table in SPACE_TABLES {
         assert!(!has_column(&pool, table, "space_id").await, "{table} untouched");
     }
     assert_eq!(snapshot(&pool).await, before);
-    // Still a working database on the old schema
-    assert!(db.list_kwants().await.unwrap().iter().any(|k| k.id == "k_ada"));
-    assert!(db.list_teams().await.unwrap().iter().any(|t| t.name == "web"));
-    drop(db);
 
     std::fs::remove_file(tmp.path().join("backups")).unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
@@ -222,7 +228,7 @@ async fn backup_failure_leaves_the_old_schema_and_retries_next_start() {
 }
 
 #[tokio::test]
-async fn failed_schema_change_rolls_back_everything() {
+async fn failed_schema_change_rolls_back_everything_and_refuses_startup() {
     let tmp = tempfile::tempdir().unwrap();
     let pool = legacy(tmp.path()).await;
     // A column the rebuilt table doesn't know: the migration must refuse rather than drop it
@@ -230,8 +236,8 @@ async fn failed_schema_change_rolls_back_everything() {
     exec(&pool, "UPDATE mcp_servers SET local_note = 'keep me'").await;
     let before = snapshot(&pool).await;
 
-    let db = Database::init(tmp.path()).await.expect("startup still succeeds");
-    assert_eq!(db.schema_version().await.unwrap(), 0);
+    let refused = refused_start(tmp.path()).await;
+    assert!(refused.contains("rolled back"), "{refused}");
     assert_eq!(snapshot(&pool).await, before);
     assert_eq!(scalar_i64(&pool, "SELECT COUNT(*) FROM sqlite_master WHERE name = 'spaces'").await, 0);
     // Steps before the failing one were rolled back too
@@ -300,11 +306,11 @@ async fn fresh_database_starts_with_spaces_and_no_backup() {
     }
     // The existing DB layer writes through unchanged and lands in Default
     let team = db
-        .create_team(&kwnt::db::models::NewTeam {
+        .create_team(&kwnt::db::spaces::SpaceId::default_space(), &kwnt::db::models::NewTeam {
             name: "web".into(),
             description: None,
             icon: None,
-            lead_kwant_id: db.list_kwants().await.unwrap()[0].id.clone(),
+            lead_kwant_id: db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone(),
             member_kwants: vec![],
             workspace_path: None,
             repo_url: None,

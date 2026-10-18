@@ -413,7 +413,11 @@ async fn call_tool(
             let Some(query) = str_arg("query") else {
                 return ("query is required".into(), true);
             };
-            let channels = db.list_channels().await.unwrap_or_default();
+            // Only the agent's own space, #general included
+            let Ok(Some(space)) = db.space_of_kwant(&scope.kwant_id).await else {
+                return ("Search failed.".into(), true);
+            };
+            let channels = db.list_channels(&space).await.unwrap_or_default();
             let visible = visible_channels(&channels, &scope.kwant_id);
             let channel_id = str_arg("channel_id").map(str::to_string);
             if let Some(c) = &channel_id {
@@ -431,7 +435,7 @@ async fn call_tool(
                     .unwrap_or(10)
                     .clamp(1, AGENT_SEARCH_LIMIT),
             };
-            match db.search_messages(query, &filter).await {
+            match db.search_messages(&space, query, &filter).await {
                 Ok(hits) => (hits_as_text(&hits), false),
                 Err(e) => {
                     tracing::warn!(error = %e, "agent search failed");
@@ -567,12 +571,22 @@ pub struct SearchQuery {
     pub limit: Option<i64>,
 }
 
-/// `GET /api/search?q=&channel_id=&kwant_id=&limit=`.
+/// `GET /api/search?q=&channel_id=&kwant_id=&limit=`, in the channel's or kwant's space, else
+/// the Default space.
 pub async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> Response {
     let text = q.q.unwrap_or_default();
     if store::fts_query(&text).is_none() {
         return error(StatusCode::BAD_REQUEST, "q needs at least one word");
     }
+    let space = match (q.channel_id.as_deref().filter(|s| !s.is_empty()), q.kwant_id.as_deref().filter(|s| !s.is_empty())) {
+        (Some(c), _) => state.db.space_of_channel(c).await,
+        (None, Some(k)) => state.db.space_of_kwant(k).await,
+        (None, None) => Ok(None),
+    };
+    let space = match space {
+        Ok(s) => s.unwrap_or_else(super::routes::request_space),
+        Err(_) => return internal(),
+    };
     let filter = SearchFilter {
         channel_id: q.channel_id.filter(|s| !s.is_empty()),
         kwant_id: q.kwant_id.filter(|s| !s.is_empty()),
@@ -580,7 +594,7 @@ pub async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>)
         allowed_direct: None,
         limit: q.limit.unwrap_or(20).clamp(1, MAX_SEARCH_LIMIT),
     };
-    match state.db.search_messages(&text, &filter).await {
+    match state.db.search_messages(&space, &text, &filter).await {
         Ok(hits) => Json(hits).into_response(),
         Err(e) => {
             tracing::warn!(error = %e, "search failed");

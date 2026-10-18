@@ -217,7 +217,7 @@ async fn laya_picks_model_tier_pins_and_engine_switches() {
 
     // Laya is offered only engines that are on
     let offered: Vec<String> =
-        detect_available_models(&state.db, &state.engines, &HashSet::new()).await.into_iter().map(|m| m.id).collect();
+        detect_available_models(&state.db, &state.engines, &HashSet::new(), &HashSet::new()).await.into_iter().map(|m| m.id).collect();
     assert!(offered.contains(&"claude".to_string()), "{offered:?}");
     assert!(!offered.iter().any(|m| m == "codex" || m == "grok"), "{offered:?}");
 
