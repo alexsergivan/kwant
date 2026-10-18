@@ -71,7 +71,7 @@ async fn snapshot(pool: &SqlitePool) -> BTreeMap<String, Vec<String>> {
     .unwrap();
     let mut out = BTreeMap::new();
     for (table,) in tables {
-        let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info(?) WHERE name != 'space_id' ORDER BY cid")
+        let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info(?) WHERE name NOT IN ('space_id', 'paused_by_archive') ORDER BY cid")
             .bind(&table)
             .fetch_all(pool)
             .await

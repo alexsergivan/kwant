@@ -122,6 +122,7 @@ impl Database {
             db.require_spaces_schema(&migration).await?;
             db.ensure_one_general().await?;
             db.seed_defaults().await?;
+            db.migrate_space_archive().await?;
         }
 
         Ok(db)

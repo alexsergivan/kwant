@@ -6,6 +6,7 @@
 #![allow(clippy::result_large_err)]
 
 use super::continuity::{notify, Notification};
+use super::spaces::Scope;
 use super::AppState;
 use crate::db::continuity::{NewRoutine, RoutineRow, RoutineRun};
 use crate::drivers::events::RuntimeEvent;
@@ -110,7 +111,8 @@ async fn build(
         .or_else(|| existing.map(|e| e.kwant_id.clone()))
         .ok_or_else(|| bad("kwant_id is required"))?;
     match state.db.get_kwant(&kwant_id).await {
-        Ok(Some(_)) => {}
+        // Nothing new is scheduled in an archived space
+        Ok(Some(k)) => super::spaces::ensure_active(state, &crate::db::spaces::SpaceId::new(&k.space_id)).await?,
         Ok(None) => return Err(bad("unknown kwant_id")),
         Err(_) => return Err(internal()),
     }
@@ -171,8 +173,8 @@ async fn build(
     })
 }
 
-pub async fn list(State(state): State<AppState>) -> Response {
-    match state.db.list_routines(&super::routes::request_space()).await {
+pub async fn list(State(state): State<AppState>, Scope(space): Scope) -> Response {
+    match state.db.list_routines(&space).await {
         Ok(list) => {
             Json(list.into_iter().map(RoutineView::from).collect::<Vec<_>>()).into_response()
         }
@@ -188,11 +190,24 @@ pub async fn get(State(state): State<AppState>, Path(id): Path<String>) -> Respo
     }
 }
 
-pub async fn create(State(state): State<AppState>, Json(p): Json<RoutinePayload>) -> Response {
+/// `POST /api/routines`: the routine lives in its agent's space. An explicit `?space=` must
+/// name that space; without one the agent decides, as before spaces had a picker.
+pub async fn create(
+    State(state): State<AppState>,
+    Scope(space): Scope,
+    uri: axum::http::Uri,
+    Json(p): Json<RoutinePayload>,
+) -> Response {
     let input = match build(&state, p, None).await {
         Ok(i) => i,
         Err(r) => return r,
     };
+    let explicit = super::spaces::space_param(uri.query()).is_some();
+    match state.db.space_of_kwant(&input.kwant_id).await {
+        Ok(Some(of)) if of == space || !explicit => {}
+        Ok(_) => return error(StatusCode::BAD_REQUEST, "the agent is in another space"),
+        Err(_) => return internal(),
+    }
     match state.db.create_routine(&input).await {
         Ok(r) => {
             state.scheduler_wake.notify_one();
@@ -270,6 +285,9 @@ pub async fn run_now(State(state): State<AppState>, Path(id): Path<String>) -> R
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return internal(),
     };
+    if let Err(r) = super::spaces::ensure_active(&state, &crate::db::spaces::SpaceId::new(&routine.space_id)).await {
+        return r;
+    }
     match start_run(&state, routine, "manual").await {
         Some(run) => (StatusCode::ACCEPTED, Json(run)).into_response(),
         None => internal(),

@@ -571,9 +571,13 @@ pub struct SearchQuery {
     pub limit: Option<i64>,
 }
 
-/// `GET /api/search?q=&channel_id=&kwant_id=&limit=`, in the channel's or kwant's space, else
-/// the Default space.
-pub async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>) -> Response {
+/// `GET /api/search?q=&channel_id=&kwant_id=&limit=&space=`, in the channel's or kwant's space,
+/// else the `?space=` one (Default when there is none).
+pub async fn search(
+    State(state): State<AppState>,
+    super::spaces::Scope(scope): super::spaces::Scope,
+    Query(q): Query<SearchQuery>,
+) -> Response {
     let text = q.q.unwrap_or_default();
     if store::fts_query(&text).is_none() {
         return error(StatusCode::BAD_REQUEST, "q needs at least one word");
@@ -584,7 +588,7 @@ pub async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>)
         (None, None) => Ok(None),
     };
     let space = match space {
-        Ok(s) => s.unwrap_or_else(super::routes::request_space),
+        Ok(s) => s.unwrap_or(scope),
         Err(_) => return internal(),
     };
     let filter = SearchFilter {
@@ -839,7 +843,16 @@ pub async fn notify(state: &AppState, n: Notification) {
         return;
     }
     let body = clip(&n.body, NOTIFY_BODY_CHARS);
-    let title = clip(&n.title, 120);
+    let space = notify_space(state, &n.kwant_id).await;
+    // With more than one space the phone can't tell "Laya finished" apart, so name the space
+    let title = match &space {
+        Some((_, name, true)) => clip(&format!("{name} · {}", n.title), 120),
+        _ => clip(&n.title, 120),
+    };
+    let (space_id, space_name) = match space {
+        Some((id, name, _)) => (Some(id), Some(name)),
+        None => (None, None),
+    };
     let _ = state.event_sender.send(RuntimeEvent::Notify {
         kind: n.kind.into(),
         kwant_id: n.kwant_id,
@@ -847,6 +860,8 @@ pub async fn notify(state: &AppState, n: Notification) {
         channel_id: n.channel_id,
         title: title.clone(),
         body: body.clone(),
+        space_id,
+        space_name,
     });
     let Some(url) = state
         .db
@@ -859,6 +874,19 @@ pub async fn notify(state: &AppState, n: Notification) {
         return;
     };
     tokio::spawn(post_webhook(url, title, body));
+}
+
+/// The kwant's space: id, name and whether other active spaces exist.
+async fn notify_space(state: &AppState, kwant_id: &str) -> Option<(String, String, bool)> {
+    let id = state.db.space_of_kwant(kwant_id).await.ok().flatten()?;
+    let space = state.db.get_space(&id).await.ok().flatten()?;
+    let several = state
+        .db
+        .list_spaces()
+        .await
+        .map(|s| s.iter().filter(|s| s.archived_at.is_none()).count() > 1)
+        .unwrap_or(false);
+    Some((space.id.as_str().to_string(), space.name, several))
 }
 
 pub async fn post_webhook(url: String, title: String, body: String) {

@@ -7,6 +7,7 @@
 #![allow(clippy::result_large_err)]
 
 use super::continuity::{notify, Notification, SelfScope};
+use super::spaces::Scope;
 use super::AppState;
 use crate::db::skills::{clean_skill_text, Skill, SkillEdit, SkillError, SKILL_STATUSES};
 use crate::drivers::events::RuntimeEvent;
@@ -221,14 +222,15 @@ fn unified(lines: &[DiffLine]) -> String {
 
 // Routes
 
-/// The space a skill request is about: the kwant's, or the request's when it names none.
-async fn skill_space(state: &AppState, kwant_id: Option<&str>) -> crate::db::spaces::SpaceId {
+/// The space a skill request is about: the kwant's, or the request's (`?space=`) when it names
+/// none.
+async fn skill_space(state: &AppState, kwant_id: Option<&str>, scope: Scope) -> crate::db::spaces::SpaceId {
     match kwant_id {
         Some(id) => match state.db.space_of_kwant(id).await {
             Ok(Some(space)) => space,
-            _ => super::routes::request_space(),
+            _ => scope.0,
         },
-        None => super::routes::request_space(),
+        None => scope.0,
     }
 }
 
@@ -239,7 +241,7 @@ pub struct SkillsQuery {
 }
 
 /// `GET /api/skills?kwant_id=&status=`: newest first; `kwant_id` includes the shared skills.
-pub async fn list(State(state): State<AppState>, Query(q): Query<SkillsQuery>) -> Response {
+pub async fn list(State(state): State<AppState>, scope: Scope, Query(q): Query<SkillsQuery>) -> Response {
     let status = q.status.filter(|s| !s.is_empty());
     if let Some(s) = &status {
         if !SKILL_STATUSES.contains(&s.as_str()) {
@@ -247,7 +249,7 @@ pub async fn list(State(state): State<AppState>, Query(q): Query<SkillsQuery>) -
         }
     }
     let kwant_id = q.kwant_id.as_deref().filter(|s| !s.is_empty());
-    let space = skill_space(&state, kwant_id).await;
+    let space = skill_space(&state, kwant_id, scope).await;
     match state.db.list_skills(&space, kwant_id, status.as_deref()).await {
         Ok(list) => Json(list).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -328,7 +330,7 @@ impl SkillPayload {
 }
 
 /// `POST /api/skills {name, description, body, kwant_id?}`: a skill the user wrote, enabled at once.
-pub async fn create(State(state): State<AppState>, Json(p): Json<SkillPayload>) -> Response {
+pub async fn create(State(state): State<AppState>, scope: Scope, Json(p): Json<SkillPayload>) -> Response {
     if let Err(r) = check_owner(&state, &p.kwant_id).await {
         return r;
     }
@@ -341,7 +343,7 @@ pub async fn create(State(state): State<AppState>, Json(p): Json<SkillPayload>) 
         Err(e) => return skill_error(e),
     };
     let kwant_id = p.kwant_id.flatten();
-    let space = skill_space(&state, kwant_id.as_deref()).await;
+    let space = skill_space(&state, kwant_id.as_deref(), scope).await;
     match state.db.create_user_skill(&space, kwant_id.as_deref(), text).await {
         Ok(s) => {
             changed(&state, &s);

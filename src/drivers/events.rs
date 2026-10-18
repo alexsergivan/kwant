@@ -171,6 +171,15 @@ pub enum RuntimeEvent {
         reason: String,
         /// "direct" for a single responder, "discuss" for a multi-turn team discussion.
         mode: String,
+        /// How many agents were considered.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        candidate_count: Option<usize>,
+        /// True when Laya was unreachable and keyword matching picked instead.
+        #[serde(default)]
+        fallback: bool,
+        /// Prompt words that matched the picked agent (keyword fallback only).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        matched_terms: Vec<String>,
     },
     Error {
         code: String,
@@ -198,6 +207,11 @@ pub enum RuntimeEvent {
         channel_id: Option<String>,
         title: String,
         body: String,
+        /// The space the kwant lives in, so the UI can label and filter the notification.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        space_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        space_name: Option<String>,
     },
 }
 

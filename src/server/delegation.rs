@@ -440,9 +440,17 @@ pub async fn interrupt_open(state: &AppState) {
 
 // Routes
 
-pub async fn list_turns(State(state): State<AppState>) -> Response {
+/// `GET /api/turns?space=`: the turns running for that space's kwants. The limits are app-wide.
+pub async fn list_turns(State(state): State<AppState>, super::spaces::Scope(space): super::spaces::Scope) -> Response {
     let (per_agent, global) = state.turns.limiter.limits();
-    Json(json!({ "turns": state.turns.active_turns(), "max_turns_per_agent": per_agent, "max_turns_global": global })).into_response()
+    let mut turns = Vec::new();
+    for t in state.turns.active_turns() {
+        let of = state.db.space_of_kwant(&t.kwant_id).await.ok().flatten().unwrap_or_else(crate::db::spaces::SpaceId::default_space);
+        if of == space {
+            turns.push(t);
+        }
+    }
+    Json(json!({ "turns": turns, "max_turns_per_agent": per_agent, "max_turns_global": global })).into_response()
 }
 
 #[derive(Deserialize)]
