@@ -22,8 +22,9 @@ pub struct ApprovalRequest {
 #[derive(Clone, Debug, Default)]
 pub struct PermissionBroker {
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>>,
-    /// (kwant_id, tool_name) pairs the user chose "always allow" for, until kwnt restarts.
-    always_allowed: Arc<Mutex<HashSet<(String, String)>>>,
+    /// (kwant_id, conversation, tool_name) the user chose "always allow" for: that bot may use
+    /// that tool again in that one conversation, until kwnt restarts.
+    always_allowed: Arc<Mutex<HashSet<(String, String, String)>>>,
 }
 
 impl PermissionBroker {
@@ -69,17 +70,26 @@ impl PermissionBroker {
         self.pending.lock().await.remove(ticket_id).is_some()
     }
 
-    /// Remembers an "always allow" answer for this kwant and tool for the rest of the session.
-    pub async fn allow_for_session(&self, kwant_id: &str, tool_name: &str) {
-        self.always_allowed.lock().await.insert((kwant_id.to_string(), tool_name.to_string()));
+    /// Remembers an "always allow" answer for this kwant and tool in one conversation (a thread,
+    /// else the channel or direct chat). Another conversation with the same bot asks again.
+    pub async fn allow_for_session(&self, kwant_id: &str, conversation: &str, tool_name: &str) {
+        self.always_allowed.lock().await.insert((
+            kwant_id.to_string(),
+            conversation.to_string(),
+            tool_name.to_string(),
+        ));
     }
 
     /// Forgets a deleted bot's "always allow" answers.
     pub async fn forget_kwant(&self, kwant_id: &str) {
-        self.always_allowed.lock().await.retain(|(k, _)| k != kwant_id);
+        self.always_allowed.lock().await.retain(|(k, _, _)| k != kwant_id);
     }
 
-    pub async fn is_allowed_for_session(&self, kwant_id: &str, tool_name: &str) -> bool {
-        self.always_allowed.lock().await.contains(&(kwant_id.to_string(), tool_name.to_string()))
+    pub async fn is_allowed_for_session(&self, kwant_id: &str, conversation: &str, tool_name: &str) -> bool {
+        self.always_allowed.lock().await.contains(&(
+            kwant_id.to_string(),
+            conversation.to_string(),
+            tool_name.to_string(),
+        ))
     }
 }

@@ -120,6 +120,8 @@ pub struct BrokerApprover {
     pub broker: PermissionBroker,
     pub events: broadcast::Sender<RuntimeEvent>,
     pub timeout: Duration,
+    /// The conversation "always allow" answers are kept for (see [`turn_conversation`]).
+    pub conversation: String,
 }
 
 /// Withdraws the ticket if the waiting turn is cancelled (its future dropped) mid-wait.
@@ -148,7 +150,7 @@ impl Drop for TicketGuard {
 #[async_trait]
 impl ToolApprover for BrokerApprover {
     async fn approve(&self, req: ToolApprovalRequest) -> bool {
-        if self.broker.is_allowed_for_session(&req.kwant_id, &req.tool_name).await {
+        if self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
             return true;
         }
         let details = match &req.builtin {
@@ -212,7 +214,7 @@ impl ToolApprover for BrokerApprover {
         match decision {
             Ok(Ok(ApprovalDecision::AllowOnce)) => true,
             Ok(Ok(ApprovalDecision::AlwaysAllowSession)) => {
-                self.broker.allow_for_session(&req.kwant_id, &req.tool_name).await;
+                self.broker.allow_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await;
                 true
             }
             Ok(Ok(ApprovalDecision::Deny)) | Ok(Err(_)) => false,
@@ -233,6 +235,19 @@ fn max_tool_iterations(setting: Option<String>) -> usize {
         .and_then(|v| v.trim().parse::<usize>().ok())
         .unwrap_or(mcp::DEFAULT_MAX_TOOL_ITERATIONS)
         .clamp(1, 50)
+}
+
+/// The conversation a turn runs in: its thread, else its channel or direct chat. A turn kwnt
+/// isn't tracking (no turn id, or not started through the turn registry) is its own
+/// conversation, so an "always allow" there lasts only that turn.
+fn turn_conversation(state: &AppState, turn_id: &str) -> String {
+    state
+        .turns
+        .active_turns()
+        .into_iter()
+        .find(|t| t.turn_id == turn_id)
+        .map(|t| t.thread_id.unwrap_or(t.context_id))
+        .unwrap_or_else(|| format!("turn:{turn_id}"))
 }
 
 /// Address agent CLIs on this host use to reach kwnt.
@@ -284,11 +299,13 @@ pub async fn prepare_turn_with_self(
         servers.push(super::continuity::self_server(&local_base_url(state), &token));
     }
     let setting = state.db.get_setting("mcp_max_tool_iterations").await.ok().flatten();
+    let turn_id = turn_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let broker_approver: Arc<dyn ToolApprover> = Arc::new(BrokerApprover {
         db: state.db.clone(),
         broker: state.broker.clone(),
         events: state.event_sender.clone(),
         timeout: APPROVAL_TIMEOUT,
+        conversation: turn_conversation(state, &turn_id),
     });
     let ctx = McpTurnContext {
         servers,
@@ -303,7 +320,6 @@ pub async fn prepare_turn_with_self(
         max_tool_iterations: max_tool_iterations(setting),
         records: Default::default(),
     };
-    let turn_id = turn_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), turn_id, ctx.clone(), cwd);
     state.mcp_sessions.lock().await.insert(token.clone(), session);
     if let (true, Some(scope)) = (self_tools, self_scope) {

@@ -1,7 +1,7 @@
 //! claude's own tools through kwnt's permission prompt: lookups and writes inside the bot's
 //! working folder run without a card; writes outside it and shell commands show the person an
-//! approval card ("Always this session" is honoured); tools from servers the bot doesn't have
-//! are refused.
+//! approval card ("Always this session" is honoured, in that one conversation only); tools
+//! from servers the bot doesn't have are refused.
 
 use axum::{
     body::{to_bytes, Body},
@@ -166,4 +166,81 @@ async fn without_a_folder_every_write_asks() {
     mcp_runtime::finish_turn(&state, &token).await;
     assert_eq!(ask.await.unwrap()["behavior"], "deny");
     assert!(!state.broker.is_pending(&id).await);
+}
+
+/// Registers a running turn of `bot` in `thread` and opens its permission session.
+async fn turn_in_thread(state: &AppState, bot: &kwnt::db::models::Kwant, turn_id: &str, thread: &str) -> String {
+    state.turns.set_turn(kwnt::server::turns::ActiveTurn {
+        turn_id: turn_id.into(),
+        kwant_id: bot.id.clone(),
+        context_id: bot.id.clone(),
+        thread_id: Some(thread.into()),
+        state: "running".into(),
+        since: chrono::Utc::now(),
+    });
+    let scope = SelfScope { kwant_id: bot.id.clone(), kwant_name: bot.name.clone(), ..Default::default() };
+    mcp_runtime::prepare_turn_with_self(state, bot, Some(turn_id.into()), None, Some(scope)).await.unwrap().1
+}
+
+#[tokio::test]
+async fn always_this_session_lasts_for_one_conversation() {
+    let (app, state, _tmp) = setup().await;
+    let bot = state.db.list_kwants(&SpaceId::default_space()).await.unwrap().remove(0);
+    let mut events = state.event_sender.subscribe();
+    let bash = |cmd: &str| json!({"command": cmd, "description": "Run it"});
+
+    // Chat A: "Always this session" for Bash
+    let a1 = turn_in_thread(&state, &bot, "turn-a1", "chat-a").await;
+    let ask = tokio::spawn({
+        let (app, token) = (app.clone(), a1.clone());
+        async move { claude_asks(&app, &token, "Bash", json!({"command": "touch x", "description": "Run it"})).await }
+    });
+    let (id, _) = next_card(&mut events).await;
+    post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "always_allow"})).await;
+    assert_eq!(ask.await.unwrap()["behavior"], "allow");
+    mcp_runtime::finish_turn(&state, &a1).await;
+    state.turns.end_turn("turn-a1");
+
+    // Chat A's next turn: no card
+    let a2 = turn_in_thread(&state, &bot, "turn-a2", "chat-a").await;
+    assert_eq!(claude_asks(&app, &a2, "Bash", bash("touch y")).await["behavior"], "allow");
+    assert!(state.broker.pending_ids().await.is_empty(), "chat A remembers the answer");
+    // Only that tool: Write outside the folder still asks in chat A
+    let ask = tokio::spawn({
+        let (app, token) = (app.clone(), a2.clone());
+        async move { claude_asks(&app, &token, "Write", json!({"file_path": "/tmp/x.txt", "content": "x"})).await }
+    });
+    let (id, details) = next_card(&mut events).await;
+    assert_eq!(details["tool"], "Write");
+    post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
+    assert_eq!(ask.await.unwrap()["behavior"], "deny");
+
+    // Chat B with the same bot: asks again
+    let b1 = turn_in_thread(&state, &bot, "turn-b1", "chat-b").await;
+    let ask = tokio::spawn({
+        let (app, token) = (app.clone(), b1.clone());
+        async move { claude_asks(&app, &token, "Bash", json!({"command": "touch z", "description": "Run it"})).await }
+    });
+    let (id, details) = next_card(&mut events).await;
+    assert_eq!(details["arguments"]["command"], "touch z");
+    post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
+    assert_eq!(ask.await.unwrap()["behavior"], "deny");
+
+    // A turn kwnt isn't tracking is its own conversation
+    let scope = SelfScope { kwant_id: bot.id.clone(), kwant_name: bot.name.clone(), ..Default::default() };
+    let (_, loose) = mcp_runtime::prepare_turn_with_self(&state, &bot, None, None, Some(scope)).await.unwrap();
+    let ask = tokio::spawn({
+        let (app, token) = (app.clone(), loose.clone());
+        async move { claude_asks(&app, &token, "Bash", json!({"command": "touch w", "description": "Run it"})).await }
+    });
+    let (id, _) = next_card(&mut events).await;
+    post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
+    assert_eq!(ask.await.unwrap()["behavior"], "deny");
+
+    // A restart (a fresh broker) forgets every answer
+    assert!(!PermissionBroker::new().is_allowed_for_session(&bot.id, "chat-a", "Bash").await);
+    assert!(state.broker.is_allowed_for_session(&bot.id, "chat-a", "Bash").await);
+    for t in [a2, b1, loose] {
+        mcp_runtime::finish_turn(&state, &t).await;
+    }
 }

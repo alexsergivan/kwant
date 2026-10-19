@@ -105,6 +105,7 @@ fn approver(state: &AppState, timeout: Duration) -> Arc<BrokerApprover> {
         broker: state.broker.clone(),
         events: state.event_sender.clone(),
         timeout,
+        conversation: "conv-test".into(),
     })
 }
 
