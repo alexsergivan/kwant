@@ -61,6 +61,14 @@ export type Tone = 'ok' | 'warn' | 'error' | 'muted' | 'busy' | 'info';
 /** Whether kwants can run on it: the server's `ready` (which counts its accounts), else the host check. */
 export const isUsable = (e: Pick<EngineInfo, 'status' | 'enabled' | 'ready'>) => e.enabled !== false && (e.ready ?? e.status === 'ready');
 
+/** Whether anything can run a bot in the space: null while unknown (not loaded, or still
+ *  checking with nothing ready yet), so "nothing can run" never flashes during startup checks. */
+export function canRunNow(engines: EngineInfo[] | null | undefined): boolean | null {
+  if (!engines?.length) return null;
+  if (engines.some(isUsable)) return true;
+  return engines.some((e) => e.enabled !== false && e.status === 'checking') ? null : false;
+}
+
 export function statusView(e: Pick<EngineInfo, 'status' | 'enabled' | 'ready'> & { kind?: EngineKind; id?: EngineId }): { label: string; tone: Tone } {
   if (e.enabled === false || e.status === 'disabled') return { label: 'Off', tone: 'muted' };
   if (isUsable(e)) return { label: 'Ready', tone: 'ok' };

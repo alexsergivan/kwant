@@ -16,7 +16,19 @@ use std::time::Duration;
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What a turn gets when no engine at all can run.
-pub const NO_ENGINE_MESSAGE: &str = "No engine is available — check Settings → Engines.";
+pub const NO_ENGINE_MESSAGE: &str = "No account can run bots here yet. Add one in Space settings → Accounts.";
+
+/// What a turn gets when This machine is off in the space and no other account is on.
+pub const HOST_OFF_MESSAGE: &str =
+    "This machine is off in this space and no other account is on. Turn one on in Space settings → Accounts.";
+
+/// The chat message `bot` leaves when nothing can run its turn, and its `meta`: kind
+/// `setup_needed`, so the app shows a card with a button to Accounts instead of a reply.
+/// `reason` is `host_off` when This machine is switched off in the space, else `no_account`.
+pub fn no_engine_notice(bot: &str, host_off: bool) -> (String, Value) {
+    let (reason, text) = if host_off { ("host_off", HOST_OFF_MESSAGE) } else { ("no_account", NO_ENGINE_MESSAGE) };
+    (format!("⚠️ [{bot}] {text}"), serde_json::json!({ "kind": "setup_needed", "reason": reason }))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -997,7 +1009,7 @@ fn unavailable(target_model: &str, reports: &[EngineReport]) -> String {
         })
         .collect();
     format!(
-        "'{target_model}' can't run right now ({}). Fix it in Settings → Engines, or pick another engine for this bot.",
+        "'{target_model}' can't run right now ({}). Fix it in Space settings → Accounts, or pick another engine for this bot.",
         why.join("; ")
     )
 }
@@ -1005,6 +1017,21 @@ fn unavailable(target_model: &str, reports: &[EngineReport]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_engine_notice_flags_the_setup_card() {
+        let (text, meta) = no_engine_notice("Architect", false);
+        assert_eq!(text, format!("⚠️ [Architect] {NO_ENGINE_MESSAGE}"));
+        assert!(text.contains("Space settings → Accounts"));
+        assert!(!text.contains("Settings → Engines"));
+        assert_eq!(meta, serde_json::json!({ "kind": "setup_needed", "reason": "no_account" }));
+
+        let (text, meta) = no_engine_notice("DevOps", true);
+        assert!(text.starts_with("⚠️ [DevOps] This machine is off"));
+        assert!(text.contains("Space settings → Accounts"));
+        assert_eq!(meta["kind"], "setup_needed");
+        assert_eq!(meta["reason"], "host_off");
+    }
 
     #[test]
     fn versions_parse_from_each_cli() {

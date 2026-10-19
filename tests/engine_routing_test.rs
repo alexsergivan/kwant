@@ -184,7 +184,7 @@ async fn turns_skip_engines_that_cannot_run() {
 
     // 4. Nothing can run now: a clear message, and no CLI is started
     let text = turn_text(&app, &state, &kid).await;
-    assert!(text.contains("No engine is available — check Settings"), "{text}");
+    assert!(text.contains("No account can run bots here yet. Add one in Space settings → Accounts."), "{text}");
     assert_eq!(turns_run(tmp.path()), 2);
 
     // 5. Signed in again and re-checked: claude is back. A kwant pinned to codex (not installed)

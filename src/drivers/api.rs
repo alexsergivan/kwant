@@ -46,7 +46,7 @@ async fn api_model_name(
         Some(m) => Ok(m.id),
         None if engine == super::engines::EngineId::AnthropicApi => Ok(DEFAULT_CLAUDE_MODEL.into()),
         None => Err(format!(
-            "Couldn't find a model to run on the {}: its model list didn't load. Check the key in Settings → Engines.",
+            "Couldn't find a model to run on the {}: its model list didn't load. Check the key in Space settings → Accounts.",
             engine.name()
         )),
     }

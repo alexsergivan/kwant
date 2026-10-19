@@ -31,6 +31,7 @@ import {
 import { FileTiles, UploadChip } from './Attachments';
 import { ranOnLabel } from '../engines';
 import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
+import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
 
 export interface ChatMessage {
   id: string;
@@ -160,6 +161,10 @@ export interface ChatViewProps {
   renderBotAction?: (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => React.ReactNode;
   /** A bot's proposal to hire a new bot (message meta kind "hire_proposal"). */
   renderHire?: (msg: ChatMessage, meta: HireMeta, flash: boolean) => React.ReactNode;
+  /** Opens Space settings → Accounts; turns a "nothing can run" reply into a card with a button. */
+  onOpenAccounts?: () => void;
+  /** Whether anything can run a bot in this space now (null while unknown). */
+  canRun?: boolean | null;
   /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
   awaitingAnswer?: boolean;
   /** Changes when another chat opens, so the view jumps to its bottom. */
@@ -310,6 +315,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   renderMcpSuggestion,
   renderBotAction,
   renderHire,
+  onOpenAccounts,
+  canRun = null,
   awaitingAnswer,
   contextKey,
 }) => {
@@ -652,6 +659,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (botAction && renderBotAction) return <React.Fragment key={msg.id}>{renderBotAction(msg, botAction, flashId === msg.id)}</React.Fragment>;
     const hire = msg.meta && renderHire ? parseHireMeta(msg.meta) : null;
     if (hire && renderHire) return <React.Fragment key={msg.id}>{renderHire(msg, hire, flashId === msg.id)}</React.Fragment>;
+    const setup = msg.meta && onOpenAccounts ? parseSetupMeta(msg.meta) : null;
+    if (setup && onOpenAccounts)
+      return (
+        <div key={msg.id} data-message-id={msg.id} className="w-full max-w-5xl">
+          <SetupNeededCard
+            meta={setup}
+            botName={msg.sender_id || title}
+            spaceName={spaceName ?? 'this space'}
+            canRun={canRun}
+            onOpenAccounts={onOpenAccounts}
+            flash={flashId === msg.id}
+          />
+        </div>
+      );
     const isUser = msg.sender_role === 'user';
     const files = msg.meta ? parseAttachments(msg.meta) : [];
     // A bot's share_file note: the file tiles say it all.

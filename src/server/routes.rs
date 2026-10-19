@@ -1131,14 +1131,7 @@ async fn run_kwant_turn_inner(
             == Some(crate::profiles::Engine::Custom.as_str());
         if available_models.is_empty() && !pinned_custom {
             // Say why when it's this space's own switch, so nobody hunts for a broken engine
-            let text = if host_off.is_empty() {
-                format!("⚠️ [{}] {}", target_kwant.name, crate::drivers::engines::NO_ENGINE_MESSAGE)
-            } else {
-                format!(
-                    "⚠️ [{}] This machine is off in this space and no other account is on. Turn one on in Settings → Engines.",
-                    target_kwant.name
-                )
-            };
+            let (text, meta) = crate::drivers::engines::no_engine_notice(&target_kwant.name, !host_off.is_empty());
             event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
             event_broadcast.send(RuntimeEvent::TurnComplete {
                 tokens: 0,
@@ -1150,7 +1143,7 @@ async fn run_kwant_turn_inner(
                 reasoning_content: opts.label.clone(),
                 ..scope.message("kwant", &target_kwant.name, text.clone())
             };
-            scope.save(&msg, None).await;
+            scope.save(&msg, Some(meta)).await;
             return Err(text);
         }
         let route = match router.route_prompt_with_models(&prompt, "chat", &available_models).await {
