@@ -819,6 +819,11 @@ pub(super) async fn run_routine_turn(
 /// Lets teammates that kwants @mentioned in `replies` answer in turn, so kwants can delegate to each other.
 /// `already_spoken` kwants are not handed the turn again.
 async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(Kwant, String)], user_prompt: &str) {
+    if let [(from, text)] = replies {
+        if is_team_channel_lead(scope, from).await {
+            return delegate_mentions(scope, from, text, user_prompt).await;
+        }
+    }
     let mut spoken: Vec<String> = already_spoken.to_vec();
     let mut queue: std::collections::VecDeque<(Kwant, String, String)> = std::collections::VecDeque::new();
     let enqueue = |queue: &mut std::collections::VecDeque<(Kwant, String, String)>,
@@ -883,6 +888,74 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
     }
 
     let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: done + 1, context_id: Some(context_id.clone()) });
+}
+
+/// Whether `kwant` leads the team channel this turn is in (a channel turn, not a thread).
+async fn is_team_channel_lead(scope: &TurnScope, kwant: &Kwant) -> bool {
+    let (Some(cid), None, Some(_)) = (&scope.channel_id, &scope.thread_id, &scope.team_keys) else {
+        return false;
+    };
+    match scope.state.db.get_channel(cid).await {
+        Ok(Some(channel)) => channel.name.starts_with("team-") && channel.lead_kwant_id == kwant.id,
+        _ => false,
+    }
+}
+
+/// A team lead's @mentions in its team channel hand work on as delegations, not handoff turns:
+/// each teammate gets the task in its own thread (Sent-to chip, queue, the same guards as the
+/// delegate tool), and when the last one ends the lead is resumed once with every result to give
+/// the user one answer. A refused handoff is said in the channel. Teammates the lead already
+/// delegated to from this channel (with the tool) aren't sent it twice.
+async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_prompt: &str) {
+    let Some(cid) = scope.channel_id.clone() else { return };
+    let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
+    let open: Vec<String> = scope
+        .state
+        .db
+        .list_delegations(Some(&lead.id), None, 50)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|d| d.is_open() && d.origin_channel_id.as_deref() == Some(cid.as_str()))
+        .map(|d| d.specialist_kwant_id)
+        .collect();
+    let mut targets: Vec<&Kwant> = Vec::new();
+    for i in crate::router::handoff_targets(text, &names) {
+        let k = &scope.teammates[i];
+        if k.id != lead.id && !open.contains(&k.id) && !targets.iter().any(|t| t.id == k.id) {
+            targets.push(k);
+        }
+    }
+    let user = truncate_chars(user_prompt.trim(), 3000);
+    let task = format!(
+        "The user asked in the team channel:\n{user}\n\n{lead} wrote, mentioning you:\n{text}",
+        lead = lead.name,
+        text = truncate_chars(text.trim(), 4000),
+    );
+    let title = truncate_chars(user.lines().find(|l| !l.trim().is_empty()).unwrap_or("Task").trim(), 80).to_string();
+    let allowed: Vec<String> = scope.teammates.iter().map(|k| k.id.clone()).collect();
+    for specialist in targets.into_iter().take(MAX_HANDOFFS) {
+        let req = super::delegation::StartRequest {
+            lead: lead.clone(),
+            specialist: specialist.clone(),
+            task: task.clone(),
+            title: Some(title.clone()),
+            origin: super::delegation::Origin { channel_id: Some(cid.clone()), ..Default::default() },
+            continue_lead: true,
+            origin_depth: scope.delegation_depth,
+            allowed: Some(allowed.clone()),
+        };
+        if let Err((_, why)) = super::delegation::start(&scope.state, req).await {
+            tracing::info!(lead = %lead.id, specialist = %specialist.id, "mention handoff refused: {why}");
+            let note = scope.message("system", "kwnt", format!("Couldn't hand this to {}: {why}", specialist.name));
+            if let Some(saved) = scope.save(&note, Some(serde_json::json!({"kind": "handoff_refused"}))).await {
+                let _ = scope
+                    .state
+                    .event_sender
+                    .send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or_default() });
+            }
+        }
+    }
 }
 
 /// Runs a moderated team discussion: the lead opens (or pauses to ask the user), teammates react to

@@ -22,8 +22,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tower::ServiceExt;
 
-/// Replies "answer <tag>" for a prompt with "REPLYTAG:<tag>"; a "LONGTASK:<file>" prompt waits
-/// (up to 60 s) for that file first. Every prompt is saved under `$KWNT_TEST_PROMPTS`.
+/// Replies "answer <tag>" for a prompt with "REPLYTAG:<tag>", followed by "@<name>" for one with
+/// "MENTION:<name>"; a "LONGTASK:<file>" prompt waits (up to 60 s) for that file first. Every prompt is saved under `$KWNT_TEST_PROMPTS`.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1" in
   auth) echo '{"loggedIn":true}'; exit 0 ;;
@@ -36,7 +36,8 @@ if [ -n "$release" ]; then
   while [ ! -f "$release" ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
 fi
 tag=$(printf '%s\n' "$last" | sed -n 's/.*REPLYTAG:\([A-Za-z0-9_]*\).*/\1/p' | tail -n 1)
-echo "{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"result\":\"answer ${tag:-none}\"}"
+mention=$(printf '%s\n' "$last" | sed -n 's/.*MENTION:\([A-Za-z0-9_]*\).*/\1/p' | head -n 1)
+echo "{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"result\":\"answer ${tag:-none}${mention:+ @$mention}\"}"
 "#;
 
 fn prompts_dir() -> &'static PathBuf {
@@ -772,4 +773,121 @@ async fn run_fan_in(env: &Env, third: String) {
     assert!(p.contains("answer fanA") && p.contains("answer fanB"), "both results: {p}");
     assert!(p.contains("Check each result"), "{p}");
     assert!(prompts_with("finished the task you delegated (“Fan part").is_empty(), "no per-part turns");
+}
+
+async fn name(env: &Env, id: &str) -> String {
+    let (_, kwants) = call(&env.app, "GET", "/api/kwants", None).await;
+    kwants.as_array().unwrap().iter().find(|k| k["id"] == id).unwrap()["name"].as_str().unwrap().to_string()
+}
+
+/// A team led by `env.lead` with `env.specialist` in it; returns its channel's id.
+async fn team_channel(env: &Env, team: &str) -> String {
+    let (s, v) = call(
+        &env.app,
+        "POST",
+        "/api/teams",
+        Some(json!({"name": team, "lead_kwant_id": env.lead, "member_kwants": [env.lead, env.specialist]})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (_, channels) = call(&env.app, "GET", "/api/channels", None).await;
+    channels
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == format!("team-{team}").as_str())
+        .unwrap_or_else(|| panic!("no team-{team} channel: {channels}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+async fn say_in(env: &Env, channel: &str, prompt: &str) {
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"channel_id": channel, "prompt": prompt, "sender_id": "user"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+}
+
+async fn channel_messages(env: &Env, channel: &str) -> Vec<kwnt::db::models::Message> {
+    env.state.db.list_messages(channel, 100).await.unwrap()
+}
+
+/// Gap 1: a team lead that hands work on with an @mention in its team channel delegates it. The
+/// teammate works in its own thread (the delegation_started chip in the channel), its result is
+/// posted back, and the lead is resumed once with it to give the user one final answer; the
+/// teammate never takes a handoff turn in the channel itself.
+#[tokio::test]
+async fn a_leads_mention_in_its_team_channel_is_a_delegation() {
+    let env = setup().await;
+    let (lead, specialist) = (name(&env, &env.lead).await, name(&env, &env.specialist).await);
+    let channel = team_channel(&env, "mention-squad").await;
+    say_in(&env, &channel, &format!("@{lead} Ship it LEADMARK1\nREPLYTAG:shipped MENTION:{specialist}")).await;
+
+    wait_for("the delegation from the mention", || async {
+        env.state.db.list_delegations(Some(&env.lead), None, 10).await.unwrap().iter().any(|d| d.origin_channel_id.as_deref() == Some(channel.as_str()))
+    })
+    .await;
+    let d = env.state.db.list_delegations(Some(&env.lead), None, 10).await.unwrap().into_iter().find(|d| d.origin_channel_id.as_deref() == Some(channel.as_str())).unwrap();
+    assert_eq!(d.specialist_kwant_id, env.specialist);
+    assert!(d.continue_lead);
+    assert!(d.task.contains("LEADMARK1") && d.task.contains(&format!("@{specialist}")), "the task carries the request and the lead's words: {}", d.task);
+
+    wait_for("the delegation to complete", || async { delegation_status(&env, &d.id).await == "completed" }).await;
+    let lead_replies = || async {
+        channel_messages(&env, &channel).await.into_iter().filter(|m| m.sender_role == "kwant" && m.sender_id == lead).count()
+    };
+    wait_for("the lead's final answer", || async { lead_replies().await == 2 }).await;
+    // Settle: nothing else arrives
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let msgs = channel_messages(&env, &channel).await;
+    let kinds: Vec<Option<String>> = msgs.iter().map(meta_kind).collect();
+    assert_eq!(kinds.iter().filter(|k| k.as_deref() == Some("delegation_started")).count(), 1, "one Sent-to chip");
+    assert_eq!(kinds.iter().filter(|k| k.as_deref() == Some("delegation_result")).count(), 1, "one result");
+    assert_eq!(lead_replies().await, 2, "the lead's handoff reply and one final answer");
+    assert!(
+        msgs.iter().filter(|m| m.sender_id == specialist).all(|m| meta_kind(m).as_deref() == Some("delegation_result")),
+        "the teammate speaks in the channel only through its result"
+    );
+    let resumes = prompts_with("LEADMARK1").into_iter().filter(|p| p.contains("finished the task you delegated")).count();
+    assert_eq!(resumes, 1, "the lead is resumed exactly once");
+    assert!(prompts_with("LEADMARK1").iter().all(|p| !p.contains("handed this conversation to you")), "no direct handoff turn");
+}
+
+/// A teammate who isn't the lead still hands the turn on directly, as before; and a lead's
+/// mention that the delegation guards refuse is said in the channel instead of running.
+#[tokio::test]
+async fn non_lead_mentions_hand_off_and_refused_mentions_are_reported() {
+    let env = setup().await;
+    let (lead, specialist) = (name(&env, &env.lead).await, name(&env, &env.specialist).await);
+    let channel = team_channel(&env, "plain-squad").await;
+    say_in(&env, &channel, &format!("@{specialist} Look at this PLAINMARK REPLYTAG:plain MENTION:{lead}")).await;
+    wait_for("the lead's handoff turn", || async {
+        prompts_with("PLAINMARK").iter().any(|p| p.contains("handed this conversation to you"))
+            && channel_messages(&env, &channel).await.iter().any(|m| m.sender_id == lead)
+    })
+    .await;
+    assert!(
+        env.state.db.list_delegations(Some(&env.specialist), None, 10).await.unwrap().is_empty(),
+        "a teammate's mention isn't a delegation"
+    );
+
+    // The lead already has the most unfinished delegations it may have: the mention is refused
+    let release = env.release_file("refused-release");
+    let mut held = Vec::new();
+    for _ in 0..delegation::MAX_OPEN_PER_LEAD {
+        held.push(delegate(&env, &format!("Hold LONGTASK:{} REPLYTAG:held", release.display())).await["id"].as_str().unwrap().to_string());
+    }
+    // Its own channel: the history above would carry the earlier MENTION into the lead's prompt
+    let channel = team_channel(&env, "refused-squad").await;
+    say_in(&env, &channel, &format!("@{lead} Again REFUSEDMARK REPLYTAG:again MENTION:{specialist}")).await;
+    wait_for("the refusal note", || async {
+        channel_messages(&env, &channel).await.iter().any(|m| meta_kind(m).as_deref() == Some("handoff_refused"))
+    })
+    .await;
+    let note = channel_messages(&env, &channel).await.into_iter().find(|m| meta_kind(m).as_deref() == Some("handoff_refused")).unwrap();
+    assert!(note.text.contains(&specialist) && note.text.contains("unfinished delegations"), "{}", note.text);
+    assert!(prompts_with("REFUSEDMARK").iter().all(|p| !p.contains("handed this conversation to you")), "refused, not handed off directly");
+    std::fs::write(&release, "").unwrap();
+    for id in held {
+        wait_for("a held task to finish", || async { delegation_status(&env, &id).await == "completed" }).await;
+    }
 }
