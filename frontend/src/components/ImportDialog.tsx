@@ -15,6 +15,7 @@ import {
   previewRows,
   sourceName,
   textTooLong,
+  trapFocusTarget,
 } from '../imports';
 
 const btn =
@@ -288,6 +289,7 @@ export const DoneView: React.FC<{ applied: Applied; undo: UndoState; onUndo: (fo
       </div>
       <Notes items={applied.warnings.map((n) => n.message)} tone="warn" label="Worth a look" />
       <p className="text-[11px] text-zinc-400">Give them an account and tools in Space settings when you’re ready. Skills and routines are there to review.</p>
+      <p className="text-[11px] text-zinc-400">Tools you add to this space later will be on for these bots too.</p>
       {undo.kind === 'confirm_edited' && (
         <div role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
           <p className="text-xs text-amber-100">
@@ -320,6 +322,8 @@ interface Props {
   onChanged: () => void;
 }
 
+const FOCUSABLE = 'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+
 /** "Import bots": pick a source, paste a reply or upload a file, check the preview, import, undo. */
 export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged }) => {
   const [step, setStep] = useState<Step>({ kind: 'choose' });
@@ -336,6 +340,7 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
   const [undo, setUndo] = useState<UndoState>({ kind: 'idle' });
   const fileRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
@@ -352,6 +357,20 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+  // Focus goes back to whatever opened the dialog when it closes.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    return () => opener?.focus?.();
+  }, []);
+  // Tab and Shift+Tab stay inside the dialog.
+  const onTrapKey = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Tab' || !dialogRef.current) return;
+    const items = [...dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null || el === document.activeElement);
+    const next = trapFocusTarget(items.length, items.indexOf(document.activeElement as HTMLElement), e.shiftKey);
+    if (next === null) return;
+    e.preventDefault();
+    items[next].focus();
+  };
   // Each step starts at the top, with focus inside the dialog.
   useEffect(() => {
     bodyRef.current?.scrollTo?.(0, 0);
@@ -470,6 +489,8 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
   return (
     <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex sm:items-center justify-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
+        ref={dialogRef}
+        onKeyDown={onTrapKey}
         role="dialog"
         aria-modal="true"
         aria-labelledby="import-title"

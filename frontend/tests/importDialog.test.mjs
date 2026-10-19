@@ -164,3 +164,19 @@ test('the download name comes from Content-Disposition', () => {
   assert.equal(m.downloadName("attachment; filename*=UTF-8''Caf%C3%A9.kwant.json", 'x'), 'Café.kwant.json');
   assert.equal(m.downloadName(null, 'export.kwant.json'), 'export.kwant.json');
 });
+
+test('focus trap: Tab wraps from the last item to the first, Shift+Tab the other way', () => {
+  assert.equal(m.trapFocusTarget(3, 2, false), 0);
+  assert.equal(m.trapFocusTarget(3, 0, true), 2);
+  assert.equal(m.trapFocusTarget(3, 1, false), null);
+  assert.equal(m.trapFocusTarget(3, 1, true), null);
+  assert.equal(m.trapFocusTarget(3, -1, false), 0);
+  assert.equal(m.trapFocusTarget(3, -1, true), 2);
+  assert.equal(m.trapFocusTarget(0, -1, false), null);
+});
+
+test('success state says tools added later reach the imported bots', () => {
+  const applied = { import: { id: 'imp_1', created: { kwants: [{ id: 'k1', name: 'Recipe-Pal' }], teams: [], skills: [], routines: [], memories: 0 } }, warnings: [] };
+  const out = text(html(m.DoneView, { applied, undo: { kind: 'idle' }, onUndo: () => {}, onKeep: () => {} }));
+  assert.match(out, /Tools you add to this space later will be on for these bots too\./);
+});

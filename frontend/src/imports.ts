@@ -314,3 +314,15 @@ export async function downloadExport(kwantId?: string): Promise<string> {
   setTimeout(() => URL.revokeObjectURL(href), 1000);
   return name;
 }
+
+/**
+ * Where Tab should land in a focus trap over `count` focusable items, given the focused one's index (-1 if
+ * focus is outside them). Returns null when the browser's own Tab order already stays inside.
+ */
+export function trapFocusTarget(count: number, index: number, shift: boolean): number | null {
+  if (count === 0) return null;
+  if (index < 0) return shift ? count - 1 : 0;
+  if (shift && index === 0) return count - 1;
+  if (!shift && index === count - 1) return 0;
+  return null;
+}
