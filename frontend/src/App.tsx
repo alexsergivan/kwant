@@ -66,7 +66,7 @@ import {
   turnsAwaitingAnswer,
 } from './questions';
 import { AwayItem, affectsAway, awayApi, awayTarget, badgeText } from './away';
-import { Space, eventsUrl, spaceColor } from './spaces';
+import { Space, eventsUrl, pickInitialChat, spaceColor } from './spaces';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -490,35 +490,24 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setChannels(cRes);
         setTeams(normalizedTeams);
 
-        // The chat asked for (a link, a notification, the last one open here) if it still exists.
-        const wantBot = initialTarget?.botId ? (kRes as Kwant[]).find((k) => k.id === initialTarget.botId) : undefined;
-        const wantChannel = initialTarget?.channelId
-          ? (cRes as Channel[]).find((c) => c.id === initialTarget.channelId)
-          : (cRes as Channel[]).find((c) => c.id === space.general_channel_id);
-        if (wantBot && !wantChannel) {
-          setSelectedId(wantBot.id);
-          selectedIdRef.current = wantBot.id;
+        // The chat asked for (a link, a reload, a notification, the last one open here) if it still exists.
+        const first = pickInitialChat(initialTarget, Array.isArray(kRes) ? (kRes as Kwant[]) : [], Array.isArray(cRes) ? (cRes as Channel[]) : [], space.general_channel_id);
+        if (first?.kind === 'bot') {
+          setSelectedId(first.bot.id);
+          selectedIdRef.current = first.bot.id;
           setIsChannel(false);
           isChannelRef.current = false;
           setSelectedTeamId(null);
-        } else if (wantChannel || cRes.length > 0) {
-          const init: Channel = wantChannel ?? cRes[0];
-          const initId = init.id;
-          setSelectedId(initId);
-          selectedIdRef.current = initId;
+        } else if (first?.kind === 'channel') {
+          const init = first.channel;
+          setSelectedId(init.id);
+          selectedIdRef.current = init.id;
           setIsChannel(true);
           isChannelRef.current = true;
           const matchedTeam = normalizedTeams.find(
             (t) => `team-${t.name}` === init.name || t.id === init.id
           );
           setSelectedTeamId(matchedTeam ? matchedTeam.id : null);
-        } else if (kRes.length > 0) {
-          const initId = kRes[0].id;
-          setSelectedId(initId);
-          selectedIdRef.current = initId;
-          setIsChannel(false);
-          isChannelRef.current = false;
-          setSelectedTeamId(null);
         }
       } catch (err) {
         console.error('Failed to load initial data:', err);

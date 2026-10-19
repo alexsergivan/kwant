@@ -220,6 +220,26 @@ export function pickSpace(spaces: Space[], fromUrl: string | null, remembered: s
   );
 }
 
+/**
+ * The chat a space opens on: the bot or channel asked for (a link, a reload, a notification) if it
+ * still exists, else #general, else the first channel, else the first bot. A bot target never
+ * falls through to #general just because #general exists.
+ */
+export function pickInitialChat<B extends { id: string }, C extends { id: string }>(
+  target: { channelId?: string | null; botId?: string | null } | null | undefined,
+  bots: B[],
+  channels: C[],
+  generalId: string | null | undefined,
+): { kind: 'bot'; bot: B } | { kind: 'channel'; channel: C } | null {
+  const channel = target?.channelId ? channels.find((c) => c.id === target.channelId) : undefined;
+  if (channel) return { kind: 'channel', channel };
+  const bot = target?.botId ? bots.find((b) => b.id === target.botId) : undefined;
+  if (bot) return { kind: 'bot', bot };
+  const fallback = channels.find((c) => c.id === generalId) ?? channels[0];
+  if (fallback) return { kind: 'channel', channel: fallback };
+  return bots[0] ? { kind: 'bot', bot: bots[0] } : null;
+}
+
 // ---- #general: what Laya did ----
 
 export interface RoutingMeta {

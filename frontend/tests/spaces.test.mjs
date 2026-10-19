@@ -82,3 +82,22 @@ test('a new space preselects the first unused colour and offers Copy bots as com
   assert.match(html, /This machine/);
   assert.match(html, /Coming soon/);
 });
+
+test('a reload or link reopens the bot or channel in the address, and a gone one falls back to #general', () => {
+  const bots = [{ id: 'k1' }, { id: 'k2' }];
+  const channels = [{ id: 'ch0' }, { id: 'ch1' }, { id: 'ch2' }];
+  const pick = (t) => {
+    const r = m.pickInitialChat(t, bots, channels, 'ch1');
+    return r && (r.kind === 'bot' ? `bot:${r.bot.id}` : `channel:${r.channel.id}`);
+  };
+  // The bug: a bot target lost to #general because #general exists.
+  assert.equal(pick({ botId: 'k2' }), 'bot:k2');
+  assert.equal(pick({ channelId: 'ch2' }), 'channel:ch2');
+  assert.equal(pick({ botId: 'gone' }), 'channel:ch1');
+  assert.equal(pick({ channelId: 'gone' }), 'channel:ch1');
+  assert.equal(pick(null), 'channel:ch1');
+  assert.equal(pick({}), 'channel:ch1');
+  assert.equal(m.pickInitialChat({ botId: 'gone' }, bots, channels, 'missing')?.channel.id, 'ch0');
+  assert.equal(m.pickInitialChat({ botId: 'gone' }, bots, [], 'ch1')?.bot.id, 'k1');
+  assert.equal(m.pickInitialChat({ botId: 'gone' }, [], [], 'ch1'), null);
+});
