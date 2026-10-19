@@ -11,7 +11,8 @@ build: frontend
 test:
 	cargo test
 
-run:
+# The binary embeds frontend/dist, so build it first: a fresh clone has none
+run: frontend
 	cargo run -- serve
 
 clean:

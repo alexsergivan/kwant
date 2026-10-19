@@ -2,13 +2,13 @@
 
 > Inspired by **Grok Bot** & **OpenMausBot**. Built with **Rust**, **Axum**, and **Laya**.
 
-Kwant is your team of super-intelligent bots (kwants): a high-performance, self-hosted multi-agent platform packaged as a **single, standalone binary** with an embedded sleek dark-mode Web UI and SQLite storage. Every agent (a **kwant**) is a specialized autonomous companion with its own persona (`Architect`, `TechLead`, `DevOps`), model provider routing, and developer capabilities.
+kwant is your team of AI bots: a self-hosted platform packaged as a **single, standalone binary** with an embedded dark-mode web app and SQLite storage. Every bot has its own persona (a fresh install starts with `Architect`, `TechLead` and `DevOps`), picks the right model for each message, and can work in its own folder, shell and browser.
 
 ---
 
 ## ⚡ Key Highlights
 
-- **Single-Binary Zero-Dependency Deploy**: No Node.js or Docker required in production. One compiled native binary (`kwnt`) serves both the Tokio/Axum asynchronous engine and the embedded modern React web application in under 25 MB of RAM on your laptop or a VPS.
+- **Single-Binary Deploy**: The built binary (`kwnt`) needs no Node.js: it serves both the Tokio/Axum engine and the embedded React web app in under 25 MB of RAM on your laptop or a VPS. Docker is only needed for VM mode and the bots' shared browser.
 - **Sub-50ms Intelligent Routing with Laya**: By default, task-based model selection queries [convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya) over its `/v1/systemone` API in ~33ms, with seamless offline heuristic fallback and dynamic effort-level selection.
 - **Hybrid Driver Fleet**: Run direct cloud & local APIs (xAI Grok, Anthropic Claude, OpenAI, OpenRouter, local Ollama) or supervise host CLI agents (`claude`, `codex`, `grok` CLIs).
 - **Agent-to-Agent Handoffs**: Every agent knows its teammates in the current channel or team. When a reply @mentions a teammate (or `@everyone`), that teammate answers right after in the same chat, up to 4 handoffs per message.
@@ -23,12 +23,26 @@ Kwant is your team of super-intelligent bots (kwants): a high-performance, self-
 
 ## 🚀 Quickstart
 
-### 1. Run with Cargo
+### What you need first
+- **Rust** (stable), installed with [rustup](https://rustup.rs).
+- **Node.js 20 or newer** with npm, to build the web app. The finished binary doesn't need it.
+- **At least one AI account** for your bots to run on. Any one of these is enough:
+  - the [`claude`](https://docs.anthropic.com/en/docs/claude-code) CLI, installed. You don't need to sign it in first: kwant has a **Sign in with Claude** button;
+  - the `codex` or `grok` CLI, signed in on the same machine (`codex login`, `grok login`);
+  - an Anthropic, OpenAI or xAI API key, which you add in the app under **Space settings → Accounts**.
+- Optional: **Docker** for VM mode and the bots' browser, and [`uv`](https://docs.astral.sh/uv/) or `python3` for the Laya router (see below).
+
+### 1. Run from a fresh clone
 ```bash
-# Clone and run locally
-cargo run -- serve
+git clone https://github.com/alexsergivan/kwant.git
+cd kwant
+make run          # builds the web app (frontend/dist), then runs `cargo run -- serve`
 ```
-Open your browser to: **http://127.0.0.1:8799**
+Open your browser to: **http://127.0.0.1:8799**. If no account works yet, kwant shows a **Get ready** banner with an **Add an account** button.
+
+`cargo run -- serve` on its own only works once `frontend/dist` exists, because the binary embeds it. After the first `make run` (or `make frontend`) you can use either.
+
+**First start takes a few minutes:** kwant installs its Laya router and downloads its ~420 MB model in the background (see [Laya](#-laya-model-router-convaiinnovationslaya)). Bots answer meanwhile, picked by keyword. To skip it, run `cargo run -- serve --no-laya`.
 
 Bot browsing uses a shared headless Chromium service with live WebSocket frames and separate sessions. Code execution containers start independently. See [browser service and VPS hosting](docs/browser-service.md) for Docker setup, HTTPS proxy configuration, control handoff, and session persistence limits.
 
@@ -53,7 +67,7 @@ scp target/release/kwnt user@your-vps-ip:/usr/local/bin/kwnt
 ssh user@your-vps-ip "kwnt serve --host 0.0.0.0 --port 8799"
 ```
 
-Requests from other machines need the API token: run `kwnt token` on the VPS and open `http://your-vps-ip:8799/#kwnt_token=<token>` once. Through `ssh -L 8799:127.0.0.1:8799` no token is needed. See [LLM profiles and API access](docs/llm-profiles.md).
+Requests from other machines need the API token: run `kwnt token` on the VPS (or `docker compose exec kwnt kwnt token` with Docker Compose) and open `http://your-vps-ip:8799/#kwnt_token=<token>` once. Through `ssh -L 8799:127.0.0.1:8799` no token is needed. See [LLM profiles and API access](docs/llm-profiles.md).
 
 ### Systemd Service (`/etc/systemd/system/kwnt.service`)
 ```ini
@@ -63,7 +77,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+# A dedicated user (useradd --system --create-home --home-dir /var/lib/kwnt kwnt); sign the
+# claude/codex/grok CLIs in as this user, or add API keys in the app
+User=kwnt
 ExecStart=/usr/local/bin/kwnt serve --host 0.0.0.0 --port 8799
 Restart=always
 Environment=KWNT_DATA_DIR=/var/lib/kwnt
@@ -121,21 +137,23 @@ The `laya` image (`docker/laya.Dockerfile`) uses CPU PyTorch and preloads the ch
 
 ---
 
-## 🎮 The Starter Party
+## 🎮 The Starter Team
 
-| Agent | Title | Sprite | Specialty |
+A fresh install's Default space starts with three bots in #general, on the `@core-engineering` team:
+
+| Bot | Title | Avatar | Specialty |
 |---|---|---|---|
-| **CyberMage** | Arcane Architect | `cyber_mage` | Architecture, refactoring, systems thinking |
-| **PixelNinja** | Swift Blade | `pixel_ninja` | Fast algorithms, clean functions, unit testing |
-| **TerminalKnight** | Guardian of the Shell | `terminal_knight` | Bash scripts, devops, file safety |
+| **Architect** | Systems Architect | `architect` | Architecture, software design, multi-file engineering |
+| **TechLead** | Staff Engineer & Prototyper | `tech_lead` | Fast reasoning, prototyping, clear explanations |
+| **DevOps** | Systems & Security Engineer | `devops` | Shell, servers, containers, security |
 
-You can create new agents with custom personas, souls, and avatars via the **New Agent** button in the UI.
+Make more with **New bot**: pick a ready-made persona (Tech, Non-tech, Lifestyle) or start blank, and choose a name, avatar, persona and soul.
 
 ---
 
 ## 🧪 Testing
 
 ```bash
-# Run all 14 integration and unit tests
-cargo test
+cargo test                      # Rust unit and integration tests (needs frontend/dist: run `make frontend` first)
+cd frontend && npm test         # web app tests
 ```
