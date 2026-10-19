@@ -1,0 +1,21 @@
+{
+  "format": "openmaus.package",
+  "version": 2,
+  "package": {
+    "id": "fixture-team",
+    "name": "Fixture team",
+    "agents": [
+      { "key": "lead", "name": "Ada Fixture", "title": "Tech lead", "soul": "Plan small steps and check the work.", "skills": ["triage"], "playbooks": ["plan"],
+        "seed": { "memory": { "MEMORY.md": "# Notes\n- The team ships on Fridays.\n- Tests run on every commit." } } },
+      { "key": "qa", "name": "Rigel Fixture", "title": "QA", "description": "Verifies releases.", "skills": [] }
+    ],
+    "skills": { "entries": [
+      { "name": "triage", "description": "Sort incoming bugs.", "instructions": "Label each bug by severity." },
+      { "name": "shared-style", "description": "House writing style.", "instructions": "Short sentences." }
+    ] },
+    "playbooks": [{ "key": "plan", "name": "Plan", "summary": "Plan a change.", "instructions": "List steps, owners and checks." }],
+    "routines": [{ "name": "Friday check", "agent": "qa", "prompt": "Run the release checklist.", "schedule": { "type": "daily", "time": "16:00", "weekdays": [5] } }],
+    "team": { "name": "Fixture Engineering", "leader": "lead", "brief": "Ship safely." },
+    "rooms": [{ "name": "eng" }]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "format": "kwant.bundle/1",
+  "source": { "kind": "kwant", "label": "fixture" },
+  "bots": [
+    { "ref": "helper", "name": "Helper", "title": "General helper", "persona_prompt": "Help with everyday questions.", "soul": "Friendly and brief.",
+      "memories": ["The user prefers short answers."],
+      "skills": [{ "name": "checklist", "description": "Turn a task into a checklist.", "body": "Write numbered steps." }],
+      "routines": [{ "name": "Weekly review", "instructions": "Summarise the week.", "schedule": { "type": "weekly", "time": "17:00", "weekdays": ["fri"], "tz": "UTC" } }] }
+  ]
+}

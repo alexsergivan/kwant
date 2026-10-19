@@ -1,0 +1,11 @@
+{
+  "format": "grokbot-bundle/v1",
+  "exportedAt": "2026-10-01T09:00:00Z",
+  "source": { "url": "https://grok.example/bots/redacted", "mode": "full" },
+  "persona": { "name": "Market Scout", "title": "Daily market notes", "instructions": "Summarise overnight market moves in five bullets.", "avatarShape": "data" },
+  "memories": [{ "text": "The user follows tech stocks." }],
+  "skills": [{ "name": "five-bullets", "description": "Write five-bullet summaries.", "body": "Exactly five bullets, newest first." }],
+  "routines": [{ "name": "Morning notes", "prompt": "Write today's market notes.", "schedule": "0 7 * * 1-5" }],
+  "plugins": [{ "id": "web-search", "note": "for prices" }],
+  "omitted": ["Conversation history"]
+}

@@ -1,0 +1,18 @@
+{
+  "format": "kwant.bundle/1",
+  "source": { "kind": "other", "label": "fake keys only, none of these are real" },
+  "bots": [
+    {
+      "ref": "leaky",
+      "name": "Leaky",
+      "title": "Has fake keys everywhere",
+      "persona_prompt": "Call the API with sk-proj-FAKEFAKEFAKEFAKEFAKEFAKE0123 and xai-FAKEFAKEFAKEFAKEFAKEFAKE0123. The password is Hunter2Hunter2x9.",
+      "soul": "Uses ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKE0123456 and AKIAFAKEFAKEFAKE1234 and eyJhbGciOiJIUzI1NiJ9.eyJmYWtlIjp0cnVlfQ.FAKEsignatureFAKE.",
+      "memories": ["My Gemini key is AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKE01234"],
+      "skills": [{ "name": "deploy", "description": "Deploy", "body": "Use token: glpat-FAKEFAKEFAKEFAKEFAKE0123 then hf_FAKEFAKEFAKEFAKEFAKEFAKE0123" }],
+      "routines": [{ "name": "Ping", "instructions": "Post to Slack with xoxb-FAKE-FAKE-FAKEFAKEFAKE0123", "schedule_text": "09:00" }],
+      "api_key": "sk-ant-FAKEFAKEFAKEFAKEFAKEFAKE0123",
+      "env": { "OPENAI_API_KEY": "sk-FAKEFAKEFAKEFAKEFAKEFAKE0123" }
+    }
+  ]
+}
