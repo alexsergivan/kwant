@@ -2612,6 +2612,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onOpenTools={() => setIsMcpOpen(true)}
           onOpenAppSettings={onOpenAppSettings}
           routineFocus={routineFocus}
+          onImported={() => {
+            // New bots, teams and their team chats.
+            refreshRoster();
+            fetch('/api/channels')
+              .then((r) => (r.ok ? r.json() : null))
+              .then((c) => Array.isArray(c) && setChannels(c))
+              .catch(() => undefined);
+          }}
         />
       )}
 

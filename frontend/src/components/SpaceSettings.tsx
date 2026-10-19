@@ -6,6 +6,8 @@ import {
   Bot,
   CalendarClock,
   Check,
+  Download,
+  FileUp,
   KeyRound,
   Loader2,
   Pencil,
@@ -27,9 +29,11 @@ import { RoutinesPanel, type RoutineFocus } from './RoutinesPanel';
 import { HirePolicyPanel } from './HirePolicyPanel';
 import { ModernAvatar } from './ModernAvatar';
 import { SpaceTile } from './Spaces';
+import { ImportDialog, RecentImports } from './ImportDialog';
+import { ImportError, ImportRecord, downloadExport, importApi, importErrorText } from '../imports';
 import { memberIdsOf, type Channel, type Kwant, type Team } from './Sidebar';
 
-export type SpaceSettingsTab = 'general' | 'accounts' | 'bots' | 'teams' | 'tools' | 'skills' | 'routines';
+export type SpaceSettingsTab = 'general' | 'accounts' | 'bots' | 'teams' | 'tools' | 'skills' | 'routines' | 'import';
 
 const TABS: Array<{ id: SpaceSettingsTab; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: 'General', icon: <Settings2 size={15} /> },
@@ -39,6 +43,7 @@ const TABS: Array<{ id: SpaceSettingsTab; label: string; icon: React.ReactNode }
   { id: 'tools', label: 'Tools', icon: <Plug size={15} /> },
   { id: 'skills', label: 'Skills', icon: <Sparkles size={15} /> },
   { id: 'routines', label: 'Routines', icon: <CalendarClock size={15} /> },
+  { id: 'import', label: 'Import & export', icon: <FileUp size={15} /> },
 ];
 
 interface Props {
@@ -66,7 +71,12 @@ interface Props {
   onOpenAppSettings: () => void;
   /** Set by a routine card's Edit or Pause: opens that routine in Routines. */
   routineFocus?: RoutineFocus | null;
+  /** After an import or its undo: load bots, teams and chats again. */
+  onImported?: () => void;
 }
+
+/** What the tabs get on top of the props: opening the Import dialog. */
+type TabProps = Props & { onOpenImport: () => void; importsSeq: number };
 
 const card = 'rounded-xl border border-zinc-800 bg-zinc-950/60';
 const rowBtn =
@@ -77,6 +87,10 @@ const primaryBtn =
 /** Space settings: everything here belongs to the open space only. */
 export const SpaceSettings: React.FC<Props> = (p) => {
   const { space, tab, onTab, onClose } = p;
+  const [importOpen, setImportOpen] = useState(false);
+  // Bumped after the dialog imports or undoes, so the Import tab's list loads again.
+  const [importsSeq, setImportsSeq] = useState(0);
+  const tp: TabProps = { ...p, onOpenImport: () => setImportOpen(true), importsSeq };
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
@@ -147,7 +161,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
           </div>
           {tab === 'general' && <GeneralTab {...p} />}
           {tab === 'accounts' && <AccountsTab {...p} />}
-          {tab === 'bots' && <BotsTab {...p} />}
+          {tab === 'bots' && <BotsTab {...tp} />}
           {tab === 'teams' && <TeamsTab {...p} />}
           {tab === 'tools' && (
             <div className={`${card} p-4 space-y-3`}>
@@ -159,6 +173,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
           )}
           {tab === 'skills' && <SkillsTab {...p} />}
           {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} />}
+          {tab === 'import' && <ImportTab {...tp} />}
           <div className="md:hidden pt-2">
             <button type="button" onClick={p.onOpenAppSettings} className="flex items-center gap-2 text-xs text-zinc-400 hover:text-zinc-100">
               <Settings size={14} /> App settings (every space)
@@ -166,7 +181,113 @@ export const SpaceSettings: React.FC<Props> = (p) => {
           </div>
         </div>
       </div>
+      {importOpen && (
+        <ImportDialog
+          spaceName={space.name}
+          onClose={() => setImportOpen(false)}
+          onChanged={() => {
+            setImportsSeq((n) => n + 1);
+            p.onImported?.();
+          }}
+        />
+      )}
     </div>
+  );
+};
+
+/** Export one bot or the whole space; shows a short error under the button if it fails. */
+function useExport() {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<{ key: string; text: string } | null>(null);
+  const run = async (key: string, kwantId?: string) => {
+    setBusy(key);
+    setError(null);
+    try {
+      await downloadExport(kwantId);
+    } catch (err) {
+      setError({ key, text: importErrorText(err).detail || 'The export didn’t work.' });
+    } finally {
+      setBusy(null);
+    }
+  };
+  return { busy, error, run };
+}
+
+const ImportTab: React.FC<TabProps> = ({ space, kwants, onOpenImport, onImported, importsSeq }) => {
+  const exp = useExport();
+  const [records, setRecords] = useState<ImportRecord[] | null>(null);
+  const [listError, setListError] = useState<unknown>(null);
+  const [undoing, setUndoing] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<{ record: ImportRecord; names: string[] } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const load = () => importApi.list().then((r) => { setRecords(r); setListError(null); }, setListError);
+  useEffect(() => {
+    load();
+  }, [space.id, importsSeq]);
+
+  const undo = async (r: ImportRecord, force = false) => {
+    setUndoing(r.id);
+    setConfirm(null);
+    setNotice(null);
+    try {
+      await importApi.undo(r.id, force);
+      setNotice('Import undone.');
+      onImported?.();
+    } catch (err) {
+      if (err instanceof ImportError && err.code === 'edited') setConfirm({ record: r, names: err.names });
+      else if (err instanceof ImportError && err.code === 'in_use')
+        setNotice(`${err.names.join(', ') || 'Something it made'} has already been used, so this import can’t be undone in one step. Delete those bots yourself in Kwant bots.`);
+      else setNotice(importErrorText(err).detail || importErrorText(err).title);
+    } finally {
+      setUndoing(null);
+      load();
+    }
+  };
+
+  return (
+    <>
+      <div className={`${card} p-4 space-y-3`}>
+        <p className="text-xs font-medium text-zinc-200">Bring bots from another app</p>
+        <p className="text-[11px] text-zinc-500">From Grok, ChatGPT, Claude or any other bot, or from a file. You check a preview first, and you can undo it.</p>
+        <button type="button" onClick={onOpenImport} className={primaryBtn}>
+          <FileUp size={13} /> Import bots
+        </button>
+      </div>
+      <div className={`${card} p-4 space-y-3`}>
+        <p className="text-xs font-medium text-zinc-200">Export {space.name}</p>
+        <p className="text-[11px] text-zinc-500">
+          Downloads {kwants.length === 1 ? 'its bot' : `its ${kwants.length} bots`}, teams and shared skills as one file you can import again. Chat history, files, tools and keys are never included.
+        </p>
+        <button type="button" onClick={() => exp.run('space')} disabled={exp.busy === 'space' || kwants.length === 0} className={rowBtn}>
+          {exp.busy === 'space' ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" /> : <Download size={13} />} Export space
+        </button>
+        {exp.error && <p role="alert" className="text-[11px] text-rose-300">{exp.error.text}</p>}
+      </div>
+      <div className="space-y-2">
+        <p className="text-xs font-medium text-zinc-300">Recent imports</p>
+        {confirm && (
+          <div role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
+            <p className="text-xs text-amber-100">
+              {confirm.names.join(', ')} changed since the import. Undo anyway removes {confirm.names.length === 1 ? 'it' : 'them'} with your changes.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => setConfirm(null)} className={rowBtn}>Keep them</button>
+              <button type="button" onClick={() => undo(confirm.record, true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-500">
+                Undo anyway
+              </button>
+            </div>
+          </div>
+        )}
+        {notice && <p role="status" className="text-[11px] text-zinc-300">{notice}</p>}
+        {listError ? (
+          <p role="alert" className="text-[11px] text-rose-300">{importErrorText(listError).detail || 'Couldn’t load the imports.'}</p>
+        ) : records ? (
+          <RecentImports records={records} busyId={undoing} onUndo={(r) => undo(r)} />
+        ) : (
+          <p className="text-[11px] text-zinc-500">Loading…</p>
+        )}
+      </div>
+    </>
   );
 };
 
@@ -335,16 +456,24 @@ const AccountsTab: React.FC<Props> = ({ space, focusClaudeSignIn, onProfilesChan
   );
 };
 
-const BotsTab: React.FC<Props> = ({ space, kwants, onNewBot, onEditBot }) => (
+const BotsTab: React.FC<TabProps> = ({ space, kwants, onNewBot, onEditBot, onOpenImport }) => {
+  const exp = useExport();
+  return (
   <div className="space-y-3">
-    <div className="flex items-center justify-between gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="text-xs text-zinc-400">
         {kwants.length} {kwants.length === 1 ? 'bot' : 'bots'} in {space.name}. Laya only picks from these.
       </p>
-      <button type="button" onClick={onNewBot} className={primaryBtn}>
-        <Plus size={13} /> New bot
-      </button>
+      <div className="flex gap-2">
+        <button type="button" onClick={onOpenImport} className={rowBtn}>
+          <FileUp size={13} /> Import bots
+        </button>
+        <button type="button" onClick={onNewBot} className={primaryBtn}>
+          <Plus size={13} /> New bot
+        </button>
+      </div>
     </div>
+    {exp.error && <p role="alert" className="text-[11px] text-rose-300">{exp.error.text}</p>}
     <ul className="space-y-1.5">
       {kwants.map((k) => (
         <li key={k.id} className={`${card} flex items-center gap-3 p-2.5`}>
@@ -353,16 +482,21 @@ const BotsTab: React.FC<Props> = ({ space, kwants, onNewBot, onEditBot }) => (
             <p className="text-xs font-medium text-zinc-200 truncate">{k.name}</p>
             <p className="text-[11px] text-zinc-500 truncate">{k.title}</p>
           </div>
+          <button type="button" onClick={() => exp.run(k.id, k.id)} disabled={exp.busy === k.id} className={rowBtn} aria-label={`Export ${k.name}`} title="Download as a file">
+            {exp.busy === k.id ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" /> : <Download size={12} />}
+            <span className="hidden sm:inline">Export</span>
+          </button>
           <button type="button" onClick={() => onEditBot(k)} className={rowBtn} aria-label={`Edit ${k.name}`}>
             <Pencil size={12} /> Edit
           </button>
         </li>
       ))}
     </ul>
-    {kwants.length === 0 && <p className="text-xs text-zinc-500">No bots yet. New spaces start empty.</p>}
+    {kwants.length === 0 && <p className="text-xs text-zinc-500">No bots yet. New spaces start empty. Make one, or import bots from another app.</p>}
     <HirePolicyPanel key={space.id} spaceId={space.id} spaceName={space.name} />
   </div>
-);
+  );
+};
 
 const TeamsTab: React.FC<Props> = ({ space, teams, kwants, onNewTeam, onManageTeam }) => (
   <div className="space-y-3">
