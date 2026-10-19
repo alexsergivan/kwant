@@ -73,6 +73,7 @@ import { claudeNeedsSignIn } from './claudeLogin';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
+const DeleteBotDialog = lazy(() => import('./components/DeleteBotDialog').then((m) => ({ default: m.DeleteBotDialog })));
 const NewAgentModal = lazy(() => import('./components/NewAgentModal').then((m) => ({ default: m.NewAgentModal })));
 const McpServersModal = lazy(() => import('./components/McpServersModal').then((m) => ({ default: m.McpServersModal })));
 const ChannelInstructionsModal = lazy(() =>
@@ -448,6 +449,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [editingKwant, setEditingKwant] = useState<Kwant | null>(null);
+  const [deletingKwant, setDeletingKwant] = useState<Kwant | null>(null);
   const [editingTab, setEditingTab] = useState<EditTab>('profile');
   // Skills waiting for review, for the counts on the bot's header and Skills tab.
   const [pendingSkills, setPendingSkills] = useState<Skill[]>([]);
@@ -801,6 +803,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               candidateCount: typeof event.data?.candidate_count === 'number' ? event.data.candidate_count : prev?.candidateCount ?? null,
               fallback: !!event.data?.fallback,
               matchedTerms: Array.isArray(event.data?.matched_terms) ? event.data.matched_terms : undefined,
+              basis: typeof event.data?.basis === 'string' ? event.data.basis : undefined,
             }));
             if (name && (ctx || targetId) && (ctx || targetId) in liveRef.current) markLive(ctx || targetId, name);
             playSfx('blip');
@@ -2128,6 +2131,33 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     busyKwants[t.kwant_id] = `${t.state === 'queued' ? 'Waiting to work on' : awaitingTurns.has(t.turn_id) ? 'Asked you a question in' : 'Working on'} ${describeContext(t.context_id, t.kwant_id)}`;
   }
 
+  // Delete is off while the bot runs anywhere, the open chat included.
+  const workingKwants = new Set(Object.values(turns).map((t) => t.kwant_id));
+
+  /** Drops a deleted bot from the lists; leaves its chat if it was open. */
+  const handleKwantDeleted = async (id: string) => {
+    const gone = kwants.find((k) => k.id === id);
+    setDeletingKwant(null);
+    setEditingKwant(null);
+    setKwants((prev) => prev.filter((k) => k.id !== id));
+    if (!isChannel && selectedId === id) {
+      setOpenThreadId(null);
+      if (channels.length > 0) {
+        setSelectedId(channels[0].id);
+        setIsChannel(true);
+      }
+    }
+    try {
+      const [cRes, tRes] = await Promise.all([fetch('/api/channels'), fetch('/api/teams')]);
+      if (cRes.ok) setChannels(await cRes.json());
+      if (tRes.ok) setTeams(await tRes.json());
+    } catch {
+      /* the next refresh picks it up */
+    }
+    playSfx('click');
+    pushToast(gone ? `Deleted ${gone.name}.` : 'Bot deleted.');
+  };
+
   const viewingHistory = !!historyWindow && historyWindow.ctx === openCtx;
   const errorBar = messagesError ? (
     <div role="alert" className="px-3 sm:px-6 py-2 border-b border-rose-500/20 bg-rose-500/5 flex items-center gap-2 text-xs text-rose-300">
@@ -2562,7 +2592,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           pendingSkills={editingKwant ? pendingSkillCounts[editingKwant.id] ?? 0 : 0}
           onClose={() => setEditingKwant(null)}
           onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
+          onRequestDelete={editingKwant ? () => setDeletingKwant(editingKwant) : undefined}
         />
+
+        {deletingKwant && (
+          <DeleteBotDialog
+            kwant={deletingKwant}
+            busy={workingKwants.has(deletingKwant.id) ? busyKwants[deletingKwant.id] ?? 'Working' : null}
+            onClose={() => setDeletingKwant(null)}
+            onDeleted={handleKwantDeleted}
+          />
+        )}
       </Suspense>
 
       {/* New Team Modal */}

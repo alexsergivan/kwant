@@ -326,3 +326,55 @@ export function trapFocusTarget(count: number, index: number, shift: boolean): n
   if (!shift && index === count - 1) return 0;
   return null;
 }
+
+/** The server's "It used tools (a, b, c). Imported bots start with no tools; …" notice, split up. */
+const TOOL_NOTE = /^It used tools \((.*)\)\.\s*(.*)$/s;
+
+/** "mcp__gmail__send_email", "gmail.send", "Gmail: send" → "gmail"; a plain name stays whole. */
+function appOf(hint: string): string | null {
+  const t = hint.trim();
+  const mcp = /^mcp__(.+?)__/.exec(t);
+  if (mcp) return mcp[1];
+  const sep = /^([^\s.:/]+)\s*(?:\.|:|\/|__)\s*\S/.exec(t);
+  return sep ? sep[1] : null;
+}
+
+const appLabel = (name: string) => {
+  // claude.ai connectors arrive as "claude_ai_Notion".
+  const words = name.replace(/^claude[_.]ai[_-]+/i, '').replace(/[_-]+/g, ' ').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : name;
+};
+
+export interface ToolNote {
+  /** Apps (or tools that name no app) in first-seen order, each with the tools it listed. */
+  apps: Array<{ name: string; tools: string[] }>;
+  /** The rest of the sentence: "Imported bots start with no tools; connect the ones it needs." */
+  tail: string;
+}
+
+/**
+ * The tool notice grouped by app, so 40 tool names read as a few app names; null for any other
+ * notice. snake_case names group on their first word only when another hint shares it.
+ */
+export function toolNote(message: string): ToolNote | null {
+  const m = TOOL_NOTE.exec(message);
+  if (!m) return null;
+  const hints = m[1].split(/,\s*/).map((h) => h.trim()).filter(Boolean);
+  if (hints.length === 0) return null;
+  const first = (h: string) => (/^[a-z0-9]+_[a-z0-9_]+$/i.test(h) ? h.split('_')[0].toLowerCase() : null);
+  const counts = new Map<string, number>();
+  for (const h of hints) {
+    const f = first(h);
+    if (f) counts.set(f, (counts.get(f) ?? 0) + 1);
+  }
+  const groups = new Map<string, { name: string; tools: string[] }>();
+  for (const h of hints) {
+    const f = first(h);
+    const app = appOf(h) ?? (f && (counts.get(f) ?? 0) > 1 ? f : h);
+    const key = app.toLowerCase();
+    const g = groups.get(key) ?? { name: appLabel(app), tools: [] };
+    if (!g.tools.includes(h)) g.tools.push(h);
+    groups.set(key, g);
+  }
+  return { apps: [...groups.values()], tail: m[2].trim() };
+}

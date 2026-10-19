@@ -423,8 +423,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                     e.stopPropagation();
                                     onEditKwant(k);
                                   }}
-                                  className="opacity-0 group-hover/member:opacity-100 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
-                                  title={`Edit ${k.name}`}
+                                  className="opacity-0 group-hover/member:opacity-100 max-sm:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
+                                  title={`Edit or delete ${k.name}`}
+                          aria-label={`Edit or delete ${k.name}`}
                                 >
                                   <Pencil size={11} />
                                 </button>
@@ -442,7 +443,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                       e.stopPropagation();
                                       onUpdateTeamMembers(t, memberIds.filter((id) => id !== k.id));
                                     }}
-                                    className="opacity-0 group-hover/member:opacity-100 p-0.5 rounded text-zinc-500 hover:text-rose-300 hover:bg-rose-500/10 transition-all"
+                                    className="opacity-0 group-hover/member:opacity-100 max-sm:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-rose-300 hover:bg-rose-500/10 transition-all"
                                     title={`Remove ${k.name} from @${t.name}`}
                                   >
                                     <X size={11} />
@@ -582,8 +583,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             e.stopPropagation();
                             onEditKwant(k);
                           }}
-                          className="ml-auto opacity-0 group-hover/fleet:opacity-100 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
-                          title={`Edit ${k.name}`}
+                          className="ml-auto opacity-0 group-hover/fleet:opacity-100 max-sm:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
+                          title={`Edit or delete ${k.name}`}
+                          aria-label={`Edit or delete ${k.name}`}
                         >
                           <Pencil size={11} />
                         </button>

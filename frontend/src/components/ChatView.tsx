@@ -32,6 +32,7 @@ import { FileTiles, UploadChip } from './Attachments';
 import { ranOnLabel } from '../engines';
 import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
+import { routeReasonText } from '../routeReason';
 
 export interface ChatMessage {
   id: string;
@@ -90,6 +91,8 @@ export interface RoutingState {
   candidateCount?: number | null;
   fallback?: boolean;
   matchedTerms?: string[];
+  /** How the bot was picked: by role, the team lead as fallback, keywords, or the only choice. */
+  basis?: string;
 }
 
 export interface ChatViewProps {
@@ -192,6 +195,7 @@ export const renderFormattedText = (text: string): React.ReactNode => {
 const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> = ({ routing, spaceName }) => {
   const deciding = routing.phase === 'deciding';
   const isDiscuss = routing.mode === 'discuss';
+  const why = routeReasonText(routing);
   const pool = routing.candidateCount ?? (routing.candidates.length || null);
   const where = spaceName ? ` in ${spaceName}` : '';
 
@@ -228,7 +232,7 @@ const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> =
                 <span className="font-semibold text-violet-200">{routing.kwantName}</span>
                 {routing.kwantTitle && <span className="text-zinc-400 text-xs">({routing.kwantTitle})</span>}
               </div>
-              {routing.reason && <span className="text-xs text-zinc-400">{routing.reason}</span>}
+              {why && <span className="text-xs text-zinc-400">{why}</span>}
               {routing.fallback && <span className="text-xs text-amber-300/90">Picked by keywords (Laya is offline)</span>}
             </div>
           )}

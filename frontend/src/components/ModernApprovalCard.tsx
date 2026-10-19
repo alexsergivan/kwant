@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldAlert, Check, CheckCheck, X, Plug } from 'lucide-react';
+import { ShieldAlert, Check, CheckCheck, X, Plug, FileText, Terminal } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import { formatArgs, humanizeToolName, parseMcpToolName } from '../mcp';
 
@@ -38,6 +38,42 @@ export const localShellView = (approval: PendingApproval) => {
   };
 };
 
+const BUILTIN_SHELL = ['Bash'];
+const BUILTIN_FILE = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
+const s = (v: unknown) => (typeof v === 'string' && v ? v : null);
+
+/**
+ * A Claude CLI built-in tool (Bash, Write, Edit, ...) the bot asks to use: the command or file in
+ * plain words, or null for other tools. Reads `details.arguments` (or `details.input`, the CLI's
+ * own name for it) and works without `source` when the tool name is a known built-in.
+ */
+export const builtinView = (approval: PendingApproval) => {
+  const d = approval.details ?? {};
+  const tool = s(d.tool) ?? approval.tool_name;
+  const known = BUILTIN_SHELL.includes(tool) || BUILTIN_FILE.includes(tool);
+  if (d.source !== 'claude_builtin' && !known) return null;
+  const raw = d.arguments ?? d.input;
+  const args = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+  const base = { tool, kwant: s(d.kwant_name), cwd: s(d.cwd), outsideFolder: d.outside_folder === true };
+  if (BUILTIN_SHELL.includes(tool)) {
+    return { ...base, kind: 'shell' as const, command: s(args.command) ?? '', description: s(args.description), path: null, change: null };
+  }
+  if (BUILTIN_FILE.includes(tool)) {
+    const path = s(args.file_path) ?? s(args.notebook_path) ?? s(args.path);
+    const edits = Array.isArray(args.edits) ? args.edits.length : 0;
+    const change =
+      tool === 'Write'
+        ? `Write ${typeof args.content === 'string' ? `${args.content.split('\n').length} lines` : 'the file'}`
+        : tool === 'MultiEdit'
+          ? `${edits} ${edits === 1 ? 'edit' : 'edits'}`
+          : tool === 'NotebookEdit'
+            ? 'Change a notebook cell'
+            : 'Replace text';
+    return { ...base, kind: 'file' as const, command: null, description: null, path, change };
+  }
+  return { ...base, kind: 'other' as const, command: null, description: null, path: null, change: null, args: formatArgs(args) };
+};
+
 export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   approval,
   onResolve,
@@ -48,6 +84,8 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   };
   const mcp = mcpView(approval);
   const shell = localShellView(approval);
+  const builtin = shell || mcp ? null : builtinView(approval);
+  const who = builtin?.kwant ? <span className="font-medium text-zinc-100">{builtin.kwant}</span> : 'A bot';
 
   return (
     <div className="my-3 border border-amber-500/30 bg-amber-950/20 rounded-xl p-4 text-zinc-100 max-w-2xl shadow-lg backdrop-blur-sm">
@@ -66,6 +104,57 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
             <p className="text-[11px] text-zinc-400 break-all">
               <span className="text-zinc-500">In folder:</span> <span className="font-mono text-zinc-300">{shell.cwd}</span>
             </p>
+          )}
+        </div>
+      ) : builtin?.kind === 'shell' ? (
+        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
+          <p className="flex items-center gap-1.5 text-zinc-300">
+            <Terminal size={13} className="shrink-0 text-sky-400" aria-hidden="true" />
+            <span>{who} wants to run a command.</span>
+          </p>
+          {builtin.description && <p className="text-zinc-400 break-words">{builtin.description}</p>}
+          <pre className="font-mono text-[11px] text-zinc-100 bg-zinc-950/70 border border-zinc-800 rounded-md p-2 whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
+            {builtin.command || '(empty command)'}
+          </pre>
+          {builtin.cwd && (
+            <p className="text-[11px] text-zinc-400 break-all">
+              <span className="text-zinc-500">In folder:</span> <span className="font-mono text-zinc-300">{builtin.cwd}</span>
+            </p>
+          )}
+        </div>
+      ) : builtin?.kind === 'file' ? (
+        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
+          <p className="flex items-center gap-1.5 text-zinc-300">
+            <FileText size={13} className="shrink-0 text-sky-400" aria-hidden="true" />
+            <span>
+              {who} wants to {builtin.tool === 'Write' ? 'write a file' : 'change a file'}
+              {builtin.outsideFolder ? ' outside its own folder' : ''}.
+            </span>
+          </p>
+          <p className="font-mono text-[11px] text-zinc-100 bg-zinc-950/70 border border-zinc-800 rounded-md p-2 break-all">
+            {builtin.path || '(no file given)'}
+          </p>
+          <p className="text-[11px] text-zinc-400 break-words">
+            {builtin.change}
+            {builtin.cwd && (
+              <>
+                {' · '}
+                <span className="text-zinc-500">Its folder:</span> <span className="font-mono text-zinc-300 break-all">{builtin.cwd}</span>
+              </>
+            )}
+          </p>
+        </div>
+      ) : builtin ? (
+        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
+          <p className="text-zinc-300">
+            {who} wants to use <span className="font-medium text-sky-200">{builtin.tool}</span>.
+          </p>
+          {'args' in builtin && builtin.args ? (
+            <pre className="font-mono text-[11px] text-zinc-300 bg-zinc-950/70 border border-zinc-800 rounded-md p-2 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+              {builtin.args}
+            </pre>
+          ) : (
+            <p className="text-[11px] text-zinc-500">No arguments.</p>
           )}
         </div>
       ) : mcp ? (
@@ -104,16 +193,18 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
 
       <div className="flex flex-wrap items-center justify-end gap-2">
         <button
+          type="button"
           onClick={() => handleDecision('deny')}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800 hover:bg-zinc-700 transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-zinc-300 bg-zinc-800 hover:bg-zinc-700 transition-colors"
         >
           <X size={14} />
           <span>Deny</span>
         </button>
 
         <button
+          type="button"
           onClick={() => handleDecision('allow_once')}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-sm"
+          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-sm"
         >
           <Check size={14} />
           <span>Allow Once</span>
@@ -122,12 +213,13 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         {/* Local shell approvals are never remembered, so only offer a one-off answer. */}
         {!shell && (
           <button
+            type="button"
             onClick={() => handleDecision('always_allow')}
-            title={mcp ? 'Allow this tool for this bot until the app restarts' : undefined}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm"
+            title={mcp || builtin ? 'Allow this tool for this bot until the app restarts' : undefined}
+            className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm"
           >
             <CheckCheck size={14} />
-            <span>Always Allow</span>
+            <span>{builtin ? 'Always this session' : 'Always Allow'}</span>
           </button>
         )}
       </div>

@@ -1,7 +1,7 @@
 import React, { useId, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, MinusCircle, Undo2, UserPlus } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { HireMeta, evidenceText, hireStateText, hireView, hiredBotGone, modelText } from '../botActions';
+import { HireMeta, evidenceText, hireStateText, hireView, hiredBotGone, isTeamHire, modelText } from '../botActions';
 
 export type HireDecision = 'deny' | 'accept_once' | 'always_accept' | 'undo';
 
@@ -55,6 +55,8 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
   const evidence = evidenceText(view.evidence, view.requested_by_person);
   const border = pending ? 'border-violet-500/40' : done ? 'border-zinc-800' : 'border-emerald-500/25';
   const can = (c: string) => pending && view.choices.includes(c);
+  const team = isTeamHire(view);
+  const toolText = (tools: HireMeta['tools']) => (tools.length ? tools.map((t) => t.name || 'Unknown tool').join(', ') : 'None');
 
   return (
     <section data-message-id={messageId} aria-labelledby={headingId} className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${flash ? 'kw-flash' : ''}`}>
@@ -65,18 +67,34 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
             <UserPlus size={12} className="text-violet-300" aria-hidden="true" />
             <span>
               <span className="text-zinc-200">{proposer}</span>
-              {view.status === 'auto_accepted' ? ' hired a new bot' : pending ? ' proposes hiring a new bot' : ' proposed hiring a new bot'}
+              {team
+                ? view.status === 'auto_accepted'
+                  ? ` hired a team of ${view.members.length}`
+                  : pending
+                    ? ` proposes hiring a team of ${view.members.length}`
+                    : ` proposed hiring a team of ${view.members.length}`
+                : view.status === 'auto_accepted'
+                  ? ' hired a new bot'
+                  : pending
+                    ? ' proposes hiring a new bot'
+                    : ' proposed hiring a new bot'}
             </span>
           </span>
-          <div className="flex items-center gap-2.5 min-w-0">
-            <ModernAvatar role={view.role || view.name} name={view.name} size={28} kwantId={view.hired_kwant_id ?? undefined} />
-            <div className="min-w-0">
-              <h3 id={headingId} className={`text-sm font-semibold break-words leading-snug ${done ? 'text-zinc-400' : 'text-zinc-100'}`}>
-                {view.name}
-              </h3>
-              {view.role && <p className="text-xs text-zinc-400 break-words">{view.role}</p>}
+          {team ? (
+            <h3 id={headingId} className={`text-sm font-semibold break-words leading-snug ${done ? 'text-zinc-400' : 'text-zinc-100'}`}>
+              {view.new_team?.name ?? view.team?.name ?? `${view.members.length} new bots`}
+            </h3>
+          ) : (
+            <div className="flex items-center gap-2.5 min-w-0">
+              <ModernAvatar role={view.role || view.name} name={view.name} size={28} kwantId={view.hired_kwant_id ?? undefined} />
+              <div className="min-w-0">
+                <h3 id={headingId} className={`text-sm font-semibold break-words leading-snug ${done ? 'text-zinc-400' : 'text-zinc-100'}`}>
+                  {view.name}
+                </h3>
+                {view.role && <p className="text-xs text-zinc-400 break-words">{view.role}</p>}
+              </div>
             </div>
-          </div>
+          )}
           {view.reason && (
             <p className="text-sm text-zinc-300 break-words leading-relaxed">
               <span className="text-zinc-500">Why: </span>
@@ -91,16 +109,41 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
           )}
         </div>
 
-        <dl className="mx-4 mb-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-xs">
-          <dt className="text-zinc-500">Team</dt>
-          <dd className="min-w-0 break-words text-zinc-200">{view.team ? view.team.name : 'No team'}</dd>
-          <dt className="text-zinc-500">Model</dt>
-          <dd className="min-w-0 break-words text-zinc-200">{modelText(view.model)}</dd>
-          <dt className="text-zinc-500">Tools</dt>
-          <dd className="min-w-0 break-words text-zinc-200">{view.tools.length ? view.tools.map((t) => t.name || 'Unknown tool').join(', ') : 'None'}</dd>
-        </dl>
+        {team ? (
+          <>
+            <ul aria-label="Proposed members" className="mx-4 mb-2 divide-y divide-zinc-800 rounded-xl border border-zinc-800 bg-zinc-950/70 text-xs">
+              {view.members.map((m, i) => (
+                <li key={`${m.name}-${i}`} className="flex items-start gap-2.5 px-3 py-2 min-w-0">
+                  <ModernAvatar role={m.role || m.name} name={m.name} size={24} kwantId={view.hired_kwant_ids[i]} />
+                  <div className="min-w-0 flex-1">
+                    <p className={`font-medium break-words ${done ? 'text-zinc-400' : 'text-zinc-100'}`}>{m.name}</p>
+                    {m.role && <p className="text-zinc-400 break-words">{m.role}</p>}
+                    <p className="text-[11px] text-zinc-500 break-words">
+                      {modelText(m.model)} · Tools: {toolText(m.tools)}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <dl className="mx-4 mb-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 px-1 text-xs">
+              <dt className="text-zinc-500">Team</dt>
+              <dd className="min-w-0 break-words text-zinc-200">
+                {view.new_team ? `New team: ${view.new_team.name}` : view.team ? view.team.name : 'No team'}
+              </dd>
+            </dl>
+          </>
+        ) : (
+          <dl className="mx-4 mb-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-xs">
+            <dt className="text-zinc-500">Team</dt>
+            <dd className="min-w-0 break-words text-zinc-200">{view.team ? view.team.name : 'No team'}</dd>
+            <dt className="text-zinc-500">Model</dt>
+            <dd className="min-w-0 break-words text-zinc-200">{modelText(view.model)}</dd>
+            <dt className="text-zinc-500">Tools</dt>
+            <dd className="min-w-0 break-words text-zinc-200">{toolText(view.tools)}</dd>
+          </dl>
+        )}
 
-        {view.instructions && (
+        {(team ? view.members.some((m) => m.instructions) : view.instructions) && (
           <div className="mx-4 mb-2">
             <button
               type="button"
@@ -110,14 +153,14 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
               className="inline-flex items-center gap-1 min-h-[32px] text-xs text-zinc-300 hover:text-zinc-100 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
             >
               {showInstructions ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
-              {showInstructions ? 'Hide its instructions' : 'Show its instructions'}
+              {team ? (showInstructions ? 'Hide their instructions' : 'Show their instructions') : showInstructions ? 'Hide its instructions' : 'Show its instructions'}
             </button>
             {showInstructions && (
               <p
                 id={instructionsId}
                 className="mt-1 max-h-64 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-xs text-zinc-300 whitespace-pre-wrap break-words leading-relaxed"
               >
-                {view.instructions}
+                {team ? view.members.filter((m) => m.instructions).map((m) => `${m.name}\n${m.instructions}`).join('\n\n') : view.instructions}
               </p>
             )}
           </div>
@@ -148,7 +191,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
                   className={`${btn} bg-violet-500 text-white hover:bg-violet-400 focus-visible:outline-violet-400`}
                 >
                   {busy === 'accept_once' && spin}
-                  {busy === 'accept_once' ? 'Hiring…' : 'Accept once'}
+                  {busy === 'accept_once' ? 'Hiring…' : team ? `Approve all ${view.members.length}` : 'Accept once'}
                 </button>
               )}
               {can('always_accept') && (
@@ -159,7 +202,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
               )}
               {can('deny') && (
                 <button type="button" onClick={() => decide('deny')} disabled={busy !== null} className={quiet}>
-                  {busy === 'deny' ? 'Saying no…' : 'Deny'}
+                  {busy === 'deny' ? 'Saying no…' : team ? 'Decline' : 'Deny'}
                 </button>
               )}
             </div>

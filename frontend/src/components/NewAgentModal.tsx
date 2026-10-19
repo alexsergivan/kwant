@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, Sparkles, Pencil, ChevronRight, Brain, CalendarClock, UserRound, ListChecks } from 'lucide-react';
+import { X, Sparkles, Pencil, ChevronRight, Brain, CalendarClock, UserRound, ListChecks, Trash2 } from 'lucide-react';
 import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
 import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
 import { playSfx } from '../audio/chiptune';
@@ -67,6 +67,8 @@ interface NewAgentModalProps {
   initialTab?: EditTab;
   /** Skills waiting for review, shown as a count on the Skills tab. */
   pendingSkills?: number;
+  /** Editing only: opens the Delete bot confirm. */
+  onRequestDelete?: () => void;
 }
 
 export const NewAgentModal: React.FC<NewAgentModalProps> = ({
@@ -87,6 +89,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   channels = [],
   initialTab = 'profile',
   pendingSkills = 0,
+  onRequestDelete,
 }) => {
   const [tab, setTab] = useState<EditTab>('profile');
   const [name, setName] = useState('');
@@ -460,7 +463,20 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
 
           {error && <p className="text-[11px] text-rose-400">{error}</p>}
 
-          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-zinc-800">
+          <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2 border-t border-zinc-800">
+            {isEdit && onRequestDelete && (
+              <button
+                type="button"
+                onClick={() => {
+                  playSfx('click');
+                  onRequestDelete();
+                }}
+                className="mr-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-rose-300 hover:text-rose-200 hover:bg-rose-500/10 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
+              >
+                <Trash2 size={13} aria-hidden="true" />
+                Delete bot
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {

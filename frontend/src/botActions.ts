@@ -117,8 +117,11 @@ export function botGone(m: Pick<BotActionMeta, 'status' | 'action' | 'target_kin
 }
 
 /** An accepted hire whose bot has since been deleted. */
-export function hiredBotGone(h: Pick<HireMeta, 'status' | 'hired_kwant_id'>, botIds: ReadonlySet<string> | null): boolean {
-  return !!botIds && (h.status === 'accepted' || h.status === 'auto_accepted') && !!h.hired_kwant_id && !botIds.has(h.hired_kwant_id);
+export function hiredBotGone(h: Pick<HireMeta, 'status' | 'hired_kwant_id'> & Partial<Pick<HireMeta, 'hired_kwant_ids'>>, botIds: ReadonlySet<string> | null): boolean {
+  if (!botIds || (h.status !== 'accepted' && h.status !== 'auto_accepted')) return false;
+  // A team hire is gone once every bot it made is.
+  const ids = h.hired_kwant_ids?.length ? h.hired_kwant_ids : h.hired_kwant_id ? [h.hired_kwant_id] : [];
+  return ids.length > 0 && ids.every((id) => !botIds.has(id));
 }
 
 /** The state line in plain words. Never "Done" once the change was undone or declined, or its bot is gone. */
@@ -243,6 +246,20 @@ export interface HireMeta {
   note: string | null;
   created_at: string | null;
   resolved_at: string | null;
+  /** Every bot the proposal hires, the first being the top-level one; one entry for a single hire. */
+  members: HireMember[];
+  /** The team the proposal creates for them, when it makes a new one. */
+  new_team: { name: string } | null;
+  /** The bots made on accept, in `members` order; empty until then. */
+  hired_kwant_ids: string[];
+}
+
+export interface HireMember {
+  name: string;
+  role: string;
+  model: string | null;
+  tools: Array<{ id: string; name: string | null }>;
+  instructions: string;
 }
 
 /** A proposal from the API or `hire_updated`; `card` is its meta. */
@@ -263,6 +280,22 @@ function parseEvidence(raw: unknown): HireEvidence | null {
   return null;
 }
 
+function parseTools(raw: unknown): Array<{ id: string; name: string | null }> {
+  return Array.isArray(raw)
+    ? raw.flatMap((t) => (t && typeof t === 'object' && str((t as Record<string, unknown>).id) ? [{ id: (t as Record<string, string>).id, name: str((t as Record<string, unknown>).name) }] : []))
+    : [];
+}
+
+function parseMembers(raw: unknown): HireMember[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((x) => {
+    if (!x || typeof x !== 'object') return [];
+    const o = x as Record<string, unknown>;
+    const name = str(o.name);
+    return name ? [{ name, role: str(o.role) ?? '', model: str(o.model), tools: parseTools(o.tools), instructions: str(o.instructions) ?? '' }] : [];
+  });
+}
+
 export function parseHireMeta(raw: unknown): HireMeta | null {
   const m = parseMetaObject(raw);
   if (!m || m.kind !== 'hire_proposal') return null;
@@ -280,9 +313,7 @@ export function parseHireMeta(raw: unknown): HireMeta | null {
     role: str(m.role) ?? '',
     instructions: str(m.instructions) ?? '',
     model: str(m.model),
-    tools: Array.isArray(m.tools)
-      ? m.tools.flatMap((t) => (t && typeof t === 'object' && str((t as Record<string, unknown>).id) ? [{ id: (t as Record<string, string>).id, name: str((t as Record<string, unknown>).name) }] : []))
-      : [],
+    tools: parseTools(m.tools),
     team: team && str(team.id) ? { id: team.id as string, name: str(team.name) ?? 'a team' } : null,
     reason: str(m.reason) ?? '',
     evidence: parseEvidence(m.evidence),
@@ -297,8 +328,18 @@ export function parseHireMeta(raw: unknown): HireMeta | null {
     note: str(m.note),
     created_at: str(m.created_at),
     resolved_at: str(m.resolved_at),
+    members: (() => {
+      const listed = parseMembers(m.members);
+      const top: HireMember = { name, role: str(m.role) ?? '', model: str(m.model), tools: parseTools(m.tools), instructions: str(m.instructions) ?? '' };
+      return listed.length ? listed : [top];
+    })(),
+    new_team: m.new_team && typeof m.new_team === 'object' && str((m.new_team as Record<string, unknown>).name) ? { name: (m.new_team as Record<string, string>).name } : null,
+    hired_kwant_ids: strs(m.hired_kwant_ids),
   };
 }
+
+/** Whether the proposal hires several bots at once (a team), rather than one. */
+export const isTeamHire = (h: Pick<HireMeta, 'members'>) => h.members.length > 1;
 
 const HIRE_RANK: Record<HireStatus, number> = { pending: 0, accepted: 1, auto_accepted: 1, denied: 2, undone: 2 };
 
@@ -337,17 +378,28 @@ export function evidenceText(e: HireEvidence | null, requestedByPerson: boolean)
 /** "auto" or empty means the app picks; anything else is shown as is. */
 export const modelText = (model: string | null) => (!model || model === 'auto' ? 'Picked automatically' : model);
 
-export function hireStateText(h: Pick<HireMeta, 'status' | 'name' | 'team' | 'proposer_name'>, gone = false): { label: string; tone: 'ok' | 'wait' | 'off' } {
-  if (gone) return { label: `Hired ${h.name}. It’s since been deleted.`, tone: 'off' };
+/** "Ana, Ben and Cy". */
+export const andList = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0] ?? '');
+
+export function hireStateText(
+  h: Pick<HireMeta, 'status' | 'name' | 'team' | 'proposer_name'> & Partial<Pick<HireMeta, 'members' | 'new_team'>>,
+  gone = false,
+): { label: string; tone: 'ok' | 'wait' | 'off' } {
+  const names = h.members && h.members.length > 1 ? h.members.map((m) => m.name) : [h.name];
+  const many = names.length > 1;
+  const who = andList(names);
+  const team = h.new_team?.name ?? h.team?.name;
+  const joined = team ? `joined ${team}` : many ? 'are ready' : 'is ready';
+  if (gone) return { label: many ? `Hired ${who}. They’ve since been deleted.` : `Hired ${h.name}. It’s since been deleted.`, tone: 'off' };
   switch (h.status) {
     case 'accepted':
-      return { label: `Hired. ${h.name} ${h.team ? `joined ${h.team.name}` : 'is ready'}.`, tone: 'ok' };
+      return { label: `Hired. ${who} ${joined}.`, tone: 'ok' };
     case 'auto_accepted':
-      return { label: `Hired at once, because you chose Always accept. ${h.name} ${h.team ? `joined ${h.team.name}` : 'is ready'}.`, tone: 'ok' };
+      return { label: `Hired at once, because you chose Always accept. ${who} ${joined}.`, tone: 'ok' };
     case 'denied':
-      return { label: `Not hired. Bots here won’t suggest this kind of bot again unless you ask.`, tone: 'off' };
+      return { label: many ? 'Not hired. Bots here won’t suggest this team again unless you ask.' : `Not hired. Bots here won’t suggest this kind of bot again unless you ask.`, tone: 'off' };
     case 'undone':
-      return { label: `Hire undone. ${h.name} was removed.`, tone: 'off' };
+      return { label: many ? `Hire undone. ${who} were removed.` : `Hire undone. ${h.name} was removed.`, tone: 'off' };
     default:
       return { label: `Waiting for you. ${h.proposer_name || 'The bot'} carries on with your request meanwhile.`, tone: 'wait' };
   }

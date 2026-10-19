@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Check, ChevronRight, ClipboardCopy, FileUp, Info, Loader2, Undo2, Upload, X } from 'lucide-react';
 import {
   Applied,
@@ -15,6 +15,8 @@ import {
   previewRows,
   sourceName,
   textTooLong,
+  ToolNote,
+  toolNote,
   trapFocusTarget,
 } from '../imports';
 
@@ -181,12 +183,56 @@ export const UploadStep: React.FC<{ file: File | null; onFile: (f: File | null) 
   );
 };
 
+/** How many app names a tool notice shows before "Show all". */
+const APPS_SHOWN = 5;
+
+/** The "It used tools (…)" notice as a short list of app names, with the rest behind "Show all". */
+const ToolNoteItem: React.FC<{ note: ToolNote }> = ({ note }) => {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  const n = note.apps.length;
+  const shown = open ? note.apps : note.apps.slice(0, APPS_SHOWN);
+  const hidden = n - shown.length;
+  return (
+    <li>
+      <span>
+        {open
+          ? `It used tools from ${n === 1 ? note.apps[0].name : `${n} apps, listed below`}. `
+          : `It used tools from ${n === 1 ? '' : `${n} apps: `}${shown.map((a) => a.name).join(', ')}${hidden > 0 ? ` and ${hidden} more` : ''}. `}
+        {note.tail}
+      </span>{' '}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls={listId}
+        className="underline underline-offset-2 text-amber-200 hover:text-amber-100 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+      >
+        {open ? 'Show less' : hidden > 0 ? 'Show all' : 'Show tool names'}
+      </button>
+      {open && (
+        <ul id={listId} className="mt-1 space-y-0.5 pl-1 list-none">
+          {note.apps.map((a) => (
+            <li key={a.name} className="break-words">
+              <span className="text-amber-100">{a.name}</span>
+              {a.tools.length > 1 || a.tools[0] !== a.name ? <span className="text-zinc-400">: {a.tools.join(', ')}</span> : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+};
+
 const Notes: React.FC<{ items: string[]; tone: 'warn' | 'drop' | 'problem'; label: string }> = ({ items, tone, label }) =>
   items.length === 0 ? null : (
     <div>
       <p className={`text-[11px] font-medium ${tone === 'problem' ? 'text-rose-300' : tone === 'warn' ? 'text-amber-300' : 'text-zinc-400'}`}>{label}</p>
-      <ul className={`list-disc pl-5 text-[11px] ${tone === 'problem' ? 'text-rose-200/90' : tone === 'warn' ? 'text-amber-100/80' : 'text-zinc-500'}`}>
-        {items.map((m, i) => <li key={i}>{m}</li>)}
+      <ul className={`list-disc pl-5 text-[11px] break-words ${tone === 'problem' ? 'text-rose-200/90' : tone === 'warn' ? 'text-amber-100/80' : 'text-zinc-500'}`}>
+        {items.map((m, i) => {
+          const tools = tone === 'warn' ? toolNote(m) : null;
+          return tools ? <ToolNoteItem key={i} note={tools} /> : <li key={i}>{m}</li>;
+        })}
       </ul>
     </div>
   );
