@@ -273,7 +273,8 @@ const ENGINES: &str = "Engines and their sign-in are the person's. Ask them to s
 const AUTH: &str = "How people sign in to kwnt is the person's alone; ask them to change it on the computer kwnt runs on.";
 const APPROVALS: &str = "Approvals and questions are answered by the person, never by a bot: ask them to answer the card in the chat.";
 const COMPUTER: &str = "Where bots browse and run commands is the person's choice: ask them in App settings → Computer for browsing and commands.";
-const AGENT_TOOLS: &str = "Refused: you can't switch bots' own tools on or off. Only the person can, in App settings → \"Bots can use their own tools\".";
+const AGENT_TOOLS: &str = "Refused: you can't switch bots' own tools on or off. Only the person can: tell them to open App settings \
+    (the gear at the bottom of the space rail, or Space settings → App settings) and flip the \"Bots can use their own tools\" switch.";
 const MCP: &str = "Tool servers are installed by the person. Use mcp_suggest to offer one; they see an Install card. \
     Their keys and headers are entered by the person in Space settings → Tools.";
 
@@ -1848,6 +1849,8 @@ mod tests {
             let why = refused_setting(key).unwrap();
             assert!(why.starts_with("Refused"), "{key}: {why}");
             assert!(why.contains("App settings"), "{key}: {why}");
+            assert!(why.contains("gear at the bottom of the space rail"), "{key}: the exact way there: {why}");
+            assert!(why.contains("\"Bots can use their own tools\" switch"), "{key}: the control's own label: {why}");
         }
     }
 }
