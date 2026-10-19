@@ -127,3 +127,34 @@ async fn a_failed_change_rolls_back_and_keeps_running_on_version_1() {
     let db = Database::init(tmp.path()).await.unwrap();
     assert_eq!(db.schema_version().await.unwrap(), CUSTOM_API_SCHEMA_VERSION);
 }
+
+/// Every connection the server reads with sees the migrated schema. Before the fix the
+/// migrations ran on the server's own 10-connection pool: a connection whose schema was loaded
+/// before another one added `space_id` prepared `SELECT *` with the old 15 columns, SQLite
+/// re-prepared it with 16 at the first step, and sqlx panicked on its worker thread
+/// (`index out of bounds: the len is 15 but the index is 15`) and returned RowNotFound.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_connection_reads_the_migrated_schema() {
+    for _ in 0..5 {
+        let tmp = tempfile::tempdir().unwrap();
+        legacy(tmp.path()).await;
+        let db = Database::init(tmp.path()).await.expect("migrates the legacy database");
+        let space = kwnt::db::spaces::SpaceId::default_space();
+        let ids: Vec<String> = db.list_kwants(&space).await.unwrap().into_iter().map(|k| k.id).collect();
+        assert!(!ids.is_empty());
+        // More readers than connections, so every pooled connection serves `SELECT *` reads
+        let reads = (0..40).map(|i| {
+            let (db, space, id) = (db.clone(), space.clone(), ids[i % ids.len()].clone());
+            tokio::spawn(async move {
+                assert!(db.get_kwant(&id).await.unwrap().is_some());
+                assert!(!db.list_kwants(&space).await.unwrap().is_empty());
+                db.list_channels(&space).await.unwrap();
+                db.list_routines(&space).await.unwrap();
+                db.list_profiles(&space).await.unwrap();
+            })
+        });
+        for read in reads.collect::<Vec<_>>() {
+            read.await.expect("no read sees a stale column list");
+        }
+    }
+}

@@ -95,8 +95,14 @@ impl Database {
         let fresh = !db_path.exists();
         let conn_str = format!("sqlite://{}?mode=rwc", db_path.to_string_lossy());
 
+        // Migrations run on one connection, closed before the runtime pool opens. A connection
+        // whose schema was loaded before another one altered a table prepares `SELECT *` from
+        // the old schema; SQLite re-prepares it at the first step with the new column count,
+        // and sqlx reads the row with the old column list (an index-out-of-bounds panic, then
+        // RowNotFound). With one connection every statement sees every earlier change, and the
+        // runtime pool's connections all start from the finished schema.
         let pool = SqlitePoolOptions::new()
-            .max_connections(10)
+            .max_connections(1)
             .connect(&conn_str)
             .await?;
 
@@ -139,8 +145,14 @@ impl Database {
             db.migrate_hires().await?;
             db.migrate_imports().await?;
         }
+        db.pool.close().await;
 
-        Ok(db)
+        let pool = SqlitePoolOptions::new()
+            .max_connections(10)
+            .connect(&conn_str)
+            .await?;
+        sqlx::query("PRAGMA synchronous = NORMAL;").execute(&pool).await?;
+        Ok(Self { pool })
     }
 
     async fn seed_defaults(&self) -> Result<(), DbError> {
