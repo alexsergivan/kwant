@@ -614,3 +614,85 @@ async fn migration_is_additive_and_idempotent() {
     assert_eq!(wire["data"], "hi");
     assert_eq!((wire["turn_id"].as_str(), wire["context_id"].as_str(), wire["thread_id"].as_str()), (Some("t1"), Some("th"), Some("th")));
 }
+
+/// A specialist can't hand its task back to the lead that gave it; its reply already goes back.
+#[tokio::test]
+async fn a_task_cannot_be_handed_back_to_its_sender() {
+    let env = setup().await;
+    let release = env.release_file("handback-release");
+    let d = delegate(&env, &format!("Hold on LONGTASK:{} REPLYTAG:handback", release.display())).await;
+    let thread = d["thread_id"].as_str().unwrap();
+    let (s, v) = call(
+        &env.app,
+        "POST",
+        "/api/delegations",
+        Some(json!({
+            "lead_kwant_id": env.specialist,
+            "specialist_kwant_id": env.lead,
+            "task": "You do it",
+            "thread_id": thread,
+        })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("don't hand it back"), "{v}");
+    std::fs::write(&release, "").unwrap();
+    wait_for("the held task to finish", || async { delegation_status(&env, d["id"].as_str().unwrap()).await == "completed" }).await;
+}
+
+/// A lead that hands work to two agents at once gets one turn after both end, with both results.
+#[tokio::test]
+async fn parallel_delegations_resume_the_lead_once_with_every_result() {
+    let env = setup().await;
+    let (_, kwants) = call(&env.app, "GET", "/api/kwants", None).await;
+    let third = kwants.as_array().unwrap().iter().map(|k| k["id"].as_str().unwrap().to_string()).find(|id| *id != env.lead && *id != env.specialist);
+    let Some(third) = third else {
+        // The default space has only two bots; add one
+        let (s, v) = call(&env.app, "POST", "/api/kwants", Some(json!({"name": "Third", "title": "QA", "preferred_model": "claude"}))).await;
+        assert!(s.is_success(), "{v}");
+        return run_fan_in(&env, v["id"].as_str().unwrap().to_string()).await;
+    };
+    let mut body = kwants.as_array().unwrap().iter().find(|k| k["id"] == third.as_str()).unwrap().clone();
+    body.as_object_mut().unwrap().retain(|key, _| ["name", "title", "persona_prompt", "soul", "avatar_sprite"].contains(&key.as_str()));
+    body["preferred_model"] = json!("claude");
+    let (s, v) = call(&env.app, "PUT", &format!("/api/kwants/{third}"), Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    run_fan_in(&env, third).await;
+}
+
+async fn run_fan_in(env: &Env, third: String) {
+    let (rel_a, rel_b) = (env.release_file("fan-a"), env.release_file("fan-b"));
+    let mut ids = Vec::new();
+    for (to, rel, tag, title) in [(&env.specialist, &rel_a, "fanA", "Fan part A"), (&third, &rel_b, "fanB", "Fan part B")] {
+        let (s, d) = call(
+            &env.app,
+            "POST",
+            "/api/delegations",
+            Some(json!({
+                "lead_kwant_id": env.lead,
+                "specialist_kwant_id": to,
+                "task": format!("Part LONGTASK:{} REPLYTAG:{tag}", rel.display()),
+                "title": title,
+                "kwant_id": env.lead,
+            })),
+        )
+        .await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{d}");
+        ids.push(d["id"].as_str().unwrap().to_string());
+    }
+    std::fs::write(&rel_a, "").unwrap();
+    wait_for("part A to complete", || async { delegation_status(env, &ids[0]).await == "completed" }).await;
+    // Part B is still open, so the lead isn't resumed yet
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(prompts_with("(“Fan part A”)").is_empty(), "no turn for A alone");
+    std::fs::write(&rel_b, "").unwrap();
+    wait_for("part B to complete", || async { delegation_status(env, &ids[1]).await == "completed" }).await;
+    wait_for("the lead's one continuation turn", || async { !prompts_with("All 2 tasks you delegated have ended").is_empty() }).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let resumed = prompts_with("All 2 tasks you delegated have ended");
+    assert_eq!(resumed.len(), 1, "exactly one resume");
+    let p = &resumed[0];
+    assert!(p.contains("answer fanA") && p.contains("answer fanB"), "both results: {p}");
+    assert!(p.contains("Check each result"), "{p}");
+    assert!(prompts_with("finished the task you delegated (“Fan part").is_empty(), "no per-part turns");
+}

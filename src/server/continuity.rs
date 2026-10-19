@@ -354,7 +354,7 @@ fn delegation_tools() -> Vec<Value> {
     vec![
         json!({
             "name": "delegate",
-            "description": "Hand a task to another agent (a specialist). It works on it in its own thread in the background while                 you and the user carry on; its result is posted to this chat and you get a turn to continue.                 Use it for longer, self-contained work that fits another agent's role. Write the task so it stands on its own.",
+            "description": "Hand a task to another agent (a specialist). It works on it in its own thread in the background while                 you and the user carry on; its result is posted to this chat and you get a turn to continue.                 Use it for longer, self-contained work that fits another agent's role. Write the task so it stands on its own. If you hand tasks to several agents at once, you get one turn once all of them have ended. Never hand a task back to the agent that gave it to you.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

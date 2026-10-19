@@ -163,6 +163,17 @@ pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (S
             return Err((StatusCode::FORBIDDEN, format!("{} isn't in this chat.", req.specialist.name)));
         }
     }
+    // No handing a task back to the bot that gave it: the reply in the thread already goes back to it
+    if let Some(tid) = &req.origin.thread_id {
+        if let Ok(Some(parent)) = state.db.delegation_for_thread(tid).await {
+            if parent.lead_kwant_id == req.specialist.id {
+                return bad(&format!(
+                    "{} gave you this task, so don't hand it back. Do the work here; your reply goes back to {} automatically.",
+                    req.specialist.name, req.specialist.name
+                ));
+            }
+        }
+    }
     let o = &req.origin;
     let set = [&o.channel_id, &o.kwant_id, &o.thread_id].iter().filter(|x| x.is_some()).count();
     if set != 1 {
@@ -325,13 +336,73 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
         },
     )
     .await;
-    if let (Ok(reply), true) = (&outcome, done.continue_lead) {
-        continue_lead(state, &done, specialist, reply).await;
+    if done.continue_lead {
+        if let Some(batch) = finished_batch(state, &done).await {
+            continue_lead(state, &done, &batch).await;
+        }
     }
 }
 
-/// Gives the lead a turn in the origin chat with the result, so it can carry on with the request.
-async fn continue_lead(state: &AppState, d: &Delegation, specialist: &Kwant, reply: &str) {
+/// The delegations a lead sent from one chat that ran at the same time as `d`, once all of them
+/// have ended. `None` while one is still open, or when another one of them ended later: the last
+/// to end resumes the lead, once, with every result.
+async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegation>> {
+    let siblings: Vec<Delegation> = state
+        .db
+        .list_delegations(Some(&d.lead_kwant_id), None, 50)
+        .await
+        .ok()?
+        .into_iter()
+        .filter(|s| s.continue_lead && s.origin_context() == d.origin_context())
+        .collect();
+    if siblings.iter().any(Delegation::is_open) {
+        return None;
+    }
+    let end = |s: &Delegation| s.ended_at.unwrap_or(s.created_at);
+    // Grow from `d` to every delegation whose run overlaps the batch's span
+    let mut batch = vec![siblings.iter().find(|s| s.id == d.id)?.clone()];
+    let (mut lo, mut hi) = (d.created_at, end(d));
+    loop {
+        let more: Vec<Delegation> = siblings
+            .iter()
+            .filter(|s| !batch.iter().any(|b| b.id == s.id) && s.created_at <= hi && end(s) >= lo)
+            .cloned()
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        for s in more {
+            lo = lo.min(s.created_at);
+            hi = hi.max(end(&s));
+            batch.push(s);
+        }
+    }
+    let last = batch.iter().max_by(|a, b| end(a).cmp(&end(b)).then_with(|| a.id.cmp(&b.id)))?;
+    if last.id != d.id || !batch.iter().any(|b| b.status == "completed") {
+        return None;
+    }
+    batch.sort_by_key(|b| b.created_at);
+    Some(batch)
+}
+
+/// The specialist's last reply in a delegation thread.
+async fn result_of(state: &AppState, d: &Delegation) -> String {
+    let lead = name_of(state, &d.lead_kwant_id).await;
+    state
+        .db
+        .list_messages(&d.thread_id, 100)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .find(|m| m.sender_role == "kwant" && m.sender_id != lead)
+        .map(|m| m.text)
+        .unwrap_or_else(|| "(The result is in the chat above.)".into())
+}
+
+/// Gives the lead one turn in the origin chat with every result of the batch, so it checks them
+/// and gives the user one answer.
+async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation]) {
     let Ok(Some(lead)) = state.db.get_kwant(&d.lead_kwant_id).await else {
         return;
     };
@@ -340,12 +411,25 @@ async fn continue_lead(state: &AppState, d: &Delegation, specialist: &Kwant, rep
     let Ok(scope) = scope_for(state, &lead, d.origin_channel_id.clone(), d.origin_thread_id.clone(), &job, d.depth - 1).await else {
         return;
     };
+    let budget = 4000 / batch.len().max(1);
+    let mut results = String::new();
+    for b in batch {
+        let who = name_of(state, &b.specialist_kwant_id).await;
+        let body = match b.status.as_str() {
+            "completed" => clip(&result_of(state, b).await, budget),
+            _ => format!("({}: {})", b.status, b.error.as_deref().unwrap_or("no result")),
+        };
+        results.push_str(&format!("### {who}: “{}”\n{body}\n\n", b.title));
+    }
+    let opening = match batch {
+        [one] => format!("{} finished the task you delegated (“{}”).", name_of(state, &one.specialist_kwant_id).await, one.title),
+        _ => format!("All {} tasks you delegated have ended.", batch.len()),
+    };
     let prompt = format!(
-        "{name} finished the task you delegated (“{title}”). Their result is in the chat above, quoted here:\n\n{result}\n\n\
-        Continue with what the user asked: use the result, and reply to the user. Don't repeat the whole result.",
-        name = specialist.name,
-        title = d.title,
-        result = clip(reply, 4000),
+        "{opening} The results are in the chat above, quoted here:\n\n{results}\
+        Check each result against what the user asked. If something is missing or wrong, delegate a concrete \
+        correction. Otherwise continue with the user's request and give them one answer that uses the results. \
+        Don't repeat the results in full."
     );
     let _ = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await;
 }
