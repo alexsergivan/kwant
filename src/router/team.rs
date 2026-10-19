@@ -455,9 +455,6 @@ pub fn pick_member<'a>(
                     }
                 }
             }
-            if matched.iter().any(|m| m.id == lead.id) {
-                return Some(Pick { kwant: lead, basis: "keywords", reason: format!("{} ({}) matched words in your message and leads here", lead.name, lead.title), terms });
-            }
             return Some(to_lead(matched, terms));
         }
         let (k, _, terms) = best[0];

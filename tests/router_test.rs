@@ -479,6 +479,13 @@ fn code_requests_go_to_the_matching_role_and_the_rest_to_the_lead() {
     assert!(reason.contains("Pixel (Frontend Engineer)") && reason.ends_with("Ada (Tech Lead), to answer or hand parts on"), "{reason}");
     assert!(terms.contains(&"endpoint".to_string()) && terms.contains(&"page".to_string()), "{terms:?}");
 
+    // Also when the lead is one of the roles
+    let mut led_by_backend = team.clone();
+    led_by_backend.lead_kwant_id = "be".into();
+    let (id, reason, basis, _) = direct(kwnt::router::heuristic_team_decision("Add an API endpoint and a settings page that shows it", &led_by_backend, &members));
+    assert_eq!((id.as_str(), basis.as_str()), ("be", "several"), "{reason}");
+    assert!(reason.ends_with("so it went to the team lead, Lin (Backend Engineer (Go)), to answer or hand parts on"), "{reason}");
+
     // Discussion words still start a discussion, but whole words only and not "strategy"
     assert!(matches!(
         kwnt::router::heuristic_team_decision("Should we migrate to Postgres? Compare the tradeoffs", &team, &members),
