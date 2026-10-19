@@ -353,7 +353,8 @@ pub async fn tool_suggest(state: &AppState, scope: &SelfScope, args: &Value) -> 
     (
         format!(
             "Suggested {}; waiting for the user, who sees a card with an Install button. Nothing is installed yet. \
-            Carry on with your reply without it; if they install it, its tools are yours from your next turn.",
+            If it needs a key, the user types it into that card (not Settings). Once installed, its tools are yours from your \
+            next turn, and the first use of each new tool asks the user for one approval. Carry on with your reply without it.",
             s.title
         ),
         false,

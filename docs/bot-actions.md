@@ -44,7 +44,7 @@ to the turn's bot and its space. Code: `src/server/bot_actions.rs`, `src/db/bot_
 - Schedule and validation errors come back as tool errors (`isError: true`), and nothing changes.
 - A routine runs as its bot and delivers into its channel, its thread (`thread_id`, one of that bot's own threads), or that bot's direct chat. Created by a bot for itself from a thread, with no `channel` given, it delivers into that thread.
 - Follow-ups: a `once` routine a bot makes for itself (`follow_up_create`, or `routine_create` with a once schedule and no `channel`) stores `context_message_id`, the person's latest message in that chat. When it runs, if that message is no longer in the 20 messages the turn sees anyway, the prompt gets up to 6 messages around it (600 characters each), from the same chat only. The API refuses a `context_message_id` from another chat, and a `thread_id` that belongs to another bot.
-- `GET /api/routines` items also carry `schedule_text` (for example "monthly on day 1 at 09:00 Europe/Berlin"), `thread_id` and `context_message_id`.
+- `GET /api/routines` items also carry `schedule_text` (for example "monthly on the 1st and last day at 09:00 Europe/Berlin"), `thread_id` and `context_message_id`.
 
 New setting: `GET/POST /api/settings` has `timezone` (IANA name; `""` means not set and clears it). Legacy names are canonicalised (Europe/Kiev → Europe/Kyiv).
 
@@ -71,7 +71,7 @@ New setting: `GET/POST /api/settings` has `timezone` (IANA name; `""` means not 
 
 ## The card
 
-Each action posts a message from the bot (`sender_role: "kwant"`, `sender_id: <bot name>`) into the chat of the turn: the channel, the direct chat or the thread. Example text: `Done: Created routine 'Morning motivation', daily 07:00 Europe/Berlin, delivering to #general.` A pending action reads `Needs your OK: …`.
+Each action posts a message from the bot (`sender_role: "kwant"`, `sender_id: <bot name>`) into the chat of the turn: the channel, the direct chat or the thread. Example text: `Done: Created routine 'Morning motivation', daily 07:00 Europe/Berlin, delivering to #general.` A pending action reads `Needs your OK: …`. When the person decides, the message text changes with the card: `Undone: …`, `Confirmed: …` or `Declined: …`, so history, bots and anything that shows the raw text never read "Done" for an undone change.
 
 `message.meta`:
 

@@ -59,7 +59,7 @@ pub struct RoutineView {
     pub last_run_at: Option<DateTime<Utc>>,
     pub last_status: Option<String>,
     pub created_at: DateTime<Utc>,
-    /// The schedule in words, e.g. "monthly on day 1 at 09:00 Europe/Berlin".
+    /// The schedule in words, e.g. "monthly on the 1st at 09:00 Europe/Berlin".
     pub schedule_text: String,
     /// Set when it delivers into one of its bot's threads.
     pub thread_id: Option<String>,

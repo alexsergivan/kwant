@@ -282,6 +282,7 @@ async fn suggest_posts_a_card_and_installs_nothing_and_is_limited_per_turn() {
     let token = turn(&e, "t-suggest").await;
     let (text, err) = suggest(&e, &token, "io.github.kwnt-test/echo").await;
     assert!(!err && text.contains("waiting for the user") && text.contains("Nothing is installed"), "{text}");
+    assert!(text.contains("types it into that card") && text.contains("one approval"), "{text}");
     assert!(servers(&e).await.is_empty(), "suggesting installs nothing");
 
     let list = suggestions(&e).await;

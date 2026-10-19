@@ -153,11 +153,11 @@ async fn calendar_rules_are_real_monthly_and_cron_routines_not_one_run() {
     // "Remind me on the 1st of each month": a monthly rule that keeps running, in the person's zone
     let text = ok(&e, &token, "routine_create", json!({"name": "Budget review", "instructions": "Remind the person to review the budget.",
         "schedule": {"type": "monthly", "time": "09:00", "days": [1]}})).await;
-    assert!(text.contains("monthly on day 1 at 09:00 Europe/Berlin"), "{text}");
+    assert!(text.contains("monthly on the 1st at 09:00 Europe/Berlin"), "{text}");
     let r = routines(&e).await.into_iter().find(|r| r["name"] == "Budget review").unwrap();
     assert_eq!(r["schedule"]["type"], "monthly");
     assert_eq!(r["schedule"]["tz"], "Europe/Berlin", "the zone comes from the settings");
-    assert_eq!(r["schedule_text"], "monthly on day 1 at 09:00 Europe/Berlin");
+    assert_eq!(r["schedule_text"], "monthly on the 1st at 09:00 Europe/Berlin");
     let next = chrono::DateTime::parse_from_rfc3339(r["next_run_at"].as_str().unwrap()).unwrap();
     let local = next.with_timezone(&chrono_tz_offset("Europe/Berlin", next));
     assert_eq!(local.format("%d %H:%M").to_string(), "01 09:00", "{next}");
@@ -331,5 +331,9 @@ async fn bots_with_tools_are_told_how_to_work_and_bots_without_are_not() {
     assert!(with.contains("[How to work]") && with.contains("memory_add") && with.contains("follow_up_create"), "{with}");
     assert!(!without.contains("[How to work]"));
     let section = &with[with.find("[How to work]").unwrap()..];
-    assert!(section.len() < 1200, "keep it tight: {} bytes", section.len());
+    // Proactive extras and check-ins, but never ones that cost money or reach outside, and no asking for reversible ones
+    for words in ["Be proactive", "shopping list", "a few days in", "Don't ask permission", "Undo", "10 changes", "costs money", "Never redo what the person undid", "a sample of what it will send", "saved notes don't"] {
+        assert!(section.contains(words), "{words}: {section}");
+    }
+    assert!(section.len() < 1700, "keep it tight: {} bytes", section.len());
 }

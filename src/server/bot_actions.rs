@@ -273,7 +273,7 @@ const ENGINES: &str = "Engines and their sign-in are the person's. Ask them to s
 const AUTH: &str = "How people sign in to kwnt is the person's alone; ask them to change it on the computer kwnt runs on.";
 const APPROVALS: &str = "Approvals and questions are answered by the person, never by a bot: ask them to answer the card in the chat.";
 const COMPUTER: &str = "Where bots browse and run commands is the person's choice: ask them in App settings → Computer for browsing and commands.";
-const AGENT_TOOLS: &str = "Only the person can switch bots' own tools on or off, in App settings.";
+const AGENT_TOOLS: &str = "Refused: you can't switch bots' own tools on or off. Only the person can, in App settings → \"Bots can use their own tools\".";
 const MCP: &str = "Tool servers are installed by the person. Use mcp_suggest to offer one; they see an Install card. \
     Their keys and headers are entered by the person in Space settings → Tools.";
 
@@ -294,10 +294,10 @@ fn refused_setting(key: &str) -> Option<String> {
         APPROVALS
     } else if has(&["computer", "machine", "sandbox", "vm"]) {
         COMPUTER
-    } else if k == "agent_tools" {
-        AGENT_TOOLS
     } else if has(&["mcp"]) {
         MCP
+    } else if has(&["agent_tool", "self_tool", "kwnt_tool", "own_tool"]) || k == "tools" {
+        AGENT_TOOLS
     } else {
         return Some(format!("There is no setting \"{key}\" you can change; settings_get lists them: {}.", SETTINGS.join(", ")));
     };
@@ -422,12 +422,34 @@ pub fn schedule_text(s: &Value) -> String {
         Some("monthly") => {
             let days: Vec<String> = s["days"]
                 .as_array()
-                .map(|a| a.iter().map(|d| d.as_str().map_or_else(|| d.to_string(), |x| format!("the {x} day"))).collect())
+                .map(|a| a.iter().map(|d| d.as_i64().map_or_else(|| d.as_str().unwrap_or("").to_string(), ordinal)).collect())
                 .unwrap_or_default();
-            format!("monthly on day {} at {} {}", days.join(", ").replace("day the last day", "the last day"), str_of("time"), str_of("tz"))
+            let day = if days.last().is_some_and(|d| d == "last") { " day" } else { "" };
+            format!("monthly on the {}{day} at {} {}", and_list(&days), str_of("time"), str_of("tz"))
         }
         Some("cron") => format!("cron \"{}\" {}", str_of("expression"), str_of("tz")),
         _ => "an unknown schedule".into(),
+    }
+}
+
+/// 1 → "1st", 22 → "22nd", 13 → "13th".
+fn ordinal(n: i64) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
+/// "a", "a and b", "a, b and c".
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 
@@ -1491,6 +1513,9 @@ async fn save_settings(state: &AppState, payload: Value) -> Result<(), String> {
 fn card_text(a: &BotAction) -> String {
     let lead = match a.status.as_str() {
         "pending" => "Needs your OK",
+        "undone" => "Undone",
+        "confirmed" => "Confirmed",
+        "declined" => "Declined",
         _ => "Done",
     };
     format!("{lead}: {}.", capitalize(&a.summary))
@@ -1529,6 +1554,8 @@ fn action_json(a: &BotAction) -> Value {
 async fn changed(state: &AppState, a: &BotAction) {
     if let Some(mid) = &a.message_id {
         let _ = state.db.set_message_meta(mid, &card_meta(a)).await;
+        // The text too, so history, bots and notifications never read "Done" for an undone change
+        let _ = state.db.set_message_text(mid, &card_text(a)).await;
     }
     let _ = state.event_sender.send(RuntimeEvent::BotActionUpdated { action: action_json(a) });
 }
@@ -1805,5 +1832,22 @@ mod tests {
             "weekly on mon, fri at 09:30 UTC"
         );
         assert_eq!(schedule_text(&json!({"type": "interval", "every_minutes": 60})), "every 60 minutes");
+        assert_eq!(
+            schedule_text(&json!({"type": "monthly", "days": [1, "last"], "time": "09:00", "tz": "Europe/Kyiv"})),
+            "monthly on the 1st and last day at 09:00 Europe/Kyiv"
+        );
+        assert_eq!(
+            schedule_text(&json!({"type": "monthly", "days": [2, 13, 23], "time": "08:30", "tz": "UTC"})),
+            "monthly on the 2nd, 13th and 23rd at 08:30 UTC"
+        );
+    }
+
+    #[test]
+    fn agent_tools_refusal_is_direct() {
+        for key in ["agent_tools", "Agent_Tools", "agent_tools_enabled", "tools"] {
+            let why = refused_setting(key).unwrap();
+            assert!(why.starts_with("Refused"), "{key}: {why}");
+            assert!(why.contains("App settings"), "{key}: {why}");
+        }
     }
 }

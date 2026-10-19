@@ -485,3 +485,52 @@ async fn one_turn_makes_at_most_ten_changes() {
     let cards = messages(&e, &e.general.id).await.into_iter().filter(|m| meta(m)["kind"] == "bot_action").count();
     assert_eq!(cards, 11);
 }
+
+#[tokio::test]
+async fn card_text_follows_the_decision_and_monthly_schedules_read_naturally() {
+    let e = setup().await;
+    let token = turn(&e, "t-words").await;
+    set_timezone(&e, "Europe/Kyiv").await;
+
+    // A monthly rule reads as words in the tool reply, the card text and its details
+    let text = ok(&e, &token, "routine_create", json!({"name": "Budget review", "instructions": "Review the budget.",
+        "schedule": {"type": "monthly", "days": [1, "last"], "time": "09:00"}})).await;
+    assert!(text.contains("monthly on the 1st and last day at 09:00 Europe/Kyiv"), "{text}");
+    let create = last_action(&e).await;
+    let card_of = |a: &Value| a["message_id"].as_str().unwrap().to_string();
+    let find = |list: Vec<Message>, id: String| list.into_iter().find(|m| m.id == id).expect("card");
+    let card = find(messages(&e, &e.general.id).await, card_of(&create));
+    assert!(card.text.starts_with("Done: ") && card.text.contains("monthly on the 1st and last day at 09:00"), "{}", card.text);
+    assert_eq!(meta(&card)["details"]["schedule_text"], "monthly on the 1st and last day at 09:00 Europe/Kyiv");
+
+    // After Undo the message itself says so, not only its meta (history, notifications, bots)
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let card = find(messages(&e, &e.general.id).await, card_of(&create));
+    assert!(card.text.starts_with("Undone: Created routine 'Budget review'"), "{}", card.text);
+    assert!(!card.text.contains("Done: "), "{}", card.text);
+
+    // Confirmed and declined requests read that way too
+    for (name, route, lead) in [("Temp1", "confirm", "Confirmed: "), ("Temp2", "decline", "Declined: ")] {
+        ok(&e, &token, "bot_create", json!({"name": name, "title": "t", "instructions": "t"})).await;
+        ok(&e, &token, "bot_delete", json!({"bot": name, "reason": "not needed"})).await;
+        let req = last_action(&e).await;
+        let card = find(messages(&e, &e.general.id).await, card_of(&req));
+        assert!(card.text.starts_with("Needs your OK: "), "{}", card.text);
+        let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/{route}", req["id"].as_str().unwrap()), None, None).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        let card = find(messages(&e, &e.general.id).await, card_of(&req));
+        assert!(card.text.starts_with(lead), "{}", card.text);
+    }
+}
+
+#[tokio::test]
+async fn switching_bots_tools_off_is_refused_directly() {
+    let e = setup().await;
+    let token = turn(&e, "t-tools").await;
+    for key in ["agent_tools", "agent_tools_enabled", "tools"] {
+        let text = refused(&e, &token, "settings_update", json!({"settings": {key: false}})).await;
+        assert!(text.contains("Refused") && text.contains("App settings") && !text.contains("no setting"), "{key}: {text}");
+    }
+    assert!(actions(&e).await.is_empty());
+}
