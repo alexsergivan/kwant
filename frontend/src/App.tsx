@@ -14,7 +14,7 @@ import { HireCard, type HireDecision } from './components/HireCard';
 import type { RoutineFocus } from './components/RoutinesPanel';
 import { AwayPage } from './components/AwayView';
 import { AlertTriangle, Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
-import { PendingApproval } from './components/ModernApprovalCard';
+import { ChatApproval, OpenChat, approvalFromEvent, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ManageTeamModal } from './components/ManageTeamModal';
@@ -204,7 +204,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const activeSandboxIdRef = useRef<string>('default');
   const currentKwantRef = useRef<Kwant | null>(null);
   const currentTeamRef = useRef<Team | null>(null);
-  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+  // Every tool approval still waiting, from live events and, after a reload or reconnect, the server.
+  const [pendingApprovals, setPendingApprovals] = useState<ChatApproval[]>([]);
+  // Seen live since the last server list: kept even if that list was fetched just before.
+  const liveApprovalIdsRef = useRef<Set<string>>(new Set());
+  const dropApproval = (id: string) => {
+    liveApprovalIdsRef.current.delete(id);
+    setPendingApprovals((prev) => withoutApproval(prev, id));
+  };
   const [tokensUsed, setTokensUsed] = useState(0);
 
   // Space settings: open on one tab, or closed.
@@ -255,7 +262,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const refreshAwayCount = (delay = 0) => {
     clearTimeout(awayTimerRef.current);
     awayTimerRef.current = setTimeout(() => {
-      awayApi.get().then((r) => setAwayCount(r.unseen.total), () => undefined);
+      awayApi.get().then((r) => {
+        setAwayCount(r.unseen.total);
+        const fromServer = approvalsFromAway(r.waiting);
+        const live = liveApprovalIdsRef.current;
+        setPendingApprovals((prev) => syncApprovals(prev, fromServer, live));
+        for (const a of fromServer) live.delete(a.id);
+      }, () => undefined);
     }, delay);
   };
   const toastIdRef = useRef(0);
@@ -814,16 +827,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             else applyDecision();
             break;
           }
-          case 'ApprovalRequired':
-            setPendingApproval({
-              id: event.data.id,
-              tool_name: event.data.tool_name,
-              details: event.data.details,
-            });
+          case 'ApprovalRequired': {
+            const approval = approvalFromEvent(event.data);
+            liveApprovalIdsRef.current.add(approval.id);
+            setPendingApprovals((prev) => upsertApproval(prev, approval));
             playSfx('alert');
             break;
+          }
           case 'ApprovalWithdrawn':
-            setPendingApproval((current) => (current?.id === event.data.id ? null : current));
+            dropApproval(event.data.id);
             break;
           case 'discussion_started':
           case 'DiscussionStarted': {
@@ -1129,14 +1141,22 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     decision: 'allow_once' | 'always_allow' | 'deny'
   ) => {
     try {
-      await fetch(`/api/approvals/${ticketId}/resolve`, {
+      const res = await fetch(`/api/approvals/${ticketId}/resolve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decision }),
       });
-      setPendingApproval(null);
+      // 409/404: it lapsed meanwhile (turn ended, expired, answered elsewhere).
+      if (res.ok || res.status === 409 || res.status === 404) {
+        dropApproval(ticketId);
+        if (!res.ok) pushToast('This request expired', 'The bot is no longer waiting for this answer.');
+        refreshAwayCount(300);
+      } else {
+        pushToast("Couldn't send your answer", `Request failed (HTTP ${res.status}). Try again.`);
+      }
     } catch (err) {
       console.error('Failed resolving approval:', err);
+      pushToast("Couldn't send your answer", 'Check the connection and try again.');
     }
   };
 
@@ -1892,6 +1912,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const currentChannel = isChannel ? channels.find((c) => c.id === selectedId) : null;
   const currentKwant = !isChannel ? kwants.find((k) => k.id === selectedId) : null;
+  // Approvals belong in the asking bot's chat, or a channel it's in.
+  const openChat: OpenChat | null = isChannel
+    ? currentChannel
+      ? { kind: 'channel', channelId: currentChannel.id, memberIds: [currentChannel.lead_kwant_id, ...(currentChannel.member_kwants ?? [])] }
+      : null
+    : selectedId
+      ? { kind: 'kwant', kwantId: selectedId, threadId: openThreadId }
+      : null;
+  const approvalsHere = approvalsForChat(pendingApprovals, openChat);
   const currentTeam = selectedTeamId
     ? teams.find((t) => t.id === selectedTeamId)
     : isChannel && currentChannel?.name.startsWith('team-')
@@ -2376,7 +2405,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   );
 
   const away = (
-    <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount}
+    <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount} onApprovalResolved={dropApproval}
       onBack={isPhone ? () => { setShowAway(false); setPhoneView('list'); } : undefined}
     />
   );
@@ -2391,7 +2420,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onJumpToLatest={() => setHistoryWindow(null)}
           streamingText={isCurrentContextStreaming ? streamingText : ''}
           streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
-          pendingApproval={pendingApproval}
+          pendingApprovals={approvalsHere}
           isStreaming={isCurrentContextStreaming}
           streamingSpeakerName={live[openCtx] || undefined}
           onSendMessage={handleSendMessage}

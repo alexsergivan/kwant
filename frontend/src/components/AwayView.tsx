@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Check, CheckCheck, CheckCircle2, ChevronLeft, Inbox, Loader2, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronLeft, Inbox, Loader2, RefreshCw } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
+import { ModernApprovalCard } from './ModernApprovalCard';
+import { approvalFromAway } from '../approvals';
 import {
   AWAY_SECTIONS,
   ApprovalDecision,
@@ -76,7 +78,7 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
             </div>
             <p className="mt-0.5 text-sm font-medium text-zinc-100 truncate">{item.title}</p>
             {/* A question's summary just lists its choices, which are buttons below. */}
-            {item.summary && !(item.kind === 'question' && item.choices?.length) && <p className="text-xs text-zinc-400 truncate">{item.summary}</p>}
+            {item.summary && item.kind !== 'approval' && !(item.kind === 'question' && item.choices?.length) && <p className="text-xs text-zinc-400 truncate">{item.summary}</p>}
           </div>
         </button>
 
@@ -97,16 +99,8 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
         )}
 
         {item.kind === 'approval' && (
-          <div role="group" aria-label={`Decide: ${item.title}`} className="px-3 pb-3 sm:pl-[54px] flex flex-wrap gap-2">
-            <button type="button" disabled={disabled} onClick={() => onResolve(item, 'allow_once')} className={`${actionBtn} text-white bg-emerald-600 hover:bg-emerald-500`}>
-              <Check size={13} aria-hidden="true" /> Allow once
-            </button>
-            <button type="button" disabled={disabled} onClick={() => onResolve(item, 'always_allow')} className={`${actionBtn} text-white bg-sky-600 hover:bg-sky-500`}>
-              <CheckCheck size={13} aria-hidden="true" /> Always allow
-            </button>
-            <button type="button" disabled={disabled} onClick={() => onResolve(item, 'deny')} className={`${actionBtn} text-zinc-300 bg-zinc-800 hover:bg-zinc-700`}>
-              <X size={13} aria-hidden="true" /> Deny
-            </button>
+          <div className="px-3 pb-1 sm:pl-[54px] [&>div]:my-0 [&>div]:mb-2">
+            <ModernApprovalCard approval={approvalFromAway(item)} disabled={disabled} onResolve={(_, decision) => onResolve(item, decision)} />
           </div>
         )}
 
@@ -221,11 +215,13 @@ export interface AwayPageProps {
   onOpen: (item: AwayItem) => void;
   /** New unseen counts for the sidebar badge. */
   onCounts: (total: number) => void;
+  /** An approval was answered here, so the chat drops its card too. */
+  onApprovalResolved?: (id: string) => void;
   onBack?: () => void;
 }
 
 /** Loads the page, marks it seen, and runs the one-tap actions. */
-export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpen, onCounts, onBack }) => {
+export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpen, onCounts, onApprovalResolved, onBack }) => {
   const [data, setData] = useState<AwayResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -302,7 +298,19 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
       onBack={onBack}
       onOpen={onOpen}
       onAnswer={(item, choice) => act(item, () => awayApi.answer(item.id, choice))}
-      onResolve={(item, decision) => act(item, () => awayApi.resolve(item.id, decision))}
+      onResolve={(item, decision) =>
+        act(item, async () => {
+          try {
+            const res = await awayApi.resolve(item.id, decision);
+            onApprovalResolved?.(item.id);
+            return res;
+          } catch (err) {
+            // Lapsed meanwhile: the chat's card is stale too.
+            if (err instanceof AwayError && (err.status === 409 || err.status === 404)) onApprovalResolved?.(item.id);
+            throw err;
+          }
+        })
+      }
     />
   );
 };

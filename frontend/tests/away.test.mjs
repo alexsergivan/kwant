@@ -109,7 +109,9 @@ test('three sections with agent, title, summary and time; one-tap actions', () =
   assert.match(html, /From the last 7 days/);
   assert.match(html, />Yes<\/button>/);
   assert.match(html, />No<\/button>/);
-  for (const b of ['Allow once', 'Always allow', 'Deny']) assert.match(html, new RegExp(b));
+  // An approval is the same card as in the chat, with its labels.
+  for (const b of ['Allow Once', 'Always Allow', 'Deny']) assert.match(html, new RegExp(b));
+  assert.match(html, /Lead<\/span> wants to use <span[^>]*>send<\/span>/);
   assert.match(html, /Handoff done/);
   assert.match(html, /Stuck/);
   assert.doesNotMatch(html, /all caught up/);

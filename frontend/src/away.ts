@@ -23,6 +23,9 @@ export interface AwayItem {
   link: AwayLink;
   /** Questions only. */
   choices?: string[];
+  /** Approvals only, from servers that send them: the tool and the card's details. */
+  tool_name?: string;
+  details?: Record<string, unknown>;
 }
 
 export interface AwayCounts {

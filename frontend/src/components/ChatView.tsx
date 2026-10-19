@@ -105,7 +105,8 @@ export interface ChatViewProps {
   messages: ChatMessage[];
   streamingText: string;
   streamingThinking: string;
-  pendingApproval: PendingApproval | null;
+  /** Tool approvals waiting in this chat, oldest first. */
+  pendingApprovals: PendingApproval[];
   isStreaming: boolean;
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
@@ -274,7 +275,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   messages,
   streamingText,
   streamingThinking,
-  pendingApproval,
+  pendingApprovals,
   isStreaming,
   streamingSpeakerName,
   onSendMessage,
@@ -472,7 +473,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (scrollRef.current && stickRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamingText, streamingThinking, pendingApproval, routingState, queued, contextKey]);
+  }, [messages, streamingText, streamingThinking, pendingApprovals.length, routingState, queued, contextKey]);
 
   // Jump to a search hit: open its folded discussion if needed, then centre and flash it.
   // Runs after the auto-scroll above, so it wins.
@@ -1095,12 +1096,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
 
         {/* Pending Security Approval Ticket */}
-        {pendingApproval && (
-          <ModernApprovalCard
-            approval={pendingApproval}
-            onResolve={onResolveApproval}
-          />
-        )}
+        {pendingApprovals.map((approval) => (
+          <ModernApprovalCard key={approval.id} approval={approval} onResolve={onResolveApproval} />
+        ))}
       </div>
 
       {/* Suggestion Prompts Pill Bar */}

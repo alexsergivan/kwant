@@ -12,6 +12,8 @@ export interface PendingApproval {
 interface ModernApprovalCardProps {
   approval: PendingApproval;
   onResolve: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
+  /** While an answer is being sent. */
+  disabled?: boolean;
 }
 
 /** Server/tool/arguments of an MCP approval, or null for other tools. */
@@ -43,6 +45,17 @@ const BUILTIN_FILE = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
 const s = (v: unknown) => (typeof v === 'string' && v ? v : null);
 
 /**
+ * An approval known only by its tool and a one-line summary (a reload against a server that
+ * doesn't send the details yet), or null.
+ */
+export const summaryView = (approval: PendingApproval) => {
+  const d = approval.details ?? {};
+  if (d.source !== 'summary') return null;
+  const tool = s(d.tool) ?? approval.tool_name;
+  return { tool, kwant: s(d.kwant_name), summary: s(d.summary), builtin: BUILTIN_SHELL.includes(tool) || BUILTIN_FILE.includes(tool) };
+};
+
+/**
  * A Claude CLI built-in tool (Bash, Write, Edit, ...) the bot asks to use: the command or file in
  * plain words, or null for other tools. Reads `details.arguments` (or `details.input`, the CLI's
  * own name for it) and works without `source` when the tool name is a known built-in.
@@ -51,7 +64,7 @@ export const builtinView = (approval: PendingApproval) => {
   const d = approval.details ?? {};
   const tool = s(d.tool) ?? approval.tool_name;
   const known = BUILTIN_SHELL.includes(tool) || BUILTIN_FILE.includes(tool);
-  if (d.source !== 'claude_builtin' && !known) return null;
+  if (d.source === 'summary' || (d.source !== 'claude_builtin' && !known)) return null;
   const raw = d.arguments ?? d.input;
   const args = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
   const base = { tool, kwant: s(d.kwant_name), cwd: s(d.cwd), outsideFolder: d.outside_folder === true };
@@ -77,15 +90,20 @@ export const builtinView = (approval: PendingApproval) => {
 export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   approval,
   onResolve,
+  disabled = false,
 }) => {
   const handleDecision = (decision: 'allow_once' | 'always_allow' | 'deny') => {
+    if (disabled) return;
     playSfx('click');
     onResolve(approval.id, decision);
   };
   const mcp = mcpView(approval);
   const shell = localShellView(approval);
   const builtin = shell || mcp ? null : builtinView(approval);
-  const who = builtin?.kwant ? <span className="font-medium text-zinc-100">{builtin.kwant}</span> : 'A bot';
+  const summary = summaryView(approval);
+  const name = builtin?.kwant ?? summary?.kwant;
+  const who = name ? <span className="font-medium text-zinc-100">{name}</span> : 'A bot';
+  const perSession = !!builtin || !!summary?.builtin;
 
   return (
     <div className="my-3 border border-amber-500/30 bg-amber-950/20 rounded-xl p-4 text-zinc-100 max-w-2xl shadow-lg backdrop-blur-sm">
@@ -105,6 +123,13 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
               <span className="text-zinc-500">In folder:</span> <span className="font-mono text-zinc-300">{shell.cwd}</span>
             </p>
           )}
+        </div>
+      ) : summary ? (
+        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
+          <p className="text-zinc-300">
+            {who} wants to use <span className="font-medium text-sky-200">{summary.tool}</span>.
+          </p>
+          {summary.summary && <p className="text-[11px] text-zinc-400 break-words">{summary.summary}</p>}
         </div>
       ) : builtin?.kind === 'shell' ? (
         <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
@@ -194,8 +219,9 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
       <div className="flex flex-wrap items-center justify-end gap-2">
         <button
           type="button"
+          disabled={disabled}
           onClick={() => handleDecision('deny')}
-          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-zinc-300 bg-zinc-800 hover:bg-zinc-700 transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-zinc-300 bg-zinc-800 hover:bg-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <X size={14} />
           <span>Deny</span>
@@ -203,8 +229,9 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
 
         <button
           type="button"
+          disabled={disabled}
           onClick={() => handleDecision('allow_once')}
-          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-sm"
+          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Check size={14} />
           <span>Allow Once</span>
@@ -214,12 +241,13 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         {!shell && (
           <button
             type="button"
+            disabled={disabled}
             onClick={() => handleDecision('always_allow')}
-            title={mcp || builtin ? 'Allow this tool for this bot until the app restarts' : undefined}
-            className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm"
+            title={perSession ? 'Allow this tool for this bot in this conversation' : mcp ? 'Allow this tool for this bot until the app restarts' : undefined}
+            className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <CheckCheck size={14} />
-            <span>{builtin ? 'Always this session' : 'Always Allow'}</span>
+            <span>{perSession ? 'Always this session' : 'Always Allow'}</span>
           </button>
         )}
       </div>
