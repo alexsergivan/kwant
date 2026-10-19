@@ -132,6 +132,10 @@ pub struct RoutineRow {
     pub last_status: Option<String>,
     /// Its kwant's space; the channel, when set, is in the same one.
     pub space_id: String,
+    /// Delivers into this thread of its kwant (then `channel_id` is empty).
+    pub thread_id: Option<String>,
+    /// A message in the delivery chat the routine follows up on; its run gets that exchange.
+    pub context_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
@@ -156,10 +160,12 @@ pub struct NewRoutine {
     pub schedule: String,
     pub enabled: bool,
     pub next_run_at: Option<DateTime<Utc>>,
+    pub thread_id: Option<String>,
+    pub context_message_id: Option<String>,
 }
 
 const ROUTINE_SELECT: &str = "SELECT r.id, r.kwant_id, r.channel_id, r.name, r.instructions, r.schedule, r.enabled, \
-     r.next_run_at, r.last_run_at, r.created_at, r.space_id, \
+     r.next_run_at, r.last_run_at, r.created_at, r.space_id, r.thread_id, r.context_message_id, \
      (SELECT status FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_status \
      FROM routines r";
 
@@ -173,6 +179,12 @@ impl Database {
         let _ = sqlx::query("ALTER TABLE channels ADD COLUMN instructions TEXT;")
             .execute(&self.pool)
             .await;
+        // Follow-ups: a routine can deliver into a thread and carry the exchange it follows up on
+        for column in ["thread_id", "context_message_id"] {
+            let _ = sqlx::query(&format!("ALTER TABLE routines ADD COLUMN {column} TEXT;"))
+                .execute(&self.pool)
+                .await;
+        }
 
         let had_index: Option<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'",
@@ -426,8 +438,8 @@ impl Database {
         let space = self.routine_space(input).await?;
         let id = Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO routines (id, kwant_id, channel_id, name, instructions, schedule, enabled, next_run_at, created_at, space_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO routines (id, kwant_id, channel_id, name, instructions, schedule, enabled, next_run_at, created_at, space_id, \
+             thread_id, context_message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&input.kwant_id)
@@ -439,6 +451,8 @@ impl Database {
         .bind(input.next_run_at)
         .bind(Utc::now())
         .bind(space.as_str())
+        .bind(&input.thread_id)
+        .bind(&input.context_message_id)
         .execute(&self.pool)
         .await?;
         self.get_routine(&id)
@@ -467,7 +481,7 @@ impl Database {
         let space = self.routine_space(input).await?;
         let res = sqlx::query(
             "UPDATE routines SET kwant_id = ?, channel_id = ?, name = ?, instructions = ?, schedule = ?, enabled = ?, \
-             next_run_at = ?, space_id = ? WHERE id = ?",
+             next_run_at = ?, space_id = ?, thread_id = ?, context_message_id = ? WHERE id = ?",
         )
         .bind(&input.kwant_id)
         .bind(&input.channel_id)
@@ -477,6 +491,8 @@ impl Database {
         .bind(input.enabled)
         .bind(input.next_run_at)
         .bind(space.as_str())
+        .bind(&input.thread_id)
+        .bind(&input.context_message_id)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -504,7 +520,8 @@ impl Database {
     pub async fn delete_orphan_routines(&self) -> Result<u64, DbError> {
         let mut tx = self.pool.begin().await?;
         let orphan = "SELECT id FROM routines WHERE kwant_id NOT IN (SELECT id FROM kwants) \
-                      OR (channel_id IS NOT NULL AND channel_id NOT IN (SELECT id FROM channels))";
+                      OR (channel_id IS NOT NULL AND channel_id NOT IN (SELECT id FROM channels)) \
+                      OR (thread_id IS NOT NULL AND thread_id NOT IN (SELECT id FROM threads))";
         sqlx::query(&format!(
             "DELETE FROM routine_runs WHERE routine_id IN ({orphan})"
         ))

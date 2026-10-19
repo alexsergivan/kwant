@@ -156,3 +156,47 @@ test('continuity bus delivers to subscribers until they unsubscribe', () => {
   c.emitContinuity({ type: 'memory_changed', data: { kwant_id: 'k2' } });
   assert.deepEqual(seen, ['k1']);
 });
+
+test('monthly schedules: days sort with "last" at the end, and need at least one day', () => {
+  assert.deepEqual(c.scheduleFromForm(form({ type: 'monthly', time: '09:00', monthDays: ['last', 15, 1, 15] }), NOW), {
+    schedule: { type: 'monthly', time: '09:00', days: [1, 15, 'last'], tz: 'Europe/Kyiv' },
+  });
+  assert.ok(c.scheduleFromForm(form({ type: 'monthly', monthDays: [] }), NOW).error);
+  assert.ok(c.scheduleFromForm(form({ type: 'monthly', monthDays: [0, 32] }), NOW).error);
+  assert.ok(c.scheduleFromForm(form({ type: 'monthly', time: '9:00' }), NOW).error);
+});
+
+test('cron schedules: five parts and a time zone; shortcuts are refused', () => {
+  assert.deepEqual(c.scheduleFromForm(form({ type: 'cron', cron: '  0 9   * * MON#2 ' }), NOW), {
+    schedule: { type: 'cron', expression: '0 9 * * MON#2', tz: 'Europe/Kyiv' },
+  });
+  const err = (cron, over = {}) => c.scheduleFromForm(form({ type: 'cron', cron, ...over }), NOW).error;
+  assert.match(err('@daily'), /aren’t supported/);
+  assert.match(err('0 9 * *'), /five parts/);
+  assert.ok(err(''));
+  assert.ok(err('0 9 L * *', { tz: ' ' }));
+  assert.equal(err('0 9 L * *'), undefined);
+});
+
+test('monthly and cron schedules round-trip through the form', () => {
+  for (const s of [
+    { type: 'monthly', time: '07:30', days: [1, 'last'], tz: 'Europe/Kyiv' },
+    { type: 'monthly', time: '23:59', days: ['last'], tz: 'UTC' },
+    { type: 'cron', expression: '0 9 1 * *', tz: 'Asia/Kolkata' },
+  ]) {
+    const f = c.formFromSchedule(s);
+    assert.equal(f.type, s.type);
+    assert.deepEqual(c.scheduleFromForm(f, NOW).schedule, s);
+  }
+  // An unknown type opens as a plain daily form instead of crashing the editor.
+  assert.equal(c.formFromSchedule({ type: 'lunar', tz: 'UTC' }).type, 'daily');
+});
+
+test('monthly and cron schedules in plain words', () => {
+  assert.equal(c.monthDaysText([15, 'last', 1]), 'the 1st, 15th and last day');
+  assert.equal(c.monthDaysText([2, 3, 11, 12, 13, 21, 22, 23]), 'the 2nd, 3rd, 11th, 12th, 13th, 21st, 22nd and 23rd');
+  assert.equal(c.monthDaysText(['last']), 'the last day');
+  assert.equal(c.describeSchedule({ type: 'monthly', time: '09:00', days: [1], tz: 'UTC' }), 'Every month on the 1st at 09:00 (UTC)');
+  assert.equal(c.describeSchedule({ type: 'cron', expression: '0 9 * * MON#2', tz: 'UTC' }), 'Custom rule 0 9 * * MON#2 (UTC)');
+  assert.equal(c.describeSchedule({ type: 'lunar' }), 'Unknown schedule');
+});

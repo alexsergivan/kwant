@@ -59,12 +59,22 @@ pub struct RoutineView {
     pub last_run_at: Option<DateTime<Utc>>,
     pub last_status: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// The schedule in words, e.g. "monthly on the 1st at 09:00 Europe/Berlin".
+    pub schedule_text: String,
+    /// Set when it delivers into one of its bot's threads.
+    pub thread_id: Option<String>,
+    /// The message it follows up on (in the chat it delivers to), when it is a follow-up.
+    pub context_message_id: Option<String>,
 }
 
 impl From<RoutineRow> for RoutineView {
     fn from(r: RoutineRow) -> Self {
+        let schedule: serde_json::Value = serde_json::from_str(&r.schedule).unwrap_or(serde_json::Value::Null);
         Self {
-            schedule: serde_json::from_str(&r.schedule).unwrap_or(serde_json::Value::Null),
+            schedule_text: super::bot_actions::schedule_text(&schedule),
+            schedule,
+            thread_id: r.thread_id,
+            context_message_id: r.context_message_id,
             id: r.id,
             kwant_id: r.kwant_id,
             channel_id: r.channel_id,
@@ -90,6 +100,12 @@ pub struct RoutinePayload {
     pub instructions: Option<String>,
     pub schedule: Option<Schedule>,
     pub enabled: Option<bool>,
+    /// One of the bot's own threads to deliver into, instead of a channel or the direct chat.
+    #[serde(default, deserialize_with = "double_option")]
+    pub thread_id: Option<Option<String>>,
+    /// A message in the delivery chat this routine follows up on.
+    #[serde(default, deserialize_with = "double_option")]
+    pub context_message_id: Option<Option<String>>,
 }
 
 /// Tells a missing field (`None`) from an explicit `null` (`Some(None)`).
@@ -116,7 +132,23 @@ async fn build(
         Ok(None) => return Err(bad("unknown kwant_id")),
         Err(_) => return Err(internal()),
     }
+    // A new bot or chat leaves the old thread and the exchange it followed up on behind
+    let moved = existing.is_some_and(|e| e.kwant_id != kwant_id) || p.channel_id.is_some();
+    let thread_given = p.thread_id.is_some();
+    let thread_id = match p.thread_id {
+        Some(t) => t.filter(|t| !t.trim().is_empty()),
+        None if moved => None,
+        None => existing.and_then(|e| e.thread_id.clone()),
+    };
+    if let Some(t) = &thread_id {
+        match state.db.get_thread(t).await {
+            Ok(Some(t)) if t.kwant_id == kwant_id => {}
+            Ok(_) => return Err(bad("thread_id must be one of the bot's own threads")),
+            Err(_) => return Err(internal()),
+        }
+    }
     let channel_id = match p.channel_id {
+        _ if thread_id.is_some() => None,
         Some(c) => c.filter(|c| !c.trim().is_empty()),
         None => existing.and_then(|e| e.channel_id.clone()),
     };
@@ -162,9 +194,24 @@ async fn build(
     if enabled && next_run_at.is_none() {
         return Err(bad("a 'once' routine needs a time in the future"));
     }
+    let context_message_id = match p.context_message_id {
+        Some(m) => m.filter(|m| !m.trim().is_empty()),
+        None if moved || thread_given => None,
+        None => existing.and_then(|e| e.context_message_id.clone()),
+    };
+    if let Some(m) = &context_message_id {
+        let chat = delivery_chat(thread_id.as_deref(), channel_id.as_deref(), &kwant_id);
+        match state.db.list_messages_around(chat, m, 1).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return Err(bad("context_message_id must be a message in the chat the routine delivers to")),
+            Err(_) => return Err(internal()),
+        }
+    }
     Ok(NewRoutine {
         kwant_id,
         channel_id,
+        thread_id,
+        context_message_id,
         name,
         instructions,
         schedule: serde_json::to_string(&schedule).unwrap_or_default(),
@@ -415,9 +462,16 @@ async fn execute(state: &AppState, routine: &RoutineRow) -> Result<Option<String
             return Err("the routine's channel is in another space, so it was not run".into());
         }
     }
+    if let Some(t) = &routine.thread_id {
+        let thread = state.db.get_thread(t).await.ok().flatten().ok_or_else(|| "the routine's thread no longer exists".to_string())?;
+        if thread.kwant_id != kwant.id {
+            return Err("the routine's thread belongs to another bot, so it was not run".into());
+        }
+    }
+    let in_thread = routine.thread_id.is_some();
     let message = crate::db::models::NewMessage {
         channel_id: routine.channel_id.clone(),
-        direct_kwant_id: if routine.channel_id.is_none() {
+        direct_kwant_id: if routine.channel_id.is_none() && !in_thread {
             Some(kwant.id.clone())
         } else {
             None
@@ -429,18 +483,61 @@ async fn execute(state: &AppState, routine: &RoutineRow) -> Result<Option<String
         tool_calls: None,
         tokens_used: routine.instructions.len() as i64 / 4,
     };
-    state
+    let extra = crate::db::models::MessageExtra { thread_id: routine.thread_id.clone(), meta: None };
+    let saved = state
         .db
-        .insert_message(&message)
+        .insert_message_with(&message, &extra)
         .await
         .map_err(|_| "could not post the routine's message".to_string())?;
-    super::routes::run_routine_turn(
-        state,
-        &kwant,
-        routine.channel_id.clone(),
-        routine.instructions.clone(),
+    if let Some(t) = &routine.thread_id {
+        let _ = state.db.touch_thread(t).await;
+    }
+    let prompt = routine.instructions.clone() + &follow_up_context(state, routine, &kwant, &saved.id).await;
+    super::routes::run_routine_turn(state, &kwant, routine.channel_id.clone(), routine.thread_id.clone(), prompt).await
+}
+
+/// The chat id a routine delivers to: its thread, its channel, or its bot's direct chat.
+fn delivery_chat<'a>(thread_id: Option<&'a str>, channel_id: Option<&'a str>, kwant_id: &'a str) -> &'a str {
+    thread_id.or(channel_id).unwrap_or(kwant_id)
+}
+
+/// Messages a follow-up shows of the exchange it follows up on, and how much of each.
+const FOLLOW_UP_MESSAGES: i64 = 6;
+const FOLLOW_UP_CHARS_EACH: usize = 600;
+/// What a turn already sees of its chat (see `run_kwant_turn`'s history).
+const TURN_HISTORY_MESSAGES: i64 = 20;
+
+/// For a follow-up routine, the exchange it follows up on (from the same chat only), when it has
+/// scrolled out of the history the turn sees anyway. Empty otherwise.
+pub async fn follow_up_context(state: &AppState, routine: &RoutineRow, kwant: &crate::db::models::Kwant, run_message_id: &str) -> String {
+    let Some(anchor) = &routine.context_message_id else {
+        return String::new();
+    };
+    let chat = delivery_chat(routine.thread_id.as_deref(), routine.channel_id.as_deref(), &kwant.id);
+    let recent = state.db.list_messages(chat, TURN_HISTORY_MESSAGES).await.unwrap_or_default();
+    if recent.iter().any(|m| &m.id == anchor) {
+        return String::new();
+    }
+    let Ok(Some(around)) = state.db.list_messages_around(chat, anchor, FOLLOW_UP_MESSAGES).await else {
+        return String::new();
+    };
+    let lines: Vec<String> = around
+        .iter()
+        .filter(|m| m.id != run_message_id && m.sender_role != "system")
+        .map(|m| {
+            let when = m.created_at.map(|t| t.format("%Y-%m-%d %H:%M UTC ").to_string()).unwrap_or_default();
+            let who = if m.sender_role == "user" { "Person" } else { m.sender_id.as_str() };
+            format!("- {when}{who}: {}", super::routes::truncate_chars(m.text.trim(), FOLLOW_UP_CHARS_EACH))
+        })
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\n[This is a follow-up you scheduled. The earlier exchange it follows up on, from this chat:\n{}\n\
+        Follow up on it now: ask or check what you promised, and keep it short.]",
+        lines.join("\n")
     )
-    .await
 }
 
 /// Moves every missed or unset next run to its first slot after `now`: runs missed while kwnt was

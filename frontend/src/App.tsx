@@ -6,6 +6,12 @@ import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } fro
 import { ThreadBar, ThreadHeader } from './components/ThreadBar';
 import { DelegationCard } from './components/DelegationCard';
 import { QuestionCard } from './components/QuestionCard';
+import { McpSuggestionCard } from './components/McpSuggestionCard';
+import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
+import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, changesBots, decisionError, hiresApi } from './botActions';
+import { BotActionCard, type BotActionDecision } from './components/BotActionCard';
+import { HireCard, type HireDecision } from './components/HireCard';
+import type { RoutineFocus } from './components/RoutinesPanel';
 import { AwayPage } from './components/AwayView';
 import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { PendingApproval } from './components/ModernApprovalCard';
@@ -199,8 +205,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [settingsClosedCount, setSettingsClosedCount] = useState(0);
   // Set when Accounts opens from a "Sign in with Claude" hint, to focus that button.
   const [claudeSignInFocus, setClaudeSignInFocus] = useState(0);
+  // Set by a routine card's Edit or Pause, so Routines opens at that routine.
+  const [routineFocus, setRoutineFocus] = useState<RoutineFocus | null>(null);
   const openSpaceSettings = (tab: SpaceSettingsTab = 'general') => {
     setClaudeSignInFocus(0);
+    if (tab !== 'routines') setRoutineFocus(null);
     setSpaceSettingsTab(tab);
     playSfx('click');
   };
@@ -282,6 +291,45 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const refreshProfiles = useCallback(() => {
     profilesApi.list().then(setProfiles, () => undefined);
   }, []);
+  // Bots, teams and the space's counts again after a bot was hired, made, undone or deleted elsewhere, so the sidebar
+  // matches the server without a reload. Bursts of events share one load; a late reply never
+  // overwrites a newer one.
+  const onSpacesChangedRef = useRef(onSpacesChanged);
+  onSpacesChangedRef.current = onSpacesChanged;
+  const rosterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rosterSeqRef = useRef(0);
+  const refreshRoster = useCallback(() => {
+    if (rosterTimerRef.current) clearTimeout(rosterTimerRef.current);
+    rosterTimerRef.current = setTimeout(async () => {
+      rosterTimerRef.current = null;
+      const seq = ++rosterSeqRef.current;
+      try {
+        const [kRes, tRes] = await Promise.all([
+          fetch('/api/kwants').then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+          fetch('/api/teams').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        ]);
+        if (seq !== rosterSeqRef.current || !Array.isArray(kRes)) return;
+        setKwants(kRes);
+        // The space header counts bots too.
+        onSpacesChangedRef.current();
+        if (Array.isArray(tRes)) {
+          setTeams(tRes.map((t: any) => ({
+            ...t,
+            member_kwants: Array.isArray(t.member_kwants)
+              ? t.member_kwants
+              : typeof t.member_kwants === 'string'
+              ? JSON.parse(t.member_kwants || '[]')
+              : [],
+          })));
+        }
+      } catch {
+        // The next change or a reload tries again; the list on screen stays as it was.
+      }
+    }, 150);
+  }, []);
+  useEffect(() => () => {
+    if (rosterTimerRef.current) clearTimeout(rosterTimerRef.current);
+  }, []);
   const markLive = (ctx: string | null | undefined, speaker?: string) => {
     if (!ctx) return;
     const name = speaker ?? liveRef.current[ctx] ?? '';
@@ -359,6 +407,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         return next;
       });
     }, () => undefined);
+    suggestionsApi.list().then((list) => setSuggestions((prev) => list.reduce(applySuggestion, prev)), () => undefined);
     try {
       const { turns: list } = await threadsApi.turns();
       const map = hydrateTurns(list);
@@ -393,6 +442,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [questions, setQuestions] = useState<Record<string, Question>>({});
   const questionsRef = useRef(questions);
   questionsRef.current = questions;
+  // Bots' tool suggestions by id (from the list and mcp_suggestion_updated), and installed
+  // servers that still need the person to sign in.
+  const [suggestions, setSuggestions] = useState<Record<string, Suggestion>>({});
+  const [needsSignIn, setNeedsSignIn] = useState<Record<string, boolean>>({});
+  // Cards for changes bots made (bot_action_updated) and hire proposals (hire_updated), by id.
+  const [botActions, setBotActions] = useState<Record<string, BotActionMeta>>({});
+  const [hires, setHires] = useState<Record<string, HireMeta>>({});
 
   // Virtual Machine & Live Browser state
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
@@ -556,6 +612,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       try {
         const event = JSON.parse(e.data);
         if (affectsAway(event.type)) refreshAwayCount(800);
+        if (changesBots(event.type, event.data)) refreshRoster();
         switch (event.type) {
           case 'turn_queued':
           case 'TurnQueued':
@@ -645,6 +702,27 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (!sk?.id) break;
             emitContinuity({ type: 'skill_updated', data: sk });
             setPendingSkills((prev) => applySkillEvent(prev, sk).filter((x) => x.status === 'pending'));
+            break;
+          }
+          case 'mcp_suggestion_updated':
+          case 'McpSuggestionUpdated': {
+            const sg: Suggestion | undefined = event.data?.suggestion;
+            if (sg?.id) setSuggestions((prev) => applySuggestion(prev, sg));
+            break;
+          }
+          case 'bot_action_updated':
+          case 'BotActionUpdated': {
+            const a = event.data?.action;
+            if (a?.id) setBotActions((prev) => applyBotAction(prev, a));
+            break;
+          }
+          case 'hire_updated':
+          case 'HireUpdated': {
+            const h = event.data?.hire;
+            if (h?.id) {
+              setHires((prev) => applyHire(prev, h));
+              window.dispatchEvent(new Event('kwnt:hire-updated'));
+            }
             break;
           }
           case 'question_updated':
@@ -1291,6 +1369,161 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         waiting={!!turnId && !!turns[turnId]}
         onAnswer={handleAnswerQuestion}
         onDismiss={handleDismissQuestion}
+        flash={flash}
+      />
+    );
+  };
+
+  const handleInstallSuggestion = async (id: string, body: { env?: Record<string, string>; headers?: Record<string, string> }) => {
+    try {
+      const res = await suggestionsApi.install(id, body);
+      setSuggestions((prev) => applySuggestion(prev, res.suggestion));
+      if (res.oauth_required && res.server?.id) setNeedsSignIn((prev) => ({ ...prev, [res.server.id]: true }));
+      return {};
+    } catch (err) {
+      return { error: errText(err) };
+    }
+  };
+  const handleDismissSuggestion = async (id: string): Promise<string | void> => {
+    try {
+      const sg = await suggestionsApi.dismiss(id);
+      setSuggestions((prev) => applySuggestion(prev, sg));
+    } catch (err) {
+      return `Couldn't dismiss it: ${errText(err)}`;
+    }
+  };
+  // Same flow as the servers screen: the window opens inside the click, the address comes after.
+  const handleSuggestionSignIn = async (serverId: string): Promise<string | void> => {
+    const popup = window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
+    let url: string;
+    try {
+      const res = await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}/oauth/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin: window.location.origin }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(typeof data?.error === 'string' ? data.error : `Request failed (HTTP ${res.status}).`);
+      if (typeof data?.authorize_url !== 'string' || !/^https?:\/\//.test(data.authorize_url)) throw new Error('The server didn’t return a sign-in page.');
+      url = data.authorize_url;
+    } catch (err) {
+      popup?.close();
+      return `Couldn't start the sign-in: ${errText(err)}`;
+    }
+    if (!popup || popup.closed) {
+      window.location.assign(url);
+      return;
+    }
+    popup.location.href = url;
+    popup.focus();
+    await new Promise<void>((resolve) => {
+      const t = window.setInterval(() => {
+        if (popup.closed) {
+          window.clearInterval(t);
+          resolve();
+        }
+      }, 500);
+    });
+    try {
+      const test = await suggestionsApi.testServer(serverId);
+      if (test.ok) {
+        setNeedsSignIn((prev) => ({ ...prev, [serverId]: false }));
+        return;
+      }
+      return test.auth_required ? 'The sign-in didn’t finish.' : test.error || 'The server still isn’t answering.';
+    } catch (err) {
+      return errText(err);
+    }
+  };
+  const renderMcpSuggestion = (msg: ChatMessage, meta: SuggestionMeta, flash: boolean) => {
+    const live = suggestions[meta.suggestion_id];
+    const owner = live?.kwant_id ?? meta.kwant_id ?? undefined;
+    const name = kwantName(owner);
+    const serverId = live?.server_id ?? meta.server_id;
+    return (
+      <McpSuggestionCard
+        meta={meta}
+        messageId={msg.id}
+        kwantName={name ?? (msg.sender_id && msg.sender_id.length <= 20 ? msg.sender_id : chatTitle)}
+        kwantId={owner}
+        live={live}
+        needsSignIn={!!serverId && !!needsSignIn[serverId]}
+        onInstall={handleInstallSuggestion}
+        onDismiss={handleDismissSuggestion}
+        onSignIn={handleSuggestionSignIn}
+        flash={flash}
+      />
+    );
+  };
+
+  // A routine card's Edit or Pause: open Space settings → Routines at that routine.
+  const handleOpenRoutine = (id: string, mode: 'edit' | 'pause') => {
+    setRoutineFocus({ id, mode, nonce: Date.now() });
+    openSpaceSettings('routines');
+  };
+  const handleBotActionDecision = async (actionId: string, d: BotActionDecision): Promise<string | void> => {
+    try {
+      const a = d === 'undo' ? await botActionsApi.undo(actionId) : d === 'confirm' ? await botActionsApi.confirm(actionId) : await botActionsApi.decline(actionId);
+      setBotActions((prev) => applyBotAction(prev, a));
+      playSfx('click');
+    } catch (err) {
+      // Already decided elsewhere: pick up the real state so the card stops offering the button.
+      if (err instanceof ApiError && err.status === 409) {
+        botActionsApi
+          .list()
+          .then((list) => setBotActions((prev) => list.reduce((m, a) => applyBotAction(m, a), prev)))
+          .catch(() => {});
+      }
+      return decisionError(err, d === 'undo' ? 'undo it' : d === 'confirm' ? 'confirm it' : 'decline it');
+    }
+  };
+  const refreshHires = () =>
+    hiresApi
+      .list()
+      .then((list) => setHires((prev) => list.reduce((m, h) => applyHire(m, h), prev)))
+      .catch(() => {});
+  const handleHireDecision = async (hire: HireMeta, d: HireDecision): Promise<string | void> => {
+    try {
+      if (d === 'undo') {
+        if (!hire.action_id) return 'Couldn’t undo it: this hire has nothing to undo.';
+        await botActionsApi.undo(hire.action_id);
+        refreshHires();
+      } else {
+        const h = d === 'deny' ? await hiresApi.deny(hire.hire_id) : await hiresApi.accept(hire.hire_id, d === 'always_accept');
+        setHires((prev) => applyHire(prev, h));
+      }
+      window.dispatchEvent(new Event('kwnt:hire-updated'));
+      playSfx('click');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) refreshHires();
+      return decisionError(err, d === 'deny' ? 'say no' : d === 'undo' ? 'undo the hire' : 'hire it');
+    }
+  };
+  const renderBotAction = (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => {
+    const owner = meta.kwant_id ?? undefined;
+    return (
+      <BotActionCard
+        meta={meta}
+        messageId={msg.id}
+        kwantName={kwantName(owner) ?? (msg.sender_id && msg.sender_id.length <= 20 ? msg.sender_id : chatTitle)}
+        kwantId={owner}
+        live={botActions[meta.action_id]}
+        onDecide={handleBotActionDecision}
+        onOpenRoutine={handleOpenRoutine}
+        flash={flash}
+      />
+    );
+  };
+  const renderHire = (msg: ChatMessage, meta: HireMeta, flash: boolean) => {
+    const owner = meta.kwant_id ?? undefined;
+    return (
+      <HireCard
+        meta={meta}
+        messageId={msg.id}
+        kwantName={meta.proposer_name || kwantName(owner) || chatTitle}
+        kwantId={owner}
+        live={hires[meta.hire_id]}
+        onDecide={handleHireDecision}
         flash={flash}
       />
     );
@@ -2153,6 +2386,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           queued={queuedHere}
           renderDelegation={renderDelegation}
           renderQuestion={renderQuestion}
+          renderMcpSuggestion={renderMcpSuggestion}
+          renderBotAction={renderBotAction}
+          renderHire={renderHire}
           awaitingAnswer={awaitingHere}
           contextKey={openCtx}
         />
@@ -2323,6 +2559,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onManageTeam={(t) => setEditingTeam(t)}
           onOpenTools={() => setIsMcpOpen(true)}
           onOpenAppSettings={onOpenAppSettings}
+          routineFocus={routineFocus}
         />
       )}
 

@@ -11,6 +11,8 @@ import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThr
 import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
 import { QuestionMeta, parseQuestionMeta } from '../questions';
+import { SuggestionMeta, parseSuggestionMeta } from '../mcpSuggestions';
+import { BotActionMeta, HireMeta, parseBotActionMeta, parseHireMeta } from '../botActions';
 import {
   AttachmentRef,
   MAX_ATTACHMENTS,
@@ -152,6 +154,12 @@ export interface ChatViewProps {
   renderDelegation?: (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => React.ReactNode;
   /** Draws a bot's question card (messages with `ask_user` meta). */
   renderQuestion?: (msg: ChatMessage, meta: QuestionMeta, flash: boolean) => React.ReactNode;
+  /** Draws a bot's tool suggestion card (messages with `mcp_suggestion` meta). */
+  renderMcpSuggestion?: (msg: ChatMessage, meta: SuggestionMeta, flash: boolean) => React.ReactNode;
+  /** A change a bot made in the app (message meta kind "bot_action"). */
+  renderBotAction?: (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => React.ReactNode;
+  /** A bot's proposal to hire a new bot (message meta kind "hire_proposal"). */
+  renderHire?: (msg: ChatMessage, meta: HireMeta, flash: boolean) => React.ReactNode;
   /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
   awaitingAnswer?: boolean;
   /** Changes when another chat opens, so the view jumps to its bottom. */
@@ -299,6 +307,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   queued,
   renderDelegation,
   renderQuestion,
+  renderMcpSuggestion,
+  renderBotAction,
+  renderHire,
   awaitingAnswer,
   contextKey,
 }) => {
@@ -635,6 +646,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (meta && renderDelegation) return <React.Fragment key={msg.id}>{renderDelegation(msg, meta, flashId === msg.id)}</React.Fragment>;
     const question = msg.meta && renderQuestion ? parseQuestionMeta(msg.meta) : null;
     if (question && renderQuestion) return <React.Fragment key={msg.id}>{renderQuestion(msg, question, flashId === msg.id)}</React.Fragment>;
+    const suggestion = msg.meta && renderMcpSuggestion ? parseSuggestionMeta(msg.meta) : null;
+    if (suggestion && renderMcpSuggestion) return <React.Fragment key={msg.id}>{renderMcpSuggestion(msg, suggestion, flashId === msg.id)}</React.Fragment>;
+    const botAction = msg.meta && renderBotAction ? parseBotActionMeta(msg.meta) : null;
+    if (botAction && renderBotAction) return <React.Fragment key={msg.id}>{renderBotAction(msg, botAction, flashId === msg.id)}</React.Fragment>;
+    const hire = msg.meta && renderHire ? parseHireMeta(msg.meta) : null;
+    if (hire && renderHire) return <React.Fragment key={msg.id}>{renderHire(msg, hire, flashId === msg.id)}</React.Fragment>;
     const isUser = msg.sender_role === 'user';
     const files = msg.meta ? parseAttachments(msg.meta) : [];
     // A bot's share_file note: the file tiles say it all.

@@ -93,8 +93,41 @@ pub async fn prompt_block(
             - `search_history` finds earlier messages in chats you can see; use it when the user refers to something said before that isn't in this conversation.\n\
             - `memory_add`, `memory_update` and `memory_remove` keep your notes. Save only durable facts worth knowing in later chats \
             (preferences, decisions, names), one short fact per note, never secrets or passwords. \
-            They never need the user's approval."
+            They never need the user's approval.\n\
+            - When a request needs a capability you don't have (a service, an app, live data), `mcp_search` looks for an MCP server \
+            that adds it and `mcp_suggest` offers one to the user as a one-click install card. You can't install anything yourself: \
+            suggest at most one or two good matches, then carry on with your reply as best you can without them. \
+            If it needs a key, the user types it into the card itself. Once installed, its tools are yours from your next turn; \
+            the first use of each new tool asks the user for one approval.\n\
+            - You can set up and manage the app yourself; when asked, do it in that same turn instead of telling the user how. \
+            When the user wants something to happen on its own (\"every morning\", \"each Friday\", \"remind me at 5\"), \
+            `routine_create` schedules it (it runs as you and replies in this chat by default; calendar rules like \"the 1st of each \
+            month\" use a monthly or cron schedule); `follow_up_create` schedules a one-off check-in by you here; `routine_list`, `routine_update`, \
+            `routine_pause`, `routine_resume`, `routine_run_now` and `routine_delete` manage routines. `bot_list`, `bot_create` and \
+            `bot_update` add and change bots, `settings_get`/`settings_update` change non-secret settings such as the time zone, \
+            and `space_*` and `channel_*` manage your space and its channels. Each change applies at once and the user sees a card \
+            with Undo; afterwards say in one sentence what will happen. The user may undo a change later, so check with the list tools \
+            before relying on an earlier one. Deleting a bot, a space or an account only asks the user to confirm. \
+            Never handle keys, passwords or sign-ins, answer approvals, install tool servers, switch bots' tools on or off or change the computer: those tools \
+            tell you where in Settings the user does it.\n\
+            - `propose_hire` proposes a new bot for work a specialist would do better; the person decides. `hire_status` shows \
+            the space's hire policy and decisions.\n\n\
+            [How to work]\n\
+            - Never tell the person to do what your tools can do; do it now. Hand over only what truly needs them.\n\
+            - Check with the list or search tools before stating what exists, is set or was done. Never claim an action you didn't take.\n\
+            - When the person reveals a lasting preference or fact (diet, goals, schedule, tone), save it with `memory_add` without \
+            asking, and apply your notes unasked later.\n\
+            - Be proactive: after the asked work, do the obvious next step unasked. Add one concrete extra the person would \
+            clearly want: a shopping list with a meal plan; with a new routine, a sample of what it will send (a \
+            motivation, the checklist the reminder will use); a monthly routine that sends a report you wrote. When a plan has \
+            a start date or deadline, schedule a check-in with `follow_up_create` a few days in.\n\
+            - Don't ask permission for reversible extras: do them and name each in one line. Only app changes get a card with \
+            Undo; saved notes don't. \
+            Stay within 10 changes per turn. Never add one that costs money, contacts anyone or uses an outside service; offer \
+            it instead. Never redo what the person undid or declined (\"Undone:\" means the person reversed it; your \
+            claim wasn't wrong): do the work yourself and offer to redo it."
         ));
+        out.push_str(&super::hires::prompt_block(state, &crate::db::spaces::SpaceId::new(&kwant.space_id)).await);
     }
     out
 }
@@ -213,6 +246,9 @@ fn tool_list(scope: &SelfScope) -> Value {
     let mut tools = memory_tools();
     if let Some(list) = tools.as_array_mut() {
         list.extend(super::skills::tools());
+        list.extend(super::mcp_suggest::tools());
+        list.extend(super::bot_actions::tools());
+        list.extend(super::hires::tools());
         if scope.sandbox_target.is_some() {
             list.extend(browser_tools());
         }
@@ -580,6 +616,10 @@ async fn call_tool(
         "skill_propose" => super::skills::tool_propose(state, scope, args).await,
         "skill_get" => super::skills::tool_get(state, scope, args).await,
         "ask_user" => super::questions::tool_ask(state, scope, args).await,
+        "mcp_search" => super::mcp_suggest::tool_search(state, scope, args).await,
+        "mcp_suggest" => super::mcp_suggest::tool_suggest(state, scope, args).await,
+        n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
+        n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
         "list_attachments" if scope.origin.is_some() => super::attachments::tool_list(state, scope).await,
         "share_file" if scope.origin.is_some() => super::attachments::tool_share(state, scope, args).await,
         "delegate" => super::delegation::tool_delegate(state, scope, args).await,

@@ -513,7 +513,7 @@ async fn get_configured_endpoint(db: &crate::db::Database, target_model: &str) -
 }
 
 /// Truncates to at most `max` bytes without splitting a UTF-8 character.
-fn truncate_chars(text: &str, max: usize) -> &str {
+pub(super) fn truncate_chars(text: &str, max: usize) -> &str {
     if text.len() <= max {
         return text;
     }
@@ -707,19 +707,20 @@ fn execute_single_turn(
     });
 }
 
-/// Runs a routine's turn as if the user had sent `prompt` to `kwant` in `channel_id` (or in
-/// their direct chat): same team context, workspace, approvals and profile failover, and the
+/// Runs a routine's turn as if the user had sent `prompt` to `kwant` in `thread_id`, in
+/// `channel_id` or in their direct chat: same team context, workspace, approvals and profile failover, and the
 /// chat's stop button cancels it. The prompt message must already be saved. Returns the id of
 /// the kwant's reply, or `Err` with why there is none.
 pub(super) async fn run_routine_turn(
     state: &AppState,
     kwant: &Kwant,
     channel_id: Option<String>,
+    thread_id: Option<String>,
     prompt: String,
 ) -> Result<Option<String>, String> {
-    let context_key = channel_id.clone().unwrap_or_else(|| kwant.id.clone());
+    let context_key = thread_id.clone().or_else(|| channel_id.clone()).unwrap_or_else(|| kwant.id.clone());
     let job = state.turns.start_job([context_key.clone()]);
-    let scope = scope_for(state, kwant, channel_id, None, &job, 0).await?;
+    let scope = scope_for(state, kwant, channel_id, thread_id, &job, 0).await?;
     let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts::default()).await;
     match reply {
         Ok(text) => {
@@ -2257,6 +2258,8 @@ pub struct SettingsResponse {
     /// Whether turns get the agents' own tools (history search, memory); see
     /// [`super::continuity::agent_tools_enabled`].
     pub agent_tools: bool,
+    /// The person's IANA time zone, "" when not set; routines agents create default to it.
+    pub timezone: String,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -2276,6 +2279,8 @@ pub struct SaveSettingsPayload {
     pub delegation_follow_up_minutes: Option<i64>,
     /// Stored as the `agent_tools` setting: "on" or "off".
     pub agent_tools: Option<bool>,
+    /// An IANA name such as "Europe/Berlin"; "" clears it.
+    pub timezone: Option<String>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -2306,6 +2311,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         max_turns_global: state.turns.limiter.limits().1,
         delegation_follow_up_minutes: super::delegation::follow_up_minutes(&state).await,
         agent_tools: super::continuity::agent_tools_enabled(&state).await,
+        timezone: state.db.get_setting(super::bot_actions::TIMEZONE_SETTING).await.ok().flatten().unwrap_or_default(),
     }))
 }
 
@@ -2339,6 +2345,13 @@ pub async fn save_settings(
     let max_minutes = super::delegation::MAX_FOLLOW_UP_MINUTES;
     if payload.delegation_follow_up_minutes.is_some_and(|m| !(0..=max_minutes).contains(&m)) {
         return bad(format!("delegation_follow_up_minutes must be 0–{max_minutes}"));
+    }
+    let timezone = payload.timezone.as_deref().map(crate::routines::canonical_tz);
+    if let Some(tz) = timezone.as_deref().filter(|t| !t.is_empty()) {
+        let probe = crate::routines::Schedule::Daily { time: "09:00".into(), tz: tz.to_string() };
+        if let Err(e) = probe.validate() {
+            return bad(e);
+        }
     }
     if let Err(e) =
         super::continuity::save_notify_settings(&state, payload.notify_webhook_url, payload.notify_on).await
@@ -2390,6 +2403,9 @@ pub async fn save_settings(
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;
+    }
+    if let Some(tz) = timezone {
+        let _ = state.db.set_setting(super::bot_actions::TIMEZONE_SETTING, &tz).await;
     }
 
     Ok(Json(json!({ "status": "saved" })))

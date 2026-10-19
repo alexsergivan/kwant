@@ -20,6 +20,9 @@ pub mod skills;
 pub mod spaces;
 pub mod away;
 pub mod computer;
+pub mod mcp_suggest;
+pub mod bot_actions;
+pub mod hires;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -68,6 +71,8 @@ pub struct AppState {
     pub questions: Arc<questions::QuestionHub>,
     /// "Sign in with Claude" for the Claude engine.
     pub claude_login: Arc<engine_login::ClaudeLogin>,
+    /// The MCP Registry agents search and suggest servers from (`KWNT_MCP_REGISTRY_URL`).
+    pub mcp_registry: Arc<crate::mcp::registry::McpRegistry>,
 }
 
 impl AppState {
@@ -105,6 +110,7 @@ impl AppState {
             scheduler_wake: Default::default(),
             questions: Default::default(),
             claude_login: Default::default(),
+            mcp_registry: Arc::new(crate::mcp::registry::McpRegistry::from_env()),
         }
     }
 
@@ -185,6 +191,17 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/gateway", post(mcp_runtime::gateway_endpoint))
         .route("/api/mcp/gateway/grok", post(mcp_runtime::gateway_grok_endpoint))
         .route("/api/mcp/self", post(continuity::self_endpoint))
+        .route("/api/mcp/suggestions", get(mcp_suggest::list))
+        .route("/api/mcp/suggestions/:id/install", post(mcp_suggest::install))
+        .route("/api/mcp/suggestions/:id/dismiss", post(mcp_suggest::dismiss))
+        .route("/api/bot-actions", get(bot_actions::list))
+        .route("/api/bot-actions/:id/undo", post(bot_actions::undo))
+        .route("/api/bot-actions/:id/confirm", post(bot_actions::confirm))
+        .route("/api/bot-actions/:id/decline", post(bot_actions::decline))
+        .route("/api/hires", get(hires::list))
+        .route("/api/hires/:id/accept", post(hires::accept_route))
+        .route("/api/hires/:id/deny", post(hires::deny_route))
+        .route("/api/spaces/:id/hire-policy", get(hires::get_policy).put(hires::put_policy))
         .route("/api/channels/:id", get(continuity::get_channel).patch(continuity::patch_channel))
         .route("/api/search", get(continuity::search))
         .route("/api/kwants/:id/memories", get(continuity::list_memories).post(continuity::add_memory))

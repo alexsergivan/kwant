@@ -23,7 +23,8 @@ import { useEngines } from '../useEngines';
 import { useProfiles } from '../useProfiles';
 import type { Profile } from '../profiles';
 import { EnginesPanel } from './EnginesPanel';
-import { RoutinesPanel } from './RoutinesPanel';
+import { RoutinesPanel, type RoutineFocus } from './RoutinesPanel';
+import { HirePolicyPanel } from './HirePolicyPanel';
 import { ModernAvatar } from './ModernAvatar';
 import { SpaceTile } from './Spaces';
 import { memberIdsOf, type Channel, type Kwant, type Team } from './Sidebar';
@@ -63,6 +64,8 @@ interface Props {
   onManageTeam: (t: Team) => void;
   onOpenTools: () => void;
   onOpenAppSettings: () => void;
+  /** Set by a routine card's Edit or Pause: opens that routine in Routines. */
+  routineFocus?: RoutineFocus | null;
 }
 
 const card = 'rounded-xl border border-zinc-800 bg-zinc-950/60';
@@ -155,7 +158,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
             </div>
           )}
           {tab === 'skills' && <SkillsTab {...p} />}
-          {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} />}
+          {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} />}
           <div className="md:hidden pt-2">
             <button type="button" onClick={p.onOpenAppSettings} className="flex items-center gap-2 text-xs text-zinc-400 hover:text-zinc-100">
               <Settings size={14} /> App settings (every space)
@@ -357,6 +360,7 @@ const BotsTab: React.FC<Props> = ({ space, kwants, onNewBot, onEditBot }) => (
       ))}
     </ul>
     {kwants.length === 0 && <p className="text-xs text-zinc-500">No bots yet. New spaces start empty.</p>}
+    <HirePolicyPanel key={space.id} spaceId={space.id} spaceName={space.name} />
   </div>
 );
 

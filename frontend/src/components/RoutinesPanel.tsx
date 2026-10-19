@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useId, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, History, Loader2, Pencil, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import {
   Routine,
@@ -9,14 +9,15 @@ import {
   channelLabel,
   continuityApi,
   defaultTimeZone,
-  describeSchedule,
   emptyScheduleForm,
   formFromSchedule,
   formatWhen,
+  sortMonthDays,
   onContinuity,
   scheduleFromForm,
   timeZoneOptions,
 } from '../continuity';
+import { asSchedule, scheduleWords } from '../botActions';
 import type { Channel, Kwant } from './Sidebar';
 import { playSfx } from '../audio/chiptune';
 
@@ -26,6 +27,27 @@ const quietBtn = `${smallBtn} border-zinc-700/70 bg-zinc-800/70 text-zinc-200 ho
 const inputClass =
   'w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors';
 const labelClass = 'block text-xs font-medium text-zinc-400 mb-1';
+
+/** The "Posts in" choice that keeps a routine in the thread it was set up in. */
+const IN_THREAD = '__thread__';
+
+const REPEAT: Array<{ id: ScheduleForm['type']; label: string }> = [
+  { id: 'once', label: 'Once' },
+  { id: 'daily', label: 'Daily' },
+  { id: 'weekly', label: 'Weekly' },
+  { id: 'monthly', label: 'Monthly' },
+  { id: 'interval', label: 'Every…' },
+  { id: 'cron', label: 'Custom' },
+];
+const MONTH_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
+
+/** Which routine to show when Space settings opens from a card, and why. */
+export interface RoutineFocus {
+  id: string;
+  mode: 'edit' | 'pause';
+  /** Changes each time a card asks, so the same routine can be opened twice. */
+  nonce: number;
+}
 
 const STATUS: Record<RunStatus, { label: string; cls: string }> = {
   running: { label: 'Running', cls: 'bg-sky-500/10 text-sky-300 border-sky-500/20' },
@@ -59,13 +81,15 @@ const RoutineForm: React.FC<{
   onSaved: () => void;
 }> = ({ initial, fixedKwantId, kwants, channels, onCancel, onSaved }) => {
   const uid = useId();
+  const initialChannel = initial?.thread_id ? IN_THREAD : initial?.channel_id ?? '';
+  const initialSchedule = initial ? asSchedule(initial.schedule) : null;
   const [f, setF] = useState<FormState>(() => ({
     kwantId: initial?.kwant_id ?? fixedKwantId ?? kwants[0]?.id ?? '',
-    channelId: initial?.channel_id ?? '',
+    channelId: initialChannel,
     name: initial?.name ?? '',
     instructions: initial?.instructions ?? '',
     enabled: initial?.enabled ?? true,
-    schedule: initial ? formFromSchedule(initial.schedule) : emptyScheduleForm(),
+    schedule: initialSchedule ? formFromSchedule(initialSchedule) : emptyScheduleForm(),
   }));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,15 +107,19 @@ const RoutineForm: React.FC<{
     setError(null);
     const body = {
       kwant_id: f.kwantId,
-      channel_id: f.channelId || null,
+      channel_id: f.channelId === IN_THREAD ? null : f.channelId || null,
       name: f.name.trim(),
       instructions: f.instructions.trim(),
       schedule: built.schedule,
       enabled: f.enabled,
     };
     try {
-      if (initial) await continuityApi.updateRoutine(initial.id, body);
-      else await continuityApi.createRoutine(body);
+      if (initial) {
+        // Sending the place again would move a follow-up out of its thread and forget what it
+        // checks back on, so it only goes when the person picked another one.
+        const { channel_id, ...rest } = body;
+        await continuityApi.updateRoutine(initial.id, f.channelId === initialChannel ? rest : { ...rest, channel_id });
+      } else await continuityApi.createRoutine(body);
       playSfx('coin');
       onSaved();
     } catch (err) {
@@ -122,6 +150,7 @@ const RoutineForm: React.FC<{
         <div>
           <label htmlFor={id('channel')} className={labelClass}>Posts in</label>
           <select id={id('channel')} value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value })} className={inputClass}>
+            {initial?.thread_id && <option value={IN_THREAD}>The thread it was set up in</option>}
             <option value="">Direct chat with the bot</option>
             {channels.map((c) => (
               <option key={c.id} value={c.id}>{channelLabel(c.name)}</option>
@@ -144,17 +173,17 @@ const RoutineForm: React.FC<{
 
       <fieldset className="space-y-2">
         <legend className={labelClass}>When</legend>
-        <div className="grid grid-cols-4 gap-1 p-1 bg-zinc-950 rounded-lg border border-zinc-800" role="radiogroup" aria-label="Repeat">
-          {(['once', 'daily', 'weekly', 'interval'] as const).map((t) => (
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 p-1 bg-zinc-950 rounded-lg border border-zinc-800" role="radiogroup" aria-label="Repeat">
+          {REPEAT.map((t) => (
             <button
-              key={t}
+              key={t.id}
               type="button"
               role="radio"
-              aria-checked={s.type === t}
-              onClick={() => setS({ type: t })}
-              className={`py-1 rounded-md text-[11px] font-medium transition-colors ${s.type === t ? 'bg-sky-500/15 text-sky-200' : 'text-zinc-500 hover:text-zinc-300'}`}
+              aria-checked={s.type === t.id}
+              onClick={() => setS({ type: t.id })}
+              className={`py-1.5 sm:py-1 rounded-md text-[11px] font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${s.type === t.id ? 'bg-sky-500/15 text-sky-200' : 'text-zinc-500 hover:text-zinc-300'}`}
             >
-              {t === 'once' ? 'Once' : t === 'daily' ? 'Daily' : t === 'weekly' ? 'Weekly' : 'Every…'}
+              {t.label}
             </button>
           ))}
         </div>
@@ -167,12 +196,34 @@ const RoutineForm: React.FC<{
           </div>
         )}
 
-        {(s.type === 'daily' || s.type === 'weekly') && (
+        {s.type === 'cron' && (
+          <div>
+            <label htmlFor={id('cron')} className="text-[11px] text-zinc-500">Rule</label>
+            <input
+              id={id('cron')}
+              value={s.cron}
+              onChange={(e) => setS({ cron: e.target.value })}
+              placeholder="0 9 * * MON#2"
+              spellCheck={false}
+              autoCapitalize="off"
+              aria-describedby={id('cron-hint')}
+              className={`${inputClass} font-mono`}
+            />
+            <p id={id('cron-hint')} className="mt-1 text-[11px] text-zinc-500 leading-relaxed">
+              Five parts: minute, hour, day of month, month, weekday. <span className="font-mono text-zinc-400">0 9 * * MON#2</span> is 09:00 on the
+              second Monday; <span className="font-mono text-zinc-400">0 18 L * *</span> is 18:00 on the last day of the month.
+            </p>
+          </div>
+        )}
+
+        {(s.type === 'daily' || s.type === 'weekly' || s.type === 'monthly' || s.type === 'cron') && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <div>
-              <label htmlFor={id('time')} className="text-[11px] text-zinc-500">At</label>
-              <input id={id('time')} type="time" value={s.time} onChange={(e) => setS({ time: e.target.value })} className={inputClass} />
-            </div>
+            {s.type !== 'cron' && (
+              <div>
+                <label htmlFor={id('time')} className="text-[11px] text-zinc-500">At</label>
+                <input id={id('time')} type="time" value={s.time} onChange={(e) => setS({ time: e.target.value })} className={inputClass} />
+              </div>
+            )}
             <div>
               <label htmlFor={id('tz')} className="text-[11px] text-zinc-500">Time zone</label>
               <input id={id('tz')} list={id('tzs')} value={s.tz} onChange={(e) => setS({ tz: e.target.value })} className={inputClass} spellCheck={false} />
@@ -203,6 +254,42 @@ const RoutineForm: React.FC<{
                 </button>
               );
             })}
+          </div>
+        )}
+
+        {s.type === 'monthly' && (
+          <div className="space-y-1">
+            <div className="grid grid-cols-7 gap-1" role="group" aria-label="Days of the month">
+              {MONTH_DAYS.map((d) => {
+                const on = s.monthDays.includes(d);
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setS({ monthDays: on ? s.monthDays.filter((x) => x !== d) : sortMonthDays([...s.monthDays, d]) })}
+                    className={`min-h-[32px] rounded-md text-[11px] font-medium border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                      on ? 'border-sky-500/50 bg-sky-500/15 text-sky-200' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    {d}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                aria-pressed={s.monthDays.includes('last')}
+                onClick={() =>
+                  setS({ monthDays: s.monthDays.includes('last') ? s.monthDays.filter((x) => x !== 'last') : sortMonthDays([...s.monthDays, 'last']) })
+                }
+                className={`col-span-4 min-h-[32px] rounded-md text-[11px] font-medium border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                  s.monthDays.includes('last') ? 'border-sky-500/50 bg-sky-500/15 text-sky-200' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                Last day
+              </button>
+            </div>
+            <p className="text-[11px] text-zinc-500">A day a month doesn't have, like the 31st in April, runs on that month's last day.</p>
           </div>
         )}
 
@@ -281,9 +368,20 @@ const RoutineRow: React.FC<{
   kwantName?: string;
   placeLabel: string;
   tick: number;
+  /** Opened from a card's Pause: scrolls here, focuses the switch and says how to pause. */
+  focusPause?: number;
   onEdit: () => void;
   onChanged: () => void;
-}> = ({ routine, kwantName, placeLabel, tick, onEdit, onChanged }) => {
+}> = ({ routine, kwantName, placeLabel, tick, focusPause, onEdit, onChanged }) => {
+  const rowRef = useRef<HTMLLIElement>(null);
+  const switchRef = useRef<HTMLInputElement>(null);
+  const [highlight, setHighlight] = useState(false);
+  useEffect(() => {
+    if (!focusPause) return;
+    rowRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    switchRef.current?.focus({ preventScroll: true });
+    setHighlight(true);
+  }, [focusPause]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
@@ -313,12 +411,13 @@ const RoutineRow: React.FC<{
     });
 
   return (
-    <li className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3 space-y-2">
+    <li ref={rowRef} className={`rounded-xl border bg-zinc-950/60 p-3 space-y-2 ${highlight ? 'border-sky-500/60 ring-1 ring-sky-500/30' : 'border-zinc-800'}`}>
       <div className="flex items-start gap-2.5">
         <label className="relative inline-flex items-center p-1 -m-1 mt-0 cursor-pointer" title={routine.enabled ? 'Turn off' : 'Turn on'}>
           <input
             type="checkbox"
             role="switch"
+            ref={switchRef}
             className="sr-only peer"
             checked={routine.enabled}
             disabled={busy}
@@ -335,7 +434,7 @@ const RoutineRow: React.FC<{
           </div>
           <p className="text-[11px] text-zinc-500 break-words">
             {kwantName ? `${kwantName} · ` : ''}
-            {placeLabel} · {describeSchedule(routine.schedule)}
+            {placeLabel} · <span title={routine.schedule_text || undefined}>{scheduleWords(routine.schedule, routine.schedule_text)}</span>
           </p>
           <p className="text-[11px] text-zinc-400">
             Next run: <span className="text-zinc-200">{routine.enabled ? formatWhen(routine.next_run_at) : 'off'}</span>
@@ -363,6 +462,9 @@ const RoutineRow: React.FC<{
           <Trash2 size={11} /> {confirm ? 'Delete?' : 'Delete'}
         </button>
         {notice && <span className="text-[11px] text-zinc-400" role="status">{notice}</span>}
+        {highlight && routine.enabled && !notice && (
+          <span className="text-[11px] text-sky-200" role="status">Turn the switch off to pause it.</span>
+        )}
       </div>
       {error && <p className="pl-9 text-[11px] text-rose-400" role="alert">{error}</p>}
       {open && (
@@ -375,7 +477,12 @@ const RoutineRow: React.FC<{
 };
 
 /** Routines for one kwant (`kwantId`) or for everyone. Live: refetches on `routine_run`. */
-export const RoutinesPanel: React.FC<{ kwantId?: string; kwants: Kwant[]; channels: Channel[] }> = ({ kwantId, kwants, channels }) => {
+export const RoutinesPanel: React.FC<{ kwantId?: string; kwants: Kwant[]; channels: Channel[]; focus?: RoutineFocus | null }> = ({
+  kwantId,
+  kwants,
+  channels,
+  focus,
+}) => {
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Routine | 'new' | null>(null);
@@ -399,8 +506,20 @@ export const RoutinesPanel: React.FC<{ kwantId?: string; kwants: Kwant[]; channe
     });
   }, [reload]);
 
+  // A card's Edit opens that routine's form; Pause points at its switch.
+  const [missing, setMissing] = useState(false);
+  const handled = useRef<number | null>(null);
+  useEffect(() => {
+    if (!focus || !routines || handled.current === focus.nonce) return;
+    handled.current = focus.nonce;
+    const r = routines.find((x) => x.id === focus.id);
+    setMissing(!r);
+    if (r && focus.mode === 'edit') setEditing(r);
+  }, [focus, routines]);
+
   const kwantName = (id: string) => kwants.find((k) => k.id === id)?.name;
   const place = (r: Routine) => {
+    if (r.thread_id) return 'a thread';
     if (!r.channel_id) return 'direct chat';
     const c = channels.find((ch) => ch.id === r.channel_id);
     return c ? channelLabel(c.name) : 'a deleted channel';
@@ -445,6 +564,11 @@ export const RoutinesPanel: React.FC<{ kwantId?: string; kwants: Kwant[]; channe
           <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> Loading routines…
         </p>
       )}
+      {missing && (
+        <p className="text-[11px] text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2" role="status">
+          That routine no longer exists. It may have been undone or deleted.
+        </p>
+      )}
       {routines && routines.length === 0 && editing !== 'new' && (
         <div className="text-xs text-zinc-500 border border-dashed border-zinc-800 rounded-lg p-4 text-center space-y-1">
           <CalendarClock size={18} className="mx-auto text-zinc-600" aria-hidden="true" />
@@ -465,6 +589,7 @@ export const RoutinesPanel: React.FC<{ kwantId?: string; kwants: Kwant[]; channe
                 kwantName={kwantId ? undefined : kwantName(r.kwant_id) ?? 'deleted bot'}
                 placeLabel={place(r)}
                 tick={tick}
+                focusPause={focus?.mode === 'pause' && focus.id === r.id ? focus.nonce : undefined}
                 onEdit={() => setEditing(r)}
                 onChanged={reload}
               />

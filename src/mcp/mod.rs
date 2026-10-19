@@ -6,6 +6,7 @@ pub mod client;
 pub mod echo_server;
 pub mod oauth;
 pub mod oauth_mock;
+pub mod registry;
 pub mod session;
 
 pub use client::{McpClient, McpError, McpTool};

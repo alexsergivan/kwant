@@ -209,6 +209,8 @@ async fn away_lists_every_kind_filters_caps_and_marks_seen() {
             schedule: json!({"type": "interval", "every_minutes": 60}).to_string(),
             enabled: false,
             next_run_at: None,
+            thread_id: None,
+            context_message_id: None,
         })
         .await
         .unwrap();

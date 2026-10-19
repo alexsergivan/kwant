@@ -21,7 +21,7 @@ fn err(status: StatusCode, message: impl Into<String>) -> ApiError {
     (status, Json(json!({ "error": message.into() })))
 }
 
-fn db_err(e: DbError) -> ApiError {
+pub(super) fn db_err(e: DbError) -> ApiError {
     if let DbError::Sqlx(sqlx::Error::Database(ref d)) = e {
         if d.is_unique_violation() {
             return err(StatusCode::CONFLICT, "an MCP server with that name already exists");
@@ -140,16 +140,22 @@ pub async fn test_server(State(state): State<AppState>, Path(id): Path<String>) 
         .await
         .map_err(db_err)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "MCP server not found"))?;
+    Ok(Json(run_test(&state, &stored).await))
+}
+
+/// What `test_server` answers for `stored`.
+pub(super) async fn run_test(state: &AppState, stored: &McpServer) -> Value {
+    let id = &stored.id;
     let start = Instant::now();
     let cwd = state.config.data_dir.join("workspace");
 
     let mut server = stored.clone();
-    let token_use = mcp_oauth::authorize_server(&state, &mut server).await;
+    let token_use = mcp_oauth::authorize_server(state, &mut server).await;
     let mut secrets = server.secret_values();
     let mut result = try_list(&server, &cwd).await;
     if token_use == TokenUse::Injected && matches!(result, Err((McpError::Unauthorized { .. }, _))) {
         // The token was rejected early (revoked, or the server's clock): refresh once
-        if let Some(retry) = mcp_oauth::retry_after_unauthorized(&state, &stored).await {
+        if let Some(retry) = mcp_oauth::retry_after_unauthorized(state, stored).await {
             secrets.extend(retry.secret_values());
             result = try_list(&retry, &cwd).await;
         }
@@ -160,7 +166,7 @@ pub async fn test_server(State(state): State<AppState>, Path(id): Path<String>) 
         Err((McpError::Unauthorized { .. }, _)) if token_use != TokenUse::UserHeader => {
             if token_use == TokenUse::Injected {
                 // Still rejected after a refresh: the sign-in is no longer valid
-                let _ = state.db.delete_mcp_oauth_token(&id).await;
+                let _ = state.db.delete_mcp_oauth_token(id).await;
             }
             json!({ "ok": false, "auth_required": true, "error": "Sign-in required" })
         }
@@ -168,7 +174,7 @@ pub async fn test_server(State(state): State<AppState>, Path(id): Path<String>) 
                                          "stderr_tail": mcp::redact(&stderr_tail, &secrets) }),
     };
     outcome["duration_ms"] = json!(start.elapsed().as_millis() as u64);
-    Ok(Json(outcome))
+    outcome
 }
 
 pub async fn get_kwant_servers(State(state): State<AppState>, Path(kwant_id): Path<String>) -> ApiResult<Value> {

@@ -9,6 +9,9 @@ pub mod skills;
 pub mod away;
 pub mod spaces;
 pub mod custom_api;
+pub mod mcp_suggestions;
+pub mod bot_actions;
+pub mod hires;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -130,6 +133,9 @@ impl Database {
             db.seed_defaults().await?;
             db.migrate_space_archive().await?;
             db.migrate_custom_api().await?;
+            db.migrate_mcp_suggestions().await?;
+            db.migrate_bot_actions().await?;
+            db.migrate_hires().await?;
         }
 
         Ok(db)

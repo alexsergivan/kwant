@@ -80,6 +80,16 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
             &["kwant_id", "channel_id", "direct_kwant_id", "thread_id"],
             Owner::Context,
         ),
+        E::McpSuggestionUpdated { suggestion } => {
+            let mut out = fields(suggestion, &["space_id"], Owner::Space);
+            out.extend(fields(suggestion, &["kwant_id", "channel_id", "direct_kwant_id", "thread_id"], Owner::Context));
+            out
+        }
+        E::BotActionUpdated { action: v } | E::HireUpdated { hire: v } => {
+            let mut out = fields(v, &["space_id"], Owner::Space);
+            out.extend(fields(v, &["kwant_id", "channel_id", "direct_kwant_id", "thread_id"], Owner::Context));
+            out
+        }
         E::ProfileSwitched { kwant_id, .. } | E::MemoryChanged { kwant_id } => contexts([&Some(kwant_id.clone())]),
         E::DiscussionStarted { team_id, .. }
         | E::BrowserNavigated { team_id, .. }
@@ -202,6 +212,9 @@ mod tests {
             E::MessageAdded { message: json!({"id": "m", "channel_id": "c"}) },
             E::SkillUpdated { skill: json!({"id": "s", "kwant_id": null, "deleted": true}) },
             E::QuestionUpdated { question: json!({"id": "q", "kwant_id": "k"}) },
+            E::McpSuggestionUpdated { suggestion: json!({"id": "g", "space_id": "spc_default", "kwant_id": "k"}) },
+            E::BotActionUpdated { action: json!({"id": "b", "space_id": "spc_default", "kwant_id": "k"}) },
+            E::HireUpdated { hire: json!({"id": "h", "space_id": "spc_default", "kwant_id": "k"}) },
             E::Scoped {
                 tag: TurnTag { turn_id: s("x"), kwant_id: s("k"), context_id: s("c"), thread_id: None },
                 event: Box::new(E::TextDelta(s("x"))),
@@ -275,6 +288,9 @@ mod tests {
                 | E::MessageAdded { .. }
                 | E::SkillUpdated { .. }
                 | E::QuestionUpdated { .. }
+                | E::McpSuggestionUpdated { .. }
+                | E::BotActionUpdated { .. }
+                | E::HireUpdated { .. }
                 | E::Scoped { .. }
                 | E::ProfileSwitched { .. }
                 | E::DiscussionStarted { .. }

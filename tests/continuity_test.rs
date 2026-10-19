@@ -760,7 +760,34 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
             "memory_update",
             "memory_remove",
             "skill_propose",
-            "skill_get"
+            "skill_get",
+            "mcp_search",
+            "mcp_suggest",
+            "routine_list",
+            "routine_create",
+            "follow_up_create",
+            "routine_update",
+            "routine_pause",
+            "routine_resume",
+            "routine_run_now",
+            "routine_delete",
+            "bot_list",
+            "bot_create",
+            "bot_update",
+            "bot_delete",
+            "settings_get",
+            "settings_update",
+            "space_get",
+            "space_list",
+            "space_create",
+            "space_update",
+            "space_archive",
+            "channel_list",
+            "channel_create",
+            "channel_update",
+            "profile_delete",
+            "propose_hire",
+            "hire_status",
         ]
     );
 
@@ -962,6 +989,8 @@ async fn add_routine(
             schedule: schedule.to_string(),
             enabled: true,
             next_run_at: Some(next),
+            thread_id: None,
+            context_message_id: None,
         })
         .await
         .unwrap()
