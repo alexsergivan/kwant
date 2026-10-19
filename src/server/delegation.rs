@@ -270,11 +270,15 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
         Ok(s) => s,
         Err(why) => return finish(&state, &d, &specialist, Err(why)).await,
     };
-    if state.db.mark_delegation_running(&d.id).await.unwrap_or(false) {
-        if let Ok(Some(running)) = state.db.get_delegation(&d.id).await {
-            emit_delegation(&state, &running);
+    // Queued until the specialist's turn gets its slot: a busy specialist runs one turn at a time
+    let (started_state, started_id) = (state.clone(), d.id.clone());
+    let on_started = Box::pin(async move {
+        if started_state.db.mark_delegation_running(&started_id).await.unwrap_or(false) {
+            if let Ok(Some(running)) = started_state.db.get_delegation(&started_id).await {
+                emit_delegation(&started_state, &running);
+            }
         }
-    }
+    });
     let prompt = format!(
         "{lead} delegated this task to you. Work on it here; when you finish, your reply is posted back to {lead} \
         and the chat it came from, so make it a complete, self-contained answer.\n\nTask: {title}\n\n{task}",
@@ -282,7 +286,9 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
         title = d.title,
         task = d.task,
     );
-    let outcome = try_kwant_turn(&scope, &specialist, prompt, TurnOpts::default()).await;
+    let mut opts = TurnOpts::default();
+    opts.on_started = Some(on_started);
+    let outcome = try_kwant_turn(&scope, &specialist, prompt, opts).await;
     let outcome = match outcome {
         Err(_) if job.token.is_cancelled() => Err("stopped".to_string()),
         other => other,

@@ -946,6 +946,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
             nav_prompt: Some(if opening { user_prompt.to_string() } else { String::new() }),
             discussion: Some(opening.then(|| discussion::question_label(&kwant.name, &team.name))),
             routing: None,
+            on_started: None,
         };
         let Some(raw) = run_kwant_turn(scope, &kwant, prompt, opts).await else {
             if scope.cancel_token.is_cancelled() {
@@ -998,6 +999,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
             nav_prompt: Some(String::new()),
             discussion: None,
             routing: None,
+            on_started: None,
         };
         run_kwant_turn(scope, &lead, prompt, opts).await;
     }
@@ -1017,6 +1019,9 @@ pub(super) struct TurnOpts {
     discussion: Option<Option<String>>,
     /// How this reply's agent was picked, saved as the reply's `meta.routing`.
     routing: Option<serde_json::Value>,
+    /// Awaited once the turn has its slot and is running, before the driver starts; a turn
+    /// that is stopped while queued never calls it.
+    pub(super) on_started: Option<futures::future::BoxFuture<'static, ()>>,
 }
 
 /// Runs one kwant turn: picks model/effort, syncs the bot browser, streams the reply and saves it.
@@ -1075,6 +1080,10 @@ pub(super) async fn try_kwant_turn(
     });
     if scope.cancel_token.is_cancelled() {
         return Err("stopped by the user".into());
+    }
+    let mut opts = opts;
+    if let Some(started) = opts.on_started.take() {
+        started.await;
     }
     let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts, &tag).await;
     if scope.cancel_token.is_cancelled() {

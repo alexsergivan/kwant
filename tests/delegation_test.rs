@@ -310,6 +310,83 @@ async fn excess_turns_queue_instead_of_failing() {
     wait_for("the delegation to complete", || async { delegation_status(&env, &id).await == "completed" }).await;
 }
 
+/// A delegation to a busy specialist reads "queued" until its turn gets the slot, not "running"
+/// while it waits; it turns "running" (with `started_at`) when the turn starts.
+#[tokio::test]
+async fn a_delegation_waiting_for_a_busy_specialist_reads_queued() {
+    let env = setup().await;
+    let (s, v) = call(&env.app, "POST", "/api/settings", Some(json!({"max_turns_per_agent": 1}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let release = env.release_file("busy-release");
+    let (s, v) = call(
+        &env.app,
+        "POST",
+        "/api/chat/send",
+        Some(json!({"kwant_id": env.specialist, "prompt": format!("busy LONGTASK:{} REPLYTAG:busy", release.display()), "sender_id": "user"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let specialist = env.specialist.clone();
+    wait_for("the specialist's direct turn to run", || {
+        let (app, specialist) = (env.app.clone(), specialist.clone());
+        async move {
+            let (_, turns) = call(&app, "GET", "/api/turns", None).await;
+            turns["turns"].as_array().unwrap().iter().any(|t| t["state"] == "running" && t["kwant_id"] == specialist.as_str())
+        }
+    })
+    .await;
+
+    let mut rx = env.state.event_sender.subscribe();
+    let d = delegate(&env, "Waits its turn REPLYTAG:waited").await;
+    let id = d["id"].as_str().unwrap().to_string();
+    assert_eq!(d["status"], "queued");
+    let thread = d["thread_id"].as_str().unwrap().to_string();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(e) = rx.recv().await {
+                let wire = e.to_wire();
+                if wire["type"] == "turn_queued" && wire["data"]["thread_id"] == thread.as_str() {
+                    return;
+                }
+            }
+        }
+    })
+    .await
+    .expect("the delegated turn queues behind the direct one");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (_, waiting) = call(&env.app, "GET", &format!("/api/delegations/{id}"), None).await;
+    assert_eq!(waiting["status"], "queued", "still waiting: {waiting}");
+    assert!(waiting["started_at"].is_null(), "{waiting}");
+    // No delegation_updated said "running" while it waited
+    while let Ok(e) = rx.try_recv() {
+        let wire = e.to_wire();
+        if wire["type"] == "delegation_updated" {
+            assert_ne!(wire["data"]["delegation"]["status"], "running", "{wire}");
+        }
+    }
+
+    std::fs::write(&release, "").unwrap();
+    let saw_running = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Ok(e) = rx.recv().await {
+                let wire = e.to_wire();
+                if wire["type"] == "delegation_updated" && wire["data"]["delegation"]["id"] == id.as_str() {
+                    let status = wire["data"]["delegation"]["status"].as_str().unwrap_or("").to_string();
+                    if status != "queued" {
+                        return status;
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .expect("a delegation_updated once the turn starts");
+    assert_eq!(saw_running, "running", "running is reported before the result");
+    wait_for("the delegation to complete", || async { delegation_status(&env, &id).await == "completed" }).await;
+    let (_, done) = call(&env.app, "GET", &format!("/api/delegations/{id}"), None).await;
+    assert!(!done["started_at"].is_null(), "{done}");
+}
+
 /// Stopping a thread stops only that thread: the specialist's direct chat keeps running.
 #[tokio::test]
 async fn per_thread_cancel_leaves_other_chats_running() {
