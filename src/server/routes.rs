@@ -347,6 +347,7 @@ pub async fn delete_kwant(State(state): State<AppState>, headers: axum::http::He
     tracing::info!(kwant_id = %id, name = %bot.name, "the person deleted a bot");
     let folder = crate::db::spaces::space_data_dir(&state.config.data_dir, &space).join("bot-workspaces").join(&id);
     Json(json!({
+        "status": "deleted",
         "deleted": id,
         "name": bot.name,
         "removed": usage,

@@ -117,6 +117,7 @@ async fn the_person_deletes_any_bot_with_its_history() {
     let (s, v) = call(&app, "DELETE", &format!("/api/kwants/{}", bot.id), None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["deleted"], json!(bot.id));
+    assert_eq!(v["status"], json!("deleted"));
     assert!(state.db.get_kwant(&bot.id).await.unwrap().is_none());
     assert!(state.db.list_messages(&bot.id, 50).await.unwrap().is_empty());
     assert!(state.db.get_thread(&thread.id).await.unwrap().is_none());
