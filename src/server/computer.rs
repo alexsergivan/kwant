@@ -52,6 +52,7 @@ async fn view(state: &AppState) -> Value {
         "mode": mode,
         "available": {"local": local.is_none(), "vm": vm.is_none()},
         "reasons": {"local": local, "vm": vm},
+        "isolates": computer::VM_ISOLATES,
         "window": {
             "visible": mode == ComputerMode::Local && state.browser_service.local_window(),
             "available": window.is_none(),

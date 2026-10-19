@@ -1,4 +1,4 @@
-// "Local computer" vs "VM (isolated)": which computer kwant's browser and shell use.
+// "Local computer" vs "VM": which computer kwant's browser and shell use.
 // Contract: GET/PUT /api/settings/computer (docs/browser-service.md)
 
 export type ComputerMode = 'local' | 'vm';
@@ -16,12 +16,45 @@ export interface ComputerSettings {
   available: Record<ComputerMode, boolean>;
   reasons: Record<ComputerMode, string | null>;
   window: LocalWindow;
+  /** What vm mode runs in containers, as the server reports it ("browser", "kwnt_shell", later "cli_agents"). */
+  isolates: string[];
 }
 
-export const COMPUTER_MODES: { id: ComputerMode; label: string; short: string; hint: string }[] = [
-  { id: 'local', label: 'Local computer', short: 'Local', hint: 'Uses your Chrome and your files.' },
-  { id: 'vm', label: 'VM (isolated)', short: 'VM', hint: 'Runs in Docker containers, isolated from your files.' },
+/** What vm mode isolated before the server said so: never the CLI agents. */
+export const DEFAULT_VM_ISOLATES = ['browser', 'kwnt_shell'];
+
+const ISOLATED_PARTS: Record<string, string> = { browser: 'browser', kwnt_shell: 'built-in shell' };
+
+/** VM copy built from what it really isolates, so it can't promise more than the server does. */
+export function vmCopy(isolates: string[]): { label: string; hint: string; note: string | null } {
+  if (isolates.includes('cli_agents')) {
+    return { label: 'VM (isolated)', hint: 'Runs bots in Docker containers, away from your files.', note: null };
+  }
+  const parts = Object.keys(ISOLATED_PARTS).filter((k) => isolates.includes(k)).map((k) => ISOLATED_PARTS[k]);
+  return {
+    label: parts.length ? `VM (${parts.join(' and ')} isolated)` : 'VM',
+    hint: parts.length ? `The ${parts.join(' and ')} run in Docker containers, away from your files.` : 'Uses Docker containers.',
+    note: 'Claude, Codex and Grok still run on this computer, with their own file and shell tools.',
+  };
+}
+
+export interface ModeCopy {
+  id: ComputerMode;
+  label: string;
+  short: string;
+  hint: string;
+  /** A caveat shown under the hint. */
+  note: string | null;
+}
+
+export const COMPUTER_MODES: ModeCopy[] = [
+  { id: 'local', label: 'Local computer', short: 'Local', hint: 'Uses your Chrome and your files.', note: null },
+  { id: 'vm', short: 'VM', ...vmCopy(DEFAULT_VM_ISOLATES) },
 ];
+
+/** Both options, with the VM copy taken from what this server says it isolates. */
+export const computerModes = (s: ComputerSettings | null | undefined): ModeCopy[] =>
+  s ? COMPUTER_MODES.map((m) => (m.id === 'vm' ? { ...m, ...vmCopy(s.isolates) } : m)) : COMPUTER_MODES;
 
 export const LOCAL_BROWSER_NOTE = "Your bots' Chrome is open as a window on your computer.";
 
@@ -62,17 +95,19 @@ export function parseComputerSettings(data: unknown): ComputerSettings | null {
       available: w.available === true,
       reason: typeof w.reason === 'string' && w.reason.trim() ? w.reason : null,
     },
+    // Older servers don't send it; they isolated the same things.
+    isolates: Array.isArray(d.isolates) ? d.isolates.filter((x: unknown): x is string => typeof x === 'string') : DEFAULT_VM_ISOLATES,
   };
 }
 
 export const otherMode = (m: ComputerMode): ComputerMode => (m === 'local' ? 'vm' : 'local');
 
-export const modeLabel = (m: ComputerMode) => COMPUTER_MODES.find((x) => x.id === m)!.label;
+export const modeLabel = (m: ComputerMode, s?: ComputerSettings | null) => computerModes(s).find((x) => x.id === m)!.label;
 
 /** Why `mode` can't be picked right now, or null when it can. */
 export function unavailableReason(settings: ComputerSettings, mode: ComputerMode): string | null {
   if (settings.available[mode]) return null;
-  return settings.reasons[mode] ?? `${modeLabel(mode)} isn't available on this computer.`;
+  return settings.reasons[mode] ?? `${modeLabel(mode, settings)} isn't available on this computer.`;
 }
 
 export interface SwitchState {

@@ -11,7 +11,7 @@ Take Control obtains an exclusive server-side lease. Bot navigation and selector
 Kwnt runs bots' browser and shell commands in one of two places, chosen in **Settings → Computer** or with the browser panel's mode toggle:
 
 - **Local computer** (`local`, the default on macOS): Kwnt runs your installed Chrome or Chromium without a window (`--headless=new`, 1280×800) with its own profile, `<data dir>/local-chrome`, and shows it live in the app's browser panel, the same way as the VM. To sign in or solve a CAPTCHA yourself, use **Open as window** in the panel: Kwnt closes the windowless Chrome and opens the same profile as a real window, with each bot's page reopened there (one profile can't be open twice). **Show it here instead**, or closing that window, brings it back into the panel. Saved sign-ins carry over; cookies that only last for a browser session do not. The window choice is not saved, so a restart goes back to the panel. Switching to VM closes the windowless Chrome; a window you opened stays open. It never uses your everyday Chrome profile. Each bot gets its own Chrome window (headless Chrome only paints the front tab of a window, so tabs would stall the other bots' screenshots). Sign-ins are kept in the kwant profile and shared by all bots. The debugging port is chosen by Chrome and listens on 127.0.0.1 only. Shell commands run on your computer in the bot's working folder, and **every command asks for your approval first**. "Always allow" applies to that one command; it is not remembered. Docker is not needed.
-- **VM (isolated)** (`vm`, the default everywhere else, including a VPS): the Docker browser and execution containers described below.
+- **VM (browser and built-in shell isolated)** (`vm`, the default everywhere else, including a VPS): the Docker browser and execution containers described below. Only the browser and kwnt's own `execute_shell` run in containers. Claude, Codex and Grok still run on this computer, with their own file and shell tools.
 
 Switching takes effect at once, without a restart. Kwnt disconnects from the old browser: the VM container and a local Chrome window keep running, and switching back reuses them; only the windowless local Chrome is closed, as nothing would show it. Each mode keeps its own saved pages (`browser-sessions-local.json` and `browser-sessions.json`). If the local Chrome was closed, the next browser action starts it again. Kwnt does not close Chrome when it stops, and reuses a running one on the next start.
 
@@ -24,6 +24,7 @@ API (same authentication as the other settings routes):
 ```text
 GET /api/settings/computer
 → {"mode":"local"|"vm","available":{"local":bool,"vm":bool},"reasons":{"local":string|null,"vm":string|null},
+   "isolates":["browser","kwnt_shell"],   // what vm mode runs in containers; "cli_agents" once the CLIs move
    "window":{"visible":bool,"available":bool,"reason":string|null}}
 
 PUT /api/settings/computer  {"mode":"local"|"vm"}
@@ -34,7 +35,7 @@ PUT /api/settings/computer/window  {"visible":bool}
   400 {"error":...} outside local mode or with no display for a window; 502 if Chrome could not restart
 ```
 
-Local mode gives up isolation: commands run with your user's access to your files, and the debugging port can be reached by other programs on the same computer while the kwant Chrome is running. Use VM mode for untrusted work.
+Local mode gives up isolation: commands run with your user's access to your files, and the debugging port can be reached by other programs on the same computer while the kwant Chrome is running. Use VM mode for untrusted browsing and shell work. VM mode does not contain the Claude, Codex or Grok CLIs, which run on this computer in both modes.
 
 ## VM mode on a Mac or Linux VPS
 

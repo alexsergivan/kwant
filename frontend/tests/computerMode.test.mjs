@@ -12,11 +12,12 @@ const m = await loadBundled(`
   export { createElement } from 'react';
 `);
 
-const settings = (mode, local = true, vm = true, reasons = {}, window = {}) => ({
+const settings = (mode, local = true, vm = true, reasons = {}, window = {}, isolates = ['browser', 'kwnt_shell']) => ({
   mode,
   available: { local, vm },
   reasons: { local: null, vm: null, ...reasons },
   window: { visible: false, available: false, reason: null, ...window },
+  isolates,
 });
 const api = (state, extra = {}) => ({ state, select: () => {}, dismissError: () => {}, setWindow: () => {}, windowPending: false, ...extra });
 const render = (C, state) => m.renderToStaticMarkup(m.createElement(C, { api: api(state) }));
@@ -34,7 +35,7 @@ test('parseComputerSettings accepts the contract and rejects anything else', () 
 
 test('unavailableReason uses the server reason, with a fallback', () => {
   assert.equal(m.unavailableReason(settings('local', true, false, { vm: 'Docker is not installed' }), 'vm'), 'Docker is not installed');
-  assert.match(m.unavailableReason(settings('local', true, false), 'vm'), /VM \(isolated\) isn't available/);
+  assert.match(m.unavailableReason(settings('local', true, false), 'vm'), /VM \(browser and built-in shell isolated\) isn't available/);
   assert.equal(m.unavailableReason(settings('local'), 'vm'), null);
 });
 
@@ -84,14 +85,38 @@ test('control: both available', () => {
   assert.match(html, /aria-checked="true"[^>]*>.*Local computer/);
   assert.match(html, /Uses your Chrome and your files\.</);
   assert.doesNotMatch(html, /Commands ask/);
-  assert.match(html, /Runs in Docker containers, isolated from your files\./);
+  assert.match(html, /VM \(browser and built-in shell isolated\)/);
+  assert.match(html, /The browser and built-in shell run in Docker containers, away from your files\./);
+  assert.match(html, /Claude, Codex and Grok still run on this computer, with their own file and shell tools\./);
+  assert.doesNotMatch(html, /VM \(isolated\)/);
   assert.doesNotMatch(html, /disabled=""/);
   assert.doesNotMatch(html, /Unavailable/);
 });
 
+test('isolates: parsed from the server, honest default for older servers', () => {
+  const base = { mode: 'vm', available: { local: true, vm: true }, reasons: {} };
+  assert.deepEqual(m.parseComputerSettings({ ...base, isolates: ['browser', 'kwnt_shell', 7] }).isolates, ['browser', 'kwnt_shell']);
+  assert.deepEqual(m.parseComputerSettings(base).isolates, ['browser', 'kwnt_shell']);
+  assert.deepEqual(m.parseComputerSettings({ ...base, isolates: 'all' }).isolates, ['browser', 'kwnt_shell']);
+});
+
+test('VM copy follows what the server says it isolates', () => {
+  const now = m.vmCopy(['browser', 'kwnt_shell']);
+  assert.equal(now.label, 'VM (browser and built-in shell isolated)');
+  assert.match(now.note, /Claude, Codex and Grok still run on this computer/);
+  assert.equal(m.vmCopy(['browser']).label, 'VM (browser isolated)');
+  const full = m.vmCopy(['browser', 'kwnt_shell', 'cli_agents']);
+  assert.equal(full.label, 'VM (isolated)');
+  assert.equal(full.note, null);
+  const html = render(m.ComputerModeControl, ready(settings('vm', true, true, {}, {}, ['browser', 'kwnt_shell', 'cli_agents'])));
+  assert.match(html, /VM \(isolated\)/);
+  assert.doesNotMatch(html, /still run on this computer/);
+  assert.equal(m.modeLabel('vm'), 'VM (browser and built-in shell isolated)');
+});
+
 test('control: one unavailable is disabled and says why', () => {
   const html = render(m.ComputerModeControl, ready(settings('local', true, false, { vm: 'Docker is not installed' })));
-  assert.match(html, /aria-disabled="true"[^>]*disabled=""[^>]*>.*VM \(isolated\)/);
+  assert.match(html, /aria-disabled="true"[^>]*disabled=""[^>]*>.*VM \(browser and built-in shell isolated\)/);
   assert.match(html, /Unavailable: Docker is not installed/);
 });
 
@@ -112,7 +137,7 @@ test('chip names the current mode and offers the other one', () => {
   assert.match(vm, /Click to switch to Local computer/);
   const blocked = render(m.ComputerModeChip, ready(settings('local', true, false, { vm: 'Docker is not installed' })));
   assert.match(blocked, /disabled=""/);
-  assert.match(blocked, /VM \(isolated\) is unavailable: Docker is not installed/);
+  assert.match(blocked, /VM \(browser and built-in shell isolated\) is unavailable: Docker is not installed/);
 });
 
 test('local note text', () => {

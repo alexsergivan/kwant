@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useReducer, useRef, useState } from 'rea
 import { AlertTriangle, AppWindow, Box, Laptop, Loader2, PanelRight, X } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import {
-  COMPUTER_MODES,
   COMPUTER_MODE_EVENT,
   LOCAL_BROWSER_NOTE,
   ComputerMode,
   ComputerSettings,
   SwitchState,
+  computerModes,
   fetchComputerSettings,
   initialSwitchState,
   modeLabel,
@@ -132,7 +132,7 @@ export const ComputerModeControl: React.FC<{ api: ComputerModeApi }> = ({ api })
   return (
     <div className="space-y-2">
       <div role="radiogroup" aria-labelledby="computer-mode-label" className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {COMPUTER_MODES.map(({ id, label, hint }) => {
+        {computerModes(settings).map(({ id, label, hint, note }) => {
           const Icon = ICONS[id];
           const reason = unavailableReason(settings, id);
           const checked = selected === id;
@@ -167,6 +167,12 @@ export const ComputerModeControl: React.FC<{ api: ComputerModeApi }> = ({ api })
               </span>
               <span id={`computer-mode-${id}-hint`} className="block mt-1 text-[11px] leading-snug">
                 <span className={reason ? 'text-zinc-600' : 'text-zinc-500'}>{hint}</span>
+                {note && (
+                  <>
+                    {' '}
+                    <span className={`block mt-1 ${reason ? 'text-zinc-600' : 'text-zinc-400'}`}>{note}</span>
+                  </>
+                )}
                 {reason && <span className="block mt-1 text-amber-300/90">Unavailable: {reason}</span>}
               </span>
             </button>
@@ -187,12 +193,13 @@ export const ComputerModeChip: React.FC<{ api: ComputerModeApi }> = ({ api }) =>
   const next = otherMode(current);
   const reason = unavailableReason(settings, next);
   const Icon = ICONS[current];
-  const short = COMPUTER_MODES.find((m) => m.id === current)!.short;
+  const short = computerModes(settings).find((m) => m.id === current)!.short;
+  const label = (m: ComputerMode) => modeLabel(m, settings);
   const title = state.pending
-    ? `Switching to ${modeLabel(current)}…`
+    ? `Switching to ${label(current)}…`
     : reason
-      ? `Using ${modeLabel(current)}. ${modeLabel(next)} is unavailable: ${reason}`
-      : `Using ${modeLabel(current)}. Click to switch to ${modeLabel(next)}.`;
+      ? `Using ${label(current)}. ${label(next)} is unavailable: ${reason}`
+      : `Using ${label(current)}. Click to switch to ${label(next)}.`;
   return (
     <button
       type="button"

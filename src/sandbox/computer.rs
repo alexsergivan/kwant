@@ -12,6 +12,9 @@ pub const SETTING_KEY: &str = "computer_mode";
 pub const MODE_ENV: &str = "KWNT_COMPUTER_MODE";
 /// Path to the Chrome/Chromium binary local mode launches, instead of searching for one.
 pub const CHROME_PATH_ENV: &str = "KWNT_CHROME_PATH";
+/// What vm mode actually runs in containers. The CLI drivers (Claude, Codex, Grok) and their own
+/// file and shell tools still run on the host; `cli_agents` joins this list once they move.
+pub const VM_ISOLATES: [&str; 2] = ["browser", "kwnt_shell"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

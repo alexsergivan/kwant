@@ -118,6 +118,8 @@ async fn computer_mode_api_and_local_shell_approval() {
         .unwrap()
         .contains("KWNT_CHROME_PATH"));
     assert_eq!(view["reasons"]["vm"], Value::Null);
+    // VM mode is honest about what it contains: not the Claude/Codex/Grok CLIs (yet).
+    assert_eq!(view["isolates"], json!(["browser", "kwnt_shell"]));
     assert_eq!(view["window"]["visible"], false);
     if cfg!(target_os = "linux") {
         // no display: Chrome can still run in the app, just not as a window
@@ -149,6 +151,11 @@ async fn computer_mode_api_and_local_shell_approval() {
     let (status, view) = call(&app, "PUT", Some(json!({"mode": "vm"}))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(view["mode"], "vm");
+    assert_eq!(
+        view["isolates"],
+        json!(["browser", "kwnt_shell"]),
+        "PUT returns the same shape"
+    );
     assert_eq!(
         db.get_setting("computer_mode").await.unwrap().as_deref(),
         Some("vm")

@@ -17,6 +17,7 @@ const settings = (mode, visible = false) => ({
   available: { local: true, vm: true },
   reasons: { local: null, vm: null },
   window: { visible, available: true, reason: null },
+  isolates: ['browser', 'kwnt_shell'],
 });
 const pane = (props) =>
   m.renderToStaticMarkup(m.createElement(m.VirtualMachinePane, { isOpen: true, onClose: () => {}, teamId: 'k1', screenshotBase64: 'AAAA', ...props }));
