@@ -290,23 +290,77 @@ pub fn split_memory(text: &str) -> Vec<String> {
 }
 
 /// Reads a routine's schedule: kwant JSON first, then the source's text. Imported routines
-/// always arrive paused, so a schedule only has to be valid, not right.
-pub fn read_schedule(spec: &RoutineSpec) -> Option<Schedule> {
-    if let Some(v) = &spec.schedule {
-        if let Ok(s) = serde_json::from_value::<Schedule>(v.clone()) {
-            if s.validate().is_ok() {
-                return Some(s.canonical());
+/// always arrive paused, so a schedule only has to be valid, not right. The second value is a
+/// note for the preview when part of it (so far only the time zone) had to be guessed.
+pub fn read_schedule(spec: &RoutineSpec) -> Option<(Schedule, Option<String>)> {
+    match &spec.schedule {
+        Some(serde_json::Value::String(t)) => {
+            if let Some(found) = schedule_from_text(t) {
+                return Some(found);
             }
         }
+        Some(v @ serde_json::Value::Object(o)) => {
+            let mut v = v.clone();
+            // OpenMausBot and other apps write `timeZone`; kwant writes `tz`.
+            if !o.contains_key("tz") {
+                if let Some(zone) = o.get("timeZone").or_else(|| o.get("time_zone")).or_else(|| o.get("timezone")).cloned() {
+                    v["tz"] = zone;
+                }
+            }
+            if let Ok(s) = serde_json::from_value::<Schedule>(v) {
+                if s.validate().is_ok() {
+                    return Some((s.canonical(), None));
+                }
+                // A good expression or time with a zone kwant doesn't know: keep it in UTC.
+                if let Some((zone, utc)) = with_utc(&s) {
+                    if utc.validate().is_ok() {
+                        return Some((utc.canonical(), Some(zone_note(&zone))));
+                    }
+                }
+            }
+        }
+        _ => {}
     }
     let text = spec.schedule_text.as_deref()?.trim();
     schedule_from_text(text)
 }
 
-fn schedule_from_text(text: &str) -> Option<Schedule> {
-    let lower = text.to_lowercase();
+/// The schedule moved to UTC, with the zone it had, when it has a zone at all.
+fn with_utc(s: &Schedule) -> Option<(String, Schedule)> {
+    let utc = "UTC".to_string();
+    Some(match s.clone() {
+        Schedule::Daily { time, tz } => (tz, Schedule::Daily { time, tz: utc }),
+        Schedule::Weekly { time, weekdays, tz } => (tz, Schedule::Weekly { time, weekdays, tz: utc }),
+        Schedule::Monthly { time, days, tz } => (tz, Schedule::Monthly { time, days, tz: utc }),
+        Schedule::Cron { expression, tz } => (tz, Schedule::Cron { expression, tz: utc }),
+        Schedule::Once { .. } | Schedule::Interval { .. } => return None,
+    })
+}
+
+fn zone_note(zone: &str) -> String {
+    let zone = one_line(zone, 64);
+    if zone.is_empty() {
+        "no time zone was given, so we used UTC. Check the time before turning it on.".into()
+    } else {
+        format!("we don't know the time zone \"{zone}\", so we used UTC. Check the time before turning it on.")
+    }
+}
+
+fn schedule_from_text(text: &str) -> Option<(Schedule, Option<String>)> {
+    let (rest, zone) = split_zone(text);
+    let (tz, note) = match zone {
+        None => ("UTC".to_string(), None),
+        Some(z) => {
+            let probe = Schedule::Daily { time: "00:00".into(), tz: z.clone() };
+            if probe.validate().is_ok() {
+                (z, None)
+            } else {
+                ("UTC".to_string(), Some(zone_note(&z)))
+            }
+        }
+    };
+    let lower = rest.to_lowercase();
     let lower = lower.trim();
-    let tz = "UTC".to_string();
     // "daily 09:00", "every day at 9:00", "09:00"
     let time = lower
         .trim_start_matches("every day")
@@ -314,16 +368,71 @@ fn schedule_from_text(text: &str) -> Option<Schedule> {
         .trim_start_matches(" at")
         .trim();
     if let Some(t) = clock(time) {
-        return Some(Schedule::Daily { time: t, tz });
+        return Some((Schedule::Daily { time: t, tz }.canonical(), note));
     }
-    let fields: Vec<&str> = text.split_whitespace().collect();
+    let fields: Vec<&str> = rest.split_whitespace().collect();
     if fields.len() == 5 {
         let s = Schedule::Cron { expression: fields.join(" "), tz };
         if s.validate().is_ok() {
-            return Some(s.canonical());
+            return Some((s.canonical(), note));
         }
     }
     None
+}
+
+/// Takes a time zone out of a schedule line: `0 7 * * * (Europe/Berlin)`, `0 7 * * * Europe/Berlin`,
+/// `tz=Europe/Berlin`, `TZ: Europe/Berlin`, `CRON_TZ=Europe/Berlin 0 7 * * *`. Returns the rest
+/// of the line and the zone as written; whether the zone exists is checked by the caller.
+fn split_zone(text: &str) -> (String, Option<String>) {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let mut rest = Vec::new();
+    let mut zone = None;
+    let mut i = 0;
+    while i < tokens.len() {
+        let tok = tokens[i];
+        let bare = tok.trim_matches(|c| "()[],;".contains(c));
+        let lower = bare.to_ascii_lowercase();
+        let labelled = ["cron_tz", "tz", "timezone", "time_zone"].iter().find_map(|label| {
+            let after = lower.strip_prefix(label)?;
+            let sep = after.chars().next()?;
+            ("=:".contains(sep)).then(|| bare[label.len() + 1..].to_string())
+        });
+        if let Some(value) = labelled {
+            if value.is_empty() {
+                // "TZ: Europe/Berlin": the value is the next word
+                if let Some(next) = tokens.get(i + 1) {
+                    zone = Some(next.trim_matches(|c| "()[],;".contains(c)).to_string());
+                    i += 1;
+                }
+            } else {
+                zone = Some(value);
+            }
+        } else if zone.is_none() && looks_like_zone(bare) && (tok != bare || i == tokens.len() - 1) {
+            // In brackets anywhere, or the last word
+            zone = Some(bare.to_string());
+        } else if zone.is_none() && tok.starts_with('(') && (lower.starts_with("utc") || lower.starts_with("gmt")) {
+            // "(UTC+2)": an offset kwant can't store as a zone, so the caller falls back with a note
+            zone = Some(bare.to_string());
+        } else {
+            rest.push(tok.trim_end_matches([',', ';']));
+        }
+        i += 1;
+    }
+    (rest.join(" "), zone)
+}
+
+/// `Europe/Berlin`, `America/Argentina/Buenos_Aires`, `UTC`: never a cron field like `*/5`.
+fn looks_like_zone(s: &str) -> bool {
+    if s.eq_ignore_ascii_case("utc") || s.eq_ignore_ascii_case("gmt") {
+        return true;
+    }
+    let mut parts = s.split('/');
+    let first = parts.next().unwrap_or("");
+    s.contains('/')
+        && first.len() >= 2
+        && first.starts_with(|c: char| c.is_ascii_uppercase())
+        && first.chars().all(|c| c.is_ascii_alphabetic())
+        && parts.all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || "_+-".contains(c)))
 }
 
 /// `H:MM` or `HH:MM` as `HH:MM`.
@@ -591,7 +700,12 @@ fn tidy_routines(
             continue;
         }
         let schedule = match read_schedule(&r) {
-            Some(s) => s,
+            Some((s, note)) => {
+                if let Some(note) = note {
+                    warnings.push(Notice::new(who, format!("Routine {label}: {note}")));
+                }
+                s
+            }
             None => {
                 warnings.push(Notice::new(
                     who,
@@ -663,12 +777,74 @@ mod tests {
         assert_eq!(free_name("Ada", &taken), "Ada-3");
     }
 
+    fn cron(expression: &str, tz: &str) -> Schedule {
+        Schedule::Cron { expression: expression.into(), tz: tz.into() }
+    }
+
+    fn routine(schedule: Option<serde_json::Value>, text: Option<&str>) -> RoutineSpec {
+        RoutineSpec { name: "r".into(), instructions: "i".into(), schedule, schedule_text: text.map(Into::into) }
+    }
+
     #[test]
     fn schedules_from_text() {
-        assert_eq!(schedule_from_text("09:30"), Some(Schedule::Daily { time: "09:30".into(), tz: "UTC".into() }));
-        assert_eq!(schedule_from_text("daily 7:05"), Some(Schedule::Daily { time: "07:05".into(), tz: "UTC".into() }));
-        assert!(matches!(schedule_from_text("0 9 * * 1-5"), Some(Schedule::Cron { .. })));
-        assert_eq!(schedule_from_text("whenever it feels right"), None);
+        let utc = |s| schedule_from_text(s).map(|(s, _)| s);
+        assert_eq!(utc("09:30"), Some(Schedule::Daily { time: "09:30".into(), tz: "UTC".into() }));
+        assert_eq!(utc("daily 7:05"), Some(Schedule::Daily { time: "07:05".into(), tz: "UTC".into() }));
+        assert!(matches!(utc("0 9 * * 1-5"), Some(Schedule::Cron { .. })));
+        assert_eq!(utc("*/15 9-17 * * MON-FRI"), Some(cron("*/15 9-17 * * MON-FRI", "UTC")), "cron steps aren't zones");
+        assert_eq!(utc("whenever it feels right"), None);
+    }
+
+    #[test]
+    fn schedule_text_time_zones() {
+        let berlin = Some((cron("0 7 * * *", "Europe/Berlin"), None));
+        // Oleks's first real import, 2026-10-19
+        assert_eq!(schedule_from_text("0 7 * * * (Europe/Berlin)"), berlin);
+        assert_eq!(schedule_from_text("0 7 * * * Europe/Berlin"), berlin);
+        assert_eq!(schedule_from_text("0 7 * * * [Europe/Berlin]"), berlin);
+        assert_eq!(schedule_from_text("0 7 * * * tz=Europe/Berlin"), berlin);
+        assert_eq!(schedule_from_text("0 7 * * *, TZ: Europe/Berlin"), berlin);
+        assert_eq!(schedule_from_text("TZ:Europe/Berlin 0 7 * * *"), berlin);
+        assert_eq!(schedule_from_text("CRON_TZ=Europe/Berlin 0 7 * * *"), berlin);
+        assert_eq!(schedule_from_text("timezone=America/Argentina/Buenos_Aires 0 7 * * *"), Some((cron("0 7 * * *", "America/Argentina/Buenos_Aires"), None)));
+        assert_eq!(schedule_from_text("0 7 * * * UTC"), Some((cron("0 7 * * *", "UTC"), None)));
+        // The daily path takes the zone too
+        let daily = Some((Schedule::Daily { time: "07:00".into(), tz: "Europe/Berlin".into() }, None));
+        assert_eq!(schedule_from_text("every day at 7:00 (Europe/Berlin)"), daily);
+        assert_eq!(schedule_from_text("daily 07:00 Europe/Berlin"), daily);
+        // Old names become current ones, as everywhere else in kwant
+        assert_eq!(schedule_from_text("0 7 * * * (Europe/Kiev)").map(|(s, _)| s), Some(cron("0 7 * * *", "Europe/Kyiv")));
+    }
+
+    #[test]
+    fn unknown_schedule_zones_fall_back_to_utc_with_a_note() {
+        for text in ["0 7 * * * (Mars/Olympus)", "0 7 * * * tz=Nowhere", "CRON_TZ=../../etc/passwd 0 7 * * *", "0 7 * * * (UTC+2)"] {
+            let (s, note) = schedule_from_text(text).unwrap_or_else(|| panic!("{text}"));
+            assert_eq!(s, cron("0 7 * * *", "UTC"), "{text}");
+            assert!(note.as_deref().unwrap_or("").contains("so we used UTC"), "{text}: {note:?}");
+        }
+        let (s, note) = schedule_from_text("daily 07:00 tz=Mars/Olympus").unwrap();
+        assert_eq!(s, Schedule::Daily { time: "07:00".into(), tz: "UTC".into() });
+        assert!(note.unwrap().contains("Mars/Olympus"));
+    }
+
+    #[test]
+    fn json_schedules_keep_their_zone_or_fall_back_to_utc() {
+        let berlin = cron("0 7 * * *", "Europe/Berlin");
+        let j = |v| read_schedule(&routine(Some(v), None));
+        assert_eq!(j(serde_json::json!({"type": "cron", "expression": "0 7 * * *", "tz": "Europe/Berlin"})), Some((berlin.clone(), None)));
+        assert_eq!(j(serde_json::json!({"type": "cron", "expression": "0 7 * * *", "timeZone": "Europe/Berlin"})), Some((berlin.clone(), None)));
+        // An empty or unknown zone (OpenMausBot packages can leave timeZone out) keeps the expression in UTC.
+        for tz in ["", "Mars/Olympus", "<time zone like Europe/Berlin, or UTC>"] {
+            let (s, note) = j(serde_json::json!({"type": "cron", "expression": "0 7 * * *", "tz": tz})).unwrap();
+            assert_eq!(s, cron("0 7 * * *", "UTC"), "{tz}");
+            assert!(note.unwrap().contains("so we used UTC"), "{tz}");
+        }
+        // A schedule written as a string, and a broken object with usable text
+        assert_eq!(j(serde_json::json!("0 7 * * * (Europe/Berlin)")), Some((berlin.clone(), None)));
+        let broken = routine(Some(serde_json::json!({"type": "cron", "expression": "<cron line>", "tz": "UTC"})), Some("0 7 * * * (Europe/Berlin)"));
+        assert_eq!(read_schedule(&broken), Some((berlin, None)));
+        assert_eq!(read_schedule(&routine(None, Some("whenever"))), None);
     }
 
     #[test]

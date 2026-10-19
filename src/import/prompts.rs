@@ -58,7 +58,7 @@ Reply with exactly one JSON code block and nothing else, in this shape:
         { "name": "<short-name>", "description": "<one line: when to use it>", "body": "<the steps, word for word>" }
       ],
       "routines": [
-        { "name": "<scheduled task name>", "instructions": "<what to do each time>", "schedule_text": "<cron line like 0 9 * * 1-5, or a time like 09:00>" }
+        { "name": "<scheduled task name>", "instructions": "<what to do each time>", "schedule": { "type": "cron", "expression": "<five-field cron line like 0 9 * * 1-5>", "tz": "<time zone like Europe/Berlin, or UTC>" }, "schedule_text": "<the schedule in your own words, only if it can't be written as cron>" }
       ],
       "tool_hints": ["<tools, actions, plugins or connected apps you use>"],
       "knowledge_files": ["<names of files you were given>"]
@@ -70,6 +70,7 @@ Reply with exactly one JSON code block and nothing else, in this shape:
 Rules:
 - Copy your instructions exactly as written. Don't shorten, paraphrase or improve them.
 - Leave out empty lists rather than inventing content.
+- Write each routine's schedule as a cron line with its time zone (an IANA name like Europe/Berlin), not as a sentence.
 - Never include passwords, API keys, tokens or other secrets. Write [secret] instead.
 - Don't include our past conversations.
 - Use straight JSON: double quotes, no comments, no trailing commas."#;

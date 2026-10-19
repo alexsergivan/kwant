@@ -409,7 +409,8 @@ fn from_grokbot(v: &Value) -> Bundle {
         .map(|r| RoutineSpec {
             name: s(r, "name"),
             instructions: any_s(r, &["prompt", "instructions"]),
-            schedule: None,
+            // An object like {"type": "cron", "expression": …, "timeZone": …} is read as is.
+            schedule: r.get("schedule").filter(|v| v.is_object()).cloned(),
             schedule_text: Some(any_s(r, &["schedule", "cron", "time"])).filter(|t| !t.is_empty()),
         })
         .collect();
@@ -453,10 +454,11 @@ fn openmaus_schedule(sch: &Value) -> (Option<Value>, Option<String>) {
         "daily" => {
             let wd: Vec<String> = arr(sch, "weekdays").iter().filter_map(Value::as_u64).filter_map(|d| days.get(d as usize)).map(|d| d.to_string()).collect();
             let time = s(sch, "time");
+            let tz = Some(any_s(sch, &["timeZone", "tz"])).filter(|t| !t.is_empty()).unwrap_or_else(|| "UTC".into());
             if wd.is_empty() || wd.len() == 7 {
-                (Some(serde_json::json!({"type": "daily", "time": time, "tz": "UTC"})), Some(time))
+                (Some(serde_json::json!({"type": "daily", "time": time, "tz": tz})), Some(time))
             } else {
-                (Some(serde_json::json!({"type": "weekly", "time": time, "weekdays": wd, "tz": "UTC"})), Some(time))
+                (Some(serde_json::json!({"type": "weekly", "time": time, "weekdays": wd, "tz": tz})), Some(time))
             }
         }
         "interval" => (
@@ -570,7 +572,8 @@ fn from_openmaus_grok(v: &Value) -> Bundle {
         .map(|r| RoutineSpec {
             name: any_s(r, &["name", "title"]),
             instructions: any_s(r, &["prompt", "instructions", "task"]),
-            schedule: None,
+            // An object like {"type": "cron", "expression": …, "timeZone": …} is read as is.
+            schedule: r.get("schedule").filter(|v| v.is_object()).cloned(),
             schedule_text: Some(any_s(r, &["schedule", "cron", "time", "when"])).filter(|t| !t.is_empty()),
         })
         .collect();

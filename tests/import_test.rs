@@ -647,3 +647,44 @@ async fn qa_f4_f5_cap_wording_and_hidden_characters_in_names() {
     let routines = e.state.db.list_routines(&sid).await.unwrap();
     assert!(routines.iter().any(|r| r.name == "Backup"), "{:?}", routines.iter().map(|r| &r.name).collect::<Vec<_>>());
 }
+
+/// Oleks's first real import (2026-10-19): "0 7 * * * (Europe/Berlin)" is a valid cron line with
+/// a zone, and used to arrive as daily 09:00 UTC with a "couldn't read" warning.
+#[tokio::test]
+async fn pasted_schedule_with_a_time_zone_keeps_it_and_stays_paused() {
+    let e = setup().await;
+    let reply = json!({
+        "format": "kwant.bundle/1",
+        "source": { "kind": "other", "label": "Personal" },
+        "bots": [{
+            "ref": "main",
+            "name": "Personal",
+            "persona_prompt": "Give me an overview every morning.",
+            "routines": [
+                { "name": "Morning overview", "instructions": "Check mail, calendar and weather.", "schedule_text": "0 7 * * * (Europe/Berlin)" },
+                { "name": "Evening", "instructions": "Sum up the day.", "schedule": { "type": "cron", "expression": "0 19 * * *", "timeZone": "Europe/Berlin" } },
+                { "name": "Lunch", "instructions": "Remind me to eat.", "schedule_text": "0 12 * * * (Mars/Olympus)" }
+            ]
+        }]
+    });
+    let text = format!("Here you go:\n```json\n{reply}\n```");
+    let (status, p) = json_call(&e.app, "POST", "/api/import/preview", json!({ "text": text })).await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    let routines = &p["bundle"]["bots"][0]["routines"];
+    assert_eq!(routines[0]["schedule"], json!({ "type": "cron", "expression": "0 7 * * *", "tz": "Europe/Berlin" }), "{p}");
+    assert_eq!(routines[1]["schedule"], json!({ "type": "cron", "expression": "0 19 * * *", "tz": "Europe/Berlin" }), "{p}");
+    assert_eq!(routines[2]["schedule"], json!({ "type": "cron", "expression": "0 12 * * *", "tz": "UTC" }), "{p}");
+    let warnings = p["warnings"].to_string();
+    assert!(!warnings.contains("couldn't read"), "{warnings}");
+    assert!(warnings.contains("Routine Lunch: we don't know the time zone") && warnings.contains("Mars/Olympus"), "{warnings}");
+    assert!(!warnings.contains("Routine Morning overview") && !warnings.contains("Routine Evening"), "{warnings}");
+
+    let (status, applied) = apply(&e.app, &dflt(), &p["bundle"], &[]).await;
+    assert_eq!(status, StatusCode::CREATED, "{applied}");
+    let bot_id = applied["import"]["created"]["kwants"][0]["id"].as_str().unwrap().to_string();
+    let rows: Vec<_> = e.state.db.list_routines(&SpaceId::default_space()).await.unwrap().into_iter().filter(|r| r.kwant_id == bot_id).collect();
+    let morning = rows.iter().find(|r| r.name == "Morning overview").unwrap();
+    let stored: Value = serde_json::from_str(&morning.schedule).unwrap();
+    assert_eq!(stored, json!({ "type": "cron", "expression": "0 7 * * *", "tz": "Europe/Berlin" }));
+    assert!(rows.iter().all(|r| !r.enabled && r.next_run_at.is_none()), "routines still arrive paused");
+}
