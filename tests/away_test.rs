@@ -235,6 +235,14 @@ async fn away_lists_every_kind_filters_caps_and_marks_seen() {
     let body = v.to_string();
     assert!(!body.contains(SECRET) && !body.contains("hidden-value") && !body.contains("hunter2"), "secret leaked: {body}");
 
+    // The approval carries the live event's fields, masked like the rest of the feed
+    let ai0 = find(&v["waiting"], &live.id);
+    assert_eq!(ai0["tool_name"], "mcp__mail__send");
+    assert_eq!(ai0["details"]["server"], "mail");
+    assert_eq!(ai0["details"]["arguments"]["api_key"], "[redacted]");
+    assert_eq!(ai0["details"]["arguments"]["to"], "me@example.com");
+    assert_eq!(ai0["details"]["arguments"]["command"], "mysql -u bob password=[redacted]");
+
     // Waiting ignores since; the stale ticket and the answered question aren't there
     assert_eq!(ids(&v["waiting"]), vec![live.id.clone(), q.id.clone()]);
     let qi = find(&v["waiting"], &q.id);
@@ -388,6 +396,7 @@ async fn live_approval_link(app: &Router, state: &AppState, kwant: &kwnt::db::mo
         .header("content-type", "application/json")
         .body(Body::from(ask.to_string()))
         .unwrap();
+    let mut events = state.event_sender.subscribe();
     let prompt = tokio::spawn(app.clone().oneshot(req));
 
     let mut item = None;
@@ -401,6 +410,18 @@ async fn live_approval_link(app: &Router, state: &AppState, kwant: &kwnt::db::mo
     }
     let item = item.expect("the approval never showed up under waiting");
     assert_eq!(state.db.get_approval(item["id"].as_str().unwrap()).await.unwrap().unwrap().turn_id, turn_id);
+    // The item carries what the live event did, so the client can render it the same way.
+    let (tool_name, details) = loop {
+        match events.try_recv() {
+            Ok(kwnt::drivers::events::RuntimeEvent::ApprovalRequired { id, tool_name, details }) if id == item["id"] => break (tool_name, details),
+            Ok(_) => continue,
+            Err(e) => panic!("no approval_required event for the item: {e:?}"),
+        }
+    };
+    assert_eq!(item["tool_name"], tool_name);
+    assert_eq!(tool_name, "mcp__echo__echo");
+    assert_eq!(item["details"], details);
+    assert!(details.is_object() && details != json!({}), "{details}");
 
     assert!(state.broker.resolve(item["id"].as_str().unwrap(), ApprovalDecision::AllowOnce).await);
     let resp = prompt.await.unwrap().unwrap();

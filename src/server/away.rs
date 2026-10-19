@@ -57,7 +57,18 @@ pub fn summarize(text: &str) -> String {
         .map(|l| l.trim().trim_start_matches(['#', '>', '*', '-', ' ']).trim())
         .find(|l| !l.is_empty())
         .unwrap_or_default();
-    let line = mask_credentials(line);
+    let joined = mask_words(line);
+    if joined.chars().count() > SUMMARY_CHARS {
+        let cut: String = joined.chars().take(SUMMARY_CHARS - 1).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        joined
+    }
+}
+
+/// `text` with free-text credentials and any word that has a key-like part masked.
+fn mask_words(text: &str) -> String {
+    let line = mask_credentials(text);
     let masked: Vec<&str> = line
         .split_whitespace()
         .map(|w| {
@@ -68,12 +79,44 @@ pub fn summarize(text: &str) -> String {
             }
         })
         .collect();
-    let joined = masked.join(" ");
-    if joined.chars().count() > SUMMARY_CHARS {
-        let cut: String = joined.chars().take(SUMMARY_CHARS - 1).collect();
-        format!("{}…", cut.trim_end())
-    } else {
-        joined
+    masked.join(" ")
+}
+
+/// An approval's stored details in the live `approval_required` event's shape. The tool's
+/// `arguments` get the summary's masking (sensitive-named fields, credentials, key-like words),
+/// as the feed never carries secrets; the rest (source, tool, ids, cwd) is kwnt's own.
+fn masked_details(details: Value) -> Value {
+    let mut details = details;
+    if let Some(args) = details.get_mut("arguments") {
+        *args = masked_arguments(args);
+    }
+    details
+}
+
+fn masked_arguments(v: &Value) -> Value {
+    match v {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| {
+                    let lower = k.to_ascii_lowercase();
+                    let shown = match SECRET_ARG_HINTS.iter().any(|h| lower.contains(h)) {
+                        true => json!("[redacted]"),
+                        false => masked_arguments(v),
+                    };
+                    (k.clone(), shown)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(masked_arguments).collect()),
+        // Untouched strings keep their line breaks; masked ones come back on one line
+        Value::String(s) => {
+            let masked = mask_words(s);
+            match masked == s.split_whitespace().collect::<Vec<_>>().join(" ") {
+                true => v.clone(),
+                false => json!(masked),
+            }
+        }
+        other => other.clone(),
     }
 }
 
@@ -166,6 +209,13 @@ fn item(row: AwayRow) -> Value {
             "direct_kwant_id": row.direct_kwant_id,
         },
     });
+    if row.kind == "approval" {
+        // The live `approval_required` event's fields, so an approval opened from here renders
+        // like one that arrived over SSE; secret values are masked, as everywhere in the feed.
+        v["tool_name"] = json!(row.title);
+        let details: Value = row.body.as_deref().and_then(|b| serde_json::from_str(b).ok()).unwrap_or(Value::Null);
+        v["details"] = masked_details(details);
+    }
     if row.kind == "question" {
         v["choices"] = row
             .choices
