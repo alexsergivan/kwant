@@ -85,7 +85,7 @@ test('a team proposal lists every member with role and model, and asks once', ()
   const t = text(html);
   assert.match(t, /Backend proposes hiring a team of 3/);
   assert.match(t, /Engineering/);
-  for (const s of ['Frontend Frontend Engineer Picked automatically', 'QA QA \/ Test Engineer claude-sonnet-5-5 · Tools: Browser', 'Lead Tech Lead Picked automatically']) assert.match(t, new RegExp(s));
+  for (const s of ['Frontend Lead Frontend Engineer Picked automatically', 'QA QA \/ Test Engineer claude-sonnet-5-5 · Tools: Browser', 'Lead Tech Lead Picked automatically']) assert.match(t, new RegExp(s));
   assert.match(t, /New team: Engineering/);
   assert.deepEqual(buttons(html), ['Show their instructions', 'Approve all 3', 'Always accept', 'Decline']);
 });
@@ -167,4 +167,28 @@ test('the routing line says when the team lead took it because no role matched',
   assert.equal(m.routeReasonText({ kwantName: 'Lin', reason: 'Laya picked Lin (Backend) as the best fit' }), 'Laya picked Lin (Backend) as the best fit');
   assert.equal(m.routeReasonText({ basis: 'keywords', matchedTerms: ['strategy', 'go'] }), 'Picked by matching words: strategy, go.');
   assert.match(m.routingLine({ kwant_name: 'Ada', basis: 'lead', candidate_count: 4 }, 'Work'), /^No one’s role matched, so the team lead Ada took it from 4 bots in Work$/);
+});
+
+// ---------------------------------------------------------------- shapes Lin's server sends (bot-capabilities)
+
+test('a team proposal as the server sends it: members once, no Always accept, and the lead marked', () => {
+  const html = m.hire(hireProps(hireMeta({ choices: ['deny', 'accept_once'], new_team: { name: 'Trading', lead: 'QA' } })));
+  const t = text(html);
+  assert.equal((t.match(/Frontend Engineer/g) ?? []).length, 1, 'the top-level bot is members[0], not an extra row');
+  assert.deepEqual(buttons(html), ['Show their instructions', 'Approve all 3', 'Decline']);
+  assert.match(t, /QA Lead QA \/ Test Engineer/);
+  assert.match(t, /New team: Trading, led by QA/);
+  assert.match(text(m.hire(hireProps(hireMeta({ new_team: { name: 'Trading', lead: null } })))), /led by Frontend/, 'no lead named: the first member leads');
+});
+
+test('the routing line and card use the server’s own reason when it sends one', () => {
+  const several = { kwant_name: 'Gopher', basis: 'several', fallback: true, candidate_count: 3, matched_terms: ['endpoint', 'page'],
+    reason: 'This touches several roles (Gopher and Pixel), so it went to the team lead, Gopher (Go backend), to answer or hand parts on. Laya is offline, so this was picked by keywords' };
+  const line = m.routingLine(several, 'Trading');
+  assert.match(line, /^This touches several roles \(Gopher and Pixel\).*picked by keywords\. Chosen from 3 bots in Trading\.$/);
+  assert.doesNotMatch(line, /Laya picked/);
+  const named = { kwantName: 'Probe', basis: 'keywords', matchedTerms: [], reason: 'Probe (QA) was named in your message' };
+  assert.equal(m.routeReasonText(named), 'Probe (QA) was named in your message.');
+  assert.match(m.routingLine({ kwant_name: 'Probe', basis: 'keywords', matched_terms: [], reason: named.reason }, 'Trading'), /^Probe \(QA\) was named in your message\. Chosen in Trading\.$/);
+  assert.match(m.routingLine({ kwant_name: 'Lin', reason: 'Laya picked Lin (Backend) as the best fit', candidate_count: 2 }, 'Work'), /^Laya picked Lin from 2 bots in Work$/, 'older servers keep the old line');
 });

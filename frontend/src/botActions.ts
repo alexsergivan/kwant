@@ -249,7 +249,8 @@ export interface HireMeta {
   /** Every bot the proposal hires, the first being the top-level one; one entry for a single hire. */
   members: HireMember[];
   /** The team the proposal creates for them, when it makes a new one. */
-  new_team: { name: string } | null;
+  /** `lead` is a member's name; the server makes the first member lead when it's missing. */
+  new_team: { name: string; lead: string | null } | null;
   /** The bots made on accept, in `members` order; empty until then. */
   hired_kwant_ids: string[];
 }
@@ -333,9 +334,21 @@ export function parseHireMeta(raw: unknown): HireMeta | null {
       const top: HireMember = { name, role: str(m.role) ?? '', model: str(m.model), tools: parseTools(m.tools), instructions: str(m.instructions) ?? '' };
       return listed.length ? listed : [top];
     })(),
-    new_team: m.new_team && typeof m.new_team === 'object' && str((m.new_team as Record<string, unknown>).name) ? { name: (m.new_team as Record<string, string>).name } : null,
+    new_team: (() => {
+      const t = m.new_team && typeof m.new_team === 'object' ? (m.new_team as Record<string, unknown>) : null;
+      const teamName = t && str(t.name);
+      return teamName ? { name: teamName, lead: str(t.lead)?.replace(/^@/, '') ?? null } : null;
+    })(),
     hired_kwant_ids: strs(m.hired_kwant_ids),
   };
+}
+
+/** Index of the member who will lead the new team, or -1 when the proposal makes no team. */
+export function hireLeadIndex(h: Pick<HireMeta, 'members' | 'new_team'>): number {
+  if (!h.new_team) return -1;
+  const lead = h.new_team.lead?.toLowerCase();
+  const i = lead ? h.members.findIndex((m) => m.name.toLowerCase() === lead) : -1;
+  return i >= 0 ? i : 0;
 }
 
 /** Whether the proposal hires several bots at once (a team), rather than one. */

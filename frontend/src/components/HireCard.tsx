@@ -1,7 +1,7 @@
 import React, { useId, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, MinusCircle, Undo2, UserPlus } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { HireMeta, evidenceText, hireStateText, hireView, hiredBotGone, isTeamHire, modelText } from '../botActions';
+import { HireMeta, evidenceText, hireStateText, hireView, hireLeadIndex, hiredBotGone, isTeamHire, modelText } from '../botActions';
 
 export type HireDecision = 'deny' | 'accept_once' | 'always_accept' | 'undo';
 
@@ -55,6 +55,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
   const evidence = evidenceText(view.evidence, view.requested_by_person);
   const border = pending ? 'border-violet-500/40' : done ? 'border-zinc-800' : 'border-emerald-500/25';
   const can = (c: string) => pending && view.choices.includes(c);
+  const leadIndex = hireLeadIndex(view);
   const team = isTeamHire(view);
   const toolText = (tools: HireMeta['tools']) => (tools.length ? tools.map((t) => t.name || 'Unknown tool').join(', ') : 'None');
 
@@ -116,7 +117,12 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
                 <li key={`${m.name}-${i}`} className="flex items-start gap-2.5 px-3 py-2 min-w-0">
                   <ModernAvatar role={m.role || m.name} name={m.name} size={24} kwantId={view.hired_kwant_ids[i]} />
                   <div className="min-w-0 flex-1">
-                    <p className={`font-medium break-words ${done ? 'text-zinc-400' : 'text-zinc-100'}`}>{m.name}</p>
+                    <p className={`font-medium break-words ${done ? 'text-zinc-400' : 'text-zinc-100'}`}>
+                      {m.name}
+                      {i === leadIndex && (
+                        <span className="ml-2 rounded-full border border-violet-500/40 bg-violet-500/10 px-1.5 py-px text-[10px] font-medium text-violet-200">Lead</span>
+                      )}
+                    </p>
                     {m.role && <p className="text-zinc-400 break-words">{m.role}</p>}
                     <p className="text-[11px] text-zinc-500 break-words">
                       {modelText(m.model)} · Tools: {toolText(m.tools)}
@@ -128,7 +134,9 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
             <dl className="mx-4 mb-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 px-1 text-xs">
               <dt className="text-zinc-500">Team</dt>
               <dd className="min-w-0 break-words text-zinc-200">
-                {view.new_team ? `New team: ${view.new_team.name}` : view.team ? view.team.name : 'No team'}
+                {view.new_team
+                  ? `New team: ${view.new_team.name}${leadIndex >= 0 ? `, led by ${view.members[leadIndex].name}` : ''}`
+                  : view.team ? view.team.name : 'No team'}
               </dd>
             </dl>
           </>

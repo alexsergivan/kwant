@@ -1,6 +1,8 @@
 // Spaces: separate sets of bots, teams, channels and accounts. The open space rides on every
 // `/api` call as `?space=` (added by the fetch wrapper in auth.ts) and on the event stream.
 
+import { serverReason } from './routeReason';
+
 export interface SpaceCounts {
   bots: number;
   ready_accounts: number;
@@ -249,7 +251,7 @@ export interface RoutingMeta {
   candidate_count?: number | null;
   fallback?: boolean;
   matched_terms?: string[];
-  /** 'lead' when no role matched and the team lead took it; see routeReason.ts. */
+  /** How the bot was picked: skills, keywords, only, lead, several or discuss; see routeReason.ts. */
   basis?: string;
 }
 
@@ -263,10 +265,12 @@ export function parseRoutingMeta(meta: string | null | undefined): RoutingMeta |
   }
 }
 
-/** "Laya picked Lin from 6 bots in Work · matched 'migration', 'SQLite'", or the keyword-fallback line. */
+/** The server's own reason when it sends one, else "Laya picked Lin from 6 bots in Work · matched 'migration', 'SQLite'", or the keyword-fallback line. */
 export function routingLine(r: RoutingMeta, spaceName: string): string {
   const n = typeof r.candidate_count === 'number' && r.candidate_count > 0 ? r.candidate_count : null;
   const pool = n ? `from ${n} ${n === 1 ? 'bot' : 'bots'} in ${spaceName}` : `in ${spaceName}`;
+  const own = serverReason(r);
+  if (own) return `${own} Chosen ${pool}.`;
   const matched = r.matched_terms?.length ? ` · matched ${r.matched_terms.map((t) => `'${t}'`).join(', ')}` : '';
   if (r.fallback) return `Picked by keywords (Laya is offline) · ${r.kwant_name} ${pool}${matched}`;
   if (r.basis === 'lead') return `No one’s role matched, so the team lead ${r.kwant_name} took it ${pool}`;
