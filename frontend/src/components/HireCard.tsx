@@ -1,7 +1,7 @@
 import React, { useId, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, MinusCircle, Undo2, UserPlus } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { HireMeta, evidenceText, hireStateText, hireView, modelText } from '../botActions';
+import { HireMeta, evidenceText, hireStateText, hireView, hiredBotGone, modelText } from '../botActions';
 
 export type HireDecision = 'deny' | 'accept_once' | 'always_accept' | 'undo';
 
@@ -15,6 +15,8 @@ export interface HireCardProps {
   /** Resolves to an error message on failure. */
   onDecide: (hire: HireMeta, decision: HireDecision) => Promise<string | void>;
   flash?: boolean;
+  /** Ids of the bots that exist now; null until loaded. A hire whose bot is gone settles. */
+  botIds?: ReadonlySet<string> | null;
 }
 
 const btn =
@@ -26,8 +28,11 @@ const spin = <Loader2 size={13} className="animate-spin motion-reduce:animate-no
  * A bot's proposal to hire a new bot: who it would be, which team it joins, why, and what that
  * rests on. The person denies, accepts once or always accepts; an accepted hire can be undone.
  */
-export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, kwantId, live, onDecide, flash }) => {
-  const view = hireView(meta, live);
+export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, kwantId, live, onDecide, flash, botIds = null }) => {
+  const shown = hireView(meta, live);
+  const gone = hiredBotGone(shown, botIds);
+  // Nothing to undo once the hired bot is deleted.
+  const view = gone ? { ...shown, can_undo: false } : shown;
   const [busy, setBusy] = useState<HireDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showInstructions, setShowInstructions] = useState(false);
@@ -44,9 +49,9 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
 
   const headingId = `hire-${messageId}`;
   const proposer = view.proposer_name || kwantName;
-  const state = hireStateText({ ...view, proposer_name: proposer });
+  const state = hireStateText({ ...view, proposer_name: proposer }, gone);
   const pending = view.status === 'pending';
-  const done = view.status === 'denied' || view.status === 'undone';
+  const done = view.status === 'denied' || view.status === 'undone' || gone;
   const evidence = evidenceText(view.evidence, view.requested_by_person);
   const border = pending ? 'border-violet-500/40' : done ? 'border-zinc-800' : 'border-emerald-500/25';
   const can = (c: string) => pending && view.choices.includes(c);

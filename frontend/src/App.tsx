@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { SpaceTile } from './components/Spaces';
@@ -140,6 +140,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [phoneTab, setPhoneTab] = useState<PhoneTab>('chats');
   const [loaded, setLoaded] = useState(false);
   const [kwants, setKwants] = useState<Kwant[]>([]);
+  // Whether the bot list is as new as the last bot change seen. Until then cards can't tell a
+  // deleted bot from one not fetched yet (a card for a new bot arrives before the list reloads).
+  const [rosterFresh, setRosterFresh] = useState(false);
+  const botIds = useMemo(() => (rosterFresh ? new Set(kwants.map((k) => k.id)) : null), [kwants, rosterFresh]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
@@ -310,6 +314,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         ]);
         if (seq !== rosterSeqRef.current || !Array.isArray(kRes)) return;
         setKwants(kRes);
+        setRosterFresh(true);
         // The space header counts bots too.
         onSpacesChangedRef.current();
         if (Array.isArray(tRes)) {
@@ -481,6 +486,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         }));
 
         setKwants(kRes);
+        if (Array.isArray(kRes)) setRosterFresh(true);
         setChannels(cRes);
         setTeams(normalizedTeams);
 
@@ -612,7 +618,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       try {
         const event = JSON.parse(e.data);
         if (affectsAway(event.type)) refreshAwayCount(800);
-        if (changesBots(event.type, event.data)) refreshRoster();
+        if (changesBots(event.type, event.data)) {
+          setRosterFresh(false);
+          refreshRoster();
+        }
         switch (event.type) {
           case 'turn_queued':
           case 'TurnQueued':
@@ -1469,6 +1478,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     } catch (err) {
       // Already decided elsewhere: pick up the real state so the card stops offering the button.
       if (err instanceof ApiError && err.status === 409) {
+        // "The bot no longer exists": the bot list drops it and the card settles.
+        setRosterFresh(false);
+        refreshRoster();
         botActionsApi
           .list()
           .then((list) => setBotActions((prev) => list.reduce((m, a) => applyBotAction(m, a), prev)))
@@ -1495,7 +1507,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       window.dispatchEvent(new Event('kwnt:hire-updated'));
       playSfx('click');
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) refreshHires();
+      if (err instanceof ApiError && err.status === 409) {
+        refreshHires();
+        setRosterFresh(false);
+        refreshRoster();
+      }
       return decisionError(err, d === 'deny' ? 'say no' : d === 'undo' ? 'undo the hire' : 'hire it');
     }
   };
@@ -1511,6 +1527,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         onDecide={handleBotActionDecision}
         onOpenRoutine={handleOpenRoutine}
         flash={flash}
+        botIds={botIds}
       />
     );
   };
@@ -1525,6 +1542,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         live={hires[meta.hire_id]}
         onDecide={handleHireDecision}
         flash={flash}
+        botIds={botIds}
       />
     );
   };
