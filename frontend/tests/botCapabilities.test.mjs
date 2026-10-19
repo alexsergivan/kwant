@@ -15,7 +15,7 @@ const m = await loadBundled(`
   import { PreviewView } from './src/components/ImportDialog';
   export { builtinView } from './src/components/ModernApprovalCard';
   export { parseHireMeta, hireStateText, hiredBotGone, isTeamHire } from './src/botActions';
-  export { lossLines, parseUsage, deleteBlockedReason } from './src/botDelete';
+  export { lossLines, parseUsage, deleteBlockedReason, leadsNote, botDeleteApi } from './src/botDelete';
   export { toolNote } from './src/imports';
   export { routeReasonText } from './src/routeReason';
   export { routingLine } from './src/spaces';
@@ -191,4 +191,50 @@ test('the routing line and card use the server’s own reason when it sends one'
   assert.equal(m.routeReasonText(named), 'Probe (QA) was named in your message.');
   assert.match(m.routingLine({ kwant_name: 'Probe', basis: 'keywords', matched_terms: [], reason: named.reason }, 'Trading'), /^Probe \(QA\) was named in your message\. Chosen in Trading\.$/);
   assert.match(m.routingLine({ kwant_name: 'Lin', reason: 'Laya picked Lin (Backend) as the best fit', candidate_count: 2 }, 'Work'), /^Laya picked Lin from 2 bots in Work$/, 'older servers keep the old line');
+});
+
+// One row per routing basis, with the sentence src/router/team.rs (and routes.rs for discuss) actually sends.
+const OFFLINE = 'Laya is offline, so this was a keyword match';
+const ROUTES = [
+  { case: 'named', basis: 'keywords', name: 'Probe', terms: ['probe'], reason: 'Probe (QA) was named in your message' },
+  { case: 'keywords', basis: 'keywords', name: 'Gopher', terms: ['strategy', 'go'], reason: `Gopher (Go backend) does this kind of work: your message mentions strategy, go. ${OFFLINE}` },
+  { case: 'lead-unmatched', basis: 'lead', name: 'Ada', terms: [], reason: "No one's role matched this, so it went to the channel lead, Ada (Tech Lead)" },
+  { case: 'lead-multi-role', basis: 'several', name: 'Gopher', terms: ['endpoint', 'page'], reason: `This touches several roles (Gopher and Pixel), so it went to the channel lead, Gopher (Go backend), to answer or hand parts on. ${OFFLINE}` },
+  { case: 'only-bot', basis: 'only', name: 'Lin', terms: [], reason: 'Lin is the only bot here that can answer' },
+  { case: 'laya', basis: 'skills', name: 'Lin', terms: ['migration'], reason: 'Lin (Backend) does this kind of work: your message mentions migration; Laya picked the same bot' },
+  { case: 'laya-titles', basis: 'skills', name: 'Lin', terms: [], reason: "Laya matched this to Lin's role (Backend); no words in your message named a role" },
+  { case: 'discuss', basis: 'discuss', name: 'Ada', terms: [], reason: 'This needs several perspectives — starting a 4-turn team discussion led by Ada' },
+];
+
+for (const r of ROUTES) {
+  test(`routing basis ${r.case}: card and line show the server’s reason`, () => {
+    const sentence = /[.!?]$/.test(r.reason) ? r.reason : `${r.reason}.`;
+    assert.equal(m.routeReasonText({ kwantName: r.name, basis: r.basis, matchedTerms: r.terms, reason: r.reason }), sentence);
+    const line = m.routingLine({ kwant_name: r.name, basis: r.basis, matched_terms: r.terms, reason: r.reason, candidate_count: 3, fallback: r.reason.includes(OFFLINE) }, 'Trading');
+    assert.equal(line, `${sentence} Chosen from 3 bots in Trading.`);
+    assert.doesNotMatch(line, /^Laya picked|Picked by keywords \(Laya is offline\)/, 'no local wording over the server’s');
+  });
+}
+
+test('delete dialog reads Lin’s real usage shape and both 409 codes', async () => {
+  const usage = m.parseUsage({ conversations: 3, messages: 41, memories: 2, skills: 1, routines: 0, leads: 1, running: false });
+  assert.deepEqual(m.lossLines(usage), ['3 conversations (41 messages)', '2 memories', '1 skill', '0 routines']);
+  assert.equal(m.leadsNote(usage), 'It leads 1 team or channel; the next member takes over as lead.');
+  assert.equal(m.leadsNote(m.parseUsage({ leads: 0 })), null);
+  const real = globalThis.fetch;
+  const reply = (status, body) => { globalThis.fetch = async () => new Response(JSON.stringify(body), { status }); };
+  try {
+    reply(409, { error: 'last_bot', message: 'Probe is the only bot in this space; a space needs at least one.' });
+    assert.equal(await m.botDeleteApi.remove('k1', 'Probe'), 'Probe is the only bot in this space; a space needs at least one.');
+    reply(409, { error: 'last_bot' });
+    assert.match(await m.botDeleteApi.remove('k1', 'Probe'), /only bot in this space/);
+    reply(409, { error: 'running' });
+    assert.match(await m.botDeleteApi.remove('k1', 'Probe'), /working right now/);
+    reply(200, { status: 'deleted', deleted: 'k1', name: 'Probe', removed: {}, kept_folder: null });
+    assert.equal(await m.botDeleteApi.remove('k1', 'Probe'), null);
+    reply(404, { error: 'bot not found' });
+    assert.equal(await m.botDeleteApi.remove('k1', 'Probe'), null, 'already gone counts as deleted');
+  } finally {
+    globalThis.fetch = real;
+  }
 });

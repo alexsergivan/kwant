@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Download, Loader2, Trash2 } from 'lucide-react';
-import { BotUsage, botDeleteApi, deleteBlockedReason, lossLines } from '../botDelete';
+import { BotUsage, botDeleteApi, deleteBlockedReason, leadsNote, lossLines } from '../botDelete';
 import { downloadExport, trapFocusTarget } from '../imports';
 
 interface DeleteBotDialogProps {
@@ -114,7 +114,9 @@ export const DeleteBotDialog: React.FC<DeleteBotDialogProps> = ({ kwant, busy, o
             <li key={l}>{l}</li>
           ))}
         </ul>
-        <p className="text-[11px] text-zinc-500">Teams it’s in lose it as a member. Other bots and their chats stay.</p>
+        <p className="text-[11px] text-zinc-500">
+          {leadsNote(usage) ?? 'Teams it’s in lose it as a member.'} Other bots and their chats stay, and so do its team-chat messages and working folder.
+        </p>
 
         <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 space-y-2">
           <p className="text-xs text-zinc-300">Want a copy first? Export saves its instructions, memory, skills and routines to a file you can import later.</p>

@@ -100,8 +100,6 @@ export interface ChatViewProps {
   subtitle: string;
   /** The open space, for "Message #general in Work" and Laya's lines. */
   spaceName?: string;
-  /** #general, where Laya picks who answers. */
-  isGeneral?: boolean;
   /** Phones: back to the list. */
   onBack?: () => void;
   messages: ChatMessage[];
@@ -272,7 +270,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
   title,
   subtitle,
   spaceName,
-  isGeneral,
   onBack,
   messages,
   streamingText,
@@ -684,7 +681,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const isThoughtOpen = !!openThoughts[msg.id];
     const ranOn = isUser ? null : ranOnLabel(msg.meta);
     const account = isUser ? null : ranOnAccount(msg.meta);
-    const routed = isUser || !isGeneral ? null : parseRoutingMeta(msg.meta);
+    // Any auto-routed channel, not only #general: the server attaches `routing` wherever it picked the bot.
+    const routed = isUser ? null : parseRoutingMeta(msg.meta);
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
 
     return (

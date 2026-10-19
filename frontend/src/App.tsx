@@ -2385,7 +2385,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           title={chatTitle}
           subtitle={chatSubtitle}
           spaceName={space.name}
-          isGeneral={isGeneral}
           onBack={isPhone ? () => setPhoneView('list') : undefined}
           messages={viewingHistory ? historyWindow.messages : messages}
           viewingHistory={viewingHistory}
