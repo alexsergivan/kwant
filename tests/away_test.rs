@@ -378,10 +378,11 @@ async fn away_lists_are_capped_at_50_newest_first() {
 }
 
 /// Asks for a tool approval the way claude's permission prompt does, from a live turn in `place`
-/// (`(context_id, thread_id)`), and returns the waiting item's link once it shows up.
-async fn live_approval_link(app: &Router, state: &AppState, kwant: &kwnt::db::models::Kwant, place: (&str, Option<&str>)) -> Value {
+/// (`(context_id, thread_id)`), and returns the waiting item once it shows up.
+async fn live_approval(app: &Router, state: &AppState, kwant: &kwnt::db::models::Kwant, place: (&str, Option<&str>), tool: &str, input: Value) -> Value {
     let turn_id = uuid::Uuid::new_v4().to_string();
-    let (_, token) = mcp_runtime::prepare_turn_with_self(state, kwant, Some(turn_id.clone()), None, None).await.unwrap();
+    let folder = tempdir().unwrap();
+    let (_, token) = mcp_runtime::prepare_turn_with_self(state, kwant, Some(turn_id.clone()), Some(folder.path().to_path_buf()), None).await.unwrap();
     state.turns.set_turn(ActiveTurn {
         turn_id: turn_id.clone(),
         kwant_id: kwant.id.clone(),
@@ -391,7 +392,7 @@ async fn live_approval_link(app: &Router, state: &AppState, kwant: &kwnt::db::mo
         since: Utc::now(),
     });
     let ask = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",
-        "arguments": {"tool_name": "mcp__echo__echo", "input": {"text": "hi"}, "tool_use_id": "tu_1"}}});
+        "arguments": {"tool_name": tool, "input": input, "tool_use_id": "tu_1"}}});
     let req = Request::post(format!("/api/mcp/permission/{token}"))
         .header("content-type", "application/json")
         .body(Body::from(ask.to_string()))
@@ -419,7 +420,7 @@ async fn live_approval_link(app: &Router, state: &AppState, kwant: &kwnt::db::mo
         }
     };
     assert_eq!(item["tool_name"], tool_name);
-    assert_eq!(tool_name, "mcp__echo__echo");
+    assert_eq!(tool_name, tool);
     assert_eq!(item["details"], details);
     assert!(details.is_object() && details != json!({}), "{details}");
 
@@ -429,7 +430,15 @@ async fn live_approval_link(app: &Router, state: &AppState, kwant: &kwnt::db::mo
     assert!(String::from_utf8_lossy(&bytes).contains(r#"\"behavior\":\"allow\""#), "{}", String::from_utf8_lossy(&bytes));
     mcp_runtime::finish_turn(state, &token).await;
     state.turns.end_turn(&turn_id);
-    item["link"].clone()
+    if item["details"]["source"] == "claude_builtin" {
+        let real = folder.path().canonicalize().unwrap();
+        assert_eq!(item["details"]["cwd"], real.display().to_string(), "{item}");
+    }
+    item
+}
+
+async fn live_approval_link(app: &Router, state: &AppState, kwant: &kwnt::db::models::Kwant, place: (&str, Option<&str>)) -> Value {
+    live_approval(app, state, kwant, place, "mcp__echo__echo", json!({"text": "hi"})).await["link"].clone()
 }
 
 #[tokio::test]
@@ -474,4 +483,14 @@ async fn live_approvals_link_to_the_chat_their_turn_runs_in() {
     assert_eq!(link, json!({"thread_id": thread.id, "channel_id": null, "direct_kwant_id": null}));
     let link = live_approval_link(&app, &state, &lead, (&lead.id, None)).await;
     assert_eq!(link, json!({"thread_id": null, "channel_id": null, "direct_kwant_id": lead.id}));
+
+    // A claude built-in Bash request reloads with what the built-in card draws: command, folder, outside_folder
+    let bash = live_approval(&app, &state, &lead, (&chan.id, None), "Bash", json!({"command": "touch x", "description": "Create x"})).await;
+    assert_eq!(bash["tool_name"], "Bash");
+    assert_eq!(bash["details"]["source"], "claude_builtin");
+    assert_eq!(bash["details"]["arguments"]["command"], "touch x");
+    assert!(bash["details"]["cwd"].as_str().is_some_and(|c| !c.is_empty()), "{bash}"); // and equals the turn's folder (checked in live_approval)
+    assert_eq!(bash["details"]["outside_folder"], false);
+    assert_eq!(bash["details"]["kwant_id"], lead.id);
+    assert_eq!(bash["link"], json!({"thread_id": null, "channel_id": chan.id, "direct_kwant_id": null}));
 }
