@@ -106,8 +106,29 @@ export const actionVerb = (action: string) => VERBS[action] ?? 'changed somethin
 /** "Coach set up a routine": the card's heading. */
 export const actionHeading = (botName: string, action: string) => `${botName} ${actionVerb(action)}`;
 
-/** The state line in plain words. Never "Done" once the change was undone or declined. */
-export function actionStateText(m: Pick<BotActionMeta, 'status' | 'action'>): { label: string; tone: 'ok' | 'wait' | 'off' } {
+const BOT_ACTIONS_WITH_UNDO = ['bot_create', 'bot_update', 'bot_hire'];
+
+/**
+ * The bot an applied card made or changed no longer exists (deleted since, here or elsewhere), so
+ * there's nothing left to undo. `botIds` is null until the bot list has loaded: never guess then.
+ */
+export function botGone(m: Pick<BotActionMeta, 'status' | 'action' | 'target_kind' | 'target_id'>, botIds: ReadonlySet<string> | null): boolean {
+  return !!botIds && m.status === 'applied' && m.target_kind === 'bot' && BOT_ACTIONS_WITH_UNDO.includes(m.action) && !!m.target_id && !botIds.has(m.target_id);
+}
+
+/** An accepted hire whose bot has since been deleted. */
+export function hiredBotGone(h: Pick<HireMeta, 'status' | 'hired_kwant_id'>, botIds: ReadonlySet<string> | null): boolean {
+  return !!botIds && (h.status === 'accepted' || h.status === 'auto_accepted') && !!h.hired_kwant_id && !botIds.has(h.hired_kwant_id);
+}
+
+/** The state line in plain words. Never "Done" once the change was undone or declined, or its bot is gone. */
+export function actionStateText(m: Pick<BotActionMeta, 'status' | 'action'> & Partial<Pick<BotActionMeta, 'details'>>, gone = false): { label: string; tone: 'ok' | 'wait' | 'off' } {
+  if (gone) {
+    const name = str(m.details?.name);
+    if (m.action === 'bot_create') return { label: name ? `Created ${name}. It’s since been deleted.` : 'Created. The bot has since been deleted.', tone: 'off' };
+    if (m.action === 'bot_hire') return { label: name ? `Hired ${name}. It’s since been deleted.` : 'Hired. The bot has since been deleted.', tone: 'off' };
+    return { label: name ? `Done. ${name} has since been deleted.` : 'Done. The bot has since been deleted.', tone: 'off' };
+  }
   switch (m.status) {
     case 'pending':
       return { label: 'Needs your OK. Nothing changes until you confirm.', tone: 'wait' };
@@ -316,7 +337,8 @@ export function evidenceText(e: HireEvidence | null, requestedByPerson: boolean)
 /** "auto" or empty means the app picks; anything else is shown as is. */
 export const modelText = (model: string | null) => (!model || model === 'auto' ? 'Picked automatically' : model);
 
-export function hireStateText(h: Pick<HireMeta, 'status' | 'name' | 'team' | 'proposer_name'>): { label: string; tone: 'ok' | 'wait' | 'off' } {
+export function hireStateText(h: Pick<HireMeta, 'status' | 'name' | 'team' | 'proposer_name'>, gone = false): { label: string; tone: 'ok' | 'wait' | 'off' } {
+  if (gone) return { label: `Hired ${h.name}. It’s since been deleted.`, tone: 'off' };
   switch (h.status) {
     case 'accepted':
       return { label: `Hired. ${h.name} ${h.team ? `joined ${h.team.name}` : 'is ready'}.`, tone: 'ok' };
@@ -427,13 +449,14 @@ export const hiresApi = {
 export function changesBots(type: string, data: unknown): boolean {
   const d = data && typeof data === 'object' ? (data as Record<string, unknown>) : null;
   if (!d) return false;
-  if (type === 'bot_action_updated' || type === 'BotActionUpdated') {
-    const card = parseBotActionMeta((d.action as BotAction | undefined)?.card);
-    return !!card && card.target_kind === 'bot' && ['applied', 'undone', 'confirmed'].includes(card.status);
-  }
-  if (type === 'hire_updated' || type === 'HireUpdated') {
-    const card = parseHireMeta((d.hire as Hire | undefined)?.card);
-    return !!card && ['accepted', 'auto_accepted', 'undone'].includes(card.status);
+  const action = (card: BotActionMeta | null) => !!card && card.target_kind === 'bot' && ['applied', 'undone', 'confirmed'].includes(card.status);
+  const hire = (card: HireMeta | null) => !!card && ['accepted', 'auto_accepted', 'undone'].includes(card.status);
+  if (type === 'bot_action_updated' || type === 'BotActionUpdated') return action(parseBotActionMeta((d.action as BotAction | undefined)?.card));
+  if (type === 'hire_updated' || type === 'HireUpdated') return hire(parseHireMeta((d.hire as Hire | undefined)?.card));
+  // A card can land before its update event; until the list is fetched again it can't be judged.
+  if (type === 'message_added' || type === 'MessageAdded') {
+    const meta = (d.message as { meta?: unknown } | undefined)?.meta;
+    return action(parseBotActionMeta(meta)) || hire(parseHireMeta(meta));
   }
   return false;
 }

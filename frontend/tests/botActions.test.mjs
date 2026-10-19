@@ -294,5 +294,40 @@ test('bot and hire events that add or remove a bot ask the sidebar to reload', (
   assert.equal(b.changesBots('hire_updated', { hire: hireEv('pending') }), false);
   assert.equal(b.changesBots('hire_updated', { hire: hireEv('denied') }), false);
   assert.equal(b.changesBots('message_added', { message: {} }), false);
+  // A new bot's card can arrive before its update event: the list is reloaded for it too.
+  assert.equal(b.changesBots('message_added', { message: { meta: routineMeta({ action: 'bot_create', target_kind: 'bot', target_id: 'k2' }) } }), true);
+  assert.equal(b.changesBots('MessageAdded', { message: { meta: hireEv('accepted').card } }), true);
+  assert.equal(b.changesBots('message_added', { message: { meta: routineMeta() } }), false);
   assert.equal(b.changesBots('hire_updated', null), false);
+});
+
+test('a card whose bot has since been deleted settles: no Undo, says so', () => {
+  const created = routineMeta({
+    action: 'bot_create', target_kind: 'bot', target_id: 'k7', summary: 'created bot Chef (Cook), model auto',
+    details: { id: 'k7', name: 'Chef', title: 'Cook', model: 'auto' },
+  });
+  // The bot is still there, or the list hasn't loaded yet: Done with Undo.
+  for (const botIds of [new Set(['k1', 'k7']), null, undefined]) {
+    const html = ui.action(actionProps(created, { botIds }));
+    assert.match(text(html), /Done\./);
+    assert.deepEqual(buttons(html), ['Undo']);
+  }
+  // Deleted since: settled, no Undo, never "Done".
+  const html = ui.action(actionProps(created, { botIds: new Set(['k1']) }));
+  assert.match(text(html), /Created Chef\. It's since been deleted\./);
+  assert.doesNotMatch(text(html), /Done/);
+  assert.deepEqual(buttons(html), []);
+  // An undone or still-pending card keeps its own state; routines are never "gone" bots.
+  const meta = b.parseBotActionMeta(created);
+  assert.equal(b.botGone({ ...meta, status: 'undone' }, new Set()), false);
+  assert.equal(b.botGone(b.parseBotActionMeta(routineMeta()), new Set()), false);
+  assert.equal(b.botGone(meta, new Set()), true);
+  assert.equal(b.botGone(meta, null), false);
+
+  // Same for an accepted hire whose bot was deleted.
+  const hired = hireMeta({ status: 'accepted', choices: [], hired_kwant_id: 'k9', action_id: 'a9', can_undo: true });
+  assert.deepEqual(buttons(ui.hire(hireProps(hired, { botIds: new Set(['k9']) }))), ['Show its instructions', 'Undo']);
+  const gone = ui.hire(hireProps(hired, { botIds: new Set() }));
+  assert.match(text(gone), /Hired Ledger\. It's since been deleted\./);
+  assert.deepEqual(buttons(gone), ['Show its instructions']);
 });

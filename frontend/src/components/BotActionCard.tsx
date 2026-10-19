@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { AlertTriangle, CalendarClock, CheckCircle2, Loader2, MinusCircle, Pause, Pencil, ShieldQuestion, Undo2, Wrench } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { BotActionMeta, actionStateText, actionVerb, botActionView, routineButtons, routineFacts, sentence } from '../botActions';
+import { BotActionMeta, actionStateText, botGone, actionVerb, botActionView, routineButtons, routineFacts, sentence } from '../botActions';
 
 export type BotActionDecision = 'undo' | 'confirm' | 'decline';
 
@@ -17,6 +17,8 @@ export interface BotActionCardProps {
   /** Opens Space settings → Routines at this routine. */
   onOpenRoutine?: (routineId: string, mode: 'edit' | 'pause') => void;
   flash?: boolean;
+  /** Ids of the bots that exist now; null until loaded. A card whose bot is gone settles. */
+  botIds?: ReadonlySet<string> | null;
 }
 
 const btn =
@@ -28,8 +30,11 @@ const quiet = `${btn} text-zinc-200 border border-zinc-700 hover:bg-zinc-800 foc
  * the routine's facts when it's a routine, and the person's buttons (Undo, or Confirm/Decline).
  * Once resolved it says so plainly, so an undone change never still reads "Done".
  */
-export const BotActionCard: React.FC<BotActionCardProps> = ({ meta, messageId, kwantName, kwantId, live, onDecide, onOpenRoutine, flash }) => {
-  const view = botActionView(meta, live);
+export const BotActionCard: React.FC<BotActionCardProps> = ({ meta, messageId, kwantName, kwantId, live, onDecide, onOpenRoutine, flash, botIds = null }) => {
+  const shown = botActionView(meta, live);
+  const gone = botGone(shown, botIds);
+  // Nothing to undo once the bot it made or changed is deleted.
+  const view = gone ? { ...shown, can_undo: false } : shown;
   const [busy, setBusy] = useState<BotActionDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,13 +48,13 @@ export const BotActionCard: React.FC<BotActionCardProps> = ({ meta, messageId, k
   };
 
   const headingId = `bot-action-${messageId}`;
-  const state = actionStateText(view);
+  const state = actionStateText(view, gone);
   const facts = routineFacts(view);
   const { edit, pause } = routineButtons(view);
   const reason = view.status === 'pending' && typeof view.details.reason === 'string' ? view.details.reason : '';
   const isRoutine = view.target_kind === 'routine';
   const resolved = view.status === 'undone' || view.status === 'declined';
-  const border = view.status === 'pending' ? 'border-amber-500/40' : resolved ? 'border-zinc-800' : 'border-emerald-500/25';
+  const border = view.status === 'pending' ? 'border-amber-500/40' : resolved || gone ? 'border-zinc-800' : 'border-emerald-500/25';
   const Icon = view.status === 'pending' ? ShieldQuestion : isRoutine ? CalendarClock : Wrench;
 
   return (
