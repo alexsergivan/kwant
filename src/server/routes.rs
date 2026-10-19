@@ -287,6 +287,74 @@ pub async fn update_kwant(
     kwant_view_json(&state, &id).await.map_err(IntoResponse::into_response)
 }
 
+/// `GET /api/kwants/:id/usage`: what deleting the bot would remove, for the confirm dialog.
+pub async fn kwant_usage(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.db.get_kwant(&id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return api_error(StatusCode::NOT_FOUND, "bot not found"),
+        Err(e) => return db_error(&e, ""),
+    }
+    match state.db.kwant_usage(&id).await {
+        Ok(mut v) => {
+            v["running"] = json!(kwant_is_busy(&state, &id).await);
+            Json(v).into_response()
+        }
+        Err(e) => db_error(&e, ""),
+    }
+}
+
+/// A turn of the bot is running or waiting, or delegated work for or from it is.
+async fn kwant_is_busy(state: &AppState, id: &str) -> bool {
+    if state.turns.active_turns().iter().any(|t| t.kwant_id == id) {
+        return true;
+    }
+    state.db.kwant_has_live_delegations(id).await.unwrap_or(true)
+}
+
+/// `DELETE /api/kwants/:id`: the person removes a bot with its conversations, memories,
+/// skills, routines and memberships. 409 `{error: "running"}` while it works, and
+/// `{error: "last_bot"}` for a space's only bot. Its working folder is kept on disk.
+pub async fn delete_kwant(State(state): State<AppState>, headers: axum::http::HeaderMap, Path(id): Path<String>) -> Response {
+    if let Err(r) = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person deletes a bot").await {
+        return r;
+    }
+    let bot = match state.db.get_kwant(&id).await {
+        Ok(Some(b)) => b,
+        Ok(None) => return api_error(StatusCode::NOT_FOUND, "bot not found"),
+        Err(e) => return db_error(&e, ""),
+    };
+    let conflict = |error: &str, message: String| (StatusCode::CONFLICT, Json(json!({"error": error, "message": message}))).into_response();
+    if kwant_is_busy(&state, &id).await {
+        return conflict("running", format!("{} is working right now. Stop it or wait for it to finish, then delete it.", bot.name));
+    }
+    let space = match state.db.space_of_kwant(&id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return api_error(StatusCode::NOT_FOUND, "bot not found"),
+        Err(e) => return db_error(&e, ""),
+    };
+    let others: Vec<_> = state.db.list_kwants(&space).await.unwrap_or_default().into_iter().filter(|k| k.id != id).collect();
+    let Some(fallback) = others.first() else {
+        return conflict("last_bot", format!("{} is the only bot in this space; a space needs at least one.", bot.name));
+    };
+    let usage = state.db.kwant_usage(&id).await.unwrap_or(serde_json::Value::Null);
+    match state.db.delete_kwant_and_history(&id, &fallback.id).await {
+        Ok(true) => {}
+        Ok(false) => return api_error(StatusCode::NOT_FOUND, "bot not found"),
+        Err(e) => return db_error(&e, ""),
+    }
+    state.broker.forget_kwant(&id).await;
+    state.scheduler_wake.notify_one();
+    tracing::info!(kwant_id = %id, name = %bot.name, "the person deleted a bot");
+    let folder = crate::db::spaces::space_data_dir(&state.config.data_dir, &space).join("bot-workspaces").join(&id);
+    Json(json!({
+        "deleted": id,
+        "name": bot.name,
+        "removed": usage,
+        "kept_folder": folder.exists().then(|| folder.display().to_string()),
+    }))
+    .into_response()
+}
+
 pub async fn list_channels(State(state): State<AppState>, Scope(space): Scope) -> Result<Json<Vec<Channel>>, StatusCode> {
     state
         .db

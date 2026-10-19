@@ -74,6 +74,11 @@ impl PermissionBroker {
         self.always_allowed.lock().await.insert((kwant_id.to_string(), tool_name.to_string()));
     }
 
+    /// Forgets a deleted bot's "always allow" answers.
+    pub async fn forget_kwant(&self, kwant_id: &str) {
+        self.always_allowed.lock().await.retain(|(k, _)| k != kwant_id);
+    }
+
     pub async fn is_allowed_for_session(&self, kwant_id: &str, tool_name: &str) -> bool {
         self.always_allowed.lock().await.contains(&(kwant_id.to_string(), tool_name.to_string()))
     }

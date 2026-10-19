@@ -294,6 +294,86 @@ impl Database {
         Ok(done.rows_affected() == 1)
     }
 
+    /// Delegated work for or from the bot is queued or running.
+    pub async fn kwant_has_live_delegations(&self, id: &str) -> Result<bool, DbError> {
+        let (n,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM delegations WHERE (lead_kwant_id = ?1 OR specialist_kwant_id = ?1) AND status IN ('queued', 'running')",
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n > 0)
+    }
+
+    /// What deleting a bot would remove: counts by kind (for the person's confirm dialog).
+    pub async fn kwant_usage(&self, id: &str) -> Result<serde_json::Value, DbError> {
+        let count = |sql: &'static str| async move {
+            let (n,): (i64,) = sqlx::query_as(sql).bind(id).fetch_one(&self.pool).await?;
+            Ok::<i64, DbError>(n)
+        };
+        Ok(serde_json::json!({
+            "conversations": count("SELECT (SELECT COUNT(*) FROM threads WHERE kwant_id = ?1) + \
+                (SELECT COUNT(*) > 0 FROM messages WHERE direct_kwant_id = ?1)").await?,
+            "messages": count("SELECT COUNT(*) FROM messages WHERE direct_kwant_id = ?1 OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)").await?,
+            "memories": count("SELECT COUNT(*) FROM kwant_memories WHERE kwant_id = ?1").await?,
+            "skills": count("SELECT COUNT(*) FROM skills WHERE kwant_id = ?1").await?,
+            "routines": count("SELECT COUNT(*) FROM routines WHERE kwant_id = ?1").await?,
+            "leads": count("SELECT (SELECT COUNT(*) FROM channels WHERE lead_kwant_id = ?1) + (SELECT COUNT(*) FROM teams WHERE lead_kwant_id = ?1)").await?,
+        }))
+    }
+
+    /// Deletes a bot the person chose to remove, with its direct chat, threads, memories,
+    /// skills, routines, questions, approvals, suggestions, proposals and memberships, in one
+    /// transaction. Channels and teams it led get another lead (`new_lead`, which must be in
+    /// the same space). What it wrote in shared channels stays, as the room's history; so does
+    /// the space's log of bot actions.
+    pub async fn delete_kwant_and_history(&self, id: &str, new_lead: &str) -> Result<bool, DbError> {
+        let mut tx = self.pool.begin().await?;
+        for sql in [
+            "DELETE FROM attachments WHERE direct_kwant_id = ?1 OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)",
+            "DELETE FROM messages WHERE direct_kwant_id = ?1 OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)",
+            "DELETE FROM delegations WHERE lead_kwant_id = ?1 OR specialist_kwant_id = ?1 \
+                OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)",
+            "DELETE FROM threads WHERE kwant_id = ?1",
+            "DELETE FROM questions WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
+            "DELETE FROM approvals WHERE kwant_id = ?1",
+            "DELETE FROM skills WHERE kwant_id = ?1",
+            "DELETE FROM mcp_suggestions WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
+            "DELETE FROM hire_proposals WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
+            "DELETE FROM bot_actions WHERE direct_kwant_id = ?1",
+            "DELETE FROM routine_runs WHERE routine_id IN (SELECT id FROM routines WHERE kwant_id = ?1)",
+            "DELETE FROM routines WHERE kwant_id = ?1",
+            "DELETE FROM kwant_memories WHERE kwant_id = ?1",
+            "DELETE FROM kwant_mcp_disabled WHERE kwant_id = ?1",
+            "DELETE FROM kwant_mcp_servers WHERE kwant_id = ?1",
+        ] {
+            sqlx::query(sql).bind(id).execute(&mut *tx).await?;
+        }
+        // Memberships; a channel or team it led goes to its next member, else `new_lead`
+        for table in ["channels", "teams"] {
+            let rows: Vec<(String, String, String)> = sqlx::query_as(&format!(
+                "SELECT id, lead_kwant_id, member_kwants FROM {table} WHERE lead_kwant_id = ?1 OR member_kwants LIKE '%' || ?1 || '%'"
+            ))
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+            for (row_id, lead, members) in rows {
+                let kept: Vec<String> =
+                    serde_json::from_str::<Vec<String>>(&members).unwrap_or_default().into_iter().filter(|m| m != id).collect();
+                let lead = if lead == id { kept.first().cloned().unwrap_or_else(|| new_lead.to_string()) } else { lead };
+                sqlx::query(&format!("UPDATE {table} SET member_kwants = ?, lead_kwant_id = ? WHERE id = ?"))
+                    .bind(serde_json::to_string(&kept)?)
+                    .bind(&lead)
+                    .bind(&row_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        let done = sqlx::query("DELETE FROM kwants WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(done.rows_affected() == 1)
+    }
+
     /// Removes a channel nobody has written in yet; `false` when it has messages or is #general.
     pub async fn delete_empty_channel(&self, id: &str) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
