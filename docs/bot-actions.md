@@ -146,6 +146,7 @@ The bot then carries on with the request itself. A proposal creates nothing on i
     - a similar proposal already pending;
     - a role similar to one the person denied in this space (unless `requested_by_person`, which still always asks).
   - Roles are compared by their words, ignoring case, plurals and filler such as "bot" or "assistant". They are similar when more than half the words match.
+- **A team in one proposal.** `propose_hire` also takes `members: [{name, role, instructions, model?, tools?}]` (the other bots; at most 6 bots in all) and `new_team: {name, lead?}` (create a team, with its `team-<name>` channel, instead of joining `team`; `lead` names one of the bots and defaults to the first). Every member is checked like the first bot, and any failure refuses the whole proposal. A team proposal always asks the person, even when the policy is `auto`. Its card offers Deny and Approve all (`/accept {}`). Accepting creates every bot, then the team; if any step fails, the bots already made are removed and the proposal goes back to pending. Undo removes every bot, the new team and its channel, as long as none of them has history yet.
 - `hire_status {}` is read-only. It returns the policy, the automatic hires left, recent proposals and the denials.
 
 ### Decisions (person only; a turn token or non-API bearer gets 403)
@@ -176,8 +177,12 @@ A message from the proposing bot carries `meta`:
 {kind: "hire_proposal", hire_id, kwant_id, proposer_name, name, role, instructions, model,
  tools: [{id, name}], team: {id, name} | null, reason, evidence, requested_by_person,
  status, auto, choices: ["deny","accept_once","always_accept"] (pending only, else []),
- hired_kwant_id, action_id, can_undo, policy, note, created_at, resolved_at}
+ hired_kwant_id, action_id, can_undo, policy, note, created_at, resolved_at,
+ members: [{name, role, model, tools: [{id, name}], instructions}]  (always; first = the top-level bot),
+ new_team: {name, lead} | null, hired_kwant_ids: [ids in members order]}
 ```
+
+For a team proposal, `choices` is `["deny","accept_once"]`.
 
 - Buttons:
   - **Deny** → `/deny`.

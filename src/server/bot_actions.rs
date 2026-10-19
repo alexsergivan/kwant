@@ -1720,8 +1720,15 @@ async fn undo_action(state: &AppState, a: &BotAction) -> Result<Option<String>, 
         }
         "bot_create" => delete_unused_bot(state, &target).await?,
         "bot_hire" => {
-            delete_unused_bot(state, &target).await?;
-            if let Some(hire) = a.after_json()["hire_id"].as_str() {
+            let after = a.after_json();
+            let ids: Vec<String> = serde_json::from_value(after["hired_kwant_ids"].clone()).unwrap_or_default();
+            if ids.len() > 1 || after["made_team"].is_object() {
+                let team = Some(&after["made_team"]).filter(|t| t.is_object());
+                super::hires::remove_made(state, &ids, team).await.map_err(|e| error(StatusCode::CONFLICT, e))?;
+            } else {
+                delete_unused_bot(state, &target).await?;
+            }
+            if let Some(hire) = after["hire_id"].as_str() {
                 super::hires::undone(state, hire).await;
             }
         }

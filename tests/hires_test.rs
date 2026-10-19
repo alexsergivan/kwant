@@ -441,3 +441,90 @@ async fn the_policy_and_decisions_appear_in_the_next_turn() {
     let ctx = continuity::prompt_block(&e.state, &other, None, None, true).await;
     assert!(ctx.contains("ask the person each time") && !ctx.contains("Chef") && !ctx.contains("Taxman"), "{ctx}");
 }
+
+fn team_of_three(team: &str) -> Value {
+    let mut v = specialist("Quant", "Trading lead");
+    v["requested_by_person"] = json!(true);
+    v["members"] = json!([
+        {"name": "Gopher", "role": "Go strategy developer", "instructions": "You write Go trading strategies with tests."},
+        {"name": "Tester", "role": "Backtest reviewer", "instructions": "You check backtests.", "model": "claude"},
+    ]);
+    v["new_team"] = json!({"name": team, "lead": "Quant"});
+    v
+}
+
+#[tokio::test]
+async fn a_team_is_one_proposal_on_one_card() {
+    let e = setup().await;
+    let space = SpaceId::default_space();
+    let before = e.state.db.list_kwants(&space).await.unwrap().len();
+
+    // Bad teams are refused whole: duplicate names, a lead who isn't in it, too many bots
+    let token = turn(&e, "t-team0").await;
+    let mut dup = team_of_three("trading");
+    dup["members"][1]["name"] = json!("gopher");
+    assert!(refused(&e, &token, dup).await.contains("two bots"));
+    let mut lead = team_of_three("trading");
+    lead["new_team"]["lead"] = json!("Nobody");
+    assert!(refused(&e, &token, lead).await.contains("must be one of the bots"));
+    let mut big = team_of_three("trading");
+    big["members"] = json!((0..6).map(|i| json!({"name": format!("B{i}"), "role": format!("Role{i} x{i}"), "instructions": "x"})).collect::<Vec<_>>());
+    assert!(refused(&e, &token, big).await.contains("at most 6"));
+    assert_eq!(e.state.db.list_kwants(&space).await.unwrap().len(), before, "nothing created");
+
+    // One proposal holds the whole team; nothing exists until the person approves
+    let text = ok(&e, &token, team_of_three("trading")).await;
+    assert!(text.contains("a team of 3") && text.contains("Nothing is created"), "{text}");
+    let h = latest(&e).await;
+    let id = h["id"].as_str().unwrap().to_string();
+    let (m, card) = card_of(&e, &h).await;
+    assert!(m.text.contains("a team of 3 (new team trading)") && m.text.contains("Approve all"), "{}", m.text);
+    let names: Vec<&str> = card["members"].as_array().unwrap().iter().map(|m| m["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Quant", "Gopher", "Tester"], "first is the top-level bot");
+    assert_eq!(card["members"][2]["model"], "claude");
+    assert_eq!(card["new_team"], json!({"name": "trading", "lead": "Quant"}));
+    assert_eq!(card["choices"], json!(["deny", "accept_once"]));
+    assert_eq!(card["hired_kwant_ids"], json!([]));
+    assert!(bot_named(&e, "spc_default", "Gopher").await.is_none());
+
+    // Approve all: every bot, the team with its lead, and its channel
+    let (status, v) = call(&e.app, "POST", &format!("/api/hires/{id}/accept"), None, Some(json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let mut ids = Vec::new();
+    for n in ["Quant", "Gopher", "Tester"] {
+        ids.push(bot_named(&e, "spc_default", n).await.unwrap_or_else(|| panic!("{n} was created")).id);
+    }
+    assert_eq!(v["card"]["hired_kwant_ids"], json!(ids));
+    let team = e.state.db.get_team_by_name(&space, "trading").await.unwrap().expect("team created");
+    assert_eq!(team.lead_kwant_id, ids[0]);
+    assert_eq!(serde_json::from_str::<Vec<String>>(&team.member_kwants).unwrap(), ids);
+    let channel = e.state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "team-trading").expect("its channel");
+    assert_eq!(channel.lead_kwant_id, ids[0]);
+    let (m, card) = card_of(&e, &h).await;
+    assert!(m.text.starts_with("Hired a team of 3"), "{}", m.text);
+    assert_eq!(card["can_undo"], true);
+
+    // Undo removes the whole team: bots, team and channel
+    let action = card["action_id"].as_str().unwrap();
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{action}/undo"), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    for n in ["Quant", "Gopher", "Tester"] {
+        assert!(bot_named(&e, "spc_default", n).await.is_none(), "{n} removed");
+    }
+    assert!(e.state.db.get_team_by_name(&space, "trading").await.unwrap().is_none());
+    assert!(!e.state.db.list_channels(&space).await.unwrap().iter().any(|c| c.name == "team-trading"));
+    assert_eq!(card_of(&e, &h).await.1["status"], "undone");
+
+    // Even with "always accept", a team asks on its card
+    e.state.db.set_hire_policy(&space, "auto", false).await.unwrap();
+    let token = turn(&e, "t-team1").await;
+    ok(&e, &token, team_of_three("desk")).await;
+    let h = latest(&e).await;
+    assert_eq!(h["status"], "pending");
+    assert!(card_of(&e, &h).await.1["note"].as_str().unwrap_or("").contains("always asks"));
+    // Deny: nothing created
+    let (status, _) = call(&e.app, "POST", &format!("/api/hires/{}/deny", h["id"].as_str().unwrap()), None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(bot_named(&e, "spc_default", "Gopher").await.is_none());
+    assert_eq!(e.state.db.list_kwants(&space).await.unwrap().len(), before);
+}

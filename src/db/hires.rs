@@ -56,6 +56,12 @@ pub struct Hire {
     pub message_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub resolved_at: Option<DateTime<Utc>>,
+    /// JSON list of the other bots in a team proposal: `{name, role, instructions, model, tools}`.
+    pub members: Option<String>,
+    /// JSON `{name, lead?}`: the team a team proposal creates, `lead` naming one of its bots.
+    pub new_team: Option<String>,
+    /// JSON list of every bot an accepted team proposal made, in `members` order.
+    pub hired_kwant_ids: Option<String>,
 }
 
 fn as_json<S: serde::Serializer>(raw: &str, s: S) -> Result<S::Ok, S::Error> {
@@ -69,6 +75,22 @@ impl Hire {
     }
     pub fn evidence_json(&self) -> serde_json::Value {
         serde_json::from_str(&self.evidence).unwrap_or(serde_json::Value::Null)
+    }
+    /// The other bots of a team proposal (empty for a single hire).
+    pub fn members_json(&self) -> Vec<serde_json::Value> {
+        self.members.as_deref().and_then(|m| serde_json::from_str(m).ok()).unwrap_or_default()
+    }
+    pub fn new_team_json(&self) -> Option<serde_json::Value> {
+        self.new_team.as_deref().and_then(|t| serde_json::from_str(t).ok()).filter(|v: &serde_json::Value| v.is_object())
+    }
+    /// Every bot it made: the team's ids, or the single hire's.
+    pub fn hired_ids(&self) -> Vec<String> {
+        let ids: Vec<String> = self.hired_kwant_ids.as_deref().and_then(|m| serde_json::from_str(m).ok()).unwrap_or_default();
+        if ids.is_empty() {
+            self.hired_kwant_id.iter().cloned().collect()
+        } else {
+            ids
+        }
     }
 }
 
@@ -89,6 +111,9 @@ pub struct NewHire {
     pub reason: String,
     pub evidence: serde_json::Value,
     pub requested_by_person: bool,
+    /// The other bots of a team proposal.
+    pub members: Vec<serde_json::Value>,
+    pub new_team: Option<serde_json::Value>,
 }
 
 /// The space's hire policy: `ask` (default) or `auto`; denials before `denials_cleared_at` no
@@ -171,6 +196,10 @@ impl Database {
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        // Team proposals (added later; "duplicate column" on databases that have them)
+        for col in ["members TEXT", "new_team TEXT", "hired_kwant_ids TEXT"] {
+            let _ = sqlx::query(&format!("ALTER TABLE hire_proposals ADD COLUMN {col}")).execute(&self.pool).await;
+        }
         Ok(())
     }
 
@@ -251,8 +280,8 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         sqlx::query(
             "INSERT INTO hire_proposals (id, space_id, kwant_id, turn_id, channel_id, direct_kwant_id, thread_id, name, role, role_key,
-                 instructions, model, tools, team_id, reason, evidence, requested_by_person, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                 instructions, model, tools, team_id, reason, evidence, requested_by_person, status, created_at, members, new_team)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
         )
         .bind(&id)
         .bind(&new.space_id)
@@ -272,6 +301,8 @@ impl Database {
         .bind(new.evidence.to_string())
         .bind(new.requested_by_person)
         .bind(Utc::now())
+        .bind((!new.members.is_empty()).then(|| serde_json::Value::from(new.members.clone()).to_string()))
+        .bind(new.new_team.as_ref().map(|t| t.to_string()))
         .execute(&mut *tx)
         .await?;
         let hire = sqlx::query_as::<_, Hire>(GET).bind(&id).fetch_one(&mut *tx).await?;
@@ -302,6 +333,16 @@ impl Database {
         sqlx::query("UPDATE hire_proposals SET hired_kwant_id = ?, action_id = ? WHERE id = ?")
             .bind(kwant_id)
             .bind(action_id)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Every bot an accepted team proposal made, in `members` order.
+    pub async fn set_hired_kwant_ids(&self, id: &str, ids: &[String]) -> Result<(), DbError> {
+        sqlx::query("UPDATE hire_proposals SET hired_kwant_ids = ? WHERE id = ?")
+            .bind(serde_json::to_string(ids)?)
             .bind(id)
             .execute(&self.pool)
             .await?;

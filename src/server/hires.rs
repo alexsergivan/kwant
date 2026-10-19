@@ -37,6 +37,8 @@ fn fail(msg: impl Into<String>) -> ToolResult {
 const NEEDS: [&str; 4] = ["instructions", "tools", "schedule", "model"];
 /// Earlier similar requests from the person that count as "this keeps coming up".
 const MIN_SIMILAR_REQUESTS: usize = 3;
+/// Bots one team proposal may hold.
+pub const MAX_TEAM_SIZE: usize = 6;
 
 pub fn handles(name: &str) -> bool {
     matches!(name, "propose_hire" | "hire_status")
@@ -50,7 +52,9 @@ pub fn tools() -> Vec<Value> {
                 Only after you tried the request yourself (and mcp_suggest for missing tools), and only when (a) a specialist with \
                 its own instructions, tools, schedule or model would clearly do this kind of work better, or (b) similar requests \
                 have come up at least 3 times in this space. It creates nothing by itself; carry on with the request yourself. \
-                At most one proposal per turn. A kind of bot the person turned down is refused unless they asked for one.",
+                One proposal per turn, which may hold a whole team: when the person asks for a team, put the first bot in \
+                name/role/instructions and the others in members (up to 6 bots in all), with new_team to create their team \
+                (and its channel) on the same card. A kind of bot the person turned down is refused unless they asked for one.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -73,6 +77,27 @@ pub fn tools() -> Vec<Value> {
                         "required": ["basis"],
                     },
                     "requested_by_person": {"type": "boolean", "description": "true only when the person asked for this kind of bot in this conversation"},
+                    "members": {
+                        "type": "array",
+                        "description": "For a team: the other bots, each like the first one. The person approves them all on one card.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "role": {"type": "string"},
+                                "instructions": {"type": "string"},
+                                "model": {"type": "string"},
+                                "tools": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["name", "role", "instructions"],
+                        },
+                    },
+                    "new_team": {
+                        "type": "object",
+                        "description": "Create a new team (with its own channel) for these bots instead of joining one; lead names the bot that leads it (default: the first).",
+                        "properties": {"name": {"type": "string"}, "lead": {"type": "string"}},
+                        "required": ["name"],
+                    },
                 },
                 "required": ["name", "role", "instructions", "reason", "evidence"],
             },
@@ -166,6 +191,61 @@ async fn check_evidence(state: &AppState, space: &SpaceId, raw: &Value) -> Resul
     }
 }
 
+/// Tools: only servers already installed in the space, as their ids.
+async fn resolve_tools(state: &AppState, space: &SpaceId, raw: Option<&Value>) -> Result<Vec<String>, String> {
+    let mut tools = Vec::new();
+    match raw {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(list)) => {
+            let servers = state.db.list_mcp_servers(space).await.unwrap_or_default();
+            for item in list {
+                let r = item.as_str().unwrap_or("").trim();
+                match servers.iter().find(|s| s.id == r || s.name.eq_ignore_ascii_case(r)) {
+                    Some(s) => tools.push(s.id.clone()),
+                    None => {
+                        return Err(format!(
+                            "Nothing was proposed: no tool server \"{r}\" is installed in your space. Suggest it with mcp_suggest; \
+                            the person installs it."
+                        ))
+                    }
+                }
+            }
+        }
+        Some(_) => return Err("Nothing was proposed: tools must be a list of installed tool servers' names or ids.".into()),
+    }
+    Ok(tools)
+}
+
+/// Why a bot of this name and role can't be proposed in the space, if it can't.
+fn clash(name: &str, key: &str, bots: &[crate::db::models::Kwant], denials: &[Hire], pending: &[Hire], requested: bool) -> Option<String> {
+    if let Some(b) = bots.iter().find(|b| b.name.eq_ignore_ascii_case(name)) {
+        return Some(format!("There is already a bot called {} in your space; ask it, or pick another name.", b.name));
+    }
+    if let Some(b) = bots.iter().find(|b| similar_roles(&role_key(&b.title), key)) {
+        return Some(format!(
+            "{} ({}) already does this kind of work in your space. Hand the work to it, or update it with bot_update, instead of \
+            hiring.",
+            b.name, b.title
+        ));
+    }
+    if let (Some(d), false) = (denials.iter().find(|d| d.name.eq_ignore_ascii_case(name) || similar_roles(&d.role_key, key)), requested) {
+        return Some(format!(
+            "The person turned down hiring {} ({}) in this space on {}. Don't propose this kind of bot again unless they ask for \
+            one; carry on with the request yourself.",
+            d.name,
+            d.role,
+            d.resolved_at.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_default()
+        ));
+    }
+    if let Some(p) = pending.iter().find(|p| p.name.eq_ignore_ascii_case(name) || similar_roles(&p.role_key, key)) {
+        return Some(format!(
+            "A proposal to hire {} ({}) is already waiting for the person. Don't propose it again; carry on with the request.",
+            p.name, p.role
+        ));
+    }
+    None
+}
+
 async fn propose(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Value) -> ToolResult {
     if let Err(e) = super::spaces::ensure_active(state, space).await {
         let _ = e;
@@ -206,27 +286,10 @@ async fn propose(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Va
     if let Err(e) = super::bot_actions::check_model(&model) {
         return fail(format!("Nothing was proposed. {e}"));
     }
-    // Tools: only servers already installed in the space
-    let mut tools = Vec::new();
-    match args.get("tools") {
-        None | Some(Value::Null) => {}
-        Some(Value::Array(list)) => {
-            let servers = state.db.list_mcp_servers(space).await.unwrap_or_default();
-            for item in list {
-                let r = item.as_str().unwrap_or("").trim();
-                match servers.iter().find(|s| s.id == r || s.name.eq_ignore_ascii_case(r)) {
-                    Some(s) => tools.push(s.id.clone()),
-                    None => {
-                        return fail(format!(
-                            "Nothing was proposed: no tool server \"{r}\" is installed in your space. Suggest it with mcp_suggest; \
-                            the person installs it."
-                        ))
-                    }
-                }
-            }
-        }
-        Some(_) => return fail("Nothing was proposed: tools must be a list of installed tool servers' names or ids."),
-    }
+    let tools = match resolve_tools(state, space, args.get("tools")).await {
+        Ok(t) => t,
+        Err(e) => return fail(e),
+    };
     // Team: the one named, or the proposer's
     let team = match arg(args, "team") {
         Some(t) => {
@@ -246,36 +309,76 @@ async fn propose(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Va
     // Bot first: an existing bot that already does this
     let key = role_key(role);
     let bots = state.db.list_kwants(space).await.unwrap_or_default();
-    if let Some(b) = bots.iter().find(|b| b.name.eq_ignore_ascii_case(name)) {
-        return fail(format!("There is already a bot called {} in your space; ask it, or pick another name.", b.name));
-    }
-    if let Some(b) = bots.iter().find(|b| similar_roles(&role_key(&b.title), &key)) {
-        return fail(format!(
-            "{} ({}) already does this kind of work in your space. Hand the work to it, or update it with bot_update, instead of \
-            hiring.",
-            b.name, b.title
-        ));
-    }
     let requested = args["requested_by_person"].as_bool() == Some(true);
     // A kind of bot the person turned down stays turned down in this space
     let denials = state.db.active_denials(space).await.unwrap_or_default();
-    let denied = denials.iter().find(|d| d.name.eq_ignore_ascii_case(name) || similar_roles(&d.role_key, &key));
-    if let (Some(d), false) = (denied, requested) {
-        return fail(format!(
-            "The person turned down hiring {} ({}) in this space on {}. Don't propose this kind of bot again unless they ask for \
-            one; carry on with the request yourself.",
-            d.name,
-            d.role,
-            d.resolved_at.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_default()
-        ));
-    }
     let pending = state.db.list_hires(space, Some("pending")).await.unwrap_or_default();
-    if let Some(p) = pending.iter().find(|p| p.name.eq_ignore_ascii_case(name) || similar_roles(&p.role_key, &key)) {
-        return fail(format!(
-            "A proposal to hire {} ({}) is already waiting for the person. Don't propose it again; carry on with the request.",
-            p.name, p.role
-        ));
+    if let Some(why) = clash(name, &key, &bots, &denials, &pending, requested) {
+        return fail(why);
     }
+    let mut denied = denials.iter().find(|d| d.name.eq_ignore_ascii_case(name) || similar_roles(&d.role_key, &key));
+
+    // A team: the other bots, checked like the first, and the team they form
+    let mut members = Vec::new();
+    let mut names = vec![name.to_lowercase()];
+    match args.get("members") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(list)) => {
+            if list.len() + 1 > MAX_TEAM_SIZE {
+                return fail(format!("Nothing was proposed: a team proposal holds at most {MAX_TEAM_SIZE} bots."));
+            }
+            for m in list {
+                let (Some(mname), Some(mrole), Some(minstr)) = (arg(m, "name"), arg(m, "role"), arg(m, "instructions")) else {
+                    return fail("Nothing was proposed: every member needs a name, role and instructions.");
+                };
+                let mname = mname.trim_start_matches('@');
+                if mname.chars().any(char::is_whitespace) {
+                    return fail(format!("Nothing was proposed: member name \"{mname}\" must be one word."));
+                }
+                if names.contains(&mname.to_lowercase()) {
+                    return fail(format!("Nothing was proposed: two bots in the proposal are called {mname}; give each its own name."));
+                }
+                let mkey = role_key(mrole);
+                if let Some(why) = clash(mname, &mkey, &bots, &denials, &pending, requested) {
+                    return fail(format!("Nothing was proposed. {why}"));
+                }
+                denied = denied.or(denials.iter().find(|d| d.name.eq_ignore_ascii_case(mname) || similar_roles(&d.role_key, &mkey)));
+                let mmodel = arg(m, "model").unwrap_or("auto").to_string();
+                if let Err(e) = super::bot_actions::check_model(&mmodel) {
+                    return fail(format!("Nothing was proposed ({mname}). {e}"));
+                }
+                let mtools = match resolve_tools(state, space, m.get("tools")).await {
+                    Ok(t) => t,
+                    Err(e) => return fail(e),
+                };
+                names.push(mname.to_lowercase());
+                members.push(json!({"name": mname, "role": mrole, "instructions": minstr, "model": mmodel, "tools": mtools}));
+            }
+        }
+        Some(_) => return fail("Nothing was proposed: members must be a list of bots, each with name, role and instructions."),
+    }
+    let new_team = match args.get("new_team") {
+        None | Some(Value::Null) => None,
+        Some(t) => {
+            let Some(tname) = arg(t, "name") else {
+                return fail("Nothing was proposed: new_team needs a name.");
+            };
+            if arg(args, "team").is_some() {
+                return fail("Nothing was proposed: give either team (join one) or new_team (create one), not both.");
+            }
+            let teams = state.db.list_teams(space).await.unwrap_or_default();
+            if let Some(x) = teams.iter().find(|x| x.name.eq_ignore_ascii_case(tname)) {
+                return fail(format!("Nothing was proposed: there is already a team called {} in your space; join it with team.", x.name));
+            }
+            let lead = match arg(t, "lead").map(|l| l.trim_start_matches('@')) {
+                Some(l) if names.contains(&l.to_lowercase()) => Some(l.to_string()),
+                Some(l) => return fail(format!("Nothing was proposed: the lead {l} must be one of the bots in the proposal.")),
+                None => None,
+            };
+            Some(json!({"name": tname, "lead": lead}))
+        }
+    };
+    let team = if new_team.is_some() { None } else { team };
 
     let origin = scope.origin.as_ref();
     let new = NewHire {
@@ -294,7 +397,10 @@ async fn propose(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Va
         reason: reason.into(),
         evidence,
         requested_by_person: requested,
+        members,
+        new_team,
     };
+    let is_team = !new.members.is_empty() || new.new_team.is_some();
     let has_chat = origin.is_some_and(|o| o.channel_id.is_some() || o.direct_kwant_id.is_some() || o.thread_id.is_some());
     let sender = scope.kwant_name.clone();
     let mut card_meta = Value::Null;
@@ -311,7 +417,7 @@ async fn propose(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Va
                     direct_kwant_id: h.direct_kwant_id.clone().filter(|_| h.thread_id.is_none()),
                     sender_role: "kwant".into(),
                     sender_id: sender,
-                    text: format!("Wants to hire {} ({}). Waiting for your choice: Deny, Accept once or Always accept.", h.name, h.role),
+                    text: card_text(h, ""),
                     reasoning_content: None,
                     tool_calls: None,
                     tokens_used: 0,
@@ -338,7 +444,12 @@ async fn propose(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Va
     // The space's policy may decide at once
     let policy = state.db.hire_policy(space).await.map(|p| p.policy).unwrap_or_else(|_| "ask".into());
     let mut note = None;
-    if policy == "auto" && denied.is_none() {
+    if is_team {
+        // Several bots at once always ask, on one card
+        if policy == "auto" {
+            note = Some("A team proposal always asks you, even with \"always accept\".".to_string());
+        }
+    } else if policy == "auto" && denied.is_none() {
         let used = state.db.auto_hires_today(space).await.unwrap_or(i64::MAX);
         if used < AUTO_HIRES_PER_DAY {
             return match accept(state, &hire, true).await {
@@ -360,12 +471,15 @@ async fn propose(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Va
     } else if denied.is_some() {
         note = Some("You turned this kind of bot down before; the bot says you asked for one now.".to_string());
     }
+    if is_team && denied.is_some() {
+        note = Some("You turned one of these kinds of bot down before; the bot says you asked for them now.".to_string());
+    }
     refresh(state, &hire.id, note.as_deref()).await;
     (
         format!(
-            "Proposed hiring {} ({}). Nothing is created until the person chooses on the card (Deny, Accept once or Always accept). \
+            "Proposed hiring {}. Nothing is created until the person chooses on the card (Deny, Accept once or Always accept). \
             Tell them in one sentence, then carry on with the request yourself.",
-            hire.name, hire.role
+            who(&hire)
         ),
         false,
     )
@@ -373,13 +487,29 @@ async fn propose(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Va
 
 // The card
 
+/// "Chef (Recipe planner)", or for a team "a team of 3 (team Trading): Ana (Lead), Bo (Backend), Cy (QA)".
+fn who(h: &Hire) -> String {
+    let members = h.members_json();
+    let mut list = vec![format!("{} ({})", h.name, h.role)];
+    list.extend(members.iter().map(|m| format!("{} ({})", m["name"].as_str().unwrap_or(""), m["role"].as_str().unwrap_or(""))));
+    let team = h.new_team_json().and_then(|t| t["name"].as_str().map(|n| format!(" (new team {n})"))).unwrap_or_default();
+    if list.len() == 1 && team.is_empty() {
+        list.remove(0)
+    } else {
+        format!("a team of {}{team}: {}", list.len(), list.join(", "))
+    }
+}
+
 fn card_text(h: &Hire, proposer: &str) -> String {
+    let who = who(h);
+    let team = h.members.is_some() || h.new_team.is_some();
     match h.status.as_str() {
-        "pending" => format!("Wants to hire {} ({}). Waiting for your choice: Deny, Accept once or Always accept.", h.name, h.role),
-        "accepted" => format!("Hired {} ({}); you accepted. Undo removes it while it has no history.", h.name, h.role),
-        "auto_accepted" => format!("Hired {} ({}) at once, as you chose \"always accept\". Undo removes it.", h.name, h.role),
-        "denied" => format!("Not hired: {} ({}). {proposer} won't propose this kind of bot again in this space.", h.name, h.role),
-        _ => format!("Hire undone: {} ({}) was removed.", h.name, h.role),
+        "pending" if team => format!("Wants to hire {who}. Waiting for your choice: Deny, or Approve all."),
+        "pending" => format!("Wants to hire {who}. Waiting for your choice: Deny, Accept once or Always accept."),
+        "accepted" => format!("Hired {who}; you accepted. Undo removes it while it has no history."),
+        "auto_accepted" => format!("Hired {who} at once, as you chose \"always accept\". Undo removes it."),
+        "denied" => format!("Not hired: {who}. {proposer} won't propose this kind of bot again in this space."),
+        _ => format!("Hire undone: {who} was removed."),
     }
 }
 
@@ -403,6 +533,24 @@ pub async fn card_meta(state: &AppState, h: &Hire, note: Option<&str>) -> Value 
         None => false,
     };
     let policy = state.db.hire_policy(&space).await.map(|p| p.policy).unwrap_or_else(|_| "ask".into());
+    let tool_view = |ids: &Value| -> Vec<Value> {
+        ids.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|id| json!({"id": id, "name": servers.iter().find(|s| s.id == id).map(|s| s.name.clone())}))
+            .collect()
+    };
+    let is_team = h.members.is_some() || h.new_team.is_some();
+    let mut members = vec![json!({"name": h.name, "role": h.role, "model": h.model, "tools": tools, "instructions": h.instructions})];
+    members.extend(h.members_json().iter().map(|m| {
+        json!({"name": m["name"], "role": m["role"], "model": m["model"], "tools": tool_view(&m["tools"]), "instructions": m["instructions"]})
+    }));
+    let choices = match (h.status.as_str(), is_team) {
+        ("pending", true) => json!(["deny", "accept_once"]),
+        ("pending", false) => json!(["deny", "accept_once", "always_accept"]),
+        _ => json!([]),
+    };
     json!({
         "kind": "hire_proposal",
         "hire_id": h.id,
@@ -419,7 +567,10 @@ pub async fn card_meta(state: &AppState, h: &Hire, note: Option<&str>) -> Value 
         "requested_by_person": h.requested_by_person,
         "status": h.status,
         "auto": h.auto,
-        "choices": if h.status == "pending" { json!(["deny", "accept_once", "always_accept"]) } else { json!([]) },
+        "choices": choices,
+        "members": members,
+        "new_team": h.new_team_json().map(|t| json!({"name": t["name"], "lead": t["lead"]})),
+        "hired_kwant_ids": h.hired_ids(),
         "hired_kwant_id": h.hired_kwant_id,
         "action_id": h.action_id,
         "can_undo": action_applied && matches!(h.status.as_str(), "accepted" | "auto_accepted"),
@@ -476,23 +627,72 @@ async fn accept(state: &AppState, h: &Hire, auto: bool) -> Result<Hire, (StatusC
     if super::spaces::ensure_active(state, &space).await.is_err() {
         return back("the space is archived".into()).await;
     }
-    let spec = json!({"name": h.name, "title": h.role, "instructions": h.instructions, "model": h.model});
-    let view = match super::bot_actions::create_bot(state, &space, &spec).await {
-        Ok(v) => v,
-        Err(e) => return back(format!("the bot could not be created: {e}")).await,
-    };
-    let id = view["id"].as_str().unwrap_or("").to_string();
+    // Every bot of the proposal (the first, then a team's others); all or none
     let installed: Vec<String> = state.db.list_mcp_servers(&space).await.unwrap_or_default().into_iter().map(|s| s.id).collect();
-    let tools: Vec<String> = h.tools_json().into_iter().filter(|t| installed.contains(t)).collect();
-    if !tools.is_empty() {
-        let _ = state.db.set_kwant_mcp_servers(&id, &tools).await;
+    let first = json!({"name": h.name, "role": h.role, "instructions": h.instructions, "model": h.model, "tools": h.tools_json()});
+    let mut ids: Vec<String> = Vec::new();
+    for m in std::iter::once(first).chain(h.members_json()) {
+        let spec = json!({"name": m["name"], "title": m["role"], "instructions": m["instructions"], "model": m["model"]});
+        let view = match super::bot_actions::create_bot(state, &space, &spec).await {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = remove_made(state, &ids, None).await;
+                return back(format!("{} could not be created: {e}", m["name"].as_str().unwrap_or("a bot"))).await;
+            }
+        };
+        let id = view["id"].as_str().unwrap_or("").to_string();
+        let tools: Vec<String> = m["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|t| installed.iter().any(|i| i == t))
+            .map(str::to_string)
+            .collect();
+        if !tools.is_empty() {
+            let _ = state.db.set_kwant_mcp_servers(&id, &tools).await;
+        }
+        ids.push(id);
     }
-    if let Some(t) = &h.team_id {
-        let _ = state.db.add_team_member(t, &id).await;
+    let id = ids[0].clone();
+    // Their team: a new one (with its channel), or the one they join
+    let mut made_team = None;
+    if let Some(t) = h.new_team_json() {
+        let names: Vec<String> =
+            std::iter::once(h.name.clone()).chain(h.members_json().iter().map(|m| m["name"].as_str().unwrap_or("").to_string())).collect();
+        let lead = t["lead"].as_str().and_then(|l| names.iter().zip(&ids).find(|(n, _)| n.eq_ignore_ascii_case(l)).map(|(_, i)| i.clone()));
+        let new_team = crate::db::models::NewTeam {
+            name: t["name"].as_str().unwrap_or("").to_string(),
+            description: Some(format!("Hired together: {}", who(h))),
+            icon: None,
+            lead_kwant_id: lead.unwrap_or_else(|| id.clone()),
+            member_kwants: ids.clone(),
+            workspace_path: None,
+            repo_url: None,
+        };
+        match state.db.create_team(&space, &new_team).await {
+            Ok(team) => {
+                let channel = state.db.list_channels(&space).await.unwrap_or_default().into_iter().find(|c| c.name == format!("team-{}", team.name));
+                made_team = Some(json!({"id": team.id, "name": team.name, "channel_id": channel.map(|c| c.id)}));
+            }
+            Err(e) => {
+                let _ = remove_made(state, &ids, None).await;
+                return back(format!("the team could not be created: {e}")).await;
+            }
+        }
+    } else if let Some(t) = &h.team_id {
+        for i in &ids {
+            let _ = state.db.add_team_member(t, i).await;
+        }
+    }
+    if ids.len() > 1 || made_team.is_some() {
+        let _ = state.db.set_hired_kwant_ids(&h.id, &ids).await;
     }
     let mut after = super::bot_actions::bot_snapshot(state, &id).await;
     after["hire_id"] = json!(h.id);
     after["team_id"] = json!(h.team_id);
+    after["hired_kwant_ids"] = json!(ids);
+    after["made_team"] = made_team.unwrap_or(Value::Null);
     let new = NewBotAction {
         space_id: h.space_id.clone(),
         kwant_id: h.kwant_id.clone(),
@@ -503,7 +703,7 @@ async fn accept(state: &AppState, h: &Hire, auto: bool) -> Result<Hire, (StatusC
         action: "bot_hire".into(),
         target_kind: "bot".into(),
         target_id: Some(id.clone()),
-        summary: format!("hired bot {} ({})", h.name, h.role),
+        summary: format!("hired {}", who(h)),
         before: None,
         after: Some(after),
         status: "applied".into(),
@@ -517,6 +717,37 @@ async fn accept(state: &AppState, h: &Hire, auto: bool) -> Result<Hire, (StatusC
     refresh(state, &h.id, None).await;
     tracing::info!(hire_id = %h.id, kwant_id = %id, auto, "a hire was accepted");
     state.db.get_hire(&h.id).await.ok().flatten().ok_or((StatusCode::INTERNAL_SERVER_ERROR, "lost the proposal".into()))
+}
+
+/// Removes bots (and the team and channel) a hire made: a failed accept, or the person's Undo.
+/// Refuses, removing nothing, when any of them already has history.
+pub(super) async fn remove_made(state: &AppState, ids: &[String], made_team: Option<&Value>) -> Result<(), String> {
+    for id in ids {
+        match state.db.kwant_in_use(id).await {
+            Ok(None) | Ok(Some("it leads a channel")) | Ok(Some("it leads a team")) if made_team.is_some() => {}
+            Ok(None) => {}
+            Ok(Some(why)) => {
+                let name = state.db.get_kwant(id).await.ok().flatten().map(|k| k.name).unwrap_or_else(|| "a bot".into());
+                return Err(format!("{name} can't be removed: {why}"));
+            }
+            Err(_) => return Err("could not check the bots".into()),
+        }
+    }
+    if let Some(t) = made_team {
+        if let Some(c) = t["channel_id"].as_str() {
+            if !matches!(state.db.delete_empty_channel(c).await, Ok(true)) {
+                return Err("the team's channel already has messages".into());
+            }
+        }
+        if let Some(t) = t["id"].as_str() {
+            let _ = state.db.delete_team(t).await;
+        }
+    }
+    for id in ids {
+        let _ = state.db.delete_unused_kwant(id).await;
+    }
+    state.scheduler_wake.notify_one();
+    Ok(())
 }
 
 // What bots see
@@ -577,7 +808,9 @@ pub async fn prompt_block(state: &AppState, space: &SpaceId) -> String {
         "\n\n[Hiring new bots in this space]\n{policy_line}\n\
         Do every request yourself first (with mcp_suggest for a missing tool). Use `propose_hire` only when a specialist with its \
         own instructions, tools, schedule or model would clearly do this kind of work better, or when similar requests have come \
-        up at least {MIN_SIMILAR_REQUESTS} times here; give the reason and the evidence, then carry on with the request yourself."
+        up at least {MIN_SIMILAR_REQUESTS} times here; give the reason and the evidence, then carry on with the request yourself. \
+        When the person asks for a team, propose the whole team in one call: the first bot plus `members`, and `new_team` to \
+        create their team and channel; they approve it on one card."
     );
     if !lines.is_empty() {
         out.push_str("\nProposals so far:\n");
