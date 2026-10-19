@@ -242,6 +242,7 @@ impl McpToolSession {
                         server: server.clone(),
                         tool: t.tool.name.clone(),
                         arguments: arguments.clone(),
+                        builtin: None,
                     })
                     .await;
                 if !approved {

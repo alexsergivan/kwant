@@ -75,6 +75,7 @@ fn request(tool: &str) -> ToolApprovalRequest {
         server: "echo".into(),
         tool: tool.into(),
         arguments: json!({"text": "hi"}),
+        builtin: None,
     }
 }
 
@@ -233,8 +234,11 @@ async fn permission_endpoint_answers_claude_prompts_over_http() {
     let ask = |tool: &str| json!({"tool_name": tool, "input": {"text": "hi"}, "tool_use_id": "tu_1"});
     let allowed: Value = serde_json::from_str(&client.call_tool("approve", ask("mcp__echo__echo")).await.unwrap().text).unwrap();
     assert_eq!(allowed, json!({"behavior": "allow", "updatedInput": {"text": "hi"}}));
-    // Built-in tools and servers the kwant doesn't have are refused without asking
-    for tool in ["Bash", "mcp__other__echo", "mcp__kwnt__approve"] {
+    // claude's own tools follow the built-in policy: Bash asks the approver (here: yes)
+    let bash: Value = serde_json::from_str(&client.call_tool("approve", ask("Bash")).await.unwrap().text).unwrap();
+    assert_eq!(bash["behavior"], "allow");
+    // Servers the kwant doesn't have are refused without asking
+    for tool in ["mcp__other__echo", "mcp__kwnt__approve"] {
         let d: Value = serde_json::from_str(&client.call_tool("approve", ask(tool)).await.unwrap().text).unwrap();
         assert_eq!(d["behavior"], "deny", "{tool}");
     }
@@ -248,10 +252,11 @@ async fn permission_endpoint_answers_claude_prompts_over_http() {
 
     let sessions = state.mcp_sessions.lock().await;
     let allow_records = sessions["allow-tok"].ctx.take_records();
-    assert_eq!(allow_records.len(), 1, "only real approval decisions are recorded");
+    assert_eq!(allow_records.len(), 2, "only real approval decisions are recorded");
     assert_eq!(allow_records[0]["name"], "mcp__echo__echo");
     assert_eq!(allow_records[0]["status"], "allowed");
     assert_eq!(allow_records[0]["id"], "tu_1");
+    assert_eq!(allow_records[1]["name"], "Bash");
     assert_eq!(sessions["deny-tok"].ctx.take_records()[0]["status"], "denied");
     drop(sessions);
 
@@ -464,7 +469,7 @@ async fn grok_cli_reaches_mcp_only_through_kwnts_gateway() {
     let tmp = tempdir().unwrap();
     let (argv, token, notes, _) = fake_agent_run("grok", Some(ctx(tmp.path(), Arc::new(FixedApprover(true)))), Some(USER_SERVERS)).await;
     assert_eq!(token, "gw-secret-token", "token comes through the env");
-    assert!(argv.contains("--allow MCPTool(kwnt__*) --output-format streaming-json"), "{argv}");
+    assert!(argv.contains("--allow MCPTool(kwnt__*) --allow WebFetch --output-format streaming-json"), "{argv}");
     for secret in ["gw-secret-token", "sk-very-secret", "hdr-secret", "/usr/bin/true", "mcp.example.test"] {
         assert!(!argv.contains(secret), "{secret} in argv: {argv}");
     }

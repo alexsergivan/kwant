@@ -1124,6 +1124,11 @@ async fn run_kwant_turn_inner(
     let kwant_id = scope.kwant_id.clone();
     let team_keys = &scope.team_keys;
     let cancel_token = &scope.cancel_token;
+    // A bot outside a team still gets a folder of its own to write files in
+    let workspace_dir = scope.workspace_dir.clone().or_else(|| {
+        let space = SpaceId::new(&target_kwant.space_id);
+        Some(crate::tools::bot_workspace(&crate::db::spaces::space_data_dir(&state.config.data_dir, &space), &target_kwant.id))
+    });
 
     {
         let space = SpaceId::new(&target_kwant.space_id);
@@ -1312,7 +1317,7 @@ async fn run_kwant_turn_inner(
                 }),
                 cancel: Some(cancel_token.clone()),
                 turn_id: Some(tag.turn_id.clone()),
-                workspace: scope.workspace_dir.clone(),
+                workspace: workspace_dir.clone(),
                 sandbox_target: Some(sandbox_target.clone()),
             }
         });
@@ -1320,7 +1325,7 @@ async fn run_kwant_turn_inner(
             state,
             target_kwant,
             Some(tag.turn_id.clone()),
-            scope.workspace_dir.clone(),
+            workspace_dir.clone(),
             self_scope,
         )
         .await;
@@ -1350,7 +1355,7 @@ async fn run_kwant_turn_inner(
             model: None,
             effort_level: Some(effort_level.clone()),
             team_context: scope.team_context.clone(),
-            workspace_dir: scope.workspace_dir.clone(),
+            workspace_dir: workspace_dir.clone(),
             sandbox_id: Some(sandbox_target.clone()),
             teammates: scope
                 .teammates

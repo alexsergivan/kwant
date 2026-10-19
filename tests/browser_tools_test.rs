@@ -1,6 +1,6 @@
 //! The bot browser as kwnt's own MCP tools (`browser_open`, `browser_page`, `browser_act`).
-//! Claude's permission prompt refuses Bash, so the old curl instructions never reached the
-//! browser; these tools go through the self server, which needs no approval card, and drive
+//! Claude's permission prompt asks the person before Bash, so the old curl instructions were a
+//! detour; these tools go through the self server, which needs no approval card, and drive
 //! only the turn's own sandbox. The browser part runs a real windowless Chrome in Local mode and
 //! is skipped when none is installed.
 
@@ -136,8 +136,8 @@ async fn claude_turn_gets_browser_tools_that_drive_its_own_panel() {
     let (text, is_error) = self_tool(&app, &bare, "browser_open", json!({"url": "http://127.0.0.1:1/"})).await;
     assert!(is_error && text.contains("Unknown tool"), "{text}");
 
-    // claude asks before every tool: Bash stays refused, the browser tools pass with no card
-    assert_eq!(claude_asks(&app, &token, "Bash").await, "deny");
+    // claude asks before every tool: the browser tools (like web lookups) pass with no card
+    assert_eq!(claude_asks(&app, &token, "WebFetch").await, "allow");
     assert_eq!(claude_asks(&app, &token, &format!("mcp__{SELF_SERVER_NAME}__browser_open")).await, "allow");
     assert_eq!(claude_asks(&app, &token, &format!("mcp__{SELF_SERVER_NAME}__browser_act")).await, "allow");
     assert!(state.broker.pending_ids().await.is_empty(), "no approval card for the bot's own browser");

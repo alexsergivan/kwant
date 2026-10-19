@@ -162,6 +162,22 @@ const CODEX_MCP_LIST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// `codex exec` overrides limiting the model's shell commands to codex's "core" env
 /// (PATH, HOME, USER, SHELL...). codex's default passes its whole env, provider key included.
+/// grok's headless mode refuses anything it would ask about. Like claude's policy (see
+/// `mcp::builtin_tools`): fetching pages anywhere, and editing files inside the bot's working
+/// folder, run without asking. Shell commands stay refused: grok has no approval hook for kwnt.
+pub fn grok_builtin_rules(folder: Option<&Path>) -> Vec<String> {
+    let mut rules = vec!["--allow".to_string(), "WebFetch".to_string()];
+    // grok matches paths lexically, so the folder's real path keeps a symlinked folder working
+    if let Some(dir) = folder.and_then(|d| d.canonicalize().ok()) {
+        let dir = dir.display().to_string().replace(')', "\\)");
+        for tool in ["Edit", "Write"] {
+            rules.push("--allow".into());
+            rules.push(format!("{tool}({dir}/**)"));
+        }
+    }
+    rules
+}
+
 pub const CODEX_SHELL_POLICY: [&str; 4] = [
     "-c",
     "shell_environment_policy.inherit=\"core\"",
@@ -502,6 +518,7 @@ impl CliDriver {
             args.push("--allow".into());
             args.push(super::grok::gateway_allow_rule());
         }
+        args.extend(grok_builtin_rules(input.workspace_dir.as_deref()));
         args.push("--output-format".into());
         args.push("streaming-json".into());
         let gateway_token = gateway.map(|(_, g)| g.token.clone());
@@ -770,6 +787,11 @@ impl Driver for CliDriver {
                     .arg(codex_mcp_servers(input.mcp.as_ref(), &user_servers))
                     // The model's shell sees only codex's core env, never kwnt's keys or rc exports
                     .args(CODEX_SHELL_POLICY);
+                // codex exec has no approval hook: its sandbox keeps file writes (and shell
+                // commands' writes) inside the bot's working folder instead of read-only everywhere
+                if input.workspace_dir.as_deref().is_some_and(|d| d.exists()) {
+                    cmd.arg("--sandbox").arg("workspace-write");
+                }
                 if let Some(gateway) = input.mcp.as_ref().and_then(|c| c.gateway.as_ref()) {
                     cmd.env(crate::mcp::GATEWAY_TOKEN_ENV, &gateway.token);
                     // codex's default shell env policy passes the token on to the model's shell
@@ -879,7 +901,14 @@ impl Driver for CliDriver {
                         }
                     }
                 }
-                cmd.arg("--append-system-prompt").arg(&system_prompt);
+                // claude's own tools follow kwnt's policy (see mcp::builtin_tools); tell the bot
+                let folder = input.workspace_dir.as_deref().filter(|d| d.exists());
+                let tools_block = if input.mcp.is_some() {
+                    crate::mcp::builtin_tools::prompt_block(folder)
+                } else {
+                    String::new()
+                };
+                cmd.arg("--append-system-prompt").arg(format!("{system_prompt}{tools_block}"));
                 // One JSON result: tells a usage limit or sign-out apart from a reply
                 cmd.arg("--output-format").arg("json");
                 cmd.arg("-p").arg(&effective_prompt);
@@ -1017,6 +1046,16 @@ impl Driver for CliDriver {
 mod tests {
     use super::*;
     use crate::db::models::{Kwant, Message};
+
+    #[test]
+    fn grok_may_fetch_pages_and_edit_only_inside_the_folder() {
+        assert_eq!(grok_builtin_rules(None), ["--allow", "WebFetch"]);
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().canonicalize().unwrap().display().to_string();
+        let rules = grok_builtin_rules(Some(tmp.path()));
+        assert_eq!(rules, ["--allow", "WebFetch", "--allow", &format!("Edit({real}/**)"), "--allow", &format!("Write({real}/**)")]);
+        assert!(!rules.iter().any(|r| r.starts_with("Bash")), "shell commands stay refused");
+    }
 
     #[test]
     fn codex_shell_policy_is_core_only() {

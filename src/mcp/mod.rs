@@ -1,6 +1,7 @@
 //! Model Context Protocol support: the server registry's validation and secret masking, a small
 //! MCP client (stdio + streamable HTTP), and the per-turn context drivers use to offer MCP tools.
 
+pub mod builtin_tools;
 pub mod cli_config;
 pub mod client;
 pub mod echo_server;
@@ -255,6 +256,17 @@ pub struct ToolApprovalRequest {
     pub server: String,
     pub tool: String,
     pub arguments: Value,
+    /// Set for one of claude's own tools (Bash, Write, …) rather than an MCP server's.
+    pub builtin: Option<BuiltinCall>,
+}
+
+/// Where a built-in tool call would act, for its approval card.
+#[derive(Debug, Clone, Serialize)]
+pub struct BuiltinCall {
+    /// The bot's working folder (the shell command's folder for Bash).
+    pub cwd: Option<String>,
+    /// The file tool's path is outside the working folder.
+    pub outside_folder: bool,
 }
 
 /// Decides whether an MCP tool call may run. The server implements it with the permission broker.

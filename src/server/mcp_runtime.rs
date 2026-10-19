@@ -151,14 +151,25 @@ impl ToolApprover for BrokerApprover {
         if self.broker.is_allowed_for_session(&req.kwant_id, &req.tool_name).await {
             return true;
         }
-        let details = json!({
-            "source": "mcp",
-            "server": req.server,
-            "tool": req.tool,
-            "arguments": req.arguments,
-            "kwant_id": req.kwant_id,
-            "kwant_name": req.kwant_name,
-        });
+        let details = match &req.builtin {
+            Some(b) => json!({
+                "source": "claude_builtin",
+                "tool": req.tool,
+                "arguments": req.arguments,
+                "cwd": b.cwd,
+                "outside_folder": b.outside_folder,
+                "kwant_id": req.kwant_id,
+                "kwant_name": req.kwant_name,
+            }),
+            None => json!({
+                "source": "mcp",
+                "server": req.server,
+                "tool": req.tool,
+                "arguments": req.arguments,
+                "kwant_id": req.kwant_id,
+                "kwant_name": req.kwant_name,
+            }),
+        };
         let ticket = match self
             .db
             .save_approval(&NewApproval {
@@ -317,17 +328,31 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Response {
     Json(json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})).into_response()
 }
 
-/// Answers one claude permission prompt. Only MCP tools from the kwant's own servers can be
-/// approved here; anything else is denied, as it would be in `-p` mode without this handler.
+/// Answers one claude permission prompt. MCP tools from the kwant's own servers get their
+/// approval card; claude's own tools follow [`mcp::builtin_tools`]; tools from servers the
+/// kwant doesn't have are denied.
 async fn decide(session: &PermissionSession, args: &Value) -> Value {
     let tool_name = args["tool_name"].as_str().unwrap_or("");
     let input = args.get("input").cloned().unwrap_or_else(|| json!({}));
     let tool_use_id = args["tool_use_id"].as_str().unwrap_or("").to_string();
 
-    let target = mcp::split_tool_name(tool_name)
-        .filter(|(server, _)| session.ctx.servers.iter().any(|s| s.name == *server));
-    let Some((server, tool)) = target else {
-        return json!({"behavior": "deny", "message": format!("{tool_name} is not available to this bot.")});
+    let (server, tool, builtin) = match mcp::split_tool_name(tool_name) {
+        Some((server, tool)) if session.ctx.servers.iter().any(|s| s.name == server) => (server, tool, None),
+        _ if tool_name.is_empty() || tool_name.starts_with("mcp__") => {
+            return json!({"behavior": "deny", "message": format!("{tool_name} is not available to this bot.")});
+        }
+        _ => {
+            let folder = mcp::builtin_tools::canonical_folder(session.cwd.as_deref());
+            match mcp::builtin_tools::decide(tool_name, &input, folder.as_deref()) {
+                mcp::builtin_tools::BuiltinDecision::Allow => {
+                    return json!({"behavior": "allow", "updatedInput": input});
+                }
+                mcp::builtin_tools::BuiltinDecision::Ask { outside_folder } => {
+                    let cwd = folder.or_else(|| session.cwd.clone()).map(|f| f.display().to_string());
+                    ("", tool_name, Some(mcp::BuiltinCall { cwd, outside_folder }))
+                }
+            }
+        }
     };
     let approval = session.ctx.approver.approve(ToolApprovalRequest {
         kwant_id: session.kwant_id.clone(),
@@ -337,6 +362,7 @@ async fn decide(session: &PermissionSession, args: &Value) -> Value {
         server: server.to_string(),
         tool: tool.to_string(),
         arguments: input.clone(),
+        builtin,
     });
     // Dropping the approval withdraws its card when the turn ends first
     let allowed = tokio::select! {

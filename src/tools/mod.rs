@@ -74,6 +74,15 @@ impl ToolRunner {
     }
 }
 
+/// The working folder of a bot outside any team: `<space data>/bot-workspaces/<kwant id>`,
+/// created on first use. Its file tools write there without asking.
+pub fn bot_workspace(space_data_dir: &std::path::Path, kwant_id: &str) -> PathBuf {
+    let safe: String = kwant_id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    let dir = space_data_dir.join("bot-workspaces").join(safe);
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 pub async fn resolve_or_prepare_workspace(
     base_data_dir: &std::path::Path,
     team_name: &str,
