@@ -263,8 +263,22 @@ pub async fn undo(State(state): State<AppState>, Scope(space): Scope, Path(id): 
     }
 }
 
-fn download(bundle: &Bundle, name: &str) -> Response {
-    let file: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
+/// A download file name from a bot or space name: ASCII letters, digits, `-` and `_`, other
+/// runs as one `-`; `fallback` when nothing is left.
+pub fn file_stem(name: &str, fallback: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-');
+    if out.is_empty() { fallback.to_string() } else { out.chars().take(80).collect() }
+}
+
+fn download(bundle: &Bundle, file: &str) -> Response {
     (
         [(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{file}.kwant.json\""))],
         Json(bundle),
@@ -277,7 +291,7 @@ pub async fn export_kwant(State(state): State<AppState>, Path(id): Path<String>)
     match state.db.export_kwant(&id).await {
         Ok(Some(b)) => {
             let name = b.bots.first().map(|k| k.name.clone()).unwrap_or_default();
-            download(&b, &name)
+            download(&b, &file_stem(&name, &id))
         }
         Ok(None) => error(StatusCode::NOT_FOUND, "not_found", "bot not found"),
         Err(e) => internal(e),
@@ -286,8 +300,12 @@ pub async fn export_kwant(State(state): State<AppState>, Path(id): Path<String>)
 
 /// `GET /api/export?space=`: every bot and team in the space.
 pub async fn export_space(State(state): State<AppState>, Scope(space): Scope) -> Response {
+    let name = match state.db.get_space(&space).await {
+        Ok(s) => s.map(|s| s.name).unwrap_or_default(),
+        Err(e) => return internal(e),
+    };
     match state.db.export_space(&space).await {
-        Ok(b) => download(&b, &format!("space-{}", space.as_str())),
+        Ok(b) => download(&b, &file_stem(&name, space.as_str())),
         Err(e) => internal(e),
     }
 }
@@ -295,4 +313,18 @@ pub async fn export_space(State(state): State<AppState>, Scope(space): Scope) ->
 /// `GET /api/import/prompts`.
 pub async fn prompts() -> Response {
     Json(import::prompts::export_prompts()).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_stem;
+
+    #[test]
+    fn file_stems() {
+        assert_eq!(file_stem("Default", "spc_x"), "Default");
+        assert_eq!(file_stem("  My  Team / 2 ", "spc_x"), "My-Team-2");
+        assert_eq!(file_stem("Café", "spc_x"), "Caf");
+        assert_eq!(file_stem("★★", "spc_x"), "spc_x");
+        assert_eq!(file_stem("", "spc_x"), "spc_x");
+    }
 }

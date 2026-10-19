@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 pub const BUNDLE_FORMAT: &str = "kwant.bundle/1";
+/// `source.kind` of pasted text that was taken as one bot's instructions.
+pub const PLAIN_TEXT_KIND: &str = "plain-text";
 
 /// Pasted text (an export-prompt reply).
 pub const MAX_TEXT_BYTES: usize = 256 * 1024;
@@ -79,7 +81,7 @@ pub struct Bundle {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Source {
     /// `kwant`, `claude-code`, `skill`, `character-card`, `grokbot`, `openmaus`, `openmaus-grok`,
-    /// `prompt-reply`, or what an export-prompt reply says (`chatgpt`, `grok`, …).
+    /// `prompt-reply`, `plain-text`, or what an export-prompt reply says (`chatgpt`, `grok`, …).
     #[serde(default)]
     pub kind: String,
     #[serde(default)]
@@ -373,6 +375,11 @@ pub fn normalize(mut bundle: Bundle, existing: &[String]) -> Checked {
         }
         refs.insert(r.clone());
         bot.ref_ = r;
+    }
+
+    if bundle.source.kind == PLAIN_TEXT_KIND {
+        let who = bundle.bots.first().map(|b| b.ref_.clone());
+        warnings.push(Notice::new(who.as_deref(), "No name or memory found — we used the text as this bot's instructions. You can rename it after importing."));
     }
 
     let removed = scrub::scrub_bundle(&mut bundle);

@@ -26,7 +26,7 @@ const SOURCES: [(&str, &str, &str, &str); 4] = [
     (
         "chatgpt",
         "ChatGPT",
-        "Open your custom GPT (or the ChatGPT Project) and send it this message in a new chat. For a custom GPT you edit yourself, you can also copy the Instructions field from the GPT editor.",
+        "Open your custom GPT (or the ChatGPT Project) and send it this message in a new chat. For a custom GPT you edit yourself, you can instead copy its Instructions field from the GPT editor and paste that here; it becomes one bot's instructions.",
         "chatgpt",
     ),
     (

@@ -10,13 +10,14 @@
 //! | Grok Bot | JSON `"format": "grokbot-bundle/v1"` |
 //! | OpenMausBot | JSON `"format": "openmaus.package"` (v1, v2), or `"openmaus.grok/1"` |
 //! | export-prompt reply | pasted text holding one of the JSON forms above, usually in a ```json block |
+//! | plain instructions | any other pasted text: one bot, the text as its instructions |
 //! | zip | any mix of the files above |
 
 use super::archive::{self, PNG_SIGNATURE};
 use super::scrub::drop_secret_fields;
 use super::{
     cut, first_line, BotSpec, Bundle, ImportError, RoutineSpec, SkillSpec, Source, TeamSpec, BUNDLE_FORMAT, MAX_FILE_BYTES,
-    MAX_TEXT_BYTES, MAX_ZIP_BYTES,
+    MAX_TEXT_BYTES, MAX_ZIP_BYTES, PLAIN_TEXT_KIND,
 };
 use serde_json::Value;
 
@@ -58,12 +59,38 @@ pub fn parse_file(bytes: &[u8], filename: Option<&str>) -> Result<Bundle, Import
     from_text(text, filename)
 }
 
-/// Pasted text: usually the reply to the export prompt.
+/// Pasted text: usually the reply to the export prompt. Text that isn't one of the formats above
+/// and doesn't try to be (a bot's Instructions field copied as is) becomes one bot's instructions.
 pub fn parse_pasted(text: &str) -> Result<Bundle, ImportError> {
     if text.len() > MAX_TEXT_BYTES {
         return Err(too_large("Pasted text", "256 KB"));
     }
-    from_text(text, None)
+    let text = text.trim_start_matches('\u{feff}');
+    if text.trim().is_empty() {
+        return Err(invalid("There's nothing to import in this text. Paste your bot's reply or its instructions."));
+    }
+    match from_text(text, None) {
+        Err(ImportError::Invalid(_) | ImportError::Unsupported(_)) if !looks_structured(text) => Ok(from_plain_text(text)),
+        other => other,
+    }
+}
+
+/// Whether pasted text means to be JSON or front matter, so a broken reply still gets its error
+/// instead of being taken as instructions.
+fn looks_structured(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with('{') || t.starts_with("---") || t.contains("```json") || t.contains("\"format\"") || t.contains("kwant.bundle/")
+}
+
+/// One bot whose instructions are the whole text. Its name and title are the defaults
+/// [`super::normalize`] gives; it warns that nothing else was found.
+fn from_plain_text(text: &str) -> Bundle {
+    Bundle {
+        format: BUNDLE_FORMAT.into(),
+        source: Source { kind: PLAIN_TEXT_KIND.into(), ..Source::default() },
+        bots: vec![BotSpec { ref_: "main".into(), name: "Imported-bot".into(), persona_prompt: text.to_string(), ..BotSpec::default() }],
+        ..Bundle::default()
+    }
 }
 
 fn from_text(text: &str, filename: Option<&str>) -> Result<Bundle, ImportError> {
@@ -594,6 +621,21 @@ mod tests {
         assert_eq!(json_block("prefix {\"a\": 1} suffix"), Some("{\"a\": 1}"));
         assert_eq!(json_block("no json here"), None);
         assert_eq!(json_block("```json\n{\"a\": 1}\nthe reply was cut"), Some("{\"a\": 1}"));
+    }
+
+    #[test]
+    fn pasted_plain_text_is_one_bot_and_broken_replies_keep_their_error() {
+        let b = parse_pasted("\u{feff}You review pull requests. Be kind.").unwrap();
+        assert_eq!(b.source.kind, crate::import::PLAIN_TEXT_KIND);
+        assert_eq!(b.bots.len(), 1);
+        assert_eq!(b.bots[0].persona_prompt, "You review pull requests. Be kind.");
+        // Braces in instructions aren't taken for a broken reply.
+        assert_eq!(parse_pasted("Greet {user} by name.").unwrap().bots[0].persona_prompt, "Greet {user} by name.");
+        assert!(matches!(parse_pasted("   \n"), Err(ImportError::Invalid(_))));
+        assert!(matches!(parse_pasted("{ \"format\": "), Err(ImportError::Invalid(_))));
+        assert!(matches!(parse_pasted("Here:\n```json\n{ nope }\n```"), Err(ImportError::Invalid(_))));
+        // A file upload doesn't fall back: an unknown file stays unknown.
+        assert!(parse_file(b"just words", Some("notes.txt")).is_err());
     }
 
     #[test]

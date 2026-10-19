@@ -259,6 +259,7 @@ const SOURCE_NAMES: Record<string, string> = {
   openmaus: 'OpenMausBot',
   'openmaus-grok': 'OpenMausBot',
   zip: 'a zip',
+  'plain-text': 'pasted text',
 };
 
 /** Where an import comes from, for "from …". `source.label` is often a bot name, so it isn't used. */

@@ -403,7 +403,10 @@ async fn oversize_and_unknown_inputs_are_refused() {
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
     let (status, _) = json_call(&e.app, "POST", "/api/import/preview", json!({ "text": "x".repeat(300 * 1024) })).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    let (status, v) = json_call(&e.app, "POST", "/api/import/preview", json!({ "text": "just some words" })).await;
+    let (status, v) = json_call(&e.app, "POST", "/api/import/preview", json!({ "text": " \n\t " })).await;
+    assert_eq!((status, v["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid")), "{v}");
+    // A reply that means to be JSON but is broken keeps its error rather than becoming instructions.
+    let (status, v) = json_call(&e.app, "POST", "/api/import/preview", json!({ "text": "Here you go:\n```json\n{ \"format\": \"kwant.bundle/1\", \"bots\": [ }\n```" })).await;
     assert_eq!((status, v["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid")), "{v}");
     let (status, _) = send(&e.app, "POST", "/api/import/preview", "application/octet-stream", vec![0xff, 0xfe, 0x00]).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
@@ -491,4 +494,50 @@ async fn export_prompts_start_with_grok_chatgpt_claude() {
     let ids: Vec<&str> = v.as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap()).collect();
     assert_eq!(ids, ["grok", "chatgpt", "claude", "other"]);
     assert!(v[0]["prompt"].as_str().unwrap().contains("kwant.bundle/1"));
+}
+
+#[tokio::test]
+async fn plain_text_becomes_one_bots_instructions_scrubbed_and_capped() {
+    let e = setup().await;
+    let before = row_counts(&e.tmp).await;
+    let text = "You are a friendly travel planner. Ask where {city} is before suggesting anything.\n\nKeep answers short.\nOur key is sk-ant-api03-FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE.";
+    let (status, p) = json_call(&e.app, "POST", "/api/import/preview", json!({ "text": text })).await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    assert_eq!(p["can_apply"], true, "{p}");
+    assert_eq!(p["bundle"]["source"]["kind"], "plain-text");
+    assert_eq!(bot_names(&p), ["Imported-bot"]);
+    let persona = p["bundle"]["bots"][0]["persona_prompt"].as_str().unwrap();
+    assert!(persona.starts_with("You are a friendly travel planner. Ask where {city} is"), "{persona}");
+    assert!(!persona.contains("FAKEFAKE") && persona.contains("[removed key]"), "{persona}");
+    let warnings = p["warnings"].to_string();
+    assert!(warnings.contains("No name or memory found"), "{warnings}");
+    assert!(warnings.contains("key"), "{warnings}");
+    assert!(!warnings.contains("can't have spaces"), "the default name needs no cleaning: {warnings}");
+    assert_eq!(row_counts(&e.tmp).await, before, "preview writes nothing");
+
+    let (status, v) = apply(&e.app, &dflt(), &p["bundle"], &[]).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    // A second paste gets a new name instead of overwriting the first.
+    let (_, again) = json_call(&e.app, "POST", "/api/import/preview", json!({ "text": "Be brief." })).await;
+    assert_eq!(bot_names(&again), ["Imported-bot-2"]);
+
+    // Over 16,000 characters: a problem in preview, nothing to apply.
+    let (status, p) = json_call(&e.app, "POST", "/api/import/preview", json!({ "text": "word ".repeat(4_000) })).await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    assert_eq!(p["can_apply"], false);
+    assert!(p["problems"][0]["message"].as_str().unwrap().contains("16,000"), "{p}");
+}
+
+#[tokio::test]
+async fn space_export_is_named_after_the_space() {
+    let e = setup().await;
+    let named = new_space(&e, "Travel Team!").await;
+    let symbols = new_space(&e, "★★★").await;
+    for (space, want) in [(dflt(), "Default.kwant.json".to_string()), (named, "Travel-Team.kwant.json".into()), (symbols.clone(), format!("{symbols}.kwant.json"))] {
+        let req = Request::builder().uri(format!("/api/export?space={space}")).body(Body::empty()).unwrap();
+        let resp = e.app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let cd = resp.headers()["content-disposition"].to_str().unwrap().to_string();
+        assert_eq!(cd, format!("attachment; filename=\"{want}\""));
+    }
 }
