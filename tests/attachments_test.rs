@@ -242,6 +242,44 @@ async fn sent_files_reach_the_agent_and_only_its_chat() {
 }
 
 #[tokio::test]
+async fn a_sent_pdf_reads_as_text_page_by_page() {
+    let env = setup().await;
+    let pdf = include_bytes!("fixtures/two-pages.pdf").to_vec();
+    let (s, up) = upload(&env, "plan.pdf", pdf.clone()).await;
+    assert_eq!(s, StatusCode::CREATED, "{up}");
+    assert_eq!(up["mime"], "application/pdf");
+    let (_, broken) = upload(&env, "broken.pdf", pdf[..pdf.len() / 2].to_vec()).await;
+    let ids = [up["id"].as_str().unwrap(), broken["id"].as_str().unwrap()];
+    send_direct(&env, &env.a, "what is in this file? REPLYTAG:p1", json!({"attachment_ids": ids})).await;
+    wait_reply(&env, &env.a, "answer p1").await;
+
+    direct_turn(&env, "tok-a", &env.a, None).await;
+    let r = self_call(&env, "tok-a", "read_attachment", json!({"id": ids[0]})).await;
+    assert_eq!(r["isError"], false, "{r}");
+    let t = text_of(&r);
+    assert!(t.contains("plan.pdf (2 pages)"), "{t}");
+    let page_two = t.find("[page 2]").expect("page markers");
+    assert!(t[page_two..].contains("Budget is 42 euros"), "{t}");
+    assert!(!t.contains("open it with your own file tools"), "text, not just a path: {t}");
+
+    // A PDF that can't be parsed says so, without crashing the server, and the next read still works
+    let r = self_call(&env, "tok-a", "read_attachment", json!({"id": ids[1]})).await;
+    let t = text_of(&r);
+    assert!(!t.contains("PAGE_TWO_MARKER"), "{t}");
+    if r["isError"] == true {
+        assert!(t.contains("Couldn't read the text of broken.pdf") && t.contains("ask the user"), "{t}");
+    }
+    let r = self_call(&env, "tok-a", "read_attachment", json!({"id": ids[0]})).await;
+    assert_eq!(r["isError"], false);
+
+    // Through a real turn of the fake CLI
+    let marker = call_tool_marker("read_attachment", json!({"id": ids[0]}));
+    send_direct(&env, &env.a, &format!("{marker} REPLYTAG:p2"), json!({})).await;
+    let reply = wait_reply(&env, &env.a, "answer p2").await;
+    assert!(reply.text.contains("PAGE_ONE_MARKER"), "{}", reply.text);
+}
+
+#[tokio::test]
 async fn agents_share_files_as_download_cards_from_inside_their_workspace_only() {
     let env = setup().await;
     let ws = env.tmp.path().join("team-ws");

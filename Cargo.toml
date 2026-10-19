@@ -43,6 +43,7 @@ tz-rs = "0.7"
 percent-encoding = "2"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 serde_norway = "0.9"
+pdf-extract = "0.12"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

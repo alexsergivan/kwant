@@ -35,6 +35,10 @@ pub const MAX_ATTACHMENTS_PER_MESSAGE: usize = 10;
 const INLINE_TEXT_BYTES: usize = 32 * 1024;
 /// Most text `read_attachment` returns.
 const READ_TEXT_BYTES: usize = 100_000;
+/// Longest a PDF's text extraction may take before `read_attachment` gives up on it.
+const PDF_EXTRACT_SECS: u64 = 20;
+/// PDFs read at once: extraction is CPU- and memory-heavy, and the server is small.
+static PDF_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 /// Largest image `read_attachment` returns as an image.
 const READ_IMAGE_BYTES: i64 = 5 * 1024 * 1024;
 /// Longest text an agent can share as `content`.
@@ -480,7 +484,7 @@ pub fn tools() -> Vec<Value> {
         json!({
             "name": "read_attachment",
             "description": "Read a file attached in this chat, by id. Text comes back as text, images as images; \
-                for a PDF you get a local path to open with your own file tools.",
+                a PDF comes back as its text, page by page.",
             "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
         }),
         json!({
@@ -556,6 +560,33 @@ pub async fn tool_read(state: &AppState, scope: &SelfScope, args: &Value) -> (Va
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
         return (json!([{"type": "text", "text": a.name}, {"type": "image", "data": data, "mimeType": a.mime}]), false);
     }
+    if a.mime == "application/pdf" {
+        let Ok(bytes) = tokio::fs::read(&path).await else {
+            return (text("Could not open the file.".into()), true);
+        };
+        return match pdf_pages(bytes).await {
+            Ok(pages) if pages.iter().any(|p| !p.trim().is_empty()) => (text(pdf_body(&a.name, &pages)), false),
+            Ok(pages) => (
+                text(format!(
+                    "{} is a PDF with {} page(s) but no text layer (probably scanned images). A read-only copy is at {} — \
+                     open it with your own file tools if they can read PDFs, or ask the user for a text version.",
+                    a.name,
+                    pages.len(),
+                    path.display()
+                )),
+                false,
+            ),
+            Err(why) => (
+                text(format!(
+                    "Couldn't read the text of {}: {why}. A read-only copy is at {} — open it with your own file tools \
+                     if they can read PDFs, or ask the user for a text version.",
+                    a.name,
+                    path.display()
+                )),
+                true,
+            ),
+        };
+    }
     (
         text(format!(
             "{} is a {} file ({}). A read-only copy is at {} — open it with your own file tools.",
@@ -566,6 +597,44 @@ pub async fn tool_read(state: &AppState, scope: &SelfScope, args: &Value) -> (Va
         )),
         false,
     )
+}
+
+/// A PDF's text, one string per page, extracted off the async runtime. A malformed PDF can make
+/// the extractor panic or spin, so a panic and a timeout both become an error message.
+async fn pdf_pages(bytes: Vec<u8>) -> Result<Vec<String>, String> {
+    let _slot = PDF_SLOTS.acquire().await.map_err(|_| "the server is shutting down".to_string())?;
+    let job = tokio::task::spawn_blocking(move || pdf_extract::extract_text_from_mem_by_pages(&bytes));
+    match tokio::time::timeout(std::time::Duration::from_secs(PDF_EXTRACT_SECS), job).await {
+        Ok(Ok(Ok(pages))) => Ok(pages),
+        Ok(Ok(Err(e))) => Err(match e.to_string() {
+            m if m.to_lowercase().contains("encrypt") || m.to_lowercase().contains("password") => {
+                "it is password-protected".to_string()
+            }
+            _ => "it isn't a PDF we can parse".to_string(),
+        }),
+        Ok(Err(_)) => Err("it isn't a PDF we can parse".to_string()),
+        Err(_) => Err(format!("reading it took longer than {PDF_EXTRACT_SECS} seconds")),
+    }
+}
+
+/// The text `read_attachment` returns for a PDF: each page under its number, cut at
+/// `READ_TEXT_BYTES` with a note on how many pages were left out.
+fn pdf_body(name: &str, pages: &[String]) -> String {
+    let mut body = format!("--- {name} ({} pages) ---", pages.len());
+    for (i, page) in pages.iter().enumerate() {
+        let chunk = format!("\n\n[page {}]\n{}", i + 1, page.trim());
+        if body.len() + chunk.len() > READ_TEXT_BYTES {
+            let mut room = READ_TEXT_BYTES.saturating_sub(body.len());
+            while room > 0 && !chunk.is_char_boundary(room) {
+                room -= 1;
+            }
+            body.push_str(&chunk[..room]);
+            body.push_str(&format!("\n[… cut: page {} onwards is left out of {} pages]", i + 1, pages.len()));
+            return body;
+        }
+        body.push_str(&chunk);
+    }
+    body
 }
 
 /// `share_file`: stores the file and posts a download card in the turn's chat.
@@ -745,5 +814,37 @@ mod tests {
             std::os::unix::fs::symlink(tmp.path().join("secret.txt"), ws.join("link.txt")).unwrap();
             assert!(inside_workspace(&ws, "link.txt").is_none(), "symlinks out are refused");
         }
+    }
+
+    const TWO_PAGES: &[u8] = include_bytes!("../../tests/fixtures/two-pages.pdf");
+
+    #[tokio::test]
+    async fn pdf_text_comes_back_page_by_page() {
+        let pages = pdf_pages(TWO_PAGES.to_vec()).await.unwrap();
+        assert_eq!(pages.len(), 2);
+        let body = pdf_body("plan.pdf", &pages);
+        assert!(body.starts_with("--- plan.pdf (2 pages) ---"), "{body}");
+        let (one, two) = (body.find("[page 1]").unwrap(), body.find("[page 2]").unwrap());
+        assert!(one < body.find("PAGE_ONE_MARKER").unwrap() && body.find("PAGE_ONE_MARKER").unwrap() < two, "{body}");
+        assert!(body[two..].contains("PAGE_TWO_MARKER Budget is 42 euros"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn broken_pdfs_give_an_error_not_a_panic() {
+        for bad in [b"%PDF-1.7\nnot really".to_vec(), TWO_PAGES[..TWO_PAGES.len() / 2].to_vec(), Vec::new()] {
+            if let Ok(pages) = pdf_pages(bad).await {
+                // A lenient parse may recover nothing; it must not claim text it doesn't have
+                assert!(pages.iter().all(|p| !p.contains("PAGE_TWO_MARKER")));
+            }
+        }
+    }
+
+    #[test]
+    fn long_pdf_text_is_cut_with_a_note() {
+        let pages: Vec<String> = (0..40).map(|i| format!("{i} {}", "é".repeat(2_000))).collect();
+        let body = pdf_body("big.pdf", &pages);
+        assert!(body.len() <= READ_TEXT_BYTES + 100, "{}", body.len());
+        assert!(body.contains("[page 1]") && !body.contains("[page 40]"));
+        assert!(body.contains("onwards is left out of 40 pages]"), "{}", &body[body.len() - 80..]);
     }
 }
