@@ -541,3 +541,109 @@ async fn space_export_is_named_after_the_space() {
         assert_eq!(cd, format!("attachment; filename=\"{want}\""));
     }
 }
+
+/// Every byte under the data dir, as lossy text, for "is this anywhere on disk" checks.
+fn everything_on_disk(tmp: &TempDir) -> String {
+    let mut out = String::new();
+    let mut dirs = vec![tmp.path().to_path_buf()];
+    while let Some(d) = dirs.pop() {
+        for entry in std::fs::read_dir(d).unwrap().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else if let Ok(bytes) = std::fs::read(&p) {
+                out.push_str(&String::from_utf8_lossy(&bytes));
+            }
+        }
+    }
+    out
+}
+
+/// IMPORT-QA.md F1: secret shapes the first scrubber missed, in every field, never reach the
+/// preview, the database or an export.
+#[tokio::test]
+async fn qa_f1_pem_passwords_url_credentials_aws_npm_and_split_keys_are_removed() {
+    let e = setup().await;
+    let secrets = [
+        "FAKEPEMBODY",
+        "p@ssFAKE!Secret#99",
+        "SuperFAKESecret123",
+        "Tr0ubFAKE&3xyz",
+        "AKIAIOSFODNN7EXAMPLE",
+        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "npm_FAKE",
+        "ya29.FAKE",
+        "FAKEtailFAKE",
+        "FAKEs3cret!value",
+        "FAKEdbPass99",
+    ];
+    let (status, preview) = preview_file(&e.app, "hostile/keys-qa.json", &dflt()).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let text = preview["bundle"].to_string();
+    for s in secrets {
+        assert!(!text.contains(s), "{s} survived the preview: {text}");
+    }
+    // Hosts stay readable; only the credentials go.
+    assert!(text.contains("https://[removed key]@git.example.com/repo.git"), "{text}");
+    assert!(text.contains("postgres://[removed key]@db.example.com:5432/app"), "{text}");
+
+    let (status, applied) = apply(&e.app, &dflt(), &preview["bundle"], &[]).await;
+    assert_eq!(status, StatusCode::CREATED, "{applied}");
+    let id = applied["import"]["created"]["kwants"][0]["id"].as_str().unwrap();
+    let (_, exported) = get(&e.app, &format!("/api/kwants/{id}/export")).await;
+    let on_disk = everything_on_disk(&e.tmp);
+    for s in secrets {
+        assert!(!exported.to_string().contains(s), "{s} in the export");
+        assert!(!on_disk.contains(s), "{s} stored on disk");
+    }
+}
+
+/// IMPORT-QA.md F2: instructions that mention "format", start with `{` or show a JSON example
+/// import as plain text; pasted text never gets a 415; a broken export reply keeps its 422.
+#[tokio::test]
+async fn qa_f2_instruction_like_text_imports_as_plain_text() {
+    let e = setup().await;
+    for text in [
+        "Always answer in the \"format\" the user asks for.",
+        "I like the kwant.bundle/1 format.",
+        "{Be nice} to everyone.",
+        "When asked for data, reply like this:\n```json\n{\"a\": 1}\n```\nand nothing else.",
+    ] {
+        let (status, p) = json_call(&e.app, "POST", "/api/import/preview", json!({ "text": text })).await;
+        assert_eq!(status, StatusCode::OK, "{text:?}: {p}");
+        assert_eq!(p["bundle"]["source"]["kind"], "plain-text", "{text:?}");
+        assert_eq!(p["bundle"]["bots"][0]["persona_prompt"], text);
+        assert_eq!(p["can_apply"], true);
+    }
+    for broken in [
+        "Here you go:\n```json\n{\"format\": \"kwant.bundle/1\", \"bots\": [{\"name\": \"A\",}\n```",
+        "```json\n{\"bots\": [{\"name\": \"A\"}]}\n```",
+    ] {
+        let (status, p) = json_call(&e.app, "POST", "/api/import/preview", json!({ "text": broken })).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{broken:?}: {p}");
+    }
+}
+
+/// IMPORT-QA.md F4 and F5: the over-16k problem says where to shorten it, and hidden or
+/// direction characters never reach a bot, team or routine name.
+#[tokio::test]
+async fn qa_f4_f5_cap_wording_and_hidden_characters_in_names() {
+    let e = setup().await;
+    let (_, p) = json_call(&e.app, "POST", "/api/import/preview", json!({ "text": "x".repeat(16_001) })).await;
+    let problem = p["problems"][0]["message"].as_str().unwrap();
+    assert!(problem.contains("Shorten it where it came from") && !problem.contains("here before"), "{problem}");
+
+    let (status, preview) = preview_file(&e.app, "hostile/keys-qa.json", &dflt()).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let (status, applied) = apply(&e.app, &dflt(), &preview["bundle"], &[]).await;
+    assert_eq!(status, StatusCode::CREATED, "{applied}");
+    let sid = SpaceId::default_space();
+    let bot = e.state.db.list_kwants(&sid).await.unwrap().into_iter().find(|k| k.name.starts_with("Evil")).unwrap();
+    assert_eq!(bot.name, "EvilName");
+    assert!(preview["warnings"].to_string().contains("We removed hidden characters from the name EvilName"), "{}", preview["warnings"]);
+    assert_eq!(bot.title, "Has fake secrets everywhere");
+    let teams = e.state.db.list_teams(&sid).await.unwrap();
+    assert!(teams.iter().any(|t| t.name == "Ops Team"), "{:?}", teams.iter().map(|t| &t.name).collect::<Vec<_>>());
+    let routines = e.state.db.list_routines(&sid).await.unwrap();
+    assert!(routines.iter().any(|r| r.name == "Backup"), "{:?}", routines.iter().map(|r| &r.name).collect::<Vec<_>>());
+}

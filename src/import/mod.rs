@@ -224,10 +224,24 @@ pub(crate) fn cut(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
-/// A bot name kwant accepts: no spaces or `@`, at most [`MAX_NAME_CHARS`].
+/// Control characters, and characters that draw nothing or turn text around (zero-width
+/// spaces, U+202E right-to-left override and the other bidi controls, soft hyphens).
+pub(crate) fn is_hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}')
+}
+
+/// A one-line label (title, team or routine name): whitespace collapsed, hidden characters gone.
+fn one_line(raw: &str, max: usize) -> String {
+    let visible: String = raw.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).filter(|c| !is_hidden(*c)).collect();
+    cut(visible.split_whitespace().collect::<Vec<_>>().join(" ").as_str(), max)
+}
+
+/// A bot name kwant accepts: no spaces, `@` or hidden characters, at most [`MAX_NAME_CHARS`].
 pub fn clean_bot_name(raw: &str) -> String {
     let joined = raw.split_whitespace().collect::<Vec<_>>().join("-");
-    let name: String = joined.chars().filter(|c| *c != '@' && !c.is_control()).collect();
+    let name: String = joined.chars().filter(|c| *c != '@' && !is_hidden(*c)).collect();
     let name = cut(name.trim_matches('-'), MAX_NAME_CHARS);
     if name.is_empty() {
         "Imported-bot".into()
@@ -405,12 +419,20 @@ pub fn normalize(mut bundle: Bundle, existing: &[String]) -> Checked {
         if name != wanted {
             renames.push(Rename { ref_: r.clone(), from: wanted.clone(), to: name.clone() });
         } else if wanted != bot.name.trim() {
-            warnings.push(Notice::new(who, format!("Bot names can't have spaces or @, so \"{}\" becomes {wanted}.", bot.name.trim())));
+            let shown: String = bot.name.trim().chars().filter(|c| !is_hidden(*c)).collect();
+            warnings.push(Notice::new(
+                who,
+                if shown == wanted {
+                    format!("We removed hidden characters from the name {wanted}.")
+                } else {
+                    format!("Bot names can't have spaces or @, so \"{shown}\" becomes {wanted}.")
+                },
+            ));
         }
         taken.insert(name.to_lowercase());
         bot.name = name;
 
-        bot.title = cut(bot.title.split_whitespace().collect::<Vec<_>>().join(" ").as_str(), MAX_TITLE_CHARS);
+        bot.title = one_line(&bot.title, MAX_TITLE_CHARS);
         if bot.title.is_empty() {
             bot.title = "Imported bot".into();
         }
@@ -422,7 +444,7 @@ pub fn normalize(mut bundle: Bundle, existing: &[String]) -> Checked {
         for (field, text) in [("instructions", &bot.persona_prompt), ("soul", &bot.soul)] {
             let n = text.chars().count();
             if n > MAX_PERSONA_CHARS {
-                problems.push(Notice::new(who, format!("{} ({n} now). Shorten it here before importing.", persona_too_long(&format!("{}'s {field}", bot.name)))));
+                problems.push(Notice::new(who, format!("{} ({n} now). Shorten it where it came from (or in the pasted reply), then try the import again.", persona_too_long(&format!("{}'s {field}", bot.name)))));
             }
             for why in suspicious(text) {
                 warnings.push(Notice::new(who, format!("The {field} {why}. Read it before importing.")));
@@ -468,7 +490,7 @@ pub fn normalize(mut bundle: Bundle, existing: &[String]) -> Checked {
     let mut team_names = HashSet::new();
     let teams = std::mem::take(&mut bundle.teams);
     for mut team in teams {
-        team.name = cut(team.name.split_whitespace().collect::<Vec<_>>().join(" ").as_str(), MAX_TEAM_NAME_CHARS);
+        team.name = one_line(&team.name, MAX_TEAM_NAME_CHARS);
         let mut members: Vec<String> = Vec::new();
         for m in team.lead.iter().chain(team.members.iter()) {
             let m = m.trim().to_string();
@@ -553,7 +575,7 @@ fn tidy_routines(
 ) -> Vec<RoutineSpec> {
     let mut out = Vec::new();
     for r in routines {
-        let name = cut(r.name.split_whitespace().collect::<Vec<_>>().join(" ").as_str(), MAX_ROUTINE_NAME_CHARS);
+        let name = one_line(&r.name, MAX_ROUTINE_NAME_CHARS);
         let instructions = r.instructions.trim().to_string();
         let label = if name.is_empty() { "(unnamed)".to_string() } else { name.clone() };
         if name.is_empty() || instructions.is_empty() {
@@ -634,6 +656,9 @@ mod tests {
     fn names_are_cleaned_and_renamed_on_clash() {
         assert_eq!(clean_bot_name("  Code Reviewer @x "), "Code-Reviewer-x");
         assert_eq!(clean_bot_name("   "), "Imported-bot");
+        // IMPORT-QA.md F5: right-to-left override, zero-width and control characters go.
+        assert_eq!(clean_bot_name("Evil\u{202E}Name\u{200B}\u{7}"), "EvilName");
+        assert_eq!(one_line(" Team\u{2066} A\u{202E}\tB ", 40), "Team A B");
         let taken: HashSet<String> = ["ada".into(), "ada-2".into()].into_iter().collect();
         assert_eq!(free_name("Ada", &taken), "Ada-3");
     }

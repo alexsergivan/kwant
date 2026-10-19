@@ -70,16 +70,53 @@ pub fn parse_pasted(text: &str) -> Result<Bundle, ImportError> {
         return Err(invalid("There's nothing to import in this text. Paste your bot's reply or its instructions."));
     }
     match from_text(text, None) {
-        Err(ImportError::Invalid(_) | ImportError::Unsupported(_)) if !looks_structured(text) => Ok(from_plain_text(text)),
+        Err(ImportError::Invalid(_) | ImportError::Unsupported(_)) if !means_export(text) => Ok(from_plain_text(text)),
+        Err(ImportError::Unsupported(_)) => Err(invalid(
+            "This looks like a bot export, but not one kwant reads. Paste the whole reply to the export prompt, \
+             starting at the ```json line.",
+        )),
         other => other,
     }
 }
 
-/// Whether pasted text means to be JSON or front matter, so a broken reply still gets its error
-/// instead of being taken as instructions.
-fn looks_structured(text: &str) -> bool {
+/// Fields that only an export has; a broken JSON object naming one of them was meant as one.
+const EXPORT_KEYS: [&str; 4] = ["format", "spec", "bots", "bot"];
+
+/// Whether pasted text that didn't import was meant as an export, so it gets its error instead
+/// of being taken as instructions: front matter with fields, or a JSON object (the whole text or
+/// a fenced block) that is shaped like a bundle, or doesn't parse but has an export's fields.
+/// Instructions that mention `"format"`, start with `{` or show a JSON example are not.
+fn means_export(text: &str) -> bool {
     let t = text.trim_start();
-    t.starts_with('{') || t.starts_with("---") || t.contains("```json") || t.contains("\"format\"") || t.contains("kwant.bundle/")
+    if let Some(rest) = t.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
+            return rest[..end].lines().any(|l| {
+                let l = l.trim_start();
+                l.split_once(':').is_some_and(|(k, _)| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            });
+        }
+    }
+    let whole = t.starts_with('{').then_some(t);
+    whole.into_iter().chain(fenced_objects(text)).any(|obj| match serde_json::from_str::<Value>(obj) {
+        Ok(v) => bundle_shaped(&v),
+        Err(_) => EXPORT_KEYS.iter().any(|k| has_json_key(obj, k)),
+    })
+}
+
+/// A JSON object naming a format kwant reads, or carrying bots.
+fn bundle_shaped(v: &Value) -> bool {
+    let format = v.get("format").and_then(Value::as_str).unwrap_or("");
+    let spec = v.get("spec").and_then(Value::as_str).unwrap_or("");
+    ["kwant.bundle/", "grokbot-bundle/", "openmaus."].iter().any(|p| format.starts_with(p))
+        || spec.starts_with("chara_card")
+        || v.get("bots").is_some()
+        || v.get("bot").is_some()
+}
+
+/// Whether `obj` has `"key"` followed by a colon, as a JSON field.
+fn has_json_key(obj: &str, key: &str) -> bool {
+    let quoted = format!("\"{key}\"");
+    obj.match_indices(&quoted).any(|(i, _)| obj[i + quoted.len()..].trim_start().starts_with(':'))
 }
 
 /// One bot whose instructions are the whole text. Its name and title are the defaults
@@ -114,21 +151,31 @@ fn from_text(text: &str, filename: Option<&str>) -> Result<Bundle, ImportError> 
     Ok(b)
 }
 
-/// The JSON in a pasted reply: a ```json fence (or any fence starting with `{`), else the span
-/// from the first `{` to the last `}`.
-pub fn json_block(text: &str) -> Option<&str> {
+/// Every fenced block in `text` whose body starts with `{`, up to its last `}`. An unclosed
+/// fence runs to the end of the reply; the object still ends at its last brace.
+fn fenced_objects(text: &str) -> impl Iterator<Item = &str> {
     let mut rest = text;
-    while let Some(open) = rest.find("```") {
-        let after = &rest[open + 3..];
-        let body_start = after.find('\n').map(|i| i + 1).unwrap_or(after.len());
-        let body = &after[body_start..];
-        let close = body.find("```").unwrap_or(body.len());
-        let inner = body[..close].trim();
-        // An unclosed fence runs to the end of the reply; the object still ends at its last brace.
-        if let (true, Some(end)) = (inner.starts_with('{'), inner.rfind('}')) {
-            return Some(&inner[..=end]);
+    std::iter::from_fn(move || {
+        while let Some(open) = rest.find("```") {
+            let after = &rest[open + 3..];
+            let body_start = after.find('\n').map(|i| i + 1).unwrap_or(after.len());
+            let body = &after[body_start..];
+            let close = body.find("```").unwrap_or(body.len());
+            let inner = body[..close].trim();
+            rest = &body[(close + 3).min(body.len())..];
+            if let (true, Some(end)) = (inner.starts_with('{'), inner.rfind('}')) {
+                return Some(&inner[..=end]);
+            }
         }
-        rest = &body[(close + 3).min(body.len())..];
+        None
+    })
+}
+
+/// The JSON in a pasted reply: the first fenced block that is an object, else the span from the
+/// first `{` to the last `}`.
+pub fn json_block(text: &str) -> Option<&str> {
+    if let Some(obj) = fenced_objects(text).next() {
+        return Some(obj);
     }
     let (a, b) = (text.find('{')?, text.rfind('}')?);
     (a < b).then(|| &text[a..=b])
@@ -633,9 +680,33 @@ mod tests {
         assert_eq!(parse_pasted("Greet {user} by name.").unwrap().bots[0].persona_prompt, "Greet {user} by name.");
         assert!(matches!(parse_pasted("   \n"), Err(ImportError::Invalid(_))));
         assert!(matches!(parse_pasted("{ \"format\": "), Err(ImportError::Invalid(_))));
-        assert!(matches!(parse_pasted("Here:\n```json\n{ nope }\n```"), Err(ImportError::Invalid(_))));
+        assert!(matches!(parse_pasted("Here:\n```json\n{ \"format\": \"kwant.bundle/1\", nope }\n```"), Err(ImportError::Invalid(_))));
+        assert!(matches!(parse_pasted("```json\n{\"bots\": [{\"name\": \"x\"}]}\n```"), Err(ImportError::Invalid(_))));
+        assert!(matches!(parse_pasted("---\nname: x\nfoo: [unclosed\n---\nBody"), Err(ImportError::Invalid(_))));
         // A file upload doesn't fall back: an unknown file stays unknown.
         assert!(parse_file(b"just words", Some("notes.txt")).is_err());
+    }
+
+    #[test]
+    fn instructions_that_look_a_bit_like_json_are_plain_text() {
+        // IMPORT-QA.md F2: each of these got a 422 or 415.
+        for text in [
+            "Always answer in the \"format\" the user asks for.",
+            "I like the kwant.bundle/1 format.",
+            "{Be nice} to everyone.",
+            "Reply with JSON like this:\n```json\n{\"answer\": 1}\n```\nNothing else.",
+            "Reply with JSON like:\n```json\n{ \"answer\": ... }\n```",
+            "{\"a\": 1}",
+            "Use \"format\": \"markdown\" when asked.",
+            "---\nA horizontal rule, then instructions.",
+        ] {
+            let b = parse_pasted(text).unwrap_or_else(|e| panic!("{text:?}: {e}"));
+            assert_eq!(b.source.kind, crate::import::PLAIN_TEXT_KIND, "{text:?}");
+            assert_eq!(b.bots[0].persona_prompt, text);
+        }
+        // A real reply after a JSON example still imports as the reply.
+        let reply = "```json\n{\"format\": \"kwant.bundle/1\", \"bots\": [{\"name\": \"Ok\"}]}\n```";
+        assert_eq!(parse_pasted(reply).unwrap().bots[0].name, "Ok");
     }
 
     #[test]

@@ -1,0 +1,17 @@
+{
+  "format": "kwant.bundle/1",
+  "source": { "kind": "other", "label": "fake secrets only (IMPORT-QA.md F1), none of these are real" },
+  "bots": [
+    {
+      "ref": "leaky",
+      "name": "Evil‮Name",
+      "title": "Has ⁦fake⁩ secrets everywhere",
+      "persona_prompt": "Sign with this:\n-----BEGIN PRIVATE KEY-----\nMIIEvFAKEPEMBODYFAKEPEMBODY0123\nFAKEPEMBODYFAKE==\n-----END PRIVATE KEY-----\nThe admin password: p@ssFAKE!Secret#99 and clone https://deploy:SuperFAKESecret123@git.example.com/repo.git",
+      "soul": "Config: password=\"Tr0ubFAKE&3xyz\". My AWS keys: AKIAIOSFODNN7EXAMPLE and wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      "memories": ["Publish with npm_FAKEFAKEFAKEfakefake0123456789abcdef", "Drive token ya29.FAKE_fake-token-0123456789abcdefgh"],
+      "skills": [{ "name": "deploy", "description": "Deploy", "body": "Use sk-proj-FAKEFAKEFAKE​FAKEtailFAKE0123456789 to deploy." }],
+      "routines": [{ "name": "Back‮up", "instructions": "Log in with secret: FAKEs3cret!value then back up.", "schedule_text": "09:00" }]
+    }
+  ],
+  "teams": [{ "name": "Ops‮ Team", "lead": "leaky", "members": ["leaky"], "instructions": "DB at postgres://ops:FAKEdbPass99@db.example.com:5432/app" }]
+}
