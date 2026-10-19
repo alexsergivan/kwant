@@ -3,6 +3,7 @@ pub mod config;
 pub mod db;
 pub mod drivers;
 pub mod embedded;
+pub mod import;
 pub mod mcp;
 pub mod profiles;
 pub mod router;

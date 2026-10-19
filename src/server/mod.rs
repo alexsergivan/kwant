@@ -23,6 +23,7 @@ pub mod computer;
 pub mod mcp_suggest;
 pub mod bot_actions;
 pub mod hires;
+pub mod import_routes;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -152,6 +153,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/laya/status", get(routes::laya_status))
         .route("/api/kwants", get(routes::list_kwants).post(routes::create_kwant))
         .route("/api/kwants/:id", put(routes::update_kwant))
+        .route("/api/kwants/:id/export", get(import_routes::export_kwant))
+        .route("/api/export", get(import_routes::export_space))
+        .route("/api/import/prompts", get(import_routes::prompts))
+        .route("/api/import/preview", post(import_routes::preview))
+        .route("/api/import/apply", post(import_routes::apply))
+        .route("/api/imports", get(import_routes::list))
+        .route("/api/imports/:id", get(import_routes::get))
+        .route("/api/imports/:id/undo", post(import_routes::undo))
         .route("/api/channels", get(routes::list_channels).post(routes::create_channel))
         .route("/api/channels/:id/messages", get(routes::list_messages))
         .route("/api/teams", get(routes::list_teams).post(routes::create_team))

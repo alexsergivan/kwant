@@ -226,6 +226,9 @@ pub async fn create_kwant(
     Scope(space): Scope,
     Json(mut payload): Json<CreateKwantRequest>,
 ) -> Result<Json<KwantView>, Response> {
+    if let Some(msg) = crate::import::check_persona_caps(&payload.base.persona_prompt, &payload.base.soul) {
+        return Err(api_error(StatusCode::BAD_REQUEST, &msg));
+    }
     validate_kwant_name(&state, &space, &mut payload.base.name, None).await?;
     check_binding(&state, &space, &payload.binding, &payload.base.preferred_model)
         .await
@@ -261,6 +264,9 @@ pub async fn update_kwant(
     Path(id): Path<String>,
     Json(mut payload): Json<UpdateKwantRequest>,
 ) -> Result<Json<KwantView>, Response> {
+    if let Some(msg) = crate::import::check_persona_caps(&payload.base.persona_prompt, &payload.base.soul) {
+        return Err(api_error(StatusCode::BAD_REQUEST, &msg));
+    }
     let space = state
         .db
         .space_of_kwant(&id)

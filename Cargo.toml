@@ -41,6 +41,8 @@ base64 = "0.22"
 url = "2"
 tz-rs = "0.7"
 percent-encoding = "2"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+serde_norway = "0.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
