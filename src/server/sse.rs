@@ -256,6 +256,7 @@ mod tests {
                 candidate_count: None,
                 fallback: false,
                 matched_terms: vec![],
+                basis: None,
             },
             E::Error { code: s("x"), message: s("x"), kwant_id: Some(s("k")) },
             E::MemoryChanged { kwant_id: s("k") },

@@ -414,3 +414,126 @@ async fn test_ollama_not_offered_when_server_is_down() {
     std::env::remove_var("OLLAMA_MODEL");
     assert_eq!(kwnt::drivers::first_ollama_model("http://127.0.0.1:59998").await, None);
 }
+
+/// Oleks's finding 4: in a Go trading repo, "Create a new test simple strategy" went to Frontend
+/// because Laya only compares titles. A code request goes to the role it belongs to; anything that
+/// matches no role, or several, goes to the lead; the reason says which.
+fn trading_team() -> (Team, Vec<Kwant>) {
+    let members = vec![
+        agent("lead", "Ada", "Tech Lead"),
+        agent("fe", "Pixel", "Frontend Engineer"),
+        agent("be", "Lin", "Backend Engineer (Go)"),
+        agent("sre", "Ops", "SRE"),
+        agent("qa", "Rigel", "QA Engineer"),
+    ];
+    let team = Team {
+        space_id: kwnt::db::spaces::DEFAULT_SPACE_ID.into(),
+        id: "t".into(),
+        name: "trading".into(),
+        description: Some("Go trading bot".into()),
+        workspace_path: None,
+        repo_url: None,
+        icon: "users".into(),
+        lead_kwant_id: "lead".into(),
+        member_kwants: "[]".into(),
+        created_at: None,
+        instructions: None,
+    };
+    (team, members)
+}
+
+fn direct(d: TeamDecision) -> (String, String, String, Vec<String>) {
+    match d {
+        TeamDecision::Direct { kwant_id, reason, basis, matched_terms } => (kwant_id, reason, basis, matched_terms),
+        other => panic!("expected a direct answer, got {other:?}"),
+    }
+}
+
+#[test]
+fn code_requests_go_to_the_matching_role_and_the_rest_to_the_lead() {
+    let (team, members) = trading_team();
+    let route = |p: &str| direct(kwnt::router::heuristic_team_decision(p, &team, &members));
+
+    let (id, reason, basis, terms) = route("Create a new test simple strategy");
+    assert_eq!((id.as_str(), basis.as_str()), ("be", "keywords"), "{reason}");
+    assert!(terms.contains(&"strategy".to_string()), "{terms:?}");
+    assert!(reason.starts_with("Lin (Backend Engineer (Go)) does this kind of work"), "{reason}");
+
+    for (prompt, who) in [
+        ("Fix the flaky e2e tests", "qa"),
+        ("Check why the deploy pipeline fails", "sre"),
+        ("Make the settings button blue on the dashboard page", "fe"),
+        ("Add a backtest for the moving average strategy", "be"),
+        ("Rigel, can you look at this?", "qa"),
+    ] {
+        assert_eq!(route(prompt).0, who, "{prompt}");
+    }
+
+    let (id, reason, basis, _) = route("What's the capital of Peru?");
+    assert_eq!((id.as_str(), basis.as_str()), ("lead", "lead"));
+    assert_eq!(reason, "No one's role matched this, so it went to the team lead, Ada (Tech Lead)");
+
+    let (id, reason, basis, terms) = route("Add an API endpoint and a settings page that shows it");
+    assert_eq!((id.as_str(), basis.as_str()), ("lead", "several"), "{reason}");
+    assert!(reason.starts_with("This touches several roles (") && reason.contains("Lin (Backend Engineer (Go))"), "{reason}");
+    assert!(reason.contains("Pixel (Frontend Engineer)") && reason.ends_with("Ada (Tech Lead), to answer or hand parts on"), "{reason}");
+    assert!(terms.contains(&"endpoint".to_string()) && terms.contains(&"page".to_string()), "{terms:?}");
+
+    // Discussion words still start a discussion, but whole words only and not "strategy"
+    assert!(matches!(
+        kwnt::router::heuristic_team_decision("Should we migrate to Postgres? Compare the tradeoffs", &team, &members),
+        TeamDecision::Discuss { .. }
+    ));
+    assert_eq!(route("Explain how orders are matched").2, "keywords", "'explain' is not 'plan'");
+}
+
+#[test]
+fn a_weak_laya_pick_no_longer_overrides_the_role() {
+    let (team, members) = trading_team();
+    // What Oleks saw: Laya sure enough to discuss, and its lead pick is Frontend
+    let laya = json!({"answers": {
+        "team_decision": {"choice": "discuss", "probabilities": {"discuss": 0.86, "direct": 0.14}},
+        "lead_kwant": {"choice": "Pixel", "probabilities": {"Pixel": 0.4, "Lin": 0.2, "Ada": 0.2, "Ops": 0.1, "Rigel": 0.1}}
+    }});
+    let d = kwnt::router::parse_laya_team_answers("Create a new test simple strategy", &laya, &team, &members).unwrap();
+    let (id, reason, basis, _) = direct(d);
+    assert_eq!((id.as_str(), basis.as_str()), ("be", "keywords"));
+    assert!(reason.contains("Laya guessed Pixel from titles alone"), "{reason}");
+
+    // Laya and the words agree
+    let agree = json!({"answers": {"team_decision": {"choice": "direct"}, "lead_kwant": {"choice": "Lin"}}});
+    let (id, _, basis, _) = direct(kwnt::router::parse_laya_team_answers("Create a new test simple strategy", &agree, &team, &members).unwrap());
+    assert_eq!((id.as_str(), basis.as_str()), ("be", "skills"));
+
+    // No words match: a clear Laya pick stands, a near-tie goes to the lead
+    let clear = json!({"answers": {"team_decision": {"choice": "direct"},
+        "lead_kwant": {"choice": "Ops", "probabilities": {"Ops": 0.7, "Lin": 0.1, "Ada": 0.1, "Pixel": 0.05, "Rigel": 0.05}}}});
+    let (id, reason, basis, _) = direct(kwnt::router::parse_laya_team_answers("Is the box healthy?", &clear, &team, &members).unwrap());
+    assert_eq!((id.as_str(), basis.as_str()), ("sre", "skills"), "{reason}");
+    let close = json!({"answers": {"team_decision": {"choice": "direct"},
+        "lead_kwant": {"choice": "Pixel", "probabilities": {"Pixel": 0.3, "Lin": 0.25, "Ada": 0.25, "Ops": 0.1, "Rigel": 0.1}}}});
+    let (id, _, basis, _) = direct(kwnt::router::parse_laya_team_answers("Is the box healthy?", &close, &team, &members).unwrap());
+    assert_eq!((id.as_str(), basis.as_str()), ("lead", "lead"));
+
+    // A real multi-role question can still be a discussion
+    let plan = json!({"answers": {"team_decision": {"choice": "discuss", "probabilities": {"discuss": 0.9, "direct": 0.1}},
+        "lead_kwant": {"choice": "Ada"}}});
+    assert!(matches!(
+        kwnt::router::parse_laya_team_answers("Plan the migration of orders to Postgres", &plan, &team, &members),
+        Some(TeamDecision::Discuss { .. })
+    ));
+}
+
+#[tokio::test]
+async fn channel_routing_reports_its_basis() {
+    let (_, members) = trading_team();
+    let laya = kwnt::router::LayaRouter::new("http://127.0.0.1:9".into());
+    let r = laya.route_channel_query_detailed("Create a new test simple strategy", "desk", "lead", &members).await;
+    assert_eq!((r.kwant_id.as_str(), r.basis.as_str(), r.fallback), ("be", "keywords", true));
+    assert!(r.matched_terms.contains(&"strategy".to_string()));
+    let r = laya.route_channel_query_detailed("hello", "desk", "lead", &members).await;
+    assert_eq!((r.kwant_id.as_str(), r.basis.as_str()), ("lead", "lead"));
+    assert!(r.reason.starts_with("No one's role matched this, so it went to the channel lead, Ada"), "{}", r.reason);
+    let r = laya.route_channel_query_detailed("hello", "desk", "lead", &members[1..2]).await;
+    assert_eq!((r.kwant_id.as_str(), r.basis.as_str()), ("fe", "only"));
+}

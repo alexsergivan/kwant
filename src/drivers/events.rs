@@ -192,9 +192,12 @@ pub enum RuntimeEvent {
         /// True when Laya was unreachable and keyword matching picked instead.
         #[serde(default)]
         fallback: bool,
-        /// Prompt words that matched the picked agent (keyword fallback only).
+        /// Prompt words that matched the picked agent's name, title, persona or role.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         matched_terms: Vec<String>,
+        /// How the pick was made: only, keywords, skills, lead, several, or discuss.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        basis: Option<String>,
     },
     Error {
         code: String,

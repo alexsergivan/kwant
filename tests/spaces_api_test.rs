@@ -491,9 +491,10 @@ async fn a_general_reply_carries_routing_and_account_and_notifications_name_the_
     })
     .await
     .expect("a routing decision and a notification");
-    let RuntimeEvent::RoutingDecided { kwant_id, candidate_count, fallback, matched_terms, .. } = decided else {
+    let RuntimeEvent::RoutingDecided { kwant_id, candidate_count, fallback, matched_terms, basis, .. } = decided else {
         unreachable!()
     };
+    assert_eq!(basis.as_deref(), Some("keywords"), "named in the message");
     assert_eq!(kwant_id, bea["id"].as_str().unwrap(), "keywords pick Bea by name");
     assert_eq!(candidate_count, Some(2));
     assert!(fallback, "Laya is offline in tests");

@@ -9,6 +9,11 @@ pub enum TeamDecision {
     Direct {
         kwant_id: String,
         reason: String,
+        /// How the bot was picked: see [`Pick::basis`]. Empty from an older Laya that sends a decision itself.
+        #[serde(default)]
+        basis: String,
+        #[serde(default)]
+        matched_terms: Vec<String>,
     },
     Discuss {
         turns: usize,
@@ -121,22 +126,31 @@ impl LayaRouter {
         lead_kwant_id: &str,
         members: &[Kwant],
     ) -> ChannelRoute {
-        match self.query_laya_for_kwant(prompt, channel_name, members).await {
-            Ok((kwant_id, reason)) => ChannelRoute { kwant_id, reason, fallback: false, matched_terms: Vec::new() },
+        let laya = match self.query_laya_for_kwant(prompt, channel_name, members).await {
+            Ok(data) => laya_guess(&data, members),
             Err(e) => {
                 if self.status().is_up() {
                     tracing::warn!(error = %e, url = %self.base_url, "Laya channel routing failed, using keyword fallback");
                 }
-                let (kwant_id, reason, matched_terms) = heuristic_pick_kwant(prompt, lead_kwant_id, members)
-                    .map(|(k, r)| (k.id.clone(), r, matched_terms(prompt, k)))
-                    .unwrap_or_else(|| (lead_kwant_id.to_string(), "Routed to channel lead".into(), Vec::new()));
-                ChannelRoute {
-                    kwant_id,
-                    reason: format!("{reason}. {}", self.offline_note()),
-                    fallback: true,
-                    matched_terms,
-                }
+                None
             }
+        };
+        let fallback = laya.is_none();
+        match pick_member(prompt, lead_kwant_id, members, laya, "channel lead") {
+            Some(p) => ChannelRoute {
+                kwant_id: p.kwant.id.clone(),
+                reason: if fallback { format!("{}. {}", p.reason, self.offline_note()) } else { p.reason },
+                fallback,
+                matched_terms: p.terms,
+                basis: p.basis.into(),
+            },
+            None => ChannelRoute {
+                kwant_id: lead_kwant_id.to_string(),
+                reason: "Routed to channel lead".into(),
+                fallback,
+                matched_terms: Vec::new(),
+                basis: "lead".into(),
+            },
         }
     }
 
@@ -145,7 +159,7 @@ impl LayaRouter {
         prompt: &str,
         channel_name: &str,
         members: &[Kwant],
-    ) -> Result<(String, String), String> {
+    ) -> Result<serde_json::Value, String> {
         let kwant_criteria = kwant_choice_criteria(members);
 
         let payload = json!({
@@ -176,8 +190,10 @@ impl LayaRouter {
         }
 
         let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-        parse_laya_kwant_choice(&data, members)
-            .ok_or_else(|| "Laya response missing valid kwant choice".into())
+        if laya_guess(&data, members).is_none() {
+            return Err("Laya response missing valid kwant choice".into());
+        }
+        Ok(data)
     }
 }
 
@@ -227,47 +243,293 @@ fn resolve_kwant_choice<'a>(choice: &str, members: &'a [Kwant]) -> Option<&'a Kw
 
 /// Extracts a valid member kwant choice from a Laya `answers.lead_kwant` response.
 pub fn parse_laya_kwant_choice(data: &serde_json::Value, members: &[Kwant]) -> Option<(String, String)> {
-    let choice = data
-        .get("answers")?
-        .get("lead_kwant")?
-        .get("choice")?
-        .as_str()?;
-    let kwant = resolve_kwant_choice(choice, members)?;
-    Some((
-        kwant.id.clone(),
-        format!("Laya picked {} ({}) as the best fit for this question", kwant.name, kwant.title),
-    ))
+    let guess = laya_guess(data, members)?;
+    Some((guess.kwant.id.clone(), format!("Laya matched this to {}'s role ({})", guess.kwant.name, guess.kwant.title)))
 }
 
-/// Picks the member with the highest domain-keyword relevance, or the lead when nothing matches.
+/// Laya's pick for `lead_kwant`, and whether it was clear of the runner-up. Laya only sees each bot's
+/// name and title, so a near-tie between bots is a guess, not a match.
+#[derive(Debug, Clone, Copy)]
+pub struct LayaGuess<'a> {
+    pub kwant: &'a Kwant,
+    pub confident: bool,
+}
+
+fn laya_guess<'a>(data: &serde_json::Value, members: &'a [Kwant]) -> Option<LayaGuess<'a>> {
+    let lead = data.get("answers")?.get("lead_kwant")?;
+    let kwant = resolve_kwant_choice(lead.get("choice")?.as_str()?, members)?;
+    let mut probs: Vec<f64> = lead
+        .get("probabilities")
+        .and_then(|p| p.as_object())
+        .map(|p| p.values().filter_map(|v| v.as_f64()).collect())
+        .unwrap_or_default();
+    probs.sort_by(|a, b| b.total_cmp(a));
+    let confident = match probs.as_slice() {
+        [top, second, ..] => top - second >= 0.15,
+        _ => true,
+    };
+    Some(LayaGuess { kwant, confident })
+}
+
+/// Picks the member with the clearest match, or the lead when nothing (or several roles) match.
 pub fn heuristic_pick_kwant<'a>(
     prompt: &str,
     lead_kwant_id: &str,
     members: &'a [Kwant],
 ) -> Option<(&'a Kwant, String)> {
-    let (best, score) = members
-        .iter()
-        .map(|m| (m, calculate_kwant_relevance(prompt, m)))
-        .fold(None, |acc: Option<(&Kwant, usize)>, (m, s)| match acc {
-            Some((_, best_s)) if best_s >= s => acc,
-            _ => Some((m, s)),
-        })?;
+    pick_member(prompt, lead_kwant_id, members, None, "channel lead").map(|p| (p.kwant, p.reason))
+}
 
-    if score > 0 {
-        Some((
-            best,
-            format!("Selected {} ({}) based on domain expertise", best.name, best.title),
-        ))
-    } else {
-        let lead = members.iter().find(|m| m.id == lead_kwant_id).unwrap_or(&members[0]);
-        Some((
-            lead,
-            format!(
-                "No bot here lists skills matching this request, so {} ({}) is taking it as channel lead",
-                lead.name, lead.title
-            ),
-        ))
+/// Who should answer, and the honest reason for the routing card.
+#[derive(Debug, Clone)]
+pub struct Pick<'a> {
+    pub kwant: &'a Kwant,
+    /// `only` (one bot can answer), `keywords` (words in the message point to this bot's role or
+    /// name), `skills` (Laya and the words agree), `lead` (nothing matched), `several` (more than one
+    /// role matched, so the lead coordinates). The UI words each one; see frontend/src/routeReason.ts.
+    pub basis: &'static str,
+    pub reason: String,
+    pub terms: Vec<String>,
+}
+
+/// Engineering roles and the words in a request that belong to them. A bot has a role when its title
+/// (or, without a title, the first line of its persona) names it; Laya only compares titles, so it
+/// can't tell that "strategy" in a trading repo is backend code, and picked Frontend for it.
+struct Role {
+    titles: &'static [&'static str],
+    /// Request words for this role, with weight: 2 is a clear signal, 1 a hint.
+    signals: &'static [(&'static str, usize)],
+}
+
+const ROLES: &[Role] = &[
+    Role {
+        titles: &["frontend", "front-end", "ui", "ux", "interface", "designer", "web", "mobile", "ios", "android"],
+        signals: &[
+            ("ui", 2), ("ux", 2), ("frontend", 2), ("front-end", 2), ("page", 2), ("button", 2), ("css", 2),
+            ("component", 2), ("layout", 2), ("screen", 2), ("react", 2), ("modal", 2), ("responsive", 2),
+            ("style", 1), ("styling", 2), ("dashboard", 1), ("form", 1), ("color", 1), ("colour", 1), ("dark", 1),
+        ],
+    },
+    Role {
+        titles: &["backend", "back-end", "server", "api", "services", "database", "data", "go", "golang", "rust",
+            "python", "java", "quant", "trading", "algorithm", "algorithms"],
+        signals: &[
+            ("backend", 2), ("back-end", 2), ("api", 2), ("endpoint", 2), ("database", 2), ("schema", 2),
+            ("migration", 2), ("server", 2), ("service", 1), ("strategy", 2), ("strategies", 2), ("backtest", 2),
+            ("trading", 2), ("indicator", 2), ("order", 1), ("orders", 1), ("algorithm", 2), ("query", 1),
+            ("sql", 2), ("golang", 2), ("go", 1), ("rust", 1), ("function", 1), ("cli", 1), ("parser", 2),
+        ],
+    },
+    Role {
+        titles: &["qa", "quality", "test", "tests", "testing", "tester", "verification"],
+        signals: &[
+            ("tests", 2), ("testing", 2), ("qa", 2), ("e2e", 2), ("regression", 2), ("coverage", 2),
+            ("flaky", 2), ("test", 1), ("verify", 1), ("bug", 1), ("repro", 2),
+        ],
+    },
+    Role {
+        titles: &["sre", "devops", "ops", "infrastructure", "infra", "platform", "reliability", "release"],
+        signals: &[
+            ("deploy", 2), ("deployment", 2), ("pipeline", 2), ("docker", 2), ("kubernetes", 2), ("k8s", 2),
+            ("ci", 2), ("infra", 2), ("infrastructure", 2), ("monitoring", 2), ("alert", 2), ("alerts", 2),
+            ("terraform", 2), ("outage", 2), ("uptime", 2), ("release", 1), ("logs", 1),
+        ],
+    },
+];
+
+fn tokens(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '-')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn roles_of(kwant: &Kwant) -> Vec<&'static Role> {
+    let mut own = tokens(&kwant.title);
+    own.extend(tokens(&kwant.name));
+    let mut roles: Vec<&Role> = ROLES.iter().filter(|r| r.titles.iter().any(|t| own.iter().any(|o| o == t))).collect();
+    if roles.is_empty() && kwant.title.trim().is_empty() {
+        let first = tokens(kwant.persona_prompt.split(['.', '\n']).next().unwrap_or(""));
+        roles = ROLES.iter().filter(|r| r.titles.iter().any(|t| first.iter().any(|o| o == t))).collect();
     }
+    roles
+}
+
+/// The request words that belong to `kwant`'s role, and their weight.
+fn role_score(words: &[String], kwant: &Kwant) -> (usize, Vec<String>) {
+    let mut score = 0;
+    let mut terms = Vec::new();
+    for role in roles_of(kwant) {
+        for (w, weight) in role.signals {
+            if words.iter().any(|x| x == w) && !terms.iter().any(|t: &String| t == w) {
+                score += weight;
+                terms.push(w.to_string());
+            }
+        }
+    }
+    (score, terms)
+}
+
+fn lead_of<'a>(lead_kwant_id: &str, members: &'a [Kwant]) -> &'a Kwant {
+    members.iter().find(|m| m.id == lead_kwant_id).unwrap_or(&members[0])
+}
+
+fn names(ks: &[&Kwant]) -> String {
+    let n: Vec<String> = ks.iter().map(|k| format!("{} ({})", k.name, k.title)).collect();
+    match n.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// Routes one message to one member. In order: a bot named in the message; the one bot whose role
+/// the request's words belong to; the bot whose name, title or persona shares the most words; Laya's
+/// pick when it was clear. Anything else — nothing matched, or two roles matched — goes to the lead,
+/// who answers or hands parts on. The reason says which of these happened.
+pub fn pick_member<'a>(
+    prompt: &str,
+    lead_kwant_id: &str,
+    members: &'a [Kwant],
+    laya: Option<LayaGuess<'a>>,
+    lead_word: &str,
+) -> Option<Pick<'a>> {
+    let only = match members {
+        [] => return None,
+        [one] => Some(one),
+        _ => None,
+    };
+    if let Some(k) = only {
+        return Some(Pick { kwant: k, basis: "only", reason: format!("{} is the only bot here that can answer", k.name), terms: vec![] });
+    }
+    let words = tokens(prompt);
+    let lead = lead_of(lead_kwant_id, members);
+    let to_lead = |matched: Vec<&'a Kwant>, terms: Vec<String>| {
+        let reason = format!(
+            "This touches several roles ({}), so it went to the {lead_word}, {} ({}), to answer or hand parts on",
+            names(&matched),
+            lead.name,
+            lead.title
+        );
+        Pick { kwant: lead, basis: "several", reason, terms }
+    };
+    let chosen = |k: &'a Kwant, terms: Vec<String>, how: &str| {
+        let agree = laya.is_some_and(|g| g.kwant.id == k.id);
+        let mut reason = format!("{} ({}) {how}", k.name, k.title);
+        if agree {
+            reason.push_str("; Laya picked the same bot");
+        } else if let Some(g) = laya {
+            reason.push_str(&format!("; Laya guessed {} from titles alone, but nothing in the message points to that role", g.kwant.name));
+        }
+        Pick { kwant: k, basis: if agree { "skills" } else { "keywords" }, reason, terms }
+    };
+
+    // 1. Named in the message ("Bea, can you…")
+    let named: Vec<&Kwant> = members.iter().filter(|m| words.iter().any(|w| *w == m.name.trim().to_lowercase())).collect();
+    if let [k] = named.as_slice() {
+        return Some(chosen(k, vec![k.name.trim().to_lowercase()], "was named in your message"));
+    }
+
+    // 2. The request's words belong to a role
+    let roles: Vec<(&Kwant, usize, Vec<String>)> =
+        members.iter().map(|m| (m, role_score(&words, m))).map(|(m, (s, t))| (m, s, t)).collect();
+    let strong: Vec<&(&Kwant, usize, Vec<String>)> = roles.iter().filter(|(_, s, _)| *s >= 2).collect();
+    let distinct_roles = |set: &[&(&Kwant, usize, Vec<String>)]| {
+        let mut terms: Vec<Vec<String>> = set.iter().map(|(_, _, t)| { let mut t = t.clone(); t.sort(); t }).collect();
+        terms.dedup();
+        terms.len()
+    };
+    if !strong.is_empty() {
+        let top = strong.iter().map(|(_, s, _)| *s).max().unwrap_or(0);
+        let best: Vec<&&(&Kwant, usize, Vec<String>)> = strong.iter().filter(|(_, s, _)| *s == top).collect();
+        // Two bots with clear signals of different roles is multi-role work; two bots sharing one role
+        // is a tie the lead settles.
+        if distinct_roles(&strong) > 1 || best.len() > 1 {
+            let matched: Vec<&Kwant> = strong.iter().map(|(m, _, _)| *m).collect();
+            let mut terms: Vec<String> = Vec::new();
+            for (_, _, t) in &strong {
+                for w in t {
+                    if !terms.contains(w) {
+                        terms.push(w.clone());
+                    }
+                }
+            }
+            if matched.iter().any(|m| m.id == lead.id) {
+                return Some(Pick { kwant: lead, basis: "keywords", reason: format!("{} ({}) matched words in your message and leads here", lead.name, lead.title), terms });
+            }
+            return Some(to_lead(matched, terms));
+        }
+        let (k, _, terms) = best[0];
+        let how = format!("does this kind of work: your message mentions {}", terms.join(", "));
+        return Some(chosen(k, terms.clone(), &how));
+    }
+
+    // 3. Shared words with a bot's name, title or persona (plus weak role hints)
+    let scored: Vec<(&Kwant, usize, Vec<String>)> = members
+        .iter()
+        .zip(&roles)
+        .map(|(m, (_, rs, rt))| {
+            let (s, mut t) = relevance(prompt, m);
+            for w in rt {
+                if !t.contains(w) {
+                    t.push(w.clone());
+                }
+            }
+            (m, s + rs, t)
+        })
+        .collect();
+    let top = scored.iter().map(|(_, s, _)| *s).max().unwrap_or(0);
+    if top > 0 {
+        let best: Vec<&(&Kwant, usize, Vec<String>)> = scored.iter().filter(|(_, s, _)| *s == top).collect();
+        if let [(k, _, terms)] = best.as_slice() {
+            let how = format!("shares words with your message: {}", terms.join(", "));
+            return Some(chosen(k, terms.clone(), &how));
+        }
+        if let Some((k, _, terms)) = best.iter().find(|(m, _, _)| m.id == lead.id) {
+            return Some(chosen(k, terms.clone(), "shares words with your message and leads here"));
+        }
+        let matched: Vec<&Kwant> = best.iter().map(|(m, _, _)| *m).collect();
+        return Some(to_lead(matched, best.iter().flat_map(|(_, _, t)| t.clone()).collect()));
+    }
+
+    // 4. Nothing in the message matched: Laya's pick only when it was clear, else the lead
+    if let Some(g) = laya.filter(|g| g.confident) {
+        let reason = format!("Laya matched this to {}'s role ({}); no words in your message named a role", g.kwant.name, g.kwant.title);
+        return Some(Pick { kwant: g.kwant, basis: "skills", reason, terms: vec![] });
+    }
+    let reason = format!("No one's role matched this, so it went to the {lead_word}, {} ({})", lead.name, lead.title);
+    Some(Pick { kwant: lead, basis: "lead", reason, terms: vec![] })
+}
+
+/// "Create…", "Fix…", "Add…": a request to change code, which one role should do rather than discuss.
+fn is_code_request(prompt: &str) -> bool {
+    const VERBS: &[&str] = &[
+        "create", "add", "implement", "write", "build", "make", "fix", "update", "change", "rename", "remove",
+        "delete", "code", "port", "wire", "hook", "bump", "patch",
+    ];
+    let words = tokens(prompt);
+    words.iter().take(3).any(|w| VERBS.contains(&w.as_str()))
+}
+
+/// A Direct decision from a pick. A message nobody can take goes to the lead.
+fn direct(pick: Option<Pick<'_>>, team: &Team) -> TeamDecision {
+    match pick {
+        Some(p) => TeamDecision::Direct { kwant_id: p.kwant.id.clone(), reason: p.reason, basis: p.basis.into(), matched_terms: p.terms },
+        None => TeamDecision::Direct {
+            kwant_id: team.lead_kwant_id.clone(),
+            reason: "No team members available; routed to team lead".into(),
+            basis: "lead".into(),
+            matched_terms: vec![],
+        },
+    }
+}
+
+/// A clear single-role code request, or a message addressed to one bot, goes straight to that bot even
+/// when it reads like a discussion ("Create a new test simple strategy" used to start one).
+fn settles_without_discussion(prompt: &str, pick: &Option<Pick<'_>>) -> bool {
+    let Some(p) = pick else { return true };
+    p.reason.contains("was named in your message") || (is_code_request(prompt) && matches!(p.basis, "keywords" | "skills" | "only"))
 }
 
 pub fn parse_laya_team_answers(
@@ -296,10 +558,12 @@ pub fn parse_laya_team_answers(
         .and_then(|td| td.get("probabilities"))
         .and_then(|p| p.get("discuss"))
         .and_then(|p| p.as_f64());
+    let guess = laya_guess(data, members);
+    let pick = pick_member(prompt, &team.lead_kwant_id, members, guess, "team lead");
     let discuss = match discuss_probability {
         Some(p) => p >= 0.8 || (p >= 0.5 && is_complex_query(prompt)),
         None => choice == "discuss",
-    };
+    } && !settles_without_discussion(prompt, &pick);
 
     if discuss {
         // Laya's runner-up for the lead role is the best second voice; fall back to any other member.
@@ -331,14 +595,7 @@ pub fn parse_laya_team_answers(
             plan,
         })
     } else {
-        let reason = match lead_kwant {
-            Some(k) => format!("Laya picked {} ({}) as the best fit for this question", k.name, k.title),
-            None => "Routed to the team lead".into(),
-        };
-        Some(TeamDecision::Direct {
-            kwant_id: first_speaker,
-            reason,
-        })
+        Some(direct(pick, team))
     }
 }
 
@@ -347,112 +604,54 @@ pub fn heuristic_team_decision(
     team: &Team,
     members: &[Kwant],
 ) -> TeamDecision {
-    if members.is_empty() {
-        return TeamDecision::Direct {
-            kwant_id: team.lead_kwant_id.clone(),
-            reason: "No team members available; routed to team lead".into(),
-        };
+    let pick = pick_member(prompt, &team.lead_kwant_id, members, None, "team lead");
+    if members.is_empty() || !is_complex_query(prompt) || settles_without_discussion(prompt, &pick) {
+        return direct(pick, team);
     }
 
-    if is_complex_query(prompt) {
-        // Multi-turn discussion between 2-3 specialists
-        let lead_id = if members.iter().any(|m| m.id == team.lead_kwant_id) {
-            team.lead_kwant_id.clone()
-        } else {
-            members[0].id.clone()
-        };
-
-        let mut other_members: Vec<&Kwant> = members.iter().filter(|m| m.id != lead_id).collect();
-        // Rank other members by relevance to prompt
-        other_members.sort_by_key(|m| std::cmp::Reverse(calculate_kwant_relevance(prompt, m)));
-
-        let mut speakers = vec![lead_id];
-        if !other_members.is_empty() {
-            speakers.push(other_members[0].id.clone());
-        }
-
-        // If 3+ members and next member has specific relevance, include them (up to 3 turns)
-        if other_members.len() >= 2 && calculate_kwant_relevance(prompt, other_members[1]) > 0 {
-            speakers.push(other_members[1].id.clone());
-        } else if speakers.len() < 2 {
-            // If team only had 1 member
-            speakers.push(speakers[0].clone());
-        }
-
-        let turns = speakers.len();
-        let plan = generate_discussion_plan(&speakers, members);
-
-        TeamDecision::Discuss {
-            turns,
-            speakers,
-            plan,
-        }
+    // Multi-turn discussion between 2-3 specialists
+    let lead_id = if members.iter().any(|m| m.id == team.lead_kwant_id) {
+        team.lead_kwant_id.clone()
     } else {
-        // Simple query or lookup: Direct to best suited Kwant
-        let mut scored_members: Vec<(&Kwant, usize)> = members
-            .iter()
-            .map(|m| (m, calculate_kwant_relevance(prompt, m)))
-            .collect();
+        members[0].id.clone()
+    };
 
-        scored_members.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
+    let mut other_members: Vec<&Kwant> = members.iter().filter(|m| m.id != lead_id).collect();
+    // Rank other members by relevance to prompt
+    other_members.sort_by_key(|m| std::cmp::Reverse(calculate_kwant_relevance(prompt, m)));
 
-        let best = if scored_members[0].1 > 0 {
-            scored_members[0].0
-        } else {
-            // Fallback to team lead if no domain keyword matched
-            members
-                .iter()
-                .find(|m| m.id == team.lead_kwant_id)
-                .unwrap_or(&members[0])
-        };
+    let mut speakers = vec![lead_id];
+    if !other_members.is_empty() {
+        speakers.push(other_members[0].id.clone());
+    }
 
-        TeamDecision::Direct {
-            kwant_id: best.id.clone(),
-            reason: format!(
-                "Selected {} ({}) for direct response based on domain expertise",
-                best.name, best.title
-            ),
-        }
+    // If 3+ members and next member has specific relevance, include them (up to 3 turns)
+    if other_members.len() >= 2 && calculate_kwant_relevance(prompt, other_members[1]) > 0 {
+        speakers.push(other_members[1].id.clone());
+    } else if speakers.len() < 2 {
+        // If team only had 1 member
+        speakers.push(speakers[0].clone());
+    }
+
+    let turns = speakers.len();
+    let plan = generate_discussion_plan(&speakers, members);
+
+    TeamDecision::Discuss {
+        turns,
+        speakers,
+        plan,
     }
 }
 
+/// Words that ask for a discussion. Whole words only ("explain" isn't "plan"); "strategy" and
+/// "design" are left out because in a code repo they are usually the thing to build.
 fn is_complex_query(prompt: &str) -> bool {
-    let lower = prompt.to_lowercase();
-    let complex_phrases = [
-        "architecture",
-        "architectural",
-        "tradeoff",
-        "trade-off",
-        "design",
-        "migration",
-        "plan",
-        "review",
-        "refactor",
-        "overhaul",
-        "strategy",
-        "rfc",
-        "compare",
-        "comparison",
+    const COMPLEX: &[&str] = &[
+        "architecture", "architectural", "tradeoff", "tradeoffs", "trade-off", "trade-offs", "migration",
+        "migrations", "migrate", "plan", "review", "refactor", "overhaul", "rfc", "compare", "comparison", "vs",
+        "versus",
     ];
-
-    for phrase in complex_phrases {
-        if lower.contains(phrase) {
-            return true;
-        }
-    }
-
-    let words: Vec<&str> = lower
-        .split(|c: char| !c.is_alphanumeric() && c != '-')
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    for w in words {
-        if w == "vs" || w == "versus" {
-            return true;
-        }
-    }
-
-    false
+    tokens(prompt).iter().any(|w| COMPLEX.contains(&w.as_str()))
 }
 
 const STOP_WORDS: &[&str] = &[
@@ -469,8 +668,10 @@ pub struct ChannelRoute {
     pub reason: String,
     /// True when Laya was unreachable and keyword matching picked instead.
     pub fallback: bool,
-    /// Prompt words found in the picked agent's name, title or persona (keyword fallback only).
+    /// Prompt words found in the picked agent's name, title, persona or role.
     pub matched_terms: Vec<String>,
+    /// How the pick was made: see [`Pick::basis`].
+    pub basis: String,
 }
 
 fn calculate_kwant_relevance(prompt: &str, kwant: &Kwant) -> usize {

@@ -2001,7 +2001,7 @@ async fn send_chat_inner(
             .await;
 
         match team_decision {
-            TeamDecision::Direct { kwant_id, reason } => {
+            TeamDecision::Direct { kwant_id, reason, basis, matched_terms } => {
                 let target_kwant = members
                     .iter()
                     .find(|k| k.id == kwant_id)
@@ -2011,7 +2011,8 @@ async fn send_chat_inner(
 
                 // The team router doesn't say which path it took; Laya being down means keywords did
                 let fallback = !state.router.status().is_up();
-                let routing = routing_meta(&target_kwant, &reason, members.len(), fallback, &[]);
+                let basis = if basis.is_empty() { "skills".to_string() } else { basis };
+                let routing = routing_meta(&target_kwant, &reason, members.len(), fallback, &matched_terms, &basis);
                 let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                     context_id: routing_context_id,
                     kwant_id: target_kwant.id.clone(),
@@ -2021,7 +2022,8 @@ async fn send_chat_inner(
                     mode: "direct".into(),
                     candidate_count: Some(members.len()),
                     fallback,
-                    matched_terms: Vec::new(),
+                    matched_terms,
+                    basis: Some(basis),
                 });
 
                 let _ = state.event_sender.send(RuntimeEvent::ThinkingDelta(format!(
@@ -2070,6 +2072,7 @@ async fn send_chat_inner(
                         candidate_count: Some(members.len()),
                         fallback: !state.router.status().is_up(),
                         matched_terms: Vec::new(),
+                        basis: Some("discuss".into()),
                     });
                 }
 
@@ -2160,7 +2163,7 @@ async fn send_chat_inner(
                         .await;
                     let chosen = members.iter().find(|k| k.id == route.kwant_id).cloned().or(lead);
                     if let Some(ref k) = chosen {
-                        routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms));
+                        routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms, &route.basis));
                         let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                             context_id,
                             kwant_id: k.id.clone(),
@@ -2171,6 +2174,7 @@ async fn send_chat_inner(
                             candidate_count: Some(members.len()),
                             fallback: route.fallback,
                             matched_terms: route.matched_terms,
+                            basis: Some(route.basis),
                         });
                     }
                     chosen
@@ -2207,8 +2211,9 @@ async fn send_chat_inner(
 }
 
 /// A reply's `meta.routing`: who Laya picked for a channel or team message and why.
-fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String]) -> serde_json::Value {
+fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String], basis: &str) -> serde_json::Value {
     json!({
+        "basis": basis,
         "kwant_id": kwant.id,
         "kwant_name": kwant.name,
         "reason": reason,

@@ -333,7 +333,7 @@ async fn grok_gets_the_gateway_with_the_token_in_env_only() {
     let config_text = grok.out("config.toml");
     let env = grok.out("env");
     assert!(
-        argv.contains("--allow\nMCPTool(kwnt__*)\n--output-format\nstreaming-json\n"),
+        argv.contains("--allow\nMCPTool(kwnt__*)\n--allow\nWebFetch\n--output-format\nstreaming-json\n"),
         "{argv}"
     );
     assert_eq!(
@@ -379,7 +379,8 @@ async fn grok_without_tools_gets_no_gateway() {
     let grok = FakeGrok::new("echo ok");
     grok.run(None).await;
     let argv = grok.out("argv");
-    assert!(!argv.contains("--allow"), "{argv}");
+    assert!(!argv.contains("MCPTool("), "{argv}");
+    assert!(argv.contains("--allow\nWebFetch\n"), "grok may still read web pages: {argv}");
     assert!(argv.contains("--output-format\nstreaming-json\n"), "{argv}");
     assert_eq!(env_value(&grok.out("env"), "KWNT_MCP_GATEWAY_TOKEN"), None);
     assert!(!grok.out("config.toml").contains("mcp_servers"));
