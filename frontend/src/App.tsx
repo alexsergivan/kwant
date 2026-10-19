@@ -8,7 +8,7 @@ import { DelegationCard } from './components/DelegationCard';
 import { QuestionCard } from './components/QuestionCard';
 import { McpSuggestionCard } from './components/McpSuggestionCard';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
-import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, decisionError, hiresApi } from './botActions';
+import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, changesBots, decisionError, hiresApi } from './botActions';
 import { BotActionCard, type BotActionDecision } from './components/BotActionCard';
 import { HireCard, type HireDecision } from './components/HireCard';
 import type { RoutineFocus } from './components/RoutinesPanel';
@@ -290,6 +290,45 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   showNotificationRef.current = showNotification;
   const refreshProfiles = useCallback(() => {
     profilesApi.list().then(setProfiles, () => undefined);
+  }, []);
+  // Bots, teams and the space's counts again after a bot was hired, made, undone or deleted elsewhere, so the sidebar
+  // matches the server without a reload. Bursts of events share one load; a late reply never
+  // overwrites a newer one.
+  const onSpacesChangedRef = useRef(onSpacesChanged);
+  onSpacesChangedRef.current = onSpacesChanged;
+  const rosterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rosterSeqRef = useRef(0);
+  const refreshRoster = useCallback(() => {
+    if (rosterTimerRef.current) clearTimeout(rosterTimerRef.current);
+    rosterTimerRef.current = setTimeout(async () => {
+      rosterTimerRef.current = null;
+      const seq = ++rosterSeqRef.current;
+      try {
+        const [kRes, tRes] = await Promise.all([
+          fetch('/api/kwants').then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
+          fetch('/api/teams').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        ]);
+        if (seq !== rosterSeqRef.current || !Array.isArray(kRes)) return;
+        setKwants(kRes);
+        // The space header counts bots too.
+        onSpacesChangedRef.current();
+        if (Array.isArray(tRes)) {
+          setTeams(tRes.map((t: any) => ({
+            ...t,
+            member_kwants: Array.isArray(t.member_kwants)
+              ? t.member_kwants
+              : typeof t.member_kwants === 'string'
+              ? JSON.parse(t.member_kwants || '[]')
+              : [],
+          })));
+        }
+      } catch {
+        // The next change or a reload tries again; the list on screen stays as it was.
+      }
+    }, 150);
+  }, []);
+  useEffect(() => () => {
+    if (rosterTimerRef.current) clearTimeout(rosterTimerRef.current);
   }, []);
   const markLive = (ctx: string | null | undefined, speaker?: string) => {
     if (!ctx) return;
@@ -573,6 +612,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       try {
         const event = JSON.parse(e.data);
         if (affectsAway(event.type)) refreshAwayCount(800);
+        if (changesBots(event.type, event.data)) refreshRoster();
         switch (event.type) {
           case 'turn_queued':
           case 'TurnQueued':

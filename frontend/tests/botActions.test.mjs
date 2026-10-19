@@ -276,3 +276,23 @@ test('hire policy parses with safe defaults', () => {
   assert.deepEqual(d.denied, []);
   assert.equal(b.parseHirePolicy(null), null);
 });
+
+test('bot and hire events that add or remove a bot ask the sidebar to reload', () => {
+  const action = (over) => ({ id: 'a9', status: over.status ?? 'applied', card: routineMeta({ action_id: 'a9', ...over }) });
+  const hireEv = (status) => ({ id: 'h9', status, card: { kind: 'hire_proposal', hire_id: 'h9', kwant_id: 'k1', name: 'Chef', role: 'Cook', status } });
+  // A bot made, renamed, hired, undone or deleted: reload.
+  assert.equal(b.changesBots('bot_action_updated', { action: action({ action: 'bot_create', target_kind: 'bot', target_id: 'k2' }) }), true);
+  assert.equal(b.changesBots('bot_action_updated', { action: action({ action: 'bot_hire', target_kind: 'bot', status: 'undone' }) }), true);
+  assert.equal(b.changesBots('BotActionUpdated', { action: action({ action: 'bot_delete', target_kind: 'bot', status: 'confirmed' }) }), true);
+  assert.equal(b.changesBots('hire_updated', { hire: hireEv('accepted') }), true);
+  assert.equal(b.changesBots('HireUpdated', { hire: hireEv('auto_accepted') }), true);
+  assert.equal(b.changesBots('hire_updated', { hire: hireEv('undone') }), true);
+  // Nothing about the bot list changed yet, or not a bot at all: leave it.
+  assert.equal(b.changesBots('bot_action_updated', { action: action({ action: 'bot_delete', target_kind: 'bot', status: 'pending' }) }), false);
+  assert.equal(b.changesBots('bot_action_updated', { action: action({ action: 'bot_delete', target_kind: 'bot', status: 'declined' }) }), false);
+  assert.equal(b.changesBots('bot_action_updated', { action: action({}) }), false);
+  assert.equal(b.changesBots('hire_updated', { hire: hireEv('pending') }), false);
+  assert.equal(b.changesBots('hire_updated', { hire: hireEv('denied') }), false);
+  assert.equal(b.changesBots('message_added', { message: {} }), false);
+  assert.equal(b.changesBots('hire_updated', null), false);
+});

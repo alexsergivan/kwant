@@ -416,3 +416,24 @@ export const hiresApi = {
   setPolicy: (spaceId: string, body: { policy?: 'ask' | 'auto'; clear_denials?: boolean }) =>
     call<unknown>('PUT', `/api/spaces/${enc(spaceId)}/hire-policy`, body),
 };
+
+// ---------------------------------------------------------------------------
+// Sidebar
+
+/**
+ * Whether a live event added, changed or removed a bot, so the bot list should reload: a bot
+ * action on a bot that was applied, undone or confirmed, or a hire that was accepted or undone.
+ */
+export function changesBots(type: string, data: unknown): boolean {
+  const d = data && typeof data === 'object' ? (data as Record<string, unknown>) : null;
+  if (!d) return false;
+  if (type === 'bot_action_updated' || type === 'BotActionUpdated') {
+    const card = parseBotActionMeta((d.action as BotAction | undefined)?.card);
+    return !!card && card.target_kind === 'bot' && ['applied', 'undone', 'confirmed'].includes(card.status);
+  }
+  if (type === 'hire_updated' || type === 'HireUpdated') {
+    const card = parseHireMeta((d.hire as Hire | undefined)?.card);
+    return !!card && ['accepted', 'auto_accepted', 'undone'].includes(card.status);
+  }
+  return false;
+}
