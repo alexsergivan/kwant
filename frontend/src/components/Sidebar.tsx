@@ -3,8 +3,8 @@ import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, S
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
-import { isUsable, pickLabel } from '../engines';
-import { useEngines } from '../useEngines';
+import { canRunNow, isUsable, pickLabel } from '../engines';
+import { EnginesApi, useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
 import { Space, spaceSummary } from '../spaces';
 import { SpaceSwitcher, SpaceTile } from './Spaces';
@@ -91,6 +91,8 @@ export interface SidebarProps {
   onSignInClaude?: () => void;
   /** Changes when Space settings closes, so the footer reads account status again. */
   enginesRefreshKey?: number;
+  /** The space's engine checks when the app already loads them; the sidebar loads its own otherwise. */
+  engines?: EnginesApi;
 }
 
 const navRow = (active: boolean) =>
@@ -137,8 +139,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenAccounts,
   onSignInClaude,
   enginesRefreshKey = 0,
+  engines: sharedEngines,
 }) => {
-  const engines = useEngines(true);
+  const ownEngines = useEngines(!sharedEngines);
+  const engines = sharedEngines ?? ownEngines;
   const { reload: reloadEngines } = engines;
   useEffect(() => {
     if (enginesRefreshKey) reloadEngines();
@@ -148,6 +152,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const runsOn = ready?.map((e) => e.uses?.label ?? e.name) ?? [];
   // Nothing can run and Claude only needs signing in: the footer goes straight to that.
   const offerClaude = readyCount === 0 && !!onSignInClaude && claudeNeedsSignIn(engines.engines);
+  const canRun = canRunNow(engines.engines);
   const [teamsOpen, setTeamsOpen] = useState(true);
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
   const [addingTo, setAddingTo] = useState<string | null>(null);
@@ -558,13 +563,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                   }`}
                 >
-                  <ModernAvatar
-                    role={k.avatar_sprite}
-                    name={k.name}
-                    size={32}
-                    isOnline={true}
-                    kwantId={k.id}
-                  />
+                  <span className="shrink-0" title={canRun === false ? "Can't run yet: no account works here" : undefined}>
+                    <ModernAvatar
+                      role={k.avatar_sprite}
+                      name={k.name}
+                      size={32}
+                      isOnline={canRun !== false}
+                      kwantId={k.id}
+                    />
+                  </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-1">
                       <span className="text-xs font-semibold text-zinc-200 truncate">{k.name}</span>
@@ -606,7 +613,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Footer: what this space's bots run on, from the real checks */}
-      {engines.engines?.length !== 0 && section !== 'chats' ? (
+      {/* On the phone's Chats tab only while nothing can run, so setup is never hidden there */}
+      {engines.engines?.length !== 0 && (section !== 'chats' || canRun === false) ? (
         <div className="p-3 border-t border-zinc-800/60 bg-zinc-950/40 text-[11px] text-zinc-500">
           <button
             type="button"
@@ -622,7 +630,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             ) : (
               <AlertTriangle size={13} className="text-amber-400" aria-hidden="true" />
             )}
-            <span className="truncate">
+            {/* The warning wraps, so its fix is never cut off */}
+            <span className={readyCount === 0 ? 'text-left' : 'truncate'}>
               {readyCount === null
                 ? 'Checking accounts…'
                 : readyCount === 0

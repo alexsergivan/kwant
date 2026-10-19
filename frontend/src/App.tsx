@@ -13,7 +13,7 @@ import { BotActionCard, type BotActionDecision } from './components/BotActionCar
 import { HireCard, type HireDecision } from './components/HireCard';
 import type { RoutineFocus } from './components/RoutinesPanel';
 import { AwayPage } from './components/AwayView';
-import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
+import { AlertTriangle, Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { PendingApproval } from './components/ModernApprovalCard';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
@@ -67,6 +67,9 @@ import {
 } from './questions';
 import { AwayItem, affectsAway, awayApi, awayTarget, badgeText } from './away';
 import { Space, eventsUrl, pickInitialChat, spaceColor } from './spaces';
+import { canRunNow } from './engines';
+import { useEngines } from './useEngines';
+import { claudeNeedsSignIn } from './claudeLogin';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -222,6 +225,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setClaudeSignInFocus(Date.now());
     setSpaceSettingsTab('accounts');
   };
+  // This space's engine checks, shared with the sidebar: the setup banner, the "can't answer"
+  // card and the bots' online dots all read whether anything can run.
+  const engines = useEngines(true);
+  const canRun = canRunNow(engines.engines);
+  const offerClaude = canRun === false && claudeNeedsSignIn(engines.engines);
   const closeSpaceSettings = () => {
     setSpaceSettingsTab(null);
     setSettingsClosedCount((n) => n + 1);
@@ -2182,6 +2190,30 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const needsSetup = loaded && kwants.length === 0;
   const readyAccounts = space.counts?.ready_accounts ?? 0;
+  // The space has bots but nothing can run them (a fresh install's starter bots): the checklist's
+  // first step, kept above the chat until an account works.
+  const setupBanner =
+    loaded && kwants.length > 0 && canRun === false ? (
+      <div
+        role="status"
+        data-setup-banner
+        className="shrink-0 px-3 sm:px-6 py-2.5 border-b border-amber-500/20 bg-amber-500/5 flex flex-wrap items-center gap-x-3 gap-y-2"
+      >
+        <AlertTriangle size={15} className="shrink-0 text-amber-300" aria-hidden="true" />
+        <div className="flex-1 min-w-[12rem]">
+          <p className="text-xs font-medium text-zinc-100">Get {space.name} ready: add an account</p>
+          <p className="text-[11px] text-zinc-400">Bots here can't answer until one account works. Sign in with Claude, Codex or Grok, or add an API key.</p>
+        </div>
+        <button
+          type="button"
+          onClick={offerClaude ? openClaudeSignIn : openSettings}
+          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
+        >
+          <KeyRound size={13} aria-hidden="true" />
+          {offerClaude ? 'Sign in with Claude' : 'Add an account'}
+        </button>
+      </div>
+    ) : null;
   const setupChecklist = (
     <main className="flex-1 min-w-0 overflow-y-auto flex items-start sm:items-center justify-center p-4 sm:p-8" data-space-checklist>
       <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 sm:p-6 space-y-4">
@@ -2275,6 +2307,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpenAccounts={openSettings}
       onSignInClaude={openClaudeSignIn}
       enginesRefreshKey={settingsClosedCount}
+      engines={engines}
       kwants={kwants}
       channels={channels}
       teams={teams}
@@ -2381,7 +2414,18 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           highlightMessageId={highlightMessageId}
           onHighlightDone={() => setHighlightMessageId(null)}
-          subHeader={subHeader}
+          subHeader={
+            setupBanner ? (
+              <>
+                {subHeader}
+                {setupBanner}
+              </>
+            ) : (
+              subHeader
+            )
+          }
+          onOpenAccounts={openSettings}
+          canRun={canRun}
           titleExtra={
             workingBadge || skillsBadge ? (
               <>
@@ -2452,7 +2496,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                         return;
                       }
                       if (t.id === 'space') {
-                        openSpaceSettings('general');
+                        // Nothing can run yet: the fix is in Accounts, so start there
+                        openSpaceSettings(canRun === false ? 'accounts' : 'general');
                         return;
                       }
                       setPhoneTab(t.id);
