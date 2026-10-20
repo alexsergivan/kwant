@@ -178,6 +178,43 @@ pub fn grok_builtin_rules(folder: Option<&Path>) -> Vec<String> {
     rules
 }
 
+/// claude's own product features that would work outside kwnt, where the person can't see or
+/// undo them: its scheduler (cron, wake-ups, the `schedule`/`loop` skills, cloud routines), push
+/// notifications, and messaging other claude sessions. kwnt has its own routines and teammates.
+pub const CLAUDE_DISALLOWED_TOOLS: &[&str] = &[
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "ScheduleWakeup",
+    "RemoteTrigger",
+    "PushNotification",
+    "ListAgents",
+    "SendMessage",
+    "Skill(schedule)",
+    "Skill(loop)",
+];
+
+/// grok's own scheduler, for the same reason. Its subagents are already off (`--no-subagents`).
+pub const GROK_DISALLOWED_TOOLS: &[&str] = &["SchedulerCreate", "SchedulerDelete", "SchedulerList"];
+
+/// codex features kept off for the same reason: its local automations and its cross-session
+/// memories. `-c features.<name>=false` rather than `--disable`, which refuses names a later codex
+/// drops and would stop every turn.
+pub const CODEX_DISABLED_FEATURES: &[&str] = &["in_app_local_automation", "memories"];
+
+/// One `--disallowedTools` value: claude reads a comma-separated list.
+pub fn claude_disallowed_args() -> [String; 2] {
+    ["--disallowedTools".into(), CLAUDE_DISALLOWED_TOOLS.join(",")]
+}
+
+pub fn grok_disallowed_args() -> [String; 2] {
+    ["--disallowed-tools".into(), GROK_DISALLOWED_TOOLS.join(",")]
+}
+
+pub fn codex_feature_args() -> Vec<String> {
+    CODEX_DISABLED_FEATURES.iter().flat_map(|f| ["-c".to_string(), format!("features.{f}=false")]).collect()
+}
+
 pub const CODEX_SHELL_POLICY: [&str; 4] = [
     "-c",
     "shell_environment_policy.inherit=\"core\"",
@@ -786,7 +823,9 @@ impl Driver for CliDriver {
                     .arg("-c")
                     .arg(codex_mcp_servers(input.mcp.as_ref(), &user_servers))
                     // The model's shell sees only codex's core env, never kwnt's keys or rc exports
-                    .args(CODEX_SHELL_POLICY);
+                    .args(CODEX_SHELL_POLICY)
+                    // kwnt's routines and memory, never codex's own
+                    .args(codex_feature_args());
                 // codex exec has no approval hook: its sandbox keeps file writes (and shell
                 // commands' writes) inside the bot's working folder instead of read-only everywhere
                 if input.workspace_dir.as_deref().is_some_and(|d| d.exists()) {
@@ -820,6 +859,9 @@ impl Driver for CliDriver {
                     grok_effort.into(),
                     "--no-plan".into(),
                     "--no-subagents".into(),
+                ]);
+                args.extend(grok_disallowed_args());
+                args.extend([
                     "--rules".into(),
                     system_prompt.clone(),
                     "-p".into(),
@@ -880,6 +922,8 @@ impl Driver for CliDriver {
                 cmd.arg("--permission-mode").arg("default");
                 // Skip starting the user's personal MCP servers on every chat turn
                 cmd.arg("--strict-mcp-config");
+                // kwnt's routines and teammates, never claude's own scheduler or sessions
+                cmd.args(claude_disallowed_args());
                 if let Some(ctx) = &input.mcp {
                     match crate::mcp::cli_config::write_claude_config(ctx) {
                         Ok(file) => {
@@ -1058,6 +1102,27 @@ mod tests {
         let rules = grok_builtin_rules(Some(tmp.path()));
         assert_eq!(rules, ["--allow", "WebFetch", "--allow", &format!("Edit({real}/**)"), "--allow", &format!("Write({real}/**)")]);
         assert!(!rules.iter().any(|r| r.starts_with("Bash")), "shell commands stay refused");
+    }
+
+    #[test]
+    fn engine_schedulers_and_sessions_are_switched_off() {
+        let [flag, list] = claude_disallowed_args();
+        assert_eq!(flag, "--disallowedTools");
+        let tools: Vec<&str> = list.split(',').collect();
+        for tool in ["CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger", "PushNotification", "Skill(schedule)", "Skill(loop)"] {
+            assert!(tools.contains(&tool), "{tool} missing from {list}");
+        }
+        // kwnt's own tools and claude's lookups stay usable
+        assert!(!tools.iter().any(|t| t.starts_with("mcp__") || ["WebSearch", "WebFetch", "Read"].contains(t)));
+
+        assert_eq!(grok_disallowed_args(), ["--disallowed-tools", "SchedulerCreate,SchedulerDelete,SchedulerList"]);
+
+        let codex = codex_feature_args();
+        assert_eq!(codex, ["-c", "features.in_app_local_automation=false", "-c", "features.memories=false"]);
+        for pair in codex.iter().skip(1).step_by(2) {
+            let table: toml::Table = pair.parse().unwrap();
+            assert_eq!(table["features"].as_table().unwrap().values().next(), Some(&toml::Value::Boolean(false)), "{pair}");
+        }
     }
 
     #[test]

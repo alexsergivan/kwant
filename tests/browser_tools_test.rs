@@ -166,6 +166,18 @@ async fn claude_turn_gets_browser_tools_that_drive_its_own_panel() {
     let none = input.format_system_prompt_with(BrowserAccess::Unavailable);
     assert!(!none.contains("curl -sS") && !none.contains("browser_open") && none.contains("no way to use the browser"));
 
+    // Every turn knows it is a kwant bot, not the engine; only a turn whose tools work is sent to `routine_create`
+    for (label, p) in [("tools", &prompt), ("shell", &shell), ("unavailable", &none)] {
+        assert!(p.contains("[Who you are]"), "{label}");
+        assert!(p.contains(&format!("You are {}, a bot in kwant", bot.name)), "{label}");
+        assert!(p.contains("you are not Claude Code, Codex or Grok"), "{label}");
+        assert!(p.contains("Never use the engine's own scheduler"), "{label}");
+    }
+    assert!(prompt.contains("`routine_create`") && !prompt.contains("Routines in kwant's sidebar"));
+    for p in [&shell, &none] {
+        assert!(p.contains("Routines in kwant's sidebar") && !p.contains("`routine_create`"), "{p}");
+    }
+
     if computer::local_chrome_path().is_none() {
         eprintln!("browser part skipped: no Chrome or Chromium installed");
         mcp_runtime::finish_turn(&state, &token).await;
