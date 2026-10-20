@@ -1680,6 +1680,7 @@ async fn delete_unused_bot(state: &AppState, id: &str) -> Result<(), Response> {
     }
     match state.db.delete_unused_kwant(id).await {
         Ok(true) => {
+            super::passwords::forget_deleted_owners(state, &[id]).await;
             state.scheduler_wake.notify_one();
             Ok(())
         }
@@ -1782,7 +1783,7 @@ async fn undo_action(state: &AppState, a: &BotAction) -> Result<Option<String>, 
                 .await?;
         }
         "channel_create" => match state.db.delete_empty_channel(&target).await {
-            Ok(true) => {}
+            Ok(true) => super::passwords::forget_deleted_owners(state, &[&target]).await,
             Ok(false) => return Err(error(StatusCode::CONFLICT, "the channel already has messages, so it is kept")),
             Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
         },

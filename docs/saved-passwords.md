@@ -17,6 +17,7 @@ Since 2026-10-20, approvals off and passwords in the built-in store are not allo
 - While any space or bot has approvals off, saving into the built-in store (`POST …/passwords` or `…/passwords/pending`) returns 409 `{error, needs_bitwarden: true}`. A captured login keeps waiting.
 - While any space or bot has approvals off, going back from Bitwarden to the built-in store (`DELETE /api/passwords/bitwarden`) returns 409 `{error, needs_bitwarden: true, local_count}`, unless the built-in store is empty.
 - A space that is off counts even if every bot in it overrides to `ask`, because a new bot there would inherit `off`.
+- `local_count` counts every file in `<data>/kwnt-vault/`, including those of deleted teams, channels and bots (audit F-11). A file that won't open counts as one. Deleting a bot, team or channel now deletes its file. Leftovers from before this change are kept, because they are the person's data. They still count, and `POST /api/passwords/migrate` moves them to Bitwarden too. Spaces are only archived, so their bots' passwords keep counting. Deleting an owner never deletes items in Bitwarden.
 - An install that was already in this state keeps its approvals as they are. `GET /api/passwords/store` shows `exposed: true`, and kwnt logs one warning at start (a count, no secrets). Moving the passwords to Bitwarden or turning approvals back on clears it.
 
 With Bitwarden, the API token alone doesn't show a password: that needs the master password. The DevTools gap below still applies in Bitwarden mode.

@@ -4,13 +4,15 @@
 //! unlocks it again. Forgetting Bitwarden goes back to the built-in store.
 
 use super::bitwarden::BitwardenStore;
-use super::credentials::{open_store, Credential, CredentialMeta, CredentialStore, StoreError, VAULT_DIR};
-use std::path::Path;
+use super::credentials::{open_store, stored_owners, Credential, CredentialMeta, CredentialStore, StoreError, VAULT_DIR};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct PasswordVault {
     local: Arc<dyn CredentialStore>,
     bitwarden: BitwardenStore,
+    /// `<data_dir>/kwnt-vault`, where the built-in store keeps one file per owner.
+    dir: PathBuf,
 }
 
 impl std::fmt::Debug for PasswordVault {
@@ -33,7 +35,8 @@ impl PasswordVault {
     }
 
     pub fn new(local: Arc<dyn CredentialStore>, data_dir: &Path) -> Self {
-        Self { local, bitwarden: BitwardenStore::open(&data_dir.join(VAULT_DIR)) }
+        let dir = data_dir.join(VAULT_DIR);
+        Self { local, bitwarden: BitwardenStore::open(&dir), dir }
     }
 
     pub fn bitwarden(&self) -> &BitwardenStore {
@@ -66,24 +69,27 @@ impl PasswordVault {
         }
     }
 
-    /// Moves every built-in saved password of `owners` into the unlocked Bitwarden vault. Each is
-    /// deleted locally only after Bitwarden has it; one that fails stays where it was.
-    pub async fn move_local_to_bitwarden(&self, owners: &[String]) -> Result<Migration, StoreError> {
+    /// Moves every password the built-in store holds into the unlocked Bitwarden vault, including
+    /// those of deleted teams, channels and bots (audit F-11). Each is deleted locally only after
+    /// Bitwarden has it; one that fails stays where it was, and a file no owner opens counts as
+    /// one failure.
+    pub async fn move_local_to_bitwarden(&self) -> Result<Migration, StoreError> {
         if !self.bitwarden.is_unlocked().await {
             return Err(StoreError::Locked);
         }
         let mut done = Migration::default();
-        for owner in owners {
-            let Ok(list) = self.local.list(owner).await else {
+        for owner in stored_owners(&self.dir) {
+            let Ok(list) = self.local.list(&owner).await else {
+                done.failed += 1;
                 continue;
             };
             for meta in list {
-                let Ok(Some(c)) = self.local.get(owner, &meta.id).await else {
+                let Ok(Some(c)) = self.local.get(&owner, &meta.id).await else {
                     done.failed += 1;
                     continue;
                 };
-                match self.bitwarden.save(owner, &c.meta.origin, &c.meta.username, &c.password).await {
-                    Ok(_) if self.local.delete(owner, &meta.id).await.is_ok() => done.moved += 1,
+                match self.bitwarden.save(&owner, &c.meta.origin, &c.meta.username, &c.password).await {
+                    Ok(_) if self.local.delete(&owner, &meta.id).await.is_ok() => done.moved += 1,
                     Ok(_) => done.failed += 1,
                     Err(StoreError::Locked) => return Err(StoreError::Locked),
                     Err(e) => {
@@ -96,13 +102,20 @@ impl PasswordVault {
         Ok(done)
     }
 
-    /// How many passwords the built-in store holds for `owners`.
-    pub async fn local_count(&self, owners: &[String]) -> usize {
+    /// How many passwords the built-in store holds: every file in it, including those of deleted
+    /// owners (audit F-11). A file that doesn't open counts as one, since a bot with the key might.
+    pub async fn local_count(&self) -> usize {
         let mut n = 0;
-        for owner in owners {
-            n += self.local.list(owner).await.map(|l| l.len()).unwrap_or(0);
+        for owner in stored_owners(&self.dir) {
+            n += self.local.list(&owner).await.map(|l| l.len()).unwrap_or(1);
         }
         n
+    }
+
+    /// Deletes the built-in store's file for a team, channel or bot that was deleted. Bitwarden
+    /// items are the person's own and stay.
+    pub async fn forget_local_owner(&self, owner: &str) -> Result<(), StoreError> {
+        self.local.forget_owner(owner).await
     }
 }
 
@@ -157,7 +170,7 @@ mod tests {
         assert!(vault.for_origin("team-1", "https://example.com").await.unwrap().is_none());
         assert!(matches!(vault.list("team-1").await, Err(StoreError::Locked)));
         assert!(matches!(vault.save("team-1", "https://example.com", "u", "p").await, Err(StoreError::Locked)));
-        assert!(matches!(vault.move_local_to_bitwarden(&["team-1".into()]).await, Err(StoreError::Locked)));
-        assert_eq!(vault.local_count(&["team-1".into()]).await, 1, "the local copy stays until moved");
+        assert!(matches!(vault.move_local_to_bitwarden().await, Err(StoreError::Locked)));
+        assert_eq!(vault.local_count().await, 1, "the local copy stays until moved");
     }
 }

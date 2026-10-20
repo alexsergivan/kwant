@@ -39,6 +39,8 @@
 //!
 //! and switching approvals off answers 409 while the built-in store holds any password (see
 //! [`refuse_approvals_off`]). An install already in that state is reported as `exposed: true`.
+//! `local_count` counts every file in the built-in store, those of deleted teams, channels and
+//! bots included, and deleting one removes its file (audit F-11).
 
 use super::AppState;
 use crate::db::spaces::SpaceId;
@@ -346,10 +348,24 @@ async fn store_json(state: &AppState) -> Value {
     })
 }
 
-/// How many passwords the built-in store holds. In Bitwarden mode these are leftovers that were
-/// never moved, still readable with the built-in key.
+/// How many passwords the built-in store holds, deleted owners' files included (audit F-11). In
+/// Bitwarden mode these are leftovers that were never moved, still readable with the built-in key.
 pub async fn local_count(state: &AppState) -> usize {
-    state.credentials.local_count(&all_owners(state).await).await
+    state.credentials.local_count().await
+}
+
+/// After a team, channel or bot is deleted: removes its file from the built-in store, so no
+/// password outlives its owner unseen (audit F-11). An id that still exists is left alone.
+pub async fn forget_deleted_owners(state: &AppState, ids: &[&str]) {
+    if ids.is_empty() {
+        return;
+    }
+    let live = all_owners(state).await;
+    for id in ids.iter().filter(|id| !live.iter().any(|l| l == *id)) {
+        if let Err(e) = state.credentials.forget_local_owner(id).await {
+            tracing::warn!(error = %e, owner = %id, "could not delete a deleted owner's saved passwords");
+        }
+    }
 }
 
 /// Whether any space or bot has approvals off. A failed read counts as off.
@@ -490,8 +506,7 @@ pub async fn migrate_to_bitwarden(State(state): State<AppState>, headers: Header
     if let Err(r) = person(&state, &headers).await {
         return r;
     }
-    let owners = all_owners(&state).await;
-    match state.credentials.move_local_to_bitwarden(&owners).await {
+    match state.credentials.move_local_to_bitwarden().await {
         Ok(done) => {
             tracing::info!(moved = done.moved, failed = done.failed, "the person moved saved passwords to Bitwarden");
             Json(json!(done)).into_response()

@@ -187,6 +187,8 @@ async fn bitwarden_end_to_end() {
         .person("POST", &format!("/api/sandbox/{team}/passwords"), Some(json!({"origin": "https://old.example.com", "username": "olduser", "password": "DUMMY-LOCAL-PW"})))
         .await;
     assert_eq!(s, StatusCode::OK);
+    // and one a deleted bot left behind (audit F-11): counted, and moved too
+    e.state.credentials.local().save("0b5e1e7e-dead-4bad-8bad-000000000011", "https://orphan.example.com", "ou", "DUMMY-ORPHAN-PW").await.unwrap();
 
     // Wrong master password
     let unlock = |pw: &str| json!({"server_url": server, "email": email, "master_password": pw});
@@ -202,7 +204,7 @@ async fn bitwarden_end_to_end() {
     assert_eq!(v["bitwarden"]["email"], email);
     assert_eq!(v["bitwarden"]["unlocked"], true);
     assert_eq!(v["bitwarden"]["login"], "password");
-    assert_eq!(v["local_count"], 1);
+    assert_eq!(v["local_count"], 2);
 
     // Another account can't replace it without forgetting this one
     let (s, _) = e
@@ -213,8 +215,14 @@ async fn bitwarden_end_to_end() {
     // Move the local one over
     let (s, v) = e.person("POST", "/api/passwords/migrate", None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    assert_eq!(v, json!({"moved": 1, "failed": 0}));
-    assert_eq!(e.state.credentials.local_count(std::slice::from_ref(&team)).await, 0);
+    assert_eq!(v, json!({"moved": 2, "failed": 0}));
+    assert_eq!(e.state.credentials.local_count().await, 0);
+    let left: Vec<_> = std::fs::read_dir(e.data.join("kwnt-vault"))
+        .unwrap()
+        .flatten()
+        .filter(|f| f.file_name().to_string_lossy().ends_with(".bin"))
+        .collect();
+    assert!(left.is_empty(), "Move to Bitwarden leaves no built-in file: {left:?}");
 
     // Save one through the API and one the browser captured
     let uri = format!("/api/sandbox/{team}/passwords");
@@ -303,7 +311,7 @@ async fn bitwarden_end_to_end() {
     // Unlock again (the saved server and email are reused) and the items are back
     let (s, v) = e.person("POST", "/api/passwords/bitwarden/unlock", Some(json!({"master_password": MASTER}))).await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    assert_eq!(v["bitwarden"]["item_count"], 3);
+    assert_eq!(v["bitwarden"]["item_count"], 4, "the 3 saved here and the moved leftover");
     assert_eq!(vault.for_origin(&team, "https://login.example.com").await.unwrap().unwrap().password, "DUMMY-BW-PW-1b");
 
     // Delete moves it to Bitwarden's trash and kwnt stops using it

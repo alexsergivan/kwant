@@ -236,6 +236,10 @@ pub async fn undo(State(state): State<AppState>, Scope(space): Scope, Path(id): 
     };
     match state.db.undo_import(&id, req.force).await {
         Ok(r) => {
+            let c = &r.created;
+            let gone: Vec<&str> =
+                c.kwants.iter().map(|k| k.id.as_str()).chain(c.teams.iter().chain(&c.channels).map(String::as_str)).collect();
+            super::passwords::forget_deleted_owners(&state, &gone).await;
             tracing::info!(import_id = %id, space = %space, "import undone");
             Json(r).into_response()
         }

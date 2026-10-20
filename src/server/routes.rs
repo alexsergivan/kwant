@@ -350,6 +350,7 @@ pub async fn delete_kwant(State(state): State<AppState>, headers: axum::http::He
         Err(e) => return db_error(&e, ""),
     }
     state.broker.forget_kwant(&id).await;
+    super::passwords::forget_deleted_owners(&state, &[&id]).await;
     state.scheduler_wake.notify_one();
     tracing::info!(kwant_id = %id, name = %bot.name, "the person deleted a bot");
     let folder = crate::db::spaces::space_data_dir(&state.config.data_dir, &space).join("bot-workspaces").join(&id);
@@ -518,7 +519,10 @@ pub async fn delete_team(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     match state.db.delete_team(&id).await {
-        Ok(true) => Ok(Json(json!({ "status": "deleted" }))),
+        Ok(true) => {
+            super::passwords::forget_deleted_owners(&state, &[&id]).await;
+            Ok(Json(json!({ "status": "deleted" })))
+        }
         Ok(false) => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }

@@ -746,6 +746,12 @@ pub(super) async fn remove_made(state: &AppState, ids: &[String], made_team: Opt
     for id in ids {
         let _ = state.db.delete_unused_kwant(id).await;
     }
+    // Only what is really gone loses its saved passwords
+    let mut gone: Vec<&str> = ids.iter().map(String::as_str).collect();
+    if let Some(t) = made_team {
+        gone.extend(["channel_id", "id"].iter().filter_map(|k| t[*k].as_str()));
+    }
+    super::passwords::forget_deleted_owners(state, &gone).await;
     state.scheduler_wake.notify_one();
     Ok(())
 }

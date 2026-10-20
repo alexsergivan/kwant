@@ -72,6 +72,11 @@ pub trait CredentialStore: Send + Sync {
     /// Adds a credential, or replaces the password of the same origin + username.
     async fn save(&self, owner: &str, origin: &str, username: &str, password: &str) -> Result<CredentialMeta, StoreError>;
     async fn delete(&self, owner: &str, id: &str) -> Result<bool, StoreError>;
+    /// Removes everything kept for `owner` once its team, channel or bot is deleted. Only the
+    /// built-in store keeps per-owner files; other stores keep nothing to remove.
+    async fn forget_owner(&self, _owner: &str) -> Result<(), StoreError> {
+        Ok(())
+    }
 }
 
 /// `scheme://host[:port]` of an http(s) URL, or of a bare host (taken as https).
@@ -183,6 +188,19 @@ fn load_or_create_key(path: &Path, rng: &SystemRandom) -> Result<[u8; 32], Store
     rng.fill(&mut key).map_err(|_| StoreError::Crypto)?;
     write_private(path, &key)?;
     Ok(key)
+}
+
+/// The owner each `*.bin` file in `dir` is named after, live or not: every file the built-in
+/// store holds. A hashed name (`h-…`) can't be opened by its stem, so it is counted, not moved.
+pub fn stored_owners(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut owners: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".bin")).map(str::to_string))
+        .filter(|o| !o.is_empty())
+        .collect();
+    owners.sort();
+    owners
 }
 
 /// A file name for an owner id; ids are uuids, anything else is hashed.
@@ -314,6 +332,14 @@ impl CredentialStore for EncryptedFileStore {
         self.write(owner, &creds)?;
         Ok(true)
     }
+
+    async fn forget_owner(&self, owner: &str) -> Result<(), StoreError> {
+        let _g = self.guard();
+        match std::fs::remove_file(self.path(owner)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Stands in when the store can't be opened (an unreadable key): every call fails, nothing is
@@ -444,6 +470,21 @@ mod tests {
         let v = dir.path().join(VAULT_DIR);
         std::fs::copy(v.join("a.bin"), v.join("b.bin")).unwrap();
         assert!(matches!(store.list("b").await, Err(StoreError::Crypto)));
+    }
+
+    #[tokio::test]
+    async fn every_file_is_listed_and_forgetting_an_owner_removes_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = EncryptedFileStore::open(dir.path()).unwrap();
+        store.save("a", "https://example.com", "u", "DUMMY").await.unwrap();
+        store.save("b", "https://example.com", "u", "DUMMY").await.unwrap();
+        let v = dir.path().join(VAULT_DIR);
+        std::fs::write(v.join("bitwarden.json"), b"{}").unwrap();
+        assert_eq!(stored_owners(&v), vec!["a".to_string(), "b".to_string()]);
+        store.forget_owner("a").await.unwrap();
+        store.forget_owner("never-saved").await.unwrap();
+        assert!(!v.join("a.bin").exists());
+        assert_eq!(stored_owners(&v), vec!["b".to_string()]);
     }
 
     #[test]
