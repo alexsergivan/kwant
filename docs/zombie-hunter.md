@@ -27,7 +27,8 @@ only accepted for a server on this computer (Proton Bridge, a test server).
 
 Like any saved password (see `saved-passwords.md`), a login is refused with 409
 `{needs_bitwarden: true}` on the built-in store while approvals are off anywhere, before the
-connection test runs. Existing logins count toward `local_count` and move with "Move to Bitwarden".
+connection test runs. That holds for adding a source and for changing its settings or login
+(`PATCH sources/:id` with `config` or `secret`): a refused save never contacts the server. Existing logins count toward `local_count` and move with "Move to Bitwarden".
 
 The case store is not tied to mail: `source`, `conv_kind`, `kind`, `evidence` and `deadline` fit
 any open loop, and source kinds are checked in Rust, not by the table, so later sources (a
@@ -108,6 +109,9 @@ All routes are under `/api/zombie`. The full list and shapes are in the header o
 - `age_days`, `last_activity_at`, `first_seen`, `status_changed_at`
 - `snoozed_until`, `waiting_since`, `follow_ups`
 - `deadline`, `resolution`, `dismiss_reason`, `space_id`
+- `kwant_id`: the bot whose chat the case is in, for `kwant_*` cases (link the card to the
+  chat with it and the thread in `link`); `null` for other sources and for cases found before
+  the field was added (filled in at the next scan)
 
 ## Settings (`GET|PUT /api/zombie/settings`)
 

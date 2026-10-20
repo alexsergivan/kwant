@@ -121,6 +121,8 @@ pub struct CaseView {
     pub resolution: Option<String>,
     pub dismiss_reason: Option<String>,
     pub space_id: Option<String>,
+    /// The bot whose chat the case is in, for kwant's own conversations.
+    pub kwant_id: Option<String>,
 }
 
 impl CaseView {
@@ -151,6 +153,7 @@ impl CaseView {
             resolution: c.resolution,
             dismiss_reason: c.dismiss_reason,
             space_id: c.space_id,
+            kwant_id: c.kwant_id,
         }
     }
 }
@@ -482,6 +485,10 @@ pub async fn update_source(State(state): State<AppState>, headers: HeaderMap, Pa
     }
     let mut test = None;
     if b.config.is_some() || b.secret.is_some() {
+        // Before the connection test, so a refused save never reaches the server
+        if let Some(refused) = super::passwords::refuse_local_save(&state).await {
+            return Err(refused);
+        }
         let (config, origin) = match &b.config {
             Some(c) => checked_config(&row.kind, c)?,
             None => (row.config.clone(), hunt::origin_of(&row).map_err(|e| error(StatusCode::BAD_REQUEST, &e))?),

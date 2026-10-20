@@ -334,6 +334,7 @@ mod tests {
             deadline: None,
             reply_to_message_id: None,
             space_id: None,
+            kwant_id: None,
         }
     }
 

@@ -646,6 +646,120 @@ async fn a_source_login_is_refused_on_the_built_in_store_while_approvals_are_off
     assert_eq!(e.state.credentials.list(kwnt::zombie::VAULT_OWNER).await.unwrap().len(), 1, "the saved login is left as it was");
 }
 
+/// L-1: editing a source's settings or login with approvals off is refused before any
+/// connection is made. A plain TCP listener stands in for the mail and GitHub servers and counts
+/// every connection, so a test call that reached it in any way would show.
+#[tokio::test]
+async fn a_refused_source_edit_never_connects_to_the_server() {
+    let e = setup().await;
+    let (base, _) = github_mock().await;
+    let (s, v) = e.person("POST", "/api/zombie/sources", Some(json!({"kind": "github", "label": "GitHub", "config": {"api_base": base}, "secret": MOCK_TOKEN}))).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let id = v["source"]["id"].as_str().unwrap().to_string();
+    let before = e.state.db.zombie_source(&id).await.unwrap().unwrap();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = connections.clone();
+    let accept = tokio::spawn(async move {
+        while let Ok((sock, _)) = listener.accept().await {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            drop(sock);
+        }
+    });
+    e.state.db.set_space_approvals(&SpaceId::default_space(), "off").await.unwrap();
+
+    let trap = format!("http://127.0.0.1:{port}");
+    let edits = [
+        json!({"config": {"api_base": trap}, "secret": MOCK_TOKEN}),
+        json!({"config": {"api_base": trap}}),
+        json!({"secret": "a-new-token"}),
+    ];
+    for body in edits {
+        let (s, v) = e.person("PATCH", &format!("/api/zombie/sources/{id}"), Some(body.clone())).await;
+        assert_eq!(s, StatusCode::CONFLICT, "{body}: {v}");
+        assert_eq!(v["needs_bitwarden"], true, "{v}");
+    }
+    let imap = json!({"kind": "imap", "label": "Mail", "secret": "dummy-password",
+        "config": {"host": "127.0.0.1", "port": port, "security": "plain", "username": "me@example.org"}});
+    let (s, v) = e.person("POST", "/api/zombie/sources", Some(imap)).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["needs_bitwarden"], true, "{v}");
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0, "a refused save never reaches the server");
+    assert_eq!(e.state.db.zombie_source(&id).await.unwrap().unwrap(), before, "the source is left as it was");
+    assert_eq!(e.state.db.zombie_sources().await.unwrap().len(), 1, "no mailbox was added");
+    assert_eq!(e.state.credentials.list(kwnt::zombie::VAULT_OWNER).await.unwrap().len(), 1, "the saved login is left as it was");
+
+    // The same edit is tested against the server once approvals are back on
+    e.state.db.set_space_approvals(&SpaceId::default_space(), "ask").await.unwrap();
+    let (s, v) = e.person("PATCH", &format!("/api/zombie/sources/{id}"), Some(json!({"config": {"api_base": trap}}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert!(connections.load(std::sync::atomic::Ordering::SeqCst) > 0, "the listener does see a real test");
+    accept.abort();
+}
+
+/// A case from a bot's chat names the bot, so the Loose ends card can link to the chat.
+#[tokio::test]
+async fn a_case_from_a_bot_chat_carries_the_bot_id() {
+    let e = setup().await;
+    let bot = e.state.db.list_kwants(&SpaceId::default_space()).await.unwrap().remove(0);
+    let thread = e.state.db.create_thread(&bot.id, "Invoice summary", "chat", None, "user").await.unwrap();
+    let m = kwnt::db::models::NewMessage {
+        channel_id: None,
+        direct_kwant_id: Some(bot.id.clone()),
+        sender_role: "user".into(),
+        sender_id: "user".into(),
+        text: "Could you send me the invoice summary?".into(),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: 0,
+    };
+    let extra = kwnt::db::models::MessageExtra { thread_id: Some(thread.id.clone()), meta: None };
+    e.state.db.insert_message_with(&m, &extra).await.unwrap();
+
+    let sources: Vec<Box<dyn MissionSource>> = vec![Box::new(kwnt::zombie::kwant_source::KwantSource::new(e.state.db.clone()))];
+    let settings = Settings { kwant_source: true, ..Default::default() };
+    scan_with(&e.state.db, &sources, None, &settings, Utc::now() + Duration::days(10)).await.unwrap();
+    let cases = e.state.db.zombie_cases_of_source(kwnt::zombie::kwant_source::SOURCE_ID).await.unwrap();
+    assert_eq!(cases.len(), 1, "{cases:?}");
+    assert_eq!(cases[0].kwant_id.as_deref(), Some(bot.id.as_str()));
+
+    let (s, v) = e.person("GET", &format!("/api/zombie/cases/{}", cases[0].id), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["kwant_id"], bot.id.as_str(), "{v}");
+    assert_eq!(v["link"], format!("kwant://thread/{}", thread.id), "{v}");
+}
+
+/// `kwant_id` came after the first release: a database without it gains the column on start,
+/// and the cases already in it read back with no bot.
+#[tokio::test]
+async fn cases_from_before_kwant_id_survive_the_upgrade() {
+    let tmp = tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let key = {
+        let db = Database::init(&data).await.unwrap();
+        let src = FakeSource::default();
+        let now = Utc::now();
+        src.set(vec![asked("old", 20, now)]);
+        run(&db, &src, None, now).await;
+        case(&db, "old").await.dedupe_key
+    };
+    {
+        let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", data.join("kwnt.db").display())).await.unwrap();
+        sqlx::query("ALTER TABLE zombie_cases DROP COLUMN kwant_id").execute(&pool).await.unwrap();
+        pool.close().await;
+    }
+    let db = Database::init(&data).await.unwrap();
+    let mut c = db.zombie_case_by_key(&key).await.unwrap().expect("the old case is still there");
+    assert_eq!(c.kwant_id, None);
+    c.kwant_id = Some("bot-1".into());
+    db.zombie_put_case(&c).await.unwrap();
+    assert_eq!(db.zombie_case_by_key(&key).await.unwrap().unwrap().kwant_id.as_deref(), Some("bot-1"));
+}
+
 /// The case store is not tied to mail: a later source (a photographed letter, a bank statement)
 /// stores its cases in the same table without a schema change.
 #[tokio::test]

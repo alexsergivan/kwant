@@ -122,6 +122,8 @@ pub struct Conversation {
     pub failed: bool,
     /// The kwant space it belongs to, for kwant's own conversations.
     pub space_id: Option<String>,
+    /// The bot whose chat it is in, for kwant's own conversations.
+    pub kwant_id: Option<String>,
 }
 
 impl Conversation {
@@ -141,6 +143,7 @@ impl Conversation {
             reference: None,
             failed: false,
             space_id: None,
+            kwant_id: None,
         }
     }
 
@@ -231,6 +234,7 @@ pub struct Candidate {
     /// Message-ID of the last message, for a reply that threads under it.
     pub reply_to_message_id: Option<String>,
     pub space_id: Option<String>,
+    pub kwant_id: Option<String>,
 }
 
 impl Candidate {

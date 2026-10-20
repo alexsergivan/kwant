@@ -51,6 +51,8 @@ pub struct CaseRow {
     pub space_id: Option<String>,
     /// Wiped by retention: only the key and status are left.
     pub redacted: bool,
+    /// The bot whose chat the case is in, for kwant's own conversations (a link to the chat).
+    pub kwant_id: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq, Serialize)]
@@ -107,6 +109,8 @@ pub struct KwantDelegationRow {
     pub task: String,
     pub status: String,
     pub error: Option<String>,
+    /// The bot whose thread the task ran in.
+    pub kwant_id: String,
     pub kwant_name: String,
     pub space_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -128,7 +132,7 @@ pub struct KwantQuestionRow {
 const CASE_COLUMNS: &str = "id, dedupe_key, source, source_id, source_ref, kind, conv_kind, title, counterpart, \
     counterpart_name, reference, link, why, evidence, draft, status, snoozed_until, waiting_since, follow_ups, \
     first_seen, last_seen, last_activity_at, status_changed_at, resolution, dismiss_reason, deadline, \
-    reply_to_message_id, space_id, redacted";
+    reply_to_message_id, space_id, redacted, kwant_id";
 
 impl Database {
     pub(super) async fn migrate_zombie(&self) -> Result<(), DbError> {
@@ -197,6 +201,12 @@ impl Database {
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        // Added after the first release: nullable, so existing cases are fine as they are
+        let has_kwant_id: Option<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('zombie_cases') WHERE name = 'kwant_id'").fetch_optional(&self.pool).await?;
+        if has_kwant_id.is_none() {
+            sqlx::query("ALTER TABLE zombie_cases ADD COLUMN kwant_id TEXT").execute(&self.pool).await?;
+        }
         Ok(())
     }
 
@@ -234,7 +244,7 @@ impl Database {
     /// Inserts `c`, or replaces every column of the case with its id.
     pub async fn zombie_put_case(&self, c: &CaseRow) -> Result<(), DbError> {
         sqlx::query(&format!(
-            "INSERT INTO zombie_cases ({CASE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO zombie_cases ({CASE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 source_ref = excluded.source_ref, kind = excluded.kind, conv_kind = excluded.conv_kind,
                 title = excluded.title, counterpart = excluded.counterpart, counterpart_name = excluded.counterpart_name,
@@ -243,7 +253,8 @@ impl Database {
                 waiting_since = excluded.waiting_since, follow_ups = excluded.follow_ups, last_seen = excluded.last_seen,
                 last_activity_at = excluded.last_activity_at, status_changed_at = excluded.status_changed_at,
                 resolution = excluded.resolution, dismiss_reason = excluded.dismiss_reason, deadline = excluded.deadline,
-                reply_to_message_id = excluded.reply_to_message_id, space_id = excluded.space_id, redacted = excluded.redacted"
+                reply_to_message_id = excluded.reply_to_message_id, space_id = excluded.space_id, redacted = excluded.redacted,
+                kwant_id = excluded.kwant_id"
         ))
         .bind(&c.id)
         .bind(&c.dedupe_key)
@@ -274,6 +285,7 @@ impl Database {
         .bind(&c.reply_to_message_id)
         .bind(&c.space_id)
         .bind(c.redacted)
+        .bind(&c.kwant_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -290,7 +302,7 @@ impl Database {
         let wiped = sqlx::query(
             "UPDATE zombie_cases SET title = '', counterpart = NULL, counterpart_name = NULL, reference = NULL,
                 link = NULL, why = '', evidence = '[]', draft = NULL, dismiss_reason = NULL, deadline = NULL,
-                reply_to_message_id = NULL, redacted = 1
+                reply_to_message_id = NULL, kwant_id = NULL, redacted = 1
              WHERE redacted = 0 AND status IN ('closed', 'dismissed') AND status_changed_at < ?",
         )
         .bind(before)
@@ -420,7 +432,9 @@ impl Database {
     /// Failed or interrupted tasks since `since` that were never run again (same task text) after.
     pub async fn zombie_kwant_delegations(&self, since: DateTime<Utc>) -> Result<Vec<KwantDelegationRow>, DbError> {
         Ok(sqlx::query_as(
-            "SELECT d.id, d.thread_id, d.title, d.task, d.status, d.error, k.name AS kwant_name, k.space_id,
+            "SELECT d.id, d.thread_id, d.title, d.task, d.status, d.error,
+                COALESCE((SELECT t.kwant_id FROM threads t WHERE t.id = d.thread_id), d.specialist_kwant_id) AS kwant_id,
+                k.name AS kwant_name, k.space_id,
                 d.created_at, COALESCE(d.ended_at, d.created_at) AS ended_at
              FROM delegations d
              JOIN kwants k ON k.id = d.specialist_kwant_id

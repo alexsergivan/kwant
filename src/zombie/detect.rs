@@ -250,6 +250,7 @@ pub fn detect(c: &Conversation, rules: &Rules) -> Option<Candidate> {
             deadline,
             reply_to_message_id: c.messages.iter().rev().find_map(|m| m.message_id.clone()),
             space_id: c.space_id.clone(),
+            kwant_id: c.kwant_id.clone(),
         })
     };
 

@@ -42,6 +42,7 @@ impl MissionSource for KwantSource {
             c.counterpart = Some(t.kwant_id.clone());
             c.counterpart_name = Some(t.kwant_name.clone());
             c.space_id = t.space_id.clone();
+            c.kwant_id = Some(t.kwant_id.clone());
             c.messages = vec![msg("you", true, t.created_at, &t.text)];
             out.push(with_ref(c, &t.thread_id));
         }
@@ -49,6 +50,7 @@ impl MissionSource for KwantSource {
             let mut c = Conversation::new(SourceKind::Kwant, SOURCE_ID, &format!("delegation:{}", d.id), ConvKind::KwantDelegation, &d.title);
             c.counterpart_name = Some(d.kwant_name.clone());
             c.space_id = d.space_id.clone();
+            c.kwant_id = Some(d.kwant_id.clone());
             c.failed = true;
             let outcome = match (d.status.as_str(), d.error.as_deref().map(str::trim).filter(|e| !e.is_empty())) {
                 (_, Some(e)) => format!("The task failed: {e}"),
@@ -63,6 +65,7 @@ impl MissionSource for KwantSource {
             c.counterpart = Some(q.kwant_id.clone());
             c.counterpart_name = Some(q.kwant_name.clone());
             c.space_id = q.space_id.clone();
+            c.kwant_id = Some(q.kwant_id.clone());
             c.messages = vec![msg(&q.kwant_name, false, q.created_at, &q.question)];
             let thread = q.thread_id.clone().unwrap_or_default();
             out.push(with_ref(c, &thread));

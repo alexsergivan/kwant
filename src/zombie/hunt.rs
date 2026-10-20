@@ -325,6 +325,7 @@ fn refresh(row: &mut CaseRow, cand: &Candidate, now: DateTime<Utc>) {
     row.deadline = cand.deadline.map(|d| d.format("%Y-%m-%d").to_string());
     row.reply_to_message_id = cand.reply_to_message_id.clone();
     row.space_id = cand.space_id.clone();
+    row.kwant_id = cand.kwant_id.clone();
     row.redacted = false;
     // A model-written draft the person asked for stays until the conversation moves on
     let keep_draft = !activity_changed && row.draft.as_deref().and_then(|d| serde_json::from_str::<Draft>(d).ok()).is_some();
@@ -410,6 +411,7 @@ fn new_row(cand: &Candidate, now: DateTime<Utc>) -> CaseRow {
         deadline: None,
         reply_to_message_id: None,
         space_id: None,
+        kwant_id: None,
         redacted: false,
     };
     refresh(&mut row, cand, now);
@@ -733,6 +735,7 @@ mod tests {
             deadline: None,
             reply_to_message_id: None,
             space_id: None,
+            kwant_id: None,
             redacted: false,
         }
     }
