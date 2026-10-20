@@ -149,6 +149,19 @@ pub async fn put_window(
     Ok(Json(view(&state).await))
 }
 
+/// Whether the person switched approvals off for the bot or team a local command runs for: a
+/// bot's own setting, else the space of the bot or team. Anything else (or an unreadable
+/// setting) asks.
+async fn local_shell_approvals_off(state: &AppState, target_id: &str) -> bool {
+    if let Ok(Some(_)) = state.db.space_of_kwant(target_id).await {
+        return state.db.kwant_approvals(target_id).await.is_ok_and(|m| m.is_off());
+    }
+    match state.db.space_of_team(target_id).await {
+        Ok(Some(space)) => state.db.space_approvals(&space).await.is_ok_and(|m| m == crate::db::approval_modes::OFF),
+        _ => false,
+    }
+}
+
 /// Asks the person before a shell command runs on their own computer. Every command asks:
 /// "always allow" is honoured for this one command only, never remembered.
 pub async fn approve_local_shell(
@@ -163,6 +176,18 @@ pub async fn approve_local_shell(
         "arguments": {"command": command, "cwd": cwd.to_string_lossy()},
         "kwant_id": target_id,
     });
+    if local_shell_approvals_off(state, target_id).await {
+        let record = NewApproval {
+            turn_id: String::new(),
+            kwant_id: target_id.to_string(),
+            tool_name: "execute_shell".into(),
+            parameters: details,
+        };
+        if let Err(e) = state.db.save_auto_allowed(&record).await {
+            tracing::warn!(error = %e, "could not record a command that ran with approvals off");
+        }
+        return true;
+    }
     let ticket = match state
         .db
         .save_approval(&NewApproval {

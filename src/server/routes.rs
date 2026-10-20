@@ -84,6 +84,13 @@ pub async fn list_kwants(
         let runs_on = super::profile_turn::runs_on(&state, &v.kwant).await;
         let mut item = serde_json::to_value(&v).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         item["runs_on"] = runs_on;
+        let mode = state
+            .db
+            .kwant_approvals_in(&space, &v.kwant.id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        item["approvals"] = json!(mode.bot);
+        item["approvals_effective"] = json!(mode.effective);
         out.push(item);
     }
     Ok(Json(out))

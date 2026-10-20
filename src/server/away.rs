@@ -85,7 +85,7 @@ fn mask_words(text: &str) -> String {
 /// An approval's stored details in the live `approval_required` event's shape. The tool's
 /// `arguments` get the summary's masking (sensitive-named fields, credentials, key-like words),
 /// as the feed never carries secrets; the rest (source, tool, ids, cwd) is kwnt's own.
-fn masked_details(details: Value) -> Value {
+pub(super) fn masked_details(details: Value) -> Value {
     let mut details = details;
     if let Some(args) = details.get_mut("arguments") {
         *args = masked_arguments(args);

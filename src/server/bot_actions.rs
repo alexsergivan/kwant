@@ -272,6 +272,7 @@ const ENGINES: &str = "Engines and their sign-in are the person's. Ask them to s
     or App settings.";
 const AUTH: &str = "How people sign in to kwnt is the person's alone; ask them to change it on the computer kwnt runs on.";
 const APPROVALS: &str = "Approvals and questions are answered by the person, never by a bot: ask them to answer the card in the chat.";
+const APPROVALS_MODE: &str = "Whether bots ask before their tools run is the person's choice alone: only they can change it, in the app.";
 const COMPUTER: &str = "Where bots browse and run commands is the person's choice: ask them in App settings → Computer for browsing and commands.";
 const AGENT_TOOLS: &str = "Refused: you can't switch bots' own tools on or off. Only the person can: tell them to open App settings \
     (the gear at the bottom of the space rail, or Space settings → App settings) and flip the \"Bots can use their own tools\" switch.";
@@ -1098,7 +1099,7 @@ pub(super) async fn record_quiet(state: &AppState, new: &NewBotAction) -> Result
 
 impl Ctx<'_> {
     async fn bot_create(&self, args: &Value) -> ToolResult {
-        if let Some(r) = refuse_extra(args, &["mcp_env", "env", "headers", "api_key", "password", "token"]) {
+        if let Some(r) = refuse_extra(args, &["mcp_env", "env", "headers", "api_key", "password", "token", "approvals"]) {
             return r;
         }
         let model = arg(args, "model").unwrap_or("auto").to_string();
@@ -1133,7 +1134,7 @@ impl Ctx<'_> {
     }
 
     async fn bot_update(&self, args: &Value) -> ToolResult {
-        if let Some(r) = refuse_extra(args, &["mcp_env", "env", "headers", "api_key", "password", "token"]) {
+        if let Some(r) = refuse_extra(args, &["mcp_env", "env", "headers", "api_key", "password", "token", "approvals"]) {
             return r;
         }
         let target = match self.bot(arg(args, "bot")).await {
@@ -1347,6 +1348,9 @@ impl Ctx<'_> {
         if args.get("archived").is_some() {
             return fail("Use space_archive to ask the person to archive the space.");
         }
+        if let Some(r) = refuse_extra(args, &["approvals"]) {
+            return r;
+        }
         let before = self.space_json(&self.space).await;
         let mut body = json!({});
         for k in ["name", "icon"] {
@@ -1499,6 +1503,7 @@ fn refuse_extra(args: &Value, keys: &[&str]) -> Option<ToolResult> {
     let found = keys.iter().find(|k| args.get(**k).is_some())?;
     let why = match *found {
         "mcp_env" | "env" | "headers" => MCP,
+        "approvals" => APPROVALS_MODE,
         _ => SECRETS,
     };
     Some(fail(format!("Nothing was changed: {found} is not something you can set. {why}")))

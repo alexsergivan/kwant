@@ -337,6 +337,7 @@ impl Database {
             "DELETE FROM threads WHERE kwant_id = ?1",
             "DELETE FROM questions WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
             "DELETE FROM approvals WHERE kwant_id = ?1",
+            "DELETE FROM approval_modes WHERE scope = 'kwant' AND id = ?1",
             "DELETE FROM skills WHERE kwant_id = ?1",
             "DELETE FROM mcp_suggestions WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
             "DELETE FROM hire_proposals WHERE kwant_id = ?1 OR direct_kwant_id = ?1",

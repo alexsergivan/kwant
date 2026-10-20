@@ -24,6 +24,7 @@ pub mod mcp_suggest;
 pub mod bot_actions;
 pub mod hires;
 pub mod import_routes;
+pub mod approval_modes;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -171,7 +172,10 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/api/chat/send", post(routes::send_chat))
         .route("/api/chat/cancel", post(routes::cancel_chat))
+        .route("/api/approvals", get(approval_modes::list))
         .route("/api/approvals/:id/resolve", post(routes::resolve_approval))
+        .route("/api/spaces/:id/approvals", get(approval_modes::get_space).put(approval_modes::put_space))
+        .route("/api/kwants/:id/approvals", get(approval_modes::get_kwant).put(approval_modes::put_kwant))
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
         .route("/api/settings/computer", get(computer::get_computer).put(computer::put_computer))
         .route("/api/settings/computer/window", put(computer::put_window))

@@ -150,7 +150,10 @@ impl Drop for TicketGuard {
 #[async_trait]
 impl ToolApprover for BrokerApprover {
     async fn approve(&self, req: ToolApprovalRequest) -> bool {
-        if self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
+        // Approvals the person switched off: run, and keep a record of what ran. A setting that
+        // can't be read asks, as before.
+        let off = self.db.kwant_approvals(&req.kwant_id).await.is_ok_and(|m| m.is_off());
+        if !off && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
             return true;
         }
         let details = match &req.builtin {
@@ -172,14 +175,21 @@ impl ToolApprover for BrokerApprover {
                 "kwant_name": req.kwant_name,
             }),
         };
+        let record = NewApproval {
+            turn_id: req.turn_id.clone(),
+            kwant_id: req.kwant_id.clone(),
+            tool_name: req.tool_name.clone(),
+            parameters: details.clone(),
+        };
+        if off {
+            if let Err(e) = self.db.save_auto_allowed(&record).await {
+                tracing::warn!(error = %e, "could not record a call that ran with approvals off");
+            }
+            return true;
+        }
         let ticket = match self
             .db
-            .save_approval(&NewApproval {
-                turn_id: req.turn_id.clone(),
-                kwant_id: req.kwant_id.clone(),
-                tool_name: req.tool_name.clone(),
-                parameters: details.clone(),
-            })
+            .save_approval(&record)
             .await
         {
             Ok(a) => a.id,

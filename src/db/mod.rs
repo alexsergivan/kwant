@@ -13,6 +13,7 @@ pub mod mcp_suggestions;
 pub mod bot_actions;
 pub mod hires;
 pub mod imports;
+pub mod approval_modes;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -144,6 +145,7 @@ impl Database {
             db.migrate_bot_actions().await?;
             db.migrate_hires().await?;
             db.migrate_imports().await?;
+            db.migrate_approval_modes().await?;
         }
         db.pool.close().await;
 

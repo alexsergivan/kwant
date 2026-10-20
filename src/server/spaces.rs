@@ -203,6 +203,7 @@ pub async fn view(state: &AppState, s: Space) -> Result<Value, DbError> {
     let ready = super::profile_turn::ready_accounts(state, &id).await;
     let unread = super::away::unread_total(state, &id).await?;
     let general = state.db.general_channel(&id).await?.map(|c| c.id);
+    let approvals = state.db.space_approvals(&id).await?;
     Ok(json!({
         "id": s.id,
         "name": s.name,
@@ -215,6 +216,7 @@ pub async fn view(state: &AppState, s: Space) -> Result<Value, DbError> {
         "general_channel_id": general,
         "counts": { "bots": bots, "ready_accounts": ready, "unread": unread },
         "paused_routines": paused,
+        "approvals": approvals,
     }))
 }
 
