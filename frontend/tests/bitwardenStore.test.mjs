@@ -27,7 +27,7 @@ const m = await loadBundled(`
   export const bar = (status, p) => r(PasswordStoreBar, { store: storeState(status), onUnlock() {}, onChanged() {}, ...p });
   export const form = (p) => r(BitwardenLoginForm, { mode: 'connect', status: null, onDone() {}, onCancel() {}, ...p });
   export const migrate = (p) => r(MigrateButton, { count: 0, onDone() {}, ...p });
-  export const gap = () => r(AutofillGapNote, {});
+  export const gap = (status) => r(AutofillGapNote, { status });
   export const offConfirm = () => r(OffConfirm, { title: 'Turn off?', busy: false, onCancel() {}, onConfirm() {} });
 `);
 
@@ -36,9 +36,9 @@ const buttons = (html) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g
 const inputs = (html) => [...html.matchAll(/<input[^>]*>/g)].map((x) => x[0]);
 const login = (p) => ({ id: 'c1', origin: 'https://example.com', domain: 'example.com', username: 'alice', created_at: null, last_used: null, ...p });
 const bw = (p) => ({ server_url: 'https://vault.bitwarden.com', email: 'dummy@example.com', login: 'password', client_id: null, unlocked: true, unlocked_at: 't', item_count: 4, last_sync: 't', ...p });
-const LOCAL = { store: 'local', locked: false, local_count: 3, bitwarden: null };
-const UNLOCKED = { store: 'bitwarden', locked: false, local_count: 0, bitwarden: bw() };
-const LOCKED = { store: 'bitwarden', locked: true, local_count: 0, bitwarden: bw({ unlocked: false, unlocked_at: null, item_count: null }) };
+const LOCAL = { store: 'local', locked: false, local_count: 3, bitwarden: null, approvals_off: false, exposed: false };
+const UNLOCKED = { store: 'bitwarden', locked: false, local_count: 0, bitwarden: bw(), approvals_off: false, exposed: false };
+const LOCKED = { store: 'bitwarden', locked: true, local_count: 0, bitwarden: bw({ unlocked: false, unlocked_at: null, item_count: null }), approvals_off: false, exposed: false };
 
 // ---------------------------------------------------------------- the model
 
@@ -49,7 +49,7 @@ test('store status: local, Bitwarden unlocked, Bitwarden locked (also when only 
   assert.equal(u.bitwarden.email, 'dummy@example.com');
   assert.equal(m.parseStoreStatus({ store: 'bitwarden', locked: false, bitwarden: bw({ unlocked: false }) }).locked, true);
   assert.equal(m.parseStoreStatus({ store: 'bitwarden', locked: true, bitwarden: bw() }).locked, true);
-  assert.deepEqual(m.parseStoreStatus(null), { store: 'local', locked: false, local_count: 0, bitwarden: null });
+  assert.deepEqual(m.parseStoreStatus(null), { store: 'local', locked: false, local_count: 0, bitwarden: null, approvals_off: false, exposed: false });
   assert.equal(m.parseStoreStatus({ store: 'local', bitwarden: bw({ login: 'api_key', client_id: 'user.x' }) }).bitwarden.login, 'api_key');
 });
 
@@ -287,14 +287,15 @@ test('Disconnect asks for the master password and says the items stay in Bitward
 
 // ---------------------------------------------------------------- the honest note
 
-test('approvals off: one plain sentence about autofill, in the confirm and next to saved passwords', () => {
-  const note = 'While a password is being filled into a page, a bot that can run commands can read it.';
-  assert.equal(m.AUTOFILL_GAP_NOTE, note);
-  assert.ok(m.OFF_CONSEQUENCES.includes(note));
-  assert.ok(text(m.offConfirm()).includes(note));
-  assert.ok(text(m.panel({ logins: [login()] }, { approvalsOff: true })).includes(note));
-  assert.ok(!text(m.panel({ logins: [login()] }, { approvalsOff: false })).includes(note));
-  assert.doesNotMatch(m.gap(), /rose|red-|amber/, 'no scare styling');
+test('approvals off: one plain sentence per store, in the confirm and next to saved passwords', () => {
+  // Bitwarden: the accepted gap. This server: blocked (audit F-10), so the sentence says so.
+  const bwNote = 'While a password is being filled into a page, a bot that can run commands can read it.';
+  assert.equal(m.AUTOFILL_GAP_NOTE.bitwarden, bwNote);
+  assert.match(m.AUTOFILL_GAP_NOTE.local, /^With approvals off, any bot that can run commands could read passwords saved on this server, so that's blocked|^With approvals off, any bot that can run commands could read passwords saved on this server, so that’s blocked/);
+  assert.ok(text(m.offConfirm()).includes(text(m.AUTOFILL_GAP_NOTE.local)), 'unknown store: the stricter sentence');
+  assert.ok(text(m.panel({ logins: [login()] }, { approvalsOff: true, store: m.storeState(UNLOCKED) })).includes(bwNote));
+  assert.ok(!text(m.panel({ logins: [login()] }, { approvalsOff: false, store: m.storeState(UNLOCKED) })).includes(bwNote));
+  for (const st of [undefined, UNLOCKED, { ...LOCAL, local_count: 0 }]) assert.doesNotMatch(m.gap(st), /rose|red-|amber/, 'no scare styling');
 });
 
 test('no master password in storage, logs or React state', () => {

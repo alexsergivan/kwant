@@ -2,14 +2,16 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, ArrowRight, Check, ChevronDown, Info, KeyRound, Loader2, Lock, LockOpen, Server, ShieldCheck, X } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { playSfx } from '../audio/chiptune';
+import { approvalModeApi } from '../approvalMode';
 import {
-  AUTOFILL_GAP_NOTE,
   BITWARDEN_CLOUDS,
   DEFAULT_BITWARDEN_SERVER,
   StoreError,
   StoreStatus,
   UnlockProblem,
+  autofillGapNote,
   checkServerUrl,
+  exposedText,
   migrateText,
   serverLabel,
   storeApi,
@@ -25,16 +27,16 @@ export interface PasswordStoreState {
   set: (s: StoreStatus) => void;
 }
 
-/** Where passwords are kept, loaded quietly (a missing token is the list's own state). */
-export function usePasswordStore(enabled: boolean): PasswordStoreState {
-  const [status, setStatus] = useState<StoreStatus | null>(null);
+/** Where passwords are kept, loaded quietly (a missing token is the list's own state). `peek`
+ * never opens the token dialog: for screens where the store is a side note (approvals settings). */
+export function usePasswordStore(enabled: boolean, peek = false, initial: StoreStatus | null = null): PasswordStoreState {
+  const [status, setStatus] = useState<StoreStatus | null>(initial);
   const [problem, setProblem] = useState<PasswordStoreState['problem']>(null);
   const seq = useRef(0);
   const reload = useCallback(() => {
     if (!enabled) return;
     const mine = ++seq.current;
-    storeApi
-      .status()
+    (peek ? storeApi.peek() : storeApi.status())
       .then((s) => {
         if (mine !== seq.current) return;
         setStatus(s);
@@ -44,7 +46,7 @@ export function usePasswordStore(enabled: boolean): PasswordStoreState {
         if (mine !== seq.current) return;
         setProblem(e instanceof StoreError && e.problem.kind === 'needs-token' ? 'needs-token' : 'error');
       });
-  }, [enabled]);
+  }, [enabled, peek]);
   useEffect(reload, [reload]);
   useEffect(() => {
     window.addEventListener(PERSON_SIGNED_IN_EVENT, reload);
@@ -613,12 +615,151 @@ export const PasswordStoreBar: React.FC<{
   );
 };
 
-/** The accepted autofill gap, said once, plainly, where approvals are off. */
-export const AutofillGapNote: React.FC = () => (
-  <p className="flex items-start gap-2 text-[10px] text-zinc-400 leading-snug" data-autofill-gap>
-    <Info size={12} className="text-zinc-500 flex-shrink-0 mt-px" aria-hidden="true" />
-    <span>
-      <span className="text-zinc-300">Approvals are off.</span> {AUTOFILL_GAP_NOTE}
-    </span>
-  </p>
-);
+/** What approvals off means for saved passwords, said once, plainly, for where they're kept. */
+export const AutofillGapNote: React.FC<{ status?: StoreStatus | null }> = ({ status }) => {
+  const kind = status?.store === 'bitwarden' && status.local_count === 0 ? 'bitwarden' : 'local';
+  return (
+    <p className="flex items-start gap-2 text-[10px] text-zinc-400 leading-snug" data-autofill-gap={kind}>
+      <Info size={12} className="text-zinc-500 flex-shrink-0 mt-px" aria-hidden="true" />
+      <span>
+        {/* The local sentence already starts with "With approvals off". */}
+        {kind === 'bitwarden' && <span className="text-zinc-300">Approvals are off. </span>}
+        {autofillGapNote(status)}
+      </span>
+    </p>
+  );
+};
+
+/**
+ * One button that gets the passwords on this server into Bitwarden: connect (first time) or
+ * unlock (after a restart) in place, then move them. Pressing it is the person's go-ahead, so the
+ * move runs as soon as Bitwarden is ready. Nothing moves until it's pressed.
+ */
+export const MoveToBitwardenFirst: React.FC<{
+  store: PasswordStoreState;
+  label: string;
+  /** After the move, with what it says ("Moved 3 passwords to Bitwarden."). */
+  onMoved?: (result: string) => void;
+  /** Tests open a step. */
+  initialStep?: 'connect' | 'unlock' | null;
+}> = ({ store, label, onMoved, initialStep = null }) => {
+  const [step, setStep] = useState<'connect' | 'unlock' | null>(initialStep);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const s = store.status;
+  if (!s) return null;
+  const ready = s.store === 'bitwarden' && !!s.bitwarden && !s.locked;
+
+  const move = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await storeApi.migrate();
+      const text = migrateText(r);
+      setResult(text);
+      playSfx(r.failed ? 'click' : 'coin');
+      store.reload();
+      onMoved?.(text);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Couldn’t move the passwords.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const press = () => {
+    setError(null);
+    if (ready) move();
+    else setStep(s.store === 'bitwarden' && s.bitwarden ? 'unlock' : 'connect');
+  };
+
+  return (
+    <div className="space-y-1.5" data-move-first>
+      {s.local_count > 0 && !step && (
+        <button type="button" onClick={press} disabled={busy} className={btnMain}>
+          {busy ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ArrowRight size={12} aria-hidden="true" />}
+          {busy ? 'Moving…' : label}
+        </button>
+      )}
+      {step && (
+        <div className="p-2.5 rounded-xl border border-sky-500/30 bg-zinc-900/90 space-y-1.5" data-move-step={step}>
+          <p className="text-[10px] text-zinc-400 leading-snug">
+            {step === 'connect' ? 'Connect your Bitwarden account; the passwords move as soon as it’s connected.' : 'Unlock Bitwarden; the passwords move as soon as it’s unlocked.'}
+          </p>
+          <BitwardenLoginForm
+            mode={step}
+            status={s}
+            onCancel={() => setStep(null)}
+            onDone={(next) => {
+              store.set(next);
+              setStep(null);
+              move();
+            }}
+          />
+        </div>
+      )}
+      {result && (
+        <p role="status" className="flex items-start gap-1.5 text-[11px] text-emerald-300 leading-snug">
+          <Check size={12} className="flex-shrink-0 mt-px" aria-hidden="true" /> {result}
+        </p>
+      )}
+      {error && <ProblemLine text={error} />}
+    </div>
+  );
+};
+
+/**
+ * Approvals off with passwords still on this server (set up before that was blocked): said plainly
+ * next to saved passwords and in approvals settings, with the two ways out. Nothing changes on its own.
+ */
+export const ExposedBanner: React.FC<{
+  store: PasswordStoreState;
+  /** After "Turn approvals back on", so the screen loads its approvals again. */
+  onApprovalsOn?: () => void;
+}> = ({ store, onApprovalsOn }) => {
+  const id = useId();
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const s = store.status;
+  if (!s?.exposed)
+    return done ? (
+      <p role="status" className="flex items-start gap-1.5 text-[11px] text-emerald-300 leading-snug" data-exposed-done>
+        <Check size={12} className="flex-shrink-0 mt-px" aria-hidden="true" /> {done}
+      </p>
+    ) : null;
+
+  const turnOn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await approvalModeApi.turnAllOn();
+      playSfx('click');
+      store.reload();
+      onApprovalsOn?.();
+      if (r.failed) setError(`${r.failed} ${r.failed === 1 ? 'setting' : 'settings'} couldn’t be changed. An archived space keeps its approvals until you restore it.`);
+      else setDone('Approvals are back on. Bots ask before running commands again.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Couldn’t turn approvals back on.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section role="region" aria-labelledby={`${id}-t`} className="p-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 space-y-2 text-xs" data-exposed>
+      <p id={`${id}-t`} className="flex items-start gap-2 text-[11px] text-amber-100 leading-snug">
+        <AlertTriangle size={13} className="flex-shrink-0 mt-px" aria-hidden="true" />
+        <span>{exposedText(s.local_count)}</span>
+      </p>
+      <div className="flex flex-wrap items-start gap-1.5">
+        <MoveToBitwardenFirst store={store} label="Move to Bitwarden" onMoved={setDone} />
+        <button type="button" onClick={turnOn} disabled={busy} className={`${btnQuiet} flex items-center gap-1.5`}>
+          {busy ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ShieldCheck size={12} aria-hidden="true" />}
+          {busy ? 'Turning on…' : 'Turn approvals back on'}
+        </button>
+      </div>
+      {error && <ProblemLine text={error} />}
+    </section>
+  );
+};

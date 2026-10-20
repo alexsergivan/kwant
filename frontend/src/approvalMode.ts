@@ -2,7 +2,7 @@
 // recorded). Set per space, with a per-bot override. Only the person changes it; a bot's token
 // gets 403. No event fires on a change, so callers load bots and spaces again after a save.
 
-import { AUTOFILL_GAP_NOTE } from './passwordStore';
+import { StoreStatus, autofillGapNote, needsBitwardenFrom } from './passwordStore';
 
 export type SpaceApprovals = 'ask' | 'off';
 export type BotApprovals = 'inherit' | 'ask' | 'off';
@@ -58,8 +58,20 @@ export const OFF_CONSEQUENCES = [
   'Files can be written or deleted anywhere the computer allows, not just in the bot’s folder.',
   'Tools (MCP servers, browser, web) run without asking.',
   'No approval cards appear. Everything that runs is still recorded.',
-  AUTOFILL_GAP_NOTE,
 ];
+
+/** The same, with the saved-passwords sentence for where passwords are kept. */
+export const offConsequences = (store: StoreStatus | null | undefined): string[] => [...OFF_CONSEQUENCES, autofillGapNote(store)];
+
+/** The server refused "off" because passwords are still saved on it (audit F-10). */
+export class NeedsBitwardenError extends Error {
+  constructor(message: string, public localCount: number | null) {
+    super(message);
+  }
+}
+
+/** Fired after approvals change outside a settings screen, so lists and markers load again. */
+export const APPROVALS_CHANGED_EVENT = 'kwnt:approvals-changed';
 
 export function offConfirmTitle(who: { space: string } | { bot: string }): string {
   return 'space' in who ? `Turn off approvals for every bot in ${who.space}?` : `Let ${who.bot} run everything without approval?`;
@@ -75,9 +87,11 @@ export function spaceOffLine(space: SpaceApprovals | undefined, bots: Array<{ ap
   return off ? `Approvals off for ${off} ${off === 1 ? 'bot' : 'bots'}` : null;
 }
 
-async function errorText(res: Response, fallback: string): Promise<string> {
+async function errorText(res: Response, fallback: string): Promise<string | NeedsBitwardenError> {
   try {
     const body = await res.json();
+    const needs = needsBitwardenFrom(res.status, body);
+    if (needs) return new NeedsBitwardenError(needs.message, needs.local_count);
     if (typeof body?.error === 'string' && body.error) {
       if (res.status === 403) return 'Only you can change approvals, from the app.';
       if (res.status === 409) return 'This space is archived. Restore it to change its approvals.';
@@ -97,7 +111,10 @@ async function put(url: string, approvals: string, fallback: string): Promise<un
   } catch {
     throw new Error('Couldn’t reach the server. Check your connection and try again.');
   }
-  if (!res.ok) throw new Error(await errorText(res, fallback));
+  if (!res.ok) {
+    const e = await errorText(res, fallback);
+    throw e instanceof Error ? e : new Error(e);
+  }
   return res.json();
 }
 
@@ -118,9 +135,59 @@ export const approvalModeApi = {
       return null;
     }
   },
-  setBot: async (kwantId: string, approvals: BotApprovals): Promise<BotApprovalsState> => {
-    const state = parseBotApprovals(await put(`/api/kwants/${enc(kwantId)}/approvals`, approvals, 'Couldn’t change this bot’s approvals'));
+  setBot: async (kwantId: string, approvals: BotApprovals, spaceId?: string): Promise<BotApprovalsState> => {
+    const url = `/api/kwants/${enc(kwantId)}/approvals${spaceId ? `?space=${enc(spaceId)}` : ''}`;
+    const state = parseBotApprovals(await put(url, approvals, 'Couldn’t change this bot’s approvals'));
     if (!state) throw new Error('The server sent an answer the app can’t read. Reload and check the setting.');
     return state;
+  },
+  /**
+   * "Turn approvals back on" everywhere: every active space that's off, and every bot set to off,
+   * goes back to ask. Archived spaces can't be changed until they're restored; they count as failed.
+   */
+  turnAllOn: async (): Promise<{ changed: number; failed: number }> => {
+    let changed = 0;
+    let failed = 0;
+    const list = async (url: string): Promise<Array<Record<string, unknown>>> => {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error('Couldn’t load your spaces. Try again.');
+      const body = await res.json();
+      return Array.isArray(body) ? body : [];
+    };
+    // `/api/spaces` lists the active spaces only; `?archived=1` lists only the archived ones.
+    let spaces: Array<Record<string, unknown>>;
+    try {
+      const [active, archived] = await Promise.all([list('/api/spaces'), list('/api/spaces?archived=1').catch(() => [])]);
+      spaces = [...active, ...archived];
+    } catch {
+      throw new Error('Couldn’t reach the server. Check your connection and try again.');
+    }
+    const attempt = async (f: () => Promise<unknown>) => {
+      try {
+        await f();
+        changed++;
+      } catch {
+        failed++;
+      }
+    };
+    for (const sp of spaces) {
+      const id = typeof sp.id === 'string' ? sp.id : null;
+      if (!id) continue;
+      if (sp.approvals === 'off') {
+        if (sp.archived_at) failed++;
+        else await attempt(() => approvalModeApi.setSpace(id, 'ask'));
+      }
+      if (sp.archived_at) continue;
+      const bots = await list(`/api/kwants?space=${enc(id)}`).catch(() => null);
+      if (!bots) {
+        failed++;
+        continue;
+      }
+      for (const b of bots) {
+        if (b.approvals === 'off' && typeof b.id === 'string') await attempt(() => approvalModeApi.setBot(b.id as string, 'ask', id));
+      }
+    }
+    if (changed) window.dispatchEvent(new Event(APPROVALS_CHANGED_EVENT));
+    return { changed, failed };
   },
 };

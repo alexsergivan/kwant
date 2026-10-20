@@ -24,6 +24,11 @@ export interface StoreStatus {
   /** Passwords still in the built-in store (what "Move to Bitwarden" would move). */
   local_count: number;
   bitwarden: BitwardenInfo | null;
+  /** Some space or bot runs without asking. */
+  approvals_off: boolean;
+  /** Approvals off while passwords are still saved here (an install from before the block): any
+   * bot that can run commands can read them. Nothing changes it on its own. */
+  exposed: boolean;
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
@@ -45,7 +50,16 @@ export function parseStoreStatus(raw: unknown): StoreStatus {
       }
     : null;
   const store = o.store === 'bitwarden' ? 'bitwarden' : 'local';
-  return { store, locked: o.locked === true || (store === 'bitwarden' && !bitwarden?.unlocked), local_count: num(o.local_count) ?? 0, bitwarden };
+  const local_count = num(o.local_count) ?? 0;
+  const approvals_off = o.approvals_off === true;
+  return {
+    store,
+    locked: o.locked === true || (store === 'bitwarden' && !bitwarden?.unlocked),
+    local_count,
+    bitwarden,
+    approvals_off,
+    exposed: o.exposed === true,
+  };
 }
 
 /** The Bitwarden cloud servers; anything else is self-hosted (Vaultwarden too). */
@@ -169,7 +183,7 @@ export class StoreError extends Error {
 
 /** One person-only call. Quiet: a 401 here is often a wrong master password, not a missing
  * token, so the app-wide gate must not open. The person-only 401 asks for the token itself. */
-async function call(url: string, method = 'GET', body?: unknown): Promise<unknown> {
+async function call(url: string, method = 'GET', body?: unknown, askToken = true): Promise<unknown> {
   const init = {
     method,
     cache: 'no-store',
@@ -181,7 +195,7 @@ async function call(url: string, method = 'GET', body?: unknown): Promise<unknow
   const answer = await res.json().catch(() => null);
   if (!res.ok) {
     const problem = unlockProblemFor(res.status, answer);
-    if (problem.kind === 'needs-token') requestPersonToken();
+    if (problem.kind === 'needs-token' && askToken) requestPersonToken();
     throw new StoreError(problem, res.status);
   }
   return answer;
@@ -223,6 +237,8 @@ export function migrateText(r: MigrateResult): string {
 
 export const storeApi = {
   status: async () => parseStoreStatus(await call('/api/passwords/store')),
+  /** The same, without asking for the token: for screens where the store is a side note. */
+  peek: async () => parseStoreStatus(await call('/api/passwords/store', 'GET', undefined, false)),
   unlock: async (f: UnlockFields) => parseStoreStatus(await call('/api/passwords/bitwarden/unlock', 'POST', unlockBody(f))),
   lock: async () => parseStoreStatus(await call('/api/passwords/bitwarden/lock', 'POST')),
   /** Back to the built-in store. The items stay in Bitwarden. */
@@ -233,5 +249,35 @@ export const storeApi = {
   },
 };
 
-/** The one-line note shown where autofill meets approvals off (accepted gap, 2026-10-20). */
-export const AUTOFILL_GAP_NOTE = 'While a password is being filled into a page, a bot that can run commands can read it.';
+/** One sentence per store for wherever approvals are off. Bitwarden: the accepted gap (2026-10-20).
+ * This server: approvals off can't sit next to passwords here (audit F-10), so it's blocked. */
+export const AUTOFILL_GAP_NOTE = {
+  bitwarden: 'While a password is being filled into a page, a bot that can run commands can read it.',
+  local: 'With approvals off, any bot that can run commands could read passwords saved on this server, so that’s blocked: use Bitwarden.',
+} as const;
+
+/** The note for a store; unknown counts as this server, the stricter one. */
+export const autofillGapNote = (store: StoreStatus | null | undefined): string =>
+  store?.store === 'bitwarden' && store.local_count === 0 ? AUTOFILL_GAP_NOTE.bitwarden : AUTOFILL_GAP_NOTE.local;
+
+const passwords = (n: number) => `${n} saved ${n === 1 ? 'password' : 'passwords'}`;
+
+/** Approvals can't go off while this server holds passwords: what the confirm says instead. */
+export const moveFirstText = (n: number) =>
+  `${capitalise(passwords(n))} ${n === 1 ? 'is' : 'are'} kept on this server. With approvals off, any bot that can run commands could read ${n === 1 ? 'it' : 'them'}, so move ${n === 1 ? 'it' : 'them'} to Bitwarden first.`;
+export const moveFirstLabel = (n: number) => `Move ${passwords(n)} to Bitwarden first`;
+
+/** An install already in that state (approvals off before the block). */
+export const exposedText = (n: number) =>
+  `Approvals are off and ${passwords(n)} ${n === 1 ? 'is' : 'are'} still on this server, so any bot that can run commands can read ${n === 1 ? 'it' : 'them'}.`;
+
+/** A 409 that says the server wants Bitwarden first: its sentence, and how many passwords are here. */
+export function needsBitwardenFrom(status: number, body: unknown): { message: string; local_count: number | null } | null {
+  const o = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  if (status !== 409 || o.needs_bitwarden !== true) return null;
+  const msg = str(o.error)?.trim();
+  return {
+    message: msg ? capitalise(msg.endsWith('.') ? msg : `${msg}.`) : 'Move the passwords on this server to Bitwarden first.',
+    local_count: num(o.local_count),
+  };
+}

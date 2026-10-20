@@ -6,7 +6,7 @@ import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } fro
 import { ThreadBar, ThreadHeader } from './components/ThreadBar';
 import { DelegationCard } from './components/DelegationCard';
 import { ApprovalsOffBadge } from './components/ApprovalsSetting';
-import { approvalsOff } from './approvalMode';
+import { APPROVALS_CHANGED_EVENT, approvalsOff } from './approvalMode';
 import { QuestionCard } from './components/QuestionCard';
 import { McpSuggestionCard } from './components/McpSuggestionCard';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
@@ -359,6 +359,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   useEffect(() => () => {
     if (rosterTimerRef.current) clearTimeout(rosterTimerRef.current);
   }, []);
+  // "Turn approvals back on" from a password screen: the markers and space header catch up.
+  useEffect(() => {
+    window.addEventListener(APPROVALS_CHANGED_EVENT, refreshRoster);
+    return () => window.removeEventListener(APPROVALS_CHANGED_EVENT, refreshRoster);
+  }, [refreshRoster]);
   const markLive = (ctx: string | null | undefined, speaker?: string) => {
     if (!ctx) return;
     const name = speaker ?? liveRef.current[ctx] ?? '';

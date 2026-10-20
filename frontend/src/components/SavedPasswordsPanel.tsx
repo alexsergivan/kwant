@@ -15,7 +15,7 @@ import {
   originLabel,
   passwordsApi,
 } from '../savedPasswords';
-import { AutofillGapNote, PasswordStoreBar, PasswordStoreState, UnlockDialog } from './PasswordStorePanel';
+import { AutofillGapNote, ExposedBanner, PasswordStoreBar, PasswordStoreState, UnlockDialog } from './PasswordStorePanel';
 
 export interface SavedPasswordsState {
   logins: SavedLogin[];
@@ -436,6 +436,8 @@ const AddLoginForm: React.FC<{ sandboxId: string; onSaved: () => void; onCancel:
       onSaved();
     } catch (err) {
       setError(errorText(err, 'Couldn’t save this login.'));
+      // It can't be saved here until Bitwarden is in use or approvals are back on: don't keep it typed.
+      if (err instanceof PasswordsError && err.needsBitwarden) setPassword('');
     } finally {
       setBusy(false);
     }
@@ -509,6 +511,7 @@ export const SavedPasswordsPanel: React.FC<{
   return (
     <div className="flex-1 flex flex-col p-3 gap-2 overflow-hidden bg-zinc-950" data-saved-passwords>
       {store && state.problem !== 'needs-token' && <PasswordStoreBar store={store} onUnlock={openUnlock} onChanged={state.reload} />}
+      {store && state.problem !== 'needs-token' && <ExposedBanner store={store} onApprovalsOn={state.reload} />}
       {!blocked && (
         <div className="flex items-center gap-1.5">
           <label className="flex-1 flex items-center gap-1.5 px-2 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs focus-within:border-sky-500">
@@ -587,7 +590,8 @@ export const SavedPasswordsPanel: React.FC<{
             <span className="text-zinc-300 font-medium">{bitwarden ? 'Kept in your Bitwarden, locked after every restart.' : 'Encrypted on the server, out of the bots’ folders.'}</span> A login is filled in only on the exact address it was saved for.
           </p>
         </div>
-        {approvalsOff && <AutofillGapNote />}
+        {/* The exposed banner above already says it. */}
+        {(approvalsOff || store?.status?.approvals_off) && !store?.status?.exposed && <AutofillGapNote status={store?.status} />}
       </div>
       {unlocking && store && (
         <UnlockDialog

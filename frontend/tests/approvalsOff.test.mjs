@@ -129,7 +129,7 @@ test('space control: Ask is the default and checked, Don\'t ask explains itself,
 });
 
 test('space control: the confirm says plainly what off means, and Keep asking is the safe default focus', () => {
-  const html = m.spaceSetting({ initialConfirm: true });
+  const html = m.spaceSetting({ initialConfirm: true, initialPasswords: { store: 'local', locked: false, local_count: 0, bitwarden: null, approvals_off: false, exposed: false } });
   const t = text(html);
   assert.match(html, /role="alertdialog"/);
   assert.match(t, /Turn off approvals for every bot in Work\?/);

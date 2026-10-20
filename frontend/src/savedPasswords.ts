@@ -5,6 +5,7 @@
 // layer then asks for the token (see auth.ts). Where they're kept (Bitwarden or here) is passwordStore.ts.
 
 import { isPersonOnlyBody, requestPersonToken } from './auth';
+import { needsBitwardenFrom } from './passwordStore';
 
 /** GET /api/sandbox/:id/passwords → passwords[] */
 export interface SavedLogin {
@@ -137,7 +138,7 @@ export const PROBLEM_TEXT: Record<PasswordsProblem, string> = {
 };
 
 export class PasswordsError extends Error {
-  constructor(public problem: PasswordsProblem, public status: number, message: string) {
+  constructor(public problem: PasswordsProblem, public status: number, message: string, public needsBitwarden = false) {
     super(message);
   }
 }
@@ -146,6 +147,9 @@ async function call(url: string, init?: RequestInit): Promise<unknown> {
   const res = await fetch(url, { cache: 'no-store', ...init });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
+    // Saving here while approvals are off (F-10): the server's own sentence says why and what to do.
+    const needs = needsBitwardenFrom(res.status, body);
+    if (needs) throw new PasswordsError('error', res.status, needs.message, true);
     const problem = problemFor(res.status, body);
     // A quiet call that isn't the background list still asks for the token on a person-only 401.
     if (problem === 'needs-token' && (init as { kwntAskToken?: boolean } | undefined)?.kwntAskToken && isPersonOnlyBody(body)) requestPersonToken();
