@@ -331,6 +331,8 @@ async fn claude_cli_gets_mcp_config_without_secrets_in_argv() {
     assert!(out.contains("--strict-mcp-config"), "{out}");
     assert!(out.contains(&format!("--mcp-config {}", tmp.path().join("mcp").display())), "{out}");
     assert!(out.contains("--permission-prompt-tool mcp__kwnt__approve"), "{out}");
+    // claude's own auto mode would approve tools without asking kwnt
+    assert!(out.contains("--permission-mode default"), "{out}");
     assert!(out.contains("MODE: 600"), "{out}");
     assert!(out.contains("TOOL_TIMEOUT: 330000"), "{out}");
     assert!(!out.contains("sk-very-secret") && !out.contains("hdr-secret"), "secrets leaked into argv: {out}");
@@ -339,6 +341,7 @@ async fn claude_cli_gets_mcp_config_without_secrets_in_argv() {
     // Without servers the invocation is unchanged
     let plain = fake_cli_run("claude", None).await;
     assert!(plain.contains("--strict-mcp-config") && !plain.contains("--mcp-config") && !plain.contains("permission-prompt"), "{plain}");
+    assert!(plain.contains("--permission-mode default"), "{plain}");
 }
 
 /// The servers the fake codex reports for `codex mcp list --json`, one with a quoted name.

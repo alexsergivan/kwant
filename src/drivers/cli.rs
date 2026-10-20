@@ -875,6 +875,9 @@ impl Driver for CliDriver {
                     cmd.arg("--model").arg(model);
                 }
                 cmd.arg("--effort").arg(claude_effort);
+                // kwnt decides every tool call. claude's own `auto` mode (picked on a fresh
+                // config) would approve Bash itself and never ask kwnt, so no card and no record.
+                cmd.arg("--permission-mode").arg("default");
                 // Skip starting the user's personal MCP servers on every chat turn
                 cmd.arg("--strict-mcp-config");
                 if let Some(ctx) = &input.mcp {
