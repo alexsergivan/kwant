@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
@@ -91,6 +91,8 @@ export interface SidebarProps {
   awayActive?: boolean;
   looseActive?: boolean;
   onOpenLooseEnds?: () => void;
+  parallelActive?: boolean;
+  onOpenParallel?: () => void;
   onOpenAway?: () => void;
   /** Opens Space settings → Accounts from the footer. */
   onOpenAccounts?: () => void;
@@ -143,6 +145,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   awayCount = 0,
   awayActive = false,
   looseActive = false,
+  parallelActive = false,
+  onOpenParallel,
   onOpenLooseEnds,
   onOpenAway,
   onOpenAccounts,
@@ -282,6 +286,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button type="button" onClick={onOpenLooseEnds} aria-current={looseActive ? 'page' : undefined} className={navRow(looseActive)}>
             <ListChecks size={15} className={looseActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
             <span className="truncate flex-1">Loose ends</span>
+          </button>
+          )}
+          {onOpenParallel && (
+          <button type="button" onClick={onOpenParallel} aria-current={parallelActive ? 'page' : undefined} className={navRow(parallelActive)}>
+            <Split size={15} className={parallelActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
+            <span className="truncate flex-1">Parallel Universe</span>
           </button>
           )}
           <button type="button" onClick={onOpenRoutines} className={navRow(false)}>
