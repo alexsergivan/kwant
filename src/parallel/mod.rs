@@ -10,6 +10,7 @@
 
 pub mod harness;
 pub mod prices;
+pub mod run;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,10 @@ pub struct Scenario {
     #[serde(default)]
     pub criteria: Vec<Criterion>,
     pub options: Vec<DeployOption>,
+    /// Lets `docker build` (only) use the network, for apps that fetch packages while building.
+    /// The app and the load test always stay on the internal network. Off unless the person turns it on.
+    #[serde(default)]
+    pub build_network: bool,
     #[serde(default = "Utc::now")]
     pub created_at: DateTime<Utc>,
     #[serde(default = "Utc::now")]

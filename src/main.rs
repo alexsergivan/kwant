@@ -154,6 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             kwnt::server::passwords::warn_if_exposed(&state).await;
             kwnt::server::scheduler::spawn_background(state.clone(), shutdown.clone());
             kwnt::server::engine_routes::spawn_startup_check(state.clone());
+            kwnt::server::parallel_routes::spawn_startup_sweep(state.clone());
             let app = create_router(state);
 
             let addr = format!("{}:{}", config.host, config.port);

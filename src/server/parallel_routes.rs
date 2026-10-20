@@ -8,11 +8,14 @@
 //! - `DELETE /api/parallel/scenarios/:id` → `{deleted: true}`.
 //! - `GET    /api/parallel/prices` → `{prices: [PriceEntry], stale_after_days}`.
 //! - `POST   /api/parallel/estimate {plan, traffic}` → `{figures: [Figure]}` (no Docker, no network).
+//! - `POST   /api/parallel/scenarios/:id/run` → 202 `{run}`; 409 `{error, code: "busy"}` while a run is going.
+//! - `GET    /api/parallel/scenarios/:id/runs` and `GET /api/parallel/runs` → `{runs: [Run], running}`.
+//! - `GET    /api/parallel/runs/:id` → `{run, report}` (poll it until `run.status` is not `running`).
 
 #![allow(clippy::result_large_err)]
 
 use super::AppState;
-use crate::parallel::{prices, Scenario, Traffic};
+use crate::parallel::{prices, run, Scenario, Traffic};
 use axum::{
     extract::{rejection::JsonRejection, Path, State},
     http::{HeaderMap, StatusCode},
@@ -117,4 +120,51 @@ pub async fn estimate(State(state): State<AppState>, headers: HeaderMap, b: Resu
         }
     }
     Ok(Json(json!({"figures": [prices::cost_figure(b.plan.as_deref(), t)]})).into_response())
+}
+
+pub async fn start_run(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Res {
+    person(&state, &headers).await?;
+    let scenario = scenario_or_404(&state, &id).await?;
+    let Some(guard) = state.parallel.try_begin() else {
+        return Err((StatusCode::CONFLICT, Json(json!({"error": "a run is already going; wait for it to finish", "code": "busy"}))).into_response());
+    };
+    let r = run::Run::new(&scenario);
+    state.db.pu_put_run(&r).await.map_err(db_error)?;
+    let (db, harness, bg) = (state.db.clone(), state.parallel.harness.clone(), r.clone());
+    tokio::spawn(async move {
+        if let Err(e) = run::execute(db, harness, bg, guard).await {
+            tracing::warn!("parallel: a run could not be saved: {e}");
+        }
+    });
+    Ok((StatusCode::ACCEPTED, Json(json!({"run": r}))).into_response())
+}
+
+pub async fn list_runs(State(state): State<AppState>, headers: HeaderMap) -> Res {
+    person(&state, &headers).await?;
+    let runs = state.db.pu_runs(None, 50).await.map_err(db_error)?;
+    Ok(Json(json!({"runs": runs, "running": state.parallel.running()})).into_response())
+}
+
+pub async fn scenario_runs(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Res {
+    person(&state, &headers).await?;
+    let runs = state.db.pu_runs(Some(&id), 50).await.map_err(db_error)?;
+    Ok(Json(json!({"runs": runs, "running": state.parallel.running()})).into_response())
+}
+
+pub async fn get_run(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Res {
+    person(&state, &headers).await?;
+    let r = state.db.pu_run(&id).await.map_err(db_error)?.ok_or_else(|| error(StatusCode::NOT_FOUND, "no such run"))?;
+    let report = run::report(&r, Utc::now().date_naive());
+    Ok(Json(json!({"run": r, "report": report})).into_response())
+}
+
+/// Marks runs a stopped server left behind as interrupted and removes their containers.
+pub fn spawn_startup_sweep(state: AppState) {
+    tokio::spawn(async move {
+        match run::startup(&state.db, state.parallel.harness.as_ref()).await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("parallel: removed {n} leftover containers, networks and images"),
+            Err(e) => tracing::warn!("parallel: startup sweep failed: {e}"),
+        }
+    });
 }

@@ -82,6 +82,8 @@ pub struct AppState {
     pub credentials: Arc<crate::sandbox::vault::PasswordVault>,
     /// Zombie Mission Hunter: one scan at a time, and the last scan's report.
     pub zombie: Arc<crate::zombie::hunt::Hunter>,
+    /// Parallel Universe: one run at a time, and the harness it uses.
+    pub parallel: Arc<crate::parallel::run::Runner>,
 }
 
 impl AppState {
@@ -123,6 +125,7 @@ impl AppState {
             mcp_registry: Arc::new(crate::mcp::registry::McpRegistry::from_env()),
             credentials: Arc::new(crate::sandbox::vault::PasswordVault::open(&config_data_dir)),
             zombie: Default::default(),
+            parallel: Default::default(),
         }
     }
 
@@ -230,6 +233,10 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/api/parallel/prices", get(parallel_routes::list_prices))
         .route("/api/parallel/estimate", post(parallel_routes::estimate))
+        .route("/api/parallel/scenarios/:id/run", post(parallel_routes::start_run))
+        .route("/api/parallel/scenarios/:id/runs", get(parallel_routes::scenario_runs))
+        .route("/api/parallel/runs", get(parallel_routes::list_runs))
+        .route("/api/parallel/runs/:id", get(parallel_routes::get_run))
         .route("/api/mcp/servers", get(mcp_routes::list_servers).post(mcp_routes::create_server))
         .route(
             "/api/mcp/servers/:id",

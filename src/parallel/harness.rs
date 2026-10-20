@@ -15,8 +15,9 @@ use thiserror::Error;
 use tokio::process::Command;
 use tokio::time::{sleep, timeout, Instant};
 
-/// The load tool, run as a container next to the app (pinned; `docker pull` it once).
-pub const OHA_IMAGE: &str = "ghcr.io/hatoo/oha:1.16.0";
+/// The load tool, run as a container next to the app: oha 1.16.0, pinned by digest so a re-tagged
+/// image is never used (`docker pull` it once).
+pub const OHA_IMAGE: &str = "ghcr.io/hatoo/oha@sha256:3ec3dbf549ea197793482d47a6324797411406bbf438c2fe8b91f244ec641a2f";
 pub const RUN_LABEL: &str = "kwnt.pu.run";
 
 #[derive(Debug, Error, PartialEq)]
@@ -39,6 +40,22 @@ pub enum HarnessError {
     Timeout,
 }
 
+impl HarnessError {
+    /// A stable code the UI can switch on.
+    pub fn code(&self) -> &'static str {
+        match self {
+            HarnessError::DockerUnavailable => "docker_unavailable",
+            HarnessError::LoadToolMissing => "load_tool_missing",
+            HarnessError::Invalid(_) => "invalid",
+            HarnessError::Build(_) => "build_failed",
+            HarnessError::Start(_) => "start_failed",
+            HarnessError::NotReady => "not_ready",
+            HarnessError::Load(_) => "load_failed",
+            HarnessError::Timeout => "timeout",
+        }
+    }
+}
+
 /// What to run for one option.
 #[derive(Debug, Clone)]
 pub struct BranchSpec {
@@ -47,6 +64,8 @@ pub struct BranchSpec {
     pub app: AppSpec,
     pub limits: Limits,
     pub load: LoadSpec,
+    /// Lets `docker build` use the default bridge network. Never applies to the app or load containers.
+    pub build_network: bool,
 }
 
 /// What one branch produced. `cleanup_errors` is empty when everything it made is gone.
@@ -90,19 +109,21 @@ pub fn network_args(n: &Names) -> Vec<String> {
     s(&["network", "create", "--internal", "--label", &n.label, &n.network])
 }
 
-/// An offline build: the Dockerfile cannot download anything.
-pub fn build_args(n: &Names, app: &AppSpec) -> Option<Vec<String>> {
+/// An offline build (the Dockerfile cannot download anything), unless the scenario allows the
+/// build step the default bridge network. Never the host network.
+pub fn build_args(n: &Names, app: &AppSpec, build_network: bool) -> Option<Vec<String>> {
     let context = app.context.as_deref()?;
     let dockerfile = std::path::Path::new(context).join(app.dockerfile.as_deref().unwrap_or("Dockerfile"));
-    Some(s(&["build", "--network", "none", "--label", &n.label, "-t", &n.image, "-f", &dockerfile.to_string_lossy(), context]))
+    let network = if build_network { "default" } else { "none" };
+    Some(s(&["build", "--network", network, "--label", &n.label, "-t", &n.image, "-f", &dockerfile.to_string_lossy(), context]))
 }
 
-/// The app container: limited, on the internal network only, no published port.
+/// The app container: limited, on the internal network only, no published port, never pulled.
 pub fn app_args(n: &Names, app: &AppSpec, limits: &Limits) -> Vec<String> {
     let image = app.image.clone().unwrap_or_else(|| n.image.clone());
     let memory = format!("{}m", limits.memory_mb);
     s(&[
-        "run", "-d", "--name", &n.app, "--network", &n.network, "--label", &n.label,
+        "run", "-d", "--pull", "never", "--name", &n.app, "--network", &n.network, "--label", &n.label,
         "--cpus", &format!("{}", limits.cpus), "--memory", &memory, "--memory-swap", &memory,
         "--pids-limit", &limits.pids.to_string(),
         "--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "SETUID", "--cap-add", "SETGID",
@@ -118,14 +139,14 @@ fn target(n: &Names, app: &AppSpec, path: &str) -> String {
 
 pub fn probe_args(n: &Names, app: &AppSpec) -> Vec<String> {
     s(&[
-        "run", "--rm", "--name", &n.probe, "--network", &n.network, "--label", &n.label, "--cpus", "0.5", "--memory", "128m",
+        "run", "--rm", "--pull", "never", "--name", &n.probe, "--network", &n.network, "--label", &n.label, "--cpus", "0.5", "--memory", "128m",
         OHA_IMAGE, "-n", "1", "-t", "2s", "--no-tui", "--output-format", "json", &target(n, app, &app.health_path),
     ])
 }
 
 pub fn load_args(n: &Names, app: &AppSpec, load: &LoadSpec) -> Vec<String> {
     s(&[
-        "run", "--rm", "--name", &n.load, "--network", &n.network, "--label", &n.label, "--cpus", "1", "--memory", "256m",
+        "run", "--rm", "--pull", "never", "--name", &n.load, "--network", &n.network, "--label", &n.label, "--cpus", "1", "--memory", "256m",
         OHA_IMAGE, "-n", &load.requests.to_string(), "-c", &load.concurrency.to_string(), "-t", "10s",
         "--no-tui", "--output-format", "json", &target(n, app, &load.path),
     ])
@@ -254,7 +275,7 @@ async fn steps(spec: &BranchSpec, n: &Names, ready_by: Instant) -> Result<Vec<Fi
     if !o.ok {
         return Err(HarnessError::Start(o.stderr));
     }
-    if let Some(args) = build_args(n, &spec.app) {
+    if let Some(args) = build_args(n, &spec.app, spec.build_network) {
         let o = docker(&args, step).await.map_err(HarnessError::Build)?;
         if !o.ok {
             return Err(HarnessError::Build(o.stderr));
@@ -390,16 +411,23 @@ mod tests {
             assert!(!args.iter().any(|x| x.contains("8799") || x.contains("8800")), "{args:?}");
         }
         assert!(network_args(&n).contains(&"--internal".to_string()));
+        for args in [app_args(&n, &app(), &limits), probe_args(&n, &app()), load_args(&n, &app(), &LoadSpec::default())] {
+            assert!(args.windows(2).any(|w| w[0] == "--pull" && w[1] == "never"), "nothing is pulled: {args:?}");
+        }
     }
 
     #[test]
     fn builds_are_offline_and_labelled() {
         let n = Names::new("3f2a9c1e", "vps");
         let spec = AppSpec { image: None, context: Some("/tmp/ctx".into()), dockerfile: Some("deploy/Dockerfile".into()), port: 80, health_path: "/".into() };
-        let b = build_args(&n, &spec).unwrap();
+        let b = build_args(&n, &spec, false).unwrap();
         assert_eq!(&b[..3], ["build", "--network", "none"]);
         assert!(b.contains(&"/tmp/ctx/deploy/Dockerfile".to_string()) && b.contains(&n.label));
-        assert!(build_args(&n, &app()).is_none());
+        assert!(build_args(&n, &app(), false).is_none());
+        // the opt-in build network is the default bridge, never the host's
+        let b = build_args(&n, &spec, true).unwrap();
+        assert_eq!(&b[..3], ["build", "--network", "default"]);
+        assert!(!b.iter().any(|x| x == "host"));
         assert_eq!(app_args(&n, &spec, &Limits::default()).last().unwrap(), &n.image);
     }
 
@@ -419,7 +447,7 @@ mod tests {
 
     #[test]
     fn a_bad_spec_is_refused_before_docker_is_touched() {
-        let mut spec = BranchSpec { run_id: "short".into(), branch: "vps".into(), app: app(), limits: Limits::default(), load: LoadSpec::default() };
+        let mut spec = BranchSpec { run_id: "short".into(), branch: "vps".into(), app: app(), limits: Limits::default(), load: LoadSpec::default(), build_network: false };
         assert!(matches!(spec.validate(), Err(HarnessError::Invalid(_))));
         spec.run_id = "3f2a9c1e-aaaa".into();
         spec.branch = "VPS; rm -rf /".into();
