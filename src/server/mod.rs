@@ -25,6 +25,7 @@ pub mod bot_actions;
 pub mod hires;
 pub mod import_routes;
 pub mod approval_modes;
+pub mod passwords;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -75,6 +76,8 @@ pub struct AppState {
     pub claude_login: Arc<engine_login::ClaudeLogin>,
     /// The MCP Registry agents search and suggest servers from (`KWNT_MCP_REGISTRY_URL`).
     pub mcp_registry: Arc<crate::mcp::registry::McpRegistry>,
+    /// Saved website passwords, outside every bot's folder (see `sandbox::credentials`).
+    pub credentials: Arc<dyn crate::sandbox::CredentialStore>,
 }
 
 impl AppState {
@@ -86,6 +89,7 @@ impl AppState {
         router: LayaRouter,
     ) -> Self {
         let (event_sender, _) = broadcast::channel(128);
+        let config_data_dir = config.data_dir.clone();
         let sandbox_manager = Arc::new(SandboxManager::new());
         let browser_controllers = Arc::new(Mutex::new(HashMap::new()));
         let profiles = Arc::new(crate::profiles::ProfileManager::new(config.data_dir.clone()));
@@ -113,6 +117,7 @@ impl AppState {
             questions: Default::default(),
             claude_login: Default::default(),
             mcp_registry: Arc::new(crate::mcp::registry::McpRegistry::from_env()),
+            credentials: crate::sandbox::credentials::open_store(&config_data_dir),
         }
     }
 
@@ -189,8 +194,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sandbox/:team_id/stream", get(browser_stream::upgrade))
         .route("/api/sandbox/:team_id/page", get(routes::get_sandbox_page))
         .route("/api/sandbox/:team_id/act", post(routes::act_sandbox))
-        .route("/api/sandbox/:team_id/passwords", get(routes::get_saved_passwords).post(routes::save_password))
-        .route("/api/sandbox/:team_id/passwords/:id", delete(routes::delete_password))
+        .route("/api/sandbox/:team_id/passwords", get(passwords::list).post(passwords::save))
+        .route("/api/sandbox/:team_id/passwords/pending", post(passwords::save_pending).delete(passwords::discard_pending))
+        .route("/api/sandbox/:team_id/passwords/:id", delete(passwords::remove))
+        .route("/api/sandbox/:team_id/passwords/:id/reveal", post(passwords::reveal))
         .route("/api/mcp/servers", get(mcp_routes::list_servers).post(mcp_routes::create_server))
         .route(
             "/api/mcp/servers/:id",

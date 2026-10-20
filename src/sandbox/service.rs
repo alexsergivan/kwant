@@ -64,7 +64,7 @@ impl BrowserService {
         // the page each bot had open, to reopen in the new Chrome
         let mut urls: HashMap<String, String> = HashMap::new();
         if let Some((endpoint, _)) = computer::running_local_chrome(&self.local_profile()).await {
-            let browser = BrowserController::at_endpoint(&endpoint, None, None, true);
+            let browser = BrowserController::at_endpoint(&endpoint, None, true);
             if let Ok(targets) = browser.send_cdp_command("Target.getTargets", json!({})).await {
                 for info in targets["targetInfos"].as_array().into_iter().flatten() {
                     if let (Some(id), Some(url)) = (info["targetId"].as_str(), info["url"].as_str()) {
@@ -107,7 +107,7 @@ impl BrowserService {
         if let Some((endpoint, running_headless)) = computer::running_local_chrome(&profile).await {
             if running_headless == headless { return Ok(endpoint); }
             // the other form is running on this profile: close it first
-            let _ = BrowserController::at_endpoint(&endpoint, None, None, true)
+            let _ = BrowserController::at_endpoint(&endpoint, None, true)
                 .send_cdp_command("Browser.close", json!({})).await;
             computer::wait_local_chrome_gone(&profile).await.map_err(BrowserError::Http)?;
         }
@@ -138,7 +138,7 @@ impl BrowserService {
         *lock = None;
         if previous == ComputerMode::Local {
             if let Some((endpoint, true)) = computer::running_local_chrome(&self.local_profile()).await {
-                let _ = BrowserController::at_endpoint(&endpoint, None, None, true)
+                let _ = BrowserController::at_endpoint(&endpoint, None, true)
                     .send_cdp_command("Browser.close", json!({})).await;
             }
         }
@@ -202,7 +202,7 @@ impl BrowserService {
             Some(endpoint) => endpoint.trim_end_matches('/').to_string(),
             None => self.managed_endpoint().await?,
         };
-        let browser = BrowserController::at_endpoint(&endpoint, None, None, true);
+        let browser = BrowserController::at_endpoint(&endpoint, None, true);
         if self.endpoint.is_some() || local {
             browser.send_cdp_command("Browser.getVersion", json!({})).await?;
         } else { timeout(Duration::from_secs(30), async {
@@ -216,7 +216,7 @@ impl BrowserService {
         Ok(ServiceState { browser, endpoint, sessions })
     }
 
-    pub async fn session(&self, id: &str, workspace: &Path) -> Result<BrowserController, BrowserError> {
+    pub async fn session(&self, id: &str, _workspace: &Path) -> Result<BrowserController, BrowserError> {
         let mut lock = self.state.lock().await;
         if lock.is_none() { *lock = Some(self.connect().await?); }
         let mut targets = lock.as_ref().unwrap().browser.send_cdp_command("Target.getTargets", json!({})).await;
@@ -263,7 +263,7 @@ impl BrowserService {
         };
         state.sessions.insert(id.to_string(), session.clone());
         self.save_sessions(&state.sessions).await?;
-        let ctrl = BrowserController::at_endpoint(&state.endpoint, Some(session.target), Some(workspace.to_path_buf()), false);
+        let ctrl = BrowserController::at_endpoint(&state.endpoint, Some(session.target), false);
         // A real window keeps its own size; a windowless browser gets the viewer's fixed viewport.
         if !local || !self.local_window() {
             ctrl.send_cdp_command("Emulation.setDeviceMetricsOverride", json!({

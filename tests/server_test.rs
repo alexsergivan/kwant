@@ -386,11 +386,13 @@ async fn test_sandbox_password_vault_api() {
     let team_id = team.id;
 
     let state = AppState::new(config, db, tools, broker, router);
+    let bearer = format!("Bearer {}", state.api_token.reveal());
     let app = create_router(state);
 
     // 1. Initial list should be empty
     let req = Request::builder()
         .uri(format!("/api/sandbox/{}/passwords", team_id))
+        .header("authorization", &bearer)
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -409,6 +411,7 @@ async fn test_sandbox_password_vault_api() {
     let req = Request::builder()
         .method("POST")
         .uri(format!("/api/sandbox/{}/passwords", team_id))
+        .header("authorization", &bearer)
         .header("Content-Type", "application/json")
         .body(Body::from(serde_json::to_vec(&save_payload).unwrap()))
         .unwrap();
@@ -423,6 +426,7 @@ async fn test_sandbox_password_vault_api() {
     // 3. List should now contain 1 item
     let req = Request::builder()
         .uri(format!("/api/sandbox/{}/passwords", team_id))
+        .header("authorization", &bearer)
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -433,12 +437,25 @@ async fn test_sandbox_password_vault_api() {
     assert_eq!(passwords.len(), 1);
     assert_eq!(passwords[0]["domain"], "example.com");
     assert_eq!(passwords[0]["username"], "alex");
-    assert_eq!(passwords[0]["password"], "supersecretpassword");
+    // Metadata only: the password comes back only from an explicit reveal
+    assert!(passwords[0].get("password").is_none(), "{}", passwords[0]);
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sandbox/{}/passwords/{}/reveal", team_id, cred_id))
+        .header("authorization", &bearer)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["password"], "supersecretpassword");
 
     // 4. Delete the credential
     let req = Request::builder()
         .method("DELETE")
         .uri(format!("/api/sandbox/{}/passwords/{}", team_id, cred_id))
+        .header("authorization", &bearer)
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -447,6 +464,7 @@ async fn test_sandbox_password_vault_api() {
     // 5. List should be empty again
     let req = Request::builder()
         .uri(format!("/api/sandbox/{}/passwords", team_id))
+        .header("authorization", &bearer)
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();

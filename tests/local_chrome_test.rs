@@ -74,7 +74,7 @@ async fn local_chrome_runs_windowless_and_can_open_as_a_window() {
     let sessions: serde_json::Value = serde_json::from_slice(
         &std::fs::read(tmp.path().join("browser-sessions-local.json")).unwrap()).unwrap();
     let other_target = sessions["other"]["target"].as_str().expect("other bot's page").to_string();
-    let other = kwnt::sandbox::BrowserController::at_endpoint(&endpoint, Some(other_target), None, false);
+    let other = kwnt::sandbox::BrowserController::at_endpoint(&endpoint, Some(other_target), false);
     let shot = tokio::time::timeout(Duration::from_secs(5), other.capture_screenshot()).await;
     assert!(matches!(shot, Ok(Ok(ref s)) if !s.is_empty()), "screenshot of the other bot's page: {shot:?}");
 
@@ -90,7 +90,7 @@ async fn local_chrome_runs_windowless_and_can_open_as_a_window() {
         assert!(!headless, "the window form must be a real window");
         // only the two bots' pages are open: Chrome's blank start window is not left on top
         let (endpoint, _) = computer::running_local_chrome(&profile).await.unwrap();
-        let browser = kwnt::sandbox::BrowserController::at_endpoint(&endpoint, None, None, true);
+        let browser = kwnt::sandbox::BrowserController::at_endpoint(&endpoint, None, true);
         let targets = browser.send_cdp_command("Target.getTargets", serde_json::json!({})).await.unwrap();
         let pages: Vec<_> = targets["targetInfos"].as_array().unwrap().iter()
             .filter(|t| t["type"] == "page").map(|t| t["url"].as_str().unwrap_or("").to_string()).collect();

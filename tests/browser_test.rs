@@ -494,59 +494,52 @@ async fn test_mock_cdp_protocol_error_response() {
 
 #[tokio::test]
 async fn test_browser_credential_vault_lifecycle() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let ws_path = temp_dir.path().to_path_buf();
+    use kwnt::sandbox::credentials::open_store;
+    let data = tempfile::tempdir().unwrap();
+    let store = open_store(data.path());
+    let controller = BrowserController::new(19222);
+    controller.attach_vault(store.clone(), "team-1").await;
+    assert_eq!(store.list("team-1").unwrap().len(), 0);
 
-    let controller = BrowserController::with_workspace(19222, ws_path.clone());
-    assert_eq!(controller.list_saved_credentials().await.len(), 0);
+    let meta = store.save("team-1", "https://github.com", "dev_user", "DUMMY-secret_pass_123").unwrap();
+    assert_eq!(meta.origin, "https://github.com");
+    assert_eq!(meta.username, "dev_user");
 
-    // Save first credential
-    let cred1 = controller
-        .save_credential(
-            "github.com",
-            "https://github.com",
-            "dev_user",
-            "secret_pass_123",
-        )
-        .await;
-
-    assert_eq!(cred1.domain, "github.com");
-    assert_eq!(cred1.username, "dev_user");
-    assert_eq!(cred1.password, "secret_pass_123");
-
-    // List credentials
-    let list = controller.list_saved_credentials().await;
+    let list = store.list("team-1").unwrap();
     assert_eq!(list.len(), 1);
-    assert_eq!(list[0].id, cred1.id);
+    assert_eq!(list[0].id, meta.id);
 
-    // Get for URL
-    let found = controller
-        .get_credential_for_url("https://github.com/login")
-        .await;
-    assert!(found.is_some());
-    assert_eq!(found.unwrap().username, "dev_user");
+    // Exact origin only
+    assert!(store.for_origin("team-1", "https://github.com").unwrap().is_some());
+    assert!(store.for_origin("team-1", "http://github.com").unwrap().is_none());
+    assert!(store.for_origin("team-1", "https://gist.github.com").unwrap().is_none());
+    assert!(store.for_origin("team-2", "https://github.com").unwrap().is_none());
 
-    // File was written to disk
-    let creds_file = ws_path.join(".saved_passwords.json");
-    assert!(creds_file.exists());
-    let file_content = std::fs::read_to_string(&creds_file).unwrap();
-    assert!(file_content.contains("dev_user"));
-    assert!(file_content.contains("secret_pass_123"));
+    // Nothing on disk in clear
+    for entry in walk(data.path()) {
+        let bytes = std::fs::read(&entry).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("DUMMY-secret_pass_123"), "{}", entry.display());
+        assert!(!String::from_utf8_lossy(&bytes).contains("dev_user"), "{}", entry.display());
+    }
 
-    // Reloading a new controller on same workspace loads saved passwords
-    let controller2 = BrowserController::with_workspace(19223, ws_path.clone());
-    let reloaded = controller2.list_saved_credentials().await;
-    assert_eq!(reloaded.len(), 1);
-    assert_eq!(reloaded[0].username, "dev_user");
+    // A fresh store on the same data dir reads them back
+    let reopened = open_store(data.path());
+    assert_eq!(reopened.get("team-1", &meta.id).unwrap().unwrap().password, "DUMMY-secret_pass_123");
+    assert!(reopened.delete("team-1", &meta.id).unwrap());
+    assert_eq!(reopened.list("team-1").unwrap().len(), 0);
+}
 
-    // Delete credential
-    let deleted = controller2.delete_saved_credential(&cred1.id).await;
-    assert!(deleted);
-    assert_eq!(controller2.list_saved_credentials().await.len(), 0);
-
-    // File was updated
-    let file_content_after = std::fs::read_to_string(&creds_file).unwrap();
-    assert!(!file_content_after.contains("dev_user"));
+fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
 }
 
 #[tokio::test]
@@ -666,4 +659,118 @@ fn detects_captcha_and_bot_check_pages() {
     assert!(detect_bot_wall("https://example.org/", "Just a moment...", "").is_some());
     assert!(detect_bot_wall("https://shop.example/", "Shop", "Please verify you are human to continue").is_some());
     assert!(detect_bot_wall("https://www.bing.com/images/search?q=cat", "cat - Bing images", "Cat pictures, kittens").is_none());
+}
+
+/// A fake Chrome whose main frame is at `url` and whose capture returns `captured`; records every
+/// CDP call.
+async fn fake_page(
+    url: Arc<tokio::sync::Mutex<String>>,
+    captured: Value,
+) -> (u16, Arc<tokio::sync::Mutex<Vec<(String, Value)>>>) {
+    let http = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let http_port = http.local_addr().unwrap().port();
+    let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_port = ws_listener.local_addr().unwrap().port();
+    let recorded = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = http.accept().await {
+            let mut buf = vec![0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let body = json!({"webSocketDebuggerUrl": format!("ws://127.0.0.1:{ws_port}/devtools/page/test")}).to_string();
+            let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = stream.write_all(resp.as_bytes()).await;
+        }
+    });
+    let rec = recorded.clone();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = ws_listener.accept().await {
+            let (rec, url, captured) = (rec.clone(), url.clone(), captured.clone());
+            tokio::spawn(async move {
+                let Ok(mut ws) = accept_async(stream).await else { return };
+                while let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(txt))) = ws.next().await {
+                    let parsed: Value = serde_json::from_str(&txt).unwrap();
+                    let method = parsed["method"].as_str().unwrap().to_string();
+                    let params = parsed.get("params").cloned().unwrap_or(Value::Null);
+                    rec.lock().await.push((method.clone(), params.clone()));
+                    let result = match method.as_str() {
+                        "Page.getFrameTree" => json!({"frameTree": {"frame": {"id": "F1", "url": *url.lock().await}}}),
+                        "Page.createIsolatedWorld" => json!({"executionContextId": 77}),
+                        "Runtime.evaluate" if params["expression"].as_str().unwrap_or("").contains("__kwntCaptured = null") => {
+                            json!({"result": {"type": "string", "value": captured}})
+                        }
+                        _ => json!({}),
+                    };
+                    let resp = json!({"id": parsed["id"], "result": result}).to_string();
+                    let _ = ws.send(tokio_tungstenite::tungstenite::Message::Text(resp)).await;
+                }
+            });
+        }
+    });
+    (http_port, recorded)
+}
+
+/// F-5: a password saved for example.com was filled on http://, on any port and on every
+/// subdomain, from a script in the page's own world.
+#[tokio::test]
+async fn autofill_goes_only_to_the_exact_origin_in_kwnts_own_world() {
+    use kwnt::sandbox::credentials::open_store;
+    let data = tempfile::tempdir().unwrap();
+    let store = open_store(data.path());
+    store.save("team-1", "https://example.com", "alice", "DUMMY-F5-PW").unwrap();
+    let url = Arc::new(tokio::sync::Mutex::new(String::new()));
+    let (port, recorded) = fake_page(url.clone(), Value::Null).await;
+    let ctrl = BrowserController::new(port);
+    ctrl.attach_vault(store, "team-1").await;
+
+    for (page, filled) in [
+        ("https://example.com/login", true),
+        ("http://example.com/login", false),
+        ("https://evil.example.com/login", false),
+        ("https://example.com:8443/login", false),
+        ("https://notexample.com/login", false),
+    ] {
+        *url.lock().await = page.into();
+        recorded.lock().await.clear();
+        ctrl.inject_autofill_and_capture().await.unwrap();
+        let calls = recorded.lock().await.clone();
+        let evals: Vec<&Value> = calls.iter().filter(|(m, _)| m == "Runtime.evaluate").map(|(_, p)| p).collect();
+        assert_eq!(evals.len(), 1, "{page}: {calls:?}");
+        assert_eq!(evals[0]["contextId"], 77, "{page}: runs in kwnt's isolated world, not the page's");
+        let script = evals[0]["expression"].as_str().unwrap();
+        assert_eq!(script.contains("DUMMY-F5-PW"), filled, "{page}");
+        assert!(!script.contains("window.__kwnt_captured_creds"));
+        assert!(calls.iter().any(|(m, p)| m == "Page.createIsolatedWorld" && p["frameId"] == "F1"));
+    }
+}
+
+/// F-6: the page could write `window.__kwnt_captured_creds` with any domain and have kwnt save it.
+/// The origin now comes from the frame's real URL, and nothing is saved until the person says so.
+#[tokio::test]
+async fn a_capture_is_filed_under_the_real_origin_and_waits() {
+    use kwnt::sandbox::credentials::open_store;
+    let data = tempfile::tempdir().unwrap();
+    let store = open_store(data.path());
+    let forged = json!({"domain": "victim.test", "origin": "https://victim.test", "username": "admin", "password": "DUMMY-FORGED"}).to_string();
+    let url = Arc::new(tokio::sync::Mutex::new("https://attacker.test/login".to_string()));
+    let (port, recorded) = fake_page(url.clone(), Value::String(forged)).await;
+    let ctrl = BrowserController::new(port);
+    ctrl.attach_vault(store.clone(), "team-1").await;
+    ctrl.inject_autofill_and_capture().await.unwrap();
+
+    let capture = ctrl.collect_captured_credentials().await.expect("held for the person");
+    assert_eq!(capture.origin, "https://attacker.test", "never the page's claimed origin");
+    assert_eq!(capture.username, "admin");
+    assert!(!serde_json::to_string(&capture).unwrap().contains("DUMMY-FORGED"), "the password isn't serialized");
+    assert!(!format!("{capture:?}").contains("DUMMY-FORGED"));
+    assert!(store.list("team-1").unwrap().is_empty(), "nothing saved without the person");
+    assert!(store.for_origin("team-1", "https://victim.test").unwrap().is_none());
+    assert_eq!(ctrl.pending().await.unwrap().origin, "https://attacker.test");
+    let evals: Vec<Value> = recorded.lock().await.iter().filter(|(m, _)| m == "Runtime.evaluate").map(|(_, p)| p.clone()).collect();
+    assert!(evals.iter().all(|p| p["contextId"] == 77), "{evals:?}");
+
+    // No capture world (a page kwnt never set up) or a non-web page: nothing
+    let other = BrowserController::new(port);
+    assert!(other.collect_captured_credentials().await.is_none());
+    *url.lock().await = "file:///etc/passwd".into();
+    assert!(ctrl.collect_captured_credentials().await.is_none());
 }

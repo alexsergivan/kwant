@@ -1290,6 +1290,7 @@ dependencies = [
  "pdf-extract",
  "percent-encoding",
  "reqwest",
+ "ring",
  "rust-embed",
  "serde",
  "serde_json",

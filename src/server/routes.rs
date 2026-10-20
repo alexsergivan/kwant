@@ -2928,6 +2928,10 @@ pub async fn get_or_create_browser_controller(
     let (_, workspace) = resolve_sandbox_target_info(state, team_id).await?;
     match state.browser_service.session(team_id, &workspace).await {
         Ok(ctrl) => {
+            // Passwords belong to the team, channel or bot (by id), never to a folder
+            if let Some((owner, _)) = super::passwords::password_owner(state, team_id).await {
+                ctrl.attach_vault(state.credentials.clone(), &owner).await;
+            }
             controllers.insert(team_id.to_string(), ctrl.clone());
             let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
                 team_id: team_id.to_string(), container_name: "browser-service".into(), is_running: true,
@@ -3341,77 +3345,6 @@ pub async fn execute_tool(
 
     Ok(result)
 }
-
-#[derive(Deserialize)]
-pub struct SavePasswordPayload {
-    pub domain: Option<String>,
-    pub origin: Option<String>,
-    pub username: String,
-    pub password: String,
-}
-
-pub async fn get_saved_passwords(
-    State(state): State<AppState>,
-    Path(team_id): Path<String>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let controller = get_or_create_browser_controller(&state, &team_id).await;
-    if let Some(ctrl) = controller {
-        let list = ctrl.list_saved_credentials().await;
-        Ok(Json(json!({ "passwords": list })))
-    } else {
-        // Fallback: check workspace directly
-        if let Some((_, ws_dir)) = resolve_sandbox_target_info(&state, &team_id).await {
-            let creds_file = ws_dir.join(".saved_passwords.json");
-            if creds_file.exists() {
-                if let Ok(content) = std::fs::read_to_string(&creds_file) {
-                    if let Ok(creds) = serde_json::from_str::<serde_json::Value>(&content) {
-                        return Ok(Json(json!({ "passwords": creds })));
-                    }
-                }
-            }
-        }
-        Ok(Json(json!({ "passwords": [] })))
-    }
-}
-
-pub async fn save_password(
-    State(state): State<AppState>,
-    Path(team_id): Path<String>,
-    Json(payload): Json<SavePasswordPayload>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let controller = get_or_create_browser_controller(&state, &team_id).await;
-    let domain = payload.domain.unwrap_or_default();
-    let origin = payload.origin.unwrap_or_default();
-
-    if let Some(ctrl) = controller {
-        let saved = ctrl.save_credential(&domain, &origin, &payload.username, &payload.password).await;
-        Ok(Json(json!({ "status": "saved", "credential": saved })))
-    } else if let Some((_, ws_dir)) = resolve_sandbox_target_info(&state, &team_id).await {
-        let ctrl = crate::sandbox::BrowserController::with_workspace(19222, ws_dir);
-        let saved = ctrl.save_credential(&domain, &origin, &payload.username, &payload.password).await;
-        Ok(Json(json!({ "status": "saved", "credential": saved })))
-    } else {
-        Err(StatusCode::NOT_FOUND)
-    }
-}
-
-pub async fn delete_password(
-    State(state): State<AppState>,
-    Path((team_id, cred_id)): Path<(String, String)>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let controller = get_or_create_browser_controller(&state, &team_id).await;
-    if let Some(ctrl) = controller {
-        let removed = ctrl.delete_saved_credential(&cred_id).await;
-        Ok(Json(json!({ "status": if removed { "deleted" } else { "not_found" } })))
-    } else if let Some((_, ws_dir)) = resolve_sandbox_target_info(&state, &team_id).await {
-        let ctrl = crate::sandbox::BrowserController::with_workspace(19222, ws_dir);
-        let removed = ctrl.delete_saved_credential(&cred_id).await;
-        Ok(Json(json!({ "status": if removed { "deleted" } else { "not_found" } })))
-    } else {
-        Err(StatusCode::NOT_FOUND)
-    }
-}
-
 
 #[cfg(test)]
 mod tests {

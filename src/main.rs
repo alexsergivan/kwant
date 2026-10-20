@@ -147,6 +147,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let state = AppState::new(config.clone(), db, tools, broker, router);
+            // Saved passwords left in a bot's folder by older versions move into the vault
+            kwnt::server::passwords::migrate_all(&state).await;
             kwnt::server::scheduler::spawn_background(state.clone(), shutdown.clone());
             kwnt::server::engine_routes::spawn_startup_check(state.clone());
             let app = create_router(state);
@@ -168,6 +170,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if !is_loopback_bind(&config.host) {
                 println!(
                     "🔒 Requests from other machines need the API token: run `kwnt token` and open http://<this-host>:{}/#kwnt_token=<token>",
+                    config.port
+                );
+            } else {
+                println!(
+                    "🔒 Saved passwords and approvals need the API token here too: run `kwnt token` and open http://localhost:{}/#kwnt_token=<token> once",
                     config.port
                 );
             }

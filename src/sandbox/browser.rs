@@ -1,4 +1,5 @@
 use futures::{SinkExt, StreamExt};
+use super::credentials::CredentialStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -127,15 +128,96 @@ pub struct NavigationResult {
     pub status_code: u16,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SavedCredential {
-    pub id: String,
-    pub domain: String,
+/// A password the person typed into a page, waiting for them to confirm saving it. The origin is
+/// the frame's real URL as Chrome reports it, never anything the page says about itself.
+#[derive(Clone, Serialize, PartialEq)]
+pub struct PendingCapture {
     pub origin: String,
     pub username: String,
+    #[serde(skip)]
     pub password: String,
-    pub last_used: String,
+    pub captured_at: String,
 }
+
+impl std::fmt::Debug for PendingCapture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingCapture")
+            .field("origin", &self.origin)
+            .field("username", &self.username)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The store and owner (team, channel or bot id) a browser fills passwords from.
+#[derive(Clone)]
+pub struct Vault {
+    pub store: Arc<dyn CredentialStore>,
+    pub owner: String,
+}
+
+/// Name of the isolated world kwnt's autofill and capture run in: the page's own scripts share
+/// the DOM but not its JavaScript globals, so they can't read or forge the capture.
+const KWNT_WORLD: &str = "kwnt-autofill";
+
+/// Runs in [`KWNT_WORLD`]; `window` here is that world's own global, not the page's.
+const AUTOFILL_SCRIPT: &str = r#"
+(function(creds) {
+    var USER = 'input[type="text"], input[type="email"], input:not([type]), input[name*="user"], input[name*="login"], input[name*="email"], input[id*="user"], input[id*="login"]';
+    function visible(el) {
+        var r = el.getBoundingClientRect();
+        var s = window.getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+    }
+    function postsHere(input) {
+        var f = input.form;
+        if (!f || !f.getAttribute('action')) return true;
+        try { return new URL(f.action, location.href).origin === location.origin; } catch (e) { return false; }
+    }
+    function set(input, value) {
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    function fill() {
+        if (!creds || location.origin !== creds.origin) return;
+        var pass = Array.prototype.find.call(document.querySelectorAll('input[type="password"]'), function(p) {
+            return visible(p) && postsHere(p);
+        });
+        if (!pass || pass.value) return;
+        var scope = pass.form || document;
+        var user = Array.prototype.find.call(scope.querySelectorAll(USER), visible);
+        if (user && !user.value && creds.username) set(user, creds.username);
+        set(pass, creds.password);
+    }
+    fill();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fill);
+    setTimeout(fill, 600);
+    setTimeout(fill, 1800);
+
+    if (window.__kwntCaptureInstalled) return;
+    window.__kwntCaptureInstalled = true;
+    function record(scope) {
+        if (!scope) return;
+        var pass = scope.querySelector('input[type="password"]');
+        if (!pass || !pass.value) return;
+        var user = scope.querySelector(USER);
+        window.__kwntCaptured = { username: user ? user.value : '', password: pass.value };
+    }
+    document.addEventListener('submit', function(e) { record(e.target); }, true);
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest && e.target.closest('button, input[type="submit"], [role="button"]');
+        if (btn) record(btn.closest('form') || document);
+    }, true);
+})(__KWNT_CREDS__);
+"#;
+
+const COLLECT_SCRIPT: &str = r#"
+(function() {
+    var c = window.__kwntCaptured;
+    window.__kwntCaptured = null;
+    return c ? JSON.stringify(c) : null;
+})()
+"#;
 
 #[derive(Clone)]
 pub struct BrowserController {
@@ -143,8 +225,11 @@ pub struct BrowserController {
     pub current_url: Arc<Mutex<Option<String>>>,
     pub current_title: Arc<Mutex<Option<String>>>,
     pub last_screenshot: Arc<Mutex<Option<String>>>,
-    pub saved_credentials: Arc<Mutex<Vec<SavedCredential>>>,
-    pub workspace_dir: Arc<Mutex<Option<std::path::PathBuf>>>,
+    vault: Arc<Mutex<Option<Vault>>>,
+    /// A password captured on the page, waiting for the person's OK.
+    pending_capture: Arc<Mutex<Option<PendingCapture>>>,
+    /// kwnt's isolated world in the current document.
+    capture_world: Arc<Mutex<Option<i64>>>,
     msg_id: Arc<AtomicU64>,
     ws_conn: Arc<Mutex<Option<WsStream>>>,
     endpoint: String,
@@ -168,8 +253,9 @@ impl BrowserController {
             current_url: Arc::new(Mutex::new(None)),
             current_title: Arc::new(Mutex::new(None)),
             last_screenshot: Arc::new(Mutex::new(None)),
-            saved_credentials: Arc::new(Mutex::new(Vec::new())),
-            workspace_dir: Arc::new(Mutex::new(None)),
+            vault: Arc::new(Mutex::new(None)),
+            pending_capture: Arc::new(Mutex::new(None)),
+            capture_world: Arc::new(Mutex::new(None)),
             msg_id: Arc::new(AtomicU64::new(1)),
             ws_conn: Arc::new(Mutex::new(None)),
             endpoint: format!("http://127.0.0.1:{cdp_port}"),
@@ -179,48 +265,13 @@ impl BrowserController {
         }
     }
 
-    pub fn with_workspace(cdp_port: u16, workspace_dir: std::path::PathBuf) -> Self {
-        let mut loaded = Vec::new();
-        let creds_file = workspace_dir.join(".saved_passwords.json");
-        if creds_file.exists() {
-            if let Ok(content) = std::fs::read_to_string(&creds_file) {
-                if let Ok(creds) = serde_json::from_str::<Vec<SavedCredential>>(&content) {
-                    loaded = creds;
-                }
-            }
-        }
-
-        Self {
-            cdp_port,
-            current_url: Arc::new(Mutex::new(None)),
-            current_title: Arc::new(Mutex::new(None)),
-            last_screenshot: Arc::new(Mutex::new(None)),
-            saved_credentials: Arc::new(Mutex::new(loaded)),
-            workspace_dir: Arc::new(Mutex::new(Some(workspace_dir))),
-            msg_id: Arc::new(AtomicU64::new(1)),
-            ws_conn: Arc::new(Mutex::new(None)),
-            endpoint: format!("http://127.0.0.1:{cdp_port}"),
-            target_id: None,
-            browser_level: false,
-            control: Arc::new(RwLock::new(())),
-        }
+    /// Fills and captures passwords for `owner` from `store`.
+    pub async fn attach_vault(&self, store: Arc<dyn CredentialStore>, owner: &str) {
+        *self.vault.lock().await = Some(Vault { store, owner: owner.to_string() });
     }
 
-    pub async fn set_workspace(&self, ws: std::path::PathBuf) {
-        let creds_file = ws.join(".saved_passwords.json");
-        if creds_file.exists() {
-            if let Ok(content) = std::fs::read_to_string(&creds_file) {
-                if let Ok(creds) = serde_json::from_str::<Vec<SavedCredential>>(&content) {
-                    let mut lock = self.saved_credentials.lock().await;
-                    *lock = creds;
-                }
-            }
-        }
-        *self.workspace_dir.lock().await = Some(ws);
-    }
-
-    pub fn at_endpoint(endpoint: &str, target_id: Option<String>, workspace: Option<std::path::PathBuf>, browser_level: bool) -> Self {
-        let mut ctrl = workspace.map(|ws| Self::with_workspace(0, ws)).unwrap_or_else(|| Self::new(0));
+    pub fn at_endpoint(endpoint: &str, target_id: Option<String>, browser_level: bool) -> Self {
+        let mut ctrl = Self::new(0);
         ctrl.endpoint = endpoint.trim_end_matches('/').to_string();
         ctrl.target_id = target_id;
         ctrl.browser_level = browser_level;
@@ -377,214 +428,99 @@ impl BrowserController {
         }
     }
 
-    pub async fn list_saved_credentials(&self) -> Vec<SavedCredential> {
-        self.saved_credentials.lock().await.clone()
+    async fn vault(&self) -> Option<Vault> {
+        self.vault.lock().await.clone()
     }
 
-    pub async fn save_credential(
-        &self,
-        domain: &str,
-        origin: &str,
-        username: &str,
-        password: &str,
-    ) -> SavedCredential {
-        let mut lock = self.saved_credentials.lock().await;
-        let now = chrono::Utc::now().to_rfc3339();
+    /// The main frame's id and real URL, as Chrome reports them.
+    async fn main_frame(&self) -> Option<(String, String)> {
+        let tree = self.send_cdp_command("Page.getFrameTree", json!({})).await.ok()?;
+        let frame = &tree["frameTree"]["frame"];
+        Some((frame["id"].as_str()?.to_string(), frame["url"].as_str()?.to_string()))
+    }
 
-        let clean_domain = if domain.is_empty() {
-            if let Ok(parsed) = reqwest::Url::parse(origin) {
-                parsed.host_str().unwrap_or(origin).to_string()
-            } else {
-                origin.to_string()
-            }
-        } else {
-            domain.to_string()
+    fn web_origin(url: &str) -> Option<String> {
+        let u = url::Url::parse(url).ok()?;
+        matches!(u.scheme(), "http" | "https").then(|| u.origin().ascii_serialization())
+    }
+
+    /// Sets up autofill and capture in kwnt's isolated world of the current document. The saved
+    /// password goes only to a page whose real origin (scheme, host and port) is exactly the
+    /// saved one, into a visible password field whose form posts to the same origin.
+    pub async fn inject_autofill_and_capture(&self) -> Result<(), BrowserError> {
+        *self.capture_world.lock().await = None;
+        let Some(vault) = self.vault().await else { return Ok(()) };
+        let Some((frame_id, url)) = self.main_frame().await else { return Ok(()) };
+        let Some(origin) = Self::web_origin(&url) else { return Ok(()) };
+        let world = self
+            .send_cdp_command("Page.createIsolatedWorld", json!({"frameId": frame_id, "worldName": KWNT_WORLD}))
+            .await?;
+        let Some(context) = world["executionContextId"].as_i64() else { return Ok(()) };
+        *self.capture_world.lock().await = Some(context);
+        let fill = match vault.store.for_origin(&vault.owner, &origin) {
+            Ok(Some(c)) => json!({"origin": origin, "username": c.meta.username, "password": c.password}),
+            _ => Value::Null,
         };
-
-        // Check if matching credential exists
-        if let Some(existing) = lock.iter_mut().find(|c| {
-            (c.domain.eq_ignore_ascii_case(&clean_domain) || (!origin.is_empty() && c.origin == origin))
-                && c.username == username
-        }) {
-            existing.password = password.to_string();
-            existing.last_used = now;
-            let updated = existing.clone();
-            drop(lock);
-            self.persist_credentials_to_disk().await;
-            return updated;
-        }
-
-        let new_cred = SavedCredential {
-            id: uuid::Uuid::new_v4().to_string(),
-            domain: clean_domain,
-            origin: origin.to_string(),
-            username: username.to_string(),
-            password: password.to_string(),
-            last_used: now,
-        };
-
-        lock.push(new_cred.clone());
-        drop(lock);
-        self.persist_credentials_to_disk().await;
-        new_cred
-    }
-
-    pub async fn delete_saved_credential(&self, id: &str) -> bool {
-        let mut lock = self.saved_credentials.lock().await;
-        let initial_len = lock.len();
-        lock.retain(|c| c.id != id);
-        let removed = lock.len() < initial_len;
-        drop(lock);
-        if removed {
-            self.persist_credentials_to_disk().await;
-        }
-        removed
-    }
-
-    pub async fn get_credential_for_url(&self, target_url: &str) -> Option<SavedCredential> {
-        let parsed = reqwest::Url::parse(target_url).ok();
-        let target_host = parsed.as_ref().and_then(|u| u.host_str()).unwrap_or(target_url);
-        let target_origin = parsed.as_ref().map(|u| u.origin().ascii_serialization()).unwrap_or_default();
-
-        let lock = self.saved_credentials.lock().await;
-        lock.iter().find(|c| {
-            c.domain.eq_ignore_ascii_case(target_host)
-                || (!c.origin.is_empty() && c.origin == target_origin)
-                || target_host.ends_with(&format!(".{}", c.domain))
-        }).cloned()
-    }
-
-    pub async fn persist_credentials_to_disk(&self) {
-        let ws_opt = self.workspace_dir.lock().await.clone();
-        if let Some(ws) = ws_opt {
-            if tokio::fs::create_dir_all(&ws).await.is_err() { return; }
-            let creds = self.saved_credentials.lock().await.clone();
-            let creds_file = ws.join(".saved_passwords.json");
-            if let Ok(json_str) = serde_json::to_string_pretty(&creds) {
-                let _ = std::fs::write(&creds_file, json_str);
-            }
-        }
-    }
-
-    pub async fn inject_autofill_and_capture(&self, target_url: &str) -> Result<(), BrowserError> {
-        let cred_opt = self.get_credential_for_url(target_url).await;
-        let cred_json = serde_json::to_string(&cred_opt).unwrap_or_else(|_| "null".into());
-
-        let script = format!(
-            r#"
-            (function() {{
-                var creds = {};
-
-                function fillCredentials() {{
-                    if (!creds || !creds.password) return;
-                    var passInput = document.querySelector('input[type="password"]');
-                    var userInput = document.querySelector('input[type="text"], input[type="email"], input[name*="user"], input[name*="login"], input[name*="email"], input[id*="user"], input[id*="login"]');
-                    if (passInput) {{
-                        if (!passInput.value) {{
-                            passInput.value = creds.password;
-                            passInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                            passInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        }}
-                    }}
-                    if (userInput) {{
-                        if (!userInput.value && creds.username) {{
-                            userInput.value = creds.username;
-                            userInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                            userInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        }}
-                    }}
-                }}
-
-                fillCredentials();
-                if (document.readyState === 'loading') {{
-                    document.addEventListener('DOMContentLoaded', fillCredentials);
-                }}
-                setTimeout(fillCredentials, 600);
-                setTimeout(fillCredentials, 1800);
-
-                if (!window.__kwnt_capture_installed) {{
-                    window.__kwnt_capture_installed = true;
-
-                    function recordForm(form) {{
-                        if (!form) return;
-                        var passInput = form.querySelector('input[type="password"]');
-                        if (!passInput || !passInput.value) return;
-                        var userInput = form.querySelector('input[type="text"], input[type="email"], input[name*="user"], input[name*="login"], input[name*="email"], input[id*="user"], input[id*="login"]');
-                        var username = userInput ? userInput.value : '';
-                        var password = passInput.value;
-                        if (password) {{
-                            window.__kwnt_captured_creds = {{
-                                domain: window.location.hostname || window.location.host,
-                                origin: window.location.origin,
-                                username: username,
-                                password: password
-                            }};
-                        }}
-                    }}
-
-                    document.addEventListener('submit', function(e) {{
-                        recordForm(e.target);
-                    }}, true);
-
-                    document.addEventListener('click', function(e) {{
-                        var btn = e.target.closest('button, input[type="submit"], [role="button"]');
-                        if (!btn) return;
-                        var form = btn.closest('form') || document;
-                        recordForm(form);
-                    }}, true);
-                }}
-            }})();
-            "#,
-            cred_json
-        );
-
+        let script = AUTOFILL_SCRIPT.replace("__KWNT_CREDS__", &fill.to_string());
         let _ = self
             .send_cdp_command(
                 "Runtime.evaluate",
-                json!({ "expression": script, "returnByValue": false }),
+                json!({ "expression": script, "contextId": context, "returnByValue": false }),
             )
             .await;
-
         Ok(())
     }
 
-    pub async fn collect_and_save_captured_credentials(&self) -> Result<Option<SavedCredential>, BrowserError> {
-        let check_script = r#"
-            (function() {
-                if (window.__kwnt_captured_creds) {
-                    var c = window.__kwnt_captured_creds;
-                    window.__kwnt_captured_creds = null;
-                    return JSON.stringify(c);
-                }
-                return null;
-            })()
-        "#;
-
-        let eval_res = self
+    /// Takes a password the person submitted on the page into [`Self::pending_capture`], to be
+    /// saved only when they confirm. The origin comes from the frame's URL, read before and
+    /// after, so a capture is never filed under another site. A capture that equals the saved
+    /// credential (the autofill itself) is dropped.
+    pub async fn collect_captured_credentials(&self) -> Option<PendingCapture> {
+        let context = (*self.capture_world.lock().await)?;
+        let (_, before) = self.main_frame().await?;
+        let r = self
             .send_cdp_command(
                 "Runtime.evaluate",
-                json!({ "expression": check_script, "returnByValue": true }),
+                json!({ "expression": COLLECT_SCRIPT, "contextId": context, "returnByValue": true }),
             )
             .await
-            .ok();
-
-        if let Some(r) = eval_res {
-            if let Some(raw_json) = r["result"]["value"].as_str() {
-                if let Ok(val) = serde_json::from_str::<Value>(raw_json) {
-                    let domain = val["domain"].as_str().unwrap_or("");
-                    let origin = val["origin"].as_str().unwrap_or("");
-                    let username = val["username"].as_str().unwrap_or("");
-                    let password = val["password"].as_str().unwrap_or("");
-
-                    if !password.is_empty() {
-                        let saved = self.save_credential(domain, origin, username, password).await;
-                        return Ok(Some(saved));
-                    }
+            .ok()?;
+        let raw = r["result"]["value"].as_str()?;
+        let (_, after) = self.main_frame().await?;
+        let origin = Self::web_origin(&before)?;
+        if Self::web_origin(&after).as_deref() != Some(origin.as_str()) {
+            return None;
+        }
+        let val: Value = serde_json::from_str(raw).ok()?;
+        let username = val["username"].as_str().unwrap_or("").to_string();
+        let password = val["password"].as_str().unwrap_or("").to_string();
+        if password.is_empty() {
+            return None;
+        }
+        if let Some(vault) = self.vault().await {
+            if let Ok(Some(saved)) = vault.store.for_origin(&vault.owner, &origin) {
+                if saved.meta.username == username && saved.password == password {
+                    return None;
                 }
             }
         }
+        let capture = PendingCapture { origin, username, password, captured_at: chrono::Utc::now().to_rfc3339() };
+        self.hold_for_confirmation(capture.clone()).await;
+        Some(capture)
+    }
 
-        Ok(None)
+    /// Holds a captured password until the person saves or discards it (replacing an older one).
+    pub async fn hold_for_confirmation(&self, capture: PendingCapture) {
+        *self.pending_capture.lock().await = Some(capture);
+    }
+
+    /// The capture waiting for the person, if any.
+    pub async fn pending(&self) -> Option<PendingCapture> {
+        self.pending_capture.lock().await.clone()
+    }
+
+    pub async fn take_pending(&self) -> Option<PendingCapture> {
+        self.pending_capture.lock().await.take()
     }
 
     pub async fn navigate(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
@@ -593,7 +529,7 @@ impl BrowserController {
     }
 
     pub async fn navigate_unlocked(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
-        let _ = self.collect_and_save_captured_credentials().await;
+        let _ = self.collect_captured_credentials().await;
         let _ = self.send_cdp_command("Page.enable", json!({})).await;
         let res = self
             .send_cdp_command("Page.navigate", json!({ "url": target_url }))
@@ -618,7 +554,7 @@ impl BrowserController {
         };
 
         // Automatically inject autofill and capture hooks
-        let _ = self.inject_autofill_and_capture(&url).await;
+        let _ = self.inject_autofill_and_capture().await;
 
         // Automatically capture fresh screenshot on navigation
         self.capture_screenshot().await?;
@@ -688,7 +624,7 @@ impl BrowserController {
             return Err(BrowserError::Protocol("Element not found for selector".into()));
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
-        let _ = self.collect_and_save_captured_credentials().await;
+        let _ = self.collect_captured_credentials().await;
         let _ = self.capture_screenshot().await;
         Ok(())
     }
@@ -832,7 +768,7 @@ impl BrowserController {
         .await?;
 
         tokio::time::sleep(Duration::from_millis(150)).await;
-        let _ = self.collect_and_save_captured_credentials().await;
+        let _ = self.collect_captured_credentials().await;
         let _ = self.sync_location().await;
         self.capture_screenshot().await
     }
@@ -845,7 +781,7 @@ impl BrowserController {
         .await?;
 
         tokio::time::sleep(Duration::from_millis(150)).await;
-        let _ = self.collect_and_save_captured_credentials().await;
+        let _ = self.collect_captured_credentials().await;
         let _ = self.sync_location().await;
         self.capture_screenshot().await
     }
@@ -870,7 +806,7 @@ impl BrowserController {
         self.send_cdp_command("Input.dispatchKeyEvent", up_params).await?;
 
         tokio::time::sleep(Duration::from_millis(150)).await;
-        let _ = self.collect_and_save_captured_credentials().await;
+        let _ = self.collect_captured_credentials().await;
         let _ = self.sync_location().await;
         self.capture_screenshot().await
     }
