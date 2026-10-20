@@ -151,6 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let state = AppState::new(config.clone(), db, tools, broker, router);
             // Saved passwords left in a bot's folder by older versions move into the vault
             kwnt::server::passwords::migrate_all(&state).await;
+            kwnt::server::passwords::warn_if_exposed(&state).await;
             kwnt::server::scheduler::spawn_background(state.clone(), shutdown.clone());
             kwnt::server::engine_routes::spawn_startup_check(state.clone());
             let app = create_router(state);

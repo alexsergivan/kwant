@@ -29,6 +29,16 @@
 //!
 //! While Bitwarden is locked, the per-owner routes answer 423 `{error, locked: true}` and the
 //! browser fills nothing.
+//!
+//! Approvals off and the built-in store don't mix (audit F-10): a bot that can run commands can
+//! read kwnt's data folder, and the built-in store's key and the API token sit there, so it could
+//! read every built-in saved password. So, while any space or bot has approvals off:
+//! - saving a password into the built-in store answers 409 `{error, needs_bitwarden: true}`;
+//! - going back from Bitwarden to the built-in store answers 409 `{error, needs_bitwarden: true,
+//!   local_count}` unless the built-in store is empty.
+//!
+//! and switching approvals off answers 409 while the built-in store holds any password (see
+//! [`refuse_approvals_off`]). An install already in that state is reported as `exposed: true`.
 
 use super::AppState;
 use crate::db::spaces::SpaceId;
@@ -196,6 +206,9 @@ pub async fn save(
     if body.password.is_empty() {
         return error(StatusCode::BAD_REQUEST, "password is empty");
     }
+    if let Some(r) = refuse_local_save(&state).await {
+        return r;
+    }
     let source = body.origin.filter(|o| !o.trim().is_empty()).or(body.domain).unwrap_or_default();
     let Ok(origin) = normalize_origin(&source) else {
         return error(StatusCode::BAD_REQUEST, "origin must be an http(s) address like https://example.com");
@@ -286,6 +299,10 @@ pub async fn save_pending(State(state): State<AppState>, headers: HeaderMap, Pat
     let Some(ctrl) = open_controller(&state, &id, &owner).await else {
         return error(StatusCode::NOT_FOUND, "no password is waiting to be saved");
     };
+    // Refused before it's taken, so it keeps waiting until Bitwarden is set up
+    if let Some(r) = refuse_local_save(&state).await {
+        return r;
+    }
     let Some(p) = ctrl.take_pending().await else {
         return error(StatusCode::NOT_FOUND, "no password is waiting to be saved");
     };
@@ -312,17 +329,83 @@ pub async fn discard_pending(State(state): State<AppState>, headers: HeaderMap, 
 
 /// `{store: "local" | "bitwarden", locked, bitwarden: null | {server_url, email, login:
 /// "password" | "api_key", client_id, unlocked, unlocked_at, item_count, last_sync},
-/// local_count}`. `local_count` is how many passwords the built-in store still holds (what
-/// `migrate` would move).
+/// local_count, approvals_off, exposed}`. `local_count` is how many passwords the built-in store
+/// still holds (what `migrate` would move). `approvals_off`: any space or bot has approvals off.
+/// `exposed`: both at once, so a bot could read those passwords; nothing changes it on its own.
 async fn store_json(state: &AppState) -> Value {
     let vault = &state.credentials;
-    let owners = all_owners(state).await;
+    let local_count = local_count(state).await;
+    let approvals_off = approvals_off_anywhere(state).await;
     json!({
         "store": vault.store_name(),
         "locked": vault.is_locked().await,
         "bitwarden": vault.bitwarden().status().await,
-        "local_count": vault.local_count(&owners).await,
+        "local_count": local_count,
+        "approvals_off": approvals_off,
+        "exposed": approvals_off && local_count > 0,
     })
+}
+
+/// How many passwords the built-in store holds. In Bitwarden mode these are leftovers that were
+/// never moved, still readable with the built-in key.
+pub async fn local_count(state: &AppState) -> usize {
+    state.credentials.local_count(&all_owners(state).await).await
+}
+
+/// Whether any space or bot has approvals off. A failed read counts as off.
+pub async fn approvals_off_anywhere(state: &AppState) -> bool {
+    state.db.any_approvals_off().await.unwrap_or(true)
+}
+
+/// The 409 for switching approvals off while the built-in store holds passwords: a bot with
+/// approvals off could read them (audit F-10). Bitwarden mode with nothing left in the built-in
+/// store is fine. `None` when approvals may go off.
+pub async fn refuse_approvals_off(state: &AppState) -> Option<Response> {
+    let n = local_count(state).await;
+    if n == 0 {
+        return None;
+    }
+    tracing::info!(local_count = n, "refused to switch approvals off while the built-in store holds passwords");
+    Some(
+        (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "approvals can't be switched off while passwords are saved on this server: a bot that can run commands could read them. Move them to Bitwarden first.",
+                "needs_bitwarden": true,
+                "local_count": n,
+            })),
+        )
+            .into_response(),
+    )
+}
+
+/// The 409 for saving into the built-in store while approvals are off anywhere.
+async fn refuse_local_save(state: &AppState) -> Option<Response> {
+    if state.credentials.store_name() != "local" || !approvals_off_anywhere(state).await {
+        return None;
+    }
+    Some(
+        (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "passwords can't be saved on this server while approvals are off: a bot that can run commands could read them. Use Bitwarden, or turn approvals back on.",
+                "needs_bitwarden": true,
+            })),
+        )
+            .into_response(),
+    )
+}
+
+/// On start: one warning, without secrets, when approvals are off and the built-in store holds
+/// passwords. Approvals are left as the person set them.
+pub async fn warn_if_exposed(state: &AppState) {
+    let n = local_count(state).await;
+    if n > 0 && approvals_off_anywhere(state).await {
+        tracing::warn!(
+            local_count = n,
+            "approvals are off while passwords are saved on this server: a bot that can run commands could read them. Move them to Bitwarden or turn approvals back on."
+        );
+    }
 }
 
 #[allow(clippy::result_large_err)]
@@ -380,6 +463,19 @@ pub async fn forget_bitwarden(State(state): State<AppState>, headers: HeaderMap,
     }
     if !state.credentials.bitwarden().is_configured() {
         return Json(store_json(&state).await).into_response();
+    }
+    // Back to the built-in store would expose what it still holds to bots with approvals off
+    let n = local_count(&state).await;
+    if n > 0 && approvals_off_anywhere(&state).await {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "approvals are off, so this server can't go back to its built-in password store while it still holds passwords. Turn approvals back on first.",
+                "needs_bitwarden": true,
+                "local_count": n,
+            })),
+        )
+            .into_response();
     }
     if let Err(r) = check_master_password(&state, &master_password_of(&body)).await {
         return r;

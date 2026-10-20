@@ -8,7 +8,7 @@ use super::{
     AppState,
 };
 use crate::db::{
-    approval_modes::{valid_mode, ApprovalMode, INHERIT},
+    approval_modes::{valid_mode, ApprovalMode, INHERIT, OFF},
     spaces::SpaceId,
 };
 use axum::{
@@ -87,6 +87,11 @@ pub async fn put_space(
     if !valid_mode(mode) {
         return error(StatusCode::BAD_REQUEST, "approvals must be \"ask\" or \"off\"");
     }
+    if mode == OFF {
+        if let Some(r) = super::passwords::refuse_approvals_off(&state).await {
+            return r;
+        }
+    }
     if state.db.set_space_approvals(&space, mode).await.is_err() {
         return internal();
     }
@@ -132,10 +137,18 @@ pub async fn put_kwant(
     if !(valid_mode(mode) || mode == INHERIT) {
         return error(StatusCode::BAD_REQUEST, "approvals must be \"inherit\", \"ask\" or \"off\"");
     }
-    match state.db.space_of_kwant(&id).await {
-        Ok(Some(_)) => {}
+    let space = match state.db.space_of_kwant(&id).await {
+        Ok(Some(s)) => s,
         Ok(None) => return error(StatusCode::NOT_FOUND, "no such bot"),
         Err(_) => return internal(),
+    };
+    // `inherit` in a space that is off switches the bot off too
+    let turns_off = mode == OFF
+        || (mode == INHERIT && matches!(state.db.space_approvals(&space).await.as_deref(), Ok(OFF) | Err(_)));
+    if turns_off {
+        if let Some(r) = super::passwords::refuse_approvals_off(&state).await {
+            return r;
+        }
     }
     if state.db.set_kwant_approvals(&id, mode).await.is_err() {
         return internal();

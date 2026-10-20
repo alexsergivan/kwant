@@ -374,7 +374,9 @@ async fn bots_cannot_name_kwnt_secret_files_even_with_approvals_off() {
     let (s, _) = e.person("PUT", &format!("/api/kwants/{}/approvals", bot.id), Some(json!({"approvals": "off"}))).await;
     assert_eq!(s, StatusCode::OK);
     let team = e.team("t", None).await;
-    e.person("POST", &format!("/api/sandbox/{team}/passwords"), Some(json!({"origin": "https://a.test", "username": "u", "password": "DUMMY-OFF-PW"}))).await;
+    // With approvals off nothing new goes into the built-in store (F-10)
+    let (s, _) = e.person("POST", &format!("/api/sandbox/{team}/passwords"), Some(json!({"origin": "https://a.test", "username": "u", "password": "DUMMY-OFF-PW"}))).await;
+    assert_eq!(s, StatusCode::CONFLICT);
     let folder = tempdir().unwrap();
     let turn = e.turn_token(folder.path()).await;
 

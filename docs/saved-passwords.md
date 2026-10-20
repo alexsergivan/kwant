@@ -7,7 +7,19 @@ Kwnt can fill website logins in a team's, channel's or bot's browser. The passwo
 | Built-in | encrypted files in `<data>/kwnt-vault/`, with the key next to them | yes |
 | Bitwarden | the person's own Bitwarden (or Vaultwarden) account, folder `kwnt` | after the person unlocks it once |
 
-The built-in store protects against copies of the data folder. It does **not** protect against a bot that runs as the same Linux user with approvals off. That bot can read the key file. Use Bitwarden when bots run with approvals off.
+The built-in store protects against copies of the data folder. It does **not** protect against a bot that runs as the same Linux user with approvals off. That bot can read the key file, and the API token next to it, and with them every built-in saved password (audit F-10, 2026-10-20). Kwnt's name filter on those files is not enough: shell wildcards get past it.
+
+## Approvals off needs Bitwarden
+
+Since 2026-10-20, approvals off and passwords in the built-in store are not allowed together. The server enforces this:
+
+- Switching approvals off returns 409 `{error, needs_bitwarden: true, local_count}` while the built-in store holds any password. This covers a space, a bot, and a bot set to `inherit` from a space that is off. It also applies in Bitwarden mode when built-in passwords were never moved: they still open with the built-in key. Move them with `POST /api/passwords/migrate` first.
+- While any space or bot has approvals off, saving into the built-in store (`POST …/passwords` or `…/passwords/pending`) returns 409 `{error, needs_bitwarden: true}`. A captured login keeps waiting.
+- While any space or bot has approvals off, going back from Bitwarden to the built-in store (`DELETE /api/passwords/bitwarden`) returns 409 `{error, needs_bitwarden: true, local_count}`, unless the built-in store is empty.
+- A space that is off counts even if every bot in it overrides to `ask`, because a new bot there would inherit `off`.
+- An install that was already in this state keeps its approvals as they are. `GET /api/passwords/store` shows `exposed: true`, and kwnt logs one warning at start (a count, no secrets). Moving the passwords to Bitwarden or turning approvals back on clears it.
+
+With Bitwarden, the API token alone doesn't show a password: that needs the master password. The DevTools gap below still applies in Bitwarden mode.
 
 ## Bitwarden: what holds and what doesn't
 
@@ -47,9 +59,12 @@ Vault:
 
   ```json
   {"store": "local" | "bitwarden", "locked": bool, "local_count": n,
+   "approvals_off": bool, "exposed": bool,
    "bitwarden": {"server_url", "email", "login": "password" | "api_key", "client_id",
                  "unlocked", "unlocked_at", "item_count", "last_sync"} | null}
   ```
+
+  `approvals_off`: any space or bot has approvals off. `exposed`: approvals are off and `local_count > 0`.
 
 - `POST /api/passwords/bitwarden/unlock` returns the store status.
   - Body: `{server_url?, email?, master_password, client_id?, client_secret?, two_factor_provider?, two_factor_token?, new_device_otp?}`.
@@ -63,11 +78,12 @@ Vault:
     - 400 for bad input
     - 502 when Bitwarden is unreachable or refuses
 - `POST /api/passwords/bitwarden/lock` returns the store status.
-- `DELETE /api/passwords/bitwarden {master_password}` goes back to the built-in store. The vault must be unlocked, and the items stay in Bitwarden.
+- `DELETE /api/passwords/bitwarden {master_password}` goes back to the built-in store. The vault must be unlocked, and the items stay in Bitwarden. While approvals are off anywhere and the built-in store isn't empty, it returns 409 (see above).
 - `POST /api/passwords/migrate` returns `{moved, failed}`. It runs once, when the person triggers it. Each built-in password is deleted locally only after Bitwarden has it.
 
 ## Tests
 
+- `cargo test --test approvals_passwords_test` checks the approvals-off rules above.
 - `cargo test bitwarden` runs the unit tests and route checks, with known-answer vectors for the key derivation and the cipher format.
 - The end-to-end tests run against a throwaway Vaultwarden:
 

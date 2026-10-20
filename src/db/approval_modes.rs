@@ -95,6 +95,20 @@ impl Database {
         Ok(())
     }
 
+    /// Whether approvals are off for any existing space or bot. A space that is off counts even
+    /// when every bot in it overrides to `ask`: a new bot there would inherit `off`.
+    pub async fn any_approvals_off(&self) -> Result<bool, DbError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM approval_modes WHERE mode = 'off' AND (
+                (scope = 'space' AND id IN (SELECT id FROM spaces))
+                OR (scope = 'kwant' AND id IN (SELECT id FROM kwants))
+            ) LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
     /// A bot's approvals in `space`: its override, else the space's.
     pub async fn kwant_approvals_in(&self, space: &SpaceId, kwant_id: &str) -> Result<ApprovalMode, DbError> {
         let space_mode = self.space_approvals(space).await?;
