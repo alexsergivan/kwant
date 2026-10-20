@@ -45,6 +45,21 @@ export interface VirtualMachinePaneProps {
   approvalsOff?: boolean;
 }
 
+type PaneTab = 'browser' | 'terminal' | 'vault';
+
+// On a phone, going back to the list unmounts the chat while the pane stays open, so the
+// chosen tab lives here, per bot, or it would fall back to Browser on the way back.
+const chosenTabs = new Map<string, PaneTab>();
+
+/** The tab the pane last showed for this bot or team, for when it opens again. */
+export function chosenPaneTab(teamId: string | undefined): PaneTab {
+  return (teamId && chosenTabs.get(teamId)) || 'browser';
+}
+
+export function rememberPaneTab(teamId: string | undefined, tab: PaneTab): void {
+  if (teamId) chosenTabs.set(teamId, tab);
+}
+
 export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   isOpen,
   onClose,
@@ -61,7 +76,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   onNavigate,
   approvalsOff = false,
 }) => {
-  const [activeTab, setActiveTab] = useState<'browser' | 'terminal' | 'vault'>('browser');
+  const [activeTab, setActiveTab] = useState<PaneTab>(() => chosenPaneTab(teamId));
+  useEffect(() => rememberPaneTab(teamId, activeTab), [teamId, activeTab]);
   const [inputUrl, setInputUrl] = useState(activeUrl);
   // No event fires when the browser catches a login, so a new screenshot or page loads the list again.
   const passwords = useSavedPasswords(teamId, `${activeUrl}|${screenshotBase64?.length ?? 0}|${screenshotBase64?.slice(-32) ?? ''}`);
@@ -289,6 +305,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             playSfx('click');
             setActiveTab('browser');
           }}
+          aria-pressed={activeTab === 'browser'}
           className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors border-b-2 cursor-pointer ${
             activeTab === 'browser'
               ? 'border-sky-500 text-sky-400 bg-sky-500/10'
@@ -304,6 +321,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             playSfx('click');
             setActiveTab('terminal');
           }}
+          aria-pressed={activeTab === 'terminal'}
           className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors border-b-2 cursor-pointer ${
             activeTab === 'terminal'
               ? 'border-sky-500 text-sky-400 bg-sky-500/10'
@@ -319,6 +337,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             playSfx('click');
             setActiveTab('vault');
           }}
+          aria-pressed={activeTab === 'vault'}
           className={`flex-1 py-2 flex items-center justify-center gap-1.5 transition-colors border-b-2 cursor-pointer relative ${
             activeTab === 'vault'
               ? 'border-sky-500 text-sky-400 bg-sky-500/10'

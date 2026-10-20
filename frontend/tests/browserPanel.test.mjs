@@ -7,7 +7,7 @@ globalThis.localStorage ??= { getItem: () => null, setItem: () => {} };
 
 const m = await loadBundled(`
   export { isBlankPage, browserFooterLabel } from './src/computerMode';
-  export { VirtualMachinePane } from './src/components/VirtualMachinePane';
+  export { VirtualMachinePane, chosenPaneTab, rememberPaneTab } from './src/components/VirtualMachinePane';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export { createElement } from 'react';
 `);
@@ -50,4 +50,23 @@ test('the footer says where Chrome runs and where you see it', () => {
   assert.equal(m.browserFooterLabel(settings('vm'), false), 'Browser Offline');
   // Settings not loaded yet: no claim about the user's computer.
   assert.equal(m.browserFooterLabel(null, true), 'Browser Ready');
+});
+
+// On a phone, Back to the list unmounts the chat while the pane stays open; it must come back on
+// the tab the person chose, not on Browser.
+const pressedTab = (html) => [...html.matchAll(/aria-pressed="true"[^>]*>(?:<svg[\s\S]*?<\/svg>)?<span>([^<]+)<\/span>/g)].map((x) => x[1]);
+
+test('the pane opens on Browser for a bot it has not shown before', () => {
+  assert.equal(m.chosenPaneTab('fresh-bot'), 'browser');
+  assert.equal(m.chosenPaneTab(undefined), 'browser');
+  assert.deepEqual(pressedTab(pane({ teamId: 'fresh-bot' })), ['Browser']);
+});
+
+test('a remounted pane comes back on the tab chosen for that bot', () => {
+  m.rememberPaneTab('bot-a', 'vault');
+  assert.deepEqual(pressedTab(pane({ teamId: 'bot-a' })), ['Logins']);
+  m.rememberPaneTab('bot-a', 'terminal');
+  assert.deepEqual(pressedTab(pane({ teamId: 'bot-a' })), ['Terminal']);
+  // Another bot keeps its own tab
+  assert.deepEqual(pressedTab(pane({ teamId: 'bot-b' })), ['Browser']);
 });
