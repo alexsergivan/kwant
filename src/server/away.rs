@@ -31,6 +31,15 @@ const TITLE_CHARS: usize = 120;
 /// Argument names whose values are never shown in an approval's summary.
 const SECRET_ARG_HINTS: [&str; 6] = ["key", "token", "secret", "password", "auth", "cookie"];
 
+/// Argument names that hold a file or folder path. The card shows these in full, so the person
+/// can see which file a bot wants (a path with digits would otherwise look key-like); only a
+/// password inside a URL is still masked.
+const PATH_ARGS: [&str; 6] = ["file_path", "path", "notebook_path", "cwd", "directory", "dir"];
+
+fn is_path_arg(name: &str) -> bool {
+    PATH_ARGS.contains(&name.to_ascii_lowercase().as_str())
+}
+
 fn error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
@@ -99,9 +108,10 @@ fn masked_arguments(v: &Value) -> Value {
             map.iter()
                 .map(|(k, v)| {
                     let lower = k.to_ascii_lowercase();
-                    let shown = match SECRET_ARG_HINTS.iter().any(|h| lower.contains(h)) {
-                        true => json!("[redacted]"),
-                        false => masked_arguments(v),
+                    let shown = match (SECRET_ARG_HINTS.iter().any(|h| lower.contains(h)), v) {
+                        (true, _) => json!("[redacted]"),
+                        (false, Value::String(path)) if is_path_arg(k) => json!(mask_credentials(path)),
+                        (false, _) => masked_arguments(v),
                     };
                     (k.clone(), shown)
                 })
@@ -136,13 +146,11 @@ fn approval_summary(parameters: &str) -> String {
     if let Some(args) = details["arguments"].as_object() {
         for (k, v) in args {
             let lower = k.to_ascii_lowercase();
-            let shown = if SECRET_ARG_HINTS.iter().any(|h| lower.contains(h)) {
-                "[redacted]".to_string()
-            } else {
-                match v {
-                    Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                }
+            let shown = match v {
+                _ if SECRET_ARG_HINTS.iter().any(|h| lower.contains(h)) => "[redacted]".to_string(),
+                Value::String(path) if is_path_arg(k) => mask_credentials(path).split_whitespace().collect::<Vec<_>>().join(" "),
+                Value::String(s) => mask_words(s),
+                other => mask_words(&other.to_string()),
             };
             parts.push(format!("{k}: {shown}"));
         }
@@ -150,7 +158,18 @@ fn approval_summary(parameters: &str) -> String {
     if parts.is_empty() {
         return "Wants your approval to use this tool".into();
     }
-    summarize(&parts.join(", "))
+    clip_summary(&parts.join(", "))
+}
+
+/// [`summarize`]'s length cut, for text that is already masked.
+fn clip_summary(line: &str) -> String {
+    let line = line.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default();
+    if line.chars().count() > SUMMARY_CHARS {
+        let cut: String = line.chars().take(SUMMARY_CHARS - 1).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        line.to_string()
+    }
 }
 
 fn approval_title(tool_name: &str, parameters: &str) -> String {
@@ -369,6 +388,20 @@ mod tests {
         assert_eq!(approval_title("mcp__mail__send", p), "Use send (mail)");
         let s = approval_summary(p);
         assert!(s.contains("to: a@b.c") && !s.contains("plain-but-hidden"), "{s}");
+    }
+
+    #[test]
+    fn approval_cards_show_the_file_path_but_mask_values() {
+        let p = r#"{"tool":"Read","arguments":{"file_path":"/tmp/rg4/proj/.saved_passwords.json","content":"key sk-ant-api03-abcdefghijklmnop1234","password":"DUMMY-PW-1"}}"#;
+        let s = approval_summary(p);
+        assert!(s.contains("file_path: /tmp/rg4/proj/.saved_passwords.json"), "{s}");
+        assert!(!s.contains("sk-ant") && !s.contains("DUMMY-PW-1"), "{s}");
+        let d = masked_details(serde_json::from_str(p).unwrap());
+        assert_eq!(d["arguments"]["file_path"], "/tmp/rg4/proj/.saved_passwords.json");
+        assert_eq!(d["arguments"]["password"], "[redacted]");
+        assert!(!d["arguments"]["content"].as_str().unwrap().contains("sk-ant"));
+        let url = masked_details(json!({"arguments": {"path": "https://bob:hunter2@host/x"}}));
+        assert_eq!(url["arguments"]["path"], "https://bob:[redacted]@host/x");
     }
 
     #[test]

@@ -88,7 +88,7 @@ const ITEM_ROUTES: &[(&[&str], RowKind)] = &[
     (&["kwants"], RowKind::Kwant),
     (&["channels"], RowKind::Channel),
     (&["teams"], RowKind::Team),
-    (&["sandbox"], RowKind::Team),
+    (&["sandbox"], RowKind::SandboxTarget),
     (&["routines"], RowKind::Routine),
     (&["skills"], RowKind::Skill),
     (&["mcp", "servers"], RowKind::McpServer),
@@ -112,6 +112,8 @@ pub enum RowKind {
     Thread,
     Delegation,
     Approval,
+    /// A browser's owner: a team, channel or bot id, in that order (`/api/sandbox/:id`).
+    SandboxTarget,
 }
 
 /// The kind and id of the row an `/api/...` path names, if it is an item route.
@@ -138,6 +140,15 @@ async fn space_of_row(state: &AppState, kind: RowKind, id: &str) -> Result<Optio
         RowKind::Thread => db.space_of_thread(id).await,
         RowKind::Delegation => db.space_of_delegation(id).await,
         RowKind::Approval => db.space_of_approval(id).await,
+        RowKind::SandboxTarget => {
+            if let Some(space) = db.space_of_team(id).await? {
+                return Ok(Some(space));
+            }
+            if let Some(space) = db.space_of_channel(id).await? {
+                return Ok(Some(space));
+            }
+            db.space_of_kwant(id).await
+        }
     }
 }
 
