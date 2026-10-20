@@ -15,6 +15,7 @@ import { BotActionCard, type BotActionDecision } from './components/BotActionCar
 import { HireCard, type HireDecision } from './components/HireCard';
 import type { RoutineFocus } from './components/RoutinesPanel';
 import { AwayPage } from './components/AwayView';
+import { LooseEndsPage } from './components/LooseEndsView';
 import { AlertTriangle, Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { ChatApproval, OpenChat, approvalFromEvent, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
@@ -259,6 +260,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [toasts, setToasts] = useState<Toast[]>([]);
   // "While you were away": open instead of a chat, and its unseen count for the sidebar badge.
   const [showAway, setShowAway] = useState(false);
+  const [showLoose, setShowLoose] = useState(false);
   const [awayCount, setAwayCount] = useState(0);
   const awaySinceRef = useRef<string | null>(null);
   const awayTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -1174,6 +1176,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const handleSelectTeam = (team: Team) => {
     setOpenThreadId(null);
     setShowAway(false);
+    setShowLoose(false);
     setPhoneView('chat');
     setSelectedTeamId(team.id);
     const targetChannel = channels.find(
@@ -1214,6 +1217,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const handleSelectChannel = (channel: Channel) => {
     setOpenThreadId(null);
     setShowAway(false);
+    setShowLoose(false);
     setPhoneView('chat');
     setSelectedId(channel.id);
     selectedIdRef.current = channel.id;
@@ -1230,6 +1234,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const handleSelectKwant = (kwant: Kwant) => {
     setOpenThreadId(null);
     setShowAway(false);
+    setShowLoose(false);
     setPhoneView('chat');
     setSelectedId(kwant.id);
     selectedIdRef.current = kwant.id;
@@ -1286,6 +1291,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
     knownThreadsRef.current.add(threadId);
     setShowAway(false);
+    setShowLoose(false);
     if (selectedIdRef.current !== kwant.id || isChannelRef.current) handleSelectKwant(kwant);
     else playSfx('click');
     setOpenThreadId(threadId);
@@ -1299,6 +1305,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     const ok = 'channel' in t ? openTarget({ channel_id: t.channel, kwant_id: null }) : openTarget({ channel_id: null, kwant_id: t.direct });
     if (!ok) return pushToast('That chat no longer exists.');
     setShowAway(false);
+    setShowLoose(false);
   };
 
   const openDirectChat = () => {
@@ -2412,8 +2419,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
       awayCount={awayCount}
       awayActive={showAway}
+      looseActive={showLoose}
+      onOpenLooseEnds={() => {
+        setShowLoose(true);
+        setShowAway(false);
+        setPhoneView('chat');
+        playSfx('click');
+      }}
       onOpenAway={() => {
         setShowAway(true);
+        setShowLoose(false);
         setPhoneView('chat');
         playSfx('click');
       }}
@@ -2425,6 +2440,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onBack={isPhone ? () => { setShowAway(false); setPhoneView('list'); } : undefined}
     />
   );
+  const loose = <LooseEndsPage onBack={isPhone ? () => { setShowLoose(false); setPhoneView('list'); } : undefined} />;
   const chat = (
         <ChatView
           title={chatTitle}
@@ -2520,7 +2536,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           contextKey={openCtx}
         />
   );
-  const mainPane = needsSetup ? setupChecklist : showAway ? away : !loaded ? (
+  const mainPane = needsSetup ? setupChecklist : showLoose ? loose : showAway ? away : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…
     </main>
@@ -2568,6 +2584,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                       playSfx('click');
                       if (t.id === 'inbox') {
                         setShowAway(true);
+                        setShowLoose(false);
                         setPhoneView('chat');
                         return;
                       }
