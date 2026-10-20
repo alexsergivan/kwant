@@ -19,6 +19,7 @@ import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton
 import { browserFooterLabel, isBlankPage, showsLocalWindow } from '../computerMode';
 import { loginMatchesPage } from '../savedPasswords';
 import { PendingLoginPrompt, SavedPasswordsPanel, useSavedPasswords } from './SavedPasswordsPanel';
+import { usePasswordStore } from './PasswordStorePanel';
 
 export interface TerminalLogEntry {
   command: string;
@@ -40,6 +41,8 @@ export interface VirtualMachinePaneProps {
   onRefresh?: () => void;
   onRestartVm?: () => void;
   onNavigate?: (url: string) => void;
+  /** Some bot in the space runs without asking (shown next to saved passwords). */
+  approvalsOff?: boolean;
 }
 
 export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
@@ -56,12 +59,14 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   onRefresh,
   onRestartVm,
   onNavigate,
+  approvalsOff = false,
 }) => {
   const [activeTab, setActiveTab] = useState<'browser' | 'terminal' | 'vault'>('browser');
   const [inputUrl, setInputUrl] = useState(activeUrl);
   // No event fires when the browser catches a login, so a new screenshot or page loads the list again.
   const passwords = useSavedPasswords(teamId, `${activeUrl}|${screenshotBase64?.length ?? 0}|${screenshotBase64?.slice(-32) ?? ''}`);
   const savedCount = passwords.logins.length;
+  const passwordStore = usePasswordStore(!!teamId && teamId !== 'default');
 
   // Local Chrome streams here like the VM, unless the person opened it as a window: then there's
   // nothing to show. Unknown counts as vm.
@@ -520,6 +525,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             <SavedPasswordsPanel
               sandboxId={teamId}
               state={passwords}
+              store={passwordStore}
+              approvalsOff={approvalsOff}
               pageUrl={pageUrl}
               onOpen={
                 onNavigate

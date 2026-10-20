@@ -2,7 +2,9 @@
 // fetched only when the person presses Reveal, shown for a short while and never kept. A login the
 // browser caught on a form waits as `pending` until the person saves or discards it. Every route
 // is person-only: without the API token the server answers 401 `{person_only:true}`, and the auth
-// layer then asks for the token (see auth.ts).
+// layer then asks for the token (see auth.ts). Where they're kept (Bitwarden or here) is passwordStore.ts.
+
+import { isPersonOnlyBody, requestPersonToken } from './auth';
 
 /** GET /api/sandbox/:id/passwords → passwords[] */
 export interface SavedLogin {
@@ -27,7 +29,7 @@ export interface PasswordsList {
 }
 
 /** Why the list can't be shown. `locked` is for a store that must be unlocked first (Bitwarden). */
-export type PasswordsProblem = 'needs-token' | 'locked' | 'unavailable' | 'error';
+export type PasswordsProblem = 'needs-token' | 'locked' | 'unavailable' | 'wrong-password' | 'error';
 
 /** How long a revealed password stays on screen. */
 export const REVEAL_MS = 30_000;
@@ -119,6 +121,7 @@ export function filterLogins(list: SavedLogin[], query: string): SavedLogin[] {
 
 export function problemFor(status: number, body: unknown): PasswordsProblem {
   const o = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  if (o.wrong_password === true) return 'wrong-password';
   if (status === 401) return 'needs-token';
   if (status === 423 || o.locked === true) return 'locked';
   if (status === 503) return 'unavailable';
@@ -127,8 +130,9 @@ export function problemFor(status: number, body: unknown): PasswordsProblem {
 
 export const PROBLEM_TEXT: Record<PasswordsProblem, string> = {
   'needs-token': 'Saved passwords need your access token, even on this computer, so a bot can’t reach them.',
-  locked: 'The password store is locked. Unlock it to see or use saved passwords.',
+  locked: 'Bitwarden is locked. Unlock it to see saved passwords and fill them in.',
   unavailable: 'The password store isn’t available right now. Try again in a moment.',
+  'wrong-password': 'That master password isn’t right. After five wrong tries in a row Bitwarden stays locked.',
   error: 'Couldn’t load saved passwords.',
 };
 
@@ -143,6 +147,8 @@ async function call(url: string, init?: RequestInit): Promise<unknown> {
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const problem = problemFor(res.status, body);
+    // A quiet call that isn't the background list still asks for the token on a person-only 401.
+    if (problem === 'needs-token' && (init as { kwntAskToken?: boolean } | undefined)?.kwntAskToken && isPersonOnlyBody(body)) requestPersonToken();
     const msg = body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string' ? (body as { error: string }).error : null;
     throw new PasswordsError(problem, res.status, problem === 'error' && msg ? msg : PROBLEM_TEXT[problem]);
   }
@@ -160,9 +166,11 @@ const base = (sandboxId: string) => `/api/sandbox/${encodeURIComponent(sandboxId
 export const passwordsApi = {
   /** Quiet: a missing token shows as the panel's own state, not the token dialog. */
   list: async (sandboxId: string) => parsePasswordsList(await call(base(sandboxId), { kwntQuiet: true } as RequestInit)),
-  /** The one call that returns a password. Callers show it briefly and drop it. */
-  reveal: async (sandboxId: string, id: string): Promise<string> => {
-    const body = (await call(`${base(sandboxId)}/${encodeURIComponent(id)}/reveal`, json('POST'))) as { password?: unknown } | null;
+  /** The one call that returns a password. Callers show it briefly and drop it. With Bitwarden it
+   * takes the master password; quiet, because a wrong one answers 401 and that isn't the token. */
+  reveal: async (sandboxId: string, id: string, masterPassword?: string): Promise<string> => {
+    const init = { ...json('POST', masterPassword === undefined ? undefined : { master_password: masterPassword }), kwntQuiet: true, kwntAskToken: true } as RequestInit;
+    const body = (await call(`${base(sandboxId)}/${encodeURIComponent(id)}/reveal`, init)) as { password?: unknown } | null;
     if (typeof body?.password !== 'string') throw new PasswordsError('error', 200, 'The server sent no password.');
     return body.password;
   },

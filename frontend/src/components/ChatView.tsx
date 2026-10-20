@@ -136,6 +136,8 @@ export interface ChatViewProps {
   onRefreshVm?: () => void;
   onRestartVm?: () => void;
   onNavigateVm?: (url: string) => void;
+  /** Some bot in the space runs without asking (the saved-passwords note). */
+  vmApprovalsOff?: boolean;
   /** Pinned team/channel instructions, shown collapsed above the messages. */
   pinned?: PinnedItem[];
   /** Opens the channel's instructions editor; only for channels. */
@@ -303,6 +305,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onRefreshVm,
   onRestartVm,
   onNavigateVm,
+  vmApprovalsOff,
   pinned = [],
   onEditInstructions,
   highlightMessageId,
@@ -1314,6 +1317,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       onRefresh={onRefreshVm}
       onRestartVm={onRestartVm}
       onNavigate={onNavigateVm}
+      approvalsOff={vmApprovalsOff}
     />
   </div>
 </div>

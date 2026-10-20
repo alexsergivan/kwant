@@ -2,6 +2,8 @@
 // recorded). Set per space, with a per-bot override. Only the person changes it; a bot's token
 // gets 403. No event fires on a change, so callers load bots and spaces again after a save.
 
+import { AUTOFILL_GAP_NOTE } from './passwordStore';
+
 export type SpaceApprovals = 'ask' | 'off';
 export type BotApprovals = 'inherit' | 'ask' | 'off';
 
@@ -56,6 +58,7 @@ export const OFF_CONSEQUENCES = [
   'Files can be written or deleted anywhere the computer allows, not just in the bot’s folder.',
   'Tools (MCP servers, browser, web) run without asking.',
   'No approval cards appear. Everything that runs is still recorded.',
+  AUTOFILL_GAP_NOTE,
 ];
 
 export function offConfirmTitle(who: { space: string } | { bot: string }): string {

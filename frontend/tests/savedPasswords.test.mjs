@@ -90,7 +90,9 @@ test('the API: list is quiet and uncached, reveal is a POST, save sends the orig
     assert.equal(await m.passwordsApi.reveal('k1', 'c1'), 'DUMMY-1');
     assert.equal(calls[1].method, 'POST');
     assert.equal(calls[1].url, '/api/sandbox/k1/passwords/c1/reveal');
-    assert.notEqual(calls[1].kwntQuiet, true, 'an explicit action asks for the token');
+    // Quiet, because with Bitwarden a wrong master password is also a 401; a person-only 401 asks for the token itself.
+    assert.equal(calls[1].kwntQuiet, true, 'a wrong master password must not open the app-wide gate');
+    assert.equal(calls[1].kwntAskToken, true, 'an explicit action still asks for the token');
     await m.passwordsApi.add('k1', 'https://example.com', 'alice', 'DUMMY-2');
     assert.deepEqual(JSON.parse(calls[2].body), { origin: 'https://example.com', username: 'alice', password: 'DUMMY-2' });
     await m.passwordsApi.savePending('k1');

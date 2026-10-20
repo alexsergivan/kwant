@@ -2469,6 +2469,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onRefreshVm={handleRefreshVm}
           onRestartVm={handleRestartVm}
           onNavigateVm={handleNavigateVm}
+          vmApprovalsOff={space.approvals === 'off' || kwants.some(approvalsOff)}
           pinned={pinned}
           onEditInstructions={
             isChannel && currentChannel

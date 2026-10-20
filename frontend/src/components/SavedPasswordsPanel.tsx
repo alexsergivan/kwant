@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Check, Copy, ExternalLink, Eye, EyeOff, Key, KeyRound, Loader2, Lock, Plus, Search, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, Copy, ExternalLink, Eye, EyeOff, Key, KeyRound, Loader2, Lock, LockOpen, Plus, Search, ShieldCheck, Trash2 } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { playSfx } from '../audio/chiptune';
 import {
@@ -15,6 +15,7 @@ import {
   originLabel,
   passwordsApi,
 } from '../savedPasswords';
+import { AutofillGapNote, PasswordStoreBar, PasswordStoreState, UnlockDialog } from './PasswordStorePanel';
 
 export interface SavedPasswordsState {
   logins: SavedLogin[];
@@ -152,7 +153,7 @@ export const PendingLoginPrompt: React.FC<{
 };
 
 /** The panel's own message when the list can't be shown. `locked` is ready for a store that unlocks. */
-export const PasswordsProblemNotice: React.FC<{ problem: PasswordsProblem; onRetry: () => void }> = ({ problem, onRetry }) => (
+export const PasswordsProblemNotice: React.FC<{ problem: PasswordsProblem; onRetry: () => void; onUnlock?: () => void }> = ({ problem, onRetry, onUnlock }) => (
   <div className="text-center py-10 px-4 text-xs" data-passwords-problem={problem}>
     <Lock size={28} className="mx-auto mb-2 opacity-40 text-zinc-400" aria-hidden="true" />
     <p className="text-zinc-300 leading-relaxed">{PROBLEM_TEXT[problem]}</p>
@@ -164,6 +165,14 @@ export const PasswordsProblemNotice: React.FC<{ problem: PasswordsProblem; onRet
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500"
         >
           <KeyRound size={12} aria-hidden="true" /> Enter access token
+        </button>
+      ) : problem === 'locked' && onUnlock ? (
+        <button
+          type="button"
+          onClick={onUnlock}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-zinc-950 bg-amber-400 hover:bg-amber-300"
+        >
+          <LockOpen size={12} aria-hidden="true" /> Unlock Bitwarden
         </button>
       ) : (
         <button type="button" onClick={onRetry} className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200">
@@ -180,14 +189,30 @@ interface RowProps {
   onThisPage: boolean;
   onOpen?: (origin: string) => void;
   onDeleted: () => void;
-  /** Tests start a row revealed or asking to delete. */
+  /** Bitwarden: Reveal asks for the master password first. */
+  askMasterPassword?: boolean;
+  /** Tests start a row revealed, asking to delete or asking for the master password. */
   initialRevealed?: string | null;
   initialConfirmDelete?: boolean;
+  initialAsking?: boolean;
 }
 
 /** One saved login: site and username; the password only after Reveal, for REVEAL_MS. */
-export const SavedLoginRow: React.FC<RowProps> = ({ sandboxId, login, onThisPage, onOpen, onDeleted, initialRevealed = null, initialConfirmDelete = false }) => {
+export const SavedLoginRow: React.FC<RowProps> = ({
+  sandboxId,
+  login,
+  onThisPage,
+  onOpen,
+  onDeleted,
+  askMasterPassword = false,
+  initialRevealed = null,
+  initialConfirmDelete = false,
+  initialAsking = false,
+}) => {
   const [revealed, setRevealed] = useState<string | null>(initialRevealed);
+  // The master password stays in its input (never in state) and is cleared once it's been sent.
+  const [asking, setAsking] = useState(initialAsking);
+  const masterRef = useRef<HTMLInputElement>(null);
   const [revealing, setRevealing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(initialConfirmDelete);
   const [deleting, setDeleting] = useState(false);
@@ -206,14 +231,34 @@ export const SavedLoginRow: React.FC<RowProps> = ({ sandboxId, login, onThisPage
       setRevealed(null);
       return;
     }
+    if (askMasterPassword && !asking) {
+      setError(null);
+      setAsking(true);
+      return;
+    }
+    let master: string | undefined;
+    if (askMasterPassword) {
+      master = masterRef.current?.value ?? '';
+      if (!master) {
+        setError('Enter your Bitwarden master password.');
+        masterRef.current?.focus();
+        return;
+      }
+    }
     setRevealing(true);
     setError(null);
     try {
-      setRevealed(await passwordsApi.reveal(sandboxId, login.id));
+      const pw = await passwordsApi.reveal(sandboxId, login.id, master);
+      if (masterRef.current) masterRef.current.value = '';
+      setAsking(false);
+      setRevealed(pw);
       playSfx('click');
     } catch (e) {
+      if (masterRef.current) masterRef.current.value = '';
+      masterRef.current?.focus();
       setError(errorText(e, 'Couldn’t show this password.'));
     } finally {
+      master = undefined;
       setRevealing(false);
     }
   };
@@ -307,6 +352,42 @@ export const SavedLoginRow: React.FC<RowProps> = ({ sandboxId, login, onThisPage
         </div>
       </div>
       {revealed !== null && <p className="mt-1 text-[10px] text-zinc-500">Hides again in 30 seconds.</p>}
+      {asking && revealed === null && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            reveal();
+          }}
+          className="mt-1.5 flex items-end gap-1.5"
+          data-ask-master
+          noValidate
+        >
+          <label className="flex-1 min-w-0">
+            <span className="text-[10px] text-zinc-400 block mb-0.5">Bitwarden master password, to show it</span>
+            <input
+              ref={masterRef}
+              type="password"
+              autoFocus
+              autoComplete="off"
+              className="w-full px-2 py-1 bg-zinc-950 border border-zinc-800 rounded text-[11px] text-zinc-200 focus:outline-none focus:border-sky-500"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => {
+              if (masterRef.current) masterRef.current.value = '';
+              setAsking(false);
+              setError(null);
+            }}
+            className="px-2 py-1 rounded text-[11px] bg-zinc-800 hover:bg-zinc-700 text-zinc-200"
+          >
+            Cancel
+          </button>
+          <button type="submit" disabled={revealing} className="px-2 py-1 rounded text-[11px] font-semibold bg-sky-500 hover:bg-sky-400 text-zinc-950 disabled:opacity-50">
+            Show
+          </button>
+        </form>
+      )}
 
       {confirmDelete && (
         <div role="alertdialog" aria-label={`Delete login for ${site}?`} className="mt-2 p-2 rounded-lg border border-rose-500/30 bg-rose-500/5 space-y-1.5">
@@ -402,16 +483,32 @@ export const SavedPasswordsPanel: React.FC<{
   state: SavedPasswordsState;
   pageUrl: string;
   onOpen?: (origin: string) => void;
-  /** Tests open the add form. */
+  /** Where passwords are kept (Bitwarden or this server); missing on older servers. */
+  store?: PasswordStoreState;
+  /** Some bot runs without asking: say plainly what autofill then exposes. */
+  approvalsOff?: boolean;
+  /** Tests open the add form or the unlock dialog. */
   initialAdding?: boolean;
-}> = ({ sandboxId, state, pageUrl, onOpen, initialAdding = false }) => {
+  initialUnlocking?: boolean;
+}> = ({ sandboxId, state, pageUrl, onOpen, store, approvalsOff = false, initialAdding = false, initialUnlocking = false }) => {
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState(initialAdding);
+  const [unlocking, setUnlocking] = useState(initialUnlocking);
   const shown = filterLogins(state.logins, query);
   const blocked = state.problem !== null;
+  const bitwarden = store?.status?.store === 'bitwarden';
+  const openUnlock = useCallback(() => setUnlocking(true), []);
+  const closeUnlock = useCallback(() => setUnlocking(false), []);
+  // The list says locked but the bar still shows unlocked (Bitwarden locked elsewhere): catch up.
+  const storeReload = store?.reload;
+  const staleUnlocked = state.problem === 'locked' && store?.status?.locked === false;
+  useEffect(() => {
+    if (staleUnlocked) storeReload?.();
+  }, [staleUnlocked, storeReload]);
 
   return (
     <div className="flex-1 flex flex-col p-3 gap-2 overflow-hidden bg-zinc-950" data-saved-passwords>
+      {store && state.problem !== 'needs-token' && <PasswordStoreBar store={store} onUnlock={openUnlock} onChanged={state.reload} />}
       {!blocked && (
         <div className="flex items-center gap-1.5">
           <label className="flex-1 flex items-center gap-1.5 px-2 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs focus-within:border-sky-500">
@@ -451,7 +548,7 @@ export const SavedPasswordsPanel: React.FC<{
 
       <div className="flex-1 overflow-y-auto pr-0.5">
         {state.problem ? (
-          <PasswordsProblemNotice problem={state.problem} onRetry={state.reload} />
+          <PasswordsProblemNotice problem={state.problem} onRetry={state.reload} onUnlock={store ? openUnlock : undefined} />
         ) : state.loading ? (
           <p className="flex items-center justify-center gap-2 py-10 text-xs text-zinc-500" role="status">
             <Loader2 size={14} className="animate-spin motion-reduce:animate-none" /> Loading saved logins…
@@ -469,18 +566,39 @@ export const SavedPasswordsPanel: React.FC<{
         ) : (
           <ul className="space-y-2" aria-label="Saved logins">
             {shown.map((l) => (
-              <SavedLoginRow key={l.id} sandboxId={sandboxId} login={l} onThisPage={loginMatchesPage(l, pageUrl)} onOpen={onOpen} onDeleted={state.reload} />
+              <SavedLoginRow
+                key={l.id}
+                sandboxId={sandboxId}
+                login={l}
+                onThisPage={loginMatchesPage(l, pageUrl)}
+                onOpen={onOpen}
+                onDeleted={state.reload}
+                askMasterPassword={bitwarden}
+              />
             ))}
           </ul>
         )}
       </div>
 
-      <div className="p-2 rounded-lg bg-zinc-900/40 border border-zinc-800/60 flex items-start gap-2 text-[10px] text-zinc-400">
-        <ShieldCheck size={14} className="text-emerald-400 flex-shrink-0 mt-0.5" aria-hidden="true" />
-        <p className="leading-snug">
-          <span className="text-zinc-300 font-medium">Encrypted on the server, out of the bots’ folders.</span> A login is filled in only on the exact address it was saved for.
-        </p>
+      <div className="p-2 rounded-lg bg-zinc-900/40 border border-zinc-800/60 space-y-1.5 text-[10px] text-zinc-400">
+        <div className="flex items-start gap-2">
+          <ShieldCheck size={14} className="text-emerald-400 flex-shrink-0 mt-0.5" aria-hidden="true" />
+          <p className="leading-snug">
+            <span className="text-zinc-300 font-medium">{bitwarden ? 'Kept in your Bitwarden, locked after every restart.' : 'Encrypted on the server, out of the bots’ folders.'}</span> A login is filled in only on the exact address it was saved for.
+          </p>
+        </div>
+        {approvalsOff && <AutofillGapNote />}
       </div>
+      {unlocking && store && (
+        <UnlockDialog
+          status={store.status}
+          onClose={closeUnlock}
+          onUnlocked={(next) => {
+            store.set(next);
+            state.reload();
+          }}
+        />
+      )}
     </div>
   );
 };
