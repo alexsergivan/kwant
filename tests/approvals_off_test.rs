@@ -76,7 +76,7 @@ async fn get(e: &Env, uri: &str) -> Value {
 }
 
 async fn put(e: &Env, uri: &str, approvals: &str) -> Value {
-    let (s, v) = call(&e.app, "PUT", uri, None, Some(json!({"approvals": approvals}))).await;
+    let (s, v) = call(&e.app, "PUT", uri, Some(e.state.api_token.reveal()), Some(json!({"approvals": approvals}))).await;
     assert_eq!(s, StatusCode::OK, "{uri}: {v}");
     v
 }
@@ -275,15 +275,15 @@ async fn only_the_person_changes_approvals() {
 #[tokio::test]
 async fn bad_values_unknown_rows_and_other_spaces() {
     let e = setup().await;
-    let (s, _) = call(&e.app, "PUT", "/api/spaces/spc_default/approvals", None, Some(json!({"approvals": "never"}))).await;
+    let (s, _) = call(&e.app, "PUT", "/api/spaces/spc_default/approvals", Some(e.state.api_token.reveal()), Some(json!({"approvals": "never"}))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
-    let (s, _) = call(&e.app, "PUT", "/api/spaces/spc_default/approvals", None, Some(json!({"approvals": "inherit"}))).await;
+    let (s, _) = call(&e.app, "PUT", "/api/spaces/spc_default/approvals", Some(e.state.api_token.reveal()), Some(json!({"approvals": "inherit"}))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "a space has no inherit");
-    let (s, _) = call(&e.app, "PUT", &format!("/api/kwants/{}/approvals", e.bot.id), None, Some(json!({"approvals": "maybe"}))).await;
+    let (s, _) = call(&e.app, "PUT", &format!("/api/kwants/{}/approvals", e.bot.id), Some(e.state.api_token.reveal()), Some(json!({"approvals": "maybe"}))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
-    let (s, _) = call(&e.app, "PUT", "/api/kwants/nope/approvals", None, Some(json!({"approvals": "off"}))).await;
+    let (s, _) = call(&e.app, "PUT", "/api/kwants/nope/approvals", Some(e.state.api_token.reveal()), Some(json!({"approvals": "off"}))).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
-    let (s, _) = call(&e.app, "PUT", "/api/spaces/nope/approvals", None, Some(json!({"approvals": "off"}))).await;
+    let (s, _) = call(&e.app, "PUT", "/api/spaces/nope/approvals", Some(e.state.api_token.reveal()), Some(json!({"approvals": "off"}))).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 
     // Another space has its own switch, and its bots follow it
@@ -316,7 +316,7 @@ async fn bad_values_unknown_rows_and_other_spaces() {
     assert_eq!(get(&e, &format!("/api/kwants/{}/approvals", lab_bot.id)).await["approvals_effective"], "off");
     assert_eq!(get(&e, &format!("/api/kwants/{}/approvals", e.bot.id)).await["approvals_effective"], "ask");
     // A bot named with the wrong space is not found there
-    let (s, _) = call(&e.app, "PUT", &format!("/api/kwants/{}/approvals?space=spc_default", lab_bot.id), None, Some(json!({"approvals": "ask"}))).await;
+    let (s, _) = call(&e.app, "PUT", &format!("/api/kwants/{}/approvals?space=spc_default", lab_bot.id), Some(e.state.api_token.reveal()), Some(json!({"approvals": "ask"}))).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     // The record list stays in its space
     assert_eq!(ask_bash(&e, &lab_bot, "touch x").await, Some(true));

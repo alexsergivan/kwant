@@ -485,7 +485,7 @@ async fn remote_requests_need_the_token() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(
         serde_json::from_str::<Value>(&body).unwrap(),
-        json!({"auth_required": true, "authenticated": false})
+        json!({"auth_required": true, "authenticated": false, "person_auth_required": true, "person_authenticated": false})
     );
 
     let bearer = format!("Bearer {TOKEN}");
@@ -585,6 +585,6 @@ async fn remote_requests_need_the_token() {
     .await;
     assert_eq!(
         serde_json::from_str::<Value>(&body).unwrap(),
-        json!({"auth_required": false, "authenticated": true})
+        json!({"auth_required": false, "authenticated": true, "person_auth_required": true, "person_authenticated": false})
     );
 }

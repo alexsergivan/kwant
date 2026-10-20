@@ -45,6 +45,19 @@ async fn post(app: &Router, uri: &str, body: Value) -> (StatusCode, Value) {
     (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
+/// A request only the person may make (answering a card): it carries the API token.
+async fn person_post(app: &Router, state: &AppState, uri: &str, body: Value) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", state.api_token.reveal()));
+    let resp = app.clone().oneshot(req.body(Body::from(body.to_string())).unwrap()).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
 /// What claude's `--permission-prompt-tool` asks kwnt before running a tool.
 async fn claude_asks(app: &Router, token: &str, tool_name: &str, input: Value) -> Value {
     let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
@@ -101,7 +114,7 @@ async fn built_in_tools_follow_the_folder_policy() {
         assert_eq!(details["tool"], "Write");
         assert_eq!(details["outside_folder"], true);
         assert_eq!(details["cwd"], real.display().to_string());
-        let (status, _) = post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
+        let (status, _) = person_post(&app, &state, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(ask.await.unwrap()["behavior"], "deny");
     }
@@ -118,7 +131,7 @@ async fn built_in_tools_follow_the_folder_policy() {
     assert_eq!(details["outside_folder"], false);
     assert_eq!(details["cwd"], real.display().to_string());
     assert_eq!(details["kwant_name"], bot.name);
-    post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "allow_once"})).await;
+    person_post(&app, &state, &format!("/api/approvals/{id}/resolve"), json!({"decision": "allow_once"})).await;
     assert_eq!(ask.await.unwrap(), json!({"behavior": "allow", "updatedInput": bash("ls")}));
 
     // Always this session: the next command runs without a card
@@ -127,7 +140,7 @@ async fn built_in_tools_follow_the_folder_policy() {
         async move { claude_asks(&app, &token, "Bash", input).await }
     });
     let (id, _) = next_card(&mut events).await;
-    post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "always_allow"})).await;
+    person_post(&app, &state, &format!("/api/approvals/{id}/resolve"), json!({"decision": "always_allow"})).await;
     assert_eq!(ask.await.unwrap()["behavior"], "allow");
     assert_eq!(claude_asks(&app, &token, "Bash", bash("ls -la")).await["behavior"], "allow");
     assert!(state.broker.pending_ids().await.is_empty(), "always-this-session skips the card");
@@ -139,7 +152,7 @@ async fn built_in_tools_follow_the_folder_policy() {
     });
     let (id, details) = next_card(&mut events).await;
     assert_eq!(details["tool"], "SomeNewTool");
-    post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
+    person_post(&app, &state, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
     assert_eq!(ask.await.unwrap()["behavior"], "deny");
     for tool in ["mcp__other__echo", "mcp__kwnt__approve", ""] {
         assert_eq!(claude_asks(&app, &token, tool, json!({})).await["behavior"], "deny", "{tool}");
@@ -196,7 +209,7 @@ async fn always_this_session_lasts_for_one_conversation() {
         async move { claude_asks(&app, &token, "Bash", json!({"command": "touch x", "description": "Run it"})).await }
     });
     let (id, _) = next_card(&mut events).await;
-    post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "always_allow"})).await;
+    person_post(&app, &state, &format!("/api/approvals/{id}/resolve"), json!({"decision": "always_allow"})).await;
     assert_eq!(ask.await.unwrap()["behavior"], "allow");
     mcp_runtime::finish_turn(&state, &a1).await;
     state.turns.end_turn("turn-a1");
@@ -212,7 +225,7 @@ async fn always_this_session_lasts_for_one_conversation() {
     });
     let (id, details) = next_card(&mut events).await;
     assert_eq!(details["tool"], "Write");
-    post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
+    person_post(&app, &state, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
     assert_eq!(ask.await.unwrap()["behavior"], "deny");
 
     // Chat B with the same bot: asks again
@@ -223,7 +236,7 @@ async fn always_this_session_lasts_for_one_conversation() {
     });
     let (id, details) = next_card(&mut events).await;
     assert_eq!(details["arguments"]["command"], "touch z");
-    post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
+    person_post(&app, &state, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
     assert_eq!(ask.await.unwrap()["behavior"], "deny");
 
     // A turn kwnt isn't tracking is its own conversation
@@ -234,7 +247,7 @@ async fn always_this_session_lasts_for_one_conversation() {
         async move { claude_asks(&app, &token, "Bash", json!({"command": "touch w", "description": "Run it"})).await }
     });
     let (id, _) = next_card(&mut events).await;
-    post(&app, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
+    person_post(&app, &state, &format!("/api/approvals/{id}/resolve"), json!({"decision": "deny"})).await;
     assert_eq!(ask.await.unwrap()["behavior"], "deny");
 
     // A restart (a fresh broker) forgets every answer

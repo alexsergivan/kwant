@@ -290,6 +290,7 @@ async fn ending_the_turn_cancels_a_call_waiting_for_its_card() {
     assert_eq!(withdrawn, ticket);
     let late = reqwest::Client::new()
         .post(format!("{base}/api/approvals/{ticket}/resolve"))
+        .bearer_auth(state.api_token.reveal())
         .json(&json!({"decision": "allow_once"}))
         .send()
         .await

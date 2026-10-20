@@ -183,6 +183,20 @@ fn exempt(path: &str) -> bool {
         || path == "/api/mcp/self"
 }
 
+/// Routes only the person may call: saved passwords, answering an approval card, and the
+/// approvals switch. They need the token from this machine too, because a bot's shell runs on
+/// this machine and would otherwise reach them with a bare `curl`. Turn tokens are refused by the
+/// handlers themselves (403).
+pub fn person_only(method: &Method, path: &str) -> bool {
+    let segs: Vec<&str> = path.trim_end_matches('/').split('/').collect();
+    match segs.as_slice() {
+        ["", "api", "sandbox", _, "passwords", ..] => true,
+        ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
+        ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
+        _ => false,
+    }
+}
+
 fn header_str(headers: &HeaderMap, name: impl header::AsHeaderName) -> Option<&str> {
     headers.get(name).and_then(|v| v.to_str().ok())
 }
@@ -239,6 +253,15 @@ fn deny(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({ "error": msg }))).into_response()
 }
 
+/// 401 for a person-only route without the token: `{error, person_only: true}`.
+fn person_token_required() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "this needs the API token: sign in with `kwnt token`", "person_only": true })),
+    )
+        .into_response()
+}
+
 /// Origin check, CORS for allowed origins, and the token check, for every `/api` request.
 pub async fn guard(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
@@ -268,6 +291,15 @@ pub async fn guard(State(state): State<AppState>, req: Request, next: Next) -> R
         && !presented_token_ok(&api, &headers)
     {
         deny(StatusCode::UNAUTHORIZED, "API token required")
+    } else if api.require != Require::Never && person_only(req.method(), &path) {
+        // A bot's turn token (or any bearer that isn't the API token) is a 403; no token a 401
+        if let Err(refused) = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person can do this").await {
+            refused
+        } else if !presented_token_ok(&api, &headers) {
+            person_token_required()
+        } else {
+            next.run(req).await
+        }
     } else {
         next.run(req).await
     };
@@ -297,7 +329,8 @@ pub async fn guard(State(state): State<AppState>, req: Request, next: Next) -> R
     resp
 }
 
-/// `GET /api/auth/status`: `{auth_required, authenticated}` for this request.
+/// `GET /api/auth/status`: `{auth_required, authenticated, person_auth_required,
+/// person_authenticated}` for this request.
 pub async fn status(State(state): State<AppState>, req: Request) -> Response {
     let peer = req
         .extensions()
@@ -305,8 +338,17 @@ pub async fn status(State(state): State<AppState>, req: Request) -> Response {
         .map(|c| c.0.ip());
     let headers = req.headers();
     let required = needs_token(&state.api_token, headers, peer);
-    let authenticated = !required || presented_token_ok(&state.api_token, headers);
-    Json(json!({ "auth_required": required, "authenticated": authenticated })).into_response()
+    let has_token = presented_token_ok(&state.api_token, headers);
+    let authenticated = !required || has_token;
+    // Person-only actions (passwords, approvals) need the token even where the rest doesn't
+    let person_required = state.api_token.require != Require::Never;
+    Json(json!({
+        "auth_required": required,
+        "authenticated": authenticated,
+        "person_auth_required": person_required,
+        "person_authenticated": !person_required || has_token,
+    }))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -431,6 +473,21 @@ mod tests {
             &headers(&[("authorization", "Basic abc")])
         ));
         assert!(!format!("{api:?}").contains("abcdef"));
+    }
+
+    #[test]
+    fn person_only_routes() {
+        let (get, post, put, del) = (Method::GET, Method::POST, Method::PUT, Method::DELETE);
+        assert!(person_only(&get, "/api/sandbox/t1/passwords"));
+        assert!(person_only(&post, "/api/sandbox/t1/passwords/c1/reveal"));
+        assert!(person_only(&del, "/api/sandbox/t1/passwords/c1"));
+        assert!(person_only(&post, "/api/approvals/a1/resolve"));
+        assert!(person_only(&put, "/api/spaces/s1/approvals"));
+        assert!(person_only(&put, "/api/kwants/k1/approvals"));
+        assert!(!person_only(&get, "/api/kwants/k1/approvals"));
+        assert!(!person_only(&get, "/api/approvals"));
+        assert!(!person_only(&get, "/api/sandbox/t1/status"));
+        assert!(!person_only(&get, "/api/kwants"));
     }
 
     #[test]

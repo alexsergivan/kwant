@@ -68,11 +68,12 @@ async fn next_approval(rx: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>) 
     }
 }
 
-async fn resolve(app: &axum::Router, id: &str, decision: &str) {
+async fn resolve(app: &axum::Router, token: &str, id: &str, decision: &str) {
     let req = Request::builder()
         .method("POST")
         .uri(format!("/api/approvals/{id}/resolve"))
         .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
         .body(Body::from(json!({ "decision": decision }).to_string()))
         .unwrap();
     assert_eq!(
@@ -206,20 +207,20 @@ async fn computer_mode_api_and_local_shell_approval() {
     let (id, details) = next_approval(&mut rx).await;
     assert_eq!(details["source"], "local_shell");
     assert_eq!(details["arguments"]["command"], "touch ran.txt");
-    resolve(&app, &id, "deny").await;
+    resolve(&app, state.api_token.reveal(), &id, "deny").await;
     assert!(denied.await.unwrap().is_err());
     assert!(!marker.exists(), "a denied command must not run");
 
     // "always allow" runs this command only; the next one asks again
     let allowed = run("touch ran.txt && echo local-ok");
     let (id, _) = next_approval(&mut rx).await;
-    resolve(&app, &id, "always_allow").await;
+    resolve(&app, state.api_token.reveal(), &id, "always_allow").await;
     let out = allowed.await.unwrap().unwrap();
     assert!(out["stdout"].as_str().unwrap().contains("local-ok"));
     assert!(marker.exists());
     let again = run("echo again");
     let (id, _) = next_approval(&mut rx).await;
-    resolve(&app, &id, "allow_once").await;
+    resolve(&app, state.api_token.reveal(), &id, "allow_once").await;
     assert!(again.await.unwrap().is_ok());
 
     // switching back to vm takes effect without a restart
