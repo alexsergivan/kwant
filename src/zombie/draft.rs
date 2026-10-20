@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Draft {
-    /// `email`, `github` or `kwant`: where the person sends it themselves.
+    /// `email`, `github`, `kwant` or `letter` (a reply on paper, or wherever the letter says):
+    /// where the person sends it themselves.
     pub channel: String,
     /// The address, the GitHub login, or the bot's name.
     pub to: Option<String>,
@@ -110,6 +111,13 @@ pub fn template_body(input: &DraftInput) -> String {
                 ),
             };
         }
+        ConvKind::Document => {
+            let dear = match input.counterpart_name.map(str::trim).filter(|n| !n.is_empty()) {
+                Some(n) => format!("Dear {n},"),
+                None => "Dear Sir or Madam,".to_string(),
+            };
+            return format!("{dear}\n\nI am writing about your letter{reference}.\n\n[your answer]\n\nYours sincerely,");
+        }
         ConvKind::Email => {}
     }
     let hi = match first_name(input.counterpart_name) {
@@ -152,8 +160,19 @@ pub fn finish(input: &DraftInput, body: String, generated_by: &str, now: DateTim
         created_at: now,
     };
     match input.conv_kind {
-        ConvKind::Email => {
-            let subject = reply_subject(input.title);
+        ConvKind::Email | ConvKind::Document => {
+            let subject = match (input.conv_kind, input.reference.map(str::trim).filter(|r| !r.is_empty())) {
+                (ConvKind::Document, Some(r)) => format!("Re: {r}"),
+                (ConvKind::Document, None) => "Re: your letter".to_string(),
+                _ => reply_subject(input.title),
+            };
+            // A letter with no email address to answer is answered on paper (or however it says)
+            if input.conv_kind == ConvKind::Document && !input.counterpart.is_some_and(|to| to.contains('@')) {
+                d.channel = "letter".into();
+                d.to = input.counterpart_name.map(str::to_string);
+                d.subject = Some(subject);
+                return d;
+            }
             d.channel = "email".into();
             d.in_reply_to = input.reply_to_message_id.map(str::to_string);
             d.mailto = input.counterpart.filter(|to| to.contains('@') && !to.contains(['?', '&', '\r', '\n'])).map(|to| {
@@ -240,6 +259,26 @@ mod tests {
         assert_eq!(k.channel, "kwant");
         assert_eq!(k.kwant_thread_id.as_deref(), Some("thread-1"));
         assert_eq!(k.to.as_deref(), Some("Dana Smith"));
+    }
+
+    #[test]
+    fn a_letter_reply_is_an_email_only_when_the_letter_gives_an_address() {
+        let mut i = input(CaseKind::DocumentRequest, ConvKind::Document);
+        i.title = "Letter from Northfield Water";
+        i.counterpart_name = Some("Northfield Water");
+        i.reply_to_message_id = None;
+        let d = template(&i, Utc::now());
+        assert_eq!(d.channel, "email");
+        assert_eq!(d.subject.as_deref(), Some("Re: 4471"));
+        assert!(d.body.starts_with("Dear Northfield Water,") && d.body.contains("(reference 4471)"), "{}", d.body);
+        assert!(d.mailto.unwrap().starts_with("mailto:claims%40insurer.example?subject=Re%3A%204471"));
+        i.counterpart = None;
+        i.reference = None;
+        let d = template(&i, Utc::now());
+        assert_eq!(d.channel, "letter");
+        assert_eq!(d.to.as_deref(), Some("Northfield Water"));
+        assert_eq!(d.subject.as_deref(), Some("Re: your letter"));
+        assert!(d.mailto.is_none() && d.open_url.is_none());
     }
 
     #[test]

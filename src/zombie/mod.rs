@@ -42,6 +42,8 @@ pub enum SourceKind {
     Kwant,
     Imap,
     Github,
+    /// A letter the person photographed or uploaded (`crate::documents`).
+    Document,
 }
 
 impl SourceKind {
@@ -50,6 +52,7 @@ impl SourceKind {
             SourceKind::Kwant => "kwant",
             SourceKind::Imap => "imap",
             SourceKind::Github => "github",
+            SourceKind::Document => "document",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -57,6 +60,7 @@ impl SourceKind {
             "kwant" => Some(SourceKind::Kwant),
             "imap" => Some(SourceKind::Imap),
             "github" => Some(SourceKind::Github),
+            "document" => Some(SourceKind::Document),
             _ => None,
         }
     }
@@ -75,6 +79,8 @@ pub enum ConvKind {
     KwantQuestion,
     /// A task handed to a bot that failed or was cut short.
     KwantDelegation,
+    /// A letter on paper or in a PDF.
+    Document,
 }
 
 /// One message as the detector sees it.
@@ -176,6 +182,8 @@ pub enum CaseKind {
     FailedTask,
     /// A bot asked the person a question that is still open.
     UnansweredQuestion,
+    /// A letter asks the person to do something.
+    DocumentRequest,
 }
 
 impl CaseKind {
@@ -188,13 +196,14 @@ impl CaseKind {
             CaseKind::StaleIssue => "stale_issue",
             CaseKind::FailedTask => "failed_task",
             CaseKind::UnansweredQuestion => "unanswered_question",
+            CaseKind::DocumentRequest => "document_request",
         }
     }
 
     /// Ranking weight in a review: what someone else is waiting on comes first.
     pub fn weight(self) -> i64 {
         match self {
-            CaseKind::PromiseLapsed | CaseKind::YouOweReply | CaseKind::YouPromised => 3,
+            CaseKind::PromiseLapsed | CaseKind::YouOweReply | CaseKind::YouPromised | CaseKind::DocumentRequest => 3,
             CaseKind::AwaitingReply | CaseKind::UnansweredQuestion => 2,
             CaseKind::FailedTask | CaseKind::StaleIssue => 1,
         }

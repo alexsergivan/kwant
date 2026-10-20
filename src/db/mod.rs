@@ -4,6 +4,7 @@ pub mod continuity;
 pub mod threads;
 pub mod zombie;
 pub mod parallel;
+pub mod documents;
 pub mod history;
 pub mod attachments;
 pub mod questions;
@@ -138,6 +139,7 @@ impl Database {
         db.migrate_away().await?;
         db.migrate_zombie().await?;
         db.migrate_parallel().await?;
+        db.migrate_documents().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;

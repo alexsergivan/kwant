@@ -280,6 +280,7 @@ pub async fn scan_with(
         report.sources.push(scan);
     }
     db.zombie_apply_retention(now - Duration::days(settings.retention_days)).await.map_err(db_err)?;
+    db.document_apply_retention().await.map_err(db_err)?;
     report.open_total = db.zombie_cases(Some("open")).await.map_err(db_err)?.len();
     report.ended_at = Utc::now();
     tracing::info!(flagged = report.flagged, opened = report.opened, closed = report.closed, open = report.open_total, "zombie: scan finished");
@@ -342,6 +343,7 @@ fn conv_kind_str(k: ConvKind) -> &'static str {
         ConvKind::KwantThread => "kwant_thread",
         ConvKind::KwantQuestion => "kwant_question",
         ConvKind::KwantDelegation => "kwant_delegation",
+        ConvKind::Document => "document",
     }
 }
 
@@ -512,6 +514,7 @@ pub fn review_body(picked: &[CaseRow], open_total: usize) -> String {
             Some(CaseKind::StaleIssue) => "quiet issue",
             Some(CaseKind::FailedTask) => "failed bot task",
             Some(CaseKind::UnansweredQuestion) => "bot question",
+            Some(CaseKind::DocumentRequest) => "letter to deal with",
             None => "loose end",
         };
         match counts.iter_mut().find(|(l, _)| *l == label) {

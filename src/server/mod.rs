@@ -28,6 +28,7 @@ pub mod approval_modes;
 pub mod passwords;
 pub mod zombie_routes;
 pub mod parallel_routes;
+pub mod document_routes;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -84,6 +85,8 @@ pub struct AppState {
     pub zombie: Arc<crate::zombie::hunt::Hunter>,
     /// Parallel Universe: one run at a time, and the harness it uses.
     pub parallel: Arc<crate::parallel::run::Runner>,
+    /// Camera-to-Completed: one letter read at a time (and a test's stand-in model).
+    pub documents: Arc<crate::documents::extract::Desk>,
 }
 
 impl AppState {
@@ -126,6 +129,7 @@ impl AppState {
             credentials: Arc::new(crate::sandbox::vault::PasswordVault::open(&config_data_dir)),
             zombie: Default::default(),
             parallel: Default::default(),
+            documents: Default::default(),
         }
     }
 
@@ -219,6 +223,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/zombie/cases/:id/followed-up", post(zombie_routes::followed_up))
         .route("/api/zombie/cases/:id/reopen", post(zombie_routes::reopen))
         .route("/api/zombie/cases/:id/draft", post(zombie_routes::regenerate_draft))
+        .route("/api/zombie/cases/:id/fields", patch(document_routes::patch_fields))
+        .route("/api/documents", post(document_routes::create))
+        .route("/api/documents/:id", get(document_routes::get_one).delete(document_routes::delete))
         .route("/api/zombie/sources", get(zombie_routes::list_sources).post(zombie_routes::add_source))
         .route("/api/zombie/sources/:id", patch(zombie_routes::update_source).delete(zombie_routes::delete_source))
         .route("/api/zombie/sources/:id/test", post(zombie_routes::test_source))

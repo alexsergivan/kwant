@@ -196,6 +196,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "zombie", ..] => true,
         // Parallel Universe starts containers on this machine from a directory the person names
         ["", "api", "parallel", ..] => true,
+        // Camera-to-Completed: the person's letters
+        ["", "api", "documents", ..] => true,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "kwants" | "teams", _] => *method == Method::DELETE,
@@ -261,6 +263,16 @@ fn deny(status: StatusCode, msg: &str) -> Response {
 }
 
 /// 401 for a person-only route without the token: `{error, person_only: true}`.
+/// For a handler guarding something person-only that `person_only` can't see from the path (a
+/// letter's pages under `/api/attachments`): the API token must be presented, unless tokens are off.
+#[allow(clippy::result_large_err)]
+pub(super) fn require_person_token(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
+    if state.api_token.require != Require::Never && !presented_token_ok(&state.api_token, headers) {
+        return Err(person_token_required());
+    }
+    Ok(())
+}
+
 fn person_token_required() -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -496,6 +508,8 @@ mod tests {
         assert!(person_only(&post, "/api/zombie/sources/s1/test"));
         assert!(person_only(&get, "/api/parallel/prices"));
         assert!(person_only(&post, "/api/parallel/scenarios"));
+        assert!(person_only(&post, "/api/documents"));
+        assert!(person_only(&get, "/api/documents/d1"));
         assert!(person_only(&post, "/api/approvals/a1/resolve"));
         assert!(person_only(&put, "/api/spaces/s1/approvals"));
         assert!(person_only(&put, "/api/kwants/k1/approvals"));

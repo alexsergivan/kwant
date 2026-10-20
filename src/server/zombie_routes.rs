@@ -15,6 +15,8 @@
 //! - `POST /api/zombie/cases/:id/reopen` → `CaseView` (open again; lifts a sender mute).
 //! - `POST /api/zombie/cases/:id/draft` → `CaseView` with a new draft (the model's when one can
 //!   run and keeps the reference, else the template).
+//! - `PATCH /api/zombie/cases/:id/fields` → a letter's corrected fields (see `document_routes`).
+//!   A letter's deadline reminders go when it is done or dismissed and come back when it reopens.
 //!
 //! Sources (the kwant source is built in and switched in the settings):
 //! - `GET    /api/zombie/sources` → `{sources: [SourceView], vault_locked}`.
@@ -92,11 +94,12 @@ pub struct CaseView {
     pub id: String,
     pub status: String,
     /// `awaiting_reply`, `promise_lapsed`, `you_promised`, `you_owe_reply`, `stale_issue`,
-    /// `failed_task`, `unanswered_question`.
+    /// `failed_task`, `unanswered_question`, `document_request` (a letter).
     pub kind: String,
-    /// `email`, `issue`, `pull_request`, `kwant_thread`, `kwant_question`, `kwant_delegation`.
+    /// `email`, `issue`, `pull_request`, `kwant_thread`, `kwant_question`, `kwant_delegation`,
+    /// `document`.
     pub conv_kind: String,
-    /// `kwant`, `imap`, `github`.
+    /// `kwant`, `imap`, `github`, `document` (see `document_routes`).
     pub source: String,
     pub source_id: String,
     pub title: String,
@@ -126,7 +129,7 @@ pub struct CaseView {
 }
 
 impl CaseView {
-    fn of(c: CaseRow, now: DateTime<Utc>) -> Self {
+    pub fn of(c: CaseRow, now: DateTime<Utc>) -> Self {
         Self {
             evidence: serde_json::from_str(&c.evidence).unwrap_or_default(),
             draft: c.draft.as_deref().and_then(|d| serde_json::from_str(d).ok()),
@@ -245,6 +248,7 @@ pub async fn dismiss(State(state): State<AppState>, headers: HeaderMap, Path(id)
                     set_status(&mut other, "dismissed");
                     other.dismiss_reason = Some("sender muted".into());
                     state.db.zombie_put_case(&other).await.map_err(db_error)?;
+                    crate::documents::extract::after_status_change(&state.db, &other).await.map_err(db_error)?;
                 }
             }
         }
@@ -254,6 +258,7 @@ pub async fn dismiss(State(state): State<AppState>, headers: HeaderMap, Path(id)
     c.dismiss_reason = reason;
     c.snoozed_until = None;
     state.db.zombie_put_case(&c).await.map_err(db_error)?;
+    crate::documents::extract::after_status_change(&state.db, &c).await.map_err(db_error)?;
     Ok(view(c))
 }
 
@@ -264,6 +269,7 @@ pub async fn done(State(state): State<AppState>, headers: HeaderMap, Path(id): P
     c.resolution = Some("done".into());
     c.snoozed_until = None;
     state.db.zombie_put_case(&c).await.map_err(db_error)?;
+    crate::documents::extract::after_status_change(&state.db, &c).await.map_err(db_error)?;
     Ok(view(c))
 }
 
@@ -289,6 +295,7 @@ pub async fn reopen(State(state): State<AppState>, headers: HeaderMap, Path(id):
     c.snoozed_until = None;
     c.waiting_since = None;
     state.db.zombie_put_case(&c).await.map_err(db_error)?;
+    crate::documents::extract::after_status_change(&state.db, &c).await.map_err(db_error)?;
     Ok(view(c))
 }
 

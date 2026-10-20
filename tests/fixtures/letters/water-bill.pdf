@@ -1,0 +1,42 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 427 >>
+stream
+BT /F1 12 Tf 50 780 Td 16 TL
+(Northfield Water Ltd) Tj T*
+(Customer Accounts, PO Box 77, Leeds LS1 4AB) Tj T*
+(billing@northfield-water.example) Tj T*
+(Account number: NW-448812) Tj T*
+(Dear customer,) Tj T*
+(Your water bill of GBP 142.60 is overdue.) Tj T*
+(Please pay the full amount by 30 November 2026.) Tj T*
+(If you have already paid, please send us proof of payment.) Tj T*
+(Yours faithfully, Northfield Water) Tj T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000718 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+815
+%%EOF

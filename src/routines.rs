@@ -207,6 +207,17 @@ fn parse_tz(tz: &str) -> Result<Zone, String> {
         .ok_or_else(unknown)
 }
 
+/// `date` at wall-clock `time` in `tz` (see [`resolve_local`] for DST gaps), for reminders that
+/// are not routines. `Err` for an unknown zone.
+pub fn local_instant(tz: &str, date: NaiveDate, time: NaiveTime) -> Result<Option<DateTime<Utc>>, String> {
+    Ok(resolve_local(&parse_tz(tz)?, date, time))
+}
+
+/// The calendar date in `tz` at `at`. `Err` for an unknown zone.
+pub fn local_date(tz: &str, at: DateTime<Utc>) -> Result<Option<NaiveDate>, String> {
+    Ok(parse_tz(tz)?.date_at(at))
+}
+
 fn parse_weekday(day: &str) -> Result<Weekday, String> {
     match day.trim().to_ascii_lowercase().as_str() {
         "mon" => Ok(Weekday::Mon),
