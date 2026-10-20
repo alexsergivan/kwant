@@ -25,6 +25,14 @@ before it is saved, and nothing is stored when the test fails. Deleting a source
 secret, its cases and its mutes. A plain-text IMAP connection or a self-signed certificate is
 only accepted for a server on this computer (Proton Bridge, a test server).
 
+Like any saved password (see `saved-passwords.md`), a login is refused with 409
+`{needs_bitwarden: true}` on the built-in store while approvals are off anywhere, before the
+connection test runs. Existing logins count toward `local_count` and move with "Move to Bitwarden".
+
+The case store is not tied to mail: `source`, `conv_kind`, `kind`, `evidence` and `deadline` fit
+any open loop, and source kinds are checked in Rust, not by the table, so later sources (a
+photographed letter, a bank statement) need no table rebuild.
+
 ## Finding cases
 
 1. **Rules** (`detect.rs`) look at each conversation's last messages and decide whether someone

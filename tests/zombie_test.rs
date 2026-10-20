@@ -621,6 +621,51 @@ async fn a_github_source_is_tested_saved_and_scanned() {
     assert!(left.is_empty(), "the token left the vault with the source");
 }
 
+/// F-10 holds for Zombie Hunter too: with approvals off, a mailbox or GitHub login is not saved
+/// on this server, where a bot that can run commands could read it. Nothing is tested or kept.
+#[tokio::test]
+async fn a_source_login_is_refused_on_the_built_in_store_while_approvals_are_off() {
+    let e = setup().await;
+    assert_eq!(e.state.credentials.store_name(), "local");
+    let (base, hits) = github_mock().await;
+    let (s, v) = e.person("POST", "/api/zombie/sources", Some(json!({"kind": "github", "label": "GitHub", "config": {"api_base": base}, "secret": MOCK_TOKEN}))).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let id = v["source"]["id"].as_str().unwrap().to_string();
+
+    e.state.db.set_space_approvals(&SpaceId::default_space(), "off").await.unwrap();
+    hits.lock().unwrap().clear();
+    let (s, v) = e.person("POST", "/api/zombie/sources", Some(json!({"kind": "github", "label": "Second", "config": {"api_base": base}, "secret": MOCK_TOKEN}))).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["needs_bitwarden"], true, "{v}");
+    assert!(hits.lock().unwrap().is_empty(), "a refused save never reaches the server");
+    assert_eq!(e.state.db.zombie_sources().await.unwrap().len(), 1);
+
+    let (s, v) = e.person("PATCH", &format!("/api/zombie/sources/{id}"), Some(json!({"secret": MOCK_TOKEN}))).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["needs_bitwarden"], true, "{v}");
+    assert_eq!(e.state.credentials.list(kwnt::zombie::VAULT_OWNER).await.unwrap().len(), 1, "the saved login is left as it was");
+}
+
+/// The case store is not tied to mail: a later source (a photographed letter, a bank statement)
+/// stores its cases in the same table without a schema change.
+#[tokio::test]
+async fn the_case_store_takes_a_source_that_is_not_mail() {
+    let e = setup().await;
+    let id = e.seed("letter").await;
+    let mut c = e.state.db.zombie_case(&id).await.unwrap().unwrap();
+    c.id = "case-camera-1".into();
+    c.dedupe_key = "camera:photos:letter-2026-10-20".into();
+    c.source = "camera".into();
+    c.source_id = "photos".into();
+    c.conv_kind = "letter".into();
+    c.counterpart = Some("Tax office".into());
+    c.deadline = Some("2026-11-15".into());
+    c.reply_to_message_id = None;
+    e.state.db.zombie_put_case(&c).await.unwrap();
+    let back = e.state.db.zombie_case_by_key("camera:photos:letter-2026-10-20").await.unwrap().expect("stored");
+    assert_eq!(back, c);
+}
+
 // ---- the weekly review ----
 
 #[tokio::test]

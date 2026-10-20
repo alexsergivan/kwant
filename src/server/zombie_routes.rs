@@ -406,7 +406,11 @@ fn checked_secret(secret: &str) -> Result<Zeroizing<String>, Response> {
     Ok(Zeroizing::new(secret.to_string()))
 }
 
-async fn save_secret(store: &dyn CredentialStore, id: &str, origin: &str, secret: &str) -> Result<(), Response> {
+async fn save_secret(state: &AppState, id: &str, origin: &str, secret: &str) -> Result<(), Response> {
+    if let Some(refused) = super::passwords::refuse_local_save(state).await {
+        return Err(refused);
+    }
+    let store = state.credentials.as_ref();
     let origin = normalize_origin(origin).map_err(|_| error(StatusCode::BAD_REQUEST, "the server address is not valid"))?;
     hunt::forget_secret(store, id).await.map_err(vault_error)?;
     store.save(VAULT_OWNER, &origin, id, secret).await.map_err(vault_error)?;
@@ -430,9 +434,13 @@ pub async fn add_source(State(state): State<AppState>, headers: HeaderMap, Json(
     if state.credentials.is_locked().await {
         return Err(vault_error(StoreError::Locked));
     }
+    // Before the connection test, so a refused save never reaches the server
+    if let Some(refused) = super::passwords::refuse_local_save(&state).await {
+        return Err(refused);
+    }
     let id = format!("src-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
     let test = test_connection(&id, &b.kind, &config, secret.clone()).await?;
-    save_secret(state.credentials.as_ref(), &id, &origin, &secret).await?;
+    save_secret(&state, &id, &origin, &secret).await?;
     let row = SourceRow {
         id: id.clone(),
         kind: b.kind,
@@ -489,7 +497,7 @@ pub async fn update_source(State(state): State<AppState>, headers: HeaderMap, Pa
             }
         };
         test = Some(test_connection(&id, &row.kind, &config, secret.clone()).await?);
-        save_secret(state.credentials.as_ref(), &id, &origin, &secret).await?;
+        save_secret(&state, &id, &origin, &secret).await?;
         row.config = config;
     }
     state.db.zombie_put_source(&row).await.map_err(db_error)?;

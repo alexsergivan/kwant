@@ -395,8 +395,9 @@ pub async fn refuse_approvals_off(state: &AppState) -> Option<Response> {
     )
 }
 
-/// The 409 for saving into the built-in store while approvals are off anywhere.
-async fn refuse_local_save(state: &AppState) -> Option<Response> {
+/// The 409 for saving into the built-in store while approvals are off anywhere. Zombie Hunter's
+/// mailbox and GitHub logins go through it too.
+pub(crate) async fn refuse_local_save(state: &AppState) -> Option<Response> {
     if state.credentials.store_name() != "local" || !approvals_off_anywhere(state).await {
         return None;
     }

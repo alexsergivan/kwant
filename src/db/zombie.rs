@@ -1,6 +1,11 @@
 //! Zombie Mission Hunter's tables: the cases it found (`zombie_cases`), the mailboxes and GitHub
 //! accounts it reads (`zombie_sources`, never a secret: those are in the password vault), what
 //! the person muted (`zombie_mutes`) and the weekly reviews (`zombie_reviews`).
+//!
+//! A case is not tied to email: `source`, `conv_kind`, `kind`, `evidence` and `deadline` fit any
+//! open loop (a photographed letter, a duplicate charge). Source kinds are checked in Rust (cases
+//! are written from the typed `SourceKind`, the routes check a source's kind), not by the table,
+//! so a new kind needs no table rebuild.
 
 use super::{Database, DbError};
 use chrono::{DateTime, Utc};
@@ -131,7 +136,7 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS zombie_cases (
                 id TEXT PRIMARY KEY,
                 dedupe_key TEXT NOT NULL UNIQUE,
-                source TEXT NOT NULL CHECK (source IN ('kwant', 'imap', 'github')),
+                source TEXT NOT NULL,
                 source_id TEXT NOT NULL,
                 source_ref TEXT NOT NULL,
                 kind TEXT NOT NULL,
@@ -163,7 +168,7 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS zombie_cases_source ON zombie_cases (source_id)",
             "CREATE TABLE IF NOT EXISTS zombie_sources (
                 id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL CHECK (kind IN ('imap', 'github')),
+                kind TEXT NOT NULL,
                 label TEXT NOT NULL,
                 config TEXT NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
