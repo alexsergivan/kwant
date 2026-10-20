@@ -5,7 +5,8 @@
 //! throwaway Vaultwarden with signups open:
 //!
 //! ```sh
-//! docker run -d --rm --name kwnt-bwtest -p 127.0.0.1:18990:80 -e SIGNUPS_ALLOWED=true vaultwarden/server
+//! docker run -d --rm --name kwnt-bwtest -p 127.0.0.1:18990:80 -e SIGNUPS_ALLOWED=true \
+//!   -e I_REALLY_WANT_VOLATILE_STORAGE=true vaultwarden/server
 //! KWNT_TEST_VAULTWARDEN=http://127.0.0.1:18990 cargo test --test bitwarden_test
 //! ```
 //!
