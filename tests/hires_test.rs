@@ -280,7 +280,7 @@ async fn only_the_person_decides_and_accept_once_creates_the_bot_in_the_team() {
 
     // Undo through the bot action removes the hired bot and the card says so
     let action = card["action_id"].as_str().unwrap();
-    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{action}/undo"), None, None).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{action}/undo"), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     assert!(bot_named(&e, "spc_default", "Chef").await.is_none());
     let team = e.state.db.get_team_by_name(&SpaceId::default_space(), "core-engineering").await.unwrap().unwrap();
@@ -332,7 +332,7 @@ async fn always_accept_hires_at_once_with_undo_up_to_the_daily_cap() {
     // Undo an automatic hire
     let auto = hires(&e, "spc_default").await.into_iter().find(|h| h["name"] == "Coach").unwrap();
     let action = auto["action_id"].as_str().unwrap();
-    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{action}/undo"), None, None).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{action}/undo"), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     assert!(bot_named(&e, "spc_default", "Coach").await.is_none());
 
@@ -506,7 +506,7 @@ async fn a_team_is_one_proposal_on_one_card() {
 
     // Undo removes the whole team: bots, team and channel
     let action = card["action_id"].as_str().unwrap();
-    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{action}/undo"), None, None).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{action}/undo"), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     for n in ["Quant", "Gopher", "Tester"] {
         assert!(bot_named(&e, "spc_default", n).await.is_none(), "{n} removed");

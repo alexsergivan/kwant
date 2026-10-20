@@ -34,7 +34,15 @@ async fn setup() -> (Router, AppState, TempDir) {
 }
 
 async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-    let req = Request::builder().method(method).uri(uri).header("content-type", "application/json");
+    call_as(app, method, uri, None, body).await
+}
+
+/// With the person's API token (deleting a bot is person-only).
+async fn call_as(app: &Router, method: &str, uri: &str, token: Option<&str>, body: Option<Value>) -> (StatusCode, Value) {
+    let mut req = Request::builder().method(method).uri(uri).header("content-type", "application/json");
+    if let Some(t) = token {
+        req = req.header("authorization", format!("Bearer {t}"));
+    }
     let body = body.map(|b| Body::from(b.to_string())).unwrap_or_else(Body::empty);
     let resp = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
     let status = resp.status();
@@ -95,7 +103,7 @@ async fn the_person_deletes_any_bot_with_its_history() {
         state: "running".into(),
         since: chrono::Utc::now(),
     });
-    let (s, v) = call(&app, "DELETE", &format!("/api/kwants/{}", bot.id), None).await;
+    let (s, v) = call_as(&app, "DELETE", &format!("/api/kwants/{}", bot.id), Some(state.api_token.reveal()), None).await;
     assert_eq!(s, StatusCode::CONFLICT);
     assert_eq!(v["error"], "running");
     assert!(v["message"].as_str().unwrap().contains("working"));
@@ -114,7 +122,7 @@ async fn the_person_deletes_any_bot_with_its_history() {
     assert!(s == StatusCode::FORBIDDEN || s == StatusCode::UNAUTHORIZED, "{s}");
 
     // Deleted, with everything it owned
-    let (s, v) = call(&app, "DELETE", &format!("/api/kwants/{}", bot.id), None).await;
+    let (s, v) = call_as(&app, "DELETE", &format!("/api/kwants/{}", bot.id), Some(state.api_token.reveal()), None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["deleted"], json!(bot.id));
     assert_eq!(v["status"], json!("deleted"));
@@ -135,16 +143,16 @@ async fn the_person_deletes_any_bot_with_its_history() {
         assert_ne!(t.lead_kwant_id, bot.id);
         assert!(!t.member_kwants.contains(&bot.id));
     }
-    let (s, _) = call(&app, "DELETE", &format!("/api/kwants/{}", bot.id), None).await;
+    let (s, _) = call_as(&app, "DELETE", &format!("/api/kwants/{}", bot.id), Some(state.api_token.reveal()), None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 
     // A space's only bot stays
     let rest = state.db.list_kwants(&space).await.unwrap();
     for k in &rest[1..] {
-        let (s, v) = call(&app, "DELETE", &format!("/api/kwants/{}", k.id), None).await;
+        let (s, v) = call_as(&app, "DELETE", &format!("/api/kwants/{}", k.id), Some(state.api_token.reveal()), None).await;
         assert_eq!(s, StatusCode::OK, "{v}");
     }
-    let (s, v) = call(&app, "DELETE", &format!("/api/kwants/{}", rest[0].id), None).await;
+    let (s, v) = call_as(&app, "DELETE", &format!("/api/kwants/{}", rest[0].id), Some(state.api_token.reveal()), None).await;
     assert_eq!(s, StatusCode::CONFLICT);
     assert_eq!(v["error"], "last_bot");
 }

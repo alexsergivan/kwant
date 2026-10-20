@@ -37,7 +37,7 @@ With Bitwarden, the API token alone doesn't show a password: that needs the mast
   - the UI shows "Locked" until the person unlocks it again.
 - Only items in the `kwnt` folder, named `kwnt · <host>` and carrying the custom field `kwnt-owner`, are used. Organisation items, trashed items and items in other folders are never read.
 - Showing a password needs the master password, not only the API token. The token sits in kwnt's data folder, where a bot with approvals off can read it. Five wrong master passwords in a row lock the vault.
-- Every vault route is person-only. A bot's turn token gets 403; no token gets 401.
+- Every vault route is person-only. A bot's turn token gets 403; no token gets 401. Deleting a bot or team and undoing a bot action or import are person-only too, since they delete saved passwords.
 
 **Known gap (open, accepted 2026-10-20):** autofill stays on while approvals are off; Oleks decided this. Chrome's DevTools port listens on loopback without authentication, so with approvals off a bot with a shell can attach to it and read a field kwnt has just filled. This holds for both the built-in store and Bitwarden, because the leak is in the browser, not the store. Planned fix, on its own branch: start Chrome with `--remote-debugging-pipe` so there is no port to attach to.
 
