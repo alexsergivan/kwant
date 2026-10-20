@@ -183,8 +183,8 @@ fn exempt(path: &str) -> bool {
         || path == "/api/mcp/self"
 }
 
-/// Routes only the person may call: saved passwords and the password vault (Bitwarden), answering an approval card, and the
-/// approvals switch. They need the token from this machine too, because a bot's shell runs on
+/// Routes only the person may call: saved passwords and the password vault (Bitwarden), answering an approval card, the
+/// approvals switch, and deleting a bot or team or undoing a bot action or import (those delete saved passwords too). They need the token from this machine too, because a bot's shell runs on
 /// this machine and would otherwise reach them with a bare `curl`. Turn tokens are refused by the
 /// handlers themselves (403).
 pub fn person_only(method: &Method, path: &str) -> bool {
@@ -194,6 +194,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "passwords", ..] => true,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
+        ["", "api", "kwants" | "teams", _] => *method == Method::DELETE,
+        ["", "api", "bot-actions" | "imports", _, "undo"] => *method == Method::POST,
         _ => false,
     }
 }
@@ -493,6 +495,13 @@ mod tests {
         assert!(!person_only(&get, "/api/approvals"));
         assert!(!person_only(&get, "/api/sandbox/t1/status"));
         assert!(!person_only(&get, "/api/kwants"));
+        assert!(person_only(&del, "/api/kwants/k1"));
+        assert!(person_only(&del, "/api/teams/t1/"));
+        assert!(person_only(&post, "/api/bot-actions/b1/undo"));
+        assert!(person_only(&post, "/api/imports/i1/undo"));
+        assert!(!person_only(&put, "/api/kwants/k1"));
+        assert!(!person_only(&get, "/api/teams/t1"));
+        assert!(!person_only(&post, "/api/bot-actions/b1/confirm"));
     }
 
     #[test]

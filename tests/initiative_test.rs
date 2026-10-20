@@ -231,7 +231,7 @@ async fn a_follow_up_comes_back_to_the_same_chat_as_the_same_bot_and_can_be_undo
     let a = last_action(&e).await;
     assert_eq!((a["action"].as_str(), a["status"].as_str()), (Some("routine_create"), Some("applied")));
     assert!(a["summary"].as_str().unwrap().contains("follow-up"), "{a}");
-    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", a["id"].as_str().unwrap()), None, None).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", a["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     assert!(routines(&e).await.is_empty());
 

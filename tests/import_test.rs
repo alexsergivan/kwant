@@ -59,6 +59,21 @@ async fn send(app: &Router, method: &str, uri: &str, content_type: &str, body: V
     (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
+/// Undoing an import is person-only: it carries the API token.
+async fn undo_call(e: &Env, uri: &str, body: Value) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", e.state.api_token.reveal()))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = e.app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
 async fn json_call(app: &Router, method: &str, uri: &str, body: Value) -> (StatusCode, Value) {
     send(app, method, uri, "application/json", body.to_string().into_bytes()).await
 }
@@ -191,7 +206,7 @@ async fn apply_creates_bots_without_tools_pending_skills_and_paused_routines_the
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list[0]["id"], import_id.as_str());
 
-    let (status, undone) = json_call(&e.app, "POST", &format!("/api/imports/{import_id}/undo"), Value::Null).await;
+    let (status, undone) = undo_call(&e, &format!("/api/imports/{import_id}/undo"), Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{undone}");
     assert_eq!(undone["status"], "undone");
     let mut after = row_counts(&e.tmp).await;
@@ -200,7 +215,7 @@ async fn apply_creates_bots_without_tools_pending_skills_and_paused_routines_the
     expected.retain(|(t, _)| t != "imports");
     assert_eq!(after, expected, "undo removes everything the import created");
 
-    let (status, again) = json_call(&e.app, "POST", &format!("/api/imports/{import_id}/undo"), json!({})).await;
+    let (status, again) = undo_call(&e, &format!("/api/imports/{import_id}/undo"), json!({})).await;
     assert_eq!((status, again["code"].as_str()), (StatusCode::CONFLICT, Some("already_undone")));
 }
 
@@ -249,9 +264,9 @@ async fn package_with_team_lands_in_a_new_space_and_undo_removes_team_channels_a
 
     // Undo needs the right space.
     let id = applied["import"]["id"].as_str().unwrap();
-    let (status, _) = json_call(&e.app, "POST", &format!("/api/imports/{id}/undo"), Value::Null).await;
+    let (status, _) = undo_call(&e, &format!("/api/imports/{id}/undo"), Value::Null).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "an import in another space isn't visible from Default");
-    let (status, v) = json_call(&e.app, "POST", &format!("/api/imports/{id}/undo?space={space}"), Value::Null).await;
+    let (status, v) = undo_call(&e, &format!("/api/imports/{id}/undo?space={space}"), Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     assert!(e.state.db.list_kwants(&sid).await.unwrap().is_empty());
     assert!(e.state.db.list_teams(&sid).await.unwrap().is_empty());
@@ -287,7 +302,7 @@ async fn undo_is_refused_once_a_bot_is_used_and_needs_force_once_edited() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{v}");
-    let (status, v) = json_call(&e.app, "POST", &format!("/api/imports/{id}/undo"), Value::Null).await;
+    let (status, v) = undo_call(&e, &format!("/api/imports/{id}/undo"), Value::Null).await;
     assert_eq!((status, v["code"].as_str()), (StatusCode::CONFLICT, Some("edited")), "{v}");
     assert_eq!(v["edited"][0], "Helper");
 
@@ -306,7 +321,7 @@ async fn undo_is_refused_once_a_bot_is_used_and_needs_force_once_edited() {
         })
         .await
         .unwrap();
-    let (status, v) = json_call(&e.app, "POST", &format!("/api/imports/{id}/undo"), json!({ "force": true })).await;
+    let (status, v) = undo_call(&e, &format!("/api/imports/{id}/undo"), json!({ "force": true })).await;
     assert_eq!((status, v["code"].as_str()), (StatusCode::CONFLICT, Some("in_use")), "{v}");
     assert!(e.state.db.get_kwant(&bot_id).await.unwrap().is_some());
 }
@@ -326,7 +341,7 @@ async fn forced_undo_removes_an_edited_bot() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (status, v) = json_call(&e.app, "POST", &format!("/api/imports/{id}/undo"), json!({ "force": true })).await;
+    let (status, v) = undo_call(&e, &format!("/api/imports/{id}/undo"), json!({ "force": true })).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     assert!(e.state.db.get_kwant(&bot_id).await.unwrap().is_none());
 }

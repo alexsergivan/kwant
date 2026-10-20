@@ -206,7 +206,7 @@ async fn routine_is_created_in_this_chat_as_this_bot_with_a_card_and_managed_thr
     ok(&e, &token, "routine_delete", json!({"routine": routine_id})).await;
     assert!(routines(&e).await.is_empty());
     let del = last_action(&e).await;
-    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", del["id"].as_str().unwrap()), None, None).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", del["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     assert_eq!(v["status"], "undone");
     assert_eq!(v["card"]["status"], "undone");
@@ -220,7 +220,7 @@ async fn routine_is_created_in_this_chat_as_this_bot_with_a_card_and_managed_thr
 
     // Undoing the create removes it
     let create = actions(&e).await.into_iter().find(|a| a["action"] == "routine_create").unwrap();
-    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), None, None).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
     // The routine it made was deleted and recreated, so that row is gone: a conflict, not a crash
     assert_eq!(status, StatusCode::CONFLICT, "{v}");
 }
@@ -297,7 +297,7 @@ async fn bots_are_created_and_updated_and_the_person_undoes_it() {
     let update = last_action(&e).await;
 
     // Undoing the create while a newer change is applied: 409, undo that first
-    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), None, None).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::CONFLICT, "{v}");
     assert!(v["error"].as_str().unwrap().contains("newer"), "{v}");
 
@@ -306,7 +306,7 @@ async fn bots_are_created_and_updated_and_the_person_undoes_it() {
         let (status, _) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", update["id"].as_str().unwrap()), Some(bearer), None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
     }
-    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", update["id"].as_str().unwrap()), None, None).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", update["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     let chef_back = e.state.db.get_kwant(&chef.id).await.unwrap().unwrap();
     assert_eq!(chef_back.title, "Recipe helper");
@@ -314,11 +314,11 @@ async fn bots_are_created_and_updated_and_the_person_undoes_it() {
 
     let (status, _) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), Some(&token), None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), None, None).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     assert!(e.state.db.get_kwant(&chef.id).await.unwrap().is_none(), "undo removed Chef");
     // Twice is a conflict
-    let (status, _) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), None, None).await;
+    let (status, _) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
 
@@ -372,7 +372,7 @@ async fn non_secret_settings_change_and_undo() {
     assert!(text.contains("max_turns_global"), "{text}");
 
     let a = last_action(&e).await;
-    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", a["id"].as_str().unwrap()), None, None).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", a["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     let (_, s) = call(&e.app, "GET", "/api/settings", None, None).await;
     assert_eq!(s["timezone"], "", "undo clears the time zone it set");
@@ -461,7 +461,7 @@ async fn other_spaces_are_out_of_reach() {
     // A new space can be created, but undo archives it again
     ok(&e, &token, "space_create", json!({"name": "Side project"})).await;
     let a = last_action(&e).await;
-    let (status, _) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", a["id"].as_str().unwrap()), None, None).await;
+    let (status, _) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", a["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::OK);
     let made = e.state.db.get_space(&SpaceId::new(a["target_id"].as_str().unwrap())).await.unwrap().unwrap();
     assert!(made.archived_at.is_some());
@@ -504,7 +504,7 @@ async fn card_text_follows_the_decision_and_monthly_schedules_read_naturally() {
     assert_eq!(meta(&card)["details"]["schedule_text"], "monthly on the 1st and last day at 09:00 Europe/Kyiv");
 
     // After Undo the message itself says so, not only its meta (history, notifications, bots)
-    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), None, None).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", create["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     let card = find(messages(&e, &e.general.id).await, card_of(&create));
     assert!(card.text.starts_with("Undone: Created routine 'Budget review'"), "{}", card.text);

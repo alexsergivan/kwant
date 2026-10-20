@@ -92,6 +92,20 @@ async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (St
     (s, serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into())))
 }
 
+async fn call_as(app: &Router, method: &str, uri: &str, token: &str, body: Option<Value>) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(body.map(|v| Body::from(v.to_string())).unwrap_or_else(Body::empty))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let s = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (s, serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into())))
+}
+
 async fn ok(app: &Router, method: &str, uri: &str, body: Option<Value>) -> Value {
     let (s, v) = call(app, method, uri, body).await;
     assert!(s.is_success(), "{method} {uri}: {s} {v}");
@@ -552,7 +566,12 @@ async fn writes_on_an_archived_spaces_rows_are_refused() {
         ("POST", "/api/skills".to_string(), Some(skill("late", Some(&bea)))),
     ];
     for (method, path, body) in writes {
-        let (s, v) = call(app, method, &path, body).await;
+        // Deleting a team is person-only, so that row carries the API token
+        let (s, v) = if method == "DELETE" && path.starts_with("/api/teams/") {
+            call_as(app, method, &path, env.state.api_token.reveal(), body).await
+        } else {
+            call(app, method, &path, body).await
+        };
         assert_eq!(s, StatusCode::CONFLICT, "{method} {path}: {v}");
     }
     // Reads still work, and nothing changed

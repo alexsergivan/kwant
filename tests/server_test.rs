@@ -69,7 +69,7 @@ async fn test_teams_api_endpoints() {
     let router = LayaRouter::new(config.laya_url.clone());
 
     let state = AppState::new(config, db.clone(), tools, broker, router);
-    let app = create_router(state);
+    let app = create_router(state.clone());
 
     // 1. GET /api/teams - Should return seeded team
     let req = Request::builder()
@@ -137,6 +137,7 @@ async fn test_teams_api_endpoints() {
     let req = Request::builder()
         .method("DELETE")
         .uri(format!("/api/teams/{}", created_team.id))
+        .header("authorization", format!("Bearer {}", state.api_token.reveal()))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
