@@ -183,7 +183,7 @@ fn exempt(path: &str) -> bool {
         || path == "/api/mcp/self"
 }
 
-/// Routes only the person may call: saved passwords and the password vault (Bitwarden), answering an approval card, the
+/// Routes only the person may call: saved passwords and the password vault (Bitwarden), answering an approval card, Loose ends and Parallel Universe, the
 /// approvals switch, and deleting a bot or team or undoing a bot action or import (those delete saved passwords too). They need the token from this machine too, because a bot's shell runs on
 /// this machine and would otherwise reach them with a bare `curl`. Turn tokens are refused by the
 /// handlers themselves (403).
@@ -194,6 +194,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "passwords", ..] => true,
         // Loose ends read the person's mail: bots never see or change them
         ["", "api", "zombie", ..] => true,
+        // Parallel Universe starts containers on this machine from a directory the person names
+        ["", "api", "parallel", ..] => true,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "kwants" | "teams", _] => *method == Method::DELETE,
@@ -492,6 +494,8 @@ mod tests {
         assert!(person_only(&post, "/api/passwords/migrate"));
         assert!(person_only(&get, "/api/zombie/cases"));
         assert!(person_only(&post, "/api/zombie/sources/s1/test"));
+        assert!(person_only(&get, "/api/parallel/prices"));
+        assert!(person_only(&post, "/api/parallel/scenarios"));
         assert!(person_only(&post, "/api/approvals/a1/resolve"));
         assert!(person_only(&put, "/api/spaces/s1/approvals"));
         assert!(person_only(&put, "/api/kwants/k1/approvals"));

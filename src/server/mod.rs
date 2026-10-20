@@ -27,6 +27,7 @@ pub mod import_routes;
 pub mod approval_modes;
 pub mod passwords;
 pub mod zombie_routes;
+pub mod parallel_routes;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -222,6 +223,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/zombie/status", get(zombie_routes::status))
         .route("/api/zombie/settings", get(zombie_routes::get_settings).put(zombie_routes::put_settings))
         .route("/api/zombie/reviews", get(zombie_routes::reviews))
+        .route("/api/parallel/scenarios", get(parallel_routes::list).post(parallel_routes::create))
+        .route(
+            "/api/parallel/scenarios/:id",
+            get(parallel_routes::get_one).put(parallel_routes::update).delete(parallel_routes::delete),
+        )
+        .route("/api/parallel/prices", get(parallel_routes::list_prices))
+        .route("/api/parallel/estimate", post(parallel_routes::estimate))
         .route("/api/mcp/servers", get(mcp_routes::list_servers).post(mcp_routes::create_server))
         .route(
             "/api/mcp/servers/:id",

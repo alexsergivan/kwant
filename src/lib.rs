@@ -5,6 +5,7 @@ pub mod drivers;
 pub mod embedded;
 pub mod import;
 pub mod mcp;
+pub mod parallel;
 pub mod profiles;
 pub mod router;
 pub mod routines;
