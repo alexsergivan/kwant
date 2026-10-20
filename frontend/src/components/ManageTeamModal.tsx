@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Users, Trash2, Check, AlertTriangle, ShieldCheck, Folder, GitBranch, FolderSearch } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { Team, Kwant } from './Sidebar';
@@ -27,6 +27,24 @@ interface ManageTeamModalProps {
   onDeleteTeam: (id: string) => Promise<void>;
 }
 
+/**
+ * Why a delete didn't happen, shown right below the Delete button. On a phone the modal is scrolled
+ * down to that button, so a note at the top would be out of sight; this one scrolls itself into view.
+ */
+export const DeleteNote: React.FC<{ text: string | null }> = ({ text }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (text) ref.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }, [text]);
+  if (!text) return null;
+  return (
+    <div ref={ref} role="alert" data-testid="team-delete-note" className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-300 flex items-center gap-2">
+      <AlertTriangle size={14} className="flex-shrink-0 text-rose-400" aria-hidden="true" />
+      <span>{text}</span>
+    </div>
+  );
+};
+
 export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   isOpen,
   team,
@@ -49,6 +67,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const handleBrowseFolder = async () => {
     playSfx('click');
@@ -102,6 +121,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
       setMemberIds(parsedMembers);
       setConfirmDelete(false);
       setError(null);
+      setDeleteError(null);
     }
   }, [team, kwants, isOpen]);
 
@@ -172,13 +192,14 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
 
     try {
       setIsDeleting(true);
+      setDeleteError(null);
       playSfx('click');
       await onDeleteTeam(team.id);
       setIsDeleting(false);
       onClose();
     } catch (err) {
       setIsDeleting(false);
-      setError(err instanceof Error && err.message ? err.message : 'Couldn’t delete the team.');
+      setDeleteError(err instanceof Error && err.message ? err.message : 'Couldn’t delete the team.');
     }
   };
 
@@ -506,6 +527,8 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
               </button>
             </div>
           </div>
+
+          <DeleteNote text={deleteError} />
         </form>
       </div>
 
