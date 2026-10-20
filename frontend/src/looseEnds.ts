@@ -55,6 +55,8 @@ export interface LooseCase {
   deadline: string | null;
   resolution: string | null;
   dismiss_reason: string | null;
+  /** The bot whose chat a `kwant_*` case is in; `null` for other sources and older cases. */
+  kwant_id?: string | null;
 }
 
 export interface LooseSource {
@@ -167,6 +169,14 @@ export function deadlineText(deadline: string, now = Date.now()): { text: string
 /** Only web links open from a card; anything else (kwant://, javascript:) is shown, not linked. */
 export const safeHref = (url: string | null | undefined, scheme: 'https' | 'mailto' = 'https'): string | null =>
   url && url.toLowerCase().startsWith(`${scheme}:`) ? url : null;
+
+/** The bot chat a case came from, to open in the app. Needs both the bot (`kwant_id`, missing on
+ * cases found before it was added) and the thread (`kwant://thread/<id>` in `link`). */
+export function caseChat(c: Pick<LooseCase, 'kwant_id' | 'link' | 'draft'>): { kwantId: string; threadId: string } | null {
+  const fromLink = c.link?.startsWith('kwant://thread/') ? c.link.slice('kwant://thread/'.length) : null;
+  const threadId = fromLink || c.draft?.kwant_thread_id || null;
+  return c.kwant_id && threadId ? { kwantId: c.kwant_id, threadId } : null;
+}
 
 /** The text "Copy draft" puts on the clipboard. */
 export const draftCopyText = (d: CaseDraft): string => (d.subject ? `Subject: ${d.subject}\n\n${d.body}` : d.body);

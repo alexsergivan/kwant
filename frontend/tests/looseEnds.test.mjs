@@ -82,6 +82,28 @@ test('links only open https or mailto, never a script or a kwant:// address', ()
   assert.equal(m.draftOpen({ channel: 'email', body: 'x', mailto: 'javascript:x', open_url: null }), null);
 });
 
+test('a bot-chat case opens its chat in the app when it names the bot, and shows no chat link without it', () => {
+  const chatCase = (over = {}) => mailCase({
+    source: 'kwant', conv_kind: 'kwant_thread', kind: 'unanswered_question', counterpart: null, counterpart_name: 'Ada',
+    link: 'kwant://thread/t-9', kwant_id: 'k-ada', draft: null, ...over,
+  });
+  assert.deepEqual(m.caseChat(chatCase()), { kwantId: 'k-ada', threadId: 't-9' });
+  assert.deepEqual(m.caseChat(chatCase({ link: null, draft: { ...mailCase().draft, channel: 'kwant', kwant_thread_id: 't-3' } })), { kwantId: 'k-ada', threadId: 't-3' });
+  // Cases found before kwant_id existed, and mail cases, have no chat to open.
+  assert.equal(m.caseChat(chatCase({ kwant_id: null })), null);
+  assert.equal(m.caseChat(chatCase({ link: null })), null);
+  assert.equal(m.caseChat(mailCase()), null);
+
+  const opened = [];
+  const withChat = ui.card({ c: chatCase(), busy: false, onAction: noop, onOpenChat: (k, t) => opened.push([k, t]) });
+  assert.match(withChat, /Open chat/);
+  assert.doesNotMatch(withChat, /kwant:\/\//, 'the kwant:// address is never rendered as a link');
+  assert.doesNotMatch(ui.card({ c: chatCase({ kwant_id: null }), busy: false, onAction: noop, onOpenChat: noop }), /Open chat/);
+  assert.doesNotMatch(ui.card({ c: chatCase(), busy: false, onAction: noop }), /Open chat/, 'no handler, no link');
+  assert.doesNotMatch(ui.card({ c: mailCase(), busy: false, onAction: noop, onOpenChat: noop }), /Open chat/);
+  assert.match(ui.view(viewProps({ cases: [chatCase()], onOpenChat: noop })), /Open chat/);
+});
+
 test('no cases shows the empty state, other tabs say what goes there, and a scan in progress is shown', () => {
   const empty = ui.view(viewProps({ cases: [] }));
   assert.match(empty, /No loose ends/);

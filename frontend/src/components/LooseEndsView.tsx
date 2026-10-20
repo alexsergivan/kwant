@@ -36,6 +36,7 @@ import {
   actionDoneText,
   actionsFor,
   ageText,
+  caseChat,
   deadlineText,
   draftCopyText,
   draftOpen,
@@ -85,13 +86,15 @@ export interface LooseCaseCardProps {
   busy: boolean;
   now?: number;
   onAction: (c: LooseCase, action: CaseAction, body?: unknown) => void;
+  /** Opens a bot thread in the app; without it a case shows no chat link. */
+  onOpenChat?: (kwantId: string, threadId: string) => void;
   /** Tests open a choice. */
   initialChoice?: 'snooze' | 'dismiss' | null;
 }
 
 /** One loose end: who, why it stalled, the evidence, the draft and what to do with it. Generic
  * over the source, so a letter or a bank statement can use the same card. */
-export const LooseCaseCard: React.FC<LooseCaseCardProps> = ({ c, busy, now = Date.now(), onAction, initialChoice = null }) => {
+export const LooseCaseCard: React.FC<LooseCaseCardProps> = ({ c, busy, now = Date.now(), onAction, onOpenChat, initialChoice = null }) => {
   const id = useId();
   const [choice, setChoice] = useState<'snooze' | 'dismiss' | null>(initialChoice);
   const [copied, setCopied] = useState<'ok' | 'failed' | null>(null);
@@ -99,6 +102,7 @@ export const LooseCaseCard: React.FC<LooseCaseCardProps> = ({ c, busy, now = Dat
   const who = c.counterpart_name || c.counterpart;
   const due = c.deadline ? deadlineText(c.deadline, now) : null;
   const link = safeHref(c.link);
+  const chat = onOpenChat ? caseChat(c) : null;
   const open = c.draft ? draftOpen(c.draft) : null;
 
   const copy = async () => {
@@ -183,6 +187,16 @@ export const LooseCaseCard: React.FC<LooseCaseCardProps> = ({ c, busy, now = Dat
               </a>
             )}
           </div>
+        )}
+
+        {chat && (
+          <button
+            type="button"
+            onClick={() => onOpenChat?.(chat.kwantId, chat.threadId)}
+            className="inline-flex min-h-[32px] items-center gap-1 text-[11px] text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline"
+          >
+            <MessageSquare size={12} aria-hidden="true" /> Open chat
+          </button>
         )}
 
         {c.draft && (c.status === 'open' || c.status === 'waiting_reply') && (
@@ -599,6 +613,7 @@ export interface LooseEndsViewProps {
   onRefresh: () => void;
   onScan: () => void;
   onAction: (c: LooseCase, action: CaseAction, body?: unknown) => void;
+  onOpenChat?: (kwantId: string, threadId: string) => void;
   onBack?: () => void;
 }
 
@@ -619,6 +634,7 @@ export const LooseEndsView: React.FC<LooseEndsViewProps> = ({
   onRefresh,
   onScan,
   onAction,
+  onOpenChat,
   onBack,
 }) => {
   const counts = CASE_TABS.reduce((acc, t) => ({ ...acc, [t.key]: (cases ?? []).filter((c) => tabOf(c.status) === t.key).length }), {} as Record<CaseTab, number>);
@@ -720,7 +736,7 @@ export const LooseEndsView: React.FC<LooseEndsViewProps> = ({
                 ) : (
                   <ul className="space-y-3">
                     {shown.map((c) => (
-                      <LooseCaseCard key={c.id} c={c} busy={busy === c.id} now={now} onAction={onAction} />
+                      <LooseCaseCard key={c.id} c={c} busy={busy === c.id} now={now} onAction={onAction} onOpenChat={onOpenChat} />
                     ))}
                   </ul>
                 )}
@@ -736,7 +752,7 @@ export const LooseEndsView: React.FC<LooseEndsViewProps> = ({
 };
 
 /** Loads cases and sources, runs the card actions and scans. */
-export const LooseEndsPage: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
+export const LooseEndsPage: React.FC<{ onBack?: () => void; onOpenChat?: (kwantId: string, threadId: string) => void }> = ({ onBack, onOpenChat }) => {
   const [cases, setCases] = useState<LooseCase[] | null>(null);
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -852,6 +868,7 @@ export const LooseEndsPage: React.FC<{ onBack?: () => void }> = ({ onBack }) => 
       onRefresh={load}
       onScan={scan}
       onAction={act}
+      onOpenChat={onOpenChat}
       onBack={onBack}
       sources={<LooseSources sources={sources} error={sourcesError} onChanged={() => (loadSources(), load())} />}
     />

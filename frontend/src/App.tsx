@@ -2440,7 +2440,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onBack={isPhone ? () => { setShowAway(false); setPhoneView('list'); } : undefined}
     />
   );
-  const loose = <LooseEndsPage onBack={isPhone ? () => { setShowLoose(false); setPhoneView('list'); } : undefined} />;
+  const loose = <LooseEndsPage onBack={isPhone ? () => { setShowLoose(false); setPhoneView('list'); } : undefined} onOpenChat={openThread} />;
   const chat = (
         <ChatView
           title={chatTitle}
