@@ -23,6 +23,8 @@ export interface Space {
   general_channel_id: string | null;
   counts: SpaceCounts;
   paused_routines?: number;
+  /** The approvals switch; older servers leave it out ("ask"). */
+  approvals?: 'ask' | 'off';
 }
 
 export interface NewSpace {

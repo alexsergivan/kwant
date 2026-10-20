@@ -5,6 +5,8 @@ import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } from './components/ChatView';
 import { ThreadBar, ThreadHeader } from './components/ThreadBar';
 import { DelegationCard } from './components/DelegationCard';
+import { ApprovalsOffBadge } from './components/ApprovalsSetting';
+import { approvalsOff } from './approvalMode';
 import { QuestionCard } from './components/QuestionCard';
 import { McpSuggestionCard } from './components/McpSuggestionCard';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
@@ -2142,6 +2144,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     ) : null;
   const pendingSkillCounts = pendingByKwant(pendingSkills);
   const pendingHere = currentKwant ? pendingSkillCounts[currentKwant.id] ?? 0 : 0;
+  const approvalsBadge = approvalsOff(currentKwant) ? (
+    <ApprovalsOffBadge onClick={() => currentKwant && openAgentSettings(currentKwant)} title={`${currentKwant?.name} runs commands, file writes and tools without asking. Open its settings to change it.`} />
+  ) : null;
   const skillsBadge =
     currentKwant && pendingHere > 0 ? (
       <button
@@ -2485,8 +2490,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onOpenAccounts={openSettings}
           canRun={canRun}
           titleExtra={
-            workingBadge || skillsBadge ? (
+            workingBadge || skillsBadge || approvalsBadge ? (
               <>
+                {approvalsBadge}
                 {workingBadge}
                 {skillsBadge}
               </>
@@ -2621,6 +2627,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onClose={() => setEditingKwant(null)}
           onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
           onRequestDelete={editingKwant ? () => setDeletingKwant(editingKwant) : undefined}
+          onApprovalsChanged={refreshRoster}
         />
 
         {deletingKwant && (
@@ -2680,6 +2687,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onOpenTools={() => setIsMcpOpen(true)}
           onOpenAppSettings={onOpenAppSettings}
           routineFocus={routineFocus}
+          onApprovalsChanged={refreshRoster}
           onImported={() => {
             // New bots, teams and their team chats.
             refreshRoster();

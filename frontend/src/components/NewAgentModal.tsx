@@ -12,6 +12,7 @@ import { MemoryPanel } from './MemoryPanel';
 import { RoutinesPanel } from './RoutinesPanel';
 import { SkillsPanel } from './SkillsPanel';
 import type { Channel, Kwant } from './Sidebar';
+import { BotApprovalsSetting } from './ApprovalsSetting';
 
 export type EditTab = 'profile' | 'memory' | 'skills' | 'routines';
 const EDIT_TABS: Array<{ id: EditTab; label: string; Icon: typeof Brain }> = [
@@ -69,6 +70,8 @@ interface NewAgentModalProps {
   pendingSkills?: number;
   /** Editing only: opens the Delete bot confirm. */
   onRequestDelete?: () => void;
+  /** Editing only: the approvals override saved; load bots again for the markers. */
+  onApprovalsChanged?: () => void;
 }
 
 export const NewAgentModal: React.FC<NewAgentModalProps> = ({
@@ -90,6 +93,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   initialTab = 'profile',
   pendingSkills = 0,
   onRequestDelete,
+  onApprovalsChanged,
 }) => {
   const [tab, setTab] = useState<EditTab>('profile');
   const [name, setName] = useState('');
@@ -426,6 +430,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               </label>
             </div>
           )}
+
+          {isEdit && kwantId && <BotApprovalsSetting kwantId={kwantId} kwantName={initial?.name ?? name} onChanged={() => onApprovalsChanged?.()} />}
 
           {mcpIds !== undefined && (
             <KwantToolsPicker model={model} selected={mcpIds} onChange={setMcpIds} onManageServers={onManageServers} />

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
@@ -9,6 +9,8 @@ import { claudeNeedsSignIn } from '../claudeLogin';
 import { Space, spaceSummary } from '../spaces';
 import { SpaceSwitcher, SpaceTile } from './Spaces';
 import { isMac } from './LayaStatus';
+import { ApprovalsOffBadge } from './ApprovalsSetting';
+import { approvalsOff, spaceOffLine } from '../approvalMode';
 
 export interface Kwant {
   id: string;
@@ -23,6 +25,9 @@ export interface Kwant {
   profile_id?: string | null;
   /** Whether turns may move to the engine's next profile when this one is out of usage. */
   profile_failover?: boolean;
+  /** Its own approvals setting, and what it comes to with the space's; absent on older servers. */
+  approvals?: 'inherit' | 'ask' | 'off';
+  approvals_effective?: 'ask' | 'off';
 }
 
 export interface Channel {
@@ -192,6 +197,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return selectedId === c.id;
   };
 
+  const offLine = spaceOffLine(space.approvals, kwants);
+
   return (
     <aside
       aria-label={`${space.name} chats and kwant bots`}
@@ -217,6 +224,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </span>
           <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
         </button>
+        {offLine && (
+          <button
+            type="button"
+            onClick={onOpenSpaceSettings}
+            title="Bots here run commands, file writes and tools without asking. Change it in Space settings."
+            className="mt-1 w-full flex items-center gap-1.5 px-2 py-1 rounded-md border border-amber-500/30 bg-amber-500/10 text-[11px] font-medium text-amber-200 hover:bg-amber-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400"
+          >
+            <ShieldOff size={12} aria-hidden="true" className="shrink-0" />
+            <span className="truncate">{offLine}</span>
+          </button>
+        )}
         {switcherOpen && (
           <SpaceSwitcher
             spaces={spaces}
@@ -576,6 +594,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-1">
                       <span className="text-xs font-semibold text-zinc-200 truncate">{k.name}</span>
+                      {approvalsOff(k) && <ApprovalsOffBadge compact title={`${k.name} runs commands, file writes and tools without asking.`} />}
                       {onEditKwant && (
                         <button
                           type="button"

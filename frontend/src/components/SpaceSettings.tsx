@@ -32,6 +32,7 @@ import { SpaceTile } from './Spaces';
 import { ImportDialog, RecentImports } from './ImportDialog';
 import { ImportError, ImportRecord, downloadExport, importApi, importErrorText } from '../imports';
 import { memberIdsOf, type Channel, type Kwant, type Team } from './Sidebar';
+import { SpaceApprovalsSetting } from './ApprovalsSetting';
 
 export type SpaceSettingsTab = 'general' | 'accounts' | 'bots' | 'teams' | 'tools' | 'skills' | 'routines' | 'import';
 
@@ -73,6 +74,8 @@ interface Props {
   routineFocus?: RoutineFocus | null;
   /** After an import or its undo: load bots, teams and chats again. */
   onImported?: () => void;
+  /** After the approvals switch changes: load bots and spaces again (no event fires). */
+  onApprovalsChanged?: () => void;
 }
 
 /** What the tabs get on top of the props: opening the Import dialog. */
@@ -291,7 +294,7 @@ const ImportTab: React.FC<TabProps> = ({ space, kwants, onOpenImport, onImported
   );
 };
 
-const GeneralTab: React.FC<Props> = ({ space, spaces, onSpaceSaved, onArchived }) => {
+const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, onSpaceSaved, onArchived, onApprovalsChanged }) => {
   const [name, setName] = useState(space.name);
   const [icon, setIcon] = useState(space.icon);
   // "amber" from the server shows as its swatch.
@@ -405,6 +408,18 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, onSpaceSaved, onArchived }
           </button>
         </div>
       </form>
+
+      <SpaceApprovalsSetting
+        key={space.id}
+        spaceId={space.id}
+        spaceName={space.name}
+        value={space.approvals ?? 'ask'}
+        overrides={{
+          ask: kwants.filter((k) => k.approvals === 'ask').map((k) => k.name),
+          off: kwants.filter((k) => k.approvals === 'off').map((k) => k.name),
+        }}
+        onChanged={() => onApprovalsChanged?.()}
+      />
 
       <div className={`${card} p-4 space-y-3`}>
         <p className="flex items-center gap-2 text-xs font-medium text-zinc-200">
