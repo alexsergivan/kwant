@@ -45,6 +45,11 @@ percent-encoding = "2"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 serde_norway = "0.9"
 pdf-extract = "0.12"
+# Bitwarden vault crypto (AES-256-CBC + HMAC, Argon2id KDF), done in process; see sandbox::bitwarden
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+argon2 = "0.5"
+zeroize = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -26,3 +26,19 @@ pub use sandbox::{
 };
 pub use server::{create_router, AppState};
 pub use tools::{ToolError, ToolRunner};
+
+/// Makes kwnt's own process non-dumpable, so another process of the same OS user (a bot's shell
+/// with approvals off) can't read its memory through `/proc/<pid>/mem`, attach a debugger, or
+/// read `/proc/<pid>/environ`: those files become root's. kwnt holds the unlocked Bitwarden
+/// keys in memory only (see `sandbox::bitwarden`). Children kwnt starts get the default back at
+/// `execve`, so nothing they do changes. Linux only; elsewhere a no-op.
+pub fn harden_process() {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: prctl(PR_SET_DUMPABLE) takes plain integers and touches no memory of ours
+        let rc = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+        if rc != 0 {
+            eprintln!("kwnt: could not make the process non-dumpable: {}", std::io::Error::last_os_error());
+        }
+    }
+}

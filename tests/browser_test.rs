@@ -499,21 +499,21 @@ async fn test_browser_credential_vault_lifecycle() {
     let store = open_store(data.path());
     let controller = BrowserController::new(19222);
     controller.attach_vault(store.clone(), "team-1").await;
-    assert_eq!(store.list("team-1").unwrap().len(), 0);
+    assert_eq!(store.list("team-1").await.unwrap().len(), 0);
 
-    let meta = store.save("team-1", "https://github.com", "dev_user", "DUMMY-secret_pass_123").unwrap();
+    let meta = store.save("team-1", "https://github.com", "dev_user", "DUMMY-secret_pass_123").await.unwrap();
     assert_eq!(meta.origin, "https://github.com");
     assert_eq!(meta.username, "dev_user");
 
-    let list = store.list("team-1").unwrap();
+    let list = store.list("team-1").await.unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id, meta.id);
 
     // Exact origin only
-    assert!(store.for_origin("team-1", "https://github.com").unwrap().is_some());
-    assert!(store.for_origin("team-1", "http://github.com").unwrap().is_none());
-    assert!(store.for_origin("team-1", "https://gist.github.com").unwrap().is_none());
-    assert!(store.for_origin("team-2", "https://github.com").unwrap().is_none());
+    assert!(store.for_origin("team-1", "https://github.com").await.unwrap().is_some());
+    assert!(store.for_origin("team-1", "http://github.com").await.unwrap().is_none());
+    assert!(store.for_origin("team-1", "https://gist.github.com").await.unwrap().is_none());
+    assert!(store.for_origin("team-2", "https://github.com").await.unwrap().is_none());
 
     // Nothing on disk in clear
     for entry in walk(data.path()) {
@@ -524,9 +524,9 @@ async fn test_browser_credential_vault_lifecycle() {
 
     // A fresh store on the same data dir reads them back
     let reopened = open_store(data.path());
-    assert_eq!(reopened.get("team-1", &meta.id).unwrap().unwrap().password, "DUMMY-secret_pass_123");
-    assert!(reopened.delete("team-1", &meta.id).unwrap());
-    assert_eq!(reopened.list("team-1").unwrap().len(), 0);
+    assert_eq!(reopened.get("team-1", &meta.id).await.unwrap().unwrap().password, "DUMMY-secret_pass_123");
+    assert!(reopened.delete("team-1", &meta.id).await.unwrap());
+    assert_eq!(reopened.list("team-1").await.unwrap().len(), 0);
 }
 
 fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -716,7 +716,7 @@ async fn autofill_goes_only_to_the_exact_origin_in_kwnts_own_world() {
     use kwnt::sandbox::credentials::open_store;
     let data = tempfile::tempdir().unwrap();
     let store = open_store(data.path());
-    store.save("team-1", "https://example.com", "alice", "DUMMY-F5-PW").unwrap();
+    store.save("team-1", "https://example.com", "alice", "DUMMY-F5-PW").await.unwrap();
     let url = Arc::new(tokio::sync::Mutex::new(String::new()));
     let (port, recorded) = fake_page(url.clone(), Value::Null).await;
     let ctrl = BrowserController::new(port);
@@ -762,8 +762,8 @@ async fn a_capture_is_filed_under_the_real_origin_and_waits() {
     assert_eq!(capture.username, "admin");
     assert!(!serde_json::to_string(&capture).unwrap().contains("DUMMY-FORGED"), "the password isn't serialized");
     assert!(!format!("{capture:?}").contains("DUMMY-FORGED"));
-    assert!(store.list("team-1").unwrap().is_empty(), "nothing saved without the person");
-    assert!(store.for_origin("team-1", "https://victim.test").unwrap().is_none());
+    assert!(store.list("team-1").await.unwrap().is_empty(), "nothing saved without the person");
+    assert!(store.for_origin("team-1", "https://victim.test").await.unwrap().is_none());
     assert_eq!(ctrl.pending().await.unwrap().origin, "https://attacker.test");
     let evals: Vec<Value> = recorded.lock().await.iter().filter(|(m, _)| m == "Runtime.evaluate").map(|(_, p)| p.clone()).collect();
     assert!(evals.iter().all(|p| p["contextId"] == 77), "{evals:?}");

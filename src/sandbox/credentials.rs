@@ -2,12 +2,13 @@
 //! each file AES-256-GCM encrypted with the key in `<data_dir>/kwnt-vault.key` (both owner-only,
 //! 0600 files in 0700 folders). An owner is the team, channel or bot whose browser uses them.
 //!
-//! [`CredentialStore`] is the seam for an external password manager (Proton Pass, Bitwarden,
-//! 1Password CLI) later; [`EncryptedFileStore`] is the built-in one.
+//! [`CredentialStore`] is the seam for where passwords live: [`EncryptedFileStore`] is the
+//! built-in one, [`super::bitwarden::BitwardenStore`] the person's Bitwarden vault, and
+//! [`super::vault::PasswordVault`] picks between them.
 //!
 //! A bot running as the same OS user could still read both files with approvals off; kwnt
 //! refuses tool calls that name them ([`mentions_kwnt_secrets`]), which raises the bar but is
-//! not a wall. Only another OS user (or a container) is.
+//! not a wall. Bitwarden is: its keys only ever live in kwnt's memory.
 
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
@@ -27,6 +28,10 @@ pub enum StoreError {
     Crypto,
     #[error("invalid origin: {0}")]
     Origin(String),
+    #[error("the password vault is locked")]
+    Locked,
+    #[error("the password manager failed: {0}")]
+    Remote(String),
 }
 
 /// What the app may see about a saved password: never the password itself.
@@ -58,14 +63,15 @@ impl std::fmt::Debug for Credential {
 }
 
 /// Where saved passwords live. Every call names its owner (team, channel or bot id).
+#[async_trait::async_trait]
 pub trait CredentialStore: Send + Sync {
-    fn list(&self, owner: &str) -> Result<Vec<CredentialMeta>, StoreError>;
-    fn get(&self, owner: &str, id: &str) -> Result<Option<Credential>, StoreError>;
+    async fn list(&self, owner: &str) -> Result<Vec<CredentialMeta>, StoreError>;
+    async fn get(&self, owner: &str, id: &str) -> Result<Option<Credential>, StoreError>;
     /// The credential to fill on a page whose origin is exactly `origin`.
-    fn for_origin(&self, owner: &str, origin: &str) -> Result<Option<Credential>, StoreError>;
+    async fn for_origin(&self, owner: &str, origin: &str) -> Result<Option<Credential>, StoreError>;
     /// Adds a credential, or replaces the password of the same origin + username.
-    fn save(&self, owner: &str, origin: &str, username: &str, password: &str) -> Result<CredentialMeta, StoreError>;
-    fn delete(&self, owner: &str, id: &str) -> Result<bool, StoreError>;
+    async fn save(&self, owner: &str, origin: &str, username: &str, password: &str) -> Result<CredentialMeta, StoreError>;
+    async fn delete(&self, owner: &str, id: &str) -> Result<bool, StoreError>;
 }
 
 /// `scheme://host[:port]` of an http(s) URL, or of a bare host (taken as https).
@@ -126,19 +132,19 @@ impl std::fmt::Debug for EncryptedFileStore {
 }
 
 #[cfg(unix)]
-fn private_dir(path: &Path) -> std::io::Result<()> {
+pub(crate) fn private_dir(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
 }
 
 #[cfg(not(unix))]
-fn private_dir(path: &Path) -> std::io::Result<()> {
+pub(crate) fn private_dir(path: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(path)
 }
 
 /// Writes `bytes` to `path` as a new 0600 file, via a temp file and a rename.
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
     let mut opts = std::fs::OpenOptions::new();
@@ -252,24 +258,25 @@ impl EncryptedFileStore {
     }
 }
 
+#[async_trait::async_trait]
 impl CredentialStore for EncryptedFileStore {
-    fn list(&self, owner: &str) -> Result<Vec<CredentialMeta>, StoreError> {
+    async fn list(&self, owner: &str) -> Result<Vec<CredentialMeta>, StoreError> {
         let _g = self.guard();
         Ok(self.read(owner)?.into_iter().map(|c| c.meta).collect())
     }
 
-    fn get(&self, owner: &str, id: &str) -> Result<Option<Credential>, StoreError> {
+    async fn get(&self, owner: &str, id: &str) -> Result<Option<Credential>, StoreError> {
         let _g = self.guard();
         Ok(self.read(owner)?.into_iter().find(|c| c.meta.id == id))
     }
 
-    fn for_origin(&self, owner: &str, origin: &str) -> Result<Option<Credential>, StoreError> {
+    async fn for_origin(&self, owner: &str, origin: &str) -> Result<Option<Credential>, StoreError> {
         let Ok(origin) = normalize_origin(origin) else { return Ok(None) };
         let _g = self.guard();
         Ok(self.read(owner)?.into_iter().find(|c| c.meta.origin == origin))
     }
 
-    fn save(&self, owner: &str, origin: &str, username: &str, password: &str) -> Result<CredentialMeta, StoreError> {
+    async fn save(&self, owner: &str, origin: &str, username: &str, password: &str) -> Result<CredentialMeta, StoreError> {
         let origin = normalize_origin(origin)?;
         let _g = self.guard();
         let mut creds = self.read(owner)?;
@@ -296,7 +303,7 @@ impl CredentialStore for EncryptedFileStore {
         Ok(meta)
     }
 
-    fn delete(&self, owner: &str, id: &str) -> Result<bool, StoreError> {
+    async fn delete(&self, owner: &str, id: &str) -> Result<bool, StoreError> {
         let _g = self.guard();
         let mut creds = self.read(owner)?;
         let before = creds.len();
@@ -314,20 +321,21 @@ impl CredentialStore for EncryptedFileStore {
 #[derive(Debug)]
 pub struct UnavailableStore;
 
+#[async_trait::async_trait]
 impl CredentialStore for UnavailableStore {
-    fn list(&self, _: &str) -> Result<Vec<CredentialMeta>, StoreError> {
+    async fn list(&self, _: &str) -> Result<Vec<CredentialMeta>, StoreError> {
         Err(StoreError::Crypto)
     }
-    fn get(&self, _: &str, _: &str) -> Result<Option<Credential>, StoreError> {
+    async fn get(&self, _: &str, _: &str) -> Result<Option<Credential>, StoreError> {
         Err(StoreError::Crypto)
     }
-    fn for_origin(&self, _: &str, _: &str) -> Result<Option<Credential>, StoreError> {
+    async fn for_origin(&self, _: &str, _: &str) -> Result<Option<Credential>, StoreError> {
         Err(StoreError::Crypto)
     }
-    fn save(&self, _: &str, _: &str, _: &str, _: &str) -> Result<CredentialMeta, StoreError> {
+    async fn save(&self, _: &str, _: &str, _: &str, _: &str) -> Result<CredentialMeta, StoreError> {
         Err(StoreError::Crypto)
     }
-    fn delete(&self, _: &str, _: &str) -> Result<bool, StoreError> {
+    async fn delete(&self, _: &str, _: &str) -> Result<bool, StoreError> {
         Err(StoreError::Crypto)
     }
 }
@@ -358,7 +366,7 @@ struct LegacyCredential {
 
 /// Moves `<folder>/.saved_passwords.json` into the store for each of `owners`, then deletes the
 /// file. Returns how many credentials were moved. A file that can't be parsed is left in place.
-pub fn migrate_legacy(store: &dyn CredentialStore, folder: &Path, owners: &[&str]) -> Result<usize, StoreError> {
+pub async fn migrate_legacy(store: &dyn CredentialStore, folder: &Path, owners: &[&str]) -> Result<usize, StoreError> {
     let file = folder.join(LEGACY_FILE);
     let content = match std::fs::read_to_string(&file) {
         Ok(c) => c,
@@ -377,7 +385,7 @@ pub fn migrate_legacy(store: &dyn CredentialStore, folder: &Path, owners: &[&str
         let source = if c.origin.is_empty() { c.domain.as_str() } else { c.origin.as_str() };
         let Ok(origin) = normalize_origin(source) else { continue };
         for owner in owners {
-            store.save(owner, &origin, &c.username, &c.password)?;
+            store.save(owner, &origin, &c.username, &c.password).await?;
         }
         moved += 1;
     }
@@ -398,24 +406,24 @@ mod tests {
         assert!(normalize_origin("javascript:alert(1)").is_err());
     }
 
-    #[test]
-    fn encrypted_round_trip_and_private_files() {
+    #[tokio::test]
+    async fn encrypted_round_trip_and_private_files() {
         let dir = tempfile::tempdir().unwrap();
         let store = EncryptedFileStore::open(dir.path()).unwrap();
-        let meta = store.save("team-1", "https://example.com/login", "alice", "DUMMY-PW-1").unwrap();
+        let meta = store.save("team-1", "https://example.com/login", "alice", "DUMMY-PW-1").await.unwrap();
         assert_eq!(meta.origin, "https://example.com");
         let raw = std::fs::read(dir.path().join(VAULT_DIR).join("team-1.bin")).unwrap();
         assert!(!String::from_utf8_lossy(&raw).contains("DUMMY-PW-1"));
         assert!(!String::from_utf8_lossy(&raw).contains("alice"));
-        assert_eq!(store.get("team-1", &meta.id).unwrap().unwrap().password, "DUMMY-PW-1");
-        assert!(store.list("team-2").unwrap().is_empty());
-        assert!(!format!("{:?}", store.get("team-1", &meta.id).unwrap()).contains("DUMMY"));
+        assert_eq!(store.get("team-1", &meta.id).await.unwrap().unwrap().password, "DUMMY-PW-1");
+        assert!(store.list("team-2").await.unwrap().is_empty());
+        assert!(!format!("{:?}", store.get("team-1", &meta.id).await.unwrap()).contains("DUMMY"));
         // same origin + username replaces
-        store.save("team-1", "https://example.com", "alice", "DUMMY-PW-2").unwrap();
-        assert_eq!(store.list("team-1").unwrap().len(), 1);
+        store.save("team-1", "https://example.com", "alice", "DUMMY-PW-2").await.unwrap();
+        assert_eq!(store.list("team-1").await.unwrap().len(), 1);
         // reopen with the same key
         let again = EncryptedFileStore::open(dir.path()).unwrap();
-        assert_eq!(again.get("team-1", &meta.id).unwrap().unwrap().password, "DUMMY-PW-2");
+        assert_eq!(again.get("team-1", &meta.id).await.unwrap().unwrap().password, "DUMMY-PW-2");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -424,18 +432,18 @@ mod tests {
             assert_eq!(mode(dir.path().join(VAULT_DIR)), 0o700);
             assert_eq!(mode(dir.path().join(VAULT_DIR).join("team-1.bin")), 0o600);
         }
-        assert!(store.delete("team-1", &meta.id).unwrap());
+        assert!(store.delete("team-1", &meta.id).await.unwrap());
         assert!(!dir.path().join(VAULT_DIR).join("team-1.bin").exists());
     }
 
-    #[test]
-    fn a_file_moved_to_another_owner_does_not_open() {
+    #[tokio::test]
+    async fn a_file_moved_to_another_owner_does_not_open() {
         let dir = tempfile::tempdir().unwrap();
         let store = EncryptedFileStore::open(dir.path()).unwrap();
-        store.save("a", "https://example.com", "u", "DUMMY").unwrap();
+        store.save("a", "https://example.com", "u", "DUMMY").await.unwrap();
         let v = dir.path().join(VAULT_DIR);
         std::fs::copy(v.join("a.bin"), v.join("b.bin")).unwrap();
-        assert!(matches!(store.list("b"), Err(StoreError::Crypto)));
+        assert!(matches!(store.list("b").await, Err(StoreError::Crypto)));
     }
 
     #[test]

@@ -183,7 +183,7 @@ fn exempt(path: &str) -> bool {
         || path == "/api/mcp/self"
 }
 
-/// Routes only the person may call: saved passwords, answering an approval card, and the
+/// Routes only the person may call: saved passwords and the password vault (Bitwarden), answering an approval card, and the
 /// approvals switch. They need the token from this machine too, because a bot's shell runs on
 /// this machine and would otherwise reach them with a bare `curl`. Turn tokens are refused by the
 /// handlers themselves (403).
@@ -191,6 +191,7 @@ pub fn person_only(method: &Method, path: &str) -> bool {
     let segs: Vec<&str> = path.trim_end_matches('/').split('/').collect();
     match segs.as_slice() {
         ["", "api", "sandbox", _, "passwords", ..] => true,
+        ["", "api", "passwords", ..] => true,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
         _ => false,
@@ -481,6 +482,10 @@ mod tests {
         assert!(person_only(&get, "/api/sandbox/t1/passwords"));
         assert!(person_only(&post, "/api/sandbox/t1/passwords/c1/reveal"));
         assert!(person_only(&del, "/api/sandbox/t1/passwords/c1"));
+        assert!(person_only(&get, "/api/passwords/store"));
+        assert!(person_only(&post, "/api/passwords/bitwarden/unlock"));
+        assert!(person_only(&del, "/api/passwords/bitwarden"));
+        assert!(person_only(&post, "/api/passwords/migrate"));
         assert!(person_only(&post, "/api/approvals/a1/resolve"));
         assert!(person_only(&put, "/api/spaces/s1/approvals"));
         assert!(person_only(&put, "/api/kwants/k1/approvals"));

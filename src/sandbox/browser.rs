@@ -457,7 +457,7 @@ impl BrowserController {
             .await?;
         let Some(context) = world["executionContextId"].as_i64() else { return Ok(()) };
         *self.capture_world.lock().await = Some(context);
-        let fill = match vault.store.for_origin(&vault.owner, &origin) {
+        let fill = match vault.store.for_origin(&vault.owner, &origin).await {
             Ok(Some(c)) => json!({"origin": origin, "username": c.meta.username, "password": c.password}),
             _ => Value::Null,
         };
@@ -498,7 +498,7 @@ impl BrowserController {
             return None;
         }
         if let Some(vault) = self.vault().await {
-            if let Ok(Some(saved)) = vault.store.for_origin(&vault.owner, &origin) {
+            if let Ok(Some(saved)) = vault.store.for_origin(&vault.owner, &origin).await {
                 if saved.meta.username == username && saved.password == password {
                     return None;
                 }
