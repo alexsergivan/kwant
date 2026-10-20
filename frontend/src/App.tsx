@@ -1153,6 +1153,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         dropApproval(ticketId);
         if (!res.ok) pushToast('This request expired', 'The bot is no longer waiting for this answer.');
         refreshAwayCount(300);
+      } else if (res.status === 401) {
+        // Person-only: the token dialog is open; the card stays so the person can answer again.
+        pushToast('Enter your access token', 'Answering approval cards needs your token. Then answer the card again.');
       } else {
         pushToast("Couldn't send your answer", `Request failed (HTTP ${res.status}). Try again.`);
       }
@@ -2599,6 +2602,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             setNewAgentTeam(null);
           }}
           joinTeamName={newAgentTeam?.name}
+          approvalsOff={space.approvals === 'off'}
           takenNames={kwants.map((k) => k.name)}
           profiles={profiles}
           onManageProfiles={openSettings}
@@ -2628,6 +2632,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
           onRequestDelete={editingKwant ? () => setDeletingKwant(editingKwant) : undefined}
           onApprovalsChanged={refreshRoster}
+          approvalsOff={approvalsOff(editingKwant)}
         />
 
         {deletingKwant && (

@@ -72,6 +72,8 @@ interface NewAgentModalProps {
   onRequestDelete?: () => void;
   /** Editing only: the approvals override saved; load bots again for the markers. */
   onApprovalsChanged?: () => void;
+  /** Whether this bot runs tools without asking: the bot's effective value, or the space's for a new bot. */
+  approvalsOff?: boolean;
 }
 
 export const NewAgentModal: React.FC<NewAgentModalProps> = ({
@@ -94,6 +96,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   pendingSkills = 0,
   onRequestDelete,
   onApprovalsChanged,
+  approvalsOff = false,
 }) => {
   const [tab, setTab] = useState<EditTab>('profile');
   const [name, setName] = useState('');
@@ -109,6 +112,9 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [mcpIds, setMcpIds] = useState<string[] | undefined>(undefined);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [failover, setFailover] = useState(true);
+  // Follows the prop until the person changes this bot's approvals here.
+  const [toolsRunFree, setToolsRunFree] = useState(approvalsOff);
+  useEffect(() => setToolsRunFree(approvalsOff), [approvalsOff, isOpen]);
   const isEdit = !!initial;
   const engines = useEngines(isOpen);
   const { reload: reloadEngines } = engines;
@@ -431,10 +437,19 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
             </div>
           )}
 
-          {isEdit && kwantId && <BotApprovalsSetting kwantId={kwantId} kwantName={initial?.name ?? name} onChanged={() => onApprovalsChanged?.()} />}
+          {isEdit && kwantId && (
+            <BotApprovalsSetting
+              kwantId={kwantId}
+              kwantName={initial?.name ?? name}
+              onChanged={(s) => {
+                setToolsRunFree(s.approvals_effective === 'off');
+                onApprovalsChanged?.();
+              }}
+            />
+          )}
 
           {mcpIds !== undefined && (
-            <KwantToolsPicker model={model} selected={mcpIds} onChange={setMcpIds} onManageServers={onManageServers} />
+            <KwantToolsPicker model={model} selected={mcpIds} onChange={setMcpIds} onManageServers={onManageServers} approvalsOff={toolsRunFree} />
           )}
 
           <div>

@@ -8,6 +8,8 @@ interface KwantToolsPickerProps {
   selected: string[];
   onChange: (ids: string[]) => void;
   onManageServers?: () => void;
+  /** The bot's approvals are off: its tools run without a card. */
+  approvalsOff?: boolean;
 }
 
 /**
@@ -15,7 +17,7 @@ interface KwantToolsPickerProps {
  * kwant unless switched off here. A server paused in Tools shows greyed and keeps this kwant's
  * choice, so turning it back on there restores it.
  */
-export const KwantToolsPicker: React.FC<KwantToolsPickerProps> = ({ model, selected, onChange, onManageServers }) => {
+export const KwantToolsPicker: React.FC<KwantToolsPickerProps> = ({ model, selected, onChange, onManageServers, approvalsOff = false }) => {
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [keys, setKeys] = useState<EngineKeys>({ anthropic: false, openai: false, xai: false });
 
@@ -47,7 +49,10 @@ export const KwantToolsPicker: React.FC<KwantToolsPickerProps> = ({ model, selec
     <div>
       <div className="flex items-center justify-between mb-1">
         <label className="text-xs font-medium text-zinc-400">
-          Tools this bot can use <span className="text-zinc-600 font-normal">· asks you before each use</span>
+          Tools this bot can use{' '}
+          <span className={`font-normal ${approvalsOff ? 'text-amber-300/90' : 'text-zinc-600'}`}>
+            {approvalsOff ? '· runs them without asking (approvals off)' : '· asks you before each use'}
+          </span>
         </label>
         {onManageServers && servers && servers.length > 0 && (
           <button type="button" onClick={onManageServers} className="text-[11px] text-sky-300 hover:text-sky-200">

@@ -4,10 +4,28 @@ import { getCurrentSpace, withSpace } from './spaces';
 
 /** Fired on `window` when an `/api` call answers 401 (the token is missing or no longer valid). */
 export const UNAUTHORIZED_EVENT = 'kwnt:unauthorized';
+/** Fired when a person-only route (saved passwords, answering approvals, the approvals switch)
+ * answers 401 `{person_only:true}`: the rest of the app works, only this action needs the token. */
+export const PERSON_TOKEN_EVENT = 'kwnt:person-token';
+/** Fired after the person signed in from that prompt, so open panels can load again. */
+export const PERSON_SIGNED_IN_EVENT = 'kwnt:person-signed-in';
 
 export interface AuthStatus {
   auth_required: boolean;
   authenticated: boolean;
+  /** Person-only actions need the token even where the rest of the API doesn't (newer servers). */
+  person_auth_required?: boolean;
+  person_authenticated?: boolean;
+}
+
+/** Asks for the token for a person-only action, as if one had answered 401. */
+export function requestPersonToken(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(PERSON_TOKEN_EVENT));
+}
+
+/** Whether a 401 body is the person-only answer, not "the whole API needs the token". */
+export function isPersonOnlyBody(body: unknown): boolean {
+  return !!body && typeof body === 'object' && (body as { person_only?: unknown }).person_only === true;
 }
 
 /** Splits `#kwnt_token=<t>` off a location hash, keeping any other fragment parameters. */
@@ -44,9 +62,13 @@ export function installUnauthorizedListener(): void {
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (typeof input === 'string') input = withSpace(input, window.location.origin, getCurrentSpace());
     const res = await original(input, init);
-    if (res.status === 401) {
+    // `kwntQuiet`: a background load that shows its own "needs the token" state instead.
+    if (res.status === 401 && !(init as { kwntQuiet?: boolean } | undefined)?.kwntQuiet) {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-      if (isGuardedApiUrl(url, window.location.origin)) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+      if (isGuardedApiUrl(url, window.location.origin)) {
+        const body = await res.clone().json().catch(() => null);
+        window.dispatchEvent(new Event(isPersonOnlyBody(body) ? PERSON_TOKEN_EVENT : UNAUTHORIZED_EVENT));
+      }
     }
     return res;
   };
