@@ -81,9 +81,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     // Before logging starts: stdout carries the MCP protocol
     if matches!(cli.command, Some(Commands::McpEchoServer)) {
+        // A test helper that holds nothing: left dumpable so tests can find it by its environment
         kwnt::mcp::echo_server::run_stdio().await?;
         return Ok(());
     }
+    kwnt::harden_process();
     tracing_subscriber::fmt::init();
     if let Some(Commands::McpOauthMockServer { host, port, expires_in }) = &cli.command {
         let listener = tokio::net::TcpListener::bind((host.as_str(), *port)).await?;

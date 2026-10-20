@@ -77,7 +77,7 @@ pub struct AppState {
     /// The MCP Registry agents search and suggest servers from (`KWNT_MCP_REGISTRY_URL`).
     pub mcp_registry: Arc<crate::mcp::registry::McpRegistry>,
     /// Saved website passwords, outside every bot's folder (see `sandbox::credentials`).
-    pub credentials: Arc<dyn crate::sandbox::CredentialStore>,
+    pub credentials: Arc<crate::sandbox::vault::PasswordVault>,
 }
 
 impl AppState {
@@ -117,7 +117,7 @@ impl AppState {
             questions: Default::default(),
             claude_login: Default::default(),
             mcp_registry: Arc::new(crate::mcp::registry::McpRegistry::from_env()),
-            credentials: crate::sandbox::credentials::open_store(&config_data_dir),
+            credentials: Arc::new(crate::sandbox::vault::PasswordVault::open(&config_data_dir)),
         }
     }
 
@@ -198,6 +198,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sandbox/:team_id/passwords/pending", post(passwords::save_pending).delete(passwords::discard_pending))
         .route("/api/sandbox/:team_id/passwords/:id", delete(passwords::remove))
         .route("/api/sandbox/:team_id/passwords/:id/reveal", post(passwords::reveal))
+        .route("/api/passwords/store", get(passwords::store_status))
+        .route("/api/passwords/bitwarden", delete(passwords::forget_bitwarden))
+        .route("/api/passwords/bitwarden/unlock", post(passwords::unlock_bitwarden))
+        .route("/api/passwords/bitwarden/lock", post(passwords::lock_bitwarden))
+        .route("/api/passwords/migrate", post(passwords::migrate_to_bitwarden))
         .route("/api/mcp/servers", get(mcp_routes::list_servers).post(mcp_routes::create_server))
         .route(
             "/api/mcp/servers/:id",

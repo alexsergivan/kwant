@@ -5,15 +5,35 @@
 //!   created_at, last_used}], pending: null | {origin, username, captured_at}}`. No passwords.
 //! - `POST   /api/sandbox/:id/passwords {origin | domain, username, password}` → `{status:
 //!   "saved", credential: {…metadata}}`. The password is not echoed.
-//! - `POST   /api/sandbox/:id/passwords/:cid/reveal` → `{password}` (no-store).
+//! - `POST   /api/sandbox/:id/passwords/:cid/reveal` → `{password}` (no-store). With Bitwarden
+//!   the body must be `{master_password}`: the API token sits in kwnt's data folder, where a bot
+//!   with approvals off can read it, so it alone never shows a password. Wrong → 401
+//!   `{wrong_password: true}`; after 5 in a row the vault locks.
 //! - `DELETE /api/sandbox/:id/passwords/:cid` → `{status: "deleted" | "not_found"}`.
 //! - `POST   /api/sandbox/:id/passwords/pending` → saves the captured password the browser holds
 //!   for confirmation → `{status: "saved", credential}`; 404 when there is none.
 //! - `DELETE /api/sandbox/:id/passwords/pending` → `{status: "discarded"}`.
+//!
+//! The vault (all owners):
+//! - `GET    /api/passwords/store` → [`store_json`].
+//! - `POST   /api/passwords/bitwarden/unlock {server_url?, email?, master_password, client_id?,
+//!   client_secret?, two_factor_provider?, two_factor_token?, new_device_otp?}` → the store
+//!   status. The first unlock sets Bitwarden up and makes it the store. 401 `{error, needs:
+//!   "two_factor", providers}` / `{needs: "new_device_otp"}` / `{wrong_password: true}`; 409
+//!   another account is set up; 400 bad input; 502 Bitwarden unreachable or refusing.
+//! - `POST   /api/passwords/bitwarden/lock` → the store status (locked).
+//! - `DELETE /api/passwords/bitwarden {master_password}` → back to the built-in store; needs the
+//!   vault unlocked. Items stay in the person's Bitwarden.
+//! - `POST   /api/passwords/migrate` → `{moved, failed}`: every built-in saved password moves
+//!   into the unlocked Bitwarden vault, then is deleted locally.
+//!
+//! While Bitwarden is locked, the per-owner routes answer 423 `{error, locked: true}` and the
+//! browser fills nothing.
 
 use super::AppState;
 use crate::db::spaces::SpaceId;
-use crate::sandbox::credentials::{migrate_legacy, normalize_origin, CredentialMeta, StoreError};
+use crate::sandbox::bitwarden::{UnlockError, UnlockRequest};
+use crate::sandbox::credentials::{migrate_legacy, normalize_origin, CredentialMeta, CredentialStore, StoreError};
 use axum::{
     extract::{Path, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
@@ -30,8 +50,21 @@ fn error(status: StatusCode, message: &str) -> Response {
 }
 
 fn unavailable(e: StoreError) -> Response {
-    tracing::warn!(error = %e, "saved-password store failed");
-    error(StatusCode::SERVICE_UNAVAILABLE, "saved passwords are unavailable right now")
+    match e {
+        StoreError::Locked => (
+            StatusCode::LOCKED,
+            Json(json!({"error": "the password vault is locked: unlock Bitwarden first", "locked": true})),
+        )
+            .into_response(),
+        StoreError::Remote(m) => {
+            tracing::warn!(error = %m, "Bitwarden failed");
+            error(StatusCode::BAD_GATEWAY, "Bitwarden could not be reached or refused the change")
+        }
+        e => {
+            tracing::warn!(error = %e, "saved-password store failed");
+            error(StatusCode::SERVICE_UNAVAILABLE, "saved passwords are unavailable right now")
+        }
+    }
 }
 
 /// The team, channel or bot an id names, with its space. Ids only: names don't resolve here.
@@ -63,7 +96,7 @@ async fn owner_or_404(state: &AppState, headers: &HeaderMap, id: &str) -> Result
 /// Moves a legacy `.saved_passwords.json` from the owner's old browser folder into the store.
 async fn migrate_owner(state: &AppState, owner: &str) {
     if let Some((_, folder)) = super::routes::resolve_sandbox_target_info(state, owner).await {
-        match migrate_legacy(state.credentials.as_ref(), &folder, &[owner]) {
+        match migrate_legacy(state.credentials.as_ref(), &folder, &[owner]).await {
             Ok(0) => {}
             Ok(n) => tracing::info!(moved = n, "moved saved passwords out of a bot folder into the vault"),
             Err(e) => tracing::warn!(error = %e, "could not move a saved-passwords file into the vault"),
@@ -74,14 +107,7 @@ async fn migrate_owner(state: &AppState, owner: &str) {
 /// On start: every legacy `.saved_passwords.json` under a team's, channel's or bot's browser
 /// folder moves into the vault (for every owner that shared the folder) and is deleted.
 pub async fn migrate_all(state: &AppState) {
-    let Ok(spaces) = state.db.list_spaces().await else { return };
-    let mut owners: Vec<String> = Vec::new();
-    for space in spaces {
-        let space = SpaceId::new(&space.id);
-        owners.extend(state.db.list_teams(&space).await.unwrap_or_default().into_iter().map(|t| t.id));
-        owners.extend(state.db.list_channels(&space).await.unwrap_or_default().into_iter().map(|c| c.id));
-        owners.extend(state.db.list_kwants(&space).await.unwrap_or_default().into_iter().map(|k| k.id));
-    }
+    let owners = all_owners(state).await;
     let mut by_folder: std::collections::BTreeMap<std::path::PathBuf, Vec<String>> = Default::default();
     for owner in owners {
         if let Some((_, folder)) = super::routes::resolve_sandbox_target_info(state, &owner).await {
@@ -90,12 +116,25 @@ pub async fn migrate_all(state: &AppState) {
     }
     for (folder, owners) in by_folder {
         let refs: Vec<&str> = owners.iter().map(String::as_str).collect();
-        match migrate_legacy(state.credentials.as_ref(), &folder, &refs) {
+        match migrate_legacy(state.credentials.as_ref(), &folder, &refs).await {
             Ok(0) => {}
             Ok(n) => tracing::info!(moved = n, folder = %folder.display(), "moved saved passwords into the vault"),
             Err(e) => tracing::warn!(error = %e, folder = %folder.display(), "could not move saved passwords into the vault"),
         }
     }
+}
+
+/// Every team, channel and bot id: the owners saved passwords can belong to.
+async fn all_owners(state: &AppState) -> Vec<String> {
+    let Ok(spaces) = state.db.list_spaces().await else { return Vec::new() };
+    let mut owners: Vec<String> = Vec::new();
+    for space in spaces {
+        let space = SpaceId::new(&space.id);
+        owners.extend(state.db.list_teams(&space).await.unwrap_or_default().into_iter().map(|t| t.id));
+        owners.extend(state.db.list_channels(&space).await.unwrap_or_default().into_iter().map(|c| c.id));
+        owners.extend(state.db.list_kwants(&space).await.unwrap_or_default().into_iter().map(|k| k.id));
+    }
+    owners
 }
 
 fn meta_json(m: &CredentialMeta) -> Value {
@@ -121,7 +160,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap, Path(id): P
         Ok(o) => o,
         Err(r) => return r,
     };
-    let list = match state.credentials.list(&owner) {
+    let list = match state.credentials.list(&owner).await {
         Ok(l) => l,
         Err(e) => return unavailable(e),
     };
@@ -161,18 +200,62 @@ pub async fn save(
     let Ok(origin) = normalize_origin(&source) else {
         return error(StatusCode::BAD_REQUEST, "origin must be an http(s) address like https://example.com");
     };
-    match state.credentials.save(&owner, &origin, body.username.trim(), &body.password) {
+    match state.credentials.save(&owner, &origin, body.username.trim(), &body.password).await {
         Ok(meta) => Json(json!({"status": "saved", "credential": meta_json(&meta)})).into_response(),
         Err(e) => unavailable(e),
     }
 }
 
-pub async fn reveal(State(state): State<AppState>, headers: HeaderMap, Path((id, cid)): Path<(String, String)>) -> Response {
+#[derive(Deserialize, Default)]
+pub struct MasterPassword {
+    #[serde(default)]
+    pub master_password: String,
+}
+
+impl Drop for MasterPassword {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.master_password);
+    }
+}
+
+fn master_password_of(body: &[u8]) -> MasterPassword {
+    serde_json::from_slice(body).unwrap_or_default()
+}
+
+/// With Bitwarden, the master password the person typed must match before a password is shown
+/// or the account is forgotten. `Err` is the response to send.
+#[allow(clippy::result_large_err)]
+async fn check_master_password(state: &AppState, given: &MasterPassword) -> Result<(), Response> {
+    let bw = state.credentials.bitwarden();
+    if given.master_password.is_empty() {
+        return Err(error(StatusCode::UNAUTHORIZED, "type the Bitwarden master password"));
+    }
+    match bw.verify_master_password(&given.master_password).await {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            tracing::warn!("a wrong Bitwarden master password was given");
+            Err((StatusCode::UNAUTHORIZED, Json(json!({"error": "wrong master password", "wrong_password": true}))).into_response())
+        }
+        Err(e) => Err(unavailable(e)),
+    }
+}
+
+pub async fn reveal(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, cid)): Path<(String, String)>,
+    body: axum::body::Bytes,
+) -> Response {
     let owner = match owner_or_404(&state, &headers, &id).await {
         Ok(o) => o,
         Err(r) => return r,
     };
-    match state.credentials.get(&owner, &cid) {
+    if state.credentials.store_name() == "bitwarden" {
+        if let Err(r) = check_master_password(&state, &master_password_of(&body)).await {
+            return r;
+        }
+    }
+    match state.credentials.get(&owner, &cid).await {
         Ok(Some(c)) => {
             tracing::info!(owner = %owner, credential = %cid, "the person revealed a saved password");
             let mut resp = Json(json!({"password": c.password})).into_response();
@@ -189,7 +272,7 @@ pub async fn remove(State(state): State<AppState>, headers: HeaderMap, Path((id,
         Ok(o) => o,
         Err(r) => return r,
     };
-    match state.credentials.delete(&owner, &cid) {
+    match state.credentials.delete(&owner, &cid).await {
         Ok(removed) => Json(json!({"status": if removed { "deleted" } else { "not_found" }})).into_response(),
         Err(e) => unavailable(e),
     }
@@ -206,9 +289,13 @@ pub async fn save_pending(State(state): State<AppState>, headers: HeaderMap, Pat
     let Some(p) = ctrl.take_pending().await else {
         return error(StatusCode::NOT_FOUND, "no password is waiting to be saved");
     };
-    match state.credentials.save(&owner, &p.origin, &p.username, &p.password) {
+    match state.credentials.save(&owner, &p.origin, &p.username, &p.password).await {
         Ok(meta) => Json(json!({"status": "saved", "credential": meta_json(&meta)})).into_response(),
-        Err(e) => unavailable(e),
+        Err(e) => {
+            // Locked or offline: keep it waiting so the person can save it after unlocking
+            ctrl.hold_for_confirmation(p).await;
+            unavailable(e)
+        }
     }
 }
 
@@ -221,4 +308,98 @@ pub async fn discard_pending(State(state): State<AppState>, headers: HeaderMap, 
         ctrl.take_pending().await;
     }
     Json(json!({"status": "discarded"})).into_response()
+}
+
+/// `{store: "local" | "bitwarden", locked, bitwarden: null | {server_url, email, login:
+/// "password" | "api_key", client_id, unlocked, unlocked_at, item_count, last_sync},
+/// local_count}`. `local_count` is how many passwords the built-in store still holds (what
+/// `migrate` would move).
+async fn store_json(state: &AppState) -> Value {
+    let vault = &state.credentials;
+    let owners = all_owners(state).await;
+    json!({
+        "store": vault.store_name(),
+        "locked": vault.is_locked().await,
+        "bitwarden": vault.bitwarden().status().await,
+        "local_count": vault.local_count(&owners).await,
+    })
+}
+
+#[allow(clippy::result_large_err)]
+async fn person(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
+    super::mcp_suggest::refuse_agent_tokens(state, headers, REFUSAL).await
+}
+
+pub async fn store_status(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(r) = person(&state, &headers).await {
+        return r;
+    }
+    Json(store_json(&state).await).into_response()
+}
+
+pub async fn unlock_bitwarden(State(state): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if let Err(r) = person(&state, &headers).await {
+        return r;
+    }
+    let Ok(req) = serde_json::from_slice::<UnlockRequest>(&body) else {
+        return error(StatusCode::BAD_REQUEST, "send {master_password} (and server_url and email the first time)");
+    };
+    drop(body);
+    match state.credentials.bitwarden().unlock(req).await {
+        Ok(_) => Json(store_json(&state).await).into_response(),
+        Err(e) => {
+            let message = e.to_string();
+            let (status, extra) = match e {
+                UnlockError::Wrong => (StatusCode::UNAUTHORIZED, json!({"wrong_password": true})),
+                UnlockError::TwoFactor(providers) => (StatusCode::UNAUTHORIZED, json!({"needs": "two_factor", "providers": providers})),
+                UnlockError::NewDeviceOtp => (StatusCode::UNAUTHORIZED, json!({"needs": "new_device_otp"})),
+                UnlockError::OtherAccount => (StatusCode::CONFLICT, json!({})),
+                UnlockError::Invalid(_) | UnlockError::Unsupported(_) => (StatusCode::BAD_REQUEST, json!({})),
+                UnlockError::Unreachable(_) | UnlockError::Server(_) => (StatusCode::BAD_GATEWAY, json!({})),
+            };
+            tracing::warn!(error = %message, "Bitwarden unlock failed");
+            let mut body = extra;
+            body["error"] = json!(message);
+            (status, Json(body)).into_response()
+        }
+    }
+}
+
+pub async fn lock_bitwarden(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(r) = person(&state, &headers).await {
+        return r;
+    }
+    state.credentials.bitwarden().lock().await;
+    tracing::info!("the person locked Bitwarden");
+    Json(store_json(&state).await).into_response()
+}
+
+pub async fn forget_bitwarden(State(state): State<AppState>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    if let Err(r) = person(&state, &headers).await {
+        return r;
+    }
+    if !state.credentials.bitwarden().is_configured() {
+        return Json(store_json(&state).await).into_response();
+    }
+    if let Err(r) = check_master_password(&state, &master_password_of(&body)).await {
+        return r;
+    }
+    if let Err(e) = state.credentials.bitwarden().forget().await {
+        return unavailable(e);
+    }
+    Json(store_json(&state).await).into_response()
+}
+
+pub async fn migrate_to_bitwarden(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(r) = person(&state, &headers).await {
+        return r;
+    }
+    let owners = all_owners(&state).await;
+    match state.credentials.move_local_to_bitwarden(&owners).await {
+        Ok(done) => {
+            tracing::info!(moved = done.moved, failed = done.failed, "the person moved saved passwords to Bitwarden");
+            Json(json!(done)).into_response()
+        }
+        Err(e) => unavailable(e),
+    }
 }
