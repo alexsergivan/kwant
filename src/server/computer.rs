@@ -176,6 +176,19 @@ pub async fn approve_local_shell(
         "arguments": {"command": command, "cwd": cwd.to_string_lossy()},
         "kwant_id": target_id,
     });
+    if crate::sandbox::credentials::call_touches_kwnt_secrets(&details["arguments"], Some(cwd)) {
+        tracing::warn!(target = %target_id, "refused a shell command that names kwnt's secret files");
+        let record = NewApproval {
+            turn_id: String::new(),
+            kwant_id: target_id.to_string(),
+            tool_name: "execute_shell".into(),
+            parameters: details,
+        };
+        if let Err(e) = state.db.save_refused(&record).await {
+            tracing::warn!(error = %e, "could not record a refused command");
+        }
+        return false;
+    }
     if local_shell_approvals_off(state, target_id).await {
         let record = NewApproval {
             turn_id: String::new(),

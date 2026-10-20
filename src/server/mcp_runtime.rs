@@ -153,9 +153,6 @@ impl ToolApprover for BrokerApprover {
         // Approvals the person switched off: run, and keep a record of what ran. A setting that
         // can't be read asks, as before.
         let off = self.db.kwant_approvals(&req.kwant_id).await.is_ok_and(|m| m.is_off());
-        if !off && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
-            return true;
-        }
         let details = match &req.builtin {
             Some(b) => json!({
                 "source": "claude_builtin",
@@ -181,6 +178,19 @@ impl ToolApprover for BrokerApprover {
             tool_name: req.tool_name.clone(),
             parameters: details.clone(),
         };
+        // kwnt's own secrets (saved-password vault, its key, the API token) are never a bot's,
+        // approvals on or off. Best effort: a same-user process can still find them another way.
+        let cwd = req.builtin.as_ref().and_then(|b| b.cwd.as_deref()).map(std::path::Path::new);
+        if crate::sandbox::credentials::call_touches_kwnt_secrets(&req.arguments, cwd) {
+            tracing::warn!(kwant = %req.kwant_id, tool = %req.tool_name, "refused a tool call that names kwnt's secret files");
+            if let Err(e) = self.db.save_refused(&record).await {
+                tracing::warn!(error = %e, "could not record a refused call");
+            }
+            return false;
+        }
+        if !off && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
+            return true;
+        }
         if off {
             if let Err(e) = self.db.save_auto_allowed(&record).await {
                 tracing::warn!(error = %e, "could not record a call that ran with approvals off");

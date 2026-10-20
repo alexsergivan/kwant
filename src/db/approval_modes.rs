@@ -132,6 +132,20 @@ impl Database {
     }
 
     /// Records a call that ran without a card because approvals were off.
+    /// Records a call kwnt refused on its own (it named kwnt's secret files), as `denied`.
+    pub async fn save_refused(&self, input: &super::models::NewApproval) -> Result<String, DbError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO approvals (id, turn_id, kwant_id, tool_name, parameters, status) VALUES (?, ?, ?, ?, ?, 'denied')")
+            .bind(&id)
+            .bind(&input.turn_id)
+            .bind(&input.kwant_id)
+            .bind(&input.tool_name)
+            .bind(serde_json::to_string(&input.parameters)?)
+            .execute(&self.pool)
+            .await?;
+        Ok(id)
+    }
+
     pub async fn save_auto_allowed(&self, input: &super::models::NewApproval) -> Result<String, DbError> {
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
