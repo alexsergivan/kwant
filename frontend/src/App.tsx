@@ -72,6 +72,7 @@ import { Space, eventsUrl, pickInitialChat, spaceColor } from './spaces';
 import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
 import { claudeNeedsSignIn } from './claudeLogin';
+import { personFetch } from './auth';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -1889,34 +1890,30 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
 
+  // Throws when the team wasn't deleted, so the dialog stays open and says why.
   const handleDeleteTeam = async (id: string) => {
+    // Person-only: after "Confirm it's you" the delete goes through without pressing it again.
+    const res = await personFetch(`/api/teams/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 404) throw new Error(`Couldn’t delete the team (HTTP ${res.status}).`);
+    setTeams((prev) => prev.filter((t) => t.id !== id));
+    if (selectedTeamId === id) {
+      setSelectedTeamId(null);
+      if (channels.length > 0) {
+        setSelectedId(channels[0].id);
+        setIsChannel(true);
+      }
+    }
+    setEditingTeam(null);
+    playSfx('click');
+    // Refresh channels
     try {
-      const res = await fetch(`/api/teams/${id}`, {
-        method: 'DELETE',
-      });
-
-      if (res.ok) {
-        setTeams((prev) => prev.filter((t) => t.id !== id));
-        if (selectedTeamId === id) {
-          setSelectedTeamId(null);
-          if (channels.length > 0) {
-            setSelectedId(channels[0].id);
-            setIsChannel(true);
-          }
-        }
-
-        // Refresh channels
-        const cRes = await fetch('/api/channels');
-        if (cRes.ok) {
-          const freshChannels: Channel[] = await cRes.json();
-          setChannels(freshChannels);
-        }
-
-        setEditingTeam(null);
-        playSfx('click');
+      const cRes = await fetch('/api/channels');
+      if (cRes.ok) {
+        const freshChannels: Channel[] = await cRes.json();
+        setChannels(freshChannels);
       }
     } catch (err) {
-      console.error('Failed deleting team:', err);
+      console.error('Failed refreshing channels after deleting a team:', err);
     }
   };
 

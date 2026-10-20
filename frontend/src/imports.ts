@@ -1,6 +1,8 @@
 // Bring bots over from another app, and export them again (IMPORT-API.md). The export prompt
 // text lives only on the server (src/import/prompts.rs); this file never copies it.
 
+import { PersonCancelledError, personFetch } from './auth';
+
 export type ImportSourceId = 'grok' | 'chatgpt' | 'claude' | 'other';
 
 export interface ExportPrompt {
@@ -125,8 +127,9 @@ const enc = encodeURIComponent;
 async function call<T>(method: string, url: string, init: RequestInit = {}): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(url, { method, ...init });
-  } catch {
+    res = await personFetch(url, { method, ...init });
+  } catch (e) {
+    if (e instanceof PersonCancelledError) throw new ImportError(e.message, 'person_cancelled', 401);
     throw new ImportError('Couldn’t reach the server. Check your connection and try again.', 'network', 0);
   }
   if (!res.ok) {
@@ -187,6 +190,8 @@ export function importErrorText(err: unknown): { title: string; detail: string }
       return { title: 'That import is gone', detail: detail || 'It may have been in another space.' };
     case 'network':
       return { title: 'No connection', detail };
+    case 'person_cancelled':
+      return { title: 'Not undone', detail };
     default:
       return { title: 'Something went wrong', detail: 'The server couldn’t finish this. Try again in a moment.' };
   }

@@ -9,6 +9,49 @@ export const UNAUTHORIZED_EVENT = 'kwnt:unauthorized';
 export const PERSON_TOKEN_EVENT = 'kwnt:person-token';
 /** Fired after the person signed in from that prompt, so open panels can load again. */
 export const PERSON_SIGNED_IN_EVENT = 'kwnt:person-signed-in';
+/** Fired when the person closed that prompt without signing in. */
+export const PERSON_PROMPT_CLOSED_EVENT = 'kwnt:person-prompt-closed';
+
+/** What a person-only action says when the person closed "Confirm it's you" instead of signing in. */
+export const PERSON_CANCELLED_TEXT = 'Nothing was changed. Only you can do this: confirm it’s you, then try again.';
+
+/** Thrown by `personFetch` when the person closed "Confirm it's you"; nothing was changed. */
+export class PersonCancelledError extends Error {
+  constructor() {
+    super(PERSON_CANCELLED_TEXT);
+  }
+}
+
+/** Resolves true once the person signs in from the prompt, false when they close it. */
+export function waitForPersonSignIn(target: EventTarget = window): Promise<boolean> {
+  return new Promise((resolve) => {
+    const done = (ok: boolean) => () => {
+      target.removeEventListener(PERSON_SIGNED_IN_EVENT, onIn);
+      target.removeEventListener(PERSON_PROMPT_CLOSED_EVENT, onClosed);
+      resolve(ok);
+    };
+    const onIn = done(true);
+    const onClosed = done(false);
+    target.addEventListener(PERSON_SIGNED_IN_EVENT, onIn);
+    target.addEventListener(PERSON_PROMPT_CLOSED_EVENT, onClosed);
+  });
+}
+
+/**
+ * `fetch` for a person-only action (deleting a bot or team, undoing an action or import). On a
+ * person-only 401 the fetch wrapper has already asked "Confirm it's you"; this waits for that and
+ * sends the request once more, so the person doesn't see an error and press Delete again. Throws
+ * `PersonCancelledError` when they close the prompt instead.
+ */
+export async function personFetch(input: string, init?: RequestInit, target?: EventTarget, send: typeof fetch = (...a) => fetch(...a)): Promise<Response> {
+  const res = await send(input, init);
+  if (res.status !== 401) return res;
+  const body = await res.clone().json().catch(() => null);
+  if (!isPersonOnlyBody(body)) return res;
+  // Listen before anything can answer the prompt the wrapper just opened.
+  if (!(await waitForPersonSignIn(target ?? window))) throw new PersonCancelledError();
+  return send(input, init);
+}
 
 export interface AuthStatus {
   auth_required: boolean;

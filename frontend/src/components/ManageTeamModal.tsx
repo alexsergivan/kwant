@@ -178,7 +178,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
       onClose();
     } catch (err) {
       setIsDeleting(false);
-      setError('Failed to delete team.');
+      setError(err instanceof Error && err.message ? err.message : 'Couldn’t delete the team.');
     }
   };
 
@@ -208,7 +208,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
         </div>
 
         {error && (
-          <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-300 flex items-center gap-2">
+          <div role="alert" className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-300 flex items-center gap-2">
             <AlertTriangle size={14} className="flex-shrink-0 text-rose-400" />
             <span>{error}</span>
           </div>

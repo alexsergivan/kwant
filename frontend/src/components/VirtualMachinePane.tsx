@@ -82,7 +82,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // No event fires when the browser catches a login, so a new screenshot or page loads the list again.
   const passwords = useSavedPasswords(teamId, `${activeUrl}|${screenshotBase64?.length ?? 0}|${screenshotBase64?.slice(-32) ?? ''}`);
   const savedCount = passwords.logins.length;
-  const passwordStore = usePasswordStore(!!teamId && teamId !== 'default');
+  // Quiet while the pane is closed: a background load mustn't open "Confirm it's you" on page load.
+  const passwordStore = usePasswordStore(!!teamId && teamId !== 'default', !isOpen);
 
   // Local Chrome streams here like the VM, unless the person opened it as a window: then there's
   // nothing to show. Unknown counts as vm.

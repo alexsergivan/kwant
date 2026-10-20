@@ -3,6 +3,7 @@
 // Contract: docs/bot-actions.md.
 import { parseMetaObject } from './questions';
 import { Schedule, WEEKDAYS, describeSchedule, formatWhen } from './continuity';
+import { PersonCancelledError, personFetch } from './auth';
 
 // ---------------------------------------------------------------------------
 // Bot actions
@@ -463,7 +464,8 @@ export class ApiError extends Error {
 }
 
 async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
+  // Undo, confirm and decline are person-only: after "Confirm it's you" the call goes through.
+  const res = await personFetch(url, {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -482,6 +484,7 @@ export function decisionError(err: unknown, what: string): string {
     const why = err.message && !/^Request failed/.test(err.message) ? ` (${err.message.replace(/\.$/, '')})` : '';
     return `Couldn’t ${what}: it was already decided or changed${why}.`;
   }
+  if (err instanceof PersonCancelledError) return err.message;
   if (err instanceof ApiError && err.status === 403) return `Couldn’t ${what}: only you can do this, from your own browser.`;
   return `Couldn’t ${what}: ${err instanceof Error ? err.message : 'something went wrong.'}`;
 }
