@@ -1972,15 +1972,21 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       ? `Laya picks who answers, from the ${kwants.length} ${kwants.length === 1 ? 'bot' : 'bots'} in ${space.name}`
       : currentTeam?.description || currentChannel?.description || `A team in ${space.name}`;
 
-  // Load container status and screenshot for active team or bot
+  // A different team or bot: forget the last one's page
   useEffect(() => {
-    const sid = activeSandboxId;
-    let cancelled = false;
     setScreenshotBase64(null);
     setActiveUrl('');
     setPageTitle('');
     setBrowserError(null);
-    if (!sid || sid === 'default') return;
+  }, [activeSandboxId]);
+
+  // Load container status and screenshot once the pane is open. Both start the bot's browser
+  // container, which can take half a minute, and two such requests on every chat opened tie up
+  // the browser's few connections to this server, so the rest of the page loads late.
+  useEffect(() => {
+    const sid = activeSandboxId;
+    let cancelled = false;
+    if (!isVmPaneOpen || !sid || sid === 'default') return;
 
     fetch(`/api/sandbox/${sid}/status`)
       .then((r) => (r.ok ? r.json() : null))
@@ -2016,7 +2022,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         }
       });
     return () => { cancelled = true; };
-  }, [activeSandboxId]);
+  }, [activeSandboxId, isVmPaneOpen]);
 
   const handleRefreshVm = async () => {
     const sid = activeSandboxId;
