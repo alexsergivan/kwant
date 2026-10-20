@@ -192,6 +192,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
     match segs.as_slice() {
         ["", "api", "sandbox", _, "passwords", ..] => true,
         ["", "api", "passwords", ..] => true,
+        // Loose ends read the person's mail: bots never see or change them
+        ["", "api", "zombie", ..] => true,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "kwants" | "teams", _] => *method == Method::DELETE,
@@ -488,6 +490,8 @@ mod tests {
         assert!(person_only(&post, "/api/passwords/bitwarden/unlock"));
         assert!(person_only(&del, "/api/passwords/bitwarden"));
         assert!(person_only(&post, "/api/passwords/migrate"));
+        assert!(person_only(&get, "/api/zombie/cases"));
+        assert!(person_only(&post, "/api/zombie/sources/s1/test"));
         assert!(person_only(&post, "/api/approvals/a1/resolve"));
         assert!(person_only(&put, "/api/spaces/s1/approvals"));
         assert!(person_only(&put, "/api/kwants/k1/approvals"));

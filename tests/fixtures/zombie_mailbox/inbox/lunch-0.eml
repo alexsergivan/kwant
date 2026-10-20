@@ -1,0 +1,9 @@
+From: Ivo Pal <ivo@friends.example>
+To: Oleks Example <oleks@example.org>
+Subject: Lunch last week
+Date: {{DATE:26}}
+Message-ID: <lunch-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Great lunch, let's do it again!

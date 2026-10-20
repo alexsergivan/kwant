@@ -1,0 +1,13 @@
+From: Oleks Example <oleks@example.org>
+To: Billing <billing@supplier.example>
+Subject: Invoice 2026-118 payment
+Date: {{DATE:26}}
+Message-ID: <invoice-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hello,
+
+Can you confirm you received payment for invoice 2026-118?
+
+Oleks

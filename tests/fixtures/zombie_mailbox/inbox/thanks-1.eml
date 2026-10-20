@@ -1,0 +1,13 @@
+From: Kim Trainer <kim@training.example>
+To: Oleks Example <oleks@example.org>
+Subject: Re: Wrapping up the workshop
+Date: {{DATE:20}}
+Message-ID: <thanks-1@fixture.example>
+In-Reply-To: <thanks-0@fixture.example>
+References: <thanks-0@fixture.example>
+Auto-Submitted: auto-replied
+X-Autoreply: yes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+I am out of office until Monday. I will reply when I return.

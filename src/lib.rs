@@ -11,6 +11,7 @@ pub mod routines;
 pub mod sandbox;
 pub mod server;
 pub mod tools;
+pub mod zombie;
 
 pub use broker::{ApprovalDecision, ApprovalRequest, PermissionBroker};
 pub use config::{Config, ConfigError};

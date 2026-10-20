@@ -1,0 +1,11 @@
+From: Help Desk <support@isp.example>
+To: Oleks Example <oleks@example.org>
+Subject: Re: Support ticket #5521
+Date: {{DATE:28}}
+Message-ID: <ticket-1@fixture.example>
+In-Reply-To: <ticket-0@fixture.example>
+References: <ticket-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+We fixed the line fault. Ticket #5521 is now closed.

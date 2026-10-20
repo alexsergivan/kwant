@@ -1,0 +1,15 @@
+From: Oleks Example <oleks@example.org>
+To: Anna Accounts <anna@acct.example>
+Subject: Re: Signed contract for the accountant
+Date: {{DATE:18}}
+Message-ID: <contract-1@fixture.example>
+In-Reply-To: <contract-0@fixture.example>
+References: <contract-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hi Anna,
+
+I'll send the signed contract tomorrow.
+
+Oleks

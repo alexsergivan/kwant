@@ -1,0 +1,10 @@
+From: Orders <orders@shop.example>
+To: Oleks Example <oleks@example.org>
+Subject: Your order 88213 receipt
+Date: {{DATE:33}}
+Message-ID: <receipt-0@fixture.example>
+Precedence: bulk
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Thanks for your order. Please keep this receipt.

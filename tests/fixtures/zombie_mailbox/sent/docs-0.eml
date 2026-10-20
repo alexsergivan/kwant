@@ -1,0 +1,9 @@
+From: Oleks Example <oleks@example.org>
+To: Mira Broker <mira@mortgage.example>
+Subject: Documents for the mortgage
+Date: {{DATE:30}}
+Message-ID: <docs-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hi Mira, could you send the documents list?

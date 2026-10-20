@@ -1,0 +1,9 @@
+From: Oleks Example <oleks@example.org>
+To: Kim Trainer <kim@training.example>
+Subject: Wrapping up the workshop
+Date: {{DATE:20}}
+Message-ID: <thanks-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Thanks for everything, all done.

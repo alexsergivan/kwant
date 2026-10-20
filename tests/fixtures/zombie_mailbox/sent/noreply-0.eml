@@ -1,0 +1,9 @@
+From: Oleks Example <oleks@example.org>
+To: Bank <no-reply@bank.example>
+Subject: Question about my account
+Date: {{DATE:30}}
+Message-ID: <noreply-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Can you tell me why my card was blocked?

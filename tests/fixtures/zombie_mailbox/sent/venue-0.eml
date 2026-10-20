@@ -1,0 +1,13 @@
+From: Oleks Example <oleks@example.org>
+To: Venue <events@venue.example>
+Subject: Venue booking for the 12th
+Date: {{DATE:30}}
+Message-ID: <venue-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hi,
+
+Is the hall still free on the 12th?
+
+Oleks

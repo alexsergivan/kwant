@@ -1,0 +1,9 @@
+From: Digest <noreply@social.example>
+To: Oleks Example <oleks@example.org>
+Subject: Your weekly digest
+Date: {{DATE:30}}
+Message-ID: <digest-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Could you be missing out? See what your friends posted this week.

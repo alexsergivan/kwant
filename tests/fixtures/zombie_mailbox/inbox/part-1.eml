@@ -1,0 +1,15 @@
+From: Heat Co <service@heat.example>
+To: Oleks Example <oleks@example.org>
+Subject: Re: Replacement part for the boiler
+Date: {{DATE:25}}
+Message-ID: <part-1@fixture.example>
+In-Reply-To: <part-0@fixture.example>
+References: <part-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hello Oleks,
+
+We will send you the replacement part next week.
+
+Heat Co

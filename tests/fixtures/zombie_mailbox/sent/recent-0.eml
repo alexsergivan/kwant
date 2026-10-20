@@ -1,0 +1,9 @@
+From: Oleks Example <oleks@example.org>
+To: Sam Friend <sam@friends.example>
+Subject: Quick question about Saturday
+Date: {{DATE:3}}
+Message-ID: <recent-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Are we still on for Saturday?

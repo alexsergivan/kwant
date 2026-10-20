@@ -1,0 +1,11 @@
+From: Mira Broker <mira@mortgage.example>
+To: Oleks Example <oleks@example.org>
+Subject: Re: Documents for the mortgage
+Date: {{DATE:19}}
+Message-ID: <docs-2@fixture.example>
+In-Reply-To: <docs-1@fixture.example>
+References: <docs-0@fixture.example> <docs-1@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Sorry for the delay, here are the documents. All set.

@@ -1249,7 +1249,7 @@ async fn webhook_setting_is_https_only_and_masked() {
     assert_eq!(s["notify_webhook_url"], "");
     assert_eq!(
         s["notify_on"],
-        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked"])
+        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked", "loose_ends"])
     );
 
     let (status, _) = req(

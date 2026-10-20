@@ -1,0 +1,12 @@
+From: Visa Office <visa@consulate.example>
+To: Oleks Example <oleks@example.org>
+Subject: Re: Visa support letter request
+Date: {{DATE:35}}
+Message-ID: <visa-1@fixture.example>
+In-Reply-To: <visa-0@fixture.example>
+References: <visa-0@fixture.example>
+Auto-Submitted: auto-replied
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+We received your request and will respond within 3 business days.
