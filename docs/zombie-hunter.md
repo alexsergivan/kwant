@@ -81,7 +81,7 @@ when the queue is empty. Each review is recorded (`GET /api/zombie/reviews`).
   (tested). The quote lives only in `evidence`.
 - Retention: `retention_days` (90) after a case is closed or dismissed, it is wiped down to its
   dedupe key, so a dismissed case stays dismissed without keeping its text.
-- The API is the person's only: no token → 401, a bot's turn token → 403 (all 18 method/route
+- The API is the person's only: no token from another machine → 401, a bot's turn token → 403 (all 18 method/route
   pairs are tested).
 
 ## API

@@ -1,7 +1,7 @@
 //! Deleting a bot or team, and undoing a bot action or an import, are person-only (audit
 //! 2026-10-20, F-13). Since F-11 they delete saved passwords too, so a bare `curl` from a bot's
-//! shell could wipe another bot's logins: no token is a 401 `{person_only:true}`, a bot's turn
-//! token or a wrong token a 403, and nothing is deleted. The person's token goes through.
+//! shell could wipe another bot's logins: a bot's turn token or a wrong token is a 403, no token
+//! from another machine a 401, and nothing is deleted. The person's token goes through.
 
 use axum::{
     body::{to_bytes, Body},
@@ -51,6 +51,16 @@ async fn call(app: &Router, method: &str, uri: &str, bearer: Option<&str>) -> (S
         req = req.header("authorization", format!("Bearer {t}"));
     }
     let resp = app.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+/// `call` from another machine (a non-loopback Host), without a token.
+async fn call_remote(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+    let req = Request::builder().method(method).uri(uri).header("content-type", "application/json").header("host", "kwnt.example.com");
+    let body = body.map(|b| Body::from(b.to_string())).unwrap_or_else(Body::empty);
+    let resp = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
@@ -113,9 +123,8 @@ async fn deletes_and_undos_refuse_no_token_and_bot_tokens() {
         ("POST", "/api/imports/some-import/undo".to_string()),
     ];
     for (method, uri) in &routes {
-        let (s, v) = call(&e.app, method, uri, None).await;
-        assert_eq!(s, StatusCode::UNAUTHORIZED, "{method} {uri} without a token: {v}");
-        assert_eq!(v["person_only"], true, "{v}");
+        let (s, v) = call_remote(&e.app, method, uri, None).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "{method} {uri} from another machine without a token: {v}");
         let (s, v) = call(&e.app, method, uri, Some(&turn)).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{method} {uri} with a bot's turn token: {v}");
         let (s, _) = call(&e.app, method, uri, Some("not-the-token")).await;

@@ -91,6 +91,16 @@ impl Harness for Fake {
     }
 }
 
+/// `call` from another machine (a non-loopback Host), without a token.
+async fn call_remote(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+    let req = Request::builder().method(method).uri(uri).header("content-type", "application/json").header("host", "kwnt.example.com");
+    let body = body.map(|b| Body::from(b.to_string())).unwrap_or_else(Body::empty);
+    let resp = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
 impl Env {
     /// Polls a run until it is no longer running.
     async fn finished(&self, run_id: &str) -> Value {
@@ -165,8 +175,8 @@ async fn every_route_is_the_persons_only() {
         ("GET", "/api/parallel/runs/x", None),
     ];
     for (method, uri, body) in &routes {
-        let (s, v) = call(&e.app, method, uri, None, body.clone()).await;
-        assert_eq!(s, StatusCode::UNAUTHORIZED, "{method} {uri} without a token: {v}");
+        let (s, v) = call_remote(&e.app, method, uri, body.clone()).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "{method} {uri} from another machine without a token: {v}");
         let (s, v) = call(&e.app, method, uri, Some(&turn), body.clone()).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{method} {uri} with a bot's turn token: {v}");
         let (s, v) = call(&e.app, method, uri, Some("not-the-token"), body.clone()).await;

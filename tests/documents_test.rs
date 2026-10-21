@@ -115,6 +115,16 @@ async fn call(app: &Router, method: &str, uri: &str, bearer: Option<&str>, body:
     (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
+/// `call` from another machine (a non-loopback Host), without a token.
+async fn call_remote(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+    let req = Request::builder().method(method).uri(uri).header("content-type", "application/json").header("host", "kwnt.example.com");
+    let body = body.map(|b| Body::from(b.to_string())).unwrap_or_else(Body::empty);
+    let resp = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
 impl Env {
     async fn person(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
         call(&self.app, method, uri, Some(self.state.api_token.reveal()), body).await
@@ -212,8 +222,8 @@ async fn every_route_is_the_persons_only() {
         ("PATCH", "/api/zombie/cases/x/fields", Some(json!({"deadline": {}}))),
     ];
     for (method, uri, body) in &routes {
-        let (s, v) = call(&e.app, method, uri, None, body.clone()).await;
-        assert_eq!(s, StatusCode::UNAUTHORIZED, "{method} {uri} without a token: {v}");
+        let (s, v) = call_remote(&e.app, method, uri, body.clone()).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "{method} {uri} from another machine without a token: {v}");
         let (s, v) = call(&e.app, method, uri, Some(&turn), body.clone()).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{method} {uri} with a bot's turn token: {v}");
         let (s, v) = call(&e.app, method, uri, Some("not-the-token"), body.clone()).await;
@@ -229,8 +239,11 @@ async fn every_route_is_the_persons_only() {
     for uri in [format!("/api/attachments/{id}"), format!("/api/attachments/{id}/content"), format!("/api/attachments?context_id=document:{case_id}")] {
         let (s, _) = call(&e.app, "GET", &uri, Some(&turn), None).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{uri} with a bot's turn token");
+        let (s, _) = call_remote(&e.app, "GET", &uri, None).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "{uri} from another machine without a token");
+        // The person's own browser on this machine isn't asked for the token
         let (s, _) = call(&e.app, "GET", &uri, None, None).await;
-        assert_eq!(s, StatusCode::UNAUTHORIZED, "{uri} without a token");
+        assert_eq!(s, StatusCode::OK, "{uri} from this machine without a token");
         let (s, _) = e.person("GET", &uri, None).await;
         assert_eq!(s, StatusCode::OK, "{uri} as the person");
     }

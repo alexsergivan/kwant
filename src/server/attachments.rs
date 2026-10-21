@@ -14,11 +14,12 @@ use crate::db::models::{MessageExtra, NewMessage};
 use crate::drivers::events::RuntimeEvent;
 use axum::{
     body::Body,
-    extract::{Path, Query, Request, State},
+    extract::{ConnectInfo, Path, Query, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
+use std::net::SocketAddr;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -332,11 +333,11 @@ pub struct ListQuery {
 }
 
 /// `GET /api/attachments?context_id=`: a chat's files, newest first.
-pub async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>, headers: HeaderMap) -> Response {
+pub async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>, peer: Option<ConnectInfo<SocketAddr>>, headers: HeaderMap) -> Response {
     let Some(ctx) = q.context_id.filter(|c| !c.is_empty()) else {
         return error(StatusCode::BAD_REQUEST, "context_id is required");
     };
-    if let Err(r) = letter_guard(&state, &headers, Some(&ctx)).await {
+    if let Err(r) = letter_guard(&state, &headers, peer, Some(&ctx)).await {
         return r;
     }
     match state.db.list_attachments_in(&ctx, 200).await {
@@ -346,21 +347,21 @@ pub async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>, hea
 }
 
 /// A letter's pages (`crate::documents`, context `document:<case id>`) are the person's only:
-/// a bot's turn token gets 403 here too, and no token 401 (a bot's shell on this machine could
-/// otherwise fetch them with a bare `curl`).
+/// a bot's turn token gets 403 here too, and no token 401 where `auth::person_only` routes need
+/// the token (from another machine, or anywhere with `KWNT_REQUIRE_TOKEN=always`).
 #[allow(clippy::result_large_err)]
-async fn letter_guard(state: &AppState, headers: &HeaderMap, context_id: Option<&str>) -> Result<(), Response> {
+async fn letter_guard(state: &AppState, headers: &HeaderMap, peer: Option<ConnectInfo<SocketAddr>>, context_id: Option<&str>) -> Result<(), Response> {
     if context_id.is_some_and(|c| c.starts_with("document:")) {
         super::mcp_suggest::refuse_agent_tokens(state, headers, "only the person can see their letters").await?;
-        super::auth::require_person_token(state, headers)?;
+        super::auth::require_person_token(state, headers, peer.map(|c| c.0.ip()))?;
     }
     Ok(())
 }
 
-pub async fn get(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
+pub async fn get(State(state): State<AppState>, Path(id): Path<String>, peer: Option<ConnectInfo<SocketAddr>>, headers: HeaderMap) -> Response {
     match load(&state, &id).await {
         Some(a) => {
-            if let Err(r) = letter_guard(&state, &headers, a.context_id.as_deref()).await {
+            if let Err(r) = letter_guard(&state, &headers, peer, a.context_id.as_deref()).await {
                 return r;
             }
             Json(view(&a)).into_response()
@@ -396,7 +397,7 @@ pub async fn content(State(state): State<AppState>, Path(id): Path<String>, Quer
     let Some(a) = load(&state, &id).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if let Err(r) = letter_guard(&state, req.headers(), a.context_id.as_deref()).await {
+    if let Err(r) = letter_guard(&state, req.headers(), req.extensions().get::<ConnectInfo<SocketAddr>>().copied(), a.context_id.as_deref()).await {
         return r;
     }
     let Some(path) = blob_path(&root(&state), &a.sha256).filter(|p| p.is_file()) else {

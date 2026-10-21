@@ -9,7 +9,7 @@ sent: the draft is copy or `mailto:` only. The code is `src/documents/`, `src/db
 
 ## API
 
-The person only. The auth middleware lists `/api/documents/*` and `/api/zombie/*` as person-only: no token is 401, a bot's turn
+The person only. The auth middleware lists `/api/documents/*` and `/api/zombie/*` as person-only: no token is 401 from another machine (passes on loopback unless `KWNT_REQUIRE_TOKEN=always`), a bot's turn
 token or a wrong token 403.
 
 | route | does |

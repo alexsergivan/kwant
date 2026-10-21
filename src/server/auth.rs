@@ -184,9 +184,9 @@ fn exempt(path: &str) -> bool {
 }
 
 /// Routes only the person may call: saved passwords and the password vault (Bitwarden), answering an approval card, Loose ends and Parallel Universe, the
-/// approvals switch, and deleting a bot or team or undoing a bot action or import (those delete saved passwords too). They need the token from this machine too, because a bot's shell runs on
-/// this machine and would otherwise reach them with a bare `curl`. Turn tokens are refused by the
-/// handlers themselves (403).
+/// approvals switch, and deleting a bot or team or undoing a bot action or import (those delete saved passwords too). A bot's turn token (or any
+/// bearer that isn't the API token) is refused with 403 everywhere. From another machine they need the API token (401);
+/// from this machine they don't, unless `KWNT_REQUIRE_TOKEN=always` (`person_token_needed`).
 pub fn person_only(method: &Method, path: &str) -> bool {
     let segs: Vec<&str> = path.trim_end_matches('/').split('/').collect();
     match segs.as_slice() {
@@ -258,16 +258,25 @@ fn needs_token(api: &ApiToken, headers: &HeaderMap, peer: Option<IpAddr>) -> boo
     }
 }
 
+/// Whether a person-only route needs the API token for this request. Not from this machine:
+/// the person there shouldn't be asked for a token to answer their own approval cards. A bot's
+/// shell there could reach these routes with a bare `curl`, but it could read the token file just
+/// as well; `KWNT_REQUIRE_TOKEN=always` asks for the token on loopback too.
+fn person_token_needed(api: &ApiToken, headers: &HeaderMap, peer: Option<IpAddr>) -> bool {
+    api.require != Require::Never && needs_token(api, headers, peer)
+}
+
 fn deny(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({ "error": msg }))).into_response()
 }
 
 /// 401 for a person-only route without the token: `{error, person_only: true}`.
 /// For a handler guarding something person-only that `person_only` can't see from the path (a
-/// letter's pages under `/api/attachments`): the API token must be presented, unless tokens are off.
+/// letter's pages under `/api/attachments`): the API token must be presented where
+/// `person_token_needed` says so.
 #[allow(clippy::result_large_err)]
-pub(super) fn require_person_token(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
-    if state.api_token.require != Require::Never && !presented_token_ok(&state.api_token, headers) {
+pub(super) fn require_person_token(state: &AppState, headers: &HeaderMap, peer: Option<IpAddr>) -> Result<(), Response> {
+    if person_token_needed(&state.api_token, headers, peer) && !presented_token_ok(&state.api_token, headers) {
         return Err(person_token_required());
     }
     Ok(())
@@ -311,10 +320,11 @@ pub async fn guard(State(state): State<AppState>, req: Request, next: Next) -> R
     {
         deny(StatusCode::UNAUTHORIZED, "API token required")
     } else if api.require != Require::Never && person_only(req.method(), &path) {
-        // A bot's turn token (or any bearer that isn't the API token) is a 403; no token a 401
+        // A bot's turn token (or any bearer that isn't the API token) is a 403, from anywhere;
+        // no token a 401 where the token is needed
         if let Err(refused) = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person can do this").await {
             refused
-        } else if !presented_token_ok(&api, &headers) {
+        } else if person_token_needed(&api, &headers, peer) && !presented_token_ok(&api, &headers) {
             person_token_required()
         } else {
             next.run(req).await
@@ -359,8 +369,8 @@ pub async fn status(State(state): State<AppState>, req: Request) -> Response {
     let required = needs_token(&state.api_token, headers, peer);
     let has_token = presented_token_ok(&state.api_token, headers);
     let authenticated = !required || has_token;
-    // Person-only actions (passwords, approvals) need the token even where the rest doesn't
-    let person_required = state.api_token.require != Require::Never;
+    // Person-only actions (passwords, approvals) need it from another machine, or with `always`
+    let person_required = person_token_needed(&state.api_token, headers, peer);
     Json(json!({
         "auth_required": required,
         "authenticated": authenticated,

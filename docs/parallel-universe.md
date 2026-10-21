@@ -71,7 +71,7 @@ measured: [verified Figure], cost: estimate|speculation Figure, notes: [{criteri
   when prices are stale, when currencies differ, and when options failed.
 - The cost is computed when you read the report, so a price goes stale over time.
 
-## API (person-only: no token 401, bot or wrong token 403)
+## API (person-only: no token 401 from another machine, bot or wrong token 403)
 
 - `GET/POST /api/parallel/scenarios`, `GET/PUT/DELETE /api/parallel/scenarios/:id`. A body that fails validation gets a 400 `{error}`.
 - `GET /api/parallel/prices` returns `{prices, stale_after_days}`.

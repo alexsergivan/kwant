@@ -72,7 +72,14 @@ Get the token with `kwnt token` (Docker: `docker compose exec kwnt kwnt token`).
 HttpOnly, SameSite=Strict cookie for a year, and clears the address bar. Scripts can send
 `Authorization: Bearer <token>` instead.
 
-`KWNT_REQUIRE_TOKEN=always` requires the token for local requests too; `never` turns the check
+Person-only routes (saved passwords and the vault, answering approval cards, the approvals switch,
+deleting a bot or team, undo, Loose ends, Parallel Universe, letters) refuse a bot's turn token, or
+any bearer that isn't the API token, with 403 from anywhere. From another machine they need the API
+token (401 `{person_only:true}`); from this machine they don't, so the person on it is never asked.
+A bot with a shell here could call them with a bare `curl`, but it could also read the token file.
+
+`KWNT_REQUIRE_TOKEN=always` requires the token for local requests too, person-only routes included
+(the strict setup); `never` turns the check
 off (only behind your own authentication). Always open: `/api/health`, `/api/auth/*`, the MCP
 OAuth callback and the MCP endpoints, which carry their own per-turn tokens.
 
