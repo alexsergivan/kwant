@@ -28,7 +28,9 @@ pub const RESERVED_SERVER_NAME: &str = "kwnt";
 /// Server name of the agents' own continuity tools (`mcp__kwnt_tools__memory_add`, …).
 pub const SELF_SERVER_NAME: &str = "kwnt_tools";
 pub const DEFAULT_TIMEOUT_SECS: i64 = 30;
-pub const DEFAULT_MAX_TOOL_ITERATIONS: usize = 8;
+/// Model calls an API-driver turn may make for tools; routines and delegations also get one
+/// automatic continuation when a turn runs out (see `routes::continue_once_if_capped`).
+pub const DEFAULT_MAX_TOOL_ITERATIONS: usize = 25;
 /// Longest tool result kept in a message's `tool_calls` record.
 pub const RECORD_RESULT_MAX_CHARS: usize = 4000;
 /// How long an MCP tool call waits for the user's approval before it is denied.

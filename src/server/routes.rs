@@ -821,6 +821,7 @@ pub(super) async fn run_routine_turn(
     let job = state.turns.start_job([context_key.clone()]);
     let scope = scope_for(state, kwant, channel_id, thread_id, &job, 0).await?;
     let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts::default()).await;
+    let reply = continue_once_if_capped(&scope, kwant, reply).await;
     match reply {
         Ok(text) => {
             let reply_id = state
@@ -837,6 +838,30 @@ pub(super) async fn run_routine_turn(
         }
         Err(_) if job.token.is_cancelled() => Err("stopped by the user".into()),
         Err(why) => Err(format!("the bot's turn failed: {why}")),
+    }
+}
+
+/// The prompt of the one automatic continuation a routine's or delegation's turn gets when it ran
+/// out of model calls (see [`continue_once_if_capped`]).
+pub const CONTINUE_PROMPT: &str = "[kwnt: your last turn stopped at the limit of model calls before you finished. \
+This is your one automatic continuation: pick up where you left off, finish the task, and end with a complete answer.]";
+
+/// For turns nobody is watching (routines, delegations): a turn that stopped at the model-call
+/// cap gets one more turn to finish, never more. Returns both replies joined, so a delegation's
+/// result has all of it. A turn that didn't hit the cap, or failed, is returned as it is.
+pub(super) async fn continue_once_if_capped(scope: &TurnScope, kwant: &Kwant, first: Result<String, String>) -> Result<String, String> {
+    let Ok(text) = &first else {
+        return first;
+    };
+    if !crate::drivers::api::hit_call_cap(text) || scope.cancel_token.is_cancelled() {
+        return first;
+    }
+    tracing::info!(kwant = %kwant.id, "turn hit the model-call cap: one automatic continuation");
+    let mut opts = TurnOpts::default();
+    opts.label = Some("Automatic continuation (once): the last turn ran out of model calls".into());
+    match try_kwant_turn(scope, kwant, CONTINUE_PROMPT.to_string(), opts).await {
+        Ok(more) => Ok(format!("{}\n\n{more}", text.trim_end())),
+        Err(_) => first,
     }
 }
 

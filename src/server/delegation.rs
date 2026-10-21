@@ -2,7 +2,7 @@
 //! specialist that runs in its own thread in the background and reports back to the chat it came
 //! from. See `design-A.md` (batch 2) for the API and SSE contract.
 
-use super::routes::{scope_for, try_kwant_turn, TurnOpts};
+use super::routes::{continue_once_if_capped, scope_for, try_kwant_turn, TurnOpts};
 use super::AppState;
 use crate::db::models::{Kwant, MessageExtra, NewMessage};
 use crate::db::spaces::SpaceId;
@@ -292,6 +292,7 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
     opts.retried = retried;
     opts.delegation_id = Some(d.id.clone());
     let outcome = try_kwant_turn(&scope, &specialist, prompt, opts).await;
+    let outcome = continue_once_if_capped(&scope, &specialist, outcome).await;
     let outcome = match outcome {
         Err(_) if job.token.is_cancelled() => Err("stopped".to_string()),
         other => other,

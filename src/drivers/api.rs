@@ -6,6 +6,18 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
+/// Starts the note an API turn ends with when it ran out of model calls (see [`hit_call_cap`]).
+pub const CALL_CAP_NOTE: &str = "(Stopped: reached the limit of ";
+
+/// Whether a reply ended because the turn used all its model calls for tools, not because the
+/// model was done.
+pub fn hit_call_cap(text: &str) -> bool {
+    text.trim_end()
+        .rsplit("\n\n")
+        .next()
+        .is_some_and(|last| last.starts_with(CALL_CAP_NOTE) && last.ends_with("model calls for MCP tools this turn.)"))
+}
+
 fn is_ollama(model: &str) -> bool {
     model == "local_ollama" || model.starts_with("ollama/")
 }
@@ -508,7 +520,7 @@ impl ApiDriver {
                 ));
             };
             if round + 1 == max_calls {
-                let note = format!("(Stopped: reached the limit of {max_calls} model calls for MCP tools this turn.)");
+                let note = format!("{CALL_CAP_NOTE}{max_calls} model calls for MCP tools this turn.)");
                 let text = match content.filter(|c| !c.trim().is_empty()) {
                     Some(c) => format!("{c}\n\n{note}"),
                     None => note,

@@ -143,12 +143,19 @@ async fn close(state: &AppState, id: &str, status: &str, answer: Option<&str>) -
 
 // Agent tool
 
+/// When to ask: only for a step that can't be undone or reaches outside, or a choice with no
+/// sensible default. Reversible choices are made, stated and carried on with.
+pub const ASK_USER_DESCRIPTION: &str = "Ask the user one short question, only when you can't go on without their decision: \
+    a step that can't be undone or reaches outside (sending, publishing, paying, deleting, contacting someone), or a choice \
+    with no sensible default. For a reversible choice (wording, order, which of two fine options, a setting that can be \
+    changed later) don't ask: pick the sensible option, state the assumption in your reply and continue. \
+    Give 2 to 5 short choices; the user can also type their own answer. Your turn waits for the answer \
+    (a few minutes at most) and the tool returns it. Don't ask what you can find out or decide yourself.";
+
 pub fn tools() -> Vec<Value> {
     vec![json!({
         "name": "ask_user",
-        "description": "Ask the user one short question when you can't sensibly go on without their decision. \
-            Give 2 to 5 short choices; the user can also type their own answer. Your turn waits for the answer \
-            (a few minutes at most) and the tool returns it. Don't ask what you can find out or decide yourself.",
+        "description": ASK_USER_DESCRIPTION,
         "inputSchema": {
             "type": "object",
             "properties": {
