@@ -3,13 +3,13 @@
 //! removed, so `c''url` is `curl`) and allows it only when every part runs inside the folder and
 //! nothing in it reaches the network, another account, a publish step or the system.
 //!
-//! It fails closed: anything it can't read with confidence (`$`, backticks, subshells, heredocs,
-//! `bash -c`, unknown `git` subcommands, paths it can't place) asks. It is a guard against
+//! It fails closed: only programs it knows (an allowlist, plus wrappers it unwraps) run, and
+//! anything it can't read with confidence (`$`, backticks, subshells, heredocs, `bash -c`, unknown
+//! programs, options or `git` subcommands, paths it can't place) asks. It is a guard against
 //! accidents, not a sandbox: a script inside the folder can still do anything once it runs.
 
 use super::{builtin_tools::is_inside, SmartVerdict};
-use std::path::Path;
-
+use std::path::{Path, PathBuf};
 
 /// One word as the shell will pass it on, quotes removed.
 #[derive(Debug, Clone, Default)]
@@ -255,6 +255,16 @@ const RISKY: &[(&str, &str)] = &[
 const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash", "ksh", "fish", "csh", "tcsh"];
 /// Interpreters whose inline code (`-c`, `-e`) or code from stdin kwnt can't judge.
 const INTERPRETERS: &[&str] = &["python", "python2", "python3", "node", "nodejs", "deno", "bun", "perl", "ruby", "php", "lua", "Rscript"];
+/// Programs that only read, print or change files they are given: they run when every path they
+/// name is inside the folder. Anything not here, and not judged below, asks.
+const KNOWN_SAFE: &[&str] = &[
+    "ls", "cat", "head", "tail", "wc", "echo", "printf", "true", "false", "pwd", "mkdir", "rmdir", "touch", "cp", "mv",
+    "ln", "chmod", "diff", "cmp", "sort", "uniq", "cut", "tr", "tee", "file", "stat", "du", "basename", "dirname",
+    "realpath", "readlink", "which", "date", "sleep", "test", "[", "seq", "nl", "fold", "fmt", "paste", "join", "comm",
+    "column", "rev", "tac", "od", "xxd", "hexdump", "strings", "md5sum", "sha1sum", "sha256sum", "sha512sum", "shasum",
+    "cksum", "base64", "jq", "tree", "zip", "unzip", "gzip", "gunzip", "zcat", "bzip2", "bunzip2", "xz", "unxz",
+    "uname", "whoami", "id", "nproc", "expr", "tsc", "rustfmt", "gofmt", "clear",
+];
 /// Folders whose programs are judged by their name.
 const SYSTEM_BIN: &[&str] = &["/usr/bin/", "/bin/", "/usr/local/bin/", "/usr/sbin/", "/sbin/", "/opt/homebrew/bin/"];
 /// `VAR=value` names that change nothing about what runs.
@@ -270,6 +280,13 @@ const GIT_SAFE: &[&str] = &[
     "ls-tree", "diff-tree", "name-rev", "range-diff", "sparse-checkout", "config", "submodule", "bisect", "help", "version",
 ];
 
+/// Where a command is judged: the bot's folder, and the folder it is in after any `cd` earlier
+/// in the same command line.
+struct Ctx<'a> {
+    folder: &'a Path,
+    cwd: PathBuf,
+}
+
 /// Whether `command`, run with `folder` (canonical) as its working directory, may run without a
 /// card under "Ask only when risky".
 pub fn classify(command: &str, folder: &Path) -> SmartVerdict {
@@ -284,6 +301,7 @@ fn check(command: &str, folder: &Path) -> Verdict {
         return Err("the command is empty".into());
     }
     let toks = lex(command)?;
+    let mut ctx = Ctx { folder, cwd: folder.to_path_buf() };
     let mut simple: Vec<Word> = Vec::new();
     let mut iter = toks.into_iter();
     while let Some(tok) = iter.next() {
@@ -291,19 +309,20 @@ fn check(command: &str, folder: &Path) -> Verdict {
             Tok::Word(w) => simple.push(w),
             Tok::Dup => {}
             Tok::Redirect => match iter.next() {
-                Some(Tok::Word(target)) => path_inside(&target, folder).map_err(|_| "it writes or reads a file outside the bot's folder".to_string())?,
+                Some(Tok::Word(target)) => path_inside(&target, &ctx).map_err(|_| "it writes or reads a file outside the bot's folder".to_string())?,
                 _ => return Err("it has a redirect kwnt can't read".into()),
             },
             Tok::Sep => {
-                simple_command(&std::mem::take(&mut simple), folder)?;
+                simple_command(&std::mem::take(&mut simple), &mut ctx)?;
             }
         }
     }
-    simple_command(&simple, folder)
+    simple_command(&simple, &mut ctx)
 }
 
-/// One command with its arguments (redirects already checked).
-fn simple_command(words: &[Word], folder: &Path) -> Verdict {
+/// One command with its arguments (redirects already checked). A `cd` moves `ctx.cwd` for the
+/// commands after it.
+fn simple_command(words: &[Word], ctx: &mut Ctx) -> Verdict {
     let mut rest = words;
     // Leading `VAR=value` assignments
     while let Some((name, _)) = rest.first().and_then(|w| assignment(&w.text)) {
@@ -311,13 +330,21 @@ fn simple_command(words: &[Word], folder: &Path) -> Verdict {
             return Err(format!("it sets {name}, which can change what runs"));
         }
         let value = Word { text: rest[0].text[name.len() + 1..].to_string(), ..rest[0].clone() };
-        path_inside(&value, folder)?;
+        path_inside(&value, ctx)?;
         rest = &rest[1..];
     }
     if rest.is_empty() {
         return Ok(());
     }
-    program(rest, folder)
+    program(rest, ctx)?;
+    if matches!(rest[0].text.as_str(), "cd" | "pushd") {
+        if let Some(dir) = rest[1..].iter().find(|a| !a.text.starts_with('-')) {
+            if let Ok(real) = ctx.cwd.join(&dir.text).canonicalize() {
+                ctx.cwd = real;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `NAME=` at the start of a word: the name.
@@ -329,97 +356,130 @@ fn assignment(text: &str) -> Option<(&str, ())> {
 }
 
 /// Judges `words[0]` run with `words[1..]`.
-fn program(words: &[Word], folder: &Path) -> Verdict {
+fn program(words: &[Word], ctx: &Ctx) -> Verdict {
     let cmd = &words[0];
     let args = &words[1..];
     if cmd.glob || cmd.tilde {
         return Err("kwnt can't tell which program it runs".into());
     }
-    let name = program_name(&cmd.text, folder)?;
+    let (name, in_folder) = program_name(&cmd.text, ctx)?;
+    if in_folder {
+        // The bot's own script: not a sandbox, see the module docs
+        return all_paths_inside(args, ctx);
+    }
     if let Some((_, what)) = RISKY.iter().find(|(n, _)| *n == name) {
         // Local web requests are part of building and testing
-        if (name == "curl" || name == "wget") && local_request(args) {
-            return all_paths_inside(args, folder);
+        if (name == "curl" || name == "wget") && local_request(name, args, ctx) {
+            return Ok(());
         }
         return Err(format!("`{name}` {what}"));
     }
     match name {
-        "env" => wrapped_env(args, folder),
-        "command" | "builtin" => match args.first() {
-            Some(a) if a.text.starts_with('-') => Ok(()), // `command -v x` only looks it up
-            Some(_) => program(args, folder),
-            None => Ok(()),
-        },
-        "nohup" | "time" => match args.iter().position(|a| !a.text.starts_with('-')) {
-            Some(i) => program(&args[i..], folder),
-            None => Ok(()),
-        },
-        "nice" => wrapped(args, &["-n", "--adjustment"], 0, folder),
-        "timeout" => wrapped(args, &["-s", "--signal", "-k", "--kill-after"], 1, folder),
-        "stdbuf" => wrapped(args, &["-i", "-o", "-e"], 0, folder),
+        "env" => wrapped_env(args, ctx),
+        "command" | "builtin" => {
+            // `command -v x` only looks it up; `command -p x` runs x
+            let opts = args.iter().take_while(|a| a.text.starts_with('-') && a.text != "--").count();
+            for a in &args[..opts] {
+                if !a.text[1..].chars().all(|c| matches!(c, 'p' | 'v' | 'V')) {
+                    return Err(format!("`{name} {}` isn't an option kwnt knows", a.text));
+                }
+            }
+            if args[..opts].iter().any(|a| a.text.contains(['v', 'V'])) {
+                return Ok(());
+            }
+            let rest = &args[opts..];
+            let rest = if rest.first().is_some_and(|a| a.text == "--") { &rest[1..] } else { rest };
+            if rest.is_empty() { Ok(()) } else { program(rest, ctx) }
+        }
+        "nohup" => wrapped(name, args, &[], &[], 0, ctx),
+        "time" => wrapped(name, args, &["-p", "-v", "--verbose", "-a", "--append", "-q", "--quiet", "--portability"], &["-f", "--format", "-o", "--output"], 0, ctx),
+        "setsid" => wrapped(name, args, &["-c", "--ctty", "-f", "--fork", "-w", "--wait"], &[], 0, ctx),
+        "nice" => wrapped(name, args, &[], &["-n", "--adjustment"], 0, ctx),
+        "timeout" => wrapped(name, args, &["--preserve-status", "--foreground", "-v", "--verbose"], &["-s", "--signal", "-k", "--kill-after"], 1, ctx),
+        "stdbuf" => wrapped(name, args, &[], &["-i", "-o", "-e", "--input", "--output", "--error"], 0, ctx),
         _ if SHELLS.contains(&name) => match args.first() {
-            Some(a) if !a.text.starts_with('-') => all_paths_inside(args, folder),
+            Some(a) if !a.text.starts_with('-') => all_paths_inside(args, ctx),
             _ => Err(format!("`{name}` runs commands kwnt can't see")),
         },
-        "bun" => packages(name, args, folder).and_then(|()| interpreter(name, args, folder)),
-        _ if INTERPRETERS.contains(&name) || name.starts_with("python3.") => interpreter(name, args, folder),
-        "git" => git(args, folder),
-        "npm" | "pnpm" | "yarn" | "npx" | "bunx" => packages(name, args, folder),
+        "bun" => packages(name, args, ctx).and_then(|()| interpreter(name, args, ctx)),
+        _ if INTERPRETERS.contains(&name) || name.starts_with("python3.") => interpreter(name, args, ctx),
+        "git" => git(args, ctx),
+        "npm" | "pnpm" | "yarn" => packages(name, args, ctx),
+        "npx" | "bunx" => Err(format!("`{name}` can download and run a package's code")),
         "cargo" => {
             if let Some(sub) = args.iter().find(|a| matches!(a.text.as_str(), "publish" | "login" | "logout" | "owner" | "yank" | "install")) {
                 return Err(format!("`cargo {}` reaches outside the folder", sub.text));
             }
-            all_paths_inside(args, folder)
+            all_paths_inside(args, ctx)
         }
-        "pip" | "pip3" | "pipx" | "gem" | "go" | "uv" | "poetry" | "hatch" | "flit" | "mvn" | "gradle" | "gradlew" | "dotnet" => {
+        "pipx" => Err("`pipx` installs or runs packages outside the folder".into()),
+        "pip" | "pip3" | "gem" | "go" | "uv" | "poetry" | "hatch" | "flit" | "mvn" | "gradle" | "gradlew" | "dotnet" => {
             if let Some(sub) = args.iter().find(|a| {
-                matches!(a.text.as_str(), "publish" | "push" | "upload" | "deploy" | "install" | "uninstall" | "login")
+                matches!(a.text.as_str(), "publish" | "push" | "upload" | "deploy" | "install" | "uninstall" | "login" | "tool")
                     || a.text.starts_with("publish")
             }) {
-                // Installs land outside the folder (`pip install`, `go install`, `gem install`)
+                // Installs land outside the folder (`pip install`, `go install`, `uv tool`)
                 return Err(format!("`{name} {}` reaches outside the folder", sub.text));
             }
-            all_paths_inside(args, folder)
+            all_paths_inside(args, ctx)
+        }
+        "make" | "gmake" => {
+            if let Some(a) = args.iter().find(|a| a.text == "-E" || a.text.starts_with("--eval")) {
+                return Err(format!("`make {}` runs make code kwnt can't see", a.text));
+            }
+            all_paths_inside(args, ctx)
         }
         "find" => {
-            if let Some(a) = args.iter().find(|a| matches!(a.text.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir" | "-delete") || a.text.starts_with("-fprint")) {
+            if let Some(a) = args.iter().find(|a| matches!(a.text.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir" | "-delete") || a.text.starts_with("-fprint") || a.text.starts_with("-fls")) {
                 return Err(format!("`find {}` runs or deletes on files kwnt can't list", a.text));
             }
-            all_paths_inside(args, folder)
+            all_paths_inside(args, ctx)
         }
-        "grep" | "egrep" | "fgrep" | "rg" | "ag" | "ack" => search(args, folder),
-        "sed" => sed(args, folder),
-        "awk" | "gawk" | "mawk" | "nawk" => awk(args, folder),
-        "rm" => rm(args, folder),
+        "grep" | "egrep" | "fgrep" | "rg" | "ag" | "ack" => search(name, args, ctx),
+        "sed" => sed(args, ctx),
+        "awk" | "gawk" | "mawk" | "nawk" => awk(args, ctx),
+        "tar" | "gtar" | "bsdtar" => tar(args, ctx),
+        "rm" => rm(args, ctx),
         "cd" | "pushd" => match args.iter().find(|a| !a.text.starts_with('-') || a.text == "-") {
-            Some(a) if a.text != "-" => path_inside(a, folder),
+            Some(a) if a.text != "-" => {
+                let looks = Word { text: if a.text.contains('/') || a.text.starts_with('.') { a.text.clone() } else { format!("./{}", a.text) }, ..a.clone() };
+                path_inside(&looks, ctx)
+            }
             _ => Err("it changes to a folder outside the bot's folder".into()),
         },
-        _ => all_paths_inside(args, folder),
+        // Options of otherwise plain tools that run another program
+        "sort" if args.iter().any(|a| a.text.starts_with("--compress-program")) => Err("`sort --compress-program` runs another program".into()),
+        "zip" if args.iter().any(|a| a.text.starts_with("--unzip-command") || (a.text.starts_with("-T") && a.text.contains("TT"))) => {
+            Err("`zip -TT` runs another program".into())
+        }
+        _ if KNOWN_SAFE.contains(&name) => all_paths_inside(args, ctx),
+        _ => Err(format!("kwnt doesn't know that `{name}` is safe")),
     }
 }
 
-/// The name a program word is judged by, once its folder is known.
-fn program_name<'a>(text: &'a str, folder: &Path) -> Result<&'a str, String> {
+/// The name a program word is judged by, and whether it is a program inside the bot's folder.
+fn program_name<'a>(text: &'a str, ctx: &Ctx) -> Result<(&'a str, bool), String> {
     if !text.contains('/') {
-        return Ok(text);
+        return Ok((text, false));
     }
     let base = text.rsplit('/').next().unwrap_or(text);
     let system = SYSTEM_BIN.iter().any(|d| text.strip_prefix(d).is_some_and(|rest| !rest.contains('/') && !rest.is_empty()));
-    if system || is_inside(folder, text) {
-        Ok(base)
+    if system {
+        Ok((base, false))
+    } else if is_inside(ctx.folder, &ctx.cwd.join(text).to_string_lossy()) {
+        Ok((base, true))
     } else {
         Err("it runs a program from outside the bot's folder".into())
     }
 }
 
 /// `env [options] [VAR=value…] command…`
-fn wrapped_env(args: &[Word], folder: &Path) -> Verdict {
+fn wrapped_env(args: &[Word], ctx: &Ctx) -> Verdict {
     let mut i = 0;
     while let Some(a) = args.get(i) {
         if a.text.starts_with('-') {
             if matches!(a.text.as_str(), "-i" | "--ignore-environment" | "-0" | "--null") || a.text.starts_with("-u") || a.text.starts_with("--unset") {
-                if a.text == "-u" {
+                if a.text == "-u" || a.text == "--unset" {
                     i += 1;
                 }
                 i += 1;
@@ -434,30 +494,48 @@ fn wrapped_env(args: &[Word], folder: &Path) -> Verdict {
         }
     }
     match args.get(i..) {
-        Some(rest) if !rest.is_empty() => program(rest, folder),
+        Some(rest) if !rest.is_empty() => program(rest, ctx),
         _ => Err("`env` prints environment variables, which can hold secrets".into()),
     }
 }
 
-/// A wrapper like `nice -n 5 cmd` or `timeout 10 cmd`: skips its options (`valued` take the next
-/// word) and `positional` plain words, then judges the command.
-fn wrapped(args: &[Word], valued: &[&str], positional: usize, folder: &Path) -> Verdict {
+/// A wrapper like `nice -n 5 cmd` or `timeout 10 cmd`: skips its known `flags` and `valued`
+/// options (which take the next word, or `--opt=value`, or a value stuck to a short option),
+/// then `positional` plain words, then judges the command. An option it doesn't know asks.
+fn wrapped(name: &str, args: &[Word], flags: &[&str], valued: &[&str], positional: usize, ctx: &Ctx) -> Verdict {
     let mut i = 0;
     while let Some(a) = args.get(i) {
-        if !a.text.starts_with('-') {
+        let t = a.text.as_str();
+        if t == "--" {
+            i += 1;
             break;
         }
-        i += if valued.contains(&a.text.as_str()) { 2 } else { 1 };
+        if !t.starts_with('-') || t == "-" {
+            break;
+        }
+        if flags.contains(&t) {
+            i += 1;
+        } else if valued.contains(&t) {
+            path_inside(args.get(i + 1).ok_or_else(|| format!("`{name} {t}` has no value"))?, ctx)?;
+            i += 2;
+        } else if valued.iter().any(|v| (v.starts_with("--") && t.starts_with(&format!("{v}="))) || (!v.starts_with("--") && t.len() > 2 && t.starts_with(v))) {
+            path_inside(a, ctx)?;
+            i += 1;
+        } else if name == "nice" && t[1..].chars().all(|c| c.is_ascii_digit()) {
+            i += 1; // `nice -10 cmd`
+        } else {
+            return Err(format!("`{name} {t}` isn't an option kwnt knows"));
+        }
     }
     i += positional;
     match args.get(i..) {
-        Some(rest) if !rest.is_empty() => program(rest, folder),
+        Some(rest) if !rest.is_empty() => program(rest, ctx),
         _ => Ok(()),
     }
 }
 
 /// `python x.py` runs a file kwnt can place; `python -c …` or code on stdin it can't judge.
-fn interpreter(name: &str, args: &[Word], folder: &Path) -> Verdict {
+fn interpreter(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
     let inline = args.iter().any(|a| {
         let t = a.text.as_str();
         match name {
@@ -476,28 +554,28 @@ fn interpreter(name: &str, args: &[Word], folder: &Path) -> Verdict {
             if matches!(module, "twine" | "http.server" | "smtplib" | "pip") {
                 return Err(format!("`{name} -m {module}` reaches outside the folder"));
             }
-            return all_paths_inside(args, folder);
+            return all_paths_inside(args, ctx);
         }
     }
     if !args.iter().any(|a| !a.text.starts_with('-')) {
         return Err(format!("`{name}` reads code kwnt can't see"));
     }
-    all_paths_inside(args, folder)
+    all_paths_inside(args, ctx)
 }
 
-fn git(args: &[Word], folder: &Path) -> Verdict {
+fn git(args: &[Word], ctx: &Ctx) -> Verdict {
     let mut i = 0;
     while let Some(a) = args.get(i) {
         match a.text.as_str() {
             "-c" | "--exec-path" | "--config-env" => return Err("`git -c` can change what git runs".into()),
             "-C" => {
                 let dir = args.get(i + 1).ok_or("`git -C` has no folder")?;
-                path_inside(dir, folder)?;
+                path_inside(dir, ctx)?;
                 i += 2;
             }
             t if t.starts_with("--exec-path") || t.starts_with("--config-env") => return Err("`git` options can change what git runs".into()),
             t if t.starts_with('-') => {
-                path_inside(a, folder)?;
+                path_inside(a, ctx)?;
                 i += 1;
             }
             _ => break,
@@ -514,6 +592,29 @@ fn git(args: &[Word], folder: &Path) -> Verdict {
         });
     }
     let has = |flags: &[&str]| rest.iter().any(|a| flags.contains(&a.text.as_str()));
+    // Options that make git run a command it is given
+    let runs = |a: &Word| {
+        let t = a.text.as_str();
+        let long = |o: &str| t == o || t.starts_with(&format!("{o}="));
+        let short = |c: char| t.starts_with('-') && !t.starts_with("--") && t[1..].contains(c);
+        long("--exec")
+            || long("--upload-pack")
+            || long("--receive-pack")
+            || long("--open-files-in-pager")
+            || long("--extcmd")
+            || long("--config")
+            || long("--template")
+            || t.contains("::")
+            || match sub {
+                "rebase" => short('x'),
+                "clone" | "fetch" | "pull" => short('u') || short('c'),
+                "grep" => short('O'),
+                _ => false,
+            }
+    };
+    if let Some(a) = rest.iter().find(|a| runs(a)) {
+        return Err(format!("`git {sub} {}` can make git run a command", a.text));
+    }
     match sub {
         "config" if has(&["--global", "--system"]) => return Err("`git config --global` changes git for the whole account".into()),
         "config" if !has(&["--get", "--get-all", "--list", "-l", "--get-regexp", "--show-origin"]) => {
@@ -523,10 +624,10 @@ fn git(args: &[Word], folder: &Path) -> Verdict {
         "bisect" if has(&["run"]) => return Err("`git bisect run` runs commands".into()),
         _ => {}
     }
-    all_paths_inside(rest, folder)
+    all_paths_inside(rest, ctx)
 }
 
-fn packages(name: &str, args: &[Word], folder: &Path) -> Verdict {
+fn packages(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
     const OUTWARD: &[&str] = &["publish", "unpublish", "login", "logout", "adduser", "token", "owner", "access", "deprecate", "dist-tag"];
     if let Some(a) = args.iter().find(|a| OUTWARD.contains(&a.text.as_str())) {
         return Err(format!("`{name} {}` acts on the package registry", a.text));
@@ -534,46 +635,123 @@ fn packages(name: &str, args: &[Word], folder: &Path) -> Verdict {
     if args.iter().any(|a| matches!(a.text.as_str(), "-g" | "--global" | "global")) {
         return Err(format!("`{name}` installs for the whole account"));
     }
-    all_paths_inside(args, folder)
+    // `npm exec`/`npm x`, `pnpm dlx`, `yarn dlx`, `bun x` fetch a package and run it
+    if let Some(a) = args.iter().find(|a| !a.text.starts_with('-')) {
+        let runs = match name {
+            "npm" => matches!(a.text.as_str(), "exec" | "x"),
+            "pnpm" | "yarn" => a.text == "dlx",
+            "bun" => a.text == "x",
+            _ => false,
+        };
+        if runs {
+            return Err(format!("`{name} {}` can download and run a package's code", a.text));
+        }
+    }
+    all_paths_inside(args, ctx)
 }
 
-/// grep-like tools: the pattern is not a path.
-fn search(args: &[Word], folder: &Path) -> Verdict {
-    const VALUED: &[&str] = &["-A", "-B", "-C", "-m", "-d", "-D", "-g", "-t", "-T", "-M", "-j", "--max-count", "--glob", "--type"];
-    let explicit = args.iter().any(|a| matches!(a.text.as_str(), "-e" | "-f" | "--regexp" | "--file") || a.text.starts_with("--regexp=") || a.text.starts_with("--file="));
-    let mut skip_pattern = !explicit;
+/// grep-like tools: the pattern is not a path, and `-f`/`--file` names one. Short options are
+/// read one letter at a time, so `-e.` and `-rf/x` are split the way the tool splits them.
+fn search(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
+    // Short options that take a value, per tool
+    let valued: &str = match name {
+        "rg" => "efABCmgtTMjErd",
+        "ag" => "ABCmG",
+        "ack" => "ABCm",
+        _ => "efABCmdD",
+    };
+    const LONG_VALUED: &[&str] = &[
+        "--regexp", "--file", "--max-count", "--glob", "--iglob", "--type", "--type-not", "--context", "--after-context",
+        "--before-context", "--max-depth", "--threads", "--max-columns", "--encoding", "--exclude", "--include",
+        "--exclude-dir", "--exclude-from", "--ignore-file", "--label", "--replace",
+    ];
+    const LONG_RUNS: &[&str] = &["--pre", "--pre-glob", "--pager", "--search-zip-command", "--hostname-bin"];
+    let mut pattern_given = false;
+    let mut operands: Vec<&Word> = Vec::new();
+    let mut options_done = false;
     let mut i = 0;
     while let Some(a) = args.get(i) {
         let t = a.text.as_str();
-        if t == "-e" || t == "--regexp" {
-            i += 2; // the pattern
-            continue;
-        }
-        if t.starts_with("--regexp=") {
-            i += 1;
-            continue;
-        }
-        if VALUED.contains(&t) {
-            if let Some(v) = args.get(i + 1) {
-                path_inside(v, folder)?;
-            }
-            i += 2;
-            continue;
-        }
-        if !t.starts_with('-') && skip_pattern {
-            skip_pattern = false;
-            i += 1;
-            continue;
-        }
-        path_inside(a, folder)?;
         i += 1;
+        if options_done || !t.starts_with('-') || t == "-" {
+            operands.push(a);
+            continue;
+        }
+        if t == "--" {
+            options_done = true;
+            continue;
+        }
+        if let Some(long) = t.strip_prefix("--") {
+            let (opt, value) = match long.split_once('=') {
+                Some((o, v)) => (format!("--{o}"), Some(v.to_string())),
+                None => (t.to_string(), None),
+            };
+            if LONG_RUNS.contains(&opt.as_str()) {
+                return Err(format!("`{name} {opt}` runs another program"));
+            }
+            if LONG_VALUED.contains(&opt.as_str()) {
+                let value = match value {
+                    Some(v) => Word { text: v, ..a.clone() },
+                    None => {
+                        let v = args.get(i).ok_or_else(|| format!("`{name} {opt}` has no value"))?.clone();
+                        i += 1;
+                        v
+                    }
+                };
+                match opt.as_str() {
+                    "--regexp" => pattern_given = true,
+                    "--file" => {
+                        pattern_given = true;
+                        path_inside(&as_path(&value), ctx)?;
+                    }
+                    _ => path_inside(&value, ctx)?,
+                }
+            } else {
+                path_inside(a, ctx)?;
+            }
+            continue;
+        }
+        // A bundle of short options: the first one that takes a value takes the rest
+        for (k, c) in t[1..].char_indices() {
+            if !valued.contains(c) {
+                continue;
+            }
+            let stuck = &t[1 + k + c.len_utf8()..];
+            let value = if stuck.is_empty() {
+                let v = args.get(i).ok_or_else(|| format!("`{name} -{c}` has no value"))?.clone();
+                i += 1;
+                v
+            } else {
+                Word { text: stuck.to_string(), ..a.clone() }
+            };
+            match c {
+                'e' => pattern_given = true,
+                'f' => {
+                    pattern_given = true;
+                    path_inside(&as_path(&value), ctx)?;
+                }
+                'r' if name == "rg" => {} // the replacement text
+                _ => path_inside(&value, ctx)?,
+            }
+            break;
+        }
     }
-    Ok(())
+    let files = if pattern_given { &operands[..] } else { operands.get(1..).unwrap_or(&[]) };
+    files.iter().try_for_each(|f| path_inside(&as_path(f), ctx))
+}
+
+/// The same word, judged as a path even when it has no `/` (so a symlink named `x` counts).
+fn as_path(w: &Word) -> Word {
+    if w.text.contains('/') || w.text.starts_with('-') || w.text.is_empty() {
+        w.clone()
+    } else {
+        Word { text: format!("./{}", w.text), ..w.clone() }
+    }
 }
 
 /// sed: only `p`, `d`, `q`, `=` and `s///` (without the `e` and `w` flags) scripts; files must
 /// be inside the folder.
-fn sed(args: &[Word], folder: &Path) -> Verdict {
+fn sed(args: &[Word], ctx: &Ctx) -> Verdict {
     let mut scripts: Vec<&str> = Vec::new();
     let mut files: Vec<&Word> = Vec::new();
     let explicit = args.iter().any(|a| a.text == "-e" || a.text == "--expression" || a.text.starts_with("--expression="));
@@ -589,7 +767,7 @@ fn sed(args: &[Word], folder: &Path) -> Verdict {
             _ if t.starts_with("--expression=") => scripts.push(&t["--expression=".len()..]),
             "-f" | "--file" => return Err("`sed -f` runs a script kwnt can't see".into()),
             _ if t.starts_with("--file=") => return Err("`sed -f` runs a script kwnt can't see".into()),
-            "-n" | "-E" | "-r" | "-s" | "-u" | "-z" | "--quiet" | "--silent" | "--regexp-extended" | "--posix" | "--debug" => {}
+            "-n" | "-E" | "-r" | "-s" | "-u" | "-z" | "--quiet" | "--silent" | "--regexp-extended" | "--posix" | "--debug" | "--sandbox" => {}
             _ if t.starts_with("-i") || t.starts_with("--in-place") => {}
             _ if t.starts_with('-') => return Err(format!("`sed {t}` isn't an option kwnt knows")),
             _ if !explicit && scripts.is_empty() => scripts.push(t),
@@ -605,7 +783,7 @@ fn sed(args: &[Word], folder: &Path) -> Verdict {
             return Err("the `sed` script could run commands or write files".into());
         }
     }
-    files.into_iter().try_for_each(|f| path_inside(f, folder))
+    files.into_iter().try_for_each(|f| path_inside(&as_path(f), ctx))
 }
 
 /// A sed script made only of printing, deleting, quitting and substituting commands.
@@ -686,97 +864,294 @@ fn sed_script_safe(script: &str) -> bool {
     true
 }
 
-/// awk: the program can't run commands, read from them, or write files.
-fn awk(args: &[Word], folder: &Path) -> Verdict {
+/// awk: the program can't run commands, read from them, write files or read the environment,
+/// and no option loads code from elsewhere.
+fn awk(args: &[Word], ctx: &Ctx) -> Verdict {
     let mut program: Option<&str> = None;
+    let mut options_done = false;
     let mut i = 0;
     while let Some(a) = args.get(i) {
         let t = a.text.as_str();
-        match t {
-            "-f" | "--file" => return Err("`awk -f` runs a program kwnt can't see".into()),
-            "-F" | "-v" => i += 1,
-            _ if t.starts_with('-') && t.len() > 1 => {}
-            _ if program.is_none() => program = Some(t),
-            _ if assignment(t).is_some() => {}
-            _ => path_inside(a, folder)?,
-        }
         i += 1;
+        if !options_done && t.starts_with('-') && t.len() > 1 {
+            match t {
+                "--" => options_done = true,
+                "-F" | "-v" | "--field-separator" | "--assign" => i += 1,
+                "--sandbox" | "-S" | "--posix" | "-P" => {}
+                _ if t.starts_with("-F") || t.starts_with("-v") || t.starts_with("--field-separator=") || t.starts_with("--assign=") => {}
+                _ => return Err(format!("`awk {t}` can load code kwnt can't see")),
+            }
+            continue;
+        }
+        if program.is_none() {
+            program = Some(t);
+        } else if assignment(t).is_none() {
+            path_inside(&as_path(a), ctx)?;
+        }
     }
     let Some(program) = program else { return Err("`awk` has no program".into()) };
-    let chars: Vec<char> = program.chars().collect();
-    let writes = chars.iter().enumerate().any(|(i, &ch)| {
-        ch == '>' && {
-            let next = chars[i + 1..].iter().find(|c| !c.is_whitespace());
-            !matches!(next, Some(c) if c.is_ascii_digit() || *c == '=' || *c == '$' || *c == '(')
-        }
-    });
-    if writes || ["system", "getline", "|", "close", "fflush"].iter().any(|w| program.contains(w)) {
+    if ["system", "getline", "|", "close", "fflush", "ENVIRON", "@"].iter().any(|w| program.contains(w)) || awk_print_redirects(program) {
         return Err("the `awk` program could run commands or write files".into());
     }
     Ok(())
 }
 
-/// rm: inside the folder only, and never the whole folder at once.
-fn rm(args: &[Word], folder: &Path) -> Verdict {
-    let recursive = args.iter().any(|a| {
+/// Whether a `print` or `printf` statement in an awk program has a `>` (an output redirect,
+/// `> file` or `>> file`). A `>` elsewhere is a comparison.
+fn awk_print_redirects(program: &str) -> bool {
+    let c: Vec<char> = program.chars().collect();
+    let mut i = 0;
+    let mut in_print = false;
+    while i < c.len() {
+        match c[i] {
+            '"' => {
+                // Skip the string
+                i += 1;
+                while i < c.len() && c[i] != '"' {
+                    i += if c[i] == '\\' { 2 } else { 1 };
+                }
+            }
+            ';' | '}' | '{' | '\n' => in_print = false,
+            '>' if in_print => return true,
+            ch if ch.is_ascii_alphabetic() => {
+                let start = i;
+                while i < c.len() && (c[i].is_ascii_alphanumeric() || c[i] == '_') {
+                    i += 1;
+                }
+                let word: String = c[start..i].iter().collect();
+                if word == "print" || word == "printf" {
+                    in_print = true;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// tar: no option that runs a program, follows symlinks out or writes absolute paths, and no
+/// archive on another computer (`host:file`).
+fn tar(args: &[Word], ctx: &Ctx) -> Verdict {
+    const RUNS: &[&str] = &[
+        "--checkpoint-action", "--to-command", "--use-compress-program", "--info-script", "--new-volume-script",
+        "--rmt-command", "--rsh-command", "--absolute-names", "--dereference",
+    ];
+    let force_local = args.iter().any(|a| a.text == "--force-local");
+    let archive = |w: &Word| -> Verdict {
+        if w.text.contains(':') && !force_local {
+            return Err("its tar archive is on another computer".into());
+        }
+        path_inside(&as_path(w), ctx)
+    };
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
         let t = a.text.as_str();
-        t == "--recursive" || (t.starts_with('-') && !t.starts_with("--") && (t.contains('r') || t.contains('R')))
-    });
-    for a in args.iter().filter(|a| !a.text.starts_with('-')) {
-        path_inside(a, folder)?;
-        if recursive {
-            let whole = a.glob && !a.text.contains('/') || {
-                let p = Path::new(&a.text);
-                let p = if p.is_absolute() { p.to_path_buf() } else { folder.join(p) };
-                p.canonicalize().is_ok_and(|real| real == folder)
-            };
-            if whole {
-                return Err("it would delete the bot's whole folder".into());
+        i += 1;
+        if let Some(long) = t.strip_prefix("--") {
+            let opt = format!("--{}", long.split_once('=').map_or(long, |(o, _)| o));
+            if RUNS.contains(&opt.as_str()) {
+                return Err(format!("`tar {opt}` can run a program or reach outside the folder"));
+            }
+            if opt == "--file" {
+                match long.split_once('=') {
+                    Some((_, v)) => archive(&Word { text: v.to_string(), ..a.clone() })?,
+                    None => {
+                        archive(args.get(i).ok_or("`tar --file` has no archive")?)?;
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            path_inside(a, ctx)?;
+            continue;
+        }
+        // Short options, with or without the dash (`czf` as the first word)
+        let bundle = match t.strip_prefix('-') {
+            Some(b) if !b.is_empty() => b,
+            _ if i == 1 && !t.contains(['/', '.']) && t.chars().all(|c| c.is_ascii_alphabetic()) => t,
+            _ => {
+                path_inside(a, ctx)?;
+                continue;
+            }
+        };
+        if let Some(c) = bundle.chars().find(|c| matches!(c, 'I' | 'F' | 'P' | 'h')) {
+            return Err(format!("`tar -{c}` can run a program or reach outside the folder"));
+        }
+        if let Some(k) = bundle.find('f') {
+            let stuck = &bundle[k + 1..];
+            if t.starts_with('-') && !stuck.is_empty() {
+                archive(&Word { text: stuck.to_string(), ..a.clone() })?;
+            } else {
+                archive(args.get(i).ok_or("`tar -f` has no archive")?)?;
+                i += 1;
             }
         }
     }
     Ok(())
 }
 
-/// curl/wget calls where every URL is this computer and no option reads files or picks a proxy.
-fn local_request(args: &[Word]) -> bool {
-    const RISKY_FLAGS: &[&str] = &["-x", "--proxy", "-K", "--config", "--resolve", "--connect-to", "-T", "--upload-file", "-F", "--form", "--unix-socket", "-e", "--execute"];
-    let mut any_url = false;
-    for a in args {
+/// rm: inside the folder only, and never the whole folder (or everything in it) at once.
+fn rm(args: &[Word], ctx: &Ctx) -> Verdict {
+    let recursive = args.iter().any(|a| {
         let t = a.text.as_str();
-        if RISKY_FLAGS.iter().any(|f| t == *f || t.starts_with(&format!("{f}="))) || t.starts_with('@') || a.glob {
-            return false;
-        }
-        if t.starts_with('-') {
+        t == "--recursive" || (t.starts_with('-') && !t.starts_with("--") && (t.contains('r') || t.contains('R')))
+    });
+    for a in args.iter().filter(|a| !a.text.starts_with('-')) {
+        path_inside(a, ctx)?;
+        if !recursive {
             continue;
         }
-        if let Some(rest) = t.strip_prefix("http://").or_else(|| t.strip_prefix("https://")) {
-            let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-            let host = host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host);
-            let host = if host.starts_with('[') { host.split(']').next().unwrap_or("").trim_start_matches('[') } else { host.split(':').next().unwrap_or("") };
-            if !matches!(host, "localhost" | "127.0.0.1" | "::1") {
+        let whole = if a.glob {
+            // `*`, `./*`, `*/`, `src/../*`: a wildcard straight under the folder itself
+            let text = a.text.as_str();
+            let first = text.find(['*', '?', '[']).unwrap_or(text.len());
+            let dir_end = text[..first].rfind('/').map(|i| i + 1).unwrap_or(0);
+            let dir = if dir_end == 0 { "." } else { &text[..dir_end] };
+            dir_end == first && ctx.cwd.join(dir).canonicalize().is_ok_and(|real| real == ctx.folder)
+        } else {
+            ctx.cwd.join(&a.text).canonicalize().is_ok_and(|real| real == ctx.folder)
+        };
+        if whole {
+            return Err("it would delete the bot's whole folder".into());
+        }
+    }
+    Ok(())
+}
+
+/// curl/wget calls where every URL is this computer and every option is one kwnt knows reads
+/// no file, picks no proxy and writes only inside the folder.
+fn local_request(name: &str, args: &[Word], ctx: &Ctx) -> bool {
+    // (flags, short options with a value, long flags, long options with a value)
+    let (short_flags, short_valued, long_flags, long_valued): (&str, &str, &[&str], &[&str]) = if name == "curl" {
+        (
+            "sSfLiIvkNG#",
+            "XHdowmAer",
+            &[
+                "--silent", "--show-error", "--fail", "--fail-with-body", "--location", "--include", "--head", "--verbose",
+                "--insecure", "--compressed", "--no-buffer", "--get", "--globoff", "--http1.1", "--http2",
+                "--no-progress-meter", "--progress-bar",
+            ],
+            &[
+                "--request", "--header", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--json", "--output",
+                "--write-out", "--max-time", "--connect-timeout", "--retry", "--retry-delay", "--retry-max-time",
+                "--user-agent", "--referer", "--url", "--range",
+            ],
+        )
+    } else {
+        (
+            "qSv",
+            "OTt",
+            &["--spider", "--quiet", "--server-response", "--no-verbose"],
+            &["--output-document", "--timeout", "--tries", "--header", "--post-data", "--method", "--body-data", "--user-agent"],
+        )
+    };
+    // Judges one option value: output files inside the folder, no `@file` reads, URLs local
+    let value = |opt: &str, v: &Word| -> bool {
+        match opt {
+            "-o" | "--output" | "-O" | "--output-document" => v.text == "-" || path_inside(&as_path(v), ctx).is_ok(),
+            "--url" => local_url(&v.text),
+            _ => !v.glob && !v.text.contains('@'),
+        }
+    };
+    let mut any_url = false;
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        let t = a.text.as_str();
+        i += 1;
+        if let Some(long) = t.strip_prefix("--") {
+            let (opt, stuck) = match long.split_once('=') {
+                Some((o, v)) => (format!("--{o}"), Some(v)),
+                None => (t.to_string(), None),
+            };
+            if long_flags.contains(&opt.as_str()) && stuck.is_none() {
+                continue;
+            }
+            if !long_valued.contains(&opt.as_str()) {
                 return false;
             }
-            any_url = true;
-        } else if t.contains("://") {
+            let v = match stuck {
+                Some(v) => Word { text: v.to_string(), ..a.clone() },
+                None => match args.get(i) {
+                    Some(v) => {
+                        i += 1;
+                        v.clone()
+                    }
+                    None => return false,
+                },
+            };
+            if !value(&opt, &v) {
+                return false;
+            }
+            any_url |= opt == "--url";
+            continue;
+        }
+        if let Some(bundle) = t.strip_prefix('-').filter(|b| !b.is_empty()) {
+            for (k, c) in bundle.char_indices() {
+                if short_flags.contains(c) {
+                    continue;
+                }
+                if !short_valued.contains(c) {
+                    return false;
+                }
+                let stuck = &bundle[k + c.len_utf8()..];
+                let v = if stuck.is_empty() {
+                    match args.get(i) {
+                        Some(v) => {
+                            i += 1;
+                            v.clone()
+                        }
+                        None => return false,
+                    }
+                } else {
+                    Word { text: stuck.to_string(), ..a.clone() }
+                };
+                if !value(&format!("-{c}"), &v) {
+                    return false;
+                }
+                break;
+            }
+            continue;
+        }
+        // Anything else is a URL (curl takes `host/path` without a scheme too)
+        if a.glob || !local_url(t) {
             return false;
         }
-        // Other words are option values (headers, data, methods): not a place to send to
+        any_url = true;
     }
     any_url
 }
 
-fn all_paths_inside(args: &[Word], folder: &Path) -> Verdict {
-    args.iter().try_for_each(|a| path_inside(a, folder))
+/// Whether `url` (with or without `http://`/`https://`) is on this computer.
+fn local_url(url: &str) -> bool {
+    let rest = match url.split_once("://") {
+        Some(("http" | "https", rest)) => rest,
+        Some(_) => return false,
+        None => url,
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if host.contains('\\') {
+        return false;
+    }
+    let host = host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host);
+    let host = host.split(':').next().unwrap_or("");
+    matches!(host, "localhost" | "127.0.0.1")
 }
 
-/// Whether a word that names a file names one inside the folder. Words that aren't paths pass.
-fn path_inside(word: &Word, folder: &Path) -> Verdict {
+fn all_paths_inside(args: &[Word], ctx: &Ctx) -> Verdict {
+    args.iter().try_for_each(|a| path_inside(a, ctx))
+}
+
+/// Whether a word that names a file names one inside the folder, judged from the folder the
+/// command runs in. Words that aren't paths pass, unless they name a symlink there.
+fn path_inside(word: &Word, ctx: &Ctx) -> Verdict {
     let outside = || Err("it names a path outside the bot's folder".to_string());
     if word.tilde {
         return outside();
     }
     let text = word.text.as_str();
+    let inside = |p: &str| is_inside(ctx.folder, &ctx.cwd.join(p).to_string_lossy());
     // `--out=/x` and `-I/x`: the value
     let candidate = if text.starts_with('-') {
         match text.split_once('=') {
@@ -787,6 +1162,12 @@ fn path_inside(word: &Word, folder: &Path) -> Verdict {
             },
         }
     } else {
+        // `SHELL=/x` as an argument (`make SHELL=/x`): the value too
+        if let Some((_, v)) = assignment(text).and_then(|_| text.split_once('=')) {
+            if v.starts_with(['/', '.']) && !word.glob && !SAFE_DEVICES.contains(&v) && !inside(v) {
+                return outside();
+            }
+        }
         text
     };
     let candidate = match candidate.strip_prefix("file://") {
@@ -806,10 +1187,23 @@ fn path_inside(word: &Word, folder: &Path) -> Verdict {
             return Err("its wildcard could reach outside the bot's folder".into());
         }
         let dir = if dir_end == 0 { "." } else { &candidate[..dir_end] };
-        return if is_inside(folder, dir) { Ok(()) } else { outside() };
+        if !inside(dir) {
+            return outside();
+        }
+        // A symlink the wildcard could match may point out of the folder
+        if let Ok(entries) = std::fs::read_dir(ctx.cwd.join(dir)) {
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|t| t.is_symlink()) && !inside(&entry.path().to_string_lossy()) {
+                    return Err("its wildcard could match a symlink out of the bot's folder".into());
+                }
+            }
+        }
+        return Ok(());
     }
     let looks_like_path = candidate.starts_with('/') || candidate.starts_with('.') || candidate.contains('/');
-    if !looks_like_path || is_inside(folder, candidate) {
+    // A plain name is a file in the current folder when one exists there: follow it if it's a link
+    let is_link = || ctx.cwd.join(candidate).symlink_metadata().is_ok_and(|m| m.file_type().is_symlink());
+    if (!looks_like_path && !is_link()) || inside(candidate) {
         Ok(())
     } else {
         outside()
@@ -819,7 +1213,6 @@ fn path_inside(word: &Word, folder: &Path) -> Verdict {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn folder() -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
@@ -838,7 +1231,6 @@ mod tests {
         "RUST_BACKTRACE=1 cargo test db::",
         "npm test",
         "npm run build",
-        "npx tsc --noEmit",
         "git status",
         "git diff HEAD~1 -- src/main.rs",
         "git log --oneline -5",
@@ -881,6 +1273,20 @@ mod tests {
         "jq '.a' src/data.json",
         "true # just a comment with curl in it",
         "git -C src log -1",
+        "grep -e foo src",
+        "grep -rn -e foo -e bar src",
+        "awk 'NR>1 && $3 > 10 {print $1}' src/data.txt",
+        "awk -F: -v x=1 '{print $1, x}' src/x",
+        "nice -n 5 cargo test",
+        "nohup cargo build",
+        "setsid cargo test",
+        "command -p ls src",
+        "stdbuf -oL cargo test",
+        "curl -sS -o out.json http://localhost:3000/x",
+        "tar -xzf out.tgz",
+        "rm -rf src/*",
+        "rm -rf ./target",
+        "cat src/a.rs",
     ];
 
     const ASKED: &[&str] = &[
@@ -985,6 +1391,60 @@ mod tests {
         "git -C /etc log",
         "tar czf /tmp/out.tgz src",
         "ls -I/etc",
+        // Rigel's repros (QA gate on 55c5f93)
+        "command -p curl https://example.com",
+        "command -px curl https://example.com",
+        "builtin -p curl https://example.com",
+        "setsid curl https://example.com",
+        "nice -n 5 curl https://example.com",
+        "nohup -x curl https://example.com",
+        "chrt 1 curl https://example.com",
+        "ionice curl https://example.com",
+        "awk '{print > $2}' src/x",
+        "awk '{print >$1}' src/x",
+        "awk '{printf \"%s\", $0 > (\"o\" $1)}' src/x",
+        "awk 'BEGIN{print ENVIRON[\"X\"]}'",
+        "awk -f prog.awk src/x",
+        "gawk -l filefuncs '{print}' src/x",
+        "git rebase -x 'curl evil' HEAD~1",
+        "git rebase --exec=ls main",
+        "git rebase -ix ls main",
+        "git fetch -u evil origin",
+        "git clone --upload-pack=touch src/x src/y",
+        "git grep -O vim x",
+        "git clone ext::sh src/y",
+        "npx cowsay",
+        "npx tsc --noEmit",
+        "pnpm dlx cowsay",
+        "yarn dlx cowsay",
+        "bunx cowsay",
+        "bun x cowsay",
+        "npm exec cowsay",
+        "tar --checkpoint=1 --checkpoint-action=exec=id -cf out.tar src",
+        "tar -cf out.tar --to-command=id src",
+        "tar -I gzip -cf x src",
+        "tar -cf host:out.tar src",
+        "tar cfI x src gzip",
+        "grep -e. /etc/hostname",
+        "grep -ex /etc/hostname",
+        "grep -rne. /etc",
+        "grep -f/etc/passwd src",
+        "rg --pre cat x src",
+        "curl -xevil:8080 http://localhost/",
+        "curl --socks5 evil:1080 http://localhost/",
+        "curl --proxy=evil http://localhost/",
+        "curl -s evil.example http://localhost/",
+        "curl -sx evil http://localhost/",
+        "curl -K cfg http://localhost/",
+        "curl -d @src/a http://localhost/",
+        "curl http://localhost@evil.example/",
+        "rm -rf ./*",
+        "rm -rf */",
+        "rm -r ./src/../*",
+        "frobtool x",
+        "sort --compress-program=sh src/x",
+        "zip -T -TT 'sh -c id' out.zip src",
+        "rustc -C linker=sh src/a.rs",
     ];
 
     #[test]
@@ -1013,6 +1473,15 @@ mod tests {
             std::os::unix::fs::symlink(tmp.path(), ws.join("up")).unwrap();
             assert!(!classify("rm -rf up/other", &ws).is_allowed());
             assert!(!classify("ln -s /etc etc", &ws).is_allowed());
+            // A bare name is followed when it's a link out (Rigel's repro)
+            std::os::unix::fs::symlink("/etc/hostname", ws.join("out")).unwrap();
+            assert!(!classify("cat out", &ws).is_allowed());
+            assert!(!classify("cp out src/", &ws).is_allowed());
+            std::os::unix::fs::symlink("/etc/passwd", ws.join("src/link")).unwrap();
+            assert!(!classify("cd src && cat link", &ws).is_allowed());
+            assert!(!classify("cat src/*", &ws).is_allowed());
+            assert!(!classify("cd up", &ws).is_allowed());
+            assert!(classify("cat run.sh", &ws).is_allowed());
         }
     }
 

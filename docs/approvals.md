@@ -23,19 +23,33 @@ script in the bot's folder that it runs can do anything the bot's user can.
 ## What `smart` runs without a card
 
 - **Shell commands** (claude's `Bash`, API drivers' `execute_shell` in Local mode) that
-  `src/mcp/shell_risk.rs` finds safe in the bot's folder. It fails closed: anything it can't read
-  confidently asks. It asks for:
+  `src/mcp/shell_risk.rs` finds safe in the bot's folder. It is an allowlist and fails closed:
+  only programs it knows run (file and text tools like `ls`, `cat`, `cp`, `mv`, `mkdir`, `sort`,
+  `jq`; build tools like `cargo`, `npm`, `make`, `git` with checks; programs inside the folder),
+  and anything else, or anything it can't read confidently, asks. It asks for:
   - `$`, `$(…)`, backticks, unquoted `( ) { }`, heredocs, newlines, `eval`, `source`, `exec`,
     shells with `-c`, a pipe into a shell, inline code (`python -c`, `node -e`, …);
-  - network tools (curl and wget run only for localhost URLs with plain flags), `sudo`/`su`,
-    containers and cloud CLIs, mail senders, process and system tools, credential tools,
-    `xargs`/`parallel`, `env`/`printenv` on their own;
-  - `git push` and other git commands that leave the machine or touch global config; publish,
-    login and install commands of npm/pnpm/yarn/bun/cargo/pip/uv/gem/poetry/twine/go;
-    `find -exec/-delete`, `sed` scripts beyond print/delete/substitute (`w`, `e`, `-f`), `awk`
-    programs that write files, pipe or call `system`/`getline` (or `-f`), `rm` of the whole folder;
-  - any path argument, redirect target or `cd` that resolves outside the folder (symlinks
-    followed; `/dev/null` is fine), and programs outside the folder and the system bin folders;
+  - wrappers other than `env`, `command`/`builtin` (`-p` too), `nice`, `nohup`, `time`,
+    `timeout`, `setsid`, `stdbuf`, and wrapper options it doesn't know; the wrapped command is
+    judged;
+  - network tools (curl and wget run only for localhost URLs with options from a short list:
+    proxies `-x`/`--proxy`/`--socks*`, config files and `@file` ask), `sudo`/`su`, containers and
+    cloud CLIs, mail senders, process and system tools, credential tools, `xargs`/`parallel`,
+    `env`/`printenv` on their own;
+  - `git push` and other git commands that leave the machine, touch global config or run a
+    command (`rebase -x/--exec`, `--upload-pack`, `ext::`, `grep -O`, …); publish, login and
+    install commands of npm/pnpm/yarn/bun/cargo/pip/uv/gem/poetry/twine/go; `npx`, `bunx`,
+    `npm exec`, `pnpm dlx`, `yarn dlx`, `bun x` (they download and run package code);
+  - `find -exec/-delete`, `sed` scripts beyond print/delete/substitute (`w`, `e`, `-f`), `awk`
+    programs that redirect `print`, pipe, read `ENVIRON` or call `system`/`getline`, and awk
+    options other than `-F`/`-v`; `tar` options that run a program (`--checkpoint-action`,
+    `--to-command`, `-I`, …) or a `host:file` archive; `grep`/`rg` options that run a program
+    (`--pre`) or read a pattern file outside the folder (`-f`, `-e` stuck to its value is read
+    correctly); `sort --compress-program`, `zip -TT`;
+  - `rm -r` of the whole folder or of a wildcard straight under it (`rm -rf ./*`, `rm -rf */`);
+  - any path argument, redirect target or `cd` that resolves outside the folder. Symlinks are
+    followed, also for a plain name (`cat link`) and for links a wildcard could match;
+    relative paths count from the folder after any `cd`; `/dev/null` is fine;
   - a leading `VAR=value` other than harmless names like `RUST_LOG`, `CI`, `NODE_ENV`.
 - **Reads** (Read, Glob, Grep, LS, NotebookRead) outside the folder, unless they touch:
   - live system data: `/proc`, `/sys`, `/dev`, `/run` (`/proc/self/environ` holds the gateway
