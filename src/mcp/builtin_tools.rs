@@ -6,7 +6,12 @@
 //!   anywhere else;
 //! - reading outside the working folder, shell commands and any tool kwnt doesn't know need the
 //!   person's OK (an approval card, where "Always this session" is honoured).
+//!
+//! Under "Ask only when risky" ([`smart_verdict`]) shell commands the classifier in
+//! [`super::shell_risk`] finds safe, and reads outside the folder that don't touch credentials,
+//! run without a card too.
 
+use super::SmartVerdict;
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
 
@@ -43,6 +48,63 @@ pub fn decide(tool: &str, input: &Value, folder: Option<&Path>) -> BuiltinDecisi
     }
     // Bash and anything this version of kwnt doesn't know about
     BuiltinDecision::Ask { outside_folder: false }
+}
+
+/// What "Ask only when risky" makes of a call [`decide`] would ask about.
+pub fn smart_verdict(tool: &str, input: &Value, folder: Option<&Path>) -> SmartVerdict {
+    if tool == "Bash" {
+        let Some(folder) = folder else { return SmartVerdict::Ask("the bot has no working folder this turn".into()) };
+        return match input.get("command").and_then(Value::as_str) {
+            Some(command) => super::shell_risk::classify(command, folder),
+            None => SmartVerdict::Ask("kwnt can't read this command".into()),
+        };
+    }
+    if READ_TOOLS.contains(&tool) {
+        // A pattern can name a place too (`Glob` with `/home/x/**`)
+        let keys: &[&str] = if tool == "Glob" { &["path", "pattern"] } else { &["file_path", "notebook_path", "path"] };
+        let paths: Vec<&str> = keys
+            .iter()
+            .filter_map(|k| input.get(*k).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect();
+        let Some(target) = target_path(input) else {
+            return SmartVerdict::Ask("kwnt can't tell where this read looks".into());
+        };
+        if target.starts_with('~') {
+            return SmartVerdict::Ask("kwnt can't tell where a `~` path points".into());
+        }
+        return match paths.iter().find(|p| credential_path(p)) {
+            Some(p) => SmartVerdict::Ask(format!("{p} can hold passwords or keys")),
+            None => SmartVerdict::Allow("reads outside the bot's folder, away from passwords and keys".into()),
+        };
+    }
+    if WRITE_TOOLS.contains(&tool) {
+        return SmartVerdict::Ask("it writes outside the bot's folder".into());
+    }
+    SmartVerdict::Ask(format!("kwnt doesn't know what `{tool}` does"))
+}
+
+/// Folders and files that hold passwords, keys or signed-in sessions: reading them always asks.
+const CREDENTIAL_NAMES: &[&str] = &[
+    ".ssh", ".aws", ".gnupg", ".kube", ".docker", ".netrc", ".claude", ".claude.json", ".codex", ".git-credentials",
+    ".npmrc", ".pypirc", ".password-store", ".mozilla", "Keychains",
+];
+const CREDENTIAL_FOLDERS: &[&str] = &[
+    ".config/gh", ".config/gcloud", ".config/google-chrome", ".config/chromium", ".config/BraveSoftware",
+    ".config/microsoft-edge", "Library/Application Support/Google", "Library/Application Support/Firefox",
+    "Library/Application Support/BraveSoftware", "Library/Cookies",
+];
+
+/// Whether `path`, as written or once symlinks are followed, is under a credential folder or
+/// names a `.env` file.
+fn credential_path(path: &str) -> bool {
+    let resolved = resolve(Path::new(path)).map(|p| p.display().to_string());
+    [Some(path.to_string()), resolved].into_iter().flatten().any(|p| {
+        let parts: Vec<&str> = p.split('/').filter(|c| !c.is_empty()).collect();
+        parts.iter().any(|c| CREDENTIAL_NAMES.contains(c) || c.starts_with(".env"))
+            || CREDENTIAL_FOLDERS.iter().any(|f| p.contains(&format!("/{f}")) || p.starts_with(f))
+    })
 }
 
 /// The file or folder a file tool acts on.
@@ -101,16 +163,25 @@ fn resolve(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// The paragraph a claude CLI bot reads about its own tools.
-pub fn prompt_block(folder: Option<&Path>) -> String {
+/// The paragraph a claude CLI bot reads about its own tools; `smart` when its approvals ask only
+/// for risky calls.
+pub fn prompt_block(folder: Option<&Path>, smart: bool) -> String {
     let place = match folder {
         Some(f) => format!("Your working folder is {}. You can create, edit and delete files there without asking.", f.display()),
         None => "You have no working folder this turn, so every file write needs the person's OK.".to_string(),
     };
+    let cards = if smart {
+        "Shell commands (Bash) that stay in that folder run without asking. Anything risky shows the person an approval card first: \
+         the network (except localhost), other users, git push, publishing, containers, mail, paths outside the folder, and \
+         commands kwnt can't read for sure ($(…), backticks, bash -c). Prefer plain commands and relative paths. \
+         Writing files outside the folder, and reading passwords or keys, also needs a card."
+    } else {
+        "Writing or reading files outside it, and every shell command (Bash), shows the person an approval card first."
+    };
     format!(
         "\n\n[Your tools]\nYou can search the web (WebSearch) and read web pages (WebFetch) whenever it helps; cite the pages you used. \
-         {place} Writing or reading files outside it, and every shell command (Bash), shows the person an approval card first: \
-         ask for what you need and wait for their answer instead of giving up. If they deny it, say what you would have done."
+         {place} {cards} \
+         Ask for what you need and wait for their answer instead of giving up. If they deny it, say what you would have done."
     )
 }
 

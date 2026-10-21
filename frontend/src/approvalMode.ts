@@ -1,11 +1,11 @@
-// The person's approvals switch: "ask" (a card before a bot's tool runs) or "off" (it runs and is
-// recorded). Set per space, with a per-bot override. Only the person changes it; a bot's token
+// The person's approvals switch: "ask" (a card before a bot's tool runs), "smart" (a card only for
+// risky calls; the rest run and are recorded) or "off" (it runs and is recorded). Set per space, with a per-bot override. Only the person changes it; a bot's token
 // gets 403. No event fires on a change, so callers load bots and spaces again after a save.
 
 import { StoreStatus, autofillGapNote, needsBitwardenFrom } from './passwordStore';
 
-export type SpaceApprovals = 'ask' | 'off';
-export type BotApprovals = 'inherit' | 'ask' | 'off';
+export type SpaceApprovals = 'ask' | 'smart' | 'off';
+export type BotApprovals = 'inherit' | SpaceApprovals;
 
 /** GET/PUT /api/kwants/:id/approvals */
 export interface BotApprovalsState {
@@ -15,8 +15,9 @@ export interface BotApprovalsState {
   space_approvals: SpaceApprovals;
 }
 
-const spaceMode = (v: unknown): SpaceApprovals => (v === 'off' ? 'off' : 'ask');
-const botMode = (v: unknown): BotApprovals => (v === 'off' || v === 'ask' ? v : 'inherit');
+const isMode = (v: unknown): v is SpaceApprovals => v === 'ask' || v === 'smart' || v === 'off';
+const spaceMode = (v: unknown): SpaceApprovals => (isMode(v) ? v : 'ask');
+const botMode = (v: unknown): BotApprovals => (isMode(v) ? v : 'inherit');
 
 /** True when this bot runs everything without asking. Older servers send nothing: that's "ask". */
 export const approvalsOff = (k: { approvals_effective?: string | null } | null | undefined): boolean => k?.approvals_effective === 'off';
@@ -34,20 +35,26 @@ export function parseBotApprovals(raw: unknown): BotApprovalsState | null {
     kwant_id: o.kwant_id,
     approvals,
     space_approvals: space,
-    approvals_effective: o.approvals_effective === 'off' || o.approvals_effective === 'ask' ? o.approvals_effective : effectiveApprovals(approvals, space),
+    approvals_effective: isMode(o.approvals_effective) ? o.approvals_effective : effectiveApprovals(approvals, space),
   };
 }
 
 export const SPACE_OPTIONS: Array<{ value: SpaceApprovals; label: string; hint: string }> = [
   { value: 'ask', label: 'Ask before running commands', hint: 'A card asks you before a bot runs a command, writes a file or uses a tool.' },
+  {
+    value: 'smart',
+    label: 'Ask only when risky',
+    hint: 'Ordinary work in the bot’s folder runs on its own; a card asks before network calls, git push, publishing, anything outside the folder or anything unclear.',
+  },
   { value: 'off', label: 'Don’t ask', hint: 'Bots run everything without approval.' },
 ];
 
 /** The per-bot choices; "Same as space" names what the space is set to. */
 export function botOptions(space: SpaceApprovals): Array<{ value: BotApprovals; label: string }> {
   return [
-    { value: 'inherit', label: `Same as space (${space === 'off' ? 'Don’t ask' : 'Ask'})` },
+    { value: 'inherit', label: `Same as space (${space === 'off' ? 'Don’t ask' : space === 'smart' ? 'Ask only when risky' : 'Ask'})` },
     { value: 'ask', label: 'Ask before running commands' },
+    { value: 'smart', label: 'Ask only when risky' },
     { value: 'off', label: 'Don’t ask' },
   ];
 }
@@ -142,8 +149,8 @@ export const approvalModeApi = {
     return state;
   },
   /**
-   * "Turn approvals back on" everywhere: every active space that's off, and every bot set to off,
-   * goes back to ask. Archived spaces can't be changed until they're restored; they count as failed.
+   * "Turn approvals back on" everywhere: every active space that's off or "Ask only when risky",
+   * and every bot set to either, goes back to ask (both keep passwords off this server). Archived spaces can't be changed until they're restored; they count as failed.
    */
   turnAllOn: async (): Promise<{ changed: number; failed: number }> => {
     let changed = 0;
@@ -173,7 +180,7 @@ export const approvalModeApi = {
     for (const sp of spaces) {
       const id = typeof sp.id === 'string' ? sp.id : null;
       if (!id) continue;
-      if (sp.approvals === 'off') {
+      if (sp.approvals === 'off' || sp.approvals === 'smart') {
         if (sp.archived_at) failed++;
         else await attempt(() => approvalModeApi.setSpace(id, 'ask'));
       }
@@ -184,7 +191,7 @@ export const approvalModeApi = {
         continue;
       }
       for (const b of bots) {
-        if (b.approvals === 'off' && typeof b.id === 'string') await attempt(() => approvalModeApi.setBot(b.id as string, 'ask', id));
+        if ((b.approvals === 'off' || b.approvals === 'smart') && typeof b.id === 'string') await attempt(() => approvalModeApi.setBot(b.id as string, 'ask', id));
       }
     }
     if (changed) window.dispatchEvent(new Event(APPROVALS_CHANGED_EVENT));

@@ -152,8 +152,11 @@ impl ToolApprover for BrokerApprover {
     async fn approve(&self, req: ToolApprovalRequest) -> bool {
         // Approvals the person switched off: run, and keep a record of what ran. A setting that
         // can't be read asks, as before.
-        let off = self.db.kwant_approvals(&req.kwant_id).await.is_ok_and(|m| m.is_off());
-        let details = match &req.builtin {
+        let mode = self.db.kwant_approvals(&req.kwant_id).await.ok();
+        let off = mode.as_ref().is_some_and(|m| m.is_off());
+        // "Ask only when risky": what the caller made of this call; nothing known asks
+        let smart = mode.as_ref().is_some_and(|m| m.is_smart()).then(|| req.smart.clone()).flatten();
+        let mut details = match &req.builtin {
             Some(b) => json!({
                 "source": "claude_builtin",
                 "tool": req.tool,
@@ -172,6 +175,9 @@ impl ToolApprover for BrokerApprover {
                 "kwant_name": req.kwant_name,
             }),
         };
+        if let Some(verdict) = &smart {
+            details["smart_reason"] = json!(verdict.reason());
+        }
         let record = NewApproval {
             turn_id: req.turn_id.clone(),
             kwant_id: req.kwant_id.clone(),
@@ -187,6 +193,13 @@ impl ToolApprover for BrokerApprover {
                 tracing::warn!(error = %e, "could not record a refused call");
             }
             return false;
+        }
+        if let Some(mcp::SmartVerdict::Allow(why)) = &smart {
+            tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, reason = %why, "ran without a card: not risky");
+            if let Err(e) = self.db.save_auto_allowed(&record).await {
+                tracing::warn!(error = %e, "could not record a call that ran without a card");
+            }
+            return true;
         }
         if !off && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
             return true;
@@ -338,6 +351,7 @@ pub async fn prepare_turn_with_self(
         permission_url: Some(format!("{}/api/mcp/permission/{token}", local_base_url(state))),
         gateway: Some(GatewayAccess { url: format!("{}/api/mcp/gateway", local_base_url(state)), token: token.clone() }),
         max_tool_iterations: max_tool_iterations(setting),
+        smart_approvals: state.db.kwant_approvals(&kwant.id).await.is_ok_and(|m| m.is_smart()),
         records: Default::default(),
     };
     let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), turn_id, ctx.clone(), cwd);
@@ -367,13 +381,28 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Response {
 /// Answers one claude permission prompt. MCP tools from the kwant's own servers get their
 /// approval card; claude's own tools follow [`mcp::builtin_tools`]; tools from servers the
 /// kwant doesn't have are denied.
-async fn decide(session: &PermissionSession, args: &Value) -> Value {
+async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value {
     let tool_name = args["tool_name"].as_str().unwrap_or("");
     let input = args.get("input").cloned().unwrap_or_else(|| json!({}));
     let tool_use_id = args["tool_use_id"].as_str().unwrap_or("").to_string();
 
+    let mut verdict = None;
     let (server, tool, builtin) = match mcp::split_tool_name(tool_name) {
-        Some((server, tool)) if session.ctx.servers.iter().any(|s| s.name == server) => (server, tool, None),
+        Some((server, tool)) if session.ctx.servers.iter().any(|s| s.name == server) => {
+            // Read-only tools run under "Ask only when risky": ask the server through the
+            // gateway's connections (kwnt's own tools never need a card anyway)
+            if smart && server != mcp::SELF_SERVER_NAME {
+                let read_only = match session.tool_session().await {
+                    Some(tools) => tools.read_only(tool_name),
+                    None => None,
+                };
+                verdict = Some(match read_only {
+                    Some(read_only) => mcp::session::read_only_verdict(read_only),
+                    None => mcp::SmartVerdict::Ask("kwnt couldn't check whether this MCP tool is read-only".into()),
+                });
+            }
+            (server, tool, None)
+        }
         _ if tool_name.is_empty() || tool_name.starts_with("mcp__") => {
             return json!({"behavior": "deny", "message": format!("{tool_name} is not available to this bot.")});
         }
@@ -384,6 +413,9 @@ async fn decide(session: &PermissionSession, args: &Value) -> Value {
                     return json!({"behavior": "allow", "updatedInput": input});
                 }
                 mcp::builtin_tools::BuiltinDecision::Ask { outside_folder } => {
+                    if smart {
+                        verdict = Some(mcp::builtin_tools::smart_verdict(tool_name, &input, folder.as_deref()));
+                    }
                     let cwd = folder.or_else(|| session.cwd.clone()).map(|f| f.display().to_string());
                     ("", tool_name, Some(mcp::BuiltinCall { cwd, outside_folder }))
                 }
@@ -399,6 +431,7 @@ async fn decide(session: &PermissionSession, args: &Value) -> Value {
         tool: tool.to_string(),
         arguments: input.clone(),
         builtin,
+        smart: verdict,
     });
     // Dropping the approval withdraws its card when the turn ends first
     let allowed = tokio::select! {
@@ -463,7 +496,8 @@ pub async fn permission_endpoint(
             }]}),
         ),
         "tools/call" if msg["params"]["name"] == PERMISSION_TOOL => {
-            let decision = decide(&session, &msg["params"]["arguments"]).await;
+            let smart = state.db.kwant_approvals(&session.kwant_id).await.is_ok_and(|m| m.is_smart());
+            let decision = decide(&session, &msg["params"]["arguments"], smart).await;
             rpc_result(id, json!({"content": [{"type": "text", "text": decision.to_string()}]}))
         }
         "tools/call" => rpc_error(id, -32602, "unknown tool"),

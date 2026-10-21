@@ -920,6 +920,9 @@ impl Driver for CliDriver {
                 // kwnt decides every tool call. claude's own `auto` mode (picked on a fresh
                 // config) would approve Bash itself and never ask kwnt, so no card and no record.
                 cmd.arg("--permission-mode").arg("default");
+                // Each Bash call starts in the bot's folder, so a `cd` kwnt approved once doesn't
+                // carry later commands somewhere "Ask only when risky" never judged
+                cmd.env("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "1");
                 // Skip starting the user's personal MCP servers on every chat turn
                 cmd.arg("--strict-mcp-config");
                 // kwnt's routines and teammates, never claude's own scheduler or sessions
@@ -950,8 +953,8 @@ impl Driver for CliDriver {
                 }
                 // claude's own tools follow kwnt's policy (see mcp::builtin_tools); tell the bot
                 let folder = input.workspace_dir.as_deref().filter(|d| d.exists());
-                let tools_block = if input.mcp.is_some() {
-                    crate::mcp::builtin_tools::prompt_block(folder)
+                let tools_block = if let Some(ctx) = &input.mcp {
+                    crate::mcp::builtin_tools::prompt_block(folder, ctx.smart_approvals)
                 } else {
                     String::new()
                 };

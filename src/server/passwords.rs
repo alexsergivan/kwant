@@ -39,6 +39,8 @@
 //!
 //! and switching approvals off answers 409 while the built-in store holds any password (see
 //! [`refuse_approvals_off`]). An install already in that state is reported as `exposed: true`.
+//! "Ask only when risky" (`smart`) counts as off here: it runs scripts in the bot's folder
+//! without a card, and those can read the data folder just the same.
 //! `local_count` counts every file in the built-in store, those of deleted teams, channels and
 //! bots included, and deleting one removes its file (audit F-11).
 
@@ -368,7 +370,7 @@ pub async fn forget_deleted_owners(state: &AppState, ids: &[&str]) {
     }
 }
 
-/// Whether any space or bot has approvals off. A failed read counts as off.
+/// Whether any space or bot has approvals off or "Ask only when risky". A failed read counts as off.
 pub async fn approvals_off_anywhere(state: &AppState) -> bool {
     state.db.any_approvals_off().await.unwrap_or(true)
 }
@@ -386,7 +388,7 @@ pub async fn refuse_approvals_off(state: &AppState) -> Option<Response> {
         (
             StatusCode::CONFLICT,
             Json(json!({
-                "error": "approvals can't be switched off while passwords are saved on this server: a bot that can run commands could read them. Move them to Bitwarden first.",
+                "error": "approvals can't be switched off, or to \"Ask only when risky\", while passwords are saved on this server: a bot that can run commands could read them. Move them to Bitwarden first.",
                 "needs_bitwarden": true,
                 "local_count": n,
             })),

@@ -13,6 +13,9 @@ The built-in store protects against copies of the data folder. It does **not** p
 
 Since 2026-10-20, approvals off and passwords in the built-in store are not allowed together. The server enforces this:
 
+"Ask only when risky" (`smart`, 2026-10-21) counts as off everywhere in this section. It runs commands like `cargo test` or `python3 x.py` in the bot's folder without a card, and that code can read the data folder like any other. `approvals_off` and `exposed` below are true for `smart` too.
+
+
 - Switching approvals off returns 409 `{error, needs_bitwarden: true, local_count}` while the built-in store holds any password. This covers a space, a bot, and a bot set to `inherit` from a space that is off. It also applies in Bitwarden mode when built-in passwords were never moved: they still open with the built-in key. Move them with `POST /api/passwords/migrate` first.
 - While any space or bot has approvals off, saving into the built-in store (`POST …/passwords` or `…/passwords/pending`) returns 409 `{error, needs_bitwarden: true}`. A captured login keeps waiting.
 - While any space or bot has approvals off, going back from Bitwarden to the built-in store (`DELETE /api/passwords/bitwarden`) returns 409 `{error, needs_bitwarden: true, local_count}`, unless the built-in store is empty.
@@ -84,7 +87,7 @@ Vault:
 
 ## Tests
 
-- `cargo test --test approvals_passwords_test` checks the approvals-off rules above.
+- `cargo test --test approvals_passwords_test` checks the approvals-off rules above, `smart` included.
 - `cargo test bitwarden` runs the unit tests and route checks, with known-answer vectors for the key derivation and the cipher format.
 - The end-to-end tests run against a throwaway Vaultwarden:
 

@@ -321,6 +321,7 @@ fn mcp_ctx(dir: &Path) -> McpTurnContext {
             token: "gw-secret-token".into(),
         }),
         max_tool_iterations: 8,
+        smart_approvals: false,
         records: Default::default(),
     }
 }

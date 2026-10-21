@@ -24,7 +24,7 @@ export interface Space {
   counts: SpaceCounts;
   paused_routines?: number;
   /** The approvals switch; older servers leave it out ("ask"). */
-  approvals?: 'ask' | 'off';
+  approvals?: 'ask' | 'smart' | 'off';
 }
 
 export interface NewSpace {

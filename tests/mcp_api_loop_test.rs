@@ -72,6 +72,7 @@ fn ctx(approver: Arc<dyn ToolApprover>, timeout_secs: i64, max: usize) -> McpTur
         permission_url: None,
         gateway: None,
         max_tool_iterations: max,
+        smart_approvals: false,
         records: Default::default(),
     }
 }

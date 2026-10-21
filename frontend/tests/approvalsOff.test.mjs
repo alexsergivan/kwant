@@ -152,12 +152,13 @@ test('space control when off: Don\'t ask is checked, the marker shows, and bots 
 
 // ---------------------------------------------------------------- the bot override
 
-test('bot override: three choices, "Same as space" names the space value, the marker when it runs free', () => {
+test('bot override: four choices, "Same as space" names the space value, the marker when it runs free', () => {
   const html = m.botSetting({ initial: { kwant_id: 'k1', approvals: 'inherit', approvals_effective: 'off', space_approvals: 'off' } });
   const opts = [...html.matchAll(/<option[^>]*value="([^"]+)"[^>]*>([^<]*)</g)].map((x) => [x[1], text(x[2])]);
   assert.deepEqual(opts, [
     ['inherit', "Same as space (Don't ask)"],
     ['ask', 'Ask before running commands'],
+    ['smart', 'Ask only when risky'],
     ['off', "Don't ask"],
   ]);
   assert.match(html, /<label for="([^"]+)"[^>]*>Approvals<\/label>/);

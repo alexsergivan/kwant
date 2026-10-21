@@ -1,5 +1,6 @@
-//! The person's approvals switch: `ask` (an approval card before a bot's tool runs) or `off`
-//! (it runs, and is recorded as `auto_allowed`). Set per space, with a per-bot override. Only
+//! The person's approvals switch: `ask` (an approval card before a bot's tool runs), `smart`
+//! (a card only for risky calls; the rest run and are recorded as `auto_allowed`) or `off` (it
+//! runs, and is recorded as `auto_allowed`). Set per space, with a per-bot override. Only
 //! the person changes it: a request carrying a bot's turn token is refused, and bots' own tools
 //! refuse an `approvals` field.
 
@@ -8,7 +9,7 @@ use super::{
     AppState,
 };
 use crate::db::{
-    approval_modes::{valid_mode, ApprovalMode, INHERIT, OFF},
+    approval_modes::{valid_mode, ApprovalMode, INHERIT, OFF, SMART},
     spaces::SpaceId,
 };
 use axum::{
@@ -29,6 +30,11 @@ fn internal() -> Response {
 }
 
 const REFUSAL: &str = "only the person changes approvals";
+
+/// Modes that let a bot run commands without a card: kept away from the built-in password store.
+fn relaxes(mode: &str) -> bool {
+    mode == OFF || mode == SMART
+}
 
 #[derive(Deserialize)]
 pub struct ModeBody {
@@ -54,8 +60,8 @@ async fn space_json(state: &AppState, space: &SpaceId) -> Result<Value, Response
     Ok(json!({"space_id": space.as_str(), "approvals": mode, "bots": bots}))
 }
 
-/// `GET /api/spaces/:id/approvals`: `{space_id, approvals: "ask"|"off", bots: [{kwant_id,
-/// approvals: "inherit"|"ask"|"off", approvals_effective: "ask"|"off"}]}`.
+/// `GET /api/spaces/:id/approvals`: `{space_id, approvals: "ask"|"smart"|"off", bots: [{kwant_id,
+/// approvals: "inherit"|"ask"|"smart"|"off", approvals_effective: "ask"|"smart"|"off"}]}`.
 pub async fn get_space(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let space = SpaceId::new(&id);
     match state.db.get_space(&space).await {
@@ -69,7 +75,7 @@ pub async fn get_space(State(state): State<AppState>, Path(id): Path<String>) ->
     }
 }
 
-/// `PUT /api/spaces/:id/approvals {approvals: "ask"|"off"}`: the person only.
+/// `PUT /api/spaces/:id/approvals {approvals: "ask"|"smart"|"off"}`: the person only.
 pub async fn put_space(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -85,9 +91,9 @@ pub async fn put_space(
     };
     let mode = body.approvals.trim();
     if !valid_mode(mode) {
-        return error(StatusCode::BAD_REQUEST, "approvals must be \"ask\" or \"off\"");
+        return error(StatusCode::BAD_REQUEST, "approvals must be \"ask\", \"smart\" or \"off\"");
     }
-    if mode == OFF {
+    if relaxes(mode) {
         if let Some(r) = super::passwords::refuse_approvals_off(&state).await {
             return r;
         }
@@ -114,7 +120,7 @@ async fn kwant_json(state: &AppState, id: &str) -> Result<Value, Response> {
     Ok(v)
 }
 
-/// `GET /api/kwants/:id/approvals`: `{kwant_id, approvals: "inherit"|"ask"|"off",
+/// `GET /api/kwants/:id/approvals`: `{kwant_id, approvals: "inherit"|"ask"|"smart"|"off",
 /// approvals_effective, space_approvals}`.
 pub async fn get_kwant(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match kwant_json(&state, &id).await {
@@ -123,7 +129,7 @@ pub async fn get_kwant(State(state): State<AppState>, Path(id): Path<String>) ->
     }
 }
 
-/// `PUT /api/kwants/:id/approvals {approvals: "inherit"|"ask"|"off"}`: the person only.
+/// `PUT /api/kwants/:id/approvals {approvals: "inherit"|"ask"|"smart"|"off"}`: the person only.
 pub async fn put_kwant(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -135,16 +141,16 @@ pub async fn put_kwant(
     }
     let mode = body.approvals.trim();
     if !(valid_mode(mode) || mode == INHERIT) {
-        return error(StatusCode::BAD_REQUEST, "approvals must be \"inherit\", \"ask\" or \"off\"");
+        return error(StatusCode::BAD_REQUEST, "approvals must be \"inherit\", \"ask\", \"smart\" or \"off\"");
     }
     let space = match state.db.space_of_kwant(&id).await {
         Ok(Some(s)) => s,
         Ok(None) => return error(StatusCode::NOT_FOUND, "no such bot"),
         Err(_) => return internal(),
     };
-    // `inherit` in a space that is off switches the bot off too
-    let turns_off = mode == OFF
-        || (mode == INHERIT && matches!(state.db.space_approvals(&space).await.as_deref(), Ok(OFF) | Err(_)));
+    // `inherit` in a space that is off (or smart) relaxes the bot too
+    let turns_off = relaxes(mode)
+        || (mode == INHERIT && state.db.space_approvals(&space).await.map_or(true, |m| relaxes(&m)));
     if turns_off {
         if let Some(r) = super::passwords::refuse_approvals_off(&state).await {
             return r;

@@ -2,7 +2,8 @@
 //! tests and smoke checks have a real MCP server without Python, Node or network access.
 //!
 //! Tools: `echo {text}`, `add {a, b}`, `sleep {ms}`, `env {name}` (reads its own environment)
-//! and `crash` (exits mid-call).
+//! and `crash` (exits mid-call). `echo` is marked read-only; `add` claims both read-only and
+//! destructive, so it counts as not read-only.
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -11,9 +12,11 @@ fn tools() -> Value {
     let obj = |props: Value, required: Value| json!({"type": "object", "properties": props, "required": required});
     json!([
         {"name": "echo", "description": "Returns the given text unchanged.",
-         "inputSchema": obj(json!({"text": {"type": "string"}}), json!(["text"]))},
+         "inputSchema": obj(json!({"text": {"type": "string"}}), json!(["text"])),
+         "annotations": {"readOnlyHint": true}},
         {"name": "add", "description": "Adds two numbers.",
-         "inputSchema": obj(json!({"a": {"type": "number"}, "b": {"type": "number"}}), json!(["a", "b"]))},
+         "inputSchema": obj(json!({"a": {"type": "number"}, "b": {"type": "number"}}), json!(["a", "b"])),
+         "annotations": {"readOnlyHint": true, "destructiveHint": true}},
         {"name": "sleep", "description": "Waits for the given milliseconds, then answers.",
          "inputSchema": obj(json!({"ms": {"type": "integer"}}), json!(["ms"]))},
         {"name": "env", "description": "Returns the value of one of this server's environment variables.",
