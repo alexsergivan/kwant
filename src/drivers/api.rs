@@ -268,17 +268,20 @@ fn summary_request(bot: &str, earlier: Option<&str>, messages: &[crate::db::mode
 
 /// Turns the OpenAI-style message list into an Anthropic Messages body: system prompts move to
 /// the top-level `system`, same-role neighbours share one message and the first message is the
-/// user's.
+/// user's. An assistant message's `tool_calls` become `tool_use` blocks and `tool` messages become
+/// the next user message's `tool_result` blocks, so a tool loop can keep the OpenAI shape.
 ///
 /// Prompt caching: system prompts become one block each, stable ones first, with a
-/// `cache_control` breakpoint on the last stable one; in `messages` the breakpoint is on the last
-/// block that isn't `VOLATILE`, and volatile messages become their own blocks after it. That is two
-/// breakpoints at most (the API allows 4), and each turn reads the prefix the previous one wrote.
+/// `cache_control` breakpoint on the last stable one (the tools, which come before the system
+/// prompt, are cached with it). In `messages` the breakpoint is on the last block that isn't
+/// `VOLATILE` before the volatile ones, which become their own blocks after it; a tool round adds
+/// one on its last tool result. That is three breakpoints at most (the API allows 4), and each
+/// call reads the prefix the previous one wrote.
 fn anthropic_body(model: &str, messages: &[Value], max_tokens: i64) -> Value {
     let mut stable_system = Vec::new();
     let mut volatile_system = Vec::new();
-    // (role, text blocks, how many leading blocks are stable)
-    let mut turns: Vec<(&str, Vec<String>, usize)> = Vec::new();
+    // (role, blocks with whether each is volatile)
+    let mut turns: Vec<(&str, Vec<(Value, bool)>)> = Vec::new();
     for m in messages {
         let role = m["role"].as_str().unwrap_or("user");
         let content = m["content"].as_str().unwrap_or_default().to_string();
@@ -294,7 +297,32 @@ fn anthropic_body(model: &str, messages: &[Value], max_tokens: i64) -> Value {
             }
             continue;
         }
-        if volatile && content.trim().is_empty() {
+        let mut blocks = Vec::new();
+        let calls = m["tool_calls"].as_array().filter(|c| !c.is_empty());
+        if role == "tool" {
+            blocks.push(json!({
+                "type": "tool_result",
+                "tool_use_id": m["tool_call_id"].as_str().unwrap_or_default(),
+                "content": content,
+            }));
+        } else if !(content.trim().is_empty() && (volatile || calls.is_some())) {
+            blocks.push(json!({"type": "text", "text": content}));
+        }
+        for call in calls.into_iter().flatten() {
+            let args = &call["function"]["arguments"];
+            let input = match args.as_str() {
+                Some(raw) => serde_json::from_str::<Value>(raw).ok().filter(Value::is_object).unwrap_or_else(|| json!({})),
+                None if args.is_object() => args.clone(),
+                None => json!({}),
+            };
+            blocks.push(json!({
+                "type": "tool_use",
+                "id": call["id"].as_str().unwrap_or_default(),
+                "name": call["function"]["name"].as_str().unwrap_or_default(),
+                "input": input,
+            }));
+        }
+        if blocks.is_empty() {
             continue;
         }
         let role = if role == "assistant" {
@@ -302,37 +330,42 @@ fn anthropic_body(model: &str, messages: &[Value], max_tokens: i64) -> Value {
         } else {
             "user"
         };
+        let blocks = blocks.into_iter().map(|b| (b, volatile));
         match turns.last_mut() {
             // Same-role neighbours share a message but keep their own blocks, so a message cached
             // last turn still ends on a block boundary when a teammate's reply follows it
-            Some((r, blocks, stable)) if *r == role => {
-                blocks.push(content);
-                if !volatile {
-                    *stable = blocks.len();
-                }
-            }
-            _ => turns.push((role, vec![content], if volatile { 0 } else { 1 })),
+            Some((r, existing)) if *r == role => existing.extend(blocks),
+            _ => turns.push((role, blocks.collect())),
         }
     }
-    if turns.first().is_some_and(|(r, _, _)| *r == "assistant") {
-        turns.insert(0, ("user", vec!["(conversation so far)".into()], 1));
+    if turns.first().is_some_and(|(r, _)| *r == "assistant") {
+        turns.insert(0, ("user", vec![(json!({"type": "text", "text": "(conversation so far)"}), false)]));
     }
     let model = if model == "claude" {
         DEFAULT_CLAUDE_MODEL
     } else {
         model
     };
-    let breakpoint = turns.iter().rposition(|(_, _, stable)| *stable > 0);
-    let messages = turns
+    // (turn, block) of every block in order
+    let order: Vec<(usize, usize, bool)> = turns
         .iter()
         .enumerate()
-        .map(|(i, (role, blocks, stable))| {
+        .flat_map(|(i, (_, blocks))| blocks.iter().enumerate().map(move |(j, (_, v))| (i, j, *v)))
+        .collect();
+    let first_volatile = order.iter().position(|b| b.2).unwrap_or(order.len());
+    let before_volatile = order[..first_volatile].iter().rposition(|b| !b.2);
+    let last_stable = order.iter().rposition(|b| !b.2);
+    let breakpoints: Vec<(usize, usize)> =
+        [before_volatile, last_stable].into_iter().flatten().map(|k| (order[k].0, order[k].1)).collect();
+    let messages = turns
+        .into_iter()
+        .enumerate()
+        .map(|(i, (role, blocks))| {
             let content = blocks
-                .iter()
+                .into_iter()
                 .enumerate()
-                .map(|(j, text)| {
-                    let mut block = json!({"type": "text", "text": text});
-                    if Some(i) == breakpoint && j + 1 == *stable {
+                .map(|(j, (mut block, _))| {
+                    if breakpoints.contains(&(i, j)) {
                         block["cache_control"] = json!({"type": "ephemeral"});
                     }
                     block
@@ -363,6 +396,39 @@ fn anthropic_body(model: &str, messages: &[Value], max_tokens: i64) -> Value {
         body["system"] = json!(system);
     }
     body
+}
+
+/// OpenAI-style function tools (`McpToolSession::openai_tools`) in the Anthropic format.
+fn anthropic_tools(tools: &[Value]) -> Vec<Value> {
+    tools
+        .iter()
+        .map(|t| {
+            let f = &t["function"];
+            let schema = if f["parameters"].is_object() { f["parameters"].clone() } else { json!({"type": "object", "properties": {}}) };
+            json!({"name": f["name"], "description": f["description"].as_str().unwrap_or_default(), "input_schema": schema})
+        })
+        .collect()
+}
+
+/// The tool calls of a non-streamed reply in the OpenAI shape: an OpenAI reply's `tool_calls`, or
+/// an Anthropic reply's `tool_use` blocks.
+fn reply_tool_calls(reply: &Value) -> Option<Vec<Value>> {
+    if let Some(calls) = reply["choices"][0]["message"]["tool_calls"].as_array().filter(|c| !c.is_empty()) {
+        return Some(calls.clone());
+    }
+    let calls: Vec<Value> = reply["content"]
+        .as_array()?
+        .iter()
+        .filter(|b| b["type"] == "tool_use")
+        .map(|b| {
+            json!({
+                "id": b["id"],
+                "type": "function",
+                "function": {"name": b["name"], "arguments": b["input"].to_string()},
+            })
+        })
+        .collect();
+    (!calls.is_empty()).then_some(calls)
 }
 
 /// The reply text of a non-streamed call, OpenAI or Anthropic shaped.
@@ -839,7 +905,11 @@ impl ApiDriver {
         }
         for round in 0..max_calls {
             let body = if is_anthropic(request.url) {
-                anthropic_body(request.model, &messages, request.max_tokens)
+                let mut body = anthropic_body(request.model, &messages, request.max_tokens);
+                if !tools.is_empty() {
+                    body["tools"] = json!(anthropic_tools(&tools));
+                }
+                body
             } else {
                 let mut body = json!({
                     "model": request.model,
@@ -874,9 +944,8 @@ impl ApiDriver {
             }
             let purpose = if round == 0 { crate::db::usage::PURPOSE_REPLY } else { crate::db::usage::PURPOSE_TOOL_ROUND };
             record_call(request, purpose, usage, &body).await;
-            let message = &reply["choices"][0]["message"];
             let content = reply_text(&reply);
-            let calls = message["tool_calls"].as_array().filter(|c| !c.is_empty());
+            let calls = reply_tool_calls(&reply);
 
             let (Some(calls), Some(session)) = (calls, session) else {
                 return Ok((
@@ -964,9 +1033,8 @@ impl Driver for ApiDriver {
 
         // If target is a real live API endpoint with API key or local Ollama, call HTTP streaming
         if api_key.is_some() || is_ollama(target_model) || custom {
-            // An API turn has no shell: the browser is reachable only through the tools, which the
-            // Anthropic Messages format doesn't get
-            let browser = if input.has_self_tools() && !url.ends_with("/v1/messages") {
+            // An API turn has no shell: the browser is reachable only through the tools
+            let browser = if input.has_self_tools() {
                 super::BrowserAccess::Tools
             } else {
                 super::BrowserAccess::Unavailable
@@ -989,18 +1057,7 @@ impl Driver for ApiDriver {
                 Ok(m) => m,
                 Err(why) => return Err(DriverError::Execution(why)),
             };
-            // The Anthropic Messages API has a different tool format; it is not given MCP tools yet
-            let mcp = input.mcp.as_ref().filter(|_| !url.ends_with("/v1/messages"));
-            // kwnt's own continuity tools are always attached; only the user's servers are worth a notice
-            let has_user_servers = input
-                .mcp
-                .as_ref()
-                .is_some_and(|c| c.servers.iter().any(|s| s.name != crate::mcp::SELF_SERVER_NAME));
-            if has_user_servers && mcp.is_none() {
-                let _ = event_tx
-                    .send(RuntimeEvent::ThinkingDelta("MCP tools aren't offered over the Anthropic Messages API; running without them.".into()))
-                    .await;
-            }
+            let mcp = input.mcp.as_ref();
             let session = match mcp {
                 Some(ctx) => {
                     let cwd = input.workspace_dir.as_deref().filter(|d| d.exists());
