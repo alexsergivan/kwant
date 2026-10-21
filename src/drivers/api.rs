@@ -398,6 +398,114 @@ fn anthropic_body(model: &str, messages: &[Value], max_tokens: i64) -> Value {
     body
 }
 
+/// Past this many characters of tool schemas a turn sends only its core tools in full, plus
+/// `FIND_TOOLS` and `CALL_TOOL` for the rest. The stub runs for item 6 measured kwnt's own tools
+/// alone at 23k characters a call, three times the system prompt.
+const DEFER_TOOLS_ABOVE_CHARS: usize = 12_000;
+/// What the tools sent in full may take, core tools aside.
+const UPFRONT_TOOLS_CHARS: usize = 8_000;
+/// kwnt's own tools a turn always gets in full: talking to the person, memory, teammates, the
+/// browser and files. The rest (routines, bots, spaces, settings, …) are a lookup away.
+const CORE_SELF_TOOLS: [&str; 12] = [
+    "ask_user",
+    "search_history",
+    "memory_add",
+    "memory_update",
+    "delegate",
+    "delegation_status",
+    "browser_open",
+    "browser_page",
+    "browser_act",
+    "list_attachments",
+    "read_attachment",
+    "share_file",
+];
+const FIND_TOOLS: &str = "kwnt_find_tools";
+const CALL_TOOL: &str = "kwnt_call_tool";
+/// Most schemas one `FIND_TOOLS` call returns.
+const FIND_TOOLS_MAX: usize = 8;
+
+/// The tools a turn sends in full and the ones it only names (both OpenAI-shaped).
+#[derive(Debug, Default)]
+struct ToolMenu {
+    upfront: Vec<Value>,
+    deferred: Vec<Value>,
+}
+
+fn tool_name(tool: &Value) -> &str {
+    tool["function"]["name"].as_str().unwrap_or_default()
+}
+
+/// Splits a session's tools when their schemas are large: core kwnt tools first, then the
+/// person's own servers' tools and kwnt's others, in full while they fit `UPFRONT_TOOLS_CHARS`.
+/// The split depends only on the tools, so it is the same every turn and stays cached.
+fn tool_menu(all: Vec<Value>) -> ToolMenu {
+    let size = |t: &Value| t.to_string().len();
+    if all.iter().map(size).sum::<usize>() <= DEFER_TOOLS_ABOVE_CHARS {
+        return ToolMenu { upfront: all, deferred: Vec::new() };
+    }
+    let self_prefix = format!("mcp__{}__", crate::mcp::SELF_SERVER_NAME);
+    let is_core = |t: &Value| tool_name(t).strip_prefix(&self_prefix).is_some_and(|n| CORE_SELF_TOOLS.contains(&n));
+    let (core, rest): (Vec<Value>, Vec<Value>) = all.into_iter().partition(|t| is_core(t));
+    let (theirs, ours): (Vec<Value>, Vec<Value>) = rest.into_iter().partition(|t| !tool_name(t).starts_with(&self_prefix));
+    let mut menu = ToolMenu { upfront: core, deferred: Vec::new() };
+    let mut budget = UPFRONT_TOOLS_CHARS;
+    for tool in theirs.into_iter().chain(ours) {
+        if size(&tool) <= budget && menu.deferred.is_empty() {
+            budget -= size(&tool);
+            menu.upfront.push(tool);
+        } else {
+            menu.deferred.push(tool);
+        }
+    }
+    if menu.deferred.is_empty() {
+        return menu;
+    }
+    let names = menu.deferred.iter().map(tool_name).collect::<Vec<_>>().join(", ");
+    menu.upfront.push(json!({"type": "function", "function": {
+        "name": FIND_TOOLS,
+        "description": format!(
+            "Look up tools that aren't listed in full, to see what they do and their inputs; then run one with \
+            {CALL_TOOL}. Search by words or exact names. Not listed in full: {names}."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Words to search tool names and descriptions for, or exact tool names."}
+        }, "required": ["query"]},
+    }}));
+    menu.upfront.push(json!({"type": "function", "function": {
+        "name": CALL_TOOL,
+        "description": format!("Run a tool found with {FIND_TOOLS}. It is approved like any other tool call."),
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "The tool's exact name."},
+            "arguments": {"type": "object", "description": "The tool's inputs, as its schema describes."}
+        }, "required": ["name", "arguments"]},
+    }}));
+    menu
+}
+
+/// `FIND_TOOLS`: the deferred tools matching any of the query's words, most matches first.
+fn find_tools(deferred: &[Value], raw_args: &str) -> String {
+    let query = serde_json::from_str::<Value>(raw_args).ok().and_then(|a| a["query"].as_str().map(str::to_lowercase)).unwrap_or_default();
+    let words: Vec<&str> = query.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| w.len() > 1).collect();
+    let mut hits: Vec<(usize, &Value)> = deferred
+        .iter()
+        .map(|t| {
+            let name = tool_name(t).to_lowercase();
+            let text = format!("{name} {}", t["function"]["description"].as_str().unwrap_or_default().to_lowercase());
+            let score = words.iter().map(|w| if name == *w || name.ends_with(&format!("__{w}")) { 10 } else { usize::from(text.contains(w)) }).sum();
+            (score, t)
+        })
+        .filter(|(score, _)| *score > 0)
+        .collect();
+    hits.sort_by_key(|a| std::cmp::Reverse(a.0));
+    if hits.is_empty() {
+        let names = deferred.iter().map(tool_name).collect::<Vec<_>>().join(", ");
+        return format!("No tool matches \"{query}\". Tools not listed in full: {names}.");
+    }
+    let found: Vec<&Value> = hits.into_iter().take(FIND_TOOLS_MAX).map(|(_, t)| &t["function"]).collect();
+    format!("Call one with {CALL_TOOL} (name and arguments):\n{}", serde_json::to_string_pretty(&found).unwrap_or_default())
+}
+
 /// OpenAI-style function tools (`McpToolSession::openai_tools`) in the Anthropic format.
 fn anthropic_tools(tools: &[Value]) -> Vec<Value> {
     tools
@@ -880,7 +988,8 @@ impl ApiDriver {
         caller: &Caller,
         event_tx: &mpsc::Sender<RuntimeEvent>,
     ) -> Result<(String, usize, bool), ApiError> {
-        let tools = session.map(|s| s.openai_tools()).unwrap_or_default();
+        let menu = tool_menu(session.map(|s| s.openai_tools()).unwrap_or_default());
+        let tools = &menu.upfront;
         let max_calls = request.max_calls.max(1);
         let mut tokens = 0usize;
         if request.stream && tools.is_empty() {
@@ -907,7 +1016,7 @@ impl ApiDriver {
             let body = if is_anthropic(request.url) {
                 let mut body = anthropic_body(request.model, &messages, request.max_tokens);
                 if !tools.is_empty() {
-                    body["tools"] = json!(anthropic_tools(&tools));
+                    body["tools"] = json!(anthropic_tools(tools));
                 }
                 body
             } else {
@@ -981,8 +1090,20 @@ impl ApiDriver {
 
             for call in &calls {
                 let id = call["id"].as_str().unwrap_or_default();
-                let name = call["function"]["name"].as_str().unwrap_or_default();
-                let raw_args = call["function"]["arguments"].as_str().unwrap_or("{}");
+                let mut name = call["function"]["name"].as_str().unwrap_or_default();
+                let mut raw_args = call["function"]["arguments"].as_str().unwrap_or("{}").to_string();
+                if name == FIND_TOOLS {
+                    let found = find_tools(&menu.deferred, &raw_args);
+                    messages.push(json!({"role": "tool", "tool_call_id": id, "content": found}));
+                    continue;
+                }
+                // A looked-up tool runs, and is approved, under its own name
+                let wrapped = (name == CALL_TOOL).then(|| serde_json::from_str::<Value>(&raw_args).unwrap_or_default());
+                if let Some(wrapped) = &wrapped {
+                    name = wrapped["name"].as_str().filter(|n| *n != FIND_TOOLS && *n != CALL_TOOL).unwrap_or_default();
+                    raw_args = if wrapped["arguments"].is_object() { wrapped["arguments"].to_string() } else { "{}".into() };
+                }
+                let raw_args = raw_args.as_str();
                 let shown_args = serde_json::from_str::<Value>(raw_args).unwrap_or_else(|_| json!(raw_args));
                 let _ = event_tx
                     .send(RuntimeEvent::ToolCallPending { id: id.to_string(), name: name.to_string(), args: shown_args })
@@ -1712,6 +1833,43 @@ mod tests {
         let history = driver.conversation_history(&request(&url, "sk-ant-test-key"), &input).await;
         assert!(seen.lock().unwrap().is_empty());
         assert_eq!((history.summary, history.messages.len()), (None, 20));
+    }
+
+    fn fake_tool(name: &str, description: &str, pad: usize) -> Value {
+        json!({"type": "function", "function": {"name": name, "description": format!("{description}{}", " ".repeat(pad)),
+            "parameters": {"type": "object", "properties": {"x": {"type": "string"}}}}})
+    }
+
+    #[test]
+    fn small_tool_lists_are_sent_whole() {
+        let tools = vec![fake_tool("mcp__echo__echo", "Echo", 10), fake_tool("mcp__kwnt_tools__routine_list", "List routines", 10)];
+        let menu = tool_menu(tools.clone());
+        assert_eq!((menu.upfront, menu.deferred.len()), (tools, 0));
+    }
+
+    #[test]
+    fn large_tool_lists_keep_core_tools_and_name_the_rest() {
+        let mut tools = vec![fake_tool("mcp__kwnt_tools__routine_create", "Create a routine on a schedule", 3000)];
+        tools.push(fake_tool("mcp__kwnt_tools__ask_user", "Ask the person", 3000));
+        tools.push(fake_tool("mcp__github__create_issue", "Open a GitHub issue", 3000));
+        tools.push(fake_tool("mcp__kwnt_tools__space_list", "List spaces", 3000));
+        tools.push(fake_tool("mcp__kwnt_tools__memory_add", "Remember a fact", 3000));
+        let menu = tool_menu(tools.clone());
+        let up: Vec<&str> = menu.upfront.iter().map(tool_name).collect();
+        assert_eq!(up, ["mcp__kwnt_tools__ask_user", "mcp__kwnt_tools__memory_add", "mcp__github__create_issue", "mcp__kwnt_tools__routine_create", FIND_TOOLS, CALL_TOOL]);
+        let down: Vec<&str> = menu.deferred.iter().map(tool_name).collect();
+        assert_eq!(down, ["mcp__kwnt_tools__space_list"]);
+        let find = &menu.upfront[4]["function"]["description"];
+        assert!(find.as_str().unwrap().contains("mcp__kwnt_tools__space_list"));
+        assert_eq!(tool_menu(tools).upfront, menu.upfront, "the same tools split the same way every turn");
+
+        let found = find_tools(&menu.deferred, r#"{"query": "spaces"}"#);
+        assert!(found.starts_with("Call one with kwnt_call_tool") && found.contains("\"x\""), "{found}");
+        let exact = find_tools(&menu.deferred, r#"{"query": "space_list"}"#);
+        assert!(exact.contains("mcp__kwnt_tools__space_list"));
+        let none = find_tools(&menu.deferred, r#"{"query": "weather"}"#);
+        assert!(none.starts_with("No tool matches") && none.contains("mcp__kwnt_tools__space_list"));
+        assert!(find_tools(&menu.deferred, "not json").starts_with("No tool matches"));
     }
 
     fn prefix(notes: &str) -> Prefix {
