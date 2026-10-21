@@ -874,11 +874,11 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
             break;
         }
         let prompt = format!(
-            "{from} handed this conversation to you by mentioning you.\n\nThe user's original request:\n{user}\n\n{from} wrote:\n{text}\n\n\
+            "{from} handed this conversation to you by mentioning you.\n\nThe user's original request:\n{user}\n\n{text}\n\n\
             Reply to the user now with your own part of this, in character. Don't repeat what {from} already said.",
             from = from,
             user = user_prompt,
-            text = truncate_chars(&from_text, 4000),
+            text = crate::drivers::peer_message(&from, truncate_chars(&from_text, 4000)),
         );
         let _ = events.send(RuntimeEvent::DiscussionTurnStarted {
             speaker_id: kwant.id.clone(),
@@ -939,7 +939,7 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
     }
     let user = truncate_chars(user_prompt.trim(), 3000);
     let task = format!(
-        "The user asked in the team channel:\n{user}\n\n{lead} wrote, mentioning you:\n{text}",
+        "The user asked in the team channel:\n{user}\n\n{lead} mentioned you:\n{text}",
         lead = lead.name,
         text = truncate_chars(text.trim(), 4000),
     );

@@ -22,6 +22,8 @@ use serde_json::{json, Value};
 pub const MAX_DEPTH: i64 = 2;
 /// Unfinished delegations one lead may have at a time.
 pub const MAX_OPEN_PER_LEAD: i64 = 5;
+/// An identical delegation (same lead, specialist, chat and task) within this many seconds is refused.
+pub const DEDUPE_SECS: i64 = 60;
 /// How much of the specialist's reply is copied into the origin chat; the thread keeps it all.
 pub const RESULT_CHARS: usize = 8000;
 pub const FOLLOW_UP_SETTING: &str = "delegation_follow_up_minutes";
@@ -202,6 +204,21 @@ pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (S
         }
         thread.team_id
     };
+    // A repeat of the same request (a retried tool call, a reply naming the bot twice) starts nothing
+    let since = Utc::now() - chrono::Duration::seconds(DEDUPE_SECS);
+    if let Ok(Some(same)) = state
+        .db
+        .find_recent_delegation(&req.lead.id, &req.specialist.id, o.channel_id.as_deref(), o.kwant_id.as_deref(), o.thread_id.as_deref(), task, since)
+        .await
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "{} was already given this exact task [{}] less than a minute ago ({}); it wasn't sent again.",
+                req.specialist.name, same.id, same.status
+            ),
+        ));
+    }
     let open = state.db.count_open_delegations(&req.lead.id).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error".into()))?;
     if open >= MAX_OPEN_PER_LEAD {
         return Err((
@@ -281,10 +298,9 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
     });
     let prompt = format!(
         "{lead} delegated this task to you. Work on it here; when you finish, your reply is posted back to {lead} \
-        and the chat it came from, so make it a complete, self-contained answer.\n\nTask: {title}\n\n{task}",
+        and the chat it came from, so make it a complete, self-contained answer.\n\n{task}",
         lead = lead.name,
-        title = d.title,
-        task = d.task,
+        task = crate::drivers::peer_message(&lead.name, &format!("Task: {}\n\n{}", d.title, d.task)),
     );
     let mut opts = TurnOpts::default();
     opts.on_started = Some(on_started);
@@ -425,7 +441,7 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation]) {
             "completed" => clip(&result_of(state, b).await, budget),
             _ => format!("({}: {})", b.status, b.error.as_deref().unwrap_or("no result")),
         };
-        results.push_str(&format!("### {who}: “{}”\n{body}\n\n", b.title));
+        results.push_str(&format!("### {who}: “{}”\n{}\n\n", b.title, crate::drivers::peer_message(&who, &body)));
     }
     let opening = match batch {
         [one] => format!("{} finished the task you delegated (“{}”).", name_of(state, &one.specialist_kwant_id).await, one.title),
