@@ -24,6 +24,8 @@ pub struct BrowserService {
     local_window: std::sync::atomic::AtomicBool,
     // Serialize startup and session creation, including simultaneous status/frame requests.
     state: Mutex<Option<ServiceState>>,
+    /// Why the last [`Self::session`] failed, for the error the person sees.
+    last_error: std::sync::Mutex<Option<String>>,
 }
 
 struct ServiceState {
@@ -38,6 +40,7 @@ impl BrowserService {
         Self {
             root, endpoint, mode: std::sync::RwLock::new(mode),
             local_window: std::sync::atomic::AtomicBool::new(false), state: Mutex::new(None),
+            last_error: std::sync::Mutex::new(None),
         }
     }
 
@@ -226,7 +229,30 @@ impl BrowserService {
         Ok(ServiceState { browser, endpoint, sessions })
     }
 
-    pub async fn session(&self, id: &str, _workspace: &Path) -> Result<BrowserController, BrowserError> {
+    /// What to tell the person when the browser could not be reached. In local mode that is the
+    /// reason kwant's Chrome did not start, not Docker, which local mode does not use.
+    pub fn unavailable_reason(&self) -> String {
+        if self.mode() != ComputerMode::Local {
+            return "Sandbox browser is unavailable. Check that Docker is running, then restart the browser.".into();
+        }
+        let last = self.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        match last {
+            Some(reason) => format!("The bot browser could not start kwant's Chrome on this computer: {reason}"),
+            None => "The bot browser could not start kwant's Chrome on this computer. Restart the browser and try again.".into(),
+        }
+    }
+
+    pub async fn session(&self, id: &str, workspace: &Path) -> Result<BrowserController, BrowserError> {
+        let result = self.open_session(id, workspace).await;
+        *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = result.as_ref().err().map(|e| match e {
+            // the local start's own words, without the CDP prefix
+            BrowserError::Http(reason) => reason.clone(),
+            other => other.to_string(),
+        });
+        result
+    }
+
+    async fn open_session(&self, id: &str, _workspace: &Path) -> Result<BrowserController, BrowserError> {
         let mut lock = self.state.lock().await;
         if lock.is_none() { *lock = Some(self.connect().await?); }
         let mut targets = lock.as_ref().unwrap().browser.send_cdp_command("Target.getTargets", json!({})).await;

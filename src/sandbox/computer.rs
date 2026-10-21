@@ -230,12 +230,52 @@ pub async fn running_local_chrome(profile: &Path) -> Option<(String, bool)> {
     Some((endpoint, is_headless_user_agent(&agent)))
 }
 
-/// The live process holding `profile`, from the `SingletonLock` link Chrome keeps in it
+/// The live Chrome holding `profile`, from the `SingletonLock` link Chrome keeps in it
 /// ("<host>-<pid>"). `None` when no Chrome holds it, or on Windows, which has no such link.
+///
+/// A Chrome that crashed leaves the link behind, and its pid can later belong to an unrelated
+/// program. So the pid only counts while its command line is a Chrome on this profile; trusting
+/// the pid alone waited on that program forever and never started Chrome again.
 pub fn profile_owner(profile: &Path) -> Option<u32> {
+    let pid = lock_pid(profile)?;
+    (pid_alive(pid) && command_line(pid).is_some_and(|line| is_chrome_on(&line, profile))).then_some(pid)
+}
+
+fn lock_pid(profile: &Path) -> Option<u32> {
     let target = std::fs::read_link(profile.join("SingletonLock")).ok()?;
-    let pid: u32 = target.to_string_lossy().rsplit('-').next()?.parse().ok()?;
-    pid_alive(pid).then_some(pid)
+    target.to_string_lossy().rsplit('-').next()?.parse().ok()
+}
+
+/// Whether a process command line (arguments joined by spaces) is a Chrome or Chromium started
+/// with `--user-data-dir=<profile>`.
+fn is_chrome_on(line: &str, profile: &Path) -> bool {
+    let flag = format!("--user-data-dir={}", profile.display());
+    let Some(at) = line.find(&flag) else { return false };
+    let rest = &line[at + flag.len()..];
+    if !(rest.is_empty() || rest.starts_with(' ')) {
+        return false; // another profile whose path starts with this one
+    }
+    // the profile path itself may say "chrome", so look for it in the rest of the line
+    format!("{}{rest}", &line[..at]).to_lowercase().contains("chrom")
+}
+
+#[cfg(target_os = "linux")]
+fn command_line(pid: u32) -> Option<String> {
+    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let args: Vec<_> = raw.split(|b| *b == 0).filter(|a| !a.is_empty()).map(String::from_utf8_lossy).collect();
+    (!args.is_empty()).then(|| args.join(" "))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn command_line(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps").args(["-o", "command=", "-p", &pid.to_string()]).output().ok()?;
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !line.is_empty()).then_some(line)
+}
+
+#[cfg(not(unix))]
+fn command_line(_pid: u32) -> Option<String> {
+    None
 }
 
 #[cfg(unix)]
@@ -400,8 +440,14 @@ where
             tokio::time::sleep(timing.step).await;
         }
     }
-    // nothing holds the profile, so a port file left behind points at nothing
+    // nothing holds the profile, so a port file or lock left behind points at nothing (a lock
+    // naming another program, or an old hostname, would stop the new Chrome from starting)
     let _ = std::fs::remove_file(profile.join("DevToolsActivePort"));
+    if lock_pid(profile).is_some() {
+        for name in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
+            let _ = std::fs::remove_file(profile.join(name));
+        }
+    }
     spawn()?;
     let deadline = tokio::time::Instant::now() + timing.start;
     loop {
@@ -620,16 +666,102 @@ mod tests {
         std::os::unix::fs::symlink(format!("host-{pid}"), profile.join("SingletonLock")).unwrap();
     }
 
+    /// A live process, alive until dropped. `chrome_on`: it looks like a Chrome started on that
+    /// profile ("chrome --user-data-dir=<profile>" on its command line); otherwise it is some
+    /// unrelated program, like the `sleep` whose pid reused a crashed Chrome's.
+    #[cfg(unix)]
+    struct Process(std::process::Child);
+
+    #[cfg(unix)]
+    impl Process {
+        fn start(chrome_on: Option<&Path>) -> Self {
+            let mut cmd = std::process::Command::new("sh");
+            cmd.args(["-c", "read _"]);
+            if let Some(profile) = chrome_on {
+                cmd.arg("chrome").arg(format!("--user-data-dir={}", profile.display()));
+            }
+            Self(cmd.stdin(std::process::Stdio::piped()).spawn().unwrap())
+        }
+        fn id(&self) -> u32 { self.0.id() }
+    }
+
+    #[cfg(unix)]
+    impl Drop for Process {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn profile_owner_reads_chromes_singleton_lock() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(profile_owner(dir.path()), None);
-        hold_profile(dir.path(), std::process::id());
-        assert_eq!(profile_owner(dir.path()), Some(std::process::id()));
+        let chrome = Process::start(Some(dir.path()));
+        hold_profile(dir.path(), chrome.id());
+        assert_eq!(profile_owner(dir.path()), Some(chrome.id()));
         std::fs::remove_file(dir.path().join("SingletonLock")).unwrap();
         hold_profile(dir.path(), dead_pid());
         assert_eq!(profile_owner(dir.path()), None);
+    }
+
+    /// Bug A: Chrome crashed and its pid now belongs to an unrelated live program. The lock names
+    /// that pid, but it does not hold the profile.
+    #[cfg(unix)]
+    #[test]
+    fn a_live_pid_that_is_not_this_profiles_chrome_does_not_hold_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = Process::start(None);
+        hold_profile(dir.path(), other.id());
+        assert_eq!(profile_owner(dir.path()), None);
+        // nor does a Chrome on another profile, even one whose path starts with this one
+        let sibling = dir.path().with_extension("other");
+        let chrome = Process::start(Some(&sibling));
+        std::fs::remove_file(dir.path().join("SingletonLock")).unwrap();
+        hold_profile(dir.path(), chrome.id());
+        assert_eq!(profile_owner(dir.path()), None);
+    }
+
+    #[test]
+    fn chrome_command_lines() {
+        let p = Path::new("/Users/o/Library/Application Support/kwant/local-chrome");
+        let flag = format!("--user-data-dir={}", p.display());
+        assert!(is_chrome_on(&format!("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome {flag} --remote-debugging-port=0"), p));
+        assert!(is_chrome_on(&format!("/usr/bin/chromium {flag}"), p));
+        assert!(!is_chrome_on(&format!("/usr/bin/chromium {flag}2"), p));
+        assert!(!is_chrome_on("sleep 600", p));
+        // the profile is called local-chrome, which alone is not a Chrome
+        assert!(!is_chrome_on(&format!("/usr/bin/python3 {flag}"), p));
+    }
+
+    /// Rigel's repro of Bug A: Chrome was killed, and SingletonLock names a live `sleep`. One
+    /// fresh Chrome starts at once, and the stale lock is cleared so it can.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_lock_naming_another_program_starts_one_chrome() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("DevToolsActivePort"), "1\n").unwrap();
+        let other = Process::start(None);
+        hold_profile(dir.path(), other.id());
+        let up = std::sync::atomic::AtomicBool::new(false);
+        let probe = || {
+            let found = up.load(std::sync::atomic::Ordering::SeqCst);
+            async move { found.then(|| ("http://127.0.0.1:9".to_string(), true)) }
+        };
+        let lock = dir.path().join("SingletonLock");
+        let mut spawns = 0;
+        let timing = LaunchTiming { owner: Duration::from_secs(30), ..fast() };
+        let started = std::time::Instant::now();
+        let result = ensure_chrome_with(dir.path(), probe, || {
+            assert!(std::fs::symlink_metadata(&lock).is_err(), "the stale lock goes before the start");
+            spawns += 1;
+            up.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }, timing).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(spawns, 1);
+        assert!(started.elapsed() < Duration::from_secs(5), "it did not wait on the other program");
     }
 
     /// The Bot browser button, its stream and a bot's turn all asking at once start one Chrome.
@@ -675,7 +807,8 @@ mod tests {
     async fn stale_port_file_with_live_chrome_does_not_start_another() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("DevToolsActivePort"), "1\n/devtools/browser/x\n").unwrap();
-        hold_profile(dir.path(), std::process::id());
+        let chrome = Process::start(Some(dir.path()));
+        hold_profile(dir.path(), chrome.id());
         let mut spawned = false;
         let result = ensure_chrome_with(dir.path(), || async { None }, || { spawned = true; Ok(()) }, fast()).await;
         let error = result.unwrap_err();
@@ -689,7 +822,8 @@ mod tests {
     #[tokio::test]
     async fn callers_behind_a_stuck_chrome_do_not_each_wait() {
         let dir = tempfile::tempdir().unwrap();
-        hold_profile(dir.path(), std::process::id());
+        let chrome = Process::start(Some(dir.path()));
+        hold_profile(dir.path(), chrome.id());
         let timing = LaunchTiming { owner: Duration::from_secs(2), ..fast() };
         let first = std::time::Instant::now();
         assert!(ensure_chrome_with(dir.path(), || async { None }, || Ok(()), timing).await.is_err());
@@ -710,7 +844,8 @@ mod tests {
     async fn starting_chrome_is_waited_for() {
         use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
         let dir = tempfile::tempdir().unwrap();
-        hold_profile(dir.path(), std::process::id());
+        let chrome = Process::start(Some(dir.path()));
+        hold_profile(dir.path(), chrome.id());
         let probes = AtomicUsize::new(0);
         let probe = || {
             let n = probes.fetch_add(1, SeqCst);

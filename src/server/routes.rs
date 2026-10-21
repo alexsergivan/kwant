@@ -3054,9 +3054,9 @@ pub async fn get_sandbox_status(
         "execution_running":execution.is_some_and(|s| s.is_running)})))
 }
 
-fn browser_unavailable() -> (StatusCode, Json<serde_json::Value>) {
+fn browser_unavailable(state: &AppState) -> (StatusCode, Json<serde_json::Value>) {
     (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
-        "error": "Sandbox browser is unavailable. Check that Docker is running, then restart the browser.",
+        "error": state.browser_service.unavailable_reason(),
         "is_running": false
     })))
 }
@@ -3079,7 +3079,7 @@ pub async fn get_browser_screenshot(
     Path(team_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = get_or_create_browser_controller(&state, &team_id).await
-        .ok_or_else(browser_unavailable)?;
+        .ok_or_else(|| browser_unavailable(&state))?;
     // The user may have navigated in the live viewer; keep url/title (and other viewers) in sync
     let previous_url = ctrl.current_url.lock().await.clone();
     if let Some((new_url, new_title)) = ctrl.sync_location().await {
@@ -3126,7 +3126,7 @@ pub async fn restart_sandbox(
         team_id: team_id.clone(), container_name: format!("browser-service-{}", team_id), is_running: running,
     });
     Ok(Json(json!({"status":if running {"restarted"} else {"stopped"},"team_id":team_id,"is_running":running,
-        "error":if running {None} else {Some("Browser service unavailable. Check Docker or KWNT_BROWSER_CDP_URL.")} })))
+        "error":if running {None} else {Some(state.browser_service.unavailable_reason())} })))
 }
 
 pub async fn navigate_sandbox(
@@ -3135,7 +3135,7 @@ pub async fn navigate_sandbox(
     Json(payload): Json<NavigatePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = get_or_create_browser_controller(&state, &team_id).await
-        .ok_or_else(browser_unavailable)?;
+        .ok_or_else(|| browser_unavailable(&state))?;
     let nav = ctrl.navigate(&payload.url).await.map_err(browser_request_failed)?;
 
     let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
@@ -3192,11 +3192,7 @@ pub async fn interact_sandbox(
         }))));
     }
 
-    let ctrl = get_or_create_browser_controller(&state, &team_id).await.ok_or_else(|| {
-        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
-            "error": "Sandbox browser is unavailable. Check that Docker is running, then restart the browser."
-        })))
-    })?;
+    let ctrl = get_or_create_browser_controller(&state, &team_id).await.ok_or_else(|| browser_unavailable(&state))?;
 
     let _permit = ctrl.control.try_read().map_err(|_| (StatusCode::CONFLICT, Json(json!({"error":"Browser is controlled by a person."}))))?;
     let shot_res = match payload.action.as_str() {
@@ -3289,7 +3285,7 @@ pub async fn get_sandbox_page(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = get_or_create_browser_controller(&state, &team_id)
         .await
-        .ok_or_else(browser_unavailable)?;
+        .ok_or_else(|| browser_unavailable(&state))?;
     Ok(Json(sandbox_page_state(&ctrl).await))
 }
 
@@ -3302,7 +3298,7 @@ pub async fn act_sandbox(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = get_or_create_browser_controller(&state, &team_id)
         .await
-        .ok_or_else(browser_unavailable)?;
+        .ok_or_else(|| browser_unavailable(&state))?;
     let _permit = ctrl.control.try_read().map_err(|_| browser_request_failed(crate::sandbox::BrowserError::HumanControl))?;
     let text = payload.text.clone().unwrap_or_default();
     let result: Result<String, String> = match payload.action.as_str() {
