@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   Copy,
   ExternalLink,
+  FileText,
   GitBranch,
   Loader2,
   Mail,
@@ -22,6 +23,7 @@ import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { playSfx } from '../audio/chiptune';
 import { storeApi } from '../passwordStore';
 import { BitwardenLoginForm, usePasswordStore } from './PasswordStorePanel';
+import { AddLetterForm, LetterPage } from './LetterView';
 import {
   ACTION_LABELS,
   CASE_TABS,
@@ -64,6 +66,7 @@ const SOURCE_ICON: Record<string, React.ReactNode> = {
   imap: <Mail size={12} aria-hidden="true" />,
   github: <GitBranch size={12} aria-hidden="true" />,
   kwant: <MessageSquare size={12} aria-hidden="true" />,
+  document: <FileText size={12} aria-hidden="true" />,
 };
 
 const actionBtn =
@@ -88,13 +91,15 @@ export interface LooseCaseCardProps {
   onAction: (c: LooseCase, action: CaseAction, body?: unknown) => void;
   /** Opens a bot thread in the app; without it a case shows no chat link. */
   onOpenChat?: (kwantId: string, threadId: string) => void;
+  /** Opens a letter case (`source: "document"`) with its pages and fields. */
+  onOpenLetter?: (caseId: string) => void;
   /** Tests open a choice. */
   initialChoice?: 'snooze' | 'dismiss' | null;
 }
 
 /** One loose end: who, why it stalled, the evidence, the draft and what to do with it. Generic
  * over the source, so a letter or a bank statement can use the same card. */
-export const LooseCaseCard: React.FC<LooseCaseCardProps> = ({ c, busy, now = Date.now(), onAction, onOpenChat, initialChoice = null }) => {
+export const LooseCaseCard: React.FC<LooseCaseCardProps> = ({ c, busy, now = Date.now(), onAction, onOpenChat, onOpenLetter, initialChoice = null }) => {
   const id = useId();
   const [choice, setChoice] = useState<'snooze' | 'dismiss' | null>(initialChoice);
   const [copied, setCopied] = useState<'ok' | 'failed' | null>(null);
@@ -187,6 +192,12 @@ export const LooseCaseCard: React.FC<LooseCaseCardProps> = ({ c, busy, now = Dat
               </a>
             )}
           </div>
+        )}
+
+        {c.source === 'document' && onOpenLetter && (
+          <button type="button" onClick={() => onOpenLetter(c.id)} className={`${actionBtn} bg-sky-500 hover:bg-sky-400 text-zinc-950 font-semibold`} data-open-letter>
+            <FileText size={13} aria-hidden="true" /> Open letter
+          </button>
         )}
 
         {chat && (
@@ -614,6 +625,9 @@ export interface LooseEndsViewProps {
   onScan: () => void;
   onAction: (c: LooseCase, action: CaseAction, body?: unknown) => void;
   onOpenChat?: (kwantId: string, threadId: string) => void;
+  onOpenLetter?: (caseId: string) => void;
+  /** "Add a letter": a button, or the open form. */
+  addLetter?: React.ReactNode;
   onBack?: () => void;
 }
 
@@ -635,6 +649,8 @@ export const LooseEndsView: React.FC<LooseEndsViewProps> = ({
   onScan,
   onAction,
   onOpenChat,
+  onOpenLetter,
+  addLetter = null,
   onBack,
 }) => {
   const counts = CASE_TABS.reduce((acc, t) => ({ ...acc, [t.key]: (cases ?? []).filter((c) => tabOf(c.status) === t.key).length }), {} as Record<CaseTab, number>);
@@ -707,6 +723,8 @@ export const LooseEndsView: React.FC<LooseEndsViewProps> = ({
             </p>
           )}
 
+          {cases && addLetter}
+
           {cases && (
             <>
               <div role="tablist" aria-label="Loose ends by status" className="flex gap-1 overflow-x-auto -mx-1 px-1">
@@ -736,7 +754,7 @@ export const LooseEndsView: React.FC<LooseEndsViewProps> = ({
                 ) : (
                   <ul className="space-y-3">
                     {shown.map((c) => (
-                      <LooseCaseCard key={c.id} c={c} busy={busy === c.id} now={now} onAction={onAction} onOpenChat={onOpenChat} />
+                      <LooseCaseCard key={c.id} c={c} busy={busy === c.id} now={now} onAction={onAction} onOpenChat={onOpenChat} onOpenLetter={onOpenLetter} />
                     ))}
                   </ul>
                 )}
@@ -751,6 +769,15 @@ export const LooseEndsView: React.FC<LooseEndsViewProps> = ({
   );
 };
 
+export const AddLetterButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
+  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-dashed border-zinc-700 p-3">
+    <button type="button" onClick={onClick} className={`${actionBtn} bg-sky-500 hover:bg-sky-400 text-zinc-950 font-semibold`} data-add-letter-button>
+      <FileText size={13} aria-hidden="true" /> Add a letter
+    </button>
+    <p className="text-[11px] text-zinc-500 min-w-0 flex-1">Photograph or upload a bill or form to get its deadline and a reply draft. Nothing is sent.</p>
+  </div>
+);
+
 /** Loads cases and sources, runs the card actions and scans. */
 export const LooseEndsPage: React.FC<{ onBack?: () => void; onOpenChat?: (kwantId: string, threadId: string) => void }> = ({ onBack, onOpenChat }) => {
   const [cases, setCases] = useState<LooseCase[] | null>(null);
@@ -764,6 +791,8 @@ export const LooseEndsPage: React.FC<{ onBack?: () => void; onOpenChat?: (kwantI
   const [sources, setSources] = useState<LooseSource[] | null>(null);
   const [sourcesError, setSourcesError] = useState<string | null>(null);
   const [nextReview, setNextReview] = useState<string | null>(null);
+  const [letter, setLetter] = useState<string | null>(null);
+  const [addingLetter, setAddingLetter] = useState(false);
   const alive = useRef(true);
 
   const loadSources = useCallback(async () => {
@@ -853,6 +882,19 @@ export const LooseEndsPage: React.FC<{ onBack?: () => void; onOpenChat?: (kwantI
     }
   };
 
+  if (letter)
+    return (
+      <LetterPage
+        caseId={letter}
+        onBack={() => (setLetter(null), load())}
+        onDeleted={(title) => {
+          setLetter(null);
+          setNotice({ text: `Deleted “${title}”, its pages and everything read from it.`, error: false });
+          load();
+        }}
+      />
+    );
+
   return (
     <LooseEndsView
       cases={cases}
@@ -869,6 +911,21 @@ export const LooseEndsPage: React.FC<{ onBack?: () => void; onOpenChat?: (kwantI
       onScan={scan}
       onAction={act}
       onOpenChat={onOpenChat}
+      onOpenLetter={(id) => (setNotice(null), setLetter(id))}
+      addLetter={
+        addingLetter ? (
+          <AddLetterForm
+            onCancel={() => setAddingLetter(false)}
+            onCreated={(id) => {
+              setAddingLetter(false);
+              setNotice(null);
+              setLetter(id);
+            }}
+          />
+        ) : (
+          <AddLetterButton onClick={() => setAddingLetter(true)} />
+        )
+      }
       onBack={onBack}
       sources={<LooseSources sources={sources} error={sourcesError} onChanged={() => (loadSources(), load())} />}
     />

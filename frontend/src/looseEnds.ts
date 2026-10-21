@@ -16,7 +16,7 @@ export interface Evidence {
 }
 
 export interface CaseDraft {
-  /** `email`, `github` or `kwant`: where the person sends it themselves. */
+  /** `email`, `github`, `kwant` or `letter` (a paper reply: copy only). Where the person sends it themselves. */
   channel: string;
   to: string | null;
   subject: string | null;
@@ -81,9 +81,10 @@ const KINDS: Record<string, { label: string; tone: Tone }> = {
   stale_issue: { label: 'Gone quiet', tone: 'zinc' },
   failed_task: { label: 'Task failed', tone: 'rose' },
   unanswered_question: { label: 'Question open', tone: 'amber' },
+  document_request: { label: 'Letter to deal with', tone: 'sky' },
 };
 
-const SOURCES: Record<string, string> = { imap: 'Email', github: 'GitHub', kwant: 'Bot chats' };
+const SOURCES: Record<string, string> = { imap: 'Email', github: 'GitHub', kwant: 'Bot chats', document: 'Letter' };
 
 /** `bank_statement` → `Bank statement`: how an unknown kind or source still reads. */
 export function humanize(s: string): string {
@@ -199,6 +200,8 @@ export class LooseEndsError extends Error {
     public needsBitwarden = false,
     /** 423: Bitwarden holds the logins and is locked. */
     public locked = false,
+    /** The server's `code`, e.g. `busy` on a 409. */
+    public code: string | null = null,
   ) {
     super(message);
   }
@@ -211,7 +214,7 @@ const sentence = (s: string) => {
   return /[.!?]$/.test(c) ? c : `${c}.`;
 };
 
-async function call<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
+export async function call<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
   let res: Response;
   try {
     res = await personFetch(url, {
@@ -229,11 +232,12 @@ async function call<T>(url: string, method = 'GET', body?: unknown): Promise<T> 
   const needs = needsBitwardenFrom(res.status, answer);
   if (needs) throw new LooseEndsError(needs.message, 409, true);
   const err = answer && typeof answer === 'object' ? (answer as Record<string, unknown>).error : null;
+  const code = answer && typeof answer === 'object' && typeof (answer as Record<string, unknown>).code === 'string' ? ((answer as Record<string, unknown>).code as string) : null;
   const msg = typeof err === 'string' && err.trim() ? sentence(err) : `Something went wrong (HTTP ${res.status}).`;
   if (res.status === 423) throw new LooseEndsError(msg, 423, false, true);
   if (res.status === 403) throw new LooseEndsError('Only you can see and change loose ends.', 403);
   if (res.status === 404 && !err) throw new LooseEndsError('This server doesn’t have loose ends yet. Update the app and try again.', 404);
-  throw new LooseEndsError(msg, res.status);
+  throw new LooseEndsError(msg, res.status, false, false, code);
 }
 
 const enc = encodeURIComponent;
