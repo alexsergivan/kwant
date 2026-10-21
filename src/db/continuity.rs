@@ -35,6 +35,8 @@ pub enum MemoryError {
     TooLong,
     TooMany,
     NotFound,
+    /// A bot tried to change a memory the person wrote
+    PersonWritten,
     Db(String),
 }
 
@@ -63,6 +65,11 @@ impl std::fmt::Display for MemoryError {
                 "this bot already has {MAX_MEMORIES_PER_KWANT} memories; remove one first"
             ),
             MemoryError::NotFound => write!(f, "no such memory"),
+            MemoryError::PersonWritten => write!(
+                f,
+                "the person wrote this memory, so only they can change or remove it. \
+                 Ask them in your reply if you think it should change"
+            ),
             MemoryError::Db(_) => write!(f, "database error"),
         }
     }
@@ -401,6 +408,64 @@ impl Database {
             .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
+    }
+
+    /// A bot changing its own memory: like [`Self::update_memory`], but entries the person wrote
+    /// are refused.
+    pub async fn agent_update_memory(
+        &self,
+        kwant_id: &str,
+        id: &str,
+        text: &str,
+    ) -> Result<Memory, MemoryError> {
+        let text = clean_memory_text(text)?;
+        let res = sqlx::query(
+            "UPDATE kwant_memories SET text = ?, updated_at = ? \
+             WHERE id = ? AND kwant_id = ? AND source <> 'user'",
+        )
+        .bind(&text)
+        .bind(Utc::now())
+        .bind(id)
+        .bind(kwant_id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(self.why_agent_cannot_touch(kwant_id, id).await);
+        }
+        sqlx::query_as::<_, Memory>("SELECT id, kwant_id, text, source, created_at, updated_at FROM kwant_memories WHERE id = ?")
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// A bot removing its own memory; entries the person wrote are refused.
+    pub async fn agent_delete_memory(&self, kwant_id: &str, id: &str) -> Result<(), MemoryError> {
+        let res = sqlx::query(
+            "DELETE FROM kwant_memories WHERE id = ? AND kwant_id = ? AND source <> 'user'",
+        )
+        .bind(id)
+        .bind(kwant_id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(self.why_agent_cannot_touch(kwant_id, id).await);
+        }
+        Ok(())
+    }
+
+    async fn why_agent_cannot_touch(&self, kwant_id: &str, id: &str) -> MemoryError {
+        let found: Result<Option<(String,)>, _> =
+            sqlx::query_as("SELECT source FROM kwant_memories WHERE id = ? AND kwant_id = ?")
+                .bind(id)
+                .bind(kwant_id)
+                .fetch_optional(&self.pool)
+                .await;
+        match found {
+            Ok(Some(_)) => MemoryError::PersonWritten,
+            Ok(None) => MemoryError::NotFound,
+            Err(e) => e.into(),
+        }
     }
 
     pub async fn delete_memory(&self, kwant_id: &str, id: &str) -> Result<bool, DbError> {

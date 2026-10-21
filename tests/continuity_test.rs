@@ -830,6 +830,36 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
     assert_eq!(res["result"]["isError"], true);
     assert_eq!(db.list_memories(&k2.id).await.unwrap()[0].text, "k2 fact");
 
+    // A memory the person wrote can't be changed or removed by the bot, but the person can
+    let mine = db.add_memory(&k1.id, "Never email clients on Sunday", "user").await.unwrap();
+    for (name, args) in [
+        ("memory_update", json!({"id": mine.id, "text": "Email clients any day"})),
+        ("memory_remove", json!({"id": mine.id})),
+    ] {
+        let (_, res) = call(&app, "POST", "/api/mcp/self", Some(tool(name, args)), &[("authorization", &auth)]).await;
+        assert_eq!(res["result"]["isError"], true, "{name}: {res}");
+        assert!(text(&res).contains("the person wrote this memory"), "{name}: {res}");
+    }
+    let kept = db.list_memories(&k1.id).await.unwrap();
+    assert!(kept.iter().any(|m| m.id == mine.id && m.text == "Never email clients on Sunday"));
+    // The bot's own note is still its to change
+    let own = kept.iter().find(|m| m.source == "agent").unwrap().id.clone();
+    let (_, res) = call(
+        &app,
+        "POST",
+        "/api/mcp/self",
+        Some(tool("memory_update", json!({"id": own, "text": "Oleks prefers very short replies"}))),
+        &[("authorization", &auth)],
+    )
+    .await;
+    assert_eq!(res["result"]["isError"], false, "{res}");
+    let block = kwnt::server::continuity::memory_block(&db.list_memories(&k1.id).await.unwrap(), true);
+    assert!(block.contains(&format!("[{}] (written by the person) Never email", mine.id)), "{block}");
+    assert!(block.contains(&format!("[{own}] Oleks prefers very short")), "{block}");
+    // The person's own edit and delete still work
+    assert_eq!(db.update_memory(&k1.id, &mine.id, "Never email clients on weekends").await.unwrap().text, "Never email clients on weekends");
+    assert!(db.delete_memory(&k1.id, &mine.id).await.unwrap());
+
     // Search sees k1's direct chat, not k2's, nor a channel k1 isn't in
     let (_, res) = call(
         &app,
