@@ -859,6 +859,28 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
     // The person's own edit and delete still work
     assert_eq!(db.update_memory(&k1.id, &mine.id, "Never email clients on weekends").await.unwrap().text, "Never email clients on weekends");
     assert!(db.delete_memory(&k1.id, &mine.id).await.unwrap());
+    // Rigel's M1: once the person edits the bot's own note, it is theirs and the bot can't undo it
+    let edited = db.add_memory(&k1.id, "Oleks likes Tuesday calls", "agent").await.unwrap();
+    let (status, body) = req(
+        &app,
+        "PATCH",
+        &format!("/api/kwants/{}/memories/{}", k1.id, edited.id),
+        Some(json!({"text": "Oleks never takes calls on Tuesday"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["source"], "user", "{body}");
+    for (name, args) in [
+        ("memory_update", json!({"id": edited.id, "text": "Oleks likes Tuesday calls"})),
+        ("memory_remove", json!({"id": edited.id})),
+    ] {
+        let (_, res) = call(&app, "POST", "/api/mcp/self", Some(tool(name, args)), &[("authorization", &auth)]).await;
+        assert_eq!(res["result"]["isError"], true, "{name}: {res}");
+        assert!(text(&res).contains("the person wrote this memory"), "{name}: {res}");
+    }
+    let kept = db.list_memories(&k1.id).await.unwrap();
+    assert!(kept.iter().any(|m| m.id == edited.id && m.source == "user" && m.text == "Oleks never takes calls on Tuesday"));
+    assert!(db.delete_memory(&k1.id, &edited.id).await.unwrap());
 
     // Search sees k1's direct chat, not k2's, nor a channel k1 isn't in
     let (_, res) = call(

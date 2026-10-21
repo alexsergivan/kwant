@@ -404,7 +404,8 @@ impl Database {
         })
     }
 
-    /// Only the kwant's own memory can be changed.
+    /// The person editing a memory. Only the kwant's own memory can be changed, and the edited
+    /// entry becomes the person's (`source = 'user'`), so the bot can no longer change or remove it.
     pub async fn update_memory(
         &self,
         kwant_id: &str,
@@ -413,7 +414,7 @@ impl Database {
     ) -> Result<Memory, MemoryError> {
         let text = clean_memory_text(text)?;
         let res = sqlx::query(
-            "UPDATE kwant_memories SET text = ?, updated_at = ? WHERE id = ? AND kwant_id = ?",
+            "UPDATE kwant_memories SET text = ?, source = 'user', updated_at = ? WHERE id = ? AND kwant_id = ?",
         )
         .bind(&text)
         .bind(Utc::now())
