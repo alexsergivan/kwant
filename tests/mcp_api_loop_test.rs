@@ -79,6 +79,8 @@ fn ctx(approver: Arc<dyn ToolApprover>, timeout_secs: i64, max: usize) -> McpTur
 fn input(mcp: Option<McpTurnContext>) -> TurnInput {
     TurnInput {
         continuity: String::new(),
+        skills: String::new(),
+        store: None,
         browser_api_url: None,
         thread_id: "t1".into(),
         kwant: Kwant {

@@ -157,6 +157,8 @@ async fn claude_turn_gets_browser_tools_that_drive_its_own_panel() {
         sandbox_id: Some(bot.id.clone()),
         teammates: vec![],
         continuity: String::new(),
+        skills: String::new(),
+        store: None,
         mcp: Some(ctx.clone()),
     };
     let prompt = input.format_system_prompt();

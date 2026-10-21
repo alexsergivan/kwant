@@ -1,5 +1,6 @@
 use super::{events::RuntimeEvent, Driver, DriverError, TurnInput, TurnOutput};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 use crate::mcp::session::{Caller, McpToolSession};
 use serde_json::{json, Value};
@@ -125,6 +126,87 @@ fn volatile(role: &str, content: &str) -> Value {
     let mut m = json!({"role": role, "content": content});
     m[VOLATILE] = json!(true);
     m
+}
+
+/// How long the Anthropic API keeps a cached prefix after its last use (`ephemeral`'s default).
+const CACHE_TTL_SECS: i64 = 5 * 60;
+
+/// The cached part of an Anthropic system prompt, split by what changes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Prefix {
+    /// Persona, identity and soul: changes when the bot's profile is edited.
+    profile: String,
+    /// Team block, teammates and browser rules: changes with the roster.
+    team: String,
+    /// Pinned instructions and memory: changes when a note is added or edited.
+    notes: String,
+}
+
+/// The prefix to send this turn, a note of what changed since it was written, and whether it is
+/// new. While the provider's cache is warm a conversation keeps the prefix it was first sent, so a
+/// memory, roster or profile edit doesn't rewrite every cached token; the edit rides along after
+/// the breakpoints instead. With no saved prefix, or a cache that has lapsed, `now` is the prefix.
+fn keep_prefix(saved: Option<(&Prefix, DateTime<Utc>)>, now: &Prefix, at: DateTime<Utc>) -> (Prefix, Option<String>, bool) {
+    match saved {
+        Some((old, used_at)) if (at - used_at).num_seconds() < CACHE_TTL_SECS => (old.clone(), changes_note(old, now), false),
+        _ => (now.clone(), None, true),
+    }
+}
+
+/// What changed between the cached prefix and today's, for the end of the request.
+fn changes_note(old: &Prefix, now: &Prefix) -> Option<String> {
+    let mut parts = Vec::new();
+    if old.profile != now.profile {
+        parts.push(format!("(Your profile now reads:){}", now.profile));
+    }
+    if old.team != now.team {
+        parts.push(format!("(Your team and teammates now:){}", now.team));
+    }
+    if old.notes != now.notes {
+        parts.push(if now.notes.is_empty() {
+            "(Your pinned instructions and notes are now empty.)".to_string()
+        } else {
+            format!("(Your pinned instructions and notes now read:)\n{}", now.notes)
+        });
+    }
+    (!parts.is_empty()).then(|| {
+        format!(
+            "[Updated by kwnt since earlier in this chat]\nkwnt, not the person, sends this: parts of your instructions changed during \
+            this conversation. Where these differ from the ones at the start, follow these.\n\n{}",
+            parts.join("\n\n")
+        )
+    })
+}
+
+/// [`keep_prefix`] for this turn's conversation, read from and saved to the turn's store.
+async fn conversation_prefix(input: &TurnInput, now: Prefix) -> (Prefix, Option<String>) {
+    let Some(db) = input.store.as_ref().filter(|_| !input.thread_id.is_empty()) else {
+        return (now, None);
+    };
+    let (kwant_id, context_id) = (&input.kwant.id, &input.thread_id);
+    let at = Utc::now();
+    let saved = db.api_context(kwant_id, context_id).await.ok().flatten().map(|r| {
+        let used_at = r.used_at;
+        (Prefix { profile: r.profile, team: r.team, notes: r.notes }, used_at)
+    });
+    let (prefix, changes, fresh) = keep_prefix(saved.as_ref().map(|(p, t)| (p, *t)), &now, at);
+    let stored = if fresh {
+        db.save_api_context(&crate::db::api_context::ApiContextRow {
+            kwant_id: kwant_id.clone(),
+            context_id: context_id.clone(),
+            profile: prefix.profile.clone(),
+            team: prefix.team.clone(),
+            notes: prefix.notes.clone(),
+            used_at: at,
+        })
+        .await
+    } else {
+        db.touch_api_context(kwant_id, context_id, at).await
+    };
+    if let Err(e) = stored {
+        tracing::warn!(error = %e, "could not save the API prompt prefix");
+    }
+    (prefix, changes)
 }
 
 /// Turns the OpenAI-style message list into an Anthropic Messages body: system prompts move to
@@ -718,37 +800,53 @@ impl Driver for ApiDriver {
             };
             let anthropic = is_anthropic(&url);
             let parts = input.system_prompt_parts(browser);
-            let mut messages = if anthropic {
-                // Cached part first; what changes per turn or per minute after the breakpoint
-                vec![
-                    json!({"role": "system", "content": format!("{}{}{}", parts.head, parts.team, parts.tail)}),
-                    volatile("system", input.continuity.trim()),
-                ]
-            } else {
-                vec![json!({"role": "system", "content": input.format_system_prompt_with(browser)})]
-            };
-            for msg in &input.history {
-                let (role, content) = match msg.sender_role.as_str() {
-                    "kwant" if msg.sender_id == input.kwant.name => ("assistant", msg.text.clone()),
-                    // Teammates' replies are context from other speakers, not this kwant's own turns
-                    "kwant" => ("user", format!("[{}]: {}", msg.sender_id, msg.text)),
-                    "system" => ("system", msg.text.clone()),
-                    _ => ("user", msg.text.clone()),
+            let messages = if anthropic {
+                let now = Prefix {
+                    profile: parts.head.clone(),
+                    team: format!("{}{}", parts.team, parts.tail),
+                    notes: input.continuity.trim().to_string(),
                 };
-                messages.push(if anthropic && role == "system" {
-                    volatile(role, &content)
-                } else {
-                    json!({"role": role, "content": content})
-                });
-            }
-            if anthropic {
+                let (prefix, changes) = conversation_prefix(&input, now).await;
+                // Cached part first; what changes per turn or per minute after the breakpoints
+                let mut messages = vec![
+                    json!({"role": "system", "content": format!("{}{}", prefix.profile, prefix.team)}),
+                    json!({"role": "system", "content": prefix.notes}),
+                ];
+                for msg in &input.history {
+                    let (role, content) = match msg.sender_role.as_str() {
+                        "kwant" if msg.sender_id == input.kwant.name => ("assistant", msg.text.clone()),
+                        "kwant" => ("user", format!("[{}]: {}", msg.sender_id, msg.text)),
+                        // kwnt's own notices stay where they happened, so a new one doesn't
+                        // change the cached prefix before it
+                        "system" => ("user", format!("[kwnt notice]: {}", msg.text)),
+                        _ => ("user", msg.text.clone()),
+                    };
+                    messages.push(json!({"role": role, "content": content}));
+                }
                 // The prompt and date go after the breakpoint on the last history message: next
                 // turn the prompt is history, and the date would otherwise change the prefix
+                if let Some(changes) = changes {
+                    messages.push(volatile("user", &changes));
+                }
+                messages.push(volatile("user", input.skills.trim()));
                 messages.push(volatile("user", &input.prompt));
                 messages.push(volatile("user", parts.date.trim()));
+                messages
             } else {
+                let mut messages = vec![json!({"role": "system", "content": input.format_system_prompt_with(browser)})];
+                for msg in &input.history {
+                    let (role, content) = match msg.sender_role.as_str() {
+                        "kwant" if msg.sender_id == input.kwant.name => ("assistant", msg.text.clone()),
+                        // Teammates' replies are context from other speakers, not this kwant's own turns
+                        "kwant" => ("user", format!("[{}]: {}", msg.sender_id, msg.text)),
+                        "system" => ("system", msg.text.clone()),
+                        _ => ("user", msg.text.clone()),
+                    };
+                    messages.push(json!({"role": role, "content": content}));
+                }
                 messages.push(json!({"role": "user", "content": input.prompt}));
-            }
+                messages
+            };
 
             let effort = input.effort_level.as_deref().unwrap_or("medium");
             let max_tokens = match effort {
@@ -1114,6 +1212,8 @@ mod tests {
     fn turn(prompt: &str, history: Vec<crate::db::models::Message>) -> TurnInput {
         TurnInput {
             continuity: "[Pinned]\nnotes for this turn".into(),
+            skills: String::new(),
+            store: None,
             browser_api_url: None,
             thread_id: "t1".into(),
             kwant: crate::db::models::Kwant {
@@ -1146,7 +1246,8 @@ mod tests {
     }
 
     /// The point of caching: turn 2 starts with exactly the blocks turn 1 cached, and nothing that
-    /// changes per minute (the date) or per turn (notes, the prompt) sits before a breakpoint.
+    /// changes per minute (the date) or per turn (skills, the prompt) sits before a breakpoint.
+    /// A note edited between the turns keeps the cached prefix and is sent after it.
     #[tokio::test]
     async fn a_second_turn_reuses_the_first_turns_cached_prefix() {
         let reply = json!({"content": [{"type": "text", "text": "Done."}], "usage": {"input_tokens": 5, "output_tokens": 2}});
@@ -1154,9 +1255,14 @@ mod tests {
         let driver = ApiDriver::new(Some("sk-ant-test-key".into()), Some(url));
         let (tx, mut rx) = mpsc::channel(64);
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::init(tmp.path()).await.unwrap();
 
         let first = message("m1", "user", "Oleks", "add caching");
-        driver.stream_turn(turn("add caching", vec![first.clone()]), tx.clone()).await.unwrap();
+        let mut one = turn("add caching", vec![first.clone()]);
+        one.store = Some(db.clone());
+        one.skills = "[Skills]\nskill picked for turn 1".into();
+        driver.stream_turn(one, tx.clone()).await.unwrap();
         // A teammate's reply lands right after the cached message, in the same (user) role
         let history = vec![
             first,
@@ -1165,7 +1271,9 @@ mod tests {
             message("m4", "user", "Oleks", "and the docs"),
         ];
         let mut second = turn("and the docs", history);
+        second.store = Some(db);
         second.continuity = "[Pinned]\ndifferent notes now".into();
+        second.skills = "[Skills]\nanother skill for turn 2".into();
         driver.stream_turn(second, tx).await.unwrap();
 
         let bodies: Vec<Value> = seen.lock().unwrap().iter().map(|(_, b)| b.clone()).collect();
@@ -1173,14 +1281,22 @@ mod tests {
         for body in &bodies {
             assert_eq!(breakpoints(body), 2);
             let blocks = rendered(body);
-            let date = blocks.iter().position(|b| b.1.contains("[Current date]")).unwrap();
-            assert!(date > blocks.iter().rposition(|b| b.2).unwrap(), "the date is after every breakpoint");
+            let last_breakpoint = blocks.iter().rposition(|b| b.2).unwrap();
+            for changing in ["[Current date]", "[Skills]"] {
+                let at = blocks.iter().position(|b| b.1.contains(changing)).unwrap();
+                assert!(at > last_breakpoint, "{changing} is after every breakpoint");
+            }
         }
-        // The system breakpoint: the same stable block both turns, without the date or the notes
-        assert!(one[0].2 && two[0].2);
-        assert_eq!(one[0].1, two[0].1);
+        // The system breakpoint: the same blocks both turns, ending with the notes turn 1 had
+        assert_eq!(bodies[0]["system"], bodies[1]["system"]);
         assert!(!one[0].1.contains("[Current date]") && !one[0].1.contains("[Pinned]"));
-        assert!(one[1].1.contains("[Pinned]") && !one[1].2, "notes come after the system breakpoint");
+        assert_eq!((one[1].1.as_str(), one[1].2), ("[Pinned]\nnotes for this turn", true));
+        // The edit comes after the message breakpoint, in a note saying it is from kwnt
+        let last_breakpoint = two.iter().rposition(|b| b.2).unwrap();
+        let note = two.iter().position(|b| b.1.starts_with("[Updated by kwnt")).unwrap();
+        assert!(note > last_breakpoint);
+        assert!(two[note].1.contains("different notes now") && !two[note].1.contains("(Your profile"));
+        assert!(!one.iter().any(|b| b.1.starts_with("[Updated by kwnt")));
         // The message breakpoint of turn 1 ends a prefix that turn 2 repeats unchanged
         let msgs = |r: &[(String, String, bool)]| r.iter().filter(|b| b.0 != "system").cloned().collect::<Vec<_>>();
         let (msgs_one, msgs_two) = (msgs(&one), msgs(&two));
@@ -1191,7 +1307,56 @@ mod tests {
         // Turn 2 marks its own last history block for turn 3, and sends the prompt after it
         let end_two = msgs_two.iter().position(|b| b.2).unwrap();
         assert_eq!(msgs_two[end_two].1, "and the docs");
-        assert_eq!(msgs_two[end_two + 1].1, "and the docs");
+        assert!(msgs_two[end_two + 1..].iter().any(|b| b.1 == "and the docs"));
+    }
+
+    fn prefix(notes: &str) -> Prefix {
+        Prefix { profile: "\n\nYou are Lin.".into(), team: "\n\n[Team] Ada, Pixel".into(), notes: notes.into() }
+    }
+
+    #[test]
+    fn a_warm_prefix_is_kept_and_a_lapsed_one_is_rewritten() {
+        let at = Utc::now();
+        let old = prefix("likes tea");
+        let mut now = prefix("likes coffee");
+        now.team = "\n\n[Team] Ada, Pixel, Rigel".into();
+
+        let (kept, note, fresh) = keep_prefix(Some((&old, at - chrono::Duration::seconds(60))), &now, at);
+        assert_eq!((kept, fresh), (old.clone(), false));
+        let note = note.unwrap();
+        assert!(note.contains("Rigel") && note.contains("likes coffee"));
+        assert!(!note.contains("(Your profile"), "only what changed is repeated");
+
+        let (kept, note, _) = keep_prefix(Some((&old, at - chrono::Duration::seconds(60))), &old, at);
+        assert_eq!((kept, note), (old.clone(), None), "nothing changed, nothing to add");
+
+        let lapsed = at - chrono::Duration::seconds(CACHE_TTL_SECS + 1);
+        assert_eq!(keep_prefix(Some((&old, lapsed)), &now, at), (now.clone(), None, true));
+        assert_eq!(keep_prefix(None, &now, at), (now.clone(), None, true));
+
+        let (_, note, _) = keep_prefix(Some((&old, at)), &prefix(""), at);
+        assert!(note.unwrap().contains("are now empty"));
+    }
+
+    #[tokio::test]
+    async fn kwnt_notices_stay_where_they_happened() {
+        let reply = json!({"content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 2}});
+        let (url, seen) = mock(200, reply).await;
+        let driver = ApiDriver::new(Some("sk-ant-test-key".into()), Some(url));
+        let (tx, mut rx) = mpsc::channel(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let history = vec![
+            message("m1", "user", "Oleks", "hi"),
+            message("m2", "system", "kwnt", "Ada wasn't asked"),
+            message("m3", "user", "Oleks", "go on"),
+        ];
+        driver.stream_turn(turn("go on", history), tx).await.unwrap();
+        let body = seen.lock().unwrap()[0].1.clone();
+        let blocks = rendered(&body);
+        assert!(!body["system"].to_string().contains("wasn't asked"));
+        let at = blocks.iter().position(|b| b.1 == "[kwnt notice]: Ada wasn't asked").unwrap();
+        assert_eq!(blocks[at - 1].1, "hi");
+        assert_eq!(blocks[at + 1].1, "go on");
     }
 
     #[tokio::test]

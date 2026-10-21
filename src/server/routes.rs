@@ -1611,8 +1611,8 @@ async fn run_kwant_turn_inner(
             channel_id.as_deref(),
             with_tools,
         )
-        .await
-            + &super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
+        .await;
+        let skills = super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
         let turn_input = TurnInput {
             browser_api_url: Some(format!(
                 "http://127.0.0.1:{}/api/sandbox/{}",
@@ -1636,6 +1636,8 @@ async fn run_kwant_turn_inner(
                 .collect(),
             mcp: mcp_ctx.clone(),
             continuity,
+            skills,
+            store: Some(state.db.clone()),
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();

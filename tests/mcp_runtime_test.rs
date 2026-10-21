@@ -268,6 +268,8 @@ async fn permission_endpoint_answers_claude_prompts_over_http() {
 fn turn(mcp: Option<McpTurnContext>) -> TurnInput {
     TurnInput {
         continuity: String::new(),
+        skills: String::new(),
+        store: None,
         browser_api_url: None,
         thread_id: "t1".into(),
         kwant: Kwant {
