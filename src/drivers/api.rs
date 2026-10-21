@@ -116,16 +116,46 @@ pub(crate) fn error_message(body: &str) -> String {
     crate::profiles::classify::redact_detail(&msg.unwrap_or_else(|| body.to_string()), 300)
 }
 
+/// Marks a message in the list `anthropic_body` takes as one that changes every turn (the current
+/// date, this turn's notes): it goes after the cache breakpoints so the prefix before it is reused.
+pub(crate) const VOLATILE: &str = "kwant_volatile";
+
+/// A message for `anthropic_body` that goes after the cache breakpoints (see `VOLATILE`).
+fn volatile(role: &str, content: &str) -> Value {
+    let mut m = json!({"role": role, "content": content});
+    m[VOLATILE] = json!(true);
+    m
+}
+
 /// Turns the OpenAI-style message list into an Anthropic Messages body: system prompts move to
-/// the top-level `system`, same-role neighbours are merged and the first message is the user's.
+/// the top-level `system`, same-role neighbours share one message and the first message is the
+/// user's.
+///
+/// Prompt caching: system prompts become one block each, stable ones first, with a
+/// `cache_control` breakpoint on the last stable one; in `messages` the breakpoint is on the last
+/// block that isn't `VOLATILE`, and volatile messages become their own blocks after it. That is two
+/// breakpoints at most (the API allows 4), and each turn reads the prefix the previous one wrote.
 fn anthropic_body(model: &str, messages: &[Value], max_tokens: i64) -> Value {
-    let mut system = Vec::new();
-    let mut turns: Vec<(String, String)> = Vec::new();
+    let mut stable_system = Vec::new();
+    let mut volatile_system = Vec::new();
+    // (role, text blocks, how many leading blocks are stable)
+    let mut turns: Vec<(&str, Vec<String>, usize)> = Vec::new();
     for m in messages {
         let role = m["role"].as_str().unwrap_or("user");
         let content = m["content"].as_str().unwrap_or_default().to_string();
+        let volatile = m[VOLATILE].as_bool().unwrap_or(false);
         if role == "system" {
-            system.push(content);
+            if content.trim().is_empty() {
+                continue;
+            }
+            if volatile {
+                volatile_system.push(content);
+            } else {
+                stable_system.push(content);
+            }
+            continue;
+        }
+        if volatile && content.trim().is_empty() {
             continue;
         }
         let role = if role == "assistant" {
@@ -134,27 +164,66 @@ fn anthropic_body(model: &str, messages: &[Value], max_tokens: i64) -> Value {
             "user"
         };
         match turns.last_mut() {
-            Some((r, c)) if r == role => {
-                c.push_str("\n\n");
-                c.push_str(&content);
+            // Same-role neighbours share a message but keep their own blocks, so a message cached
+            // last turn still ends on a block boundary when a teammate's reply follows it
+            Some((r, blocks, stable)) if *r == role => {
+                blocks.push(content);
+                if !volatile {
+                    *stable = blocks.len();
+                }
             }
-            _ => turns.push((role.to_string(), content)),
+            _ => turns.push((role, vec![content], if volatile { 0 } else { 1 })),
         }
     }
-    if turns.first().is_some_and(|(r, _)| r == "assistant") {
-        turns.insert(0, ("user".into(), "(conversation so far)".into()));
+    if turns.first().is_some_and(|(r, _, _)| *r == "assistant") {
+        turns.insert(0, ("user", vec!["(conversation so far)".into()], 1));
     }
     let model = if model == "claude" {
         DEFAULT_CLAUDE_MODEL
     } else {
         model
     };
-    json!({
+    let breakpoint = turns.iter().rposition(|(_, _, stable)| *stable > 0);
+    let messages = turns
+        .iter()
+        .enumerate()
+        .map(|(i, (role, blocks, stable))| {
+            let content = blocks
+                .iter()
+                .enumerate()
+                .map(|(j, text)| {
+                    let mut block = json!({"type": "text", "text": text});
+                    if Some(i) == breakpoint && j + 1 == *stable {
+                        block["cache_control"] = json!({"type": "ephemeral"});
+                    }
+                    block
+                })
+                .collect::<Vec<_>>();
+            json!({"role": role, "content": content})
+        })
+        .collect::<Vec<_>>();
+    let stable_count = stable_system.len();
+    let system = stable_system
+        .into_iter()
+        .chain(volatile_system)
+        .enumerate()
+        .map(|(i, text)| {
+            let mut block = json!({"type": "text", "text": text});
+            if i + 1 == stable_count {
+                block["cache_control"] = json!({"type": "ephemeral"});
+            }
+            block
+        })
+        .collect::<Vec<_>>();
+    let mut body = json!({
         "model": model,
         "max_tokens": max_tokens.max(1),
-        "system": system.join("\n\n"),
-        "messages": turns.into_iter().map(|(role, content)| json!({"role": role, "content": content})).collect::<Vec<_>>(),
-    })
+        "messages": messages,
+    });
+    if !system.is_empty() {
+        body["system"] = json!(system);
+    }
+    body
 }
 
 /// The reply text of a non-streamed call, OpenAI or Anthropic shaped.
@@ -172,21 +241,69 @@ fn reply_text(reply: &Value) -> Option<String> {
         .or(anthropic_text)
 }
 
-/// Tokens a reply used, from OpenAI's `total_tokens` or Anthropic's input + output.
-fn usage_tokens(usage: &Value) -> Option<u64> {
-    usage["total_tokens"]
-        .as_u64()
-        .or_else(|| Some(usage["input_tokens"].as_u64()? + usage["output_tokens"].as_u64().unwrap_or(0)))
+/// Token counts of one model call. On the Anthropic API `input_tokens` is only the part after the
+/// last cache breakpoint; the cached prefix is counted in the two cache fields.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Usage {
+    input: u64,
+    output: u64,
+    cache_creation: u64,
+    cache_read: u64,
+    /// OpenAI's `total_tokens`, when the server sent it.
+    total: Option<u64>,
+}
+
+impl Usage {
+    /// Reads an OpenAI or Anthropic `usage` object; `None` when it has no token counts.
+    fn parse(usage: &Value) -> Option<Self> {
+        let n = |k: &str| usage[k].as_u64();
+        let found = Self {
+            input: n("input_tokens").or_else(|| n("prompt_tokens")).unwrap_or(0),
+            output: n("output_tokens").or_else(|| n("completion_tokens")).unwrap_or(0),
+            cache_creation: n("cache_creation_input_tokens").unwrap_or(0),
+            cache_read: n("cache_read_input_tokens").unwrap_or(0),
+            total: n("total_tokens"),
+        };
+        (found.total.is_some() || n("input_tokens").is_some()).then_some(found)
+    }
+
+    /// Adds a later reading of the same call (a stream's `message_delta`): counts it carries win.
+    fn update(&mut self, later: &Value) {
+        let n = |k: &str| later[k].as_u64();
+        self.input = n("input_tokens").unwrap_or(self.input);
+        self.output = n("output_tokens").unwrap_or(self.output);
+        self.cache_creation = n("cache_creation_input_tokens").unwrap_or(self.cache_creation);
+        self.cache_read = n("cache_read_input_tokens").unwrap_or(self.cache_read);
+        self.total = n("total_tokens").or(self.total);
+    }
+
+    /// All tokens the call processed, cached or not, so the count means the same with caching on.
+    fn tokens(&self) -> u64 {
+        self.total
+            .unwrap_or(self.input + self.cache_creation + self.cache_read + self.output)
+    }
+
+    /// Logs the counts (never any text) so cache hits can be checked per turn.
+    fn log(&self, model: &str) {
+        tracing::info!(
+            model,
+            input_tokens = self.input,
+            output_tokens = self.output,
+            cache_creation_input_tokens = self.cache_creation,
+            cache_read_input_tokens = self.cache_read,
+            "model API usage"
+        );
+    }
 }
 
 /// Reads a streamed reply (server-sent events, OpenAI or Anthropic shaped), sending each piece
 /// of text as it arrives. A server that answers with one JSON body instead is read whole. Returns
-/// the full text and tokens used; a stream cut off midway keeps what arrived, with a note.
+/// the full text and token counts; a stream cut off midway keeps what arrived, with a note.
 async fn stream_reply(
     mut resp: reqwest::Response,
     anthropic: bool,
     event_tx: &mpsc::Sender<RuntimeEvent>,
-) -> (String, usize) {
+) -> (String, Option<Usage>) {
     let is_sse = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -196,12 +313,10 @@ async fn stream_reply(
         let reply = resp.json::<Value>().await.unwrap_or(Value::Null);
         let text = reply_text(&reply).unwrap_or_else(|| "No response content".into());
         let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
-        return (text, usage_tokens(&reply["usage"]).unwrap_or(45) as usize);
+        return (text, Usage::parse(&reply["usage"]));
     }
     let mut text = String::new();
-    let mut input_tokens = 0u64;
-    let mut output_tokens = 0u64;
-    let mut total_tokens: Option<u64> = None;
+    let mut usage: Option<Usage> = None;
     let mut pending: Vec<u8> = Vec::new();
     let mut failure: Option<String> = None;
     'read: loop {
@@ -233,19 +348,19 @@ async fn stream_reply(
             let piece = if anthropic {
                 match event["type"].as_str() {
                     Some("message_start") => {
-                        input_tokens = event["message"]["usage"]["input_tokens"].as_u64().unwrap_or(0);
+                        usage = Usage::parse(&event["message"]["usage"]).or(usage);
                         None
                     }
                     Some("message_delta") => {
-                        output_tokens = event["usage"]["output_tokens"].as_u64().unwrap_or(output_tokens);
+                        usage.get_or_insert_with(Usage::default).update(&event["usage"]);
                         None
                     }
                     Some("content_block_delta") => event["delta"]["text"].as_str(),
                     _ => None,
                 }
             } else {
-                if let Some(t) = usage_tokens(&event["usage"]) {
-                    total_tokens = Some(t);
+                if let Some(u) = Usage::parse(&event["usage"]) {
+                    usage = Some(u);
                 }
                 event["choices"][0]["delta"]["content"].as_str()
             };
@@ -263,8 +378,7 @@ async fn stream_reply(
         text = "No response content".into();
         let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
     }
-    let tokens = total_tokens.unwrap_or(input_tokens + output_tokens);
-    (text, if tokens == 0 { 45 } else { tokens as usize })
+    (text, usage.filter(|u| u.tokens() > 0))
 }
 
 struct ChatRequest<'a> {
@@ -465,8 +579,11 @@ impl ApiDriver {
             };
             body["stream"] = json!(true);
             let resp = self.with_retry(|| self.send_chat(request, &body)).await?;
-            let (text, tokens) = stream_reply(resp, is_anthropic(request.url), event_tx).await;
-            return Ok((text, tokens, true));
+            let (text, usage) = stream_reply(resp, is_anthropic(request.url), event_tx).await;
+            if let Some(u) = usage {
+                u.log(request.model);
+            }
+            return Ok((text, usage.map_or(45, |u| u.tokens() as usize), true));
         }
         for round in 0..max_calls {
             let body = if is_anthropic(request.url) {
@@ -495,7 +612,13 @@ impl ApiDriver {
                     ))
                 }
             };
-            tokens += usage_tokens(&reply["usage"]).unwrap_or(45) as usize;
+            match Usage::parse(&reply["usage"]) {
+                Some(u) => {
+                    u.log(request.model);
+                    tokens += u.tokens() as usize;
+                }
+                None => tokens += 45,
+            }
             let message = &reply["choices"][0]["message"];
             let content = reply_text(&reply);
             let calls = message["tool_calls"].as_array().filter(|c| !c.is_empty());
@@ -593,9 +716,17 @@ impl Driver for ApiDriver {
             } else {
                 super::BrowserAccess::Unavailable
             };
-            let system_prompt = input.format_system_prompt_with(browser);
-
-            let mut messages = vec![json!({"role": "system", "content": system_prompt})];
+            let anthropic = is_anthropic(&url);
+            let parts = input.system_prompt_parts(browser);
+            let mut messages = if anthropic {
+                // Cached part first; what changes per turn or per minute after the breakpoint
+                vec![
+                    json!({"role": "system", "content": format!("{}{}{}", parts.head, parts.team, parts.tail)}),
+                    volatile("system", input.continuity.trim()),
+                ]
+            } else {
+                vec![json!({"role": "system", "content": input.format_system_prompt_with(browser)})]
+            };
             for msg in &input.history {
                 let (role, content) = match msg.sender_role.as_str() {
                     "kwant" if msg.sender_id == input.kwant.name => ("assistant", msg.text.clone()),
@@ -604,9 +735,20 @@ impl Driver for ApiDriver {
                     "system" => ("system", msg.text.clone()),
                     _ => ("user", msg.text.clone()),
                 };
-                messages.push(json!({"role": role, "content": content}));
+                messages.push(if anthropic && role == "system" {
+                    volatile(role, &content)
+                } else {
+                    json!({"role": role, "content": content})
+                });
             }
-            messages.push(json!({"role": "user", "content": input.prompt}));
+            if anthropic {
+                // The prompt and date go after the breakpoint on the last history message: next
+                // turn the prompt is history, and the date would otherwise change the prefix
+                messages.push(volatile("user", &input.prompt));
+                messages.push(volatile("user", parts.date.trim()));
+            } else {
+                messages.push(json!({"role": "user", "content": input.prompt}));
+            }
 
             let effort = input.effort_level.as_deref().unwrap_or("medium");
             let max_tokens = match effort {
@@ -830,7 +972,7 @@ mod tests {
         assert_eq!(headers["anthropic-version"], ANTHROPIC_VERSION);
         assert!(headers.get("authorization").is_none());
         assert_eq!(body["model"], DEFAULT_CLAUDE_MODEL);
-        assert_eq!(body["system"], "be brief");
+        assert_eq!(body["system"], json!([{"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral"}}]));
         assert!(body.get("stream").is_none(), "existing API-key turns are not streamed");
         assert!(body.get("temperature").is_none());
         let roles: Vec<&str> = body["messages"]
@@ -840,7 +982,216 @@ mod tests {
             .map(|m| m["role"].as_str().unwrap())
             .collect();
         assert_eq!(roles, ["user", "assistant", "user"]);
-        assert_eq!(body["messages"][2]["content"], "a\n\nb");
+        assert_eq!(body["messages"][2]["content"], json!([{"type": "text", "text": "a"}, {"type": "text", "text": "b", "cache_control": {"type": "ephemeral"}}]));
+    }
+
+    /// Every block of a body in render order (system, then messages), with its breakpoint flag.
+    fn rendered(body: &Value) -> Vec<(String, String, bool)> {
+        let mut out = Vec::new();
+        for b in body["system"].as_array().into_iter().flatten() {
+            out.push(("system".into(), b["text"].as_str().unwrap().to_string(), b.get("cache_control").is_some()));
+        }
+        for m in body["messages"].as_array().unwrap() {
+            let role = m["role"].as_str().unwrap().to_string();
+            for b in m["content"].as_array().unwrap() {
+                out.push((role.clone(), b["text"].as_str().unwrap().to_string(), b.get("cache_control").is_some()));
+            }
+        }
+        out
+    }
+
+    fn breakpoints(body: &Value) -> usize {
+        body.to_string().matches("cache_control").count()
+    }
+
+    #[test]
+    fn anthropic_body_puts_breakpoints_before_what_changes() {
+        let body = anthropic_body(
+            "claude-opus-5-5",
+            &[
+                json!({"role": "system", "content": "persona and rules"}),
+                volatile("system", "pinned notes"),
+                json!({"role": "user", "content": "hi"}),
+                json!({"role": "assistant", "content": "hello"}),
+                json!({"role": "user", "content": "do x"}),
+                volatile("user", "do x"),
+                volatile("user", "[Current date] Tuesday 10:45"),
+            ],
+            100,
+        );
+        let blocks = rendered(&body);
+        assert_eq!(
+            blocks,
+            [
+                ("system".into(), "persona and rules".into(), true),
+                ("system".into(), "pinned notes".into(), false),
+                ("user".into(), "hi".into(), false),
+                ("assistant".into(), "hello".into(), false),
+                ("user".into(), "do x".into(), true),
+                ("user".into(), "do x".into(), false),
+                ("user".into(), "[Current date] Tuesday 10:45".into(), false),
+            ]
+        );
+        assert_eq!(body["messages"].as_array().unwrap().len(), 3, "same-role neighbours still merge into one message");
+        assert_eq!(body["system"][0]["cache_control"], json!({"type": "ephemeral"}), "default 5-minute TTL");
+        assert!(breakpoints(&body) <= 4);
+        assert!(body.get(VOLATILE).is_none() && !body.to_string().contains(VOLATILE), "the marker never reaches the API");
+    }
+
+    #[test]
+    fn anthropic_body_without_history_caches_only_the_system_prompt() {
+        let body = anthropic_body(
+            "claude",
+            &[
+                json!({"role": "system", "content": "rules"}),
+                volatile("system", ""),
+                volatile("user", "first question"),
+                volatile("user", "[Current date]"),
+            ],
+            100,
+        );
+        assert_eq!(breakpoints(&body), 1);
+        assert_eq!(body["system"].as_array().unwrap().len(), 1, "empty notes are left out");
+        assert_eq!(body["messages"][0]["content"].as_array().unwrap().len(), 2);
+        let none = anthropic_body("claude", &[json!({"role": "user", "content": "x"})], 10);
+        assert!(none.get("system").is_none(), "no empty system is sent");
+    }
+
+    #[test]
+    fn usage_reads_cache_fields_and_counts_all_input() {
+        let u = Usage::parse(&json!({"input_tokens": 20, "output_tokens": 7, "cache_creation_input_tokens": 1500, "cache_read_input_tokens": 3000})).unwrap();
+        assert_eq!((u.input, u.output, u.cache_creation, u.cache_read), (20, 7, 1500, 3000));
+        assert_eq!(u.tokens(), 4527, "cached tokens still count, so totals mean the same as before caching");
+        let openai = Usage::parse(&json!({"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12})).unwrap();
+        assert_eq!(openai.tokens(), 12);
+        assert_eq!(Usage::parse(&json!({"input_tokens": 5, "output_tokens": 2})).unwrap().tokens(), 7);
+        assert!(Usage::parse(&Value::Null).is_none());
+        // A stream: message_start has the input side, message_delta the final output count
+        let mut streamed = Usage::parse(&json!({"input_tokens": 4, "cache_read_input_tokens": 900, "output_tokens": 1})).unwrap();
+        streamed.update(&json!({"output_tokens": 30}));
+        assert_eq!((streamed.cache_read, streamed.output, streamed.tokens()), (900, 30, 934));
+    }
+
+    #[tokio::test]
+    async fn streamed_anthropic_usage_includes_cache_reads() {
+        let sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":2000,\"output_tokens\":1}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n",
+            "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":5}}\n\n",
+        );
+        let app = Router::new().route(
+            "/v1/messages",
+            post(move || async move { ([(axum::http::header::CONTENT_TYPE, "text/event-stream")], sse) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let resp = reqwest::Client::new().post(&url).send().await.unwrap();
+        let (tx, _rx) = mpsc::channel(8);
+        let (text, usage) = stream_reply(resp, true, &tx).await;
+        assert_eq!(text, "Hi");
+        let u = usage.unwrap();
+        assert_eq!((u.input, u.cache_read, u.output, u.tokens()), (3, 2000, 5, 2008));
+    }
+
+    fn message(id: &str, role: &str, sender: &str, text: &str) -> crate::db::models::Message {
+        crate::db::models::Message {
+            id: id.into(),
+            channel_id: Some("c1".into()),
+            direct_kwant_id: None,
+            sender_role: role.into(),
+            sender_id: sender.into(),
+            text: text.into(),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 0,
+            created_at: None,
+            thread_id: None,
+            meta: None,
+        }
+    }
+
+    fn turn(prompt: &str, history: Vec<crate::db::models::Message>) -> TurnInput {
+        TurnInput {
+            continuity: "[Pinned]\nnotes for this turn".into(),
+            browser_api_url: None,
+            thread_id: "t1".into(),
+            kwant: crate::db::models::Kwant {
+                space_id: crate::db::spaces::DEFAULT_SPACE_ID.into(),
+                id: "k1".into(),
+                name: "Lin".into(),
+                title: "Backend".into(),
+                persona_prompt: "You build backends.".into(),
+                soul: String::new(),
+                avatar_sprite: "s".into(),
+                driver_type: "api".into(),
+                preferred_model: "claude".into(),
+                temperature: 0.7,
+                max_tokens: 1000,
+                level: 1,
+                turns_completed: 0,
+                created_at: None,
+            },
+            prompt: prompt.into(),
+            history,
+            model_override: None,
+            model: Some("claude-opus-5-5".into()),
+            effort_level: None,
+            team_context: None,
+            workspace_dir: None,
+            sandbox_id: None,
+            teammates: vec![],
+            mcp: None,
+        }
+    }
+
+    /// The point of caching: turn 2 starts with exactly the blocks turn 1 cached, and nothing that
+    /// changes per minute (the date) or per turn (notes, the prompt) sits before a breakpoint.
+    #[tokio::test]
+    async fn a_second_turn_reuses_the_first_turns_cached_prefix() {
+        let reply = json!({"content": [{"type": "text", "text": "Done."}], "usage": {"input_tokens": 5, "output_tokens": 2}});
+        let (url, seen) = mock(200, reply).await;
+        let driver = ApiDriver::new(Some("sk-ant-test-key".into()), Some(url));
+        let (tx, mut rx) = mpsc::channel(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let first = message("m1", "user", "Oleks", "add caching");
+        driver.stream_turn(turn("add caching", vec![first.clone()]), tx.clone()).await.unwrap();
+        // A teammate's reply lands right after the cached message, in the same (user) role
+        let history = vec![
+            first,
+            message("m2", "kwant", "Ada", "check the tests"),
+            message("m3", "kwant", "Lin", "Done."),
+            message("m4", "user", "Oleks", "and the docs"),
+        ];
+        let mut second = turn("and the docs", history);
+        second.continuity = "[Pinned]\ndifferent notes now".into();
+        driver.stream_turn(second, tx).await.unwrap();
+
+        let bodies: Vec<Value> = seen.lock().unwrap().iter().map(|(_, b)| b.clone()).collect();
+        let (one, two) = (rendered(&bodies[0]), rendered(&bodies[1]));
+        for body in &bodies {
+            assert_eq!(breakpoints(body), 2);
+            let blocks = rendered(body);
+            let date = blocks.iter().position(|b| b.1.contains("[Current date]")).unwrap();
+            assert!(date > blocks.iter().rposition(|b| b.2).unwrap(), "the date is after every breakpoint");
+        }
+        // The system breakpoint: the same stable block both turns, without the date or the notes
+        assert!(one[0].2 && two[0].2);
+        assert_eq!(one[0].1, two[0].1);
+        assert!(!one[0].1.contains("[Current date]") && !one[0].1.contains("[Pinned]"));
+        assert!(one[1].1.contains("[Pinned]") && !one[1].2, "notes come after the system breakpoint");
+        // The message breakpoint of turn 1 ends a prefix that turn 2 repeats unchanged
+        let msgs = |r: &[(String, String, bool)]| r.iter().filter(|b| b.0 != "system").cloned().collect::<Vec<_>>();
+        let (msgs_one, msgs_two) = (msgs(&one), msgs(&two));
+        let end = msgs_one.iter().position(|b| b.2).unwrap();
+        let strip = |v: &[(String, String, bool)]| v.iter().map(|b| (b.0.clone(), b.1.clone())).collect::<Vec<_>>();
+        assert_eq!(strip(&msgs_two[..=end]), strip(&msgs_one[..=end]), "turn 2 starts with turn 1's cached messages");
+        assert_eq!(msgs_two[end + 1].1, "[Ada]: check the tests", "the teammate's reply is its own block");
+        // Turn 2 marks its own last history block for turn 3, and sends the prompt after it
+        let end_two = msgs_two.iter().position(|b| b.2).unwrap();
+        assert_eq!(msgs_two[end_two].1, "and the docs");
+        assert_eq!(msgs_two[end_two + 1].1, "and the docs");
     }
 
     #[tokio::test]

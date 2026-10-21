@@ -139,6 +139,14 @@ impl TurnInput {
     }
 
     pub fn format_system_prompt_with(&self, browser: BrowserAccess) -> String {
+        let p = self.system_prompt_parts(browser);
+        format!("{}{}{}{}{}", p.head, p.date, p.team, self.continuity, p.tail)
+    }
+
+    /// The system prompt split by how often each part changes, for callers that cache it: `head`,
+    /// `team` and `tail` stay the same between turns, `date` changes every minute and
+    /// `self.continuity` can change every turn. `format_system_prompt_with` joins them in order.
+    pub fn system_prompt_parts(&self, browser: BrowserAccess) -> SystemPromptParts {
         let mut base = format!(
             "{}\n\nYou are {}, {}.",
             self.kwant.persona_prompt, self.kwant.name, self.kwant.title
@@ -152,7 +160,7 @@ impl TurnInput {
                 soul
             ));
         }
-        base.push_str(&current_date_block(chrono::Local::now().fixed_offset()));
+        let date = current_date_block(chrono::Local::now().fixed_offset());
         let team_block = if let Some(ref team) = self.team_context {
             let desc = team.description.as_deref().unwrap_or("General team objectives");
             let mut ws_info = String::new();
@@ -246,8 +254,22 @@ impl TurnInput {
             )
         };
 
-        format!("{}{}{}{}{}", base, team_block, self.continuity, teammates_block, sandbox_rules)
+        SystemPromptParts {
+            head: base,
+            date,
+            team: team_block,
+            tail: format!("{teammates_block}{sandbox_rules}"),
+        }
     }
+}
+
+/// See `TurnInput::system_prompt_parts`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemPromptParts {
+    pub head: String,
+    pub date: String,
+    pub team: String,
+    pub tail: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
