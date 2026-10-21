@@ -1,0 +1,9 @@
+From: Oleks Example <oleks@example.org>
+To: Org Team <talks@meetup.example>
+Subject: Slides from today's talk
+Date: {{DATE:20}}
+Message-ID: <pleasantry-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Here are the slides from today. Let me know if you have questions.

@@ -1,0 +1,9 @@
+From: Oleks Example <oleks@example.org>
+To: Dental Clinic <desk@dental.example>
+Subject: Appointment confirmation
+Date: {{DATE:18}}
+Message-ID: <dentist-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hello, I'd like an appointment for a check-up, please.

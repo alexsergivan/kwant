@@ -1,0 +1,15 @@
+From: Support <help@store.example>
+To: Oleks Example <oleks@example.org>
+Subject: Re: Refund for order 7731
+Date: {{DATE:22}}
+Message-ID: <refund-1@fixture.example>
+In-Reply-To: <refund-0@fixture.example>
+References: <refund-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hello,
+
+Your refund request is being reviewed.
+
+Support

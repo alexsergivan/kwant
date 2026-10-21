@@ -1,0 +1,11 @@
+From: Oleks Example <oleks@example.org>
+To: Venue <events@venue.example>
+Subject: Re: Venue booking for the 12th
+Date: {{DATE:29}}
+Message-ID: <venue-2@fixture.example>
+In-Reply-To: <venue-1@fixture.example>
+References: <venue-0@fixture.example> <venue-1@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Thanks!

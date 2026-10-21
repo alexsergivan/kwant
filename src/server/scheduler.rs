@@ -640,5 +640,7 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
 /// Starts the scheduler and the notifier.
 pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     super::continuity::spawn_notifier(state.clone());
+    crate::zombie::hunt::spawn(state.clone(), shutdown.clone());
+    crate::documents::reminders::spawn(state.clone(), shutdown.clone());
     spawn(state, shutdown);
 }

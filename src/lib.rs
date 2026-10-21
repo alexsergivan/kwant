@@ -1,16 +1,19 @@
 pub mod broker;
 pub mod config;
 pub mod db;
+pub mod documents;
 pub mod drivers;
 pub mod embedded;
 pub mod import;
 pub mod mcp;
+pub mod parallel;
 pub mod profiles;
 pub mod router;
 pub mod routines;
 pub mod sandbox;
 pub mod server;
 pub mod tools;
+pub mod zombie;
 
 pub use broker::{ApprovalDecision, ApprovalRequest, PermissionBroker};
 pub use config::{Config, ConfigError};

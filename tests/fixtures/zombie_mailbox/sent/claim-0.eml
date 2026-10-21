@@ -1,0 +1,14 @@
+From: Oleks Example <oleks@example.org>
+To: Claims Desk <claims@insurer.example>
+Subject: Claim No. 4471-B status
+Date: {{DATE:30}}
+Message-ID: <claim-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hello,
+
+Could you tell me the status of claim No. 4471-B? I sent all documents last month.
+
+Thanks,
+Oleks

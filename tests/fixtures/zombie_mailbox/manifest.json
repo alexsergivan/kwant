@@ -1,0 +1,224 @@
+{
+ "me": [
+  "oleks@example.org"
+ ],
+ "threads": [
+  {
+   "key": "claim",
+   "subject": "Claim No. 4471-B status",
+   "expect": "awaiting_reply",
+   "note": "asked the insurer, never heard back",
+   "holdout": false
+  },
+  {
+   "key": "quote",
+   "subject": "Kitchen renovation quote",
+   "expect": "promise_lapsed",
+   "note": "contractor promised a quote by Friday",
+   "holdout": false
+  },
+  {
+   "key": "deposit",
+   "subject": "Deposit return flat 3",
+   "expect": "you_owe_reply",
+   "note": "landlord asked for the new address",
+   "holdout": false
+  },
+  {
+   "key": "contract",
+   "subject": "Signed contract for the accountant",
+   "expect": "you_promised",
+   "note": "I promised the signed contract and never sent it",
+   "holdout": false
+  },
+  {
+   "key": "visa",
+   "subject": "Visa support letter request",
+   "expect": "promise_lapsed",
+   "note": "only an auto-acknowledgement came",
+   "holdout": false
+  },
+  {
+   "key": "venue",
+   "subject": "Venue booking for the 12th",
+   "expect": null,
+   "note": "answered and thanked",
+   "holdout": false
+  },
+  {
+   "key": "invoice",
+   "subject": "Invoice 2026-118 payment",
+   "expect": null,
+   "note": "they confirmed payment, nothing open",
+   "holdout": false
+  },
+  {
+   "key": "deals",
+   "subject": "Our biggest autumn deals",
+   "expect": null,
+   "note": "newsletter",
+   "holdout": false
+  },
+  {
+   "key": "digest",
+   "subject": "Your weekly digest",
+   "expect": null,
+   "note": "no-reply digest",
+   "holdout": false
+  },
+  {
+   "key": "receipt",
+   "subject": "Your order 88213 receipt",
+   "expect": null,
+   "note": "bulk receipt",
+   "holdout": false
+  },
+  {
+   "key": "thanks",
+   "subject": "Wrapping up the workshop",
+   "expect": null,
+   "note": "closed exchange plus out-of-office",
+   "holdout": false
+  },
+  {
+   "key": "recent",
+   "subject": "Quick question about Saturday",
+   "expect": null,
+   "note": "too recent to be stale",
+   "holdout": false
+  },
+  {
+   "key": "pitch",
+   "subject": "Grow your sales 10x",
+   "expect": null,
+   "note": "cold sales pitch",
+   "holdout": false
+  },
+  {
+   "key": "ghnotif",
+   "subject": "[kwant/kwant] CI failed on main",
+   "expect": null,
+   "note": "GitHub notification email",
+   "holdout": false
+  },
+  {
+   "key": "bounce",
+   "subject": "Undelivered Mail Returned to Sender",
+   "expect": null,
+   "note": "bounce",
+   "holdout": false
+  },
+  {
+   "key": "noreply",
+   "subject": "Question about my account",
+   "expect": null,
+   "note": "written to a no-reply address",
+   "holdout": false
+  },
+  {
+   "key": "job",
+   "subject": "Application: Senior Rust Engineer",
+   "expect": "awaiting_reply",
+   "note": "job application never answered",
+   "holdout": false
+  },
+  {
+   "key": "refund",
+   "subject": "Refund for order 7731",
+   "expect": "promise_lapsed",
+   "note": "refund 'being reviewed' for weeks",
+   "holdout": false
+  },
+  {
+   "key": "rhetorical",
+   "subject": "That concert last night",
+   "expect": null,
+   "note": "a rhetorical question from a friend",
+   "holdout": false
+  },
+  {
+   "key": "pleasantry",
+   "subject": "Slides from today's talk",
+   "expect": null,
+   "note": "closing pleasantry, nothing expected",
+   "holdout": false
+  },
+  {
+   "key": "dentist",
+   "subject": "Appointment confirmation",
+   "expect": "you_owe_reply",
+   "note": "dentist asked me to confirm",
+   "holdout": false
+  },
+  {
+   "key": "docs",
+   "subject": "Documents for the mortgage",
+   "expect": null,
+   "note": "answered after my follow-up",
+   "holdout": false
+  },
+  {
+   "key": "part",
+   "subject": "Replacement part for the boiler",
+   "expect": "promise_lapsed",
+   "note": "promised a part next week, nothing came",
+   "holdout": false
+  },
+  {
+   "key": "lease",
+   "subject": "Signed lease",
+   "expect": "awaiting_reply",
+   "note": "awaiting a countersignature, worded without a question",
+   "holdout": false
+  },
+  {
+   "key": "library",
+   "subject": "Library card renewal",
+   "expect": null,
+   "note": "answered with a statement",
+   "holdout": false
+  },
+  {
+   "key": "passport",
+   "subject": "Passport renewal appointment",
+   "expect": "awaiting_reply",
+   "note": "holdout: asked for a slot, silence",
+   "holdout": true
+  },
+  {
+   "key": "photos",
+   "subject": "Wedding photos",
+   "expect": "promise_lapsed",
+   "note": "holdout: photographer will send the album",
+   "holdout": true
+  },
+  {
+   "key": "review",
+   "subject": "Draft chapter for review",
+   "expect": "you_owe_reply",
+   "note": "holdout: editor asked for my comments",
+   "holdout": true
+  },
+  {
+   "key": "webinar",
+   "subject": "Join our webinar on Thursday",
+   "expect": null,
+   "note": "holdout: marketing with a question in it",
+   "holdout": true
+  },
+  {
+   "key": "lunch",
+   "subject": "Lunch last week",
+   "expect": null,
+   "note": "holdout: friendly closer",
+   "holdout": true
+  },
+  {
+   "key": "ticket",
+   "subject": "Support ticket #5521",
+   "expect": null,
+   "note": "holdout: resolved ticket",
+   "holdout": true
+  }
+ ]
+}

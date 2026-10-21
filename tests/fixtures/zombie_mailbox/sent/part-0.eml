@@ -1,0 +1,9 @@
+From: Oleks Example <oleks@example.org>
+To: Heat Co <service@heat.example>
+Subject: Replacement part for the boiler
+Date: {{DATE:32}}
+Message-ID: <part-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hello, the boiler part broke again. Can you replace it?

@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useUndoableDelete } from '../undoDelete';
+import { UndoNotice } from './UndoNotice';
 import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, History, Loader2, Pencil, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import {
   Routine,
@@ -363,7 +365,7 @@ const RunHistory: React.FC<{ routineId: string; tick: number }> = ({ routineId, 
   );
 };
 
-const RoutineRow: React.FC<{
+export const RoutineRow: React.FC<{
   routine: Routine;
   kwantName?: string;
   placeLabel: string;
@@ -372,7 +374,9 @@ const RoutineRow: React.FC<{
   focusPause?: number;
   onEdit: () => void;
   onChanged: () => void;
-}> = ({ routine, kwantName, placeLabel, tick, focusPause, onEdit, onChanged }) => {
+  /** Tests: start in the Undo window. */
+  initialPending?: boolean;
+}> = ({ routine, kwantName, placeLabel, tick, focusPause, onEdit, onChanged, initialPending = false }) => {
   const rowRef = useRef<HTMLLIElement>(null);
   const switchRef = useRef<HTMLInputElement>(null);
   const [highlight, setHighlight] = useState(false);
@@ -384,10 +388,10 @@ const RoutineRow: React.FC<{
   }, [focusPause]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const historyId = useId();
+  const removal = useUndoableDelete(onChanged, initialPending);
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -409,6 +413,8 @@ const RoutineRow: React.FC<{
       setOpen(true);
       playSfx('click');
     });
+
+  if (removal.pending) return <UndoNotice as="li" text={`Deleted “${routine.name}”. It won’t run again.`} onUndo={removal.undo} />;
 
   return (
     <li ref={rowRef} className={`rounded-xl border bg-zinc-950/60 p-3 space-y-2 ${highlight ? 'border-sky-500/60 ring-1 ring-sky-500/30' : 'border-zinc-800'}`}>
@@ -455,18 +461,17 @@ const RoutineRow: React.FC<{
         <button
           type="button"
           disabled={busy}
-          onBlur={() => setConfirm(false)}
-          onClick={() => (confirm ? act(() => continuityApi.removeRoutine(routine.id)) : setConfirm(true))}
-          className={`${smallBtn} ${confirm ? 'border-rose-500/50 bg-rose-500/15 text-rose-200' : 'border-zinc-700/70 bg-zinc-800/70 text-zinc-300 hover:text-rose-200'}`}
+          onClick={() => removal.start(() => continuityApi.removeRoutine(routine.id))}
+          className={`${smallBtn} border-zinc-700/70 bg-zinc-800/70 text-zinc-300 hover:text-rose-200`}
         >
-          <Trash2 size={11} /> {confirm ? 'Delete?' : 'Delete'}
+          <Trash2 size={11} /> Delete
         </button>
         {notice && <span className="text-[11px] text-zinc-400" role="status">{notice}</span>}
         {highlight && routine.enabled && !notice && (
           <span className="text-[11px] text-sky-200" role="status">Turn the switch off to pause it.</span>
         )}
       </div>
-      {error && <p className="pl-9 text-[11px] text-rose-400" role="alert">{error}</p>}
+      {(error ?? removal.error) && <p className="pl-9 text-[11px] text-rose-400" role="alert">{error ?? `Couldn’t delete it: ${removal.error}`}</p>}
       {open && (
         <div id={historyId} className="pl-9 pt-1">
           <RunHistory routineId={routine.id} tick={tick} />

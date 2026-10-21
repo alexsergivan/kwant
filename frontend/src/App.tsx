@@ -15,6 +15,8 @@ import { BotActionCard, type BotActionDecision } from './components/BotActionCar
 import { HireCard, type HireDecision } from './components/HireCard';
 import type { RoutineFocus } from './components/RoutinesPanel';
 import { AwayPage } from './components/AwayView';
+import { LooseEndsPage } from './components/LooseEndsView';
+import { ParallelPage } from './components/ParallelUniverseView';
 import { AlertTriangle, Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { ChatApproval, OpenChat, approvalFromEvent, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
@@ -72,6 +74,7 @@ import { Space, eventsUrl, pickInitialChat, spaceColor } from './spaces';
 import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
 import { claudeNeedsSignIn } from './claudeLogin';
+import { personFetch } from './auth';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -258,6 +261,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [toasts, setToasts] = useState<Toast[]>([]);
   // "While you were away": open instead of a chat, and its unseen count for the sidebar badge.
   const [showAway, setShowAway] = useState(false);
+  const [showLoose, setShowLoose] = useState(false);
+  const [showParallel, setShowParallel] = useState(false);
   const [awayCount, setAwayCount] = useState(0);
   const awaySinceRef = useRef<string | null>(null);
   const awayTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -1173,6 +1178,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const handleSelectTeam = (team: Team) => {
     setOpenThreadId(null);
     setShowAway(false);
+    setShowLoose(false);
+    setShowParallel(false);
     setPhoneView('chat');
     setSelectedTeamId(team.id);
     const targetChannel = channels.find(
@@ -1213,6 +1220,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const handleSelectChannel = (channel: Channel) => {
     setOpenThreadId(null);
     setShowAway(false);
+    setShowLoose(false);
+    setShowParallel(false);
     setPhoneView('chat');
     setSelectedId(channel.id);
     selectedIdRef.current = channel.id;
@@ -1229,6 +1238,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const handleSelectKwant = (kwant: Kwant) => {
     setOpenThreadId(null);
     setShowAway(false);
+    setShowLoose(false);
+    setShowParallel(false);
     setPhoneView('chat');
     setSelectedId(kwant.id);
     selectedIdRef.current = kwant.id;
@@ -1285,6 +1296,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
     knownThreadsRef.current.add(threadId);
     setShowAway(false);
+    setShowLoose(false);
+    setShowParallel(false);
     if (selectedIdRef.current !== kwant.id || isChannelRef.current) handleSelectKwant(kwant);
     else playSfx('click');
     setOpenThreadId(threadId);
@@ -1298,6 +1311,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     const ok = 'channel' in t ? openTarget({ channel_id: t.channel, kwant_id: null }) : openTarget({ channel_id: null, kwant_id: t.direct });
     if (!ok) return pushToast('That chat no longer exists.');
     setShowAway(false);
+    setShowLoose(false);
+    setShowParallel(false);
   };
 
   const openDirectChat = () => {
@@ -1889,34 +1904,30 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
 
+  // Throws when the team wasn't deleted, so the dialog stays open and says why.
   const handleDeleteTeam = async (id: string) => {
+    // Person-only: after "Confirm it's you" the delete goes through without pressing it again.
+    const res = await personFetch(`/api/teams/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 404) throw new Error(`Couldn’t delete the team (HTTP ${res.status}).`);
+    setTeams((prev) => prev.filter((t) => t.id !== id));
+    if (selectedTeamId === id) {
+      setSelectedTeamId(null);
+      if (channels.length > 0) {
+        setSelectedId(channels[0].id);
+        setIsChannel(true);
+      }
+    }
+    setEditingTeam(null);
+    playSfx('click');
+    // Refresh channels
     try {
-      const res = await fetch(`/api/teams/${id}`, {
-        method: 'DELETE',
-      });
-
-      if (res.ok) {
-        setTeams((prev) => prev.filter((t) => t.id !== id));
-        if (selectedTeamId === id) {
-          setSelectedTeamId(null);
-          if (channels.length > 0) {
-            setSelectedId(channels[0].id);
-            setIsChannel(true);
-          }
-        }
-
-        // Refresh channels
-        const cRes = await fetch('/api/channels');
-        if (cRes.ok) {
-          const freshChannels: Channel[] = await cRes.json();
-          setChannels(freshChannels);
-        }
-
-        setEditingTeam(null);
-        playSfx('click');
+      const cRes = await fetch('/api/channels');
+      if (cRes.ok) {
+        const freshChannels: Channel[] = await cRes.json();
+        setChannels(freshChannels);
       }
     } catch (err) {
-      console.error('Failed deleting team:', err);
+      console.error('Failed refreshing channels after deleting a team:', err);
     }
   };
 
@@ -2415,8 +2426,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
       awayCount={awayCount}
       awayActive={showAway}
+      looseActive={showLoose}
+      parallelActive={showParallel}
+      onOpenParallel={() => {
+        setShowParallel(true);
+        setShowLoose(false);
+        setShowAway(false);
+        setPhoneView('chat');
+        playSfx('click');
+      }}
+      onOpenLooseEnds={() => {
+        setShowLoose(true);
+        setShowParallel(false);
+        setShowAway(false);
+        setPhoneView('chat');
+        playSfx('click');
+      }}
       onOpenAway={() => {
         setShowAway(true);
+        setShowLoose(false);
+        setShowParallel(false);
         setPhoneView('chat');
         playSfx('click');
       }}
@@ -2428,6 +2457,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onBack={isPhone ? () => { setShowAway(false); setPhoneView('list'); } : undefined}
     />
   );
+  const parallel = <ParallelPage onBack={isPhone ? () => { setShowParallel(false); setPhoneView('list'); } : undefined} />;
+  const loose = <LooseEndsPage onBack={isPhone ? () => { setShowLoose(false); setPhoneView('list'); } : undefined} onOpenChat={openThread} />;
   const chat = (
         <ChatView
           title={chatTitle}
@@ -2523,7 +2554,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           contextKey={openCtx}
         />
   );
-  const mainPane = needsSetup ? setupChecklist : showAway ? away : !loaded ? (
+  const mainPane = needsSetup ? setupChecklist : showParallel ? parallel : showLoose ? loose : showAway ? away : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…
     </main>
@@ -2571,6 +2602,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                       playSfx('click');
                       if (t.id === 'inbox') {
                         setShowAway(true);
+                        setShowLoose(false);
+                        setShowParallel(false);
                         setPhoneView('chat');
                         return;
                       }

@@ -120,7 +120,7 @@ Suggested buttons:
   - 409 if it isn't applied, if a newer applied change to the same target exists ("undo the newer change first: …"), or if it can't be put back safely (for example, a bot that already has history, or a channel with messages).
 - `POST /api/bot-actions/:id/confirm` and `POST /api/bot-actions/:id/decline`: only for pending actions; 409 otherwise.
 - All three return **403** for a turn token (self tools or MCP session) or any non-API bearer.
-- Undo also needs the API token from this machine (401 `{person_only:true}` without it), because undoing a bot or channel deletes its saved passwords. The same holds for `POST /api/imports/:id/undo`, `DELETE /api/kwants/:id` and `DELETE /api/teams/:id`.
+- Undo is person-only: a turn token gets 403, and from another machine (or with `KWNT_REQUIRE_TOKEN=always`) it needs the API token (401 `{person_only:true}` without it), because undoing a bot or channel deletes its saved passwords. The same holds for `POST /api/imports/:id/undo`, `DELETE /api/kwants/:id` and `DELETE /api/teams/:id`.
 - After a change, the card's meta is updated and SSE sends `bot_action_updated { action }`. That event is routed to the space and the chat context (channel, direct chat or thread).
 
 ## Hiring

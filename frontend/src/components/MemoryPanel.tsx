@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useUndoableDelete } from '../undoDelete';
+import { UndoNotice } from './UndoNotice';
 import { Bot, Check, Loader2, Pencil, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
 import { MAX_MEMORIES, MAX_MEMORY, Memory, continuityApi, formatWhen, onContinuity } from '../continuity';
 import { playSfx } from '../audio/chiptune';
@@ -20,16 +22,18 @@ const SourceBadge: React.FC<{ source: Memory['source'] }> = ({ source }) =>
     </span>
   );
 
-const MemoryRow: React.FC<{
+export const MemoryRow: React.FC<{
   memory: Memory;
   onSave: (text: string) => Promise<string | void>;
   onDelete: () => Promise<string | void>;
-}> = ({ memory, onSave, onDelete }) => {
+  /** Tests: start in the Undo window. */
+  initialPending?: boolean;
+}> = ({ memory, onSave, onDelete, initialPending = false }) => {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(memory.text);
   const [busy, setBusy] = useState(false);
-  const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const removal = useUndoableDelete(undefined, initialPending);
 
   useEffect(() => {
     if (!editing) setText(memory.text);
@@ -48,17 +52,15 @@ const MemoryRow: React.FC<{
     }
   };
 
-  const remove = async () => {
-    if (!confirm) {
-      setConfirm(true);
-      return;
-    }
-    setBusy(true);
-    const err = await onDelete();
-    setBusy(false);
-    setConfirm(false);
-    if (err) setError(err);
+  const remove = () => {
+    setError(null);
+    removal.start(async () => {
+      const err = await onDelete();
+      if (err) throw new Error(err);
+    });
   };
+
+  if (removal.pending) return <UndoNotice as="li" text="Memory deleted." onUndo={removal.undo} />;
 
   return (
     <li className="p-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60 space-y-1.5">
@@ -77,13 +79,11 @@ const MemoryRow: React.FC<{
           <button
             type="button"
             onClick={remove}
-            onBlur={() => setConfirm(false)}
             disabled={busy}
-            className={`${smallBtn} ${confirm ? 'border-rose-500/50 bg-rose-500/15 text-rose-200' : 'border-zinc-700/70 bg-zinc-800/70 text-zinc-300 hover:text-rose-200'}`}
-            aria-label={confirm ? 'Confirm delete' : 'Delete memory'}
+            className={`${smallBtn} border-zinc-700/70 bg-zinc-800/70 text-zinc-300 hover:text-rose-200`}
+            aria-label="Delete memory"
           >
             <Trash2 size={11} />
-            {confirm && <span>Delete?</span>}
           </button>
         </span>
       </div>
@@ -124,9 +124,9 @@ const MemoryRow: React.FC<{
       ) : (
         <p className="text-xs text-zinc-200 whitespace-pre-wrap break-words">{memory.text}</p>
       )}
-      {error && (
+      {(error ?? removal.error) && (
         <p className="text-[11px] text-rose-400" role="alert">
-          {error}
+          {error ?? `Couldn’t delete it: ${removal.error}`}
         </p>
       )}
     </li>

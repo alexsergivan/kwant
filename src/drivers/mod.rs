@@ -85,6 +85,34 @@ pub fn current_date_block(now: chrono::DateTime<chrono::FixedOffset>) -> String 
     )
 }
 
+/// Who the bot is, whatever engine runs it. Claude Code, Codex and Grok each bring their own
+/// identity and product features (schedulers, memory files, remote sessions); a bot that believes
+/// it *is* that engine makes a "routine" inside the engine, where the person can't see or manage it.
+pub fn identity_block(name: &str, with_tools: bool) -> String {
+    let own = if with_tools {
+        format!(
+            "Use your `{tools}` tools for these: `routine_create` for anything that should happen on its own (\"every morning\", \"remind me at 5\"), \
+            `follow_up_create` for a one-off check-in, `memory_add` for notes worth keeping.",
+            tools = crate::mcp::SELF_SERVER_NAME,
+        )
+    } else {
+        "You have no kwant tools this turn, so you can't create routines, reminders or notes yourself. When the person wants something \
+        to happen on its own, say so and tell them to add it under Routines in kwant's sidebar, with the exact schedule and \
+        instructions to enter."
+            .to_string()
+    };
+    format!(
+        "\n\n[Who you are]\n\
+        You are {name}, a bot in kwant, the app the person is chatting in. kwant runs you on a model engine (Claude Code, Codex, Grok \
+        or a model API), but the engine only supplies the model: you are not Claude Code, Codex or Grok, and their own product \
+        features are not yours. Your tools, routines, memory, teammates and limits are kwant's.\n\
+        Never use the engine's own scheduler, cron, loop or wake-up tools, reminders or push notifications, its memory files, \
+        its remote or cloud sessions, or its ways of messaging other agents or sessions: they work outside kwant, where the person \
+        can't see, approve or undo them. {own} If kwant gives you no tool for something, say so plainly instead of using the \
+        engine's version."
+    )
+}
+
 /// How a turn's agent reaches its bot browser, which decides what the prompt tells it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BrowserAccess {
@@ -115,6 +143,8 @@ impl TurnInput {
             "{}\n\nYou are {}, {}.",
             self.kwant.persona_prompt, self.kwant.name, self.kwant.title
         );
+        // The browser tools come from kwnt's own tools server, so `Tools` is exactly "kwnt's tools work this turn"
+        base.push_str(&identity_block(&self.kwant.name, browser == BrowserAccess::Tools));
         let soul = self.kwant.soul.trim();
         if !soul.is_empty() {
             base.push_str(&format!(
@@ -400,5 +430,63 @@ pub fn create_driver_for_kwant(kwant: &Kwant) -> Box<dyn Driver> {
     match resolve_driver_for_model(&kwant.preferred_model, None, None, &engines::EngineRegistry::default()) {
         Ok((driver, _)) => driver,
         Err(_) => Box::new(ApiDriver::new(None, None)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input() -> TurnInput {
+        TurnInput {
+            thread_id: "t1".into(),
+            kwant: Kwant {
+                space_id: crate::db::spaces::DEFAULT_SPACE_ID.into(),
+                id: "k1".into(),
+                name: "Wren".into(),
+                title: "Planner".into(),
+                persona_prompt: "p".into(),
+                soul: String::new(),
+                avatar_sprite: "s".into(),
+                driver_type: "cli".into(),
+                preferred_model: "claude".into(),
+                temperature: 0.7,
+                max_tokens: 1000,
+                level: 1,
+                turns_completed: 0,
+                created_at: None,
+            },
+            prompt: "create a routine that says good morning every day at 9".into(),
+            history: vec![],
+            model_override: None,
+            model: None,
+            effort_level: None,
+            team_context: None,
+            workspace_dir: None,
+            browser_api_url: None,
+            sandbox_id: None,
+            teammates: vec![],
+            continuity: String::new(),
+            mcp: None,
+        }
+    }
+
+    #[test]
+    fn every_turn_is_told_it_is_a_kwant_bot_not_its_engine() {
+        for access in [BrowserAccess::Tools, BrowserAccess::Shell, BrowserAccess::Unavailable] {
+            let prompt = input().format_system_prompt_with(access);
+            let who = prompt.find("[Who you are]").unwrap_or_else(|| panic!("{access:?}: {prompt}"));
+            // Right after the name, before team, memory and browser notes
+            assert!(who < prompt.find("[Current date]").unwrap(), "{access:?}");
+            assert!(prompt.contains("You are Wren, a bot in kwant"), "{access:?}");
+            assert!(prompt.contains("you are not Claude Code, Codex or Grok"), "{access:?}");
+            for feature in ["scheduler, cron, loop", "memory files", "remote or cloud sessions", "messaging other agents"] {
+                assert!(prompt.contains(feature), "{access:?}: {feature}");
+            }
+            assert!(prompt.contains("say so plainly instead of using the engine's version"), "{access:?}");
+            let with_tools = access == BrowserAccess::Tools;
+            assert_eq!(prompt.contains("`routine_create`"), with_tools, "{access:?}");
+            assert_eq!(prompt.contains("Routines in kwant's sidebar"), !with_tools, "{access:?}");
+        }
     }
 }

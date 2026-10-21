@@ -585,6 +585,6 @@ async fn remote_requests_need_the_token() {
     .await;
     assert_eq!(
         serde_json::from_str::<Value>(&body).unwrap(),
-        json!({"auth_required": false, "authenticated": true, "person_auth_required": true, "person_authenticated": false})
+        json!({"auth_required": false, "authenticated": true, "person_auth_required": false, "person_authenticated": true})
     );
 }

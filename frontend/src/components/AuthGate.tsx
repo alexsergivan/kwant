@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { KeyRound, Loader2, RefreshCw, Terminal, X } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import {
+  PERSON_PROMPT_CLOSED_EVENT,
   PERSON_SIGNED_IN_EVENT,
   PERSON_TOKEN_EVENT,
   UNAUTHORIZED_EVENT,
@@ -89,7 +90,10 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
         {children}
         {personPrompt && (
           <PersonTokenDialog
-            onClose={() => setPersonPrompt(false)}
+            onClose={() => {
+              setPersonPrompt(false);
+              window.dispatchEvent(new Event(PERSON_PROMPT_CLOSED_EVENT));
+            }}
             onSignedIn={() => {
               setPersonPrompt(false);
               window.dispatchEvent(new Event(PERSON_SIGNED_IN_EVENT));
@@ -206,7 +210,7 @@ const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; perso
         </h2>
         <p className="text-xs text-zinc-400 leading-relaxed">
           {personOnly
-            ? 'Saved passwords and answers to approval cards need your access token, even on this computer, so a bot can’t reach them. You need it once per browser. Get it on the server:'
+            ? 'Saved passwords, answers to approval cards and deleting bots or teams need your access token, even on this computer, so a bot can’t do them for you. You need it once per browser. Get it on the server:'
             : 'This server is reachable from other machines, so it needs its token once per browser. Get it on the server:'}
         </p>
         <div className="space-y-1 text-[11px] font-mono text-zinc-300">

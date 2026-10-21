@@ -1,0 +1,13 @@
+From: Oleks Example <oleks@example.org>
+To: Bob Builder <bob@builders.example>
+Subject: Kitchen renovation quote
+Date: {{DATE:40}}
+Message-ID: <quote-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hi Bob,
+
+Could you send me a quote for the kitchen?
+
+Oleks

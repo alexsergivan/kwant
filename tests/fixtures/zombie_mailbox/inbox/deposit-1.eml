@@ -1,0 +1,15 @@
+From: Lena Landlord <lena@flats.example>
+To: Oleks Example <oleks@example.org>
+Subject: Re: Deposit return flat 3
+Date: {{DATE:20}}
+Message-ID: <deposit-1@fixture.example>
+In-Reply-To: <deposit-0@fixture.example>
+References: <deposit-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hi Oleks,
+
+Could you send me your new address so I can return the deposit?
+
+Lena

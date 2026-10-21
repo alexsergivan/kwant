@@ -1,0 +1,10 @@
+From: Mail Delivery System <MAILER-DAEMON@mx.example.org>
+To: Oleks Example <oleks@example.org>
+Subject: Undelivered Mail Returned to Sender
+Date: {{DATE:27}}
+Message-ID: <bounce-0@fixture.example>
+Auto-Submitted: auto-generated
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Your message could not be delivered. Please check the address.

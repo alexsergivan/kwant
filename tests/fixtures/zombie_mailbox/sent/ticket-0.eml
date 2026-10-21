@@ -1,0 +1,9 @@
+From: Oleks Example <oleks@example.org>
+To: Help Desk <support@isp.example>
+Subject: Support ticket #5521
+Date: {{DATE:30}}
+Message-ID: <ticket-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+My internet keeps dropping. Can you check the line?

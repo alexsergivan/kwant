@@ -1,6 +1,8 @@
 // Deleting a bot: what it takes with it, and the call. The person starts it from the bot's
 // settings; a bot can only propose it (bot_delete action card).
 
+import { PersonCancelledError, personFetch } from './auth';
+
 /** What deleting a bot removes, from GET /api/kwants/:id/usage; null when the server can't say. */
 export interface BotUsage {
   conversations: number;
@@ -73,8 +75,9 @@ export const botDeleteApi = {
   remove: async (id: string, name: string): Promise<string | null> => {
     let res: Response;
     try {
-      res = await fetch(`/api/kwants/${enc(id)}`, { method: 'DELETE' });
-    } catch {
+      res = await personFetch(`/api/kwants/${enc(id)}`, { method: 'DELETE' });
+    } catch (e) {
+      if (e instanceof PersonCancelledError) return e.message;
       return 'Couldn’t reach the server. Check your connection and try again.';
     }
     if (res.ok || res.status === 404) return null;

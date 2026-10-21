@@ -1,0 +1,13 @@
+From: Oleks Example <oleks@example.org>
+To: Passport Office <appointments@gov.example>
+Subject: Passport renewal appointment
+Date: {{DATE:21}}
+Message-ID: <passport-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hello,
+
+Is there an appointment available next month for a passport renewal?
+
+Oleks

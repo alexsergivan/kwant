@@ -1,0 +1,11 @@
+From: Oleks Example <oleks@example.org>
+To: Ivo Pal <ivo@friends.example>
+Subject: Re: Lunch last week
+Date: {{DATE:25}}
+Message-ID: <lunch-1@fixture.example>
+In-Reply-To: <lunch-0@fixture.example>
+References: <lunch-0@fixture.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Absolutely, see you soon.

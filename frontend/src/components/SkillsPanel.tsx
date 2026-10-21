@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useUndoableDelete } from '../undoDelete';
+import { UndoNotice } from './UndoNotice';
 import { Bot, Check, ChevronDown, ChevronRight, Globe2, Loader2, Pencil, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
 import { formatWhen, onContinuity } from '../continuity';
 import { playSfx } from '../audio/chiptune';
@@ -207,12 +209,12 @@ const SkillMeta: React.FC<{ skill: Skill; replaces?: Skill }> = ({ skill, replac
   </div>
 );
 
-const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill }> = ({ skill, replaces }) => {
+export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPending?: boolean }> = ({ skill, replaces, initialPending = false }) => {
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [open, setOpen] = useState(true);
   const [busy, setBusy] = useState<'approve' | 'reject' | null>(null);
-  const [confirmReject, setConfirmReject] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const rejection = useUndoableDelete(undefined, initialPending);
 
   const approve = async (edits?: SkillDraft) => {
     setBusy('approve');
@@ -225,21 +227,13 @@ const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill }> = ({ skill, rep
       return errText(e);
     }
   };
-  const reject = async () => {
-    if (!confirmReject) {
-      setConfirmReject(true);
-      return;
-    }
-    setBusy('reject');
+  const reject = () => {
     setError(null);
-    try {
-      await skillsApi.reject(skill.id);
-    } catch (e) {
-      setError(errText(e));
-      setBusy(null);
-      setConfirmReject(false);
-    }
+    rejection.start(() => skillsApi.reject(skill.id));
   };
+
+  if (rejection.gone) return null;
+  if (rejection.pending) return <UndoNotice as="li" text={`Rejected “${skill.name}”. Nothing was added.`} onUndo={rejection.undo} />;
 
   return (
     <li className="p-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.04] space-y-2">
@@ -280,16 +274,15 @@ const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill }> = ({ skill, rep
               <button type="button" onClick={() => setMode('edit')} disabled={!!busy} className={quietBtn}>
                 <Pencil size={11} aria-hidden="true" /> Edit, then approve
               </button>
-              <button type="button" onClick={reject} onBlur={() => setConfirmReject(false)} disabled={!!busy} className={dangerBtn}>
-                {busy === 'reject' ? <Loader2 size={11} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <X size={11} aria-hidden="true" />}
-                {confirmReject ? 'Reject it?' : 'Reject'}
+              <button type="button" onClick={reject} disabled={!!busy} className={dangerBtn}>
+                <X size={11} aria-hidden="true" /> Reject
               </button>
             </div>
           </>
         )}
-        {error && (
+        {(error ?? rejection.error) && (
           <p className="text-[11px] text-rose-400" role="alert">
-            {error}
+            {error ?? `Couldn’t reject it: ${rejection.error}`}
           </p>
         )}
       </div>
@@ -297,12 +290,12 @@ const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill }> = ({ skill, rep
   );
 };
 
-const ActiveSkill: React.FC<{ skill: Skill }> = ({ skill }) => {
+export const ActiveSkill: React.FC<{ skill: Skill; initialPending?: boolean }> = ({ skill, initialPending = false }) => {
   const [editing, setEditing] = useState(false);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const removal = useUndoableDelete(undefined, initialPending);
   const enabled = skill.status === 'enabled';
 
   const run = async (fn: () => Promise<unknown>) => {
@@ -317,13 +310,12 @@ const ActiveSkill: React.FC<{ skill: Skill }> = ({ skill }) => {
     }
   };
   const remove = () => {
-    if (!confirmDelete) {
-      setConfirmDelete(true);
-      return;
-    }
-    setConfirmDelete(false);
-    run(() => skillsApi.remove(skill.id));
+    setError(null);
+    removal.start(() => skillsApi.remove(skill.id));
   };
+
+  if (removal.gone) return null;
+  if (removal.pending) return <UndoNotice as="li" text={`Deleted “${skill.name}”. Bots stop using it.`} onUndo={removal.undo} />;
 
   return (
     <li className={`p-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60 space-y-1.5 ${enabled ? '' : 'opacity-70'}`}>
@@ -366,8 +358,8 @@ const ActiveSkill: React.FC<{ skill: Skill }> = ({ skill }) => {
               <button type="button" onClick={() => setEditing(true)} className={quietBtn}>
                 <Pencil size={11} aria-hidden="true" /> Edit
               </button>
-              <button type="button" onClick={remove} onBlur={() => setConfirmDelete(false)} disabled={busy} className={dangerBtn}>
-                <Trash2 size={11} aria-hidden="true" /> {confirmDelete ? 'Delete it?' : 'Delete'}
+              <button type="button" onClick={remove} disabled={busy} className={dangerBtn}>
+                <Trash2 size={11} aria-hidden="true" /> Delete
               </button>
             </span>
           </div>
@@ -389,9 +381,9 @@ const ActiveSkill: React.FC<{ skill: Skill }> = ({ skill }) => {
           onCancel={() => setEditing(false)}
         />
       )}
-      {error && (
+      {(error ?? removal.error) && (
         <p className="text-[11px] text-rose-400" role="alert">
-          {error}
+          {error ?? `Couldn’t delete it: ${removal.error}`}
         </p>
       )}
     </li>

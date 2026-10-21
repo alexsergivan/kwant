@@ -26,6 +26,9 @@ pub mod hires;
 pub mod import_routes;
 pub mod approval_modes;
 pub mod passwords;
+pub mod zombie_routes;
+pub mod parallel_routes;
+pub mod document_routes;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -35,7 +38,7 @@ use crate::router::LayaRouter;
 use crate::sandbox::{BrowserController, SandboxManager};
 use crate::tools::ToolRunner;
 use axum::{
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use std::collections::HashMap;
@@ -78,6 +81,12 @@ pub struct AppState {
     pub mcp_registry: Arc<crate::mcp::registry::McpRegistry>,
     /// Saved website passwords, outside every bot's folder (see `sandbox::credentials`).
     pub credentials: Arc<crate::sandbox::vault::PasswordVault>,
+    /// Zombie Mission Hunter: one scan at a time, and the last scan's report.
+    pub zombie: Arc<crate::zombie::hunt::Hunter>,
+    /// Parallel Universe: one run at a time, and the harness it uses.
+    pub parallel: Arc<crate::parallel::run::Runner>,
+    /// Camera-to-Completed: one letter read at a time (and a test's stand-in model).
+    pub documents: Arc<crate::documents::extract::Desk>,
 }
 
 impl AppState {
@@ -118,6 +127,9 @@ impl AppState {
             claude_login: Default::default(),
             mcp_registry: Arc::new(crate::mcp::registry::McpRegistry::from_env()),
             credentials: Arc::new(crate::sandbox::vault::PasswordVault::open(&config_data_dir)),
+            zombie: Default::default(),
+            parallel: Default::default(),
+            documents: Default::default(),
         }
     }
 
@@ -203,6 +215,35 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/passwords/bitwarden/unlock", post(passwords::unlock_bitwarden))
         .route("/api/passwords/bitwarden/lock", post(passwords::lock_bitwarden))
         .route("/api/passwords/migrate", post(passwords::migrate_to_bitwarden))
+        .route("/api/zombie/cases", get(zombie_routes::list_cases))
+        .route("/api/zombie/cases/:id", get(zombie_routes::get_case))
+        .route("/api/zombie/cases/:id/snooze", post(zombie_routes::snooze))
+        .route("/api/zombie/cases/:id/dismiss", post(zombie_routes::dismiss))
+        .route("/api/zombie/cases/:id/done", post(zombie_routes::done))
+        .route("/api/zombie/cases/:id/followed-up", post(zombie_routes::followed_up))
+        .route("/api/zombie/cases/:id/reopen", post(zombie_routes::reopen))
+        .route("/api/zombie/cases/:id/draft", post(zombie_routes::regenerate_draft))
+        .route("/api/zombie/cases/:id/fields", patch(document_routes::patch_fields))
+        .route("/api/documents", post(document_routes::create))
+        .route("/api/documents/:id", get(document_routes::get_one).delete(document_routes::delete))
+        .route("/api/zombie/sources", get(zombie_routes::list_sources).post(zombie_routes::add_source))
+        .route("/api/zombie/sources/:id", patch(zombie_routes::update_source).delete(zombie_routes::delete_source))
+        .route("/api/zombie/sources/:id/test", post(zombie_routes::test_source))
+        .route("/api/zombie/run", post(zombie_routes::run))
+        .route("/api/zombie/status", get(zombie_routes::status))
+        .route("/api/zombie/settings", get(zombie_routes::get_settings).put(zombie_routes::put_settings))
+        .route("/api/zombie/reviews", get(zombie_routes::reviews))
+        .route("/api/parallel/scenarios", get(parallel_routes::list).post(parallel_routes::create))
+        .route(
+            "/api/parallel/scenarios/:id",
+            get(parallel_routes::get_one).put(parallel_routes::update).delete(parallel_routes::delete),
+        )
+        .route("/api/parallel/prices", get(parallel_routes::list_prices))
+        .route("/api/parallel/estimate", post(parallel_routes::estimate))
+        .route("/api/parallel/scenarios/:id/run", post(parallel_routes::start_run))
+        .route("/api/parallel/scenarios/:id/runs", get(parallel_routes::scenario_runs))
+        .route("/api/parallel/runs", get(parallel_routes::list_runs))
+        .route("/api/parallel/runs/:id", get(parallel_routes::get_run))
         .route("/api/mcp/servers", get(mcp_routes::list_servers).post(mcp_routes::create_server))
         .route(
             "/api/mcp/servers/:id",

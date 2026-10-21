@@ -2,8 +2,8 @@
 //!
 //! - F-1/F-7: passwords live encrypted in the server's own data dir (0700 dir, 0600 files), never
 //!   in a bot's folder; an old `.saved_passwords.json` moves in on start and is deleted.
-//! - F-2: the password routes, answering a card and the approvals switch need the API token even
-//!   from this machine (401), and a bot's turn token is refused (403).
+//! - F-2: the password routes, answering a card and the approvals switch need the API token from
+//!   another machine (401), and a bot's turn token is refused (403) from anywhere.
 //! - F-3: the list is metadata only, a save doesn't echo the password, reveal is explicit.
 //! - F-4: an id from another space is a 404; names don't resolve.
 //! - F-5/F-6: a captured password waits for the person's confirmation (browser side in
@@ -66,6 +66,16 @@ async fn call(app: &Router, method: &str, uri: &str, bearer: Option<&str>, body:
     let (status, headers) = (resp.status(), resp.headers().clone());
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null), headers)
+}
+
+/// `call` from another machine (a non-loopback Host), without a token.
+async fn call_remote(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+    let req = Request::builder().method(method).uri(uri).header("content-type", "application/json").header("host", "kwnt.example.com");
+    let body = body.map(|b| Body::from(b.to_string())).unwrap_or_else(Body::empty);
+    let resp = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
 impl Env {
@@ -154,9 +164,8 @@ async fn f2_person_only_routes_refuse_no_token_and_bot_tokens() {
         ("PUT", format!("/api/kwants/{}/approvals", bot.id), Some(json!({"approvals": "off"}))),
     ];
     for (method, uri, body) in &routes {
-        let (s, v, _) = call(&e.app, method, uri, None, body.clone()).await;
-        assert_eq!(s, StatusCode::UNAUTHORIZED, "{method} {uri} without a token: {v}");
-        assert_eq!(v["person_only"], true, "{v}");
+        let (s, v) = call_remote(&e.app, method, uri, body.clone()).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "{method} {uri} from another machine without a token: {v}");
         assert!(!v.to_string().contains("DUMMY"), "{v}");
         let (s, v, _) = call(&e.app, method, uri, Some(&turn), body.clone()).await;
         assert_eq!(s, StatusCode::FORBIDDEN, "{method} {uri} with a bot's turn token: {v}");
@@ -169,15 +178,14 @@ async fn f2_person_only_routes_refuse_no_token_and_bot_tokens() {
     let (_, v) = e.person("GET", "/api/spaces/spc_default/approvals", None).await;
     assert_eq!(v["approvals"], "ask");
 
-    // The rest of the local app still works without a token, and reading the switch is open
-    let (s, _, _) = call(&e.app, "GET", "/api/kwants", None, None).await;
-    assert_eq!(s, StatusCode::OK);
+    // From this machine the person isn't asked for the token: the passwords open without it
+    let (s, v, _) = call(&e.app, "GET", &format!("/api/sandbox/{team}/passwords"), None, None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
     let (s, _, _) = call(&e.app, "GET", "/api/spaces/spc_default/approvals", None, None).await;
     assert_eq!(s, StatusCode::OK);
-    // The UI learns it needs the token for these
     let (_, v, _) = call(&e.app, "GET", "/api/auth/status", None, None).await;
-    assert_eq!(v["person_auth_required"], true);
-    assert_eq!(v["person_authenticated"], false);
+    assert_eq!(v["person_auth_required"], false);
+    assert_eq!(v["person_authenticated"], true);
     let (_, v) = e.person("GET", "/api/auth/status", None).await;
     assert_eq!(v["person_authenticated"], true);
 }

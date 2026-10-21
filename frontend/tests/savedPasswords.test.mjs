@@ -219,7 +219,7 @@ test('the token dialog says why it is asked on this computer and can be dismisse
   assert.match(html, /aria-modal="true"/);
   const t = text(html);
   assert.match(t, /Confirm it's you/);
-  assert.match(t, /even on this computer, so a bot can't reach them/);
+  assert.match(t, /deleting bots or teams need your access token, even on this computer, so a bot can't do them for you/);
   assert.match(t, /kwnt token/);
   assert.ok(buttons(html).includes('Not now'));
   assert.ok(buttons(html).includes('Continue'));
