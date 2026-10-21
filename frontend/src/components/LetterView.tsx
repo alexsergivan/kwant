@@ -32,6 +32,8 @@ import {
   reminderWhen,
   setBody,
   stillReading,
+  isAuto,
+  needsLook,
 } from '../letters';
 
 const actionBtn =
@@ -238,11 +240,22 @@ export const AddLetterForm: React.FC<{ onCreated: (caseId: string) => void; onCa
 
 export const StateBadge: React.FC<{ field: LetterField | null | undefined }> = ({ field }) => {
   const s = fieldState(field);
+  const auto = isAuto(field);
   return (
-    <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded-full border text-[11px] ${STATE_TONE[s]}`} data-state={s}>
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-px rounded-full border text-[11px] ${STATE_TONE[s]}`}
+      data-state={s}
+      data-auto={auto || undefined}
+      title={auto ? 'This was clear in the letter, so it was confirmed for you. Edit or clear it if it’s wrong.' : undefined}
+    >
       {s === 'uncertain' && <AlertTriangle size={11} aria-hidden="true" />}
       {s === 'confirmed' && <Check size={11} aria-hidden="true" />}
       {FIELD_STATE_LABEL[s]}
+      {auto && (
+        <span className="ml-0.5 px-1 rounded bg-emerald-500/15 text-[10px] font-medium uppercase tracking-wide text-emerald-300/90">
+          auto<span className="sr-only">: confirmed automatically, not by you</span>
+        </span>
+      )}
     </span>
   );
 };
@@ -472,7 +485,7 @@ export const ListField: React.FC<{ fkey: ListKey; label: string; hint: string; e
                       )}
                       <StateBadge field={it} />
                     </div>
-                    {s !== 'confirmed' && <FieldQuote field={it} />}
+                    {(s !== 'confirmed' || isAuto(it)) && <FieldQuote field={it} />}
                   </li>
                 );
               })}
@@ -768,9 +781,14 @@ export const LetterDetail: React.FC<LetterDetailProps> = ({ view, loading, error
                       <p className="text-xs text-zinc-500">The fields appear here once the letter has been read.</p>
                     ) : (
                       <>
-                        <p className="text-[11px] text-zinc-500">Nothing is confirmed until you confirm it. Fields marked Uncertain need a look at the page first.</p>
+                        <p className="text-[11px] text-zinc-500">
+                          {needsLook(fields) > 0
+                            ? `${needsLook(fields) === 1 ? '1 field needs' : `${needsLook(fields)} fields need`} a look: check ${needsLook(fields) === 1 ? 'it' : 'each'} against the page and confirm. `
+                            : 'Nothing needs a look. '}
+                          Fields marked auto were clear in the letter and are confirmed already; edit or clear any that are wrong.
+                        </p>
                         {SINGLE_FIELDS.map((f) => (
-                          <FieldRow key={`${f.key}-${fields[f.key]?.value ?? ''}-${fields[f.key]?.confirmed}`} fkey={f.key} label={f.label} hint={f.hint} field={fields[f.key]} disabled={!canEdit || acting} onSave={onSave} missing={wasRead ? undefined : 'Not filled in yet.'} />
+                          <FieldRow key={`${f.key}-${fields[f.key]?.value ?? ''}-${fields[f.key]?.confirmed}-${fields[f.key]?.auto}`} fkey={f.key} label={f.label} hint={f.hint} field={fields[f.key]} disabled={!canEdit || acting} onSave={onSave} missing={wasRead ? undefined : 'Not filled in yet.'} />
                         ))}
                         {LIST_FIELDS.map((f) => (
                           <ListField

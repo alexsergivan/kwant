@@ -7,8 +7,10 @@
 //!
 //! Every field is `{value, quote, uncertain}`. A field is uncertain when the model says so, when
 //! its quote is not word for word in the text read from the letter, or when its date or amount
-//! does not parse. An uncertain deadline is shown but never schedules a reminder (`reminders`)
-//! until the person confirms it. Nothing here sends anything: the draft reply is copy or mailto.
+//! does not parse. A field that is not uncertain is confirmed on its own (`auto`), so a sure
+//! deadline starts reminders at once; the person can still edit or clear it. An uncertain field
+//! waits for the person, and an uncertain deadline schedules no reminder (`reminders`) until they
+//! confirm it. Nothing here sends anything: the draft reply is copy or mailto.
 //!
 //! The letter's text is the person's private paper: it is stored next to the case and never logged.
 
@@ -40,9 +42,12 @@ pub struct Field {
     /// Shown highlighted: the person should check it. An uncertain deadline schedules nothing.
     #[serde(default)]
     pub uncertain: bool,
-    /// The person confirmed or typed it.
+    /// Confirmed: by the person, or on its own when kwant read it and was sure (`auto`).
     #[serde(default)]
     pub confirmed: bool,
+    /// Confirmed on its own because nothing made it uncertain; the person has not touched it yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto: bool,
     /// Checklist items only: ticked off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done: Option<bool>,
@@ -72,6 +77,8 @@ impl Fields {
     pub fn all_uncertain(mut self) -> Self {
         for f in self.iter_mut() {
             f.uncertain = true;
+            f.confirmed = false;
+            f.auto = false;
         }
         self
     }
@@ -98,7 +105,8 @@ impl Fields {
         self.iter().filter(|f| f.uncertain).count()
     }
 
-    /// The deadline reminders may use: one the person confirmed, that is not uncertain and parses.
+    /// The deadline reminders may use: one confirmed (by the person or on its own), that is not
+    /// uncertain and parses.
     pub fn confirmed_deadline(&self) -> Option<NaiveDate> {
         let d = self.deadline.as_ref().filter(|d| d.confirmed && !d.uncertain)?;
         parse_date(&d.value)
@@ -203,7 +211,8 @@ fn checked(raw: RawField, text: &str, kind: Kind) -> Option<Field> {
             }
         },
     };
-    Some(Field { value, quote, uncertain, confirmed: false, done: None })
+    // Sure means confirmed: only an uncertain field waits for the person
+    Some(Field { value, quote, uncertain, confirmed: !uncertain, auto: !uncertain, done: None })
 }
 
 /// An ISO date, `YYYY-MM-DD`; nothing else counts.
@@ -409,8 +418,9 @@ mod tests {
         assert_eq!(f.checklist[0].done, Some(false));
         assert!(f.reply_to.as_ref().unwrap().uncertain, "the address is not in this text");
         assert_eq!(f.uncertain_count(), 5);
-        // Never usable for reminders until confirmed
-        assert_eq!(f.confirmed_deadline(), None);
+        // Sure fields confirm on their own, uncertain ones wait for the person
+        assert!(f.iter().all(|x| x.confirmed == !x.uncertain && x.auto == !x.uncertain));
+        assert_eq!(f.confirmed_deadline(), NaiveDate::from_ymd_opt(2026, 11, 30), "a sure deadline is usable at once");
     }
 
     #[test]

@@ -313,12 +313,13 @@ fn single(old: &Option<Field>, v: &Value, key: &str, kind: Kind) -> Result<Optio
             f.value = valid(&f.value, key, kind)?;
             f.confirmed = true;
             f.uncertain = false;
+            f.auto = false;
             Ok(Some(f))
         }
         Some(Value::String(s)) if obj.len() == 1 => {
             let value = valid(s, key, kind)?;
             let quote = old.as_ref().filter(|o| o.value == value).map(|o| o.quote.clone()).unwrap_or_default();
-            Ok(Some(Field { value, quote, uncertain: false, confirmed: true, done: None }))
+            Ok(Some(Field { value, quote, uncertain: false, confirmed: true, auto: false, done: None }))
         }
         _ => Err(format!("{key}: send null, {{}} or {{\"value\": \"...\"}}")),
     }
@@ -349,11 +350,11 @@ fn list(old: &[Field], v: &Value, key: &str, kind: Kind) -> Result<Vec<Field>, S
             };
             // A new or changed entry, or one the person confirms, is confirmed; an unchanged one
             // (say, ticking another checklist item) keeps what it was
-            let (uncertain, confirmed) = match before {
-                Some(b) if !confirm => (b.uncertain, b.confirmed),
-                _ => (false, true),
+            let (uncertain, confirmed, auto) = match before {
+                Some(b) if !confirm => (b.uncertain, b.confirmed, b.auto),
+                _ => (false, true, false),
             };
-            Ok(Field { quote: before.map(|b| b.quote.clone()).unwrap_or_default(), value, uncertain, confirmed, done })
+            Ok(Field { quote: before.map(|b| b.quote.clone()).unwrap_or_default(), value, uncertain, confirmed, auto, done })
         })
         .collect()
 }
@@ -550,6 +551,26 @@ mod tests {
         let f = patch(&old, &json!({"amounts": [{"value": "GBP 142.60"}]})).unwrap();
         assert!(!f.amounts[0].confirmed, "an unchanged amount isn't confirmed by resending it");
         assert!(patch(&old, &json!({"amounts": [{"value": "GBP 142.60", "confirmed": "yes"}]})).is_err());
+    }
+
+    #[test]
+    fn touching_an_auto_confirmed_field_makes_it_the_persons() {
+        let mut old = fields();
+        old.sender = Some(Field { value: "Northfield Water".into(), quote: "Northfield Water".into(), confirmed: true, auto: true, ..Default::default() });
+        old.checklist = vec![Field { value: "Pay".into(), quote: "pay by".into(), confirmed: true, auto: true, done: Some(false), ..Default::default() }];
+        // Editing or confirming takes the auto mark off; clearing removes the field
+        let f = patch(&old, &json!({"sender": {"value": "Northfield Water Ltd"}})).unwrap();
+        assert!(f.sender.as_ref().is_some_and(|s| s.confirmed && !s.auto));
+        let f = patch(&old, &json!({"sender": {}})).unwrap();
+        assert!(f.sender.as_ref().is_some_and(|s| s.confirmed && !s.auto));
+        assert!(patch(&old, &json!({"sender": null})).unwrap().sender.is_none());
+        // Ticking an unchanged item keeps it auto-confirmed
+        let f = patch(&old, &json!({"checklist": [{"value": "Pay", "done": true}]})).unwrap();
+        assert!(f.checklist[0].confirmed && f.checklist[0].auto && f.checklist[0].done == Some(true));
+        // Fields stored before `auto` existed still read, as not auto
+        let legacy: Field = serde_json::from_value(json!({"value": "x", "quote": "", "uncertain": false, "confirmed": false})).unwrap();
+        assert!(!legacy.auto && !legacy.confirmed);
+        assert!(serde_json::to_value(&legacy).unwrap().get("auto").is_none());
     }
 
     #[test]

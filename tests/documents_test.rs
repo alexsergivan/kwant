@@ -348,6 +348,30 @@ async fn a_photo_no_model_can_read_is_left_for_the_person() {
 }
 
 #[tokio::test]
+async fn an_uncertain_deadline_waits_for_the_person_and_schedules_nothing() {
+    let mut answer = water_bill_answer();
+    answer["deadline"]["uncertain"] = json!(true);
+    let e = setup_with(Stub::new(Ok(answer.to_string()))).await;
+    let pdf = e.upload("water-bill.pdf", PDF).await;
+    let (s, v) = e.create(&[&pdf]).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    let case_id = v["case_id"].as_str().unwrap().to_string();
+    let doc = e.read_through(&case_id).await;
+    let f = &doc["extraction"]["fields"];
+    assert_eq!(f["deadline"]["uncertain"], true, "{doc}");
+    assert_eq!(f["deadline"]["confirmed"], false);
+    assert_eq!(f["sender"]["confirmed"], true, "the sure fields don't wait");
+    assert!(doc["case"]["deadline"].is_null(), "an uncertain deadline is not the case's deadline");
+    assert!(doc["reminders"].as_array().unwrap().is_empty(), "an uncertain deadline schedules nothing");
+
+    // One tap confirms it and starts the reminders
+    let (s, v) = e.person("PATCH", &format!("/api/zombie/cases/{case_id}/fields"), Some(json!({"deadline": {}}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["extraction"]["fields"]["deadline"]["confirmed"], true);
+    assert_eq!(v["case"]["deadline"].as_str().unwrap().get(..10), Some("2026-11-30"));
+}
+
+#[tokio::test]
 async fn a_text_pdf_and_a_photo_are_read_in_one_model_call() {
     let logs = Logs::global();
 
@@ -380,18 +404,23 @@ async fn a_text_pdf_and_a_photo_are_read_in_one_model_call() {
     assert_eq!(f["sender"]["value"], "Northfield Water Ltd");
     assert_eq!(f["sender"]["uncertain"], false);
     assert_eq!(f["deadline"]["value"], "2026-11-30");
-    assert_eq!(f["deadline"]["confirmed"], false, "nothing is confirmed until the person says so");
+    assert_eq!(f["deadline"]["confirmed"], true, "a sure deadline confirms on its own");
+    assert_eq!(f["deadline"]["auto"], true);
+    assert_eq!(f["sender"]["auto"], true);
     assert_eq!(f["amounts"][0]["value"], "GBP 142.60");
     assert_eq!(f["references"][0]["value"], "NW-448812");
     assert_eq!(f["checklist"][0]["uncertain"], false, "a quote from the photo's transcript stands");
     assert_eq!(f["checklist"][0]["done"], false);
     assert_eq!(f["checklist"][1]["uncertain"], true, "a quote that is in neither page is uncertain");
+    assert_eq!(f["checklist"][1]["confirmed"], false, "an uncertain item waits for the person");
+    assert!(f["checklist"][1].get("auto").is_none(), "auto is only sent when true");
     assert!(x["text"].as_str().unwrap().contains("Reply slip"));
 
     let case = &doc["case"];
     assert_eq!(case["title"], "Letter from Northfield Water Ltd");
-    assert!(case["deadline"].is_null(), "an unconfirmed deadline is not the case's deadline");
-    assert!(doc["reminders"].as_array().unwrap().is_empty(), "an unconfirmed deadline schedules nothing");
+    assert_eq!(case["deadline"].as_str().unwrap().get(..10), Some("2026-11-30"), "a sure deadline is the case's deadline at once");
+    let ahead = chrono::NaiveDate::from_ymd_opt(2026, 11, 30).unwrap() >= chrono::Utc::now().date_naive();
+    assert_eq!(!doc["reminders"].as_array().unwrap().is_empty(), ahead, "a sure deadline starts its reminders: {doc}");
     assert_eq!(case["draft"]["channel"], "email");
     assert_eq!(case["draft"]["to"], "billing@northfield-water.example");
 
@@ -409,7 +438,9 @@ async fn a_text_pdf_and_a_photo_are_read_in_one_model_call() {
     assert_eq!(v["extraction"]["fields"]["deadline"]["confirmed"], true);
     assert_eq!(v["extraction"]["fields"]["checklist"].as_array().unwrap().len(), 1);
     assert_eq!(v["extraction"]["fields"]["checklist"][0]["done"], true);
-    assert_eq!(v["extraction"]["fields"]["checklist"][0]["confirmed"], false, "ticking an item doesn't confirm it");
+    assert_eq!(v["extraction"]["fields"]["checklist"][0]["confirmed"], true, "ticking keeps it as it was: auto-confirmed");
+    assert_eq!(v["extraction"]["fields"]["checklist"][0]["auto"], true);
+    assert!(v["extraction"]["fields"]["deadline"].get("auto").is_none(), "a date the person set is theirs, not auto");
     assert_eq!(v["extraction"]["fields"]["checklist"][0]["quote"], "Tick the box and return this slip by post.", "an unchanged item keeps its quote");
     assert_eq!(v["case"]["deadline"].as_str().unwrap().get(..10), Some("2099-03-01"));
     let rem = v["reminders"].as_array().unwrap();

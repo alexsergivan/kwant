@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, ChevronLeft, ExternalLink, Loader2, Pencil, Play, Plus, RefreshCw, Split, Trash2, X } from 'lucide-react';
+import { useUndoableDelete } from '../undoDelete';
+import { UndoNotice } from './UndoNotice';
+import { AlertTriangle, ChevronLeft, ExternalLink, Loader2, Pencil, Play, Plus, RefreshCw, Split, Trash2 } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { playSfx } from '../audio/chiptune';
 import {
@@ -751,7 +753,12 @@ export const ParallelPage: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
   const [starting, setStarting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  // A deleted scenario leaves the list at once; the delete is sent once Undo has had its chance
+  const [removing, setRemoving] = useState<Scenario | null>(null);
+  const removal = useUndoableDelete(() => {
+    setScenarios((list) => (list ?? []).filter((x) => x.id !== removing?.id));
+    setRemoving(null);
+  });
   const alive = useRef(true);
 
   const fail = (e: unknown) => {
@@ -817,7 +824,6 @@ export const ParallelPage: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
     setCurrent(null);
     setNotice(null);
     setBusy(false);
-    setConfirmDelete(false);
     if (scenarioId) loadRuns(scenarioId);
   }, [scenarioId, loadRuns]);
 
@@ -877,21 +883,27 @@ export const ParallelPage: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
     }
   };
 
-  const remove = async (s: Scenario) => {
-    try {
-      await parallelApi.remove(s.id);
-      if (!alive.current) return;
-      setScenarios((list) => (list ?? []).filter((x) => x.id !== s.id));
-      setScreen({ kind: 'list' });
-    } catch (e) {
-      if (alive.current) setNotice({ text: `Couldn’t delete it: ${e instanceof Error ? e.message : 'something went wrong.'}`, error: true });
-    }
+  const remove = (s: Scenario) => {
+    setRemoving(s);
+    removal.start(() => parallelApi.remove(s.id));
+    setScreen({ kind: 'list' });
   };
+  const undoRemove = () => {
+    removal.undo();
+    setRemoving(null);
+  };
+  const listed = (scenarios ?? []).filter((x) => !(removal.pending && x.id === removing?.id));
 
   const shownScenario = scenarioId ? (scenarios ?? []).find((s) => s.id === scenarioId) ?? null : null;
   let body: React.ReactNode = null;
   if (screen.kind === 'list') {
-    body = <ScenarioList scenarios={scenarios ?? []} onOpen={(s) => setScreen({ kind: 'scenario', id: s.id })} onNew={() => (setSaveError(null), setScreen({ kind: 'edit', scenario: null }))} />;
+    body = (
+      <>
+        {removal.pending && removing && <UndoNotice text={`Deleted “${removing.title}”.`} onUndo={undoRemove} className="mb-3" />}
+        {removal.error && <Notice text={`Couldn’t delete it: ${removal.error}`} error />}
+        <ScenarioList scenarios={listed} onOpen={(s) => setScreen({ kind: 'scenario', id: s.id })} onNew={() => (setSaveError(null), setScreen({ kind: 'edit', scenario: null }))} />
+      </>
+    );
   } else if (screen.kind === 'edit') {
     body = (
       <ScenarioForm
@@ -918,19 +930,8 @@ export const ParallelPage: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
           onStart={() => start(shownScenario)}
           onPickRun={openRun}
           onEdit={() => (setSaveError(null), setScreen({ kind: 'edit', scenario: shownScenario }))}
-          onDelete={() => setConfirmDelete(true)}
+          onDelete={() => remove(shownScenario)}
         />
-        {confirmDelete && (
-          <div role="alertdialog" aria-label="Delete scenario" className="px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/5 flex flex-wrap items-center gap-2 text-xs text-rose-200">
-            <span className="flex-1 min-w-[12rem]">Delete “{shownScenario.title}”? You won’t be able to open its past runs here afterwards.</span>
-            <button type="button" onClick={() => remove(shownScenario)} className={`${actionBtn} border border-rose-500/40 text-rose-100 hover:bg-rose-500/10`}>
-              <Trash2 size={12} aria-hidden="true" /> Delete
-            </button>
-            <button type="button" onClick={() => setConfirmDelete(false)} className={quietBtn}>
-              <X size={12} aria-hidden="true" /> Keep it
-            </button>
-          </div>
-        )}
       </>
     );
   } else {

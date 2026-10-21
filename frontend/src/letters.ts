@@ -1,6 +1,7 @@
 // Camera-to-Completed: a photographed or uploaded letter becomes a Loose ends case (`source:
-// "document"`). kwant reads it once, marks what it isn't sure of, and keeps every field unconfirmed
-// until the person confirms it. Only a confirmed, certain deadline starts reminders. Nothing is ever
+// "document"`). kwant reads it once and marks what it isn't sure of. A field it is sure of is
+// confirmed on its own (`auto`) and can still be edited or cleared; an uncertain one waits for the
+// person. Only a confirmed, certain deadline starts reminders. Nothing is ever
 // sent: the reply is a draft the person copies (or opens in their own mail app).
 
 import { LooseCase, LooseEndsError, call, shortDate } from './looseEnds';
@@ -12,6 +13,8 @@ export interface LetterField {
   quote: string;
   uncertain: boolean;
   confirmed: boolean;
+  /** Confirmed on its own because kwant was sure; the person hasn't touched it. Absent means false. */
+  auto?: boolean;
   /** Checklist items only. */
   done?: boolean | null;
 }
@@ -170,7 +173,7 @@ export function readingText(e: Extraction | null): { title: string; body: string
     case 'running':
       return { title: 'Reading the letter…', body: 'This usually takes under a minute. You can leave this page; the case stays in Loose ends.', tone: 'sky' };
     case 'read':
-      return { title: 'Read', body: `${methodText(e.method)} Check each field against the letter, then confirm it.`, tone: 'emerald' };
+      return { title: 'Read', body: `${methodText(e.method)} Fields marked Uncertain need you to check them against the letter; the rest are confirmed already.`, tone: 'emerald' };
     case 'text_only':
       return { title: 'Only the PDF text was read', body: `The text was kept, but the details couldn’t be picked out.${note}${fillIn('Fill in the fields from the letter.')}`, tone: 'amber' };
     case 'unreadable':
@@ -200,6 +203,16 @@ export function reminderGate(deadline: LetterField | null | undefined): { on: bo
   if (s === 'uncertain') return { on: false, text: 'The deadline is marked uncertain, so there are no reminders. Check it against the letter and confirm it to start them.' };
   if (s === 'unconfirmed') return { on: false, text: 'Reminders start once you confirm the deadline.' };
   return { on: true, text: `Reminders 7 days before, 1 day before and on ${shortDate(deadline!.value)}, at 09:00.` };
+}
+
+/** Confirmed by kwant itself, not by the person. */
+export const isAuto = (f: LetterField | null | undefined): boolean => fieldState(f) === 'confirmed' && !!f?.auto;
+
+/** How many fields still need the person: the uncertain ones. */
+export function needsLook(fields: LetterFields | null | undefined): number {
+  if (!fields) return 0;
+  const all = [fields.sender, fields.request, fields.reply_to, fields.deadline, ...(fields.references ?? []), ...(fields.amounts ?? []), ...(fields.checklist ?? [])];
+  return all.filter((f) => fieldState(f) === 'uncertain').length;
 }
 
 export const reminderLabel = (offset: number): string => (offset === 0 ? 'On the day' : offset === 1 ? '1 day before' : `${offset} days before`);

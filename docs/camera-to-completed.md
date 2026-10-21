@@ -51,7 +51,7 @@ Fields {
   sender, request, reply_to, deadline: Field | null,
   references, amounts, checklist: [Field]
 }
-Field { value, quote, uncertain, confirmed, done? }   // done: checklist items only
+Field { value, quote, uncertain, confirmed, auto?, done? }   // done: checklist items only
 ```
 
 ## Reading
@@ -78,12 +78,15 @@ The model returns each field as `{value, quote, uncertain}`. kwant marks a field
 - an amount has no currency, or its number is ambiguous ("1.234" could be 1234 or 1.234). Amounts are normalised to
   `CUR 1234.50`.
 
-Nothing is `confirmed` until the person confirms it. `PATCH /api/zombie/cases/:id/fields` takes:
+A field that is **not** uncertain is confirmed as it is read, with `auto: true`; the UI shows it with an "auto" mark, and the
+person can still edit or clear it. A sure deadline therefore schedules reminders straight away. An uncertain field (and an
+uncertain deadline) stays unconfirmed until the person confirms it, so no reminders run off a date the model wasn't sure of.
+Fields stored before `auto` existed have no `auto` and keep their state. `PATCH /api/zombie/cases/:id/fields` takes:
 
 - for a single field: `null` to clear it, `{}` to confirm it as it is (the value must still parse), or `{"value": "..."}` to set it
-  (which also confirms it);
+  (which also confirms it). Either one clears `auto`: the field is now the person's;
 - for a list: the whole list, as `[{"value": "...", "done"?: bool, "confirmed"?: true}]`. `done` applies to checklist items only.
-  A new or changed item is confirmed. An item whose value is unchanged keeps its quote and its confirmed/uncertain state, so
+  A new or changed item is confirmed. An item whose value is unchanged keeps its quote and its confirmed/uncertain/auto state, so
   ticking one checklist item confirms nothing; send `"confirmed": true` on an item to confirm it as it is.
 
 Values are at most 500 characters and lists at most 20 items.

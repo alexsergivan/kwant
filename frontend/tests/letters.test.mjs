@@ -208,7 +208,40 @@ test('the pages sit next to the fields: photos inline, PDFs as a link, plus what
   assert.match(html, /What was read from it/);
   assert.match(html, /lg:grid-cols-\[minmax\(0,1fr\)_minmax\(0,1fr\)\]/, 'side by side on a wide screen');
   assert.ok(html.indexOf('The letter') < html.indexOf('What it says'), 'pages first, so a phone shows the photo above the fields');
-  assert.match(html, /Nothing is confirmed until you confirm it/);
+  assert.match(html, /1 field needs a look/, 'only the uncertain deadline needs the person');
+});
+
+test('sure fields arrive confirmed with an auto mark, still editable; uncertain ones still need a tap', () => {
+  const auto = ui.row({ fkey: 'sender', label: 'From', hint: '', field: f('Thames Water', { confirmed: true, auto: true }), disabled: false, onSave: save });
+  assert.match(auto, /data-state="confirmed"/);
+  assert.match(auto, /data-auto="true"/);
+  assert.match(auto, />auto</);
+  assert.match(auto, /confirmed automatically, not by you/, 'screen readers hear who confirmed it');
+  assert.doesNotMatch(auto, /> Confirm</, 'nothing to tap');
+  assert.match(auto, /Edit/);
+  assert.match(auto, /Clear/);
+  assert.match(auto, /“Thames Water”/, 'the quote stays visible so it can be checked');
+
+  const mine = ui.row({ fkey: 'sender', label: 'From', hint: '', field: f('Thames Water', { confirmed: true }), disabled: false, onSave: save });
+  assert.doesNotMatch(mine, /data-auto/, 'a field the person confirmed has no auto mark');
+
+  const unsure = ui.row({ fkey: 'deadline', label: 'Deadline', hint: 'YYYY-MM-DD', field: f('2026-11-14', { uncertain: true }), disabled: false, onSave: save });
+  assert.doesNotMatch(unsure, /data-auto/);
+  assert.match(unsure, /> Confirm</);
+
+  // A sure deadline starts reminders on its own; an uncertain one never does
+  assert.equal(m.reminderGate(f('2026-11-14', { confirmed: true, auto: true })).on, true);
+  assert.equal(m.reminderGate(f('2026-11-14', { uncertain: true })).on, false);
+  assert.equal(m.isAuto(f('x', { confirmed: true, auto: true, uncertain: true })), false, 'uncertain beats auto');
+
+  const list = ui.list({ fkey: 'amounts', label: 'Amounts', hint: '', empty: '', items: [f('GBP 142.60', { confirmed: true, auto: true }), f('GBP 9.99', { uncertain: true })], disabled: false, onSave: save });
+  assert.equal((list.match(/data-auto="true"/g) ?? []).length, 1);
+  assert.match(list, /Not all checked/);
+
+  const sure = { sender: f('A', { confirmed: true, auto: true }), deadline: f('2026-11-14', { confirmed: true, auto: true }), amounts: [f('GBP 1.00', { uncertain: true })] };
+  assert.equal(m.needsLook(sure), 1);
+  const html = ui.detail(detailProps(view({}, { fields: { ...sure, amounts: [] } })));
+  assert.match(html, /Nothing needs a look/);
 });
 
 test('the draft: a paper letter is copy only; an email has a mailto; nothing is sent either way', () => {
