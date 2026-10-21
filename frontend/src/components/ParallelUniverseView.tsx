@@ -755,10 +755,7 @@ export const ParallelPage: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   // A deleted scenario leaves the list at once; the delete is sent once Undo has had its chance
   const [removing, setRemoving] = useState<Scenario | null>(null);
-  const removal = useUndoableDelete(() => {
-    setScenarios((list) => (list ?? []).filter((x) => x.id !== removing?.id));
-    setRemoving(null);
-  });
+  const removal = useUndoableDelete();
   const alive = useRef(true);
 
   const fail = (e: unknown) => {
@@ -885,7 +882,11 @@ export const ParallelPage: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
 
   const remove = (s: Scenario) => {
     setRemoving(s);
-    removal.start(() => parallelApi.remove(s.id));
+    // Each delete drops its own scenario: a quick second delete sends the first one straight away
+    removal.start(async () => {
+      await parallelApi.remove(s.id);
+      if (alive.current) setScenarios((list) => (list ?? []).filter((x) => x.id !== s.id));
+    });
     setScreen({ kind: 'list' });
   };
   const undoRemove = () => {
@@ -899,7 +900,7 @@ export const ParallelPage: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
   if (screen.kind === 'list') {
     body = (
       <>
-        {removal.pending && removing && <UndoNotice text={`Deleted “${removing.title}”.`} onUndo={undoRemove} className="mb-3" />}
+        {removal.pending && removing && <UndoNotice text={`Deleted “${removing.title}” and its past runs.`} onUndo={undoRemove} className="mb-3" />}
         {removal.error && <Notice text={`Couldn’t delete it: ${removal.error}`} error />}
         <ScenarioList scenarios={listed} onOpen={(s) => setScreen({ kind: 'scenario', id: s.id })} onNew={() => (setSaveError(null), setScreen({ kind: 'edit', scenario: null }))} />
       </>

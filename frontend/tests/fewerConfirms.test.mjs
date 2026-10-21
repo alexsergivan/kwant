@@ -98,6 +98,50 @@ test('leaving the screen sends it at once; a failed delete reports why', async (
   assert.deepEqual(results, [null, 'HTTP 500']);
 });
 
+test('a second delete inside the window sends the first one, never drops it', async () => {
+  // Rigel's repro: delete scenario A, open B within 6s, delete B. A used to be silently dropped.
+  const sent = [];
+  const timers = { set: (fn) => fn, clear: () => {} };
+  const d = new u.DeferredDelete(() => {}, 6000, timers);
+  d.start(async () => sent.push('A'));
+  d.start(async () => sent.push('B'));
+  await d.flush();
+  assert.deepEqual(sent, ['A', 'B']);
+});
+
+test('the second delete keeps its own Undo window; a failed first one still reports', async () => {
+  const t = fakeTimers();
+  const results = [];
+  const sent = [];
+  const d = new u.DeferredDelete((err) => results.push(err), u.UNDO_MS, t);
+  d.start(async () => {
+    sent.push('A');
+    throw new Error('HTTP 500');
+  });
+  d.start(async () => sent.push('B'));
+  await settle();
+  assert.deepEqual(sent, ['A'], 'A goes at once, B waits');
+  assert.deepEqual(results, ['HTTP 500']);
+  assert.equal(d.pending, true, 'B can still be undone');
+  assert.equal(t.count, 1, 'only B is on a timer');
+  assert.equal(d.undo(), true);
+  t.fire();
+  await settle();
+  assert.deepEqual(sent, ['A'], 'undoing B sends nothing more');
+});
+
+test('scenario Undo says its past runs go too; each scenario delete drops only itself', () => {
+  const s = readFileSync(join(root, 'src/components/ParallelUniverseView.tsx'), 'utf8');
+  assert.match(s, /Deleted “\$\{removing\.title\}” and its past runs\./);
+  assert.match(s, /await parallelApi\.remove\(s\.id\);[^]*filter\(\(x\) => x\.id !== s\.id\)/);
+});
+
+test('a deleted or rejected skill stays hidden after the window, not back until the list reloads', () => {
+  const s = readFileSync(join(root, 'src/components/SkillsPanel.tsx'), 'utf8');
+  assert.match(s, /if \(removal\.gone\) return null;/);
+  assert.match(s, /if \(rejection\.gone\) return null;/);
+});
+
 const routine = {
   id: 'r1', kwant_id: 'k1', channel_id: null, name: 'Morning digest', instructions: 'x',
   schedule: { type: 'daily', time: '09:00', tz: 'UTC' }, enabled: true, next_run_at: null, last_run_at: null, last_status: null, created_at: '2026-10-20T08:00:00Z',

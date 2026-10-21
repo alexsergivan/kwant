@@ -32,11 +32,13 @@ export class DeferredDelete {
     return this.run !== null;
   }
 
-  /** Starts the window. A second start while one is waiting replaces it. */
+  /** Starts the window. One already waiting is sent at once, so a quick second delete never drops it. */
   start(run: () => Promise<unknown>): void {
+    const earlier = this.run;
     this.cancelTimer();
     this.run = run;
     this.handle = this.timers.set(() => void this.flush(), this.ms);
+    if (earlier) void this.send(earlier);
   }
 
   /** Cancels the waiting delete; nothing is sent. Returns whether there was one. */
@@ -53,6 +55,10 @@ export class DeferredDelete {
     if (!run) return;
     this.cancelTimer();
     this.run = null;
+    await this.send(run);
+  }
+
+  private async send(run: () => Promise<unknown>): Promise<void> {
     try {
       await run();
       this.onCommitted(null);
@@ -70,11 +76,13 @@ export class DeferredDelete {
 /**
  * `pending` while the Undo window is open. `start(run)` hides the item, `undo()` brings it back,
  * and `run` is sent when the window closes or the component unmounts. A failed delete brings the
- * item back with `error` set; `onDone` runs after a successful one (e.g. to reload the list).
+ * item back with `error` set; `onDone` runs after a successful one (e.g. to reload the list), and
+ * `gone` stays true so the item doesn't show again before the list catches up.
  */
 export function useUndoableDelete(onDone?: () => void, initialPending = false) {
   const [pending, setPending] = useState(initialPending);
   const [error, setError] = useState<string | null>(null);
+  const [gone, setGone] = useState(false);
   const alive = useRef(true);
   const done = useRef(onDone);
   done.current = onDone;
@@ -82,9 +90,13 @@ export function useUndoableDelete(onDone?: () => void, initialPending = false) {
   if (!box.current) {
     box.current = new DeferredDelete((err) => {
       if (!alive.current) return;
-      setPending(false);
+      // An earlier delete can finish while a later one is still waiting
+      setPending(box.current?.pending ?? false);
       setError(err);
-      if (!err) done.current?.();
+      if (!err) {
+        setGone(true);
+        done.current?.();
+      }
     });
   }
 
@@ -107,5 +119,5 @@ export function useUndoableDelete(onDone?: () => void, initialPending = false) {
     setPending(false);
   }, []);
 
-  return { pending, error, start, undo };
+  return { pending, gone, error, start, undo };
 }

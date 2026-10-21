@@ -232,6 +232,7 @@ export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPen
     rejection.start(() => skillsApi.reject(skill.id));
   };
 
+  if (rejection.gone) return null;
   if (rejection.pending) return <UndoNotice as="li" text={`Rejected “${skill.name}”. Nothing was added.`} onUndo={rejection.undo} />;
 
   return (
@@ -313,6 +314,7 @@ export const ActiveSkill: React.FC<{ skill: Skill; initialPending?: boolean }> =
     removal.start(() => skillsApi.remove(skill.id));
   };
 
+  if (removal.gone) return null;
   if (removal.pending) return <UndoNotice as="li" text={`Deleted “${skill.name}”. Bots stop using it.`} onUndo={removal.undo} />;
 
   return (
