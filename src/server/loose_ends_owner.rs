@@ -103,6 +103,9 @@ async fn take_slot(db: &Database, space: &SpaceId, cap: i64, now: DateTime<Utc>)
     db.set_setting(&runs_key(space), &value).await.is_ok()
 }
 
+/// Cases by the event that brought them up.
+type Batch = Vec<(Event, Vec<CaseRow>)>;
+
 /// What started the owner's turn.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Event {
@@ -179,8 +182,8 @@ pub async fn on_event(state: &AppState, event: Event, cases: Vec<CaseRow>) -> Ve
 
 /// [`on_event`] for several events at once (one reminder tick can fire "today" and "in 7 days"):
 /// still one turn per space.
-pub async fn on_events(state: &AppState, events: Vec<(Event, Vec<CaseRow>)>) -> Vec<String> {
-    let mut by_space: Vec<(SpaceId, Vec<(Event, Vec<CaseRow>)>)> = Vec::new();
+pub async fn on_events(state: &AppState, events: Batch) -> Vec<String> {
+    let mut by_space: Vec<(SpaceId, Batch)> = Vec::new();
     for (event, cases) in events {
         for c in cases {
             let space = c.space_id.clone().filter(|s| !s.is_empty()).map(SpaceId::new).unwrap_or_else(SpaceId::default_space);

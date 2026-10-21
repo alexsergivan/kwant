@@ -857,8 +857,7 @@ pub(super) async fn continue_once_if_capped(scope: &TurnScope, kwant: &Kwant, fi
         return first;
     }
     tracing::info!(kwant = %kwant.id, "turn hit the model-call cap: one automatic continuation");
-    let mut opts = TurnOpts::default();
-    opts.label = Some("Automatic continuation (once): the last turn ran out of model calls".into());
+    let opts = TurnOpts { label: Some("Automatic continuation (once): the last turn ran out of model calls".into()), ..Default::default() };
     match try_kwant_turn(scope, kwant, CONTINUE_PROMPT.to_string(), opts).await {
         Ok(more) => Ok(format!("{}\n\n{more}", text.trim_end())),
         Err(_) => first,
