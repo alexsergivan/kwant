@@ -82,13 +82,21 @@ impl BrowserService {
         let live: Vec<(String, bool)> = live["targetInfos"].as_array().into_iter().flatten()
             .filter_map(|t| Some((t["targetId"].as_str()?.to_string(), t["type"] == "page" && t["url"] == "about:blank")))
             .collect();
-        for session in state.sessions.values_mut() {
+        // Reopen only the pages that showed a site. A blank page would be one more empty window
+        // per bot that ever used the browser; its bot gets a new one when it next asks.
+        let mut dropped = Vec::new();
+        for (bot, session) in state.sessions.iter_mut() {
             if live.iter().any(|(id, _)| *id == session.target) { continue; }
-            let url = urls.get(&session.target).filter(|u| u.starts_with("http")).map_or("about:blank", |u| u.as_str());
-            if let Ok(target) = state.browser.send_cdp_command("Target.createTarget", json!({"url": url, "newWindow": true})).await {
-                if let Some(id) = target["targetId"].as_str() { session.target = id.to_string(); }
+            let Some(url) = urls.get(&session.target).filter(|u| u.starts_with("http")) else {
+                dropped.push(bot.clone());
+                continue;
+            };
+            match state.browser.send_cdp_command("Target.createTarget", json!({"url": url, "newWindow": true})).await {
+                Ok(target) => if let Some(id) = target["targetId"].as_str() { session.target = id.to_string(); },
+                Err(_) => dropped.push(bot.clone()),
             }
         }
+        for bot in dropped { state.sessions.remove(&bot); }
         // Chrome's own blank start window would sit on top of the bots' pages in the window
         if visible && !state.sessions.is_empty() {
             for (id, _) in live.iter().filter(|(id, blank)| *blank && !state.sessions.values().any(|s| s.target == *id)) {
@@ -104,14 +112,16 @@ impl BrowserService {
     async fn local_endpoint(&self) -> Result<String, BrowserError> {
         let profile = self.local_profile();
         let headless = !self.local_window();
-        if let Some((endpoint, running_headless)) = computer::running_local_chrome(&profile).await {
-            if running_headless == headless { return Ok(endpoint); }
-            // the other form is running on this profile: close it first
-            let _ = BrowserController::at_endpoint(&endpoint, None, true)
-                .send_cdp_command("Browser.close", json!({})).await;
-            computer::wait_local_chrome_gone(&profile).await.map_err(BrowserError::Http)?;
-        }
-        computer::launch_local_chrome(&profile, headless).await.map_err(BrowserError::Http)
+        // at most one kwant Chrome per profile: reuse it, or wait for the one starting
+        let (endpoint, running_headless) = computer::ensure_local_chrome(&profile, headless).await
+            .map_err(BrowserError::Http)?;
+        if running_headless == headless { return Ok(endpoint); }
+        // the other form is running on this profile: close it first
+        let _ = BrowserController::at_endpoint(&endpoint, None, true)
+            .send_cdp_command("Browser.close", json!({})).await;
+        computer::wait_local_chrome_gone(&profile).await.map_err(BrowserError::Http)?;
+        let (endpoint, _) = computer::ensure_local_chrome(&profile, headless).await.map_err(BrowserError::Http)?;
+        Ok(endpoint)
     }
 
     async fn save_sessions(&self, sessions: &HashMap<String, SessionTarget>) -> Result<(), BrowserError> {
