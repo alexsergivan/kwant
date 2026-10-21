@@ -412,9 +412,11 @@ pub trait Driver: Send + Sync {
         event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<TurnOutput, DriverError>;
 
-    /// Whether this driver streams its reply as it goes and brackets tool runs with
-    /// `ToolCallPending`/`ToolCallCompleted`, so a long silence means it is stuck. Drivers that
-    /// only report at the end (one-shot CLIs) say false and are never stopped for silence.
+    /// Whether this driver reports progress as it goes (output, or `Progress`) and brackets tool
+    /// runs with `ToolCallPending`/`ToolCallCompleted`, so a long silence means it is stuck.
+    /// Drivers that can be silent while healthy say false and are never stopped for silence: CLIs
+    /// that only report at the end, and the API driver, whose model calls aren't streamed (a slow
+    /// reply would look stalled) and are bounded by their own HTTP timeout instead.
     fn streams_progress(&self) -> bool {
         false
     }

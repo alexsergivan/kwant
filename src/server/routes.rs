@@ -1613,6 +1613,8 @@ async fn run_kwant_turn_inner(
         let mut cancelled = false;
         let mut driver_result = None;
         let mut gave_up: Option<String> = None;
+        // Saved with the gave-up reply, so a client can offer Retry without reading its wording
+        let mut gave_up_meta: Option<serde_json::Value> = None;
         let mut ran_on: Option<RanOn> = None;
         if attempts.is_empty() {
             let text = format!(
@@ -1742,6 +1744,8 @@ async fn run_kwant_turn_inner(
                             Some(RuntimeEvent::TurnComplete { tokens, duration_ms, .. }) => {
                                 held_complete = Some((tokens, duration_ms));
                             }
+                            // Only resets the stall clock (above)
+                            Some(RuntimeEvent::Progress) => {}
                             Some(event) => {
                                 let visible = match &event {
                                     RuntimeEvent::TextDelta(t) => !t.trim().is_empty(),
@@ -1774,6 +1778,13 @@ async fn run_kwant_turn_inner(
                     profile_id: profile.as_ref().map(|p| p.id.clone()),
                 });
                 gave_up = Some(text);
+                gave_up_meta = Some(json!({
+                    "kind": "turn_stalled",
+                    "stalled": true,
+                    "kwant_id": target_kwant.id,
+                    "kwant_name": target_kwant.name,
+                    "stall_secs": secs,
+                }));
                 break;
             }
             let result = driver_task.await;
@@ -1881,7 +1892,7 @@ async fn run_kwant_turn_inner(
                 reasoning_content: with_notices(opts.label.clone()),
                 ..scope.message("kwant", &target_kwant.name, text.clone())
             };
-            scope.save(&msg, None).await;
+            scope.save(&msg, gave_up_meta).await;
             return Err(text);
         } else if let Some(Ok(Ok(output))) = driver_result {
             // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM

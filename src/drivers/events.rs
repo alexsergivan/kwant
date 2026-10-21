@@ -15,6 +15,9 @@ pub enum RuntimeEvent {
         id: String,
         result: Value,
     },
+    /// A driver is still working: it printed something that isn't reply text or a tool call.
+    /// Only feeds the turn's stall watchdog; it is never broadcast.
+    Progress,
     ApprovalRequired {
         id: String,
         tool_name: String,
