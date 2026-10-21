@@ -171,3 +171,60 @@ fn a_tie_is_not_settled_by_who_leads() {
     assert_ne!(pick.reason, "FitnessCoach (Fitness Trainer) shares words with your message and leads here");
     assert!(!pick.reason.contains("leads here"), "{}", pick.reason);
 }
+
+/// Rigel's regressions (report §3): with Backend leading, a plain request for one specialist
+/// fell to the lead after generic words stopped counting. One word only that bot has still wins.
+#[test]
+fn one_distinctive_word_reaches_the_specialist_whoever_leads() {
+    let members = space();
+    let cases = [
+        ("log my meals and workouts", "fit"),
+        ("create a workout schedule for the week", "fit"),
+        ("start a new habit tracker", "fit"),
+        ("book a flight and hotel", "travel"),
+        ("create a bot that tracks flights", "travel"),
+        ("plan a trip to Rome", "travel"),
+    ];
+    for lead in ["be", "fit", "fe"] {
+        for (msg, want) in cases {
+            let pick = pick_member(msg, lead, &members, None, "channel lead").unwrap();
+            assert_eq!(pick.kwant.id, want, "lead {lead}, {msg}: {}", pick.reason);
+            assert!(!is_team_building_request(msg), "{msg}");
+        }
+    }
+}
+
+/// "plan" is in Travel Planner's title and in FitnessCoach's "workout plans", so it says nothing
+/// about which of them it is for; "workout" does.
+#[test]
+fn a_word_two_bots_share_does_not_beat_one_only_one_has() {
+    let members = space();
+    for lead in ["be", "fit", "travel"] {
+        for msg in ["need a new workout plan", "create a new workout plan", "plan my workout routine"] {
+            let pick = pick_member(msg, lead, &members, None, "channel lead").unwrap();
+            assert_eq!(pick.kwant.id, "fit", "lead {lead}, {msg}: {}", pick.reason);
+        }
+    }
+}
+
+/// put/make/start go with a team in everyday use; without a bot word they are no hire request.
+#[test]
+fn everyday_team_phrases_get_no_hire_card() {
+    let members = space();
+    for (msg, want) in [
+        ("put the team on the dashboard", Some("fe")),
+        ("make the team happy", None),
+        ("start the team standup notes", None),
+    ] {
+        assert!(!is_team_building_request(msg), "{msg}");
+        let pick = pick_member(msg, "be", &members, None, "channel lead").unwrap();
+        assert_ne!(pick.basis, "team", "{msg}: {}", pick.reason);
+        if let Some(want) = want {
+            assert_eq!(pick.kwant.id, want, "{msg}: {}", pick.reason);
+        }
+    }
+    // with a bot word they still are
+    for msg in ["put together a team of agents for SEO", "make a team of bots for my shop", "start a new team of agents"] {
+        assert!(is_team_building_request(msg), "{msg}");
+    }
+}

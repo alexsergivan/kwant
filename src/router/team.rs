@@ -474,14 +474,21 @@ pub fn pick_member<'a>(
         return Some(chosen(k, terms.clone(), &how));
     }
 
-    // 4. Shared words with a bot's name, title or persona (plus weak role hints). One shared word
-    //    in a persona is chance, not a match, and a tie is no pick: both fall through to step 5
+    // 4. Shared words with a bot's name, title or persona (plus weak role hints). A word several
+    //    bots share says nothing about which of them it is for ("plan" for a fitness coach's
+    //    "workout plans" and a travel planner), so it counts for none of them; one word only one
+    //    bot has ("workout", "flight") is enough. A tie is no pick: both fall through to step 5
     //    rather than send the message to whoever happens to lead.
+    let matches: Vec<Vec<(String, usize)>> = members.iter().map(|m| relevance_terms(prompt, m)).collect();
+    let shared = |w: &str| matches.iter().filter(|terms| terms.iter().any(|(t, _)| t == w)).count() > 1;
     let scored: Vec<(&Kwant, usize, Vec<String>)> = members
         .iter()
         .zip(&roles)
-        .map(|(m, (_, rs, rt))| {
-            let (s, mut t) = relevance(prompt, m);
+        .zip(&matches)
+        .map(|((m, (_, rs, rt)), terms)| {
+            let own: Vec<&(String, usize)> = terms.iter().filter(|(t, _)| !shared(t)).collect();
+            let s = own.iter().map(|(_, s)| s).sum::<usize>();
+            let mut t: Vec<String> = own.iter().map(|(t, _)| t.clone()).collect();
             for w in rt {
                 if !t.contains(w) {
                     t.push(w.clone());
@@ -493,12 +500,9 @@ pub fn pick_member<'a>(
     let top = scored.iter().map(|(_, s, _)| *s).max().unwrap_or(0);
     let best: Vec<usize> = (0..scored.len()).filter(|&i| top > 0 && scored[i].1 == top).collect();
     if let [i] = best.as_slice() {
-        // a hint of the bot's role ("orders" for a trading backend) counts on its own
-        if top >= MIN_SHARED_SCORE || roles[*i].1 > 0 {
-            let (k, _, terms) = &scored[*i];
-            let how = format!("shares words with your message: {}", terms.join(", "));
-            return Some(chosen(k, terms.clone(), &how));
-        }
+        let (k, _, terms) = &scored[*i];
+        let how = format!("shares words with your message: {}", terms.join(", "));
+        return Some(chosen(k, terms.clone(), &how));
     }
 
     // 5. Nothing in the message matched: Laya's pick only when it was clear, else the lead
@@ -509,11 +513,6 @@ pub fn pick_member<'a>(
     let reason = format!("No one's role matched this, so it went to the {lead_word}, {} ({})", lead.name, lead.title);
     Some(Pick { kwant: lead, basis: "lead", reason, terms: vec![] })
 }
-
-/// The least a shared-word match must score to pick a bot: a word in its title (2), or more than
-/// one word in its persona. A single persona word ("build" in a fitness coach's "build strength")
-/// is chance.
-const MIN_SHARED_SCORE: usize = 2;
 
 /// Everyday words that say nothing about whose work a request is. They never count as shared
 /// words with a bot's name, title or persona.
@@ -537,6 +536,8 @@ pub fn is_team_building_request(prompt: &str) -> bool {
     const VERBS: &[&str] = &[
         "create", "assemble", "build", "form", "hire", "recruit", "staff", "put", "spin", "set", "make", "start",
     ];
+    /// Verbs that also go with a team in everyday use, so they need a bot word too.
+    const WEAK_VERBS: &[&str] = &["put", "make", "start"];
     const GROUPS: &[&str] = &["team", "teams", "crew", "squad", "bots", "agents", "specialists"];
     const MEMBERS: &[&str] = &["bot", "bots", "agent", "agents", "someone", "specialist", "specialists", "people"];
     /// After the group word, these make it a thing in the app rather than bots to hire.
@@ -574,7 +575,12 @@ pub fn is_team_building_request(prompt: &str) -> bool {
         while j < words.len() && j <= i + 5 && (is(j, FILLER) || words[j].chars().all(|c| c.is_ascii_digit())) {
             j += 1;
         }
-        is(j, GROUPS) && !is(j + 1, OTHER_NOUNS)
+        if !is(j, GROUPS) || is(j + 1, OTHER_NOUNS) {
+            return false;
+        }
+        // "put the team on the dashboard", "make the team happy": everyday verbs only put a team of
+        // bots together when bots are said ("put together a team of agents", "make 3 bots")
+        !WEAK_VERBS.contains(&w.as_str()) || is(j, MEMBERS) || (j + 1..j + 4).any(|k| is(k, MEMBERS))
     })
 }
 
@@ -760,6 +766,13 @@ pub fn matched_terms(prompt: &str, kwant: &Kwant) -> Vec<String> {
 }
 
 fn relevance(prompt: &str, kwant: &Kwant) -> (usize, Vec<String>) {
+    let terms = relevance_terms(prompt, kwant);
+    (terms.iter().map(|(_, s)| s).sum(), terms.into_iter().map(|(t, _)| t).collect())
+}
+
+/// The prompt words that matched `kwant`'s name (3), title (2) or persona (1), each with its score,
+/// in prompt order, without repeats.
+fn relevance_terms(prompt: &str, kwant: &Kwant) -> Vec<(String, usize)> {
     let lower_prompt = prompt.to_lowercase();
     let words: Vec<&str> = lower_prompt
         .split(|c: char| !c.is_alphanumeric() && c != '-')
@@ -777,10 +790,9 @@ fn relevance(prompt: &str, kwant: &Kwant) -> (usize, Vec<String>) {
             .any(|tok| tok == w || (w.len() >= 4 && tok.starts_with(w)))
     };
 
-    let mut score = 0;
-    let mut terms: Vec<String> = Vec::new();
+    let mut terms: Vec<(String, usize)> = Vec::new();
     for w in words {
-        let before = score;
+        let mut score = 0;
         if matches(&name_lower, w) {
             score += 3;
         }
@@ -790,11 +802,11 @@ fn relevance(prompt: &str, kwant: &Kwant) -> (usize, Vec<String>) {
         if matches(&prompt_lower, w) {
             score += 1;
         }
-        if score > before && !terms.iter().any(|t| t == w) {
-            terms.push(w.to_string());
+        if score > 0 && !terms.iter().any(|(t, _)| t == w) {
+            terms.push((w.to_string(), score));
         }
     }
-    (score, terms)
+    terms
 }
 
 fn generate_discussion_plan(speakers: &[String], members: &[Kwant]) -> Vec<String> {

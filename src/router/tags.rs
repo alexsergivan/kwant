@@ -104,7 +104,8 @@ const NOT_A_BOT: [&str; 7] = ["you", "user", "me", "here", "channel", "team", "p
 pub struct HandoffMentions {
     /// Teammates handed the turn, as indices into `names`, in order of first mention.
     pub targets: Vec<usize>,
-    /// Teammates mentioned only inside a ``` code block.
+    /// Teammates mentioned only inside code: a ``` or ~~~ block, or inline code that is more
+    /// than the name.
     pub in_code_block: Vec<usize>,
     /// `@Name`s in prose that match no teammate, as written, once each.
     pub unknown: Vec<String>,
@@ -112,18 +113,19 @@ pub struct HandoffMentions {
 
 /// Reads the @mentions in `text` against `names`. Prose mentions count, and so does inline
 /// code that is just a teammate's name (`` `@Growth` ``: models often format names that way).
-/// Other inline code, ``` code blocks and email addresses hand nothing on.
+/// Other inline code, ``` and ~~~ code blocks and email addresses hand nothing on; a teammate
+/// mentioned only there is listed in `in_code_block`, so the caller can say so.
 pub fn handoff_mentions(text: &str, names: &[&str]) -> HandoffMentions {
     let is_name = |tag: &str| names.iter().position(|n| n.eq_ignore_ascii_case(tag));
     let chars: Vec<char> = text.chars().collect();
     let find = |from: usize, pat: &[char]| (from..=chars.len().saturating_sub(pat.len())).find(|&j| chars[j..].starts_with(pat));
-    let fence = ['`', '`', '`'];
+    let fences = [['`', '`', '`'], ['~', '~', '~']];
     let mut prose = String::with_capacity(text.len());
     let mut fenced = String::new();
     let mut i = 0;
     while i < chars.len() {
-        if chars[i..].starts_with(&fence) {
-            let end = find(i + 3, &fence).unwrap_or(chars.len());
+        if let Some(fence) = fences.iter().find(|f| chars[i..].starts_with(&f[..])) {
+            let end = find(i + 3, fence).unwrap_or(chars.len());
             fenced.extend(&chars[i + 3..end]);
             fenced.push('\n');
             prose.push(' ');
@@ -132,10 +134,16 @@ pub fn handoff_mentions(text: &str, names: &[&str]) -> HandoffMentions {
             match find(i + 1, &['`']) {
                 Some(end) => {
                     let span: String = chars[i + 1..end].iter().collect();
-                    let span = span.trim();
+                    // `@Growth.` is still just the name
+                    let span = span.trim().trim_end_matches(['.', ',', ':', ';', '!', '?']);
                     match span.strip_prefix('@').filter(|tag| is_name(tag).is_some()) {
                         Some(tag) => prose.push_str(&format!(" @{tag} ")),
-                        None => prose.push(' '),
+                        None => {
+                            // `run @Growth now` is code, but the mention is said, not dropped
+                            fenced.push_str(span);
+                            fenced.push('\n');
+                            prose.push(' ');
+                        }
                     }
                     i = end + 1;
                 }
@@ -224,6 +232,23 @@ mod tests {
         // A teammate also named in prose isn't reported as only in code
         let m = handoff_mentions("```\n@Growth\n``` ok @Growth", &names);
         assert_eq!((m.targets, m.in_code_block), (vec![1], vec![]));
+    }
+
+    /// Rigel's gaps: inline code with a trailing period is still the name, inline code that is
+    /// more than the name is reported instead of dropped, and ~~~ blocks are code like ```.
+    #[test]
+    fn inline_code_mentions_hand_on_or_are_reported() {
+        let names = ["Product", "Growth", "Dev"];
+        assert_eq!(handoff_mentions("`@Growth.` please draft the plan", &names).targets, vec![1]);
+        assert_eq!(handoff_mentions("over to `@Growth:`", &names).targets, vec![1]);
+        let m = handoff_mentions("`run @Growth now`", &names);
+        assert_eq!((m.targets, m.in_code_block), (vec![], vec![1]));
+        let m = handoff_mentions("~~~\n@Dev deploy\n~~~\nthat's all", &names);
+        assert_eq!((m.targets, m.in_code_block), (vec![], vec![2]));
+        let m = handoff_mentions("~~~\n@Dev\n~~~ then @Dev", &names);
+        assert_eq!((m.targets, m.in_code_block), (vec![2], vec![]));
+        // an email in inline code is still no mention at all
+        assert_eq!(handoff_mentions("`a@Growth.com`", &names), HandoffMentions::default());
     }
 
     #[test]

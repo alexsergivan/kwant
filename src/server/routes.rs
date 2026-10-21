@@ -936,7 +936,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
     report_skipped(scope, skipped).await;
 }
 
-const IN_CODE_BLOCK: &str = "the mention was inside a code block";
+const IN_CODE_BLOCK: &str = "the mention was inside code. Write the name as plain text to ask them";
 
 /// Says in the chat, and logs, each @mention that handed nothing on: "Growth wasn't asked: <why>".
 /// An empty reason means no teammate has that name; it's worked out here.
