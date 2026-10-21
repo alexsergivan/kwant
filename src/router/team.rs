@@ -286,7 +286,8 @@ pub struct Pick<'a> {
     pub kwant: &'a Kwant,
     /// `only` (one bot can answer), `keywords` (words in the message point to this bot's role or
     /// name), `skills` (Laya and the words agree), `lead` (nothing matched), `several` (more than one
-    /// role matched, so the lead coordinates). The UI words each one; see frontend/src/routeReason.ts.
+    /// role matched, so the lead coordinates), `team` (a request to put a team of bots together,
+    /// which the lead proposes on one hire card). The UI words each one; see frontend/src/routeReason.ts.
     pub basis: &'static str,
     pub reason: String,
     pub terms: Vec<String>,
@@ -384,10 +385,11 @@ fn names(ks: &[&Kwant]) -> String {
     }
 }
 
-/// Routes one message to one member. In order: a bot named in the message; the one bot whose role
-/// the request's words belong to; the bot whose name, title or persona shares the most words; Laya's
-/// pick when it was clear. Anything else — nothing matched, or two roles matched — goes to the lead,
-/// who answers or hands parts on. The reason says which of these happened.
+/// Routes one message to one member. In order: a bot named in the message; the lead for a request
+/// to put a team of bots together; the one bot whose role the request's words belong to; the one
+/// bot whose name, title or persona clearly shares the most words (not one everyday word, not a
+/// tie); Laya's pick when it was clear. Anything else — nothing matched, or two roles matched —
+/// goes to the lead, who answers or hands parts on. The reason says which of these happened.
 pub fn pick_member<'a>(
     prompt: &str,
     lead_kwant_id: &str,
@@ -431,7 +433,17 @@ pub fn pick_member<'a>(
         return Some(chosen(k, vec![k.name.trim().to_lowercase()], "was named in your message"));
     }
 
-    // 2. The request's words belong to a role
+    // 2. A request to put a team of bots together is no one specialist's work: the lead proposes
+    //    the bots on one hire card (see TEAM_BUILDING_NOTE)
+    if is_team_building_request(prompt) {
+        let reason = format!(
+            "This asks to put a team of bots together, so it went to the {lead_word}, {} ({}), to propose them on one hire card for you to approve",
+            lead.name, lead.title
+        );
+        return Some(Pick { kwant: lead, basis: "team", reason, terms: vec![] });
+    }
+
+    // 3. The request's words belong to a role
     let roles: Vec<(&Kwant, usize, Vec<String>)> =
         members.iter().map(|m| (m, role_score(&words, m))).map(|(m, (s, t))| (m, s, t)).collect();
     let strong: Vec<&(&Kwant, usize, Vec<String>)> = roles.iter().filter(|(_, s, _)| *s >= 2).collect();
@@ -462,7 +474,9 @@ pub fn pick_member<'a>(
         return Some(chosen(k, terms.clone(), &how));
     }
 
-    // 3. Shared words with a bot's name, title or persona (plus weak role hints)
+    // 4. Shared words with a bot's name, title or persona (plus weak role hints). One shared word
+    //    in a persona is chance, not a match, and a tie is no pick: both fall through to step 5
+    //    rather than send the message to whoever happens to lead.
     let scored: Vec<(&Kwant, usize, Vec<String>)> = members
         .iter()
         .zip(&roles)
@@ -477,26 +491,91 @@ pub fn pick_member<'a>(
         })
         .collect();
     let top = scored.iter().map(|(_, s, _)| *s).max().unwrap_or(0);
-    if top > 0 {
-        let best: Vec<&(&Kwant, usize, Vec<String>)> = scored.iter().filter(|(_, s, _)| *s == top).collect();
-        if let [(k, _, terms)] = best.as_slice() {
+    let best: Vec<usize> = (0..scored.len()).filter(|&i| top > 0 && scored[i].1 == top).collect();
+    if let [i] = best.as_slice() {
+        // a hint of the bot's role ("orders" for a trading backend) counts on its own
+        if top >= MIN_SHARED_SCORE || roles[*i].1 > 0 {
+            let (k, _, terms) = &scored[*i];
             let how = format!("shares words with your message: {}", terms.join(", "));
             return Some(chosen(k, terms.clone(), &how));
         }
-        if let Some((k, _, terms)) = best.iter().find(|(m, _, _)| m.id == lead.id) {
-            return Some(chosen(k, terms.clone(), "shares words with your message and leads here"));
-        }
-        let matched: Vec<&Kwant> = best.iter().map(|(m, _, _)| *m).collect();
-        return Some(to_lead(matched, best.iter().flat_map(|(_, _, t)| t.clone()).collect()));
     }
 
-    // 4. Nothing in the message matched: Laya's pick only when it was clear, else the lead
+    // 5. Nothing in the message matched: Laya's pick only when it was clear, else the lead
     if let Some(g) = laya.filter(|g| g.confident) {
         let reason = format!("Laya matched this to {}'s role ({}); no words in your message named a role", g.kwant.name, g.kwant.title);
         return Some(Pick { kwant: g.kwant, basis: "skills", reason, terms: vec![] });
     }
     let reason = format!("No one's role matched this, so it went to the {lead_word}, {} ({})", lead.name, lead.title);
     Some(Pick { kwant: lead, basis: "lead", reason, terms: vec![] })
+}
+
+/// The least a shared-word match must score to pick a bot: a word in its title (2), or more than
+/// one word in its persona. A single persona word ("build" in a fitness coach's "build strength")
+/// is chance.
+const MIN_SHARED_SCORE: usize = 2;
+
+/// Everyday words that say nothing about whose work a request is. They never count as shared
+/// words with a bot's name, title or persona.
+const GENERIC_WORDS: &[&str] = &[
+    "team", "teams", "build", "building", "new", "need", "needed", "needs", "make", "making", "create",
+    "creating", "do", "doing", "done", "everything", "anything", "something", "thing", "things", "help",
+    "work", "working", "get", "start", "starting", "set", "setup", "analyze", "analyse", "analize", "bot",
+    "bots", "agent", "agents", "good", "best", "first", "next", "now", "today", "also", "just", "like",
+    "know", "look", "let", "lets", "let's", "go", "going", "think", "sure", "people", "way",
+];
+
+/// Said to the lead with a team-building request, so it proposes the bots instead of treating the
+/// message as its own specialty.
+pub const TEAM_BUILDING_NOTE: &str = "(kwant routing note: this message asks to put a team of bots together, \
+    so it came to you as the lead. Work out which bots it needs, then propose them all on one card with \
+    propose_hire, using members and new_team. The person approves the card; nothing is created before that.)";
+
+/// "Create a team to…", "hire a few bots", "assemble a squad of agents": a request to put bots
+/// together, as opposed to code that mentions teams ("build the team page", "add a team filter").
+pub fn is_team_building_request(prompt: &str) -> bool {
+    const VERBS: &[&str] = &[
+        "create", "assemble", "build", "form", "hire", "recruit", "staff", "put", "spin", "set", "make", "start",
+    ];
+    const GROUPS: &[&str] = &["team", "teams", "crew", "squad", "bots", "agents", "specialists"];
+    const MEMBERS: &[&str] = &["bot", "bots", "agent", "agents", "someone", "specialist", "specialists", "people"];
+    /// After the group word, these make it a thing in the app rather than bots to hire.
+    const OTHER_NOUNS: &[&str] = &[
+        "page", "view", "screen", "component", "api", "endpoint", "table", "model", "settings", "list", "filter",
+        "field", "route", "schema", "feature", "tab", "panel", "button", "modal", "form", "member", "members",
+        "picker", "selector", "test", "tests", "id", "name", "lead", "channel", "description", "instructions",
+        "workspace", "folder", "repo", "icon", "discussion", "meeting", "chat", "avatar", "card",
+    ];
+    /// What may stand between the verb and the group: "put together a small team", "spin up 3 agents".
+    const FILLER: &[&str] = &[
+        "a", "an", "the", "new", "small", "whole", "full", "together", "up", "my", "our", "some", "few", "couple",
+        "of", "dedicated", "startup", "little", "proper", "entire", "me", "us", "virtual", "ai",
+    ];
+    let words = tokens(prompt);
+    let is = |i: usize, set: &[&str]| words.get(i).is_some_and(|w| set.contains(&w.as_str()));
+    words.iter().enumerate().any(|(i, w)| {
+        // "hire a designer", "hire bots": hiring here is always about bots
+        if w == "hire" || w == "recruit" {
+            return (i + 1..i + 5).any(|j| is(j, MEMBERS) || is(j, GROUPS))
+                || words.get(i + 1).is_some_and(|x| matches!(x.as_str(), "a" | "an" | "some" | "more" | "new"));
+        }
+        // "what bots we need", "which agents do we need"
+        if matches!(w.as_str(), "what" | "which")
+            && is(i + 1, &["bots", "agents", "specialists"])
+            && (i + 2..i + 6).any(|j| words.get(j).is_some_and(|x| x == "need"))
+        {
+            return true;
+        }
+        // "create a team", "put together a small team of bots", "spin up 3 agents"
+        if !VERBS.contains(&w.as_str()) {
+            return false;
+        }
+        let mut j = i + 1;
+        while j < words.len() && j <= i + 5 && (is(j, FILLER) || words[j].chars().all(|c| c.is_ascii_digit())) {
+            j += 1;
+        }
+        is(j, GROUPS) && !is(j + 1, OTHER_NOUNS)
+    })
 }
 
 /// "Create…", "Fix…", "Add…": a request to change code, which one role should do rather than discuss.
@@ -526,7 +605,7 @@ fn direct(pick: Option<Pick<'_>>, team: &Team) -> TeamDecision {
 /// when it reads like a discussion ("Create a new test simple strategy" used to start one).
 fn settles_without_discussion(prompt: &str, pick: &Option<Pick<'_>>) -> bool {
     let Some(p) = pick else { return true };
-    p.reason.contains("was named in your message") || (is_code_request(prompt) && matches!(p.basis, "keywords" | "skills" | "only"))
+    p.basis == "team" || p.reason.contains("was named in your message") || (is_code_request(prompt) && matches!(p.basis, "keywords" | "skills" | "only"))
 }
 
 pub fn parse_laya_team_answers(
@@ -684,7 +763,7 @@ fn relevance(prompt: &str, kwant: &Kwant) -> (usize, Vec<String>) {
     let lower_prompt = prompt.to_lowercase();
     let words: Vec<&str> = lower_prompt
         .split(|c: char| !c.is_alphanumeric() && c != '-')
-        .filter(|s| s.len() >= 3 && !STOP_WORDS.contains(s))
+        .filter(|s| s.len() >= 3 && !STOP_WORDS.contains(s) && !GENERIC_WORDS.contains(s))
         .map(|s| if s.len() > 4 { s.strip_suffix('s').unwrap_or(s) } else { s })
         .collect();
 

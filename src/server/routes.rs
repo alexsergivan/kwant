@@ -782,12 +782,19 @@ fn execute_single_turn(
         state,
     };
     let prompt = payload.prompt.clone();
+    // the lead got a team-building request: say so, so it proposes the bots instead of answering
+    // as its own specialty (the saved message stays as the person wrote it)
+    let turn_prompt = if routing.as_ref().is_some_and(|r| r["basis"] == "team") {
+        format!("{prompt}\n\n{}", crate::router::team::TEAM_BUILDING_NOTE)
+    } else {
+        prompt.clone()
+    };
 
     tokio::spawn(async move {
         // Ends the job (its cancel keys) when the turn and its handoffs are done
         let _job = job;
         let opts = TurnOpts { routing, ..TurnOpts::default() };
-        if let Some(reply) = run_kwant_turn(&scope, &target_kwant, prompt.clone(), opts).await {
+        if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
             run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
         }
     });
