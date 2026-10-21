@@ -20,6 +20,14 @@ pub struct ApiContextRow {
     pub used_at: DateTime<Utc>,
 }
 
+/// A conversation's summary of its older messages, for one bot.
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+pub struct ApiSummary {
+    pub summary: String,
+    /// The newest message the summary covers.
+    pub through_id: String,
+}
+
 impl Database {
     pub(super) async fn migrate_api_context(&self) -> Result<(), DbError> {
         sqlx::query(
@@ -30,9 +38,48 @@ impl Database {
                 team TEXT NOT NULL,
                 notes TEXT NOT NULL,
                 used_at TIMESTAMP NOT NULL,
+                summary TEXT NOT NULL DEFAULT '',
+                summary_through TEXT,
                 PRIMARY KEY (kwant_id, context_id)
             )",
         )
+        .execute(&self.pool)
+        .await?;
+        // Summaries came after the first prefixes
+        let has_summary: Option<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('api_contexts') WHERE name = 'summary'").fetch_optional(&self.pool).await?;
+        if has_summary.is_none() {
+            sqlx::query("ALTER TABLE api_contexts ADD COLUMN summary TEXT NOT NULL DEFAULT ''").execute(&self.pool).await?;
+            sqlx::query("ALTER TABLE api_contexts ADD COLUMN summary_through TEXT").execute(&self.pool).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn api_summary(&self, kwant_id: &str, context_id: &str) -> Result<Option<ApiSummary>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT summary, summary_through AS through_id FROM api_contexts \
+             WHERE kwant_id = ? AND context_id = ? AND summary_through IS NOT NULL",
+        )
+        .bind(kwant_id)
+        .bind(context_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// Saves a new summary. The saved prefix is marked unused, so the turn after a summary writes
+    /// a fresh one with today's notes instead of carrying a list of changes.
+    pub async fn save_api_summary(&self, kwant_id: &str, context_id: &str, summary: &ApiSummary) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO api_contexts (kwant_id, context_id, profile, team, notes, used_at, summary, summary_through) \
+             VALUES (?, ?, '', '', '', ?, ?, ?) \
+             ON CONFLICT (kwant_id, context_id) DO UPDATE SET \
+                summary = excluded.summary, summary_through = excluded.summary_through, used_at = excluded.used_at",
+        )
+        .bind(kwant_id)
+        .bind(context_id)
+        .bind(DateTime::<Utc>::UNIX_EPOCH)
+        .bind(&summary.summary)
+        .bind(&summary.through_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -105,5 +152,17 @@ mod tests {
         assert_eq!(got.notes, "n2");
         assert_eq!(got.used_at.timestamp_millis(), t1.timestamp_millis());
         assert_eq!(db.api_context("k", "other").await.unwrap(), None);
+
+        assert_eq!(db.api_summary("k", "c").await.unwrap(), None);
+        let summary = ApiSummary { summary: "they chose sqlite".into(), through_id: "m9".into() };
+        db.save_api_summary("k", "c", &summary).await.unwrap();
+        assert_eq!(db.api_summary("k", "c").await.unwrap(), Some(summary));
+        let after = db.api_context("k", "c").await.unwrap().unwrap();
+        assert_eq!(after.notes, "n2", "the prefix stays");
+        assert_eq!(after.used_at, DateTime::<Utc>::UNIX_EPOCH, "but is written afresh next turn");
+        db.save_api_context(&row).await.unwrap();
+        assert!(db.api_summary("k", "c").await.unwrap().is_some(), "a new prefix keeps the summary");
+        db.save_api_summary("k", "new", &ApiSummary { summary: "s".into(), through_id: "m1".into() }).await.unwrap();
+        assert!(db.api_summary("k", "new").await.unwrap().is_some());
     }
 }
