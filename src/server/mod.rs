@@ -11,6 +11,7 @@ pub mod engine_routes;
 pub mod engine_login;
 pub mod auth;
 pub mod continuity;
+pub mod model_usage;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
@@ -272,6 +273,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/channels/:id", get(continuity::get_channel).patch(continuity::patch_channel))
         .route("/api/search", get(continuity::search))
         .route("/api/kwants/:id/memories", get(continuity::list_memories).post(continuity::add_memory))
+        .route("/api/kwants/:id/model-usage", get(model_usage::get_usage))
         .route(
             "/api/kwants/:id/memories/:mid",
             axum::routing::patch(continuity::update_memory).delete(continuity::delete_memory),

@@ -339,11 +339,15 @@ impl Usage {
     /// Reads an OpenAI or Anthropic `usage` object; `None` when it has no token counts.
     fn parse(usage: &Value) -> Option<Self> {
         let n = |k: &str| usage[k].as_u64();
+        // OpenAI counts cached tokens inside `prompt_tokens`; Anthropic counts them apart
+        let openai_cached = usage["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0);
         let found = Self {
-            input: n("input_tokens").or_else(|| n("prompt_tokens")).unwrap_or(0),
+            input: n("input_tokens")
+                .or_else(|| n("prompt_tokens").map(|p| p.saturating_sub(openai_cached)))
+                .unwrap_or(0),
             output: n("output_tokens").or_else(|| n("completion_tokens")).unwrap_or(0),
             cache_creation: n("cache_creation_input_tokens").unwrap_or(0),
-            cache_read: n("cache_read_input_tokens").unwrap_or(0),
+            cache_read: n("cache_read_input_tokens").unwrap_or(openai_cached),
             total: n("total_tokens"),
         };
         (found.total.is_some() || n("input_tokens").is_some()).then_some(found)
@@ -473,6 +477,55 @@ struct ChatRequest<'a> {
     max_calls: usize,
     /// Stream the reply as it is written (rounds without tools only).
     stream: bool,
+    /// Where each call is recorded; `None` records nothing.
+    record: Option<UsageSink<'a>>,
+}
+
+/// The bot and conversation a turn's calls are recorded for (see `crate::db::usage`).
+#[derive(Clone, Copy)]
+struct UsageSink<'a> {
+    db: &'a crate::db::Database,
+    kwant_id: &'a str,
+    context_id: &'a str,
+}
+
+/// Characters of JSON a request spends on tool schemas, the system prompt and the messages, so a
+/// bot's usage shows which part of the prompt is worth shrinking.
+fn prompt_chars(body: &Value) -> (usize, usize, usize) {
+    let len = |v: &Value| if v.is_null() { 0 } else { v.to_string().len() };
+    let tools = len(&body["tools"]);
+    let messages = body["messages"].as_array().map(Vec::as_slice).unwrap_or_default();
+    // OpenAI-style bodies keep the system prompt in `messages`
+    let (system, rest): (Vec<&Value>, Vec<&Value>) = messages.iter().partition(|m| m["role"] == "system");
+    let system = len(&body["system"]) + system.iter().map(|m| len(m)).sum::<usize>();
+    let messages = rest.iter().map(|m| len(m)).sum();
+    (tools, system, messages)
+}
+
+/// Records one model call, if the request has somewhere to record it. Never fails the turn.
+async fn record_call(request: &ChatRequest<'_>, purpose: &'static str, usage: Option<Usage>, body: &Value) {
+    let Some(sink) = request.record else {
+        return;
+    };
+    let (tools, system, messages) = prompt_chars(body);
+    let u = usage.unwrap_or_default();
+    let row = crate::db::usage::NewUsage {
+        kwant_id: sink.kwant_id.to_string(),
+        context_id: sink.context_id.to_string(),
+        purpose,
+        model: body["model"].as_str().unwrap_or(request.model).to_string(),
+        fresh_input: u.input as i64,
+        cache_read: u.cache_read as i64,
+        cache_write: u.cache_creation as i64,
+        output: u.output as i64,
+        reported: usage.is_some(),
+        tools_chars: tools as i64,
+        system_chars: system as i64,
+        messages_chars: messages as i64,
+    };
+    if let Err(e) = sink.db.record_usage(&row).await {
+        tracing::warn!(error = %e, "could not record model usage");
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -665,6 +718,7 @@ impl ApiDriver {
             if let Some(u) = usage {
                 u.log(request.model);
             }
+            record_call(request, crate::db::usage::PURPOSE_REPLY, usage, &body).await;
             return Ok((text, usage.map_or(45, |u| u.tokens() as usize), true));
         }
         for round in 0..max_calls {
@@ -694,13 +748,16 @@ impl ApiDriver {
                     ))
                 }
             };
-            match Usage::parse(&reply["usage"]) {
+            let usage = Usage::parse(&reply["usage"]);
+            match usage {
                 Some(u) => {
                     u.log(request.model);
                     tokens += u.tokens() as usize;
                 }
                 None => tokens += 45,
             }
+            let purpose = if round == 0 { crate::db::usage::PURPOSE_REPLY } else { crate::db::usage::PURPOSE_TOOL_ROUND };
+            record_call(request, purpose, usage, &body).await;
             let message = &reply["choices"][0]["message"];
             let content = reply_text(&reply);
             let calls = message["tool_calls"].as_array().filter(|c| !c.is_empty());
@@ -895,6 +952,11 @@ impl Driver for ApiDriver {
                 max_tokens,
                 max_calls: mcp.map(|c| c.max_tool_iterations).unwrap_or(1),
                 stream: custom,
+                record: input.store.as_ref().filter(|_| !input.thread_id.is_empty()).map(|db| UsageSink {
+                    db,
+                    kwant_id: &input.kwant.id,
+                    context_id: &input.thread_id,
+                }),
             };
             let caller = Caller {
                 kwant_id: input.kwant.id.clone(),
@@ -1031,6 +1093,7 @@ mod tests {
             max_tokens: 100,
             max_calls: 1,
             stream: false,
+            record: None,
         }
     }
 
@@ -1168,6 +1231,42 @@ mod tests {
         let mut streamed = Usage::parse(&json!({"input_tokens": 4, "cache_read_input_tokens": 900, "output_tokens": 1})).unwrap();
         streamed.update(&json!({"output_tokens": 30}));
         assert_eq!((streamed.cache_read, streamed.output, streamed.tokens()), (900, 30, 934));
+    }
+
+    #[tokio::test]
+    async fn each_call_is_recorded_with_its_tokens_and_prompt_sizes() {
+        let reply = json!({"content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 20, "output_tokens": 7, "cache_creation_input_tokens": 1500, "cache_read_input_tokens": 3000}});
+        let (url, _seen) = mock(200, reply).await;
+        let driver = ApiDriver::new(Some("sk-ant-test-key".into()), Some(url));
+        let (tx, mut rx) = mpsc::channel(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::init(tmp.path()).await.unwrap();
+        let mut input = turn("hi", vec![message("m1", "user", "Oleks", "hi")]);
+        input.store = Some(db.clone());
+        driver.stream_turn(input, tx).await.unwrap();
+
+        let rows = db.recent_usage("k1", 10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!((r.purpose.as_str(), r.context_id.as_str(), r.model.as_str()), ("reply", "t1", "claude-opus-5-5"));
+        assert_eq!((r.fresh_input_tokens, r.cache_read_tokens, r.cache_write_tokens, r.output_tokens), (20, 3000, 1500, 7));
+        assert!(r.reported);
+        assert!(r.system_chars > 1000 && r.messages_chars > 0, "{r:?}");
+        assert_eq!(r.tools_chars, 0, "no tools this turn");
+    }
+
+    #[test]
+    fn openai_cached_tokens_count_as_cache_reads_not_fresh_input() {
+        let u = Usage::parse(&json!({"prompt_tokens": 1200, "completion_tokens": 9, "total_tokens": 1209, "prompt_tokens_details": {"cached_tokens": 1024}})).unwrap();
+        assert_eq!((u.input, u.cache_read, u.output, u.tokens()), (176, 1024, 9, 1209));
+        let (tools, system, messages) = prompt_chars(&json!({
+            "messages": [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            "tools": [{"type": "function"}],
+        }));
+        assert_eq!(tools, json!([{"type": "function"}]).to_string().len());
+        assert_eq!(system, json!({"role": "system", "content": "sys"}).to_string().len());
+        assert_eq!(messages, json!({"role": "user", "content": "hi"}).to_string().len());
     }
 
     #[tokio::test]

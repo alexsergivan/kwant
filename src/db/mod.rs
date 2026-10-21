@@ -18,6 +18,7 @@ pub mod hires;
 pub mod imports;
 pub mod approval_modes;
 pub mod api_context;
+pub mod usage;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -142,6 +143,7 @@ impl Database {
         db.migrate_parallel().await?;
         db.migrate_documents().await?;
         db.migrate_api_context().await?;
+        db.migrate_usage().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;
