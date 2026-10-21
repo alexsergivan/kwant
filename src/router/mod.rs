@@ -6,7 +6,7 @@ pub mod team;
 
 pub use fallback::heuristic_fallback;
 pub use laya::LayaRouter;
-pub use tags::{handoff_targets, parse_mentions, parse_mentions_with_lookup, TagMention};
+pub use tags::{handoff_mentions, handoff_targets, HandoffMentions, parse_mentions, parse_mentions_with_lookup, TagMention};
 pub use team::{
     heuristic_pick_kwant, heuristic_team_decision, matched_terms, parse_laya_kwant_choice,
     parse_laya_team_answers, ChannelRoute, TeamDecision,

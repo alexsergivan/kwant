@@ -166,6 +166,7 @@ test('the routing line says when the team lead took it because no role matched',
   assert.equal(m.routeReasonText({ kwantName: 'Ada', basis: 'lead', reason: 'Laya picked Ada (Tech Lead) as the best fit for this question' }), 'No one’s role matched this, so it went to the team lead, Ada.');
   assert.equal(m.routeReasonText({ kwantName: 'Lin', reason: 'Laya picked Lin (Backend) as the best fit' }), 'Laya picked Lin (Backend) as the best fit');
   assert.equal(m.routeReasonText({ basis: 'keywords', matchedTerms: ['strategy', 'go'] }), 'Picked by matching words: strategy, go.');
+  assert.equal(m.routeReasonText({ kwantName: 'FitnessCoach', basis: 'team' }), 'This asks to put a team of bots together, so it went to the lead, FitnessCoach, to propose them for you to approve.');
   assert.match(m.routingLine({ kwant_name: 'Ada', basis: 'lead', candidate_count: 4 }, 'Work'), /^No one’s role matched, so the team lead Ada took it from 4 bots in Work$/);
 });
 
@@ -203,6 +204,7 @@ const ROUTES = [
   { case: 'only-bot', basis: 'only', name: 'Lin', terms: [], reason: 'Lin is the only bot here that can answer' },
   { case: 'laya', basis: 'skills', name: 'Lin', terms: ['migration'], reason: 'Lin (Backend) does this kind of work: your message mentions migration; Laya picked the same bot' },
   { case: 'laya-titles', basis: 'skills', name: 'Lin', terms: [], reason: "Laya matched this to Lin's role (Backend); no words in your message named a role" },
+  { case: 'team-building', basis: 'team', name: 'FitnessCoach', terms: [], reason: 'This asks to put a team of bots together, so it went to the channel lead, FitnessCoach (Fitness Trainer), to propose them on one hire card for you to approve' },
   { case: 'discuss', basis: 'discuss', name: 'Ada', terms: [], reason: 'This needs several perspectives — starting a 4-turn team discussion led by Ada' },
 ];
 

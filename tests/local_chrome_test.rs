@@ -88,13 +88,16 @@ async fn local_chrome_runs_windowless_and_can_open_as_a_window() {
         assert!(service.local_window());
         let (_, headless) = computer::running_local_chrome(&profile).await.expect("chrome running");
         assert!(!headless, "the window form must be a real window");
-        // only the two bots' pages are open: Chrome's blank start window is not left on top
+        // only the bot's real page is open: Chrome's blank start window is not left on top, and
+        // the other bot's never-used blank page is not reopened as a window of its own
         let (endpoint, _) = computer::running_local_chrome(&profile).await.unwrap();
         let browser = kwnt::sandbox::BrowserController::at_endpoint(&endpoint, None, true);
         let targets = browser.send_cdp_command("Target.getTargets", serde_json::json!({})).await.unwrap();
         let pages: Vec<_> = targets["targetInfos"].as_array().unwrap().iter()
             .filter(|t| t["type"] == "page").map(|t| t["url"].as_str().unwrap_or("").to_string()).collect();
-        assert_eq!(pages.len(), 2, "pages in the window form: {pages:?}");
+        assert_eq!(pages, vec![url.clone()], "pages in the window form");
+        // the other bot still gets a page when it asks for one
+        service.session("other", tmp.path()).await.expect("other bot's page on demand");
         // the bot's page was reopened there
         let ctrl = service.session("bot", tmp.path()).await.unwrap();
         ctrl.refresh_location().await.unwrap();

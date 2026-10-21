@@ -24,6 +24,8 @@ pub struct BrowserService {
     local_window: std::sync::atomic::AtomicBool,
     // Serialize startup and session creation, including simultaneous status/frame requests.
     state: Mutex<Option<ServiceState>>,
+    /// Why the last [`Self::session`] failed, for the error the person sees.
+    last_error: std::sync::Mutex<Option<String>>,
 }
 
 struct ServiceState {
@@ -38,6 +40,7 @@ impl BrowserService {
         Self {
             root, endpoint, mode: std::sync::RwLock::new(mode),
             local_window: std::sync::atomic::AtomicBool::new(false), state: Mutex::new(None),
+            last_error: std::sync::Mutex::new(None),
         }
     }
 
@@ -82,13 +85,21 @@ impl BrowserService {
         let live: Vec<(String, bool)> = live["targetInfos"].as_array().into_iter().flatten()
             .filter_map(|t| Some((t["targetId"].as_str()?.to_string(), t["type"] == "page" && t["url"] == "about:blank")))
             .collect();
-        for session in state.sessions.values_mut() {
+        // Reopen only the pages that showed a site. A blank page would be one more empty window
+        // per bot that ever used the browser; its bot gets a new one when it next asks.
+        let mut dropped = Vec::new();
+        for (bot, session) in state.sessions.iter_mut() {
             if live.iter().any(|(id, _)| *id == session.target) { continue; }
-            let url = urls.get(&session.target).filter(|u| u.starts_with("http")).map_or("about:blank", |u| u.as_str());
-            if let Ok(target) = state.browser.send_cdp_command("Target.createTarget", json!({"url": url, "newWindow": true})).await {
-                if let Some(id) = target["targetId"].as_str() { session.target = id.to_string(); }
+            let Some(url) = urls.get(&session.target).filter(|u| u.starts_with("http")) else {
+                dropped.push(bot.clone());
+                continue;
+            };
+            match state.browser.send_cdp_command("Target.createTarget", json!({"url": url, "newWindow": true})).await {
+                Ok(target) => if let Some(id) = target["targetId"].as_str() { session.target = id.to_string(); },
+                Err(_) => dropped.push(bot.clone()),
             }
         }
+        for bot in dropped { state.sessions.remove(&bot); }
         // Chrome's own blank start window would sit on top of the bots' pages in the window
         if visible && !state.sessions.is_empty() {
             for (id, _) in live.iter().filter(|(id, blank)| *blank && !state.sessions.values().any(|s| s.target == *id)) {
@@ -104,14 +115,16 @@ impl BrowserService {
     async fn local_endpoint(&self) -> Result<String, BrowserError> {
         let profile = self.local_profile();
         let headless = !self.local_window();
-        if let Some((endpoint, running_headless)) = computer::running_local_chrome(&profile).await {
-            if running_headless == headless { return Ok(endpoint); }
-            // the other form is running on this profile: close it first
-            let _ = BrowserController::at_endpoint(&endpoint, None, true)
-                .send_cdp_command("Browser.close", json!({})).await;
-            computer::wait_local_chrome_gone(&profile).await.map_err(BrowserError::Http)?;
-        }
-        computer::launch_local_chrome(&profile, headless).await.map_err(BrowserError::Http)
+        // at most one kwant Chrome per profile: reuse it, or wait for the one starting
+        let (endpoint, running_headless) = computer::ensure_local_chrome(&profile, headless).await
+            .map_err(BrowserError::Http)?;
+        if running_headless == headless { return Ok(endpoint); }
+        // the other form is running on this profile: close it first
+        let _ = BrowserController::at_endpoint(&endpoint, None, true)
+            .send_cdp_command("Browser.close", json!({})).await;
+        computer::wait_local_chrome_gone(&profile).await.map_err(BrowserError::Http)?;
+        let (endpoint, _) = computer::ensure_local_chrome(&profile, headless).await.map_err(BrowserError::Http)?;
+        Ok(endpoint)
     }
 
     async fn save_sessions(&self, sessions: &HashMap<String, SessionTarget>) -> Result<(), BrowserError> {
@@ -216,7 +229,30 @@ impl BrowserService {
         Ok(ServiceState { browser, endpoint, sessions })
     }
 
-    pub async fn session(&self, id: &str, _workspace: &Path) -> Result<BrowserController, BrowserError> {
+    /// What to tell the person when the browser could not be reached. In local mode that is the
+    /// reason kwant's Chrome did not start, not Docker, which local mode does not use.
+    pub fn unavailable_reason(&self) -> String {
+        if self.mode() != ComputerMode::Local {
+            return "Sandbox browser is unavailable. Check that Docker is running, then restart the browser.".into();
+        }
+        let last = self.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        match last {
+            Some(reason) => format!("The bot browser could not start kwant's Chrome on this computer: {reason}"),
+            None => "The bot browser could not start kwant's Chrome on this computer. Restart the browser and try again.".into(),
+        }
+    }
+
+    pub async fn session(&self, id: &str, workspace: &Path) -> Result<BrowserController, BrowserError> {
+        let result = self.open_session(id, workspace).await;
+        *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = result.as_ref().err().map(|e| match e {
+            // the local start's own words, without the CDP prefix
+            BrowserError::Http(reason) => reason.clone(),
+            other => other.to_string(),
+        });
+        result
+    }
+
+    async fn open_session(&self, id: &str, _workspace: &Path) -> Result<BrowserController, BrowserError> {
         let mut lock = self.state.lock().await;
         if lock.is_none() { *lock = Some(self.connect().await?); }
         let mut targets = lock.as_ref().unwrap().browser.send_cdp_command("Target.getTargets", json!({})).await;
