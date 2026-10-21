@@ -758,6 +758,9 @@ const MAX_HANDOFFS: usize = 4;
 /// Delegations a lead's @mentions may start for one user message, follow-up rounds included:
 /// a lead resumed with results can hand on again, but never in an endless loop.
 pub const MAX_DELEGATIONS_PER_REQUEST: usize = 8;
+/// How often one teammate may be handed work by @mention for one user message, so two bots
+/// naming each other stop after a couple of rounds instead of running to the total cap.
+pub const MAX_MENTION_DELEGATIONS_PER_BOT: usize = 2;
 
 #[allow(clippy::too_many_arguments)]
 fn execute_single_turn(
@@ -989,7 +992,8 @@ async fn is_team_channel_lead(scope: &TurnScope, kwant: &Kwant) -> bool {
 /// delegate tool), and when the last one ends the lead is resumed once with every result to give
 /// the user one answer; that follow-up may hand on again. `just_reported` teammates (whose results
 /// the follow-up is about) aren't sent it again by a mention, and one user message starts at most
-/// [`MAX_DELEGATIONS_PER_REQUEST`]. Every mention that hands nothing on is said in the channel.
+/// [`MAX_DELEGATIONS_PER_REQUEST`], at most [`MAX_MENTION_DELEGATIONS_PER_BOT`] to any one
+/// teammate. Every mention that hands nothing on is said in the channel.
 /// Teammates the lead already delegated to from this channel (with the tool) aren't sent it twice.
 async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_prompt: &str, just_reported: &[String]) {
     let Some(cid) = scope.channel_id.clone() else { return };
@@ -1013,8 +1017,9 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
     // Delegations this user message already started, counting earlier follow-up rounds
     let messages = scope.state.db.list_messages(&cid, 100).await.unwrap_or_default();
     let since = messages.iter().rev().find(|m| m.sender_role == "user").or(messages.first()).and_then(|m| m.created_at);
-    let started = mine.iter().filter(|d| d.continue_lead && since.is_some_and(|t| d.created_at >= t)).count();
-    let mut room = MAX_DELEGATIONS_PER_REQUEST.saturating_sub(started);
+    let this_request: Vec<_> = mine.iter().filter(|d| d.continue_lead && since.is_some_and(|t| d.created_at >= t)).collect();
+    let mut room = MAX_DELEGATIONS_PER_REQUEST.saturating_sub(this_request.len());
+    let asked = |id: &str| this_request.iter().filter(|d| d.specialist_kwant_id == id).count();
 
     let mut targets: Vec<&Kwant> = Vec::new();
     for i in found.targets {
@@ -1026,6 +1031,11 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
             skipped.push((k.name.clone(), format!("{} just reported back on this. For a correction, delegate a concrete task", k.name)));
         } else if open.contains(&k.id.as_str()) {
             skipped.push((k.name.clone(), format!("{} is still working on an earlier task from this chat", k.name)));
+        } else if asked(&k.id) >= MAX_MENTION_DELEGATIONS_PER_BOT {
+            skipped.push((
+                k.name.clone(),
+                format!("{} was already asked {MAX_MENTION_DELEGATIONS_PER_BOT} times for this request. Send a new message to go on", k.name),
+            ));
         } else {
             targets.push(k);
         }

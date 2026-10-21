@@ -131,11 +131,16 @@ pub fn handoff_mentions(text: &str, names: &[&str]) -> HandoffMentions {
             prose.push(' ');
             i = (end + 3).min(chars.len());
         } else if chars[i] == '`' {
-            match find(i + 1, &['`']) {
+            // A span opens and closes with the same number of backticks (`` x `` like ` x `)
+            let run = chars[i..].iter().take_while(|&&c| c == '`').count();
+            let close = (i + run..chars.len()).find(|&j| {
+                chars[j] == '`' && chars[j - 1] != '`' && chars[j..].iter().take_while(|&&c| c == '`').count() == run
+            });
+            match close {
                 Some(end) => {
-                    let span: String = chars[i + 1..end].iter().collect();
-                    // `@Growth.` is still just the name
-                    let span = span.trim().trim_end_matches(['.', ',', ':', ';', '!', '?']);
+                    let span: String = chars[i + run..end].iter().collect();
+                    // `@Growth.` is still just the name, and so is `` `@Growth` ``
+                    let span = span.trim().trim_matches('`').trim_end_matches(['.', ',', ':', ';', '!', '?']);
                     match span.strip_prefix('@').filter(|tag| is_name(tag).is_some()) {
                         Some(tag) => prose.push_str(&format!(" @{tag} ")),
                         None => {
@@ -145,12 +150,12 @@ pub fn handoff_mentions(text: &str, names: &[&str]) -> HandoffMentions {
                             prose.push(' ');
                         }
                     }
-                    i = end + 1;
+                    i = end + run;
                 }
-                // A lone backtick is just a character
+                // Unmatched backticks are just characters
                 None => {
                     prose.push(' ');
-                    i += 1;
+                    i += run;
                 }
             }
         } else {
@@ -247,6 +252,14 @@ mod tests {
         assert_eq!((m.targets, m.in_code_block), (vec![], vec![2]));
         let m = handoff_mentions("~~~\n@Dev\n~~~ then @Dev", &names);
         assert_eq!((m.targets, m.in_code_block), (vec![2], vec![]));
+        // double-backtick spans are inline code too
+        let m = handoff_mentions("``run @Dev now`` then ``@Growth``", &names);
+        assert_eq!((m.targets, m.in_code_block), (vec![1], vec![2]));
+        assert_eq!(handoff_mentions("`` `@Growth` `` go", &names).targets, vec![1]);
+        let m = handoff_mentions("`` a ` @Dev `` ok", &names);
+        assert_eq!((m.targets, m.in_code_block), (vec![], vec![2]));
+        // an unmatched run is plain text, and a later single span still pairs up
+        assert_eq!(handoff_mentions("`` @Dev and `x`", &names).targets, vec![2]);
         // an email in inline code is still no mention at all
         assert_eq!(handoff_mentions("`a@Growth.com`", &names), HandoffMentions::default());
     }

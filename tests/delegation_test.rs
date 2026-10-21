@@ -1013,6 +1013,57 @@ async fn mentions_that_hand_nothing_on_are_said_in_the_channel() {
     assert!(!delegated_growth, "over the limit, Growth isn't asked");
 }
 
+/// Rigel's ping-pong (2026-10-21): two bots naming each other ran all 8 rounds of a request. One
+/// teammate is now handed work by mention at most twice per user message; the third mention is
+/// said in the channel and starts nothing.
+#[tokio::test]
+async fn one_teammate_is_asked_by_mention_at_most_twice_per_request() {
+    let env = setup().await;
+    let lead = name(&env, &env.lead).await;
+    let growth = add_bot(&env, "Growth").await;
+    let channel = team_channel_with(&env, "startup-pingpong", &[&env.lead, &env.specialist, &growth]).await;
+    say_in(&env, &channel, &format!("@{lead} Plan the launch REPLYTAG:plan")).await;
+    wait_for("the lead's reply", || async { channel_messages(&env, &channel).await.iter().any(|m| m.text.contains("answer plan")) }).await;
+
+    // Growth already ran twice for this message (earlier rounds, both ended)
+    for _ in 0..per_bot_limit() {
+        let (_, d) = env
+            .state
+            .db
+            .create_delegation(&kwnt::db::threads::NewDelegation {
+                lead_kwant_id: env.lead.clone(),
+                specialist_kwant_id: growth.clone(),
+                origin_channel_id: Some(channel.clone()),
+                origin_kwant_id: None,
+                origin_thread_id: None,
+                team_id: None,
+                task: "earlier round".into(),
+                title: "Earlier round".into(),
+                continue_lead: true,
+                depth: 1,
+                follow_up_at: None,
+            })
+            .await
+            .unwrap();
+        assert!(env.state.db.finish_delegation(&d.id, "completed", None, None).await.unwrap());
+    }
+    // The specialist reports back and the lead's follow-up names Growth a third time
+    let last = delegate_from(&env, &channel, &env.specialist, "Review REPLYTAG:rev", "Review FOLLOWUP:Growth").await;
+    wait_for("the review", || async { delegation_status(&env, &last).await == "completed" }).await;
+    let note = || async { refusals(&channel_messages(&env, &channel).await).into_iter().find(|n| n.starts_with("Growth wasn't asked")) };
+    wait_for("the per-teammate notice", || async { note().await.is_some() }).await;
+    let note = note().await.unwrap();
+    assert_eq!(note, "Growth wasn't asked: Growth was already asked 2 times for this request. Send a new message to go on");
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let to_growth = env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap().iter().filter(|d| d.specialist_kwant_id == growth).count();
+    assert_eq!(to_growth, per_bot_limit(), "no third delegation to Growth");
+    assert_eq!(refusals(&channel_messages(&env, &channel).await).len(), 1, "one notice, no flood");
+}
+
+fn per_bot_limit() -> usize {
+    kwnt::server::routes::MAX_MENTION_DELEGATIONS_PER_BOT
+}
+
 fn routes_limit() -> usize {
     kwnt::server::routes::MAX_DELEGATIONS_PER_REQUEST
 }
