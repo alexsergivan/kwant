@@ -650,7 +650,7 @@ impl TurnScope {
             .unwrap_or_else(|| speaker.id.clone())
     }
 
-    fn message(&self, sender_role: &str, sender_id: &str, text: String) -> NewMessage {
+    pub(super) fn message(&self, sender_role: &str, sender_id: &str, text: String) -> NewMessage {
         NewMessage {
             channel_id: self.channel_id.clone(),
             direct_kwant_id: self.kwant_id.clone(),
@@ -1140,6 +1140,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
             discussion: Some(opening.then(|| discussion::question_label(&kwant.name, &team.name))),
             routing: None,
             on_started: None,
+            ..Default::default()
         };
         let Some(raw) = run_kwant_turn(scope, &kwant, prompt, opts).await else {
             if scope.cancel_token.is_cancelled() {
@@ -1193,6 +1194,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
             discussion: None,
             routing: None,
             on_started: None,
+            ..Default::default()
         };
         run_kwant_turn(scope, &lead, prompt, opts).await;
     }
@@ -1204,17 +1206,21 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
 #[derive(Default)]
 pub(super) struct TurnOpts {
     /// Saved as the message's `reasoning_content` instead of the driver's reasoning.
-    label: Option<String>,
+    pub(super) label: Option<String>,
     /// Text checked for a URL to open in the bot browser; defaults to the prompt.
     nav_prompt: Option<String>,
     /// Discussion reply handling: `[PASS]` replies aren't saved; `Some(label)` lets an `[ASK_USER]`
     /// reply be saved as a question for the user under that label.
-    discussion: Option<Option<String>>,
+    pub(super) discussion: Option<Option<String>>,
     /// How this reply's agent was picked, saved as the reply's `meta.routing`.
     routing: Option<serde_json::Value>,
     /// Awaited once the turn has its slot and is running, before the driver starts; a turn
     /// that is stopped while queued never calls it.
     pub(super) on_started: Option<futures::future::BoxFuture<'static, ()>>,
+    /// The retry of a turn a usage limit stopped (see [`super::parked`]): it never parks again.
+    pub(super) retried: bool,
+    /// The delegation this turn works on; a parked retry restarts the delegation.
+    pub(super) delegation_id: Option<String>,
 }
 
 /// Runs one kwant turn: picks model/effort, syncs the bot browser, streams the reply and saves it.
@@ -1389,6 +1395,7 @@ async fn run_kwant_turn_inner(
 ) -> Result<String, String> {
     let state = &scope.state;
     let event_broadcast = TurnEvents { sender: state.event_sender.clone(), tag: tag.clone() };
+    let park_prompt = prompt.clone();
     let db = state.db.clone();
     let router = state.router.clone();
     let channel_id = scope.channel_id.clone();
@@ -1809,6 +1816,12 @@ async fn run_kwant_turn_inner(
                         failure.detail
                     ),
                 };
+                let mut text = text;
+                if failure.class == crate::profiles::classify::FailClass::Quota && !side_effects {
+                    if let Some(line) = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), failure.retry_at).await {
+                        text = format!("{text}\n\n{line}");
+                    }
+                }
                 event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
                 event_broadcast.send(RuntimeEvent::TurnComplete {
                     tokens: 0,
@@ -1877,6 +1890,10 @@ async fn run_kwant_turn_inner(
             scope.save(&msg, None).await;
             return Err(text);
         } else if let Some(Ok(Ok(output))) = driver_result {
+            // This chat got through: a turn parked behind a usage limit would only repeat it
+            let _ = db
+                .drop_parked_for_chat(&target_kwant.id, scope.channel_id.as_deref(), scope.kwant_id.as_deref(), scope.thread_id.as_deref())
+                .await;
             // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM
             if let Some(bot_url) = extract_url_from_text(&output.text) {
                 if let Some(ctrl) = get_or_create_browser_controller(state, &sandbox_target).await {

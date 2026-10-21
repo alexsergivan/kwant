@@ -260,12 +260,13 @@ pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (S
     let job = state.turns.start_job([d.id.clone(), thread.id.clone()]);
     let runner_state = state.clone();
     let (lead, specialist, delegation) = (req.lead, req.specialist, d.clone());
-    tokio::spawn(async move { run(runner_state, job, delegation, lead, specialist).await });
+    tokio::spawn(async move { run(runner_state, job, delegation, lead, specialist, false).await });
     Ok(d)
 }
 
 /// The background part: the specialist's turn in the thread, then the report in the origin chat.
-async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: Kwant, specialist: Kwant) {
+/// `retried`: the run after a usage limit reset, which never waits for one again.
+async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: Kwant, specialist: Kwant, retried: bool) {
     let scope = match scope_for(&state, &specialist, None, Some(d.thread_id.clone()), &job, d.depth).await {
         Ok(s) => s,
         Err(why) => return finish(&state, &d, &specialist, Err(why)).await,
@@ -288,12 +289,35 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
     );
     let mut opts = TurnOpts::default();
     opts.on_started = Some(on_started);
+    opts.retried = retried;
+    opts.delegation_id = Some(d.id.clone());
     let outcome = try_kwant_turn(&scope, &specialist, prompt, opts).await;
     let outcome = match outcome {
         Err(_) if job.token.is_cancelled() => Err("stopped".to_string()),
         other => other,
     };
     drop(job);
+    // A usage limit stopped it before anything happened: it stays open and runs again when the
+    // limit resets
+    if outcome.is_err() {
+        if let Ok(Some(p)) = state.db.parked_for_delegation(&d.id).await {
+            post_to_origin(
+                &state,
+                &d,
+                "system",
+                "kwnt",
+                format!(
+                    "{} hit a usage limit on “{}”. {}",
+                    specialist.name,
+                    d.title,
+                    super::parked::retry_line(p.retry_at, Utc::now())
+                ),
+                meta("delegation_started", &d, &specialist.name),
+            )
+            .await;
+            return;
+        }
+    }
     finish(&state, &d, &specialist, outcome).await;
 }
 
@@ -522,12 +546,13 @@ pub async fn follow_ups(state: &AppState, now: chrono::DateTime<Utc>) -> usize {
     due.len()
 }
 
-/// Delegations a restart cut short become `interrupted`, with a note where they came from.
+/// Delegations a restart cut short are restarted once, with a note where they came from; one
+/// cut short again becomes `interrupted`.
 pub async fn interrupt_open(state: &AppState) {
-    let Ok(open) = state.db.interrupt_open_delegations().await else {
+    let Ok((again, cut)) = state.db.restart_open_delegations().await else {
         return;
     };
-    for d in open {
+    for d in cut {
         let specialist = name_of(state, &d.specialist_kwant_id).await;
         let Ok(Some(done)) = state.db.get_delegation(&d.id).await else {
             continue;
@@ -537,11 +562,62 @@ pub async fn interrupt_open(state: &AppState) {
             &done,
             "system",
             "kwnt",
-            format!("kwnt restarted before {specialist} finished “{}”. Ask again to restart it.", done.title),
+            format!("kwnt restarted again before {specialist} finished “{}”, after one retry. Ask again to restart it.", done.title),
             meta("delegation_result", &done, &specialist),
         )
         .await;
     }
+    for d in again {
+        let Ok(Some(d)) = state.db.get_delegation(&d.id).await else {
+            continue;
+        };
+        let specialist = name_of(state, &d.specialist_kwant_id).await;
+        post_to_origin(
+            state,
+            &d,
+            "system",
+            "kwnt",
+            format!("kwnt restarted before {specialist} finished “{}”: retrying it once now.", d.title),
+            meta("delegation_started", &d, &specialist),
+        )
+        .await;
+        restart(state, d, false).await;
+    }
+}
+
+/// The retry of a delegation a usage limit stopped (see [`super::parked`]).
+pub async fn retry_parked(state: &AppState, delegation_id: &str) -> bool {
+    let Ok(Some(d)) = state.db.get_delegation(delegation_id).await else {
+        return false;
+    };
+    if !d.is_open() {
+        return false;
+    }
+    let specialist = name_of(state, &d.specialist_kwant_id).await;
+    post_to_origin(
+        state,
+        &d,
+        "system",
+        "kwnt",
+        format!("The usage limit has reset: {specialist} is retrying “{}” once.", d.title),
+        meta("delegation_started", &d, &specialist),
+    )
+    .await;
+    restart(state, d, true).await
+}
+
+/// Runs an open delegation's task again in its thread.
+async fn restart(state: &AppState, d: Delegation, retried: bool) -> bool {
+    let (Ok(Some(lead)), Ok(Some(specialist))) =
+        (state.db.get_kwant(&d.lead_kwant_id).await, state.db.get_kwant(&d.specialist_kwant_id).await)
+    else {
+        let _ = state.db.finish_delegation(&d.id, "failed", Some("the bot no longer exists"), None).await;
+        return false;
+    };
+    let job = state.turns.start_job([d.id.clone(), d.thread_id.clone()]);
+    tracing::info!(delegation = %d.id, retried, "delegation restarted");
+    tokio::spawn(run(state.clone(), job, d, lead, specialist, retried));
+    true
 }
 
 // Routes

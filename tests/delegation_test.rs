@@ -628,29 +628,36 @@ async fn follow_ups_and_restarts_report_in_the_origin_chat() {
     })
     .await;
 
-    // A delegation left open by a stopped kwnt becomes interrupted, with a note
-    let (_, open) = env
-        .state
-        .db
-        .create_delegation(&kwnt::db::threads::NewDelegation {
-            lead_kwant_id: env.lead.clone(),
-            specialist_kwant_id: env.specialist.clone(),
-            origin_channel_id: None,
-            origin_kwant_id: Some(env.lead.clone()),
-            origin_thread_id: None,
-            team_id: None,
-            task: "t".into(),
-            title: "Cut short".into(),
-            continue_lead: true,
-            depth: 1,
-            follow_up_at: None,
-        })
-        .await
-        .unwrap();
+    // A delegation left open by a stopped kwnt is restarted once, with a note
+    let left_open = |title: &str| kwnt::db::threads::NewDelegation {
+        lead_kwant_id: env.lead.clone(),
+        specialist_kwant_id: env.specialist.clone(),
+        origin_channel_id: None,
+        origin_kwant_id: Some(env.lead.clone()),
+        origin_thread_id: None,
+        team_id: None,
+        task: "t REPLYTAG:restarted".into(),
+        title: title.into(),
+        continue_lead: false,
+        depth: 1,
+        follow_up_at: None,
+    };
+    let (_, open) = env.state.db.create_delegation(&left_open("Cut short")).await.unwrap();
     delegation::interrupt_open(&env.state).await;
-    assert_eq!(delegation_status(&env, &open.id).await, "interrupted");
+    wait_for("the restarted delegation to complete", || async { delegation_status(&env, &open.id).await == "completed" }).await;
     let lead_chat = env.state.db.list_messages(&env.lead, 30).await.unwrap();
-    assert!(lead_chat.iter().any(|m| m.text.contains("Cut short") && m.text.contains("restarted")));
+    assert!(lead_chat.iter().any(|m| m.text.contains("Cut short") && m.text.contains("retrying it once now")));
+    assert!(lead_chat.iter().any(|m| m.text.contains("answer restarted")));
+
+    // Only once: one cut short a second time becomes interrupted
+    let (_, twice) = env.state.db.create_delegation(&left_open("Cut twice")).await.unwrap();
+    let (again, cut) = env.state.db.restart_open_delegations().await.unwrap();
+    assert_eq!((again.len(), cut.len()), (1, 0));
+    assert_eq!(delegation_status(&env, &twice.id).await, "queued");
+    delegation::interrupt_open(&env.state).await;
+    assert_eq!(delegation_status(&env, &twice.id).await, "interrupted");
+    let lead_chat = env.state.db.list_messages(&env.lead, 40).await.unwrap();
+    assert!(lead_chat.iter().any(|m| m.text.contains("Cut twice") && m.text.contains("after one retry")));
 }
 
 /// The new columns and tables are additive: rows written the old way still load, and init twice

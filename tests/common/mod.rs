@@ -5,6 +5,7 @@
 //! - `CALLTOOL:<tool>:<base64 json args>` in the prompt: call that tool and reply with its text
 //!   (the last marker counts, and each marker runs once: later turns see it again in history).
 //! - `REPLYTAG:<tag>`: reply "answer <tag>" (after any tool call).
+//! - `QUOTAONCE:<tag>` / `QUOTAALWAYS`: fail with Claude's usage-limit error, once / every time.
 //!
 //! Each test file that uses it is its own binary, because it changes PATH.
 #![allow(dead_code)]
@@ -33,6 +34,16 @@ prompt = args[-1] if args else ""
 out_dir = os.environ["KWNT_TEST_PROMPTS"]
 with open(os.path.join(out_dir, "%d-%d" % (os.getpid(), time.time_ns())), "w") as f:
     f.write("\n".join(args))
+# QUOTAONCE:<tag>: the first call answers with Claude's usage-limit error (resets in 2 s);
+# QUOTAALWAYS: every call does
+q = re.findall(r"QUOTAONCE:([A-Za-z0-9_]+)", prompt)
+flag = q and os.path.join(os.path.dirname(out_dir), "quota-" + q[-1])
+if "QUOTAALWAYS" in prompt or (flag and not os.path.exists(flag)):
+    if flag:
+        open(flag, "w").close()
+    print(json.dumps({"type": "result", "is_error": True, "num_turns": 1,
+        "result": "Claude AI usage limit reached|%d" % (int(time.time()) + 2)}))
+    sys.exit(1)
 reply = []
 m = ([None] + list(re.finditer(r"CALLTOOL:([a-z_]+):([A-Za-z0-9+/=]+)", prompt)))[-1]
 done = None
