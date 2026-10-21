@@ -475,7 +475,8 @@ async fn grok_cli_reaches_mcp_only_through_kwnts_gateway() {
     let tmp = tempdir().unwrap();
     let (argv, token, notes, _) = fake_agent_run("grok", Some(ctx(tmp.path(), Arc::new(FixedApprover(true)))), Some(USER_SERVERS)).await;
     assert_eq!(token, "gw-secret-token", "token comes through the env");
-    assert!(argv.contains("--allow MCPTool(kwnt__*) --allow WebFetch --output-format streaming-json"), "{argv}");
+    assert!(argv.contains("--allow MCPTool(kwnt__*) --output-format streaming-json"), "{argv}");
+    assert!(!argv.contains("--allow WebFetch") && argv.contains("SchedulerList,WebFetch"), "{argv}");
     for secret in ["gw-secret-token", "sk-very-secret", "hdr-secret", "/usr/bin/true", "mcp.example.test"] {
         assert!(!argv.contains(secret), "{secret} in argv: {argv}");
     }
