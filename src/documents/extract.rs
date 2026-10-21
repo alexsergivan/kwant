@@ -252,10 +252,12 @@ pub async fn after_status_change(db: &Database, c: &CaseRow) -> Result<(), crate
 /// The person's corrections. Each key is optional:
 /// - `sender`, `request`, `reply_to`, `deadline`: `null` clears it, `{}` confirms it as it is,
 ///   `{"value": "..."}` sets it (confirmed).
-/// - `references`, `amounts`, `checklist`: the whole list, each `{"value": "...", "done"?: bool}`
-///   (`done` for checklist items). An entry whose value was already there keeps its quote.
+/// - `references`, `amounts`, `checklist`: the whole list, each
+///   `{"value": "...", "done"?: bool, "confirmed"?: true}` (`done` for checklist items). An entry
+///   whose value was already there keeps its quote, and keeps its confirmed/uncertain state unless
+///   it is sent with `"confirmed": true`; a new or changed entry is confirmed.
 ///
-/// Every field the person touches is confirmed and no longer uncertain. A deadline must be
+/// Every single field the person touches is confirmed and no longer uncertain. A deadline must be
 /// `YYYY-MM-DD`; an amount must parse (`GBP 142.60`, `£142.60`, `142,60 EUR`).
 pub fn patch(old: &Fields, body: &Value) -> Result<Fields, String> {
     let obj = body.as_object().ok_or("send a JSON object of fields")?;
@@ -333,6 +335,11 @@ fn list(old: &[Field], v: &Value, key: &str, kind: Kind) -> Result<Vec<Field>, S
             let value = item.get("value").and_then(Value::as_str).ok_or_else(|| format!("{key}: each entry needs a value"))?;
             let value = valid(value, key, kind)?;
             let before = old.iter().find(|o| o.value == value);
+            let confirm = match item.get("confirmed") {
+                None | Some(Value::Bool(false)) => false,
+                Some(Value::Bool(true)) => true,
+                Some(_) => return Err(format!("{key}: confirmed is true or false")),
+            };
             let done = match (kind, item.get("done")) {
                 (Kind::Checklist, Some(Value::Bool(b))) => Some(*b),
                 (Kind::Checklist, None) => Some(before.and_then(|b| b.done).unwrap_or(false)),
@@ -340,7 +347,13 @@ fn list(old: &[Field], v: &Value, key: &str, kind: Kind) -> Result<Vec<Field>, S
                 (_, Some(_)) => return Err(format!("{key}: only checklist entries can be done")),
                 (_, None) => None,
             };
-            Ok(Field { quote: before.map(|b| b.quote.clone()).unwrap_or_default(), value, uncertain: false, confirmed: true, done })
+            // A new or changed entry, or one the person confirms, is confirmed; an unchanged one
+            // (say, ticking another checklist item) keeps what it was
+            let (uncertain, confirmed) = match before {
+                Some(b) if !confirm => (b.uncertain, b.confirmed),
+                _ => (false, true),
+            };
+            Ok(Field { quote: before.map(|b| b.quote.clone()).unwrap_or_default(), value, uncertain, confirmed, done })
         })
         .collect()
 }
@@ -380,9 +393,16 @@ pub async fn run(state: crate::server::AppState, case_id: String, attachments: V
 }
 
 /// Stores `out` for `case_id` and brings the case up to date. A case deleted meanwhile stays gone.
+///
+/// The case and its reminders are written first and the extraction's status last: a poller that
+/// sees the letter read always gets the updated case and its draft with it. If the case write
+/// fails, the extraction stays `running` and the next start marks it interrupted.
 pub async fn save(db: &Database, case_id: &str, out: Outcome, now: DateTime<Utc>) -> Result<(), crate::db::DbError> {
     let Some(mut e) = db.document_extraction(case_id).await? else { return Ok(()) };
     let Some(mut c) = db.zombie_case(case_id).await? else { return Ok(()) };
+    apply(&mut c, &out.fields, now);
+    db.zombie_put_case(&c).await?;
+    reschedule(db, &c, &out.fields, now).await?;
     e.status = out.status.into();
     e.method = out.method.map(str::to_string);
     e.note = out.note;
@@ -391,9 +411,6 @@ pub async fn save(db: &Database, case_id: &str, out: Outcome, now: DateTime<Utc>
     e.read_by = out.read_by;
     e.updated_at = now;
     db.document_put_extraction(&e).await?;
-    apply(&mut c, &out.fields, now);
-    db.zombie_put_case(&c).await?;
-    reschedule(db, &c, &out.fields, now).await?;
     Ok(())
 }
 
@@ -507,6 +524,32 @@ mod tests {
         assert_eq!(f.amounts[0].quote, "GBP 142.60", "an unchanged value keeps its quote");
         assert_eq!(f.amounts[1].value, "EUR 5.00");
         assert_eq!(f.checklist[0].done, Some(true));
+    }
+
+    #[test]
+    fn a_list_confirms_only_new_changed_or_confirmed_entries() {
+        let mut old = fields();
+        old.checklist = vec![
+            Field { value: "Pay".into(), quote: "pay by".into(), uncertain: true, done: Some(false), ..Default::default() },
+            Field { value: "Call".into(), done: Some(false), ..Default::default() },
+        ];
+        // Ticking one item: neither changes its confirmed/uncertain state
+        let f = patch(&old, &json!({"checklist": [{"value": "Pay", "done": true}, {"value": "Call", "done": false}]})).unwrap();
+        assert_eq!(f.checklist[0].done, Some(true));
+        assert!(f.checklist[0].uncertain && !f.checklist[0].confirmed, "ticked, still uncertain");
+        assert!(!f.checklist[1].uncertain && !f.checklist[1].confirmed, "untouched, still unconfirmed");
+        assert_eq!(f.checklist[0].quote, "pay by");
+        // A changed value and a new one are confirmed; the unchanged one isn't
+        let f = patch(&old, &json!({"checklist": [{"value": "Pay"}, {"value": "Call back"}, {"value": "File it"}]})).unwrap();
+        assert!(f.checklist[0].uncertain && !f.checklist[0].confirmed);
+        assert!(f.checklist[1..].iter().all(|x| x.confirmed && !x.uncertain && x.quote.is_empty()));
+        // Confirming as they are
+        let f = patch(&old, &json!({"checklist": [{"value": "Pay", "confirmed": true}, {"value": "Call", "confirmed": true}]})).unwrap();
+        assert!(f.checklist.iter().all(|x| x.confirmed && !x.uncertain && x.done == Some(false)));
+        assert_eq!(f.checklist[0].quote, "pay by");
+        let f = patch(&old, &json!({"amounts": [{"value": "GBP 142.60"}]})).unwrap();
+        assert!(!f.amounts[0].confirmed, "an unchanged amount isn't confirmed by resending it");
+        assert!(patch(&old, &json!({"amounts": [{"value": "GBP 142.60", "confirmed": "yes"}]})).is_err());
     }
 
     #[test]

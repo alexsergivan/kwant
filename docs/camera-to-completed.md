@@ -82,8 +82,9 @@ Nothing is `confirmed` until the person confirms it. `PATCH /api/zombie/cases/:i
 
 - for a single field: `null` to clear it, `{}` to confirm it as it is (the value must still parse), or `{"value": "..."}` to set it
   (which also confirms it);
-- for a list: the whole list, as `[{"value": "...", "done"?: bool}]`. An item whose value is unchanged keeps its quote, and `done`
-  applies to checklist items only.
+- for a list: the whole list, as `[{"value": "...", "done"?: bool, "confirmed"?: true}]`. `done` applies to checklist items only.
+  A new or changed item is confirmed. An item whose value is unchanged keeps its quote and its confirmed/uncertain state, so
+  ticking one checklist item confirms nothing; send `"confirmed": true` on an item to confirm it as it is.
 
 Values are at most 500 characters and lists at most 20 items.
 

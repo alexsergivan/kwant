@@ -186,3 +186,45 @@ impl Database {
             .rows_affected())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::db::Database;
+    use crate::documents::extract;
+    use chrono::Utc;
+
+    #[tokio::test]
+    async fn a_letter_is_marked_read_only_after_its_case_is_saved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let now = Utc::now();
+        db.zombie_put_case(&extract::new_case("c1", now)).await.unwrap();
+        db.document_put_extraction(&extract::running_row("c1", &["a1".into()], now)).await.unwrap();
+        let out = extract::Outcome {
+            status: "read",
+            method: Some("model_vision"),
+            note: None,
+            text: String::new(),
+            fields: crate::documents::Fields {
+                sender: Some(crate::documents::Field { value: "Northfield Water".into(), ..Default::default() }),
+                ..Default::default()
+            },
+            read_by: Some("stub:test".into()),
+        };
+
+        // The case write fails: the letter must not look read with the old case
+        sqlx::query("CREATE TRIGGER no_case_writes BEFORE UPDATE ON zombie_cases BEGIN SELECT RAISE(ABORT, 'test'); END")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(extract::save(&db, "c1", out.clone(), now).await.is_err());
+        assert_eq!(db.document_extraction("c1").await.unwrap().unwrap().status, "running");
+
+        sqlx::query("DROP TRIGGER no_case_writes").execute(&db.pool).await.unwrap();
+        extract::save(&db, "c1", out, now).await.unwrap();
+        assert_eq!(db.document_extraction("c1").await.unwrap().unwrap().status, "read");
+        let c = db.zombie_case("c1").await.unwrap().unwrap();
+        assert_eq!(c.title, "Letter from Northfield Water");
+        assert!(c.draft.is_some());
+    }
+}

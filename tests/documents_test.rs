@@ -396,6 +396,7 @@ async fn a_text_pdf_and_a_photo_are_read_in_one_model_call() {
     assert_eq!(v["extraction"]["fields"]["deadline"]["confirmed"], true);
     assert_eq!(v["extraction"]["fields"]["checklist"].as_array().unwrap().len(), 1);
     assert_eq!(v["extraction"]["fields"]["checklist"][0]["done"], true);
+    assert_eq!(v["extraction"]["fields"]["checklist"][0]["confirmed"], false, "ticking an item doesn't confirm it");
     assert_eq!(v["extraction"]["fields"]["checklist"][0]["quote"], "Tick the box and return this slip by post.", "an unchanged item keeps its quote");
     assert_eq!(v["case"]["deadline"].as_str().unwrap().get(..10), Some("2099-03-01"));
     let rem = v["reminders"].as_array().unwrap();
