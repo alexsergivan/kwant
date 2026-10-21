@@ -22,7 +22,8 @@ use serde_json::{json, Value};
 pub const MAX_DEPTH: i64 = 2;
 /// Unfinished delegations one lead may have at a time.
 pub const MAX_OPEN_PER_LEAD: i64 = 5;
-/// An identical delegation (same lead, specialist, chat and task) within this many seconds is refused.
+/// An identical delegation (same lead, specialist, chat and task) within this many seconds is refused,
+/// unless the earlier one failed, was cancelled or was interrupted.
 pub const DEDUPE_SECS: i64 = 60;
 /// How much of the specialist's reply is copied into the origin chat; the thread keeps it all.
 pub const RESULT_CHARS: usize = 8000;

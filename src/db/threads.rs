@@ -336,7 +336,9 @@ impl Database {
         .await?)
     }
 
-    /// The same task from the same lead to the same specialist, from the same chat, since `since`.
+    /// The same task from the same lead to the same specialist, from the same chat, since `since`,
+    /// that is still open or finished with a result. One that failed, was cancelled or was
+    /// interrupted doesn't count, so retrying it right away is allowed.
     #[allow(clippy::too_many_arguments)]
     pub async fn find_recent_delegation(
         &self,
@@ -351,7 +353,8 @@ impl Database {
         Ok(sqlx::query_as::<_, Delegation>(
             "SELECT * FROM delegations WHERE lead_kwant_id = ? AND specialist_kwant_id = ? \
              AND origin_channel_id IS ? AND origin_kwant_id IS ? AND origin_thread_id IS ? \
-             AND task = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1",
+             AND task = ? AND created_at >= ? AND status IN ('queued', 'running', 'completed') \
+             ORDER BY created_at DESC LIMIT 1",
         )
         .bind(lead)
         .bind(specialist)

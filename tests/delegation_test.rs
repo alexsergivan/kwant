@@ -534,6 +534,36 @@ async fn delegated_tasks_are_framed_and_repeats_are_refused() {
     delegate(&env, "Another task REPLYTAG:other").await;
 }
 
+/// Dedupe only covers a repeat of a task that is still open or already answered: a task that was
+/// cancelled (or failed, or interrupted) can be sent again straight away.
+#[tokio::test]
+async fn a_cancelled_task_can_be_retried_within_the_minute() {
+    let env = setup().await;
+    let release = env.release_file("retry");
+    let task = format!("Slow LONGTASK:{} REPLYTAG:retry", release.display());
+    let id = delegate(&env, &task).await["id"].as_str().unwrap().to_string();
+    wait_for("the delegated turn to run", || async { delegation_status(&env, &id).await == "running" }).await;
+    // While it runs, the same task is refused
+    let body = json!({
+        "lead_kwant_id": env.lead,
+        "specialist_kwant_id": env.specialist,
+        "task": task,
+        "kwant_id": env.lead,
+        "continue_lead": false,
+    });
+    let (s, d) = call(&env.app, "POST", "/api/delegations", Some(body.clone())).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{d}");
+    let (s, d) = call(&env.app, "POST", &format!("/api/delegations/{id}/cancel"), None).await;
+    assert_eq!((s, d["status"].as_str()), (StatusCode::OK, Some("cancelled")));
+    // Once cancelled, the same task goes through again
+    let (s, d) = call(&env.app, "POST", "/api/delegations", Some(body)).await;
+    assert!(s.is_success(), "{s} {d}");
+    let again = d["id"].as_str().unwrap().to_string();
+    assert_ne!(again, id);
+    std::fs::write(&release, "go").unwrap();
+    wait_for("the retry to finish", || async { delegation_status(&env, &again).await == "completed" }).await;
+}
+
 #[tokio::test]
 async fn delegation_tools_enforce_their_rules() {
     let env = setup().await;
