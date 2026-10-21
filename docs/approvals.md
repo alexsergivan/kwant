@@ -37,14 +37,25 @@ script in the bot's folder that it runs can do anything the bot's user can.
   - any path argument, redirect target or `cd` that resolves outside the folder (symlinks
     followed; `/dev/null` is fine), and programs outside the folder and the system bin folders;
   - a leading `VAR=value` other than harmless names like `RUST_LOG`, `CI`, `NODE_ENV`.
-- **Reads** (Read, Glob, Grep, LS, NotebookRead) outside the folder, unless the path is under
-  `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.docker`, `~/.kube`, `~/.netrc`,
-  `~/.claude`, `~/.codex`, `~/.config/gcloud`, a browser profile or the keychain, or the file name
-  starts with `.env`. A `~` path asks (a read with no path searches the folder, as before).
+- **Reads** (Read, Glob, Grep, LS, NotebookRead) outside the folder, unless they touch:
+  - live system data: `/proc`, `/sys`, `/dev`, `/run` (`/proc/self/environ` holds the gateway
+    token);
+  - credentials, matched without regard to case: `.ssh`, `.aws`, `.azure`, `.gnupg`, `.kube`,
+    `.docker`, `.netrc`, `.pgpass`, `.vault-token`, `.claude`, `.codex`, `.cargo/credentials`,
+    `.config/gh`, `.config/gcloud`, password managers, browser profiles, keychains and keyrings,
+    shell histories, `.env*` files, key files (`.pem`, `.key`, `.p12`, `.kdbx`, `id_rsa`, …) and
+    files named `credentials`, `secrets` or `token` (the full list is in
+    `src/mcp/builtin_tools.rs`);
+  - for Grep and Glob, a search rooted at `/`, at a home folder or above one, or at a folder with
+    any of the above (or a symlink, or more than 5,000 entries) somewhere below it.
+
+  Paths are checked as written and with symlinks followed; relative paths count from the bot's
+  folder. A `~` path asks (a read with no path searches the folder, as before).
 - **MCP tools** the server marks `readOnlyHint: true` without `destructiveHint: true`. That is
   the server's own claim. If kwnt can't check it, the call asks.
 
-Writes and edits outside the folder and unknown tools still ask.
+Writes and edits outside the folder and unknown tools still ask. Under every mode, a Glob whose
+`pattern` is absolute, starts with `~` or contains `..` counts as a read outside the folder.
 
 ## "Always this session"
 

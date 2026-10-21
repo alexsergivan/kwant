@@ -39,6 +39,8 @@ pub fn decide(tool: &str, input: &Value, folder: Option<&Path>) -> BuiltinDecisi
     let reads = READ_TOOLS.contains(&tool);
     if reads || WRITE_TOOLS.contains(&tool) {
         let inside = match (folder, target_path(input)) {
+            // A Glob pattern names a place too (`/home/x/**`, `../../**`)
+            _ if tool == "Glob" && !glob_stays_inside(input, folder) => false,
             (Some(folder), Some(path)) => is_inside(folder, &path),
             // A read with no path searches the working folder itself
             (Some(_), None) => reads,
@@ -48,6 +50,19 @@ pub fn decide(tool: &str, input: &Value, folder: Option<&Path>) -> BuiltinDecisi
     }
     // Bash and anything this version of kwnt doesn't know about
     BuiltinDecision::Ask { outside_folder: false }
+}
+
+/// Whether a Glob's `pattern` stays under its `path` (or the folder) inside `folder`: not
+/// absolute, not `~`, and with no `..` anywhere.
+fn glob_stays_inside(input: &Value, folder: Option<&Path>) -> bool {
+    let Some(folder) = folder else { return false };
+    let pattern = input.get("pattern").and_then(Value::as_str).map(str::trim).unwrap_or("");
+    let p = Path::new(pattern);
+    if pattern.starts_with('~') || p.is_absolute() || p.components().any(|c| c == Component::ParentDir) {
+        return false;
+    }
+    let base = target_path(input).unwrap_or_else(|| ".".into());
+    is_inside(folder, &absolute(folder, &base).join(glob_root(p)).to_string_lossy())
 }
 
 /// What "Ask only when risky" makes of a call [`decide`] would ask about.
@@ -60,22 +75,9 @@ pub fn smart_verdict(tool: &str, input: &Value, folder: Option<&Path>) -> SmartV
         };
     }
     if READ_TOOLS.contains(&tool) {
-        // A pattern can name a place too (`Glob` with `/home/x/**`)
-        let keys: &[&str] = if tool == "Glob" { &["path", "pattern"] } else { &["file_path", "notebook_path", "path"] };
-        let paths: Vec<&str> = keys
-            .iter()
-            .filter_map(|k| input.get(*k).and_then(Value::as_str))
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .collect();
-        let Some(target) = target_path(input) else {
-            return SmartVerdict::Ask("kwnt can't tell where this read looks".into());
-        };
-        if target.starts_with('~') {
-            return SmartVerdict::Ask("kwnt can't tell where a `~` path points".into());
-        }
-        return match paths.iter().find(|p| credential_path(p)) {
-            Some(p) => SmartVerdict::Ask(format!("{p} can hold passwords or keys")),
+        let Some(folder) = folder else { return SmartVerdict::Ask("the bot has no working folder this turn".into()) };
+        return match read_risk(tool, input, folder) {
+            Some(why) => SmartVerdict::Ask(why),
             None => SmartVerdict::Allow("reads outside the bot's folder, away from passwords and keys".into()),
         };
     }
@@ -85,26 +87,174 @@ pub fn smart_verdict(tool: &str, input: &Value, folder: Option<&Path>) -> SmartV
     SmartVerdict::Ask(format!("kwnt doesn't know what `{tool}` does"))
 }
 
+/// Why a read outside the folder needs a card, or `None` when it stays away from passwords,
+/// keys and the system's live process data. Relative paths count from the bot's `folder`.
+fn read_risk(tool: &str, input: &Value, folder: &Path) -> Option<String> {
+    let text = |k: &str| input.get(k).and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty());
+    let mut places: Vec<(String, PathBuf)> = Vec::new();
+    if tool == "Glob" {
+        // Glob searches `pattern` under `path` (the folder when missing); an absolute pattern
+        // ignores `path`
+        let base = text("path").unwrap_or(".");
+        let pattern = text("pattern").unwrap_or("");
+        for p in [base, pattern] {
+            if p.starts_with('~') {
+                return Some("kwnt can't tell where a `~` path points".into());
+            }
+        }
+        let joined = if Path::new(pattern).is_absolute() { PathBuf::from(pattern) } else { absolute(folder, base).join(pattern) };
+        places.push((pattern.to_string(), joined));
+    } else {
+        for k in ["file_path", "notebook_path", "path"] {
+            if let Some(p) = text(k) {
+                if p.starts_with('~') {
+                    return Some("kwnt can't tell where a `~` path points".into());
+                }
+                places.push((p.to_string(), absolute(folder, p)));
+            }
+        }
+        if places.is_empty() {
+            return Some("kwnt can't tell where this read looks".into());
+        }
+    }
+    let searches = matches!(tool, "Glob" | "Grep");
+    for (written, path) in places {
+        let root = if tool == "Glob" { glob_root(&path) } else { path.clone() };
+        for p in [Some(lexical(&path)), resolve(&root)].into_iter().flatten() {
+            if let Some(why) = denied_place(&p) {
+                return Some(why.replace("{}", &written));
+            }
+        }
+        if searches {
+            if let Some(why) = broad_search(&root) {
+                return Some(why);
+            }
+        }
+    }
+    None
+}
+
 /// Folders and files that hold passwords, keys or signed-in sessions: reading them always asks.
+/// Compared without regard to case.
 const CREDENTIAL_NAMES: &[&str] = &[
-    ".ssh", ".aws", ".gnupg", ".kube", ".docker", ".netrc", ".claude", ".claude.json", ".codex", ".git-credentials",
-    ".npmrc", ".pypirc", ".password-store", ".mozilla", "Keychains",
+    ".ssh", ".aws", ".azure", ".gnupg", ".kube", ".minikube", ".docker", ".netrc", ".claude", ".claude.json", ".codex",
+    ".git-credentials", ".gitcookies", ".npmrc", ".yarnrc", ".yarnrc.yml", ".pypirc", ".pgpass", ".my.cnf", ".password-store",
+    ".mozilla", ".pki", ".vault-token", ".terraform.d", ".terraformrc", ".boto", ".s3cfg", ".oci", ".gem", ".m2", ".gradle",
+    ".composer", ".fly", ".vercel", ".netlify", ".op", ".bash_history", ".zsh_history", ".python_history", ".node_repl_history",
+    ".psql_history", ".mysql_history", ".lesshst", ".viminfo", "keychains", "keyrings", "id_rsa", "id_dsa", "id_ecdsa",
+    "id_ed25519", "credentials", "credentials.json", "credentials.toml", "secrets", "secrets.json", "secrets.yaml",
+    "secrets.yml", "auth.json", "hosts.yml", "token", "tokens", ".kwnt", ".openmausbot",
 ];
 const CREDENTIAL_FOLDERS: &[&str] = &[
-    ".config/gh", ".config/gcloud", ".config/google-chrome", ".config/chromium", ".config/BraveSoftware",
-    ".config/microsoft-edge", "Library/Application Support/Google", "Library/Application Support/Firefox",
-    "Library/Application Support/BraveSoftware", "Library/Cookies",
+    ".config/gh", ".config/hub", ".config/gcloud", ".config/google-chrome", ".config/chromium", ".config/bravesoftware",
+    ".config/microsoft-edge", ".config/vivaldi", ".config/opera", ".config/1password", ".config/op", ".config/bitwarden",
+    ".config/bitwarden cli", ".config/github-copilot", ".config/configstore", ".config/rclone", ".config/doctl",
+    ".config/heroku", ".config/netlify", ".config/vercel", ".config/.wrangler", ".config/helm", ".config/sops",
+    ".config/age", ".config/keybase", ".config/code/user/globalstorage", ".local/share/keyrings", ".cargo/credentials",
+    ".cargo/credentials.toml", "library/application support/google", "library/application support/firefox",
+    "library/application support/bravesoftware", "library/application support/microsoft edge",
+    "library/application support/chromium", "library/application support/arc", "library/application support/1password",
+    "library/application support/bitwarden", "library/application support/code/user/globalstorage", "library/cookies",
+    "library/safari", "library/containers/com.apple.safari", "library/group containers",
 ];
+/// File endings of keys, certificates and password vaults.
+const CREDENTIAL_ENDINGS: &[&str] = &[".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".kdbx", ".ppk", ".asc", ".gpg"];
+/// Live process and device data: `/proc/self/environ` holds the gateway token.
+const SYSTEM_PLACES: &[&str] = &["/proc", "/sys", "/dev", "/run", "/var/run", "/private/var/run"];
 
-/// Whether `path`, as written or once symlinks are followed, is under a credential folder or
-/// names a `.env` file.
-fn credential_path(path: &str) -> bool {
-    let resolved = resolve(Path::new(path)).map(|p| p.display().to_string());
-    [Some(path.to_string()), resolved].into_iter().flatten().any(|p| {
-        let parts: Vec<&str> = p.split('/').filter(|c| !c.is_empty()).collect();
-        parts.iter().any(|c| CREDENTIAL_NAMES.contains(c) || c.starts_with(".env"))
-            || CREDENTIAL_FOLDERS.iter().any(|f| p.contains(&format!("/{f}")) || p.starts_with(f))
+/// Whether `path` (absolute) is live system data or names a credential, and why (`{}` stands
+/// for the path as the bot wrote it).
+fn denied_place(path: &Path) -> Option<&'static str> {
+    let p = path.to_string_lossy().to_lowercase();
+    if SYSTEM_PLACES.iter().any(|s| p == *s || p.starts_with(&format!("{s}/"))) {
+        return Some("{} is live system data and can hold secrets");
+    }
+    credential_text(&p).then_some("{} can hold passwords or keys")
+}
+
+/// Whether a lowercase path names a credential folder or file anywhere along it.
+fn credential_text(p: &str) -> bool {
+    let parts: Vec<&str> = p.split('/').filter(|c| !c.is_empty()).collect();
+    parts.iter().any(|c| {
+        CREDENTIAL_NAMES.contains(c) || c.starts_with(".env") || CREDENTIAL_ENDINGS.iter().any(|e| c.ends_with(e))
+    }) || CREDENTIAL_FOLDERS.iter().any(|f| {
+        let tail = format!("/{f}");
+        p.contains(&format!("{tail}/")) || p.ends_with(&tail) || p.starts_with(&format!("{f}/")) || p == *f
     })
+}
+
+/// How many entries kwnt looks through before calling a search too big to check.
+const SEARCH_CHECK_LIMIT: usize = 5000;
+
+/// Why a recursive search from `root` needs a card: it starts at `/` or a home folder (or above
+/// one), or something under it is a credential, a symlink or too much to check.
+fn broad_search(root: &Path) -> Option<String> {
+    let real = resolve(root).unwrap_or_else(|| lexical(root));
+    let shown = real.display();
+    let homes = std::env::var_os("HOME").map(PathBuf::from).into_iter().chain(["/home", "/Users", "/root"].map(PathBuf::from));
+    for home in homes {
+        let home = home.canonicalize().unwrap_or(home);
+        if home.starts_with(&real) {
+            return Some(format!("it searches {shown}, which holds home folders and their keys"));
+        }
+    }
+    if !real.is_dir() {
+        return None;
+    }
+    let mut queue = vec![real.clone()];
+    let mut seen = 0usize;
+    while let Some(dir) = queue.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > SEARCH_CHECK_LIMIT {
+                return Some(format!("{shown} is too big for kwnt to check for passwords and keys"));
+            }
+            let path = entry.path();
+            if credential_text(&path.to_string_lossy().to_lowercase()) {
+                return Some(format!("{} can hold passwords or keys", path.display()));
+            }
+            match entry.file_type() {
+                Ok(t) if t.is_symlink() => return Some(format!("{} is a symlink kwnt can't follow safely", path.display())),
+                Ok(t) if t.is_dir() => queue.push(path),
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// The folder a glob pattern starts from: its path up to the first part with a wildcard.
+fn glob_root(pattern: &Path) -> PathBuf {
+    let mut root = PathBuf::new();
+    for c in pattern.components() {
+        if c.as_os_str().to_string_lossy().contains(['*', '?', '[', '{']) {
+            break;
+        }
+        root.push(c);
+    }
+    root
+}
+
+/// `path` made absolute against `folder`.
+fn absolute(folder: &Path, path: &str) -> PathBuf {
+    let p = Path::new(path);
+    if p.is_absolute() { p.to_path_buf() } else { folder.join(p) }
+}
+
+/// `path` with `.` and `..` worked out on the text alone.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// The file or folder a file tool acts on.
@@ -250,6 +400,95 @@ mod tests {
         assert_eq!(decide("Glob", &json!({"pattern": "**/*.rs", "path": ws.display().to_string()}), Some(&ws)), BuiltinDecision::Allow);
         let secret = tmp.path().join(".ssh/id_rsa").display().to_string();
         assert_eq!(decide("Read", &json!({"file_path": secret}), Some(&ws)), BuiltinDecision::Ask { outside_folder: true });
+    }
+
+    fn smart(tool: &str, input: Value, ws: &Path) -> bool {
+        smart_verdict(tool, &input, Some(ws)).is_allowed()
+    }
+
+    // Rigel's deny-list repros (smart-approvals gate, 2026-10-21)
+    #[test]
+    fn smart_reads_of_live_system_data_ask() {
+        let (_tmp, ws) = folder();
+        for path in ["/proc/self/environ", "/proc/1/environ", "/PROC/self/environ", "/proc/self/root/etc/passwd", "/sys/kernel/x", "/dev/stdin", "/run/secrets/x", "/var/run/docker.sock"] {
+            assert!(!smart("Read", json!({"file_path": path}), &ws), "{path}");
+        }
+        assert!(!smart("Grep", json!({"pattern": "TOKEN", "path": "/proc/self"}), &ws));
+        assert!(!smart("Glob", json!({"pattern": "/proc/*/environ"}), &ws));
+        #[cfg(unix)]
+        {
+            // A symlink in the folder that points into /proc
+            std::os::unix::fs::symlink("/proc/self", ws.join("me")).unwrap();
+            assert_eq!(decide("Read", &json!({"file_path": "me/environ"}), Some(&ws)), BuiltinDecision::Ask { outside_folder: true });
+            assert!(!smart("Read", json!({"file_path": "me/environ"}), &ws));
+        }
+    }
+
+    #[test]
+    fn smart_credential_names_match_without_regard_to_case_and_cover_more_places() {
+        let (_tmp, ws) = folder();
+        for path in [
+            "/home/x/.SSH/id_rsa", "/srv/app/.ENV", "/srv/app/.Env.local", "/Users/x/Library/keychains/login.keychain-db",
+            "/Users/x/Library/Application Support/google/Chrome/Default/Cookies", "/home/x/.Config/GH/hosts.yml",
+            "/home/x/.azure/accessTokens.json", "/home/x/.pgpass", "/home/x/.vault-token", "/home/x/.kube/config",
+            "/home/x/.cargo/credentials.toml", "/home/x/.config/Bitwarden CLI/data.json", "/home/x/.local/share/keyrings/login.keyring",
+            "/home/x/.bash_history", "/etc/ssl/private/server.key", "/opt/vault.kdbx", "/home/x/.kwnt/secrets.json",
+        ] {
+            assert!(!smart("Read", json!({"file_path": path}), &ws), "{path}");
+        }
+        assert!(smart("Read", json!({"file_path": "/etc/hostname"}), &ws), "ordinary reads outside still run");
+    }
+
+    #[test]
+    fn smart_relative_reads_count_from_the_bots_folder() {
+        let (tmp, ws) = folder();
+        std::fs::create_dir_all(tmp.path().join(".ssh")).unwrap();
+        std::fs::write(tmp.path().join(".ssh/id_rsa"), "k").unwrap();
+        std::fs::write(tmp.path().join("notes.txt"), "n").unwrap();
+        assert!(!smart("Read", json!({"file_path": "../.ssh/id_rsa"}), &ws));
+        assert!(!smart("Read", json!({"file_path": "src/../../.ssh/id_rsa"}), &ws));
+        assert!(smart("Read", json!({"file_path": "../notes.txt"}), &ws));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(tmp.path().join(".ssh"), ws.join("keys")).unwrap();
+            assert!(!smart("Read", json!({"file_path": "keys/id_rsa"}), &ws), "a symlink to a key folder");
+        }
+    }
+
+    #[test]
+    fn smart_searches_from_root_home_or_above_credentials_ask() {
+        let (tmp, ws) = folder();
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
+        for root in ["/", "/home", "/Users", home.as_str()] {
+            assert!(!smart("Grep", json!({"pattern": "x", "path": root}), &ws), "Grep {root}");
+            assert!(!smart("Glob", json!({"pattern": "**/*", "path": root}), &ws), "Glob {root}");
+        }
+        // A folder that holds a credential folder somewhere below
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(other.join("app/config")).unwrap();
+        std::fs::write(other.join("app/readme.md"), "r").unwrap();
+        let other_s = other.display().to_string();
+        assert!(smart("Grep", json!({"pattern": "x", "path": other_s}), &ws), "a plain folder outside");
+        std::fs::write(other.join("app/config/.env"), "SECRET=1").unwrap();
+        assert!(!smart("Grep", json!({"pattern": "SECRET", "path": other_s}), &ws), "a .env deep below");
+        assert!(!smart("Glob", json!({"pattern": format!("{other_s}/**/*")}), &ws));
+    }
+
+    #[test]
+    fn globs_cannot_escape_through_their_pattern() {
+        let (tmp, ws) = folder();
+        // Under plain ask: an absolute or `..` pattern is outside, whatever `path` says
+        for pattern in ["/home/**/.ssh/*", "../../**/*", "src/**/../../../*", "~/.aws/*"] {
+            assert_eq!(decide("Glob", &json!({"pattern": pattern}), Some(&ws)), BuiltinDecision::Ask { outside_folder: true }, "{pattern}");
+            assert_eq!(
+                decide("Glob", &json!({"pattern": pattern, "path": ws.display().to_string()}), Some(&ws)),
+                BuiltinDecision::Ask { outside_folder: true },
+                "{pattern} with path"
+            );
+        }
+        assert_eq!(decide("Glob", &json!({"pattern": "src/**/*.rs"}), Some(&ws)), BuiltinDecision::Allow);
+        assert!(!smart("Glob", json!({"pattern": "/home/**/.ssh/*"}), &ws));
+        let _ = tmp;
     }
 
     #[test]

@@ -235,7 +235,19 @@ async fn smart_reads_outside_the_folder_except_secrets_and_still_asks_for_writes
     let e = setup().await;
     space_mode(&e, "smart").await;
     assert_eq!(ask(&e, "Read", |_| json!({"file_path": "/etc/hostname"})).await, Outcome::Answered(true));
-    assert_eq!(ask(&e, "Grep", |_| json!({"pattern": "x", "path": "/usr/share"})).await, Outcome::Answered(true));
+    let docs = e._tmp.path().join("shared-docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("a.md"), "x").unwrap();
+    assert_eq!(ask(&e, "Grep", |_| json!({"pattern": "x", "path": docs})).await, Outcome::Answered(true));
+    // Rigel's repros: live process data, case, and searches over home folders
+    for input in [
+        json!({"file_path": "/proc/self/environ"}),
+        json!({"file_path": "/home/x/.SSH/id_rsa"}),
+    ] {
+        assert!(is_card(&ask(&e, "Read", |_| input.clone()).await), "{input}");
+    }
+    assert!(is_card(&ask(&e, "Grep", |_| json!({"pattern": "TOKEN", "path": "/"})).await));
+    assert!(is_card(&ask(&e, "Glob", |_| json!({"pattern": "/home/**/.ssh/*"})).await));
     assert_eq!(ask(&e, "Read", |f| json!({"file_path": f.join("a.txt")})).await, Outcome::Answered(true), "inside");
 
     for path in ["/home/someone/.ssh/id_ed25519", "/srv/app/.env", "/srv/app/.env.production", "/root/.aws/credentials", "/home/x/.config/gh/hosts.yml", "/home/x/.claude/.credentials.json", "~/notes.txt"] {
