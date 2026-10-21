@@ -2501,9 +2501,18 @@ pub async fn resolve_approval(
 
     // Only a ticket still waiting can be answered; a withdrawn one (turn ended, expired)
     // keeps its status and its tool never runs
-    let resolved = state.broker.resolve(&ticket_id, decision).await;
+    let resolved = state.broker.resolve(&ticket_id, decision.clone()).await;
     if !resolved {
-        return Err(StatusCode::CONFLICT);
+        // A card whose turn stopped waiting: a late answer, and Allow resumes the work
+        return match super::mcp_runtime::resume_late_approval(&state, &ticket_id, decision, status_str).await {
+            Some(mut reply) => {
+                reply["ticket_id"] = json!(ticket_id);
+                reply["resolved"] = json!(true);
+                reply["status"] = json!(status_str);
+                Ok(Json(reply))
+            }
+            None => Err(StatusCode::CONFLICT),
+        };
     }
     let _ = state.db.update_approval_status(&ticket_id, status_str).await;
 

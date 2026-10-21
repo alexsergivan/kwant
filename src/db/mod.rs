@@ -127,6 +127,8 @@ impl Database {
         let _ = sqlx::query("ALTER TABLE teams ADD COLUMN workspace_path TEXT;").execute(&pool).await;
         let _ = sqlx::query("ALTER TABLE teams ADD COLUMN repo_url TEXT;").execute(&pool).await;
         let _ = sqlx::query("ALTER TABLE kwants ADD COLUMN soul TEXT NOT NULL DEFAULT '';").execute(&pool).await;
+        // The chat a card that outlived its turn resumes in (see `park_approval`)
+        let _ = sqlx::query("ALTER TABLE approvals ADD COLUMN resume TEXT;").execute(&pool).await;
 
         let db = Self { pool };
         db.migrate_profiles().await?;

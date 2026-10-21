@@ -106,6 +106,7 @@ fn approver(state: &AppState, timeout: Duration) -> Arc<BrokerApprover> {
         events: state.event_sender.clone(),
         timeout,
         conversation: "conv-test".into(),
+        chat: None,
     })
 }
 
@@ -136,12 +137,12 @@ async fn broker_approver_follows_user_decisions() {
 }
 
 #[tokio::test]
-async fn unanswered_approval_expires_as_denied() {
+async fn unanswered_approval_stays_open_as_waiting() {
     let (state, _tmp) = state().await;
     let (h, ticket) = ask(&state, approver(&state, Duration::from_millis(300)), "echo").await;
-    assert!(!h.await.unwrap());
-    assert!(!state.broker.is_pending(&ticket).await);
-    assert_eq!(state.db.get_approval(&ticket).await.unwrap().unwrap().status, "expired");
+    assert!(!h.await.unwrap(), "the call doesn't run");
+    assert!(!state.broker.is_pending(&ticket).await, "the turn stopped waiting");
+    assert_eq!(state.db.get_approval(&ticket).await.unwrap().unwrap().status, "waiting");
 }
 
 #[tokio::test]

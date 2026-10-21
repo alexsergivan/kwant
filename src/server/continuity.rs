@@ -240,7 +240,14 @@ pub struct SelfToolsApprover {
 #[async_trait]
 impl ToolApprover for SelfToolsApprover {
     async fn approve(&self, req: ToolApprovalRequest) -> bool {
-        req.server == SELF_SERVER_NAME || self.inner.approve(req).await
+        self.decide(req).await.allowed()
+    }
+
+    async fn decide(&self, req: ToolApprovalRequest) -> crate::mcp::ApprovalOutcome {
+        if req.server == SELF_SERVER_NAME {
+            return crate::mcp::ApprovalOutcome::Allowed;
+        }
+        self.inner.decide(req).await
     }
 }
 

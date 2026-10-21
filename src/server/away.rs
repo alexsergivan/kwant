@@ -298,6 +298,13 @@ async fn waiting_approvals(state: &AppState, space: &SpaceId) -> Result<Vec<Away
             None => row.direct_kwant_id = Some(row.kwant_id.clone()),
         }
     }
+    // Cards whose turn stopped waiting: still answerable, and a late Allow resumes the work
+    for row in state.db.away_waiting_approvals().await? {
+        let of = state.db.space_of_kwant(&row.kwant_id).await?.unwrap_or_else(SpaceId::default_space);
+        if &of == space && !rows.iter().any(|r| r.id == row.id) {
+            rows.push(row);
+        }
+    }
     Ok(rows)
 }
 

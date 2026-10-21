@@ -12,6 +12,9 @@ pub const OFF: &str = "off";
 /// A bot's setting as the person chose it: `inherit` follows its space.
 pub const INHERIT: &str = "inherit";
 
+/// How long a card that outlived its turn can still be answered to resume the work.
+pub const WAITING_APPROVAL_HOURS: i64 = 24;
+
 /// What `approvals` resolves to for one bot.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ApprovalMode {
@@ -143,6 +146,79 @@ impl Database {
         .bind(kwant_id)
         .fetch_all(&self.pool)
         .await?)
+    }
+
+    /// A card nobody answered before its turn's wait ran out: it stays open as `waiting`, with
+    /// the chat (`{"channel_id"|"thread_id"|"direct_kwant_id": …}`) a late Allow resumes in.
+    /// False when the ticket was no longer pending.
+    pub async fn park_approval(&self, id: &str, chat: &serde_json::Value) -> Result<bool, DbError> {
+        let done = sqlx::query("UPDATE approvals SET status = 'waiting', resume = ? WHERE id = ? AND status = 'pending'")
+            .bind(chat.to_string())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    /// Answers a `waiting` card once: sets `status` and returns the ticket with its chat. `None`
+    /// when it isn't waiting (answered, or never parked) or is older than [`WAITING_APPROVAL_HOURS`],
+    /// which is then marked `expired`. Two answers at once: only one gets the ticket.
+    pub async fn claim_waiting_approval(
+        &self,
+        id: &str,
+        status: &str,
+    ) -> Result<Option<(super::models::Approval, serde_json::Value)>, DbError> {
+        let window = format!("-{WAITING_APPROVAL_HOURS} hours");
+        sqlx::query("UPDATE approvals SET status = 'expired' WHERE id = ? AND status = 'waiting' AND created_at <= datetime('now', ?)")
+            .bind(id)
+            .bind(&window)
+            .execute(&self.pool)
+            .await?;
+        let done = sqlx::query("UPDATE approvals SET status = ? WHERE id = ? AND status = 'waiting'")
+            .bind(status)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if done.rows_affected() != 1 {
+            return Ok(None);
+        }
+        let resume: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT resume FROM approvals WHERE id = ?").bind(id).fetch_optional(&self.pool).await?;
+        let chat = resume
+            .and_then(|r| r.0)
+            .and_then(|r| serde_json::from_str(&r).ok())
+            .unwrap_or(serde_json::Value::Null);
+        Ok(self.get_approval(id).await?.map(|a| (a, chat)))
+    }
+
+    /// Cards still `waiting` for a late answer (younger than [`WAITING_APPROVAL_HOURS`]), with
+    /// the chat each one resumes in, newest first.
+    pub async fn away_waiting_approvals(&self) -> Result<Vec<super::away::AwayRow>, DbError> {
+        let window = format!("-{WAITING_APPROVAL_HOURS} hours");
+        Ok(sqlx::query_as(
+            "SELECT 'approval' AS kind, a.id, a.kwant_id, k.name AS kwant_name, a.tool_name AS title, a.status,
+                    a.parameters AS body, a.created_at AS at,
+                    json_extract(a.resume, '$.thread_id') AS thread_id,
+                    json_extract(a.resume, '$.channel_id') AS channel_id,
+                    json_extract(a.resume, '$.direct_kwant_id') AS direct_kwant_id, NULL AS choices
+             FROM approvals a LEFT JOIN kwants k ON k.id = a.kwant_id
+             WHERE a.status = 'waiting' AND a.created_at > datetime('now', ?)
+             ORDER BY a.created_at DESC, a.rowid DESC",
+        )
+        .bind(window)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Moves a card's `created_at` back `hours` (tests of the waiting window).
+    #[doc(hidden)]
+    pub async fn backdate_approval_for_test(&self, id: &str, hours: i64) -> Result<(), DbError> {
+        sqlx::query("UPDATE approvals SET created_at = datetime('now', ?) WHERE id = ?")
+            .bind(format!("-{hours} hours"))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// Records a call that ran without a card because approvals were off.
