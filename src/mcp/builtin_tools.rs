@@ -33,6 +33,9 @@ const WRITE_TOOLS: &[&str] = &["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
 /// The policy for `tool` with `input`, for a bot working in `folder` (canonical, or `None`).
 pub fn decide(tool: &str, input: &Value, folder: Option<&Path>) -> BuiltinDecision {
+    if tool == "WebFetch" && fetches_kwnt(input) {
+        return BuiltinDecision::Ask { outside_folder: false };
+    }
     if LOOKUP_TOOLS.contains(&tool) {
         return BuiltinDecision::Allow;
     }
@@ -65,8 +68,20 @@ fn glob_stays_inside(input: &Value, folder: Option<&Path>) -> bool {
     is_inside(folder, &absolute(folder, &base).join(glob_root(p)).to_string_lossy())
 }
 
+/// Whether a WebFetch could reach kwnt's own API on this computer (see
+/// [`super::shell_risk::kwnt_url`]), or names no URL kwnt can read.
+fn fetches_kwnt(input: &Value) -> bool {
+    match input.get("url").and_then(Value::as_str) {
+        Some(url) => super::shell_risk::kwnt_url(url.trim()),
+        None => true,
+    }
+}
+
 /// What "Ask only when risky" makes of a call [`decide`] would ask about.
 pub fn smart_verdict(tool: &str, input: &Value, folder: Option<&Path>) -> SmartVerdict {
+    if tool == "WebFetch" {
+        return SmartVerdict::Ask("it fetches from kwnt itself, whose settings only the person may change".into());
+    }
     if tool == "Bash" {
         let Some(folder) = folder else { return SmartVerdict::Ask("the bot has no working folder this turn".into()) };
         return match input.get("command").and_then(Value::as_str) {
@@ -322,7 +337,7 @@ pub fn prompt_block(folder: Option<&Path>, smart: bool) -> String {
     };
     let cards = if smart {
         "Shell commands (Bash) that stay in that folder run without asking. Anything risky shows the person an approval card first: \
-         the network (except localhost), other users, git push, publishing, containers, mail, paths outside the folder, and \
+         the network (except local dev servers; requests to kwnt itself always ask), other users, git push, publishing, containers, mail, paths outside the folder, and \
          commands kwnt can't read for sure ($(…), backticks, bash -c). Prefer plain commands and relative paths. \
          Writing files outside the folder, and reading passwords or keys, also needs a card."
     } else {
@@ -407,6 +422,25 @@ mod tests {
     }
 
     // Rigel's deny-list repros (smart-approvals gate, 2026-10-21)
+    #[test]
+    fn web_fetches_of_kwnt_itself_ask_in_every_mode() {
+        for url in [
+            "http://localhost:8799/api/passwords/store",
+            "http://127.0.0.1:8799",
+            "http://[::1]:8800/",
+            "http://0.0.0.0:8799/api/spaces",
+            "http://localhost:3000/api/spaces",
+        ] {
+            let input = json!({"url": url, "prompt": "read it"});
+            assert_eq!(decide("WebFetch", &input, None), BuiltinDecision::Ask { outside_folder: false }, "{url}");
+            assert!(!smart_verdict("WebFetch", &input, None).is_allowed(), "{url}");
+        }
+        assert_eq!(decide("WebFetch", &json!({"prompt": "x"}), None), BuiltinDecision::Ask { outside_folder: false });
+        for url in ["https://example.com/api/x", "http://localhost:3000/"] {
+            assert_eq!(decide("WebFetch", &json!({"url": url, "prompt": "x"}), None), BuiltinDecision::Allow, "{url}");
+        }
+    }
+
     #[test]
     fn smart_reads_of_live_system_data_ask() {
         let (_tmp, ws) = folder();

@@ -369,8 +369,13 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
     }
     if let Some((_, what)) = RISKY.iter().find(|(n, _)| *n == name) {
         // Local web requests are part of building and testing
-        if (name == "curl" || name == "wget") && local_request(name, args, ctx) {
-            return Ok(());
+        if name == "curl" || name == "wget" {
+            if args.iter().any(|a| a.text.split('=').any(kwnt_url)) {
+                return Err(format!("`{name}` talks to kwnt itself, whose settings only the person may change"));
+            }
+            if local_request(name, args, ctx) {
+                return Ok(());
+            }
         }
         return Err(format!("`{name}` {what}"));
     }
@@ -1123,20 +1128,116 @@ fn local_request(name: &str, args: &[Word], ctx: &Ctx) -> bool {
     any_url
 }
 
-/// Whether `url` (with or without `http://`/`https://`) is on this computer.
+/// Whether `url` (with or without `http://`/`https://`) is on this computer, and isn't kwnt's
+/// own server (see [`kwnt_url`]).
 fn local_url(url: &str) -> bool {
-    let rest = match url.split_once("://") {
-        Some(("http" | "https", rest)) => rest,
-        Some(_) => return false,
-        None => url,
-    };
-    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-    if host.contains('\\') {
+    matches!(split_url(url), Some((host, _, _)) if matches!(host.as_str(), "localhost" | "127.0.0.1")) && !kwnt_url(url)
+}
+
+/// The port kwnt itself listens on, set once at startup. 8799 and 8800 count as kwnt's too.
+static SERVE_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(crate::config::DEFAULT_PORT);
+
+/// Records the port this kwnt serves on, so requests to it ask.
+pub fn set_serve_port(port: u16) {
+    SERVE_PORT.store(port, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether `url` could reach kwnt's own API on this computer: a loopback host on kwnt's port,
+/// 8799 or 8800 (a missing port counts as 80 or 443), or any loopback URL whose path starts with `/api/`.
+/// kwnt's person-only routes take no token from this computer, so a bot reaching them could turn
+/// approvals off or answer its own cards.
+pub fn kwnt_url(url: &str) -> bool {
+    let Some((host, port, path)) = split_url(url) else { return false };
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let loopback = matches!(bare, "localhost" | "0")
+        || bare.ends_with(".localhost")
+        || bare.starts_with("127.")
+        || bare.starts_with("::ffff:127.")
+        || bare.parse::<std::net::IpAddr>().is_ok_and(|ip| match ip {
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback() || v4.is_unspecified()),
+            ip => ip.is_loopback() || ip.is_unspecified(),
+        });
+    if !loopback {
         return false;
     }
-    let host = host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host);
-    let host = host.split(':').next().unwrap_or("");
-    matches!(host, "localhost" | "127.0.0.1")
+    let serve = SERVE_PORT.load(std::sync::atomic::Ordering::Relaxed);
+    [u32::from(serve), 8799, 8800].contains(&port) || path.starts_with("/api/") || path == "/api"
+}
+
+/// `url` split into a lowercase host, its port (80 or 443 when none is written) and a normalised lowercase
+/// path (percent-escapes decoded, `.`/`..` and doubled slashes worked out). `None` when it isn't
+/// an http(s) URL or a bare `host/path`.
+fn split_url(url: &str) -> Option<(String, u32, String)> {
+    let (rest, default_port) = match url.split_once("://") {
+        Some((scheme, rest)) => match scheme.to_ascii_lowercase().as_str() {
+            "http" => (rest, 80),
+            "https" => (rest, 443),
+            _ => return None,
+        },
+        None => (url, 80),
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    if authority.contains('\\') || authority.is_empty() {
+        return None;
+    }
+    let host_port = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority).to_ascii_lowercase();
+    let (host, port) = if host_port.starts_with('[') {
+        match host_port.split_once(']') {
+            Some((h, p)) => (format!("{h}]"), p.strip_prefix(':')),
+            None => return None,
+        }
+    } else {
+        match host_port.rsplit_once(':') {
+            Some((h, p)) if !h.contains(':') => (h.to_string(), Some(p)),
+            Some(_) => (host_port.clone(), None),
+            None => (host_port.clone(), None),
+        }
+    };
+    let port = match port {
+        Some("") | None => default_port,
+        Some(p) => p.parse::<u32>().ok()?,
+    };
+    let path = tail.split(['?', '#']).next().unwrap_or("");
+    let decoded = percent_decode(path).to_ascii_lowercase();
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in decoded.split(['/', '\\']) {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    let mut path = format!("/{}", parts.join("/"));
+    if decoded.ends_with('/') && !parts.is_empty() {
+        path.push('/');
+    }
+    Some((host.trim_end_matches('.').to_string(), port, path))
+}
+
+/// `%xx` escapes decoded (twice, so `%2561` can't hide an `a`).
+fn percent_decode(text: &str) -> String {
+    let once = |t: &[u8]| {
+        let hex = |c: u8| (c as char).to_digit(16);
+        let mut out = Vec::with_capacity(t.len());
+        let mut i = 0;
+        while i < t.len() {
+            match (t[i], t.get(i + 1).copied().and_then(hex), t.get(i + 2).copied().and_then(hex)) {
+                (b'%', Some(h), Some(l)) => {
+                    out.push((h * 16 + l) as u8);
+                    i += 3;
+                }
+                (c, _, _) => {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+        }
+        out
+    };
+    String::from_utf8_lossy(&once(&once(text.as_bytes()))).into_owned()
 }
 
 fn all_paths_inside(args: &[Word], ctx: &Ctx) -> Verdict {
@@ -1262,7 +1363,9 @@ mod tests {
         "awk -F, 'NR>1 {print $2}' src/data.csv",
         "find . -name '*.rs' -type f",
         "wc -l src/*.rs",
-        "curl -s http://127.0.0.1:18947/api/health",
+        "curl -s http://127.0.0.1:18947/health",
+        "curl -s localhost:5173/",
+        "wget -qO- http://localhost:8080/index.html",
         "curl -sf -X POST -H 'content-type: application/json' -d '{\"a\":1}' http://localhost:3000/x",
         "timeout 30 cargo test",
         "env RUST_LOG=debug cargo run",
@@ -1482,6 +1585,73 @@ mod tests {
             assert!(!classify("cat src/*", &ws).is_allowed());
             assert!(!classify("cd up", &ws).is_allowed());
             assert!(classify("cat run.sh", &ws).is_allowed());
+        }
+    }
+
+    #[test]
+    fn requests_to_kwnt_itself_ask() {
+        let (_tmp, ws) = folder();
+        set_serve_port(18997);
+        for cmd in [
+            // Rigel's repro: approvals off with no card
+            r#"curl -X PUT -H 'content-type: application/json' -d '{"approvals":"off"}' http://localhost:8799/api/spaces/spc_default/approvals"#,
+            "curl -s http://localhost:8799/api/passwords/store",
+            "curl http://127.0.0.1:8799/api/passwords/store",
+            "curl http://127.0.0.2:8800/",
+            "curl 'http://[::1]:8799/api/x'",
+            "curl http://0.0.0.0:8799/",
+            "curl http://localhost:8799",
+            "curl localhost:8799",
+            "curl http://LOCALHOST:8800/",
+            "curl http://localhost:08799/",
+            "curl http://me@localhost:8799/",
+            "curl --url http://localhost:8799/ ",
+            "curl --url=http://localhost:8799/",
+            "wget -qO- http://localhost:8799/api/passwords/store",
+            "wget --method=PUT --body-data=x http://127.0.0.1:8799/api/spaces/s/approvals",
+            // The port this kwnt serves on, from its config
+            "curl http://localhost:18997/",
+            // Any /api/ path on a loopback host, however it's written
+            "curl http://localhost:3000/api/spaces",
+            "curl http://localhost:3000/API/spaces",
+            "curl http://localhost:3000/%61pi/spaces",
+            "curl http://localhost:3000/%2561pi/spaces",
+            "curl http://localhost:3000//api/spaces",
+            "curl http://localhost:3000/x/../api/spaces",
+            "curl http://localhost:3000/./api",
+            "curl http://localhost/api/x",
+            // Other spellings of this computer aren't treated as local at all
+            "curl http://127.1:3000/",
+            "curl http://[::1]:3000/",
+            "curl http://app.localhost:3000/",
+        ] {
+            assert!(!classify(cmd, &ws).is_allowed(), "should ask: {cmd:?}");
+        }
+        assert!(matches!(
+            classify("curl -X PUT http://localhost:8799/api/spaces/spc_default/approvals", &ws),
+            SmartVerdict::Ask(why) if why.contains("kwnt itself")
+        ));
+        for cmd in ["curl http://localhost:3000/", "curl -s http://127.0.0.1:3000/apis", "curl http://localhost:3000/x/api/y"] {
+            assert!(classify(cmd, &ws).is_allowed(), "should run: {cmd:?}");
+        }
+    }
+
+    #[test]
+    fn kwnt_urls_are_recognised() {
+        set_serve_port(18997);
+        for url in [
+            "http://localhost:8799/api/spaces/spc_default/approvals",
+            "https://127.0.0.1:8800",
+            "http://[::1]:8799/",
+            "http://[::ffff:127.0.0.1]:3000/api/x",
+            "http://0.0.0.0:18997/",
+            "HTTP://LocalHost:3000/Api/",
+            "localhost:8799",
+        ] {
+            assert!(kwnt_url(url), "{url}");
+        }
+        for url in ["http://localhost:3000/", "https://example.com/api/x", "http://localhost:3000/apis", "ftp://localhost:8799/", "http://10.0.0.1:8799/"] {
+            assert!(!kwnt_url(url), "{url}");
         }
     }
 

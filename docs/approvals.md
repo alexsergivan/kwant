@@ -32,8 +32,8 @@ script in the bot's folder that it runs can do anything the bot's user can.
   - wrappers other than `env`, `command`/`builtin` (`-p` too), `nice`, `nohup`, `time`,
     `timeout`, `setsid`, `stdbuf`, and wrapper options it doesn't know; the wrapped command is
     judged;
-  - network tools (curl and wget run only for localhost URLs with options from a short list:
-    proxies `-x`/`--proxy`/`--socks*`, config files and `@file` ask), `sudo`/`su`, containers and
+  - network tools (curl and wget run only for `localhost`/`127.0.0.1` URLs with options from a
+    short list: proxies `-x`/`--proxy`/`--socks*`, config files and `@file` ask), `sudo`/`su`, containers and
     cloud CLIs, mail senders, process and system tools, credential tools, `xargs`/`parallel`,
     `env`/`printenv` on their own;
   - `git push` and other git commands that leave the machine, touch global config or run a
@@ -67,6 +67,13 @@ script in the bot's folder that it runs can do anything the bot's user can.
   folder. A `~` path asks (a read with no path searches the folder, as before).
 - **MCP tools** the server marks `readOnlyHint: true` without `destructiveHint: true`. That is
   the server's own claim. If kwnt can't check it, the call asks.
+
+**kwnt itself always asks.** kwnt's person-only routes take no token from this computer, so a
+request to kwnt from a bot could turn approvals off or answer its own cards. A curl, wget or
+WebFetch to a loopback host (`localhost`, `127.x`, `0.0.0.0`, `[::1]`, …) on kwnt's serve port,
+8799 or 8800 (no port counts as 80/443), or to any loopback path starting with `/api/` (after
+decoding `%xx` and working out `..`), shows a card. For WebFetch this holds under `ask` too.
+Other local dev servers (`localhost:3000`, `localhost:5173`) still run.
 
 Writes and edits outside the folder and unknown tools still ask. Under every mode, a Glob whose
 `pattern` is absolute, starts with `~` or contains `..` counts as a read outside the folder.
