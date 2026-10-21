@@ -563,6 +563,10 @@ impl ApiDriver {
 
 #[async_trait]
 impl Driver for ApiDriver {
+    fn streams_progress(&self) -> bool {
+        true
+    }
+
     async fn stream_turn(
         &self,
         input: TurnInput,

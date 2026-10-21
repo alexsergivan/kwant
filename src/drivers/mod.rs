@@ -411,6 +411,13 @@ pub trait Driver: Send + Sync {
         input: TurnInput,
         event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<TurnOutput, DriverError>;
+
+    /// Whether this driver streams its reply as it goes and brackets tool runs with
+    /// `ToolCallPending`/`ToolCallCompleted`, so a long silence means it is stuck. Drivers that
+    /// only report at the end (one-shot CLIs) say false and are never stopped for silence.
+    fn streams_progress(&self) -> bool {
+        false
+    }
 }
 
 /// The driver for a turn on `target_model` without a profile, and the engine it runs on: the

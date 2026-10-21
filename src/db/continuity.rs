@@ -29,6 +29,18 @@ pub struct Memory {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A chat turn in progress: where its reply would go.
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct RunningTurn {
+    pub turn_id: String,
+    pub kwant_id: String,
+    pub kwant_name: String,
+    pub channel_id: Option<String>,
+    pub direct_kwant_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub started_at: DateTime<Utc>,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum MemoryError {
     Empty,
@@ -192,6 +204,15 @@ impl Database {
                 .execute(&self.pool)
                 .await;
         }
+
+        // Chat turns in progress, so a restart can say which replies it cut off
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS running_turns (\
+             turn_id TEXT PRIMARY KEY, kwant_id TEXT NOT NULL, kwant_name TEXT NOT NULL, \
+             channel_id TEXT, direct_kwant_id TEXT, thread_id TEXT, started_at DATETIME NOT NULL)",
+        )
+        .execute(&self.pool)
+        .await?;
 
         let had_index: Option<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'",
@@ -699,6 +720,39 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn add_running_turn(&self, turn: &RunningTurn) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO running_turns (turn_id, kwant_id, kwant_name, channel_id, direct_kwant_id, thread_id, started_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&turn.turn_id)
+        .bind(&turn.kwant_id)
+        .bind(&turn.kwant_name)
+        .bind(&turn.channel_id)
+        .bind(&turn.direct_kwant_id)
+        .bind(&turn.thread_id)
+        .bind(turn.started_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn remove_running_turn(&self, turn_id: &str) -> Result<(), DbError> {
+        sqlx::query("DELETE FROM running_turns WHERE turn_id = ?").bind(turn_id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Takes every turn a previous run of kwnt left running (it stopped mid-reply).
+    pub async fn take_running_turns(&self) -> Result<Vec<RunningTurn>, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let turns = sqlx::query_as::<_, RunningTurn>("SELECT * FROM running_turns ORDER BY started_at")
+            .fetch_all(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM running_turns").execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(turns)
     }
 
     /// Runs left 'running' by a kwnt that stopped mid-run.
