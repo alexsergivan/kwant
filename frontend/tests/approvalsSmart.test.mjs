@@ -38,7 +38,8 @@ test('the space control offers "Ask only when risky" between Ask and Don\'t ask,
   const values = [...html.matchAll(/value="(ask|smart|off)"/g)].map((x) => x[1]);
   assert.deepEqual(values, ['ask', 'smart', 'off']);
   const t = text(html);
-  assert.match(t, /Ask only when risky Ordinary work in the bot's folder runs on its own; a card asks before network calls, git push, publishing, anything outside the folder or anything unclear\./);
+  assert.match(t, /Ask only when risky Ordinary work in the bot's folder runs on its own; a card asks before network calls, git fetch and push, publishing, anything outside the folder or anything unclear\./);
+  assert.match(t, /Not a sandbox: scripts, make and npm install inside the folder run without a card, and can do anything you can\./);
   assert.match(t, /Ask before running commands \(default\)/, 'Ask stays the default');
 });
 

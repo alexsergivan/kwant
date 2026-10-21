@@ -44,7 +44,7 @@ export const SPACE_OPTIONS: Array<{ value: SpaceApprovals; label: string; hint: 
   {
     value: 'smart',
     label: 'Ask only when risky',
-    hint: 'Ordinary work in the bot’s folder runs on its own; a card asks before network calls, git push, publishing, anything outside the folder or anything unclear.',
+    hint: 'Ordinary work in the bot’s folder runs on its own; a card asks before network calls, git fetch and push, publishing, anything outside the folder or anything unclear. Not a sandbox: scripts, make and npm install inside the folder run without a card, and can do anything you can.',
   },
   { value: 'off', label: 'Don’t ask', hint: 'Bots run everything without approval.' },
 ];

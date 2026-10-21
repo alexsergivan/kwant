@@ -40,6 +40,9 @@ pub fn decide(tool: &str, input: &Value, folder: Option<&Path>) -> BuiltinDecisi
         return BuiltinDecision::Allow;
     }
     let reads = READ_TOOLS.contains(&tool);
+    if reads && malformed_read(tool, input).is_some() {
+        return BuiltinDecision::Ask { outside_folder: true };
+    }
     if reads || WRITE_TOOLS.contains(&tool) {
         let inside = match (folder, target_path(input)) {
             // A Glob pattern names a place too (`/home/x/**`, `../../**`)
@@ -60,12 +63,75 @@ pub fn decide(tool: &str, input: &Value, folder: Option<&Path>) -> BuiltinDecisi
 fn glob_stays_inside(input: &Value, folder: Option<&Path>) -> bool {
     let Some(folder) = folder else { return false };
     let pattern = input.get("pattern").and_then(Value::as_str).map(str::trim).unwrap_or("");
-    let p = Path::new(pattern);
-    if pattern.starts_with('~') || p.is_absolute() || p.components().any(|c| c == Component::ParentDir) {
-        return false;
-    }
+    let Some(patterns) = expand_braces(pattern) else { return false };
     let base = target_path(input).unwrap_or_else(|| ".".into());
-    is_inside(folder, &absolute(folder, &base).join(glob_root(p)).to_string_lossy())
+    patterns.iter().all(|pattern| {
+        let p = Path::new(pattern);
+        !(pattern.starts_with('~') || p.is_absolute() || pattern.contains(".."))
+            && is_inside(folder, &absolute(folder, &base).join(glob_root(p)).to_string_lossy())
+    })
+}
+
+/// Most patterns one Glob may expand `{a,b}` into before kwnt stops checking and asks.
+const BRACE_LIMIT: usize = 64;
+
+/// A glob pattern with its `{a,b}` alternatives written out, the way Glob reads them, or `None`
+/// when there are too many or the braces don't match.
+fn expand_braces(pattern: &str) -> Option<Vec<String>> {
+    let Some(open) = pattern.find('{') else { return Some(vec![pattern.to_string()]) };
+    let (mut depth, mut close, mut commas) = (0usize, None, Vec::new());
+    for (i, c) in pattern[open..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + i);
+                    break;
+                }
+            }
+            ',' if depth == 1 => commas.push(open + i),
+            _ => {}
+        }
+    }
+    let close = close?;
+    let (head, tail) = (&pattern[..open], &pattern[close + 1..]);
+    let mut bounds = vec![open];
+    bounds.extend(commas);
+    bounds.push(close);
+    let mut out = Vec::new();
+    for pair in bounds.windows(2) {
+        for rest in expand_braces(&format!("{head}{}{tail}", &pattern[pair[0] + 1..pair[1]]))? {
+            out.push(rest);
+            if out.len() > BRACE_LIMIT {
+                return None;
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Why a read tool's input can't be judged: not an object, a path that isn't a non-empty string,
+/// or a Read with no file. kwnt asks rather than guessing where it looks.
+fn malformed_read(tool: &str, input: &Value) -> Option<String> {
+    let Some(fields) = input.as_object() else { return Some("kwnt can't read this tool call".into()) };
+    for k in ["file_path", "notebook_path", "path", "pattern"] {
+        if let Some(v) = fields.get(k) {
+            if !v.as_str().is_some_and(|p| !p.trim().is_empty()) {
+                return Some(format!("kwnt can't read where this looks (`{k}` isn't a path)"));
+            }
+        }
+    }
+    let needs = match tool {
+        "Read" => Some("file_path"),
+        "NotebookRead" => Some("notebook_path"),
+        "Glob" | "Grep" => Some("pattern"),
+        _ => None,
+    };
+    match needs {
+        Some(k) if !fields.contains_key(k) => Some(format!("kwnt can't tell where this looks (no `{k}`)")),
+        _ => None,
+    }
 }
 
 /// Whether a WebFetch could reach kwnt's own API on this computer (see
@@ -91,6 +157,9 @@ pub fn smart_verdict(tool: &str, input: &Value, folder: Option<&Path>) -> SmartV
     }
     if READ_TOOLS.contains(&tool) {
         let Some(folder) = folder else { return SmartVerdict::Ask("the bot has no working folder this turn".into()) };
+        if let Some(why) = malformed_read(tool, input) {
+            return SmartVerdict::Ask(why);
+        }
         return match read_risk(tool, input, folder) {
             Some(why) => SmartVerdict::Ask(why),
             None => SmartVerdict::Allow("reads outside the bot's folder, away from passwords and keys".into()),
@@ -111,14 +180,19 @@ fn read_risk(tool: &str, input: &Value, folder: &Path) -> Option<String> {
         // Glob searches `pattern` under `path` (the folder when missing); an absolute pattern
         // ignores `path`
         let base = text("path").unwrap_or(".");
-        let pattern = text("pattern").unwrap_or("");
-        for p in [base, pattern] {
-            if p.starts_with('~') {
-                return Some("kwnt can't tell where a `~` path points".into());
+        let written = text("pattern").unwrap_or("");
+        let Some(patterns) = expand_braces(written) else {
+            return Some("its `{…}` alternatives are too many for kwnt to check".into());
+        };
+        for pattern in patterns {
+            for p in [base, pattern.as_str()] {
+                if p.starts_with('~') {
+                    return Some("kwnt can't tell where a `~` path points".into());
+                }
             }
+            let joined = if Path::new(&pattern).is_absolute() { PathBuf::from(&pattern) } else { absolute(folder, base).join(&pattern) };
+            places.push((pattern, joined));
         }
-        let joined = if Path::new(pattern).is_absolute() { PathBuf::from(pattern) } else { absolute(folder, base).join(pattern) };
-        places.push((pattern.to_string(), joined));
     } else {
         for k in ["file_path", "notebook_path", "path"] {
             if let Some(p) = text(k) {
@@ -134,7 +208,7 @@ fn read_risk(tool: &str, input: &Value, folder: &Path) -> Option<String> {
     }
     let searches = matches!(tool, "Glob" | "Grep");
     for (written, path) in places {
-        let root = if tool == "Glob" { glob_root(&path) } else { path.clone() };
+        let root = if tool == "Glob" { search_folder(&glob_root(&path)) } else { path.clone() };
         for p in [Some(lexical(&path)), resolve(&root)].into_iter().flatten() {
             if let Some(why) = denied_place(&p) {
                 return Some(why.replace("{}", &written));
@@ -177,6 +251,9 @@ const CREDENTIAL_ENDINGS: &[&str] = &[".pem", ".key", ".p12", ".pfx", ".jks", ".
 /// Live process and device data: `/proc/self/environ` holds the gateway token.
 const SYSTEM_PLACES: &[&str] = &["/proc", "/sys", "/dev", "/run", "/var/run", "/private/var/run"];
 
+/// The system's own password hashes, sudo rules and private keys (also under macOS's `/private`).
+const SYSTEM_SECRETS: &[&str] = &["/etc/shadow", "/etc/gshadow", "/etc/master.passwd", "/etc/sudoers", "/etc/ssl/private"];
+
 /// Whether `path` (absolute) is live system data or names a credential, and why (`{}` stands
 /// for the path as the bot wrote it).
 fn denied_place(path: &Path) -> Option<&'static str> {
@@ -184,7 +261,15 @@ fn denied_place(path: &Path) -> Option<&'static str> {
     if SYSTEM_PLACES.iter().any(|s| p == *s || p.starts_with(&format!("{s}/"))) {
         return Some("{} is live system data and can hold secrets");
     }
-    credential_text(&p).then_some("{} can hold passwords or keys")
+    (credential_text(&p) || system_secret(&p)).then_some("{} can hold passwords or keys")
+}
+
+/// Whether a lowercase absolute path is one of [`SYSTEM_SECRETS`] (`/etc/shadow-` and
+/// `/etc/sudoers.d` included) or an ssh host key in `/etc/ssh`.
+fn system_secret(p: &str) -> bool {
+    let p = p.strip_prefix("/private").unwrap_or(p);
+    SYSTEM_SECRETS.iter().any(|s| p.starts_with(s))
+        || p.strip_prefix("/etc/ssh/").is_some_and(|name| name.contains("_key") && !name.ends_with(".pub"))
 }
 
 /// Whether a lowercase path names a credential folder or file anywhere along it.
@@ -226,7 +311,8 @@ fn broad_search(root: &Path) -> Option<String> {
                 return Some(format!("{shown} is too big for kwnt to check for passwords and keys"));
             }
             let path = entry.path();
-            if credential_text(&path.to_string_lossy().to_lowercase()) {
+            let lower = path.to_string_lossy().to_lowercase();
+            if credential_text(&lower) || system_secret(&lower) {
                 return Some(format!("{} can hold passwords or keys", path.display()));
             }
             match entry.file_type() {
@@ -237,6 +323,18 @@ fn broad_search(root: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// The folder a Glob actually walks: `root` when it is one, else its nearest existing parent
+/// (so `pattern: "x", path: "link"` is judged where `link` points).
+fn search_folder(root: &Path) -> PathBuf {
+    let mut dir = lexical(root);
+    while !dir.is_dir() {
+        if !dir.pop() {
+            break;
+        }
+    }
+    dir
 }
 
 /// The folder a glob pattern starts from: its path up to the first part with a wildcard.
@@ -337,7 +435,7 @@ pub fn prompt_block(folder: Option<&Path>, smart: bool) -> String {
     };
     let cards = if smart {
         "Shell commands (Bash) that stay in that folder run without asking. Anything risky shows the person an approval card first: \
-         the network (except local dev servers; requests to kwnt itself always ask), other users, git push, publishing, containers, mail, paths outside the folder, and \
+         the network (except local dev servers; requests to kwnt itself always ask), other users, git clone, fetch, pull and push, publishing, containers, mail, paths outside the folder, and \
          commands kwnt can't read for sure ($(…), backticks, bash -c). Prefer plain commands and relative paths. \
          Writing files outside the folder, and reading passwords or keys, also needs a card."
     } else {
@@ -422,6 +520,76 @@ mod tests {
     }
 
     // Rigel's deny-list repros (smart-approvals gate, 2026-10-21)
+    #[test]
+    fn smart_reads_of_system_secrets_ask_like_bash() {
+        let (_tmp, ws) = folder();
+        for path in [
+            "/etc/shadow",
+            "/etc/shadow-",
+            "/etc/gshadow",
+            "/etc/sudoers",
+            "/etc/sudoers.d/90-cloud",
+            "/etc/ssh/ssh_host_ed25519_key",
+            "/etc/ssl/private/server.crt",
+            "/private/etc/master.passwd",
+            "/ETC/SHADOW",
+        ] {
+            assert!(!smart("Read", json!({"file_path": path}), &ws), "{path}");
+        }
+        assert!(smart("Read", json!({"file_path": "/etc/ssh/ssh_host_ed25519_key.pub"}), &ws));
+        assert!(smart("Read", json!({"file_path": "/etc/hostname"}), &ws));
+        assert!(!smart("Glob", json!({"pattern": "/etc/ssh/*_key"}), &ws));
+    }
+
+    #[test]
+    fn malformed_read_input_asks() {
+        let (_tmp, ws) = folder();
+        for (tool, input) in [
+            ("Read", json!({})),
+            ("Read", Value::Null),
+            ("Read", json!([])),
+            ("Read", json!({"file_path": null})),
+            ("Read", json!({"file_path": ["/etc/passwd"]})),
+            ("Read", json!({"file_path": 7})),
+            ("Read", json!({"file_path": "  "})),
+            ("Grep", json!({"pattern": "x", "path": null})),
+            ("Grep", json!({"pattern": "x", "path": {"a": 1}})),
+            ("Grep", json!({"path": "src"})),
+            ("Glob", json!({})),
+            ("Glob", json!({"pattern": null})),
+            ("LS", json!({"path": false})),
+            ("NotebookRead", json!({})),
+        ] {
+            assert_eq!(decide(tool, &input, Some(&ws)), BuiltinDecision::Ask { outside_folder: true }, "{tool} {input}");
+            assert!(!smart_verdict(tool, &input, Some(&ws)).is_allowed(), "{tool} {input}");
+        }
+        assert_eq!(decide("Read", &json!({"file_path": "src/a.go"}), Some(&ws)), BuiltinDecision::Allow);
+        assert_eq!(decide("Grep", &json!({"pattern": "x"}), Some(&ws)), BuiltinDecision::Allow);
+    }
+
+    #[test]
+    fn glob_braces_and_symlinked_roots_are_judged_where_they_lead() {
+        let (_tmp, ws) = folder();
+        for pattern in ["{../..,x}/*", "{x,/etc}/*", "{x,~}/.ssh/*", "src/{a,{b,../../..}}/*", "{a,b"] {
+            let input = json!({"pattern": pattern});
+            assert_eq!(decide("Glob", &input, Some(&ws)), BuiltinDecision::Ask { outside_folder: true }, "{pattern}");
+        }
+        assert!(!smart("Glob", json!({"pattern": "{x,/home/*/.ssh}/*"}), &ws));
+        assert!(!smart("Glob", json!({"pattern": "{x,/proc/self}/environ"}), &ws));
+        assert!(!smart("Glob", json!({"pattern": "{x,~}/*"}), &ws));
+        let many = "{a,b,c,d}{a,b,c,d}{a,b,c,d}{a,b}/*";
+        assert!(!smart("Glob", json!({"pattern": many}), &ws));
+        assert_eq!(decide("Glob", &json!({"pattern": "src/{a,b}/*.rs"}), Some(&ws)), BuiltinDecision::Allow);
+        assert_eq!(expand_braces("a{b,c{d,e}}f").unwrap(), ["abf", "acdf", "acef"]);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/etc", ws.join("etclink")).unwrap();
+            assert!(!smart("Glob", json!({"pattern": "x", "path": "etclink"}), &ws));
+            assert!(!smart("Glob", json!({"pattern": "etclink/*"}), &ws));
+            assert!(!smart("Grep", json!({"pattern": "x", "path": "etclink"}), &ws));
+        }
+    }
+
     #[test]
     fn web_fetches_of_kwnt_itself_ask_in_every_mode() {
         for url in [

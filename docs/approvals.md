@@ -17,8 +17,13 @@ is refused and recorded as `denied`. Calls that run without a card are recorded 
 `details.smart_reason` says why it was safe (e.g. "runs inside the bot's folder and does nothing risky"), and a card's `details.smart_reason` says why it asked.
 
 `smart` and `off` both need Bitwarden while the built-in password store holds passwords: see
-[saved-passwords.md](saved-passwords.md). `smart` is a guard against accidents, not a sandbox: a
-script in the bot's folder that it runs can do anything the bot's user can.
+[saved-passwords.md](saved-passwords.md).
+
+**`smart` is a guard against accidents, not a sandbox.** Scripts in the bot's folder (`./run.sh`,
+`bash x.sh`, `python data.py`), `make`, `cargo run`/`cargo build` (build scripts), and
+`npm install`/`npm run` (package scripts) run without a card, and can do anything the bot's user
+can, including the network and kwnt's own API. That includes a script the bot wrote a moment
+earlier in the same turn. Choose `ask` for bots or folders you don't trust.
 
 ## What `smart` runs without a card
 
@@ -36,7 +41,9 @@ script in the bot's folder that it runs can do anything the bot's user can.
     short list: proxies `-x`/`--proxy`/`--socks*`, config files and `@file` ask), `sudo`/`su`, containers and
     cloud CLIs, mail senders, process and system tools, credential tools, `xargs`/`parallel`,
     `env`/`printenv` on their own;
-  - `git push` and other git commands that leave the machine, touch global config or run a
+  - `git push`, `fetch`, `pull`, `clone`, `ls-remote`, `archive`, `remote` other than
+    `-v`/`get-url`/`rename`/`remove`, `submodule` other than `status`/`summary`/`init`, any git
+    argument that is a URL or `user@host:path`, and git commands that touch global config or run a
     command (`rebase -x/--exec`, `--upload-pack`, `ext::`, `grep -O`, …); publish, login and
     install commands of npm/pnpm/yarn/bun/cargo/pip/uv/gem/poetry/twine/go; `npx`, `bunx`,
     `npm exec`, `pnpm dlx`, `yarn dlx`, `bun x` (they download and run package code);
@@ -54,6 +61,8 @@ script in the bot's folder that it runs can do anything the bot's user can.
 - **Reads** (Read, Glob, Grep, LS, NotebookRead) outside the folder, unless they touch:
   - live system data: `/proc`, `/sys`, `/dev`, `/run` (`/proc/self/environ` holds the gateway
     token);
+  - the system's secrets: `/etc/shadow*`, `/etc/gshadow`, `/etc/master.passwd`, `/etc/sudoers*`,
+    ssh host keys in `/etc/ssh`, `/etc/ssl/private`;
   - credentials, matched without regard to case: `.ssh`, `.aws`, `.azure`, `.gnupg`, `.kube`,
     `.docker`, `.netrc`, `.pgpass`, `.vault-token`, `.claude`, `.codex`, `.cargo/credentials`,
     `.config/gh`, `.config/gcloud`, password managers, browser profiles, keychains and keyrings,
@@ -64,7 +73,14 @@ script in the bot's folder that it runs can do anything the bot's user can.
     any of the above (or a symlink, or more than 5,000 entries) somewhere below it.
 
   Paths are checked as written and with symlinks followed; relative paths count from the bot's
-  folder. A `~` path asks (a read with no path searches the folder, as before).
+  folder, and a Glob/Grep root that is a symlink is judged where it points. A `~` path asks. A
+  Glob's `{a,b}` alternatives are each checked (more than 64 ask). Input kwnt can't read (not an
+  object, a path that is `null`, a number or a list, a Read with no `file_path`) asks under every
+  mode; Grep/Glob/LS with no `path` search the folder, as before.
+
+  Known gaps, left as they are: options that follow symlinks (`grep -R`, `rg -L`, `find -L`,
+  `ls -R`, `zip -r`) run without a card, so a symlink already in the folder that points out of
+  it can be read through them.
 - **MCP tools** the server marks `readOnlyHint: true` without `destructiveHint: true`. That is
   the server's own claim. If kwnt can't check it, the call asks.
 

