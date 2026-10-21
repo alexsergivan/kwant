@@ -370,7 +370,7 @@ async fn anthropic_compatible_account_streams_the_bots_pinned_model() {
     let custom = &acct["custom"];
     assert_eq!(custom["base_url"], format!("{root}/api/anthropic/v1"));
     assert_eq!(custom["status"], "ready", "{custom}");
-    assert_eq!(custom["supports_tools"], false);
+    assert_eq!(custom["supports_tools"], true, "Anthropic-format accounts get tools too");
     assert_eq!(custom["models"][0]["label"], "Claude Sonnet 4");
 
     let kid = env.bot(&space, "Sage", "custom:claude-sonnet-4").await;

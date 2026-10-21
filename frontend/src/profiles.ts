@@ -71,7 +71,7 @@ export const KIND_LABELS: Record<ProfileKind, string> = {
 
 export const PROTOCOLS: Array<{ id: CustomProtocol; label: string; hint: string }> = [
   { id: 'openai-chat', label: 'OpenAI-compatible', hint: 'Bots can use tools' },
-  { id: 'anthropic-messages', label: 'Anthropic-compatible', hint: 'No tools' },
+  { id: 'anthropic-messages', label: 'Anthropic-compatible', hint: 'Bots can use tools' },
 ];
 export const protocolLabel = (p: CustomProtocol | string) => PROTOCOLS.find((x) => x.id === p)?.label ?? p;
 
