@@ -33,6 +33,8 @@ import { ranOnLabel } from '../engines';
 import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
 import { routeReasonText } from '../routeReason';
+import { InterruptedNotice, SystemNotice } from './SystemNotice';
+import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
 
 export interface ChatMessage {
   id: string;
@@ -110,7 +112,8 @@ export interface ChatViewProps {
   isStreaming: boolean;
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
-  onSendMessage: (text: string, attachments: AttachmentRef[]) => void;
+  /** Resolves to false when the message couldn't be sent. */
+  onSendMessage: (text: string, attachments: AttachmentRef[]) => void | Promise<boolean | void>;
   onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
@@ -653,7 +656,25 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   };
 
+  const retries = retryTargets(messages);
+  const retrySend = async (target: { text: string; attachments: AttachmentRef[] }) => {
+    stickRef.current = true;
+    if ((await onSendMessage(target.text, target.attachments)) === false) throw new Error('not sent');
+  };
+
   const renderMessage = (msg: ChatMessage) => {
+    const interruption = parseInterruption(msg);
+    if (interruption)
+      return (
+        <InterruptedNotice
+          key={msg.id}
+          messageId={msg.id}
+          interruption={interruption}
+          retry={retries.get(msg.id)}
+          onRetry={retrySend}
+          flash={flashId === msg.id}
+        />
+      );
     const meta = msg.meta && renderDelegation ? parseDelegationMeta(msg.meta) : null;
     if (meta && renderDelegation) return <React.Fragment key={msg.id}>{renderDelegation(msg, meta, flashId === msg.id)}</React.Fragment>;
     const question = msg.meta && renderQuestion ? parseQuestionMeta(msg.meta) : null;
@@ -678,6 +699,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           />
         </div>
       );
+    if (isSystemNotice(msg) && !parseAttachments(msg.meta).length)
+      return <SystemNotice key={msg.id} messageId={msg.id} text={msg.text} flash={flashId === msg.id} />;
     const isUser = msg.sender_role === 'user';
     const files = msg.meta ? parseAttachments(msg.meta) : [];
     // A bot's share_file note: the file tiles say it all.

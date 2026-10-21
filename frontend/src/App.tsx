@@ -1069,7 +1069,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     });
   };
 
-  const handleSendMessage = async (text: string, attachments: AttachmentRef[] = []) => {
+  const handleSendMessage = async (text: string, attachments: AttachmentRef[] = []): Promise<boolean> => {
     setHistoryWindow(null);
     const targetId = openCtx;
     const threadId = openThreadId;
@@ -1134,6 +1134,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         }
         throw new Error(message);
       }
+      return true;
     } catch (err) {
       console.error('Failed sending chat:', err);
       const rest = (messagesCacheRef.current[targetId] || []).filter((m) => m.id !== tempId);
@@ -1145,6 +1146,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setRoutingState(null);
         streamingContextIdRef.current = null;
       }
+      return false;
     }
   };
 
