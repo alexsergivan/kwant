@@ -437,7 +437,23 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation]) {
         correction. Otherwise continue with the user's request and give them one answer that uses the results. \
         Don't repeat the results in full."
     );
-    let _ = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await;
+    // The follow-up may hand on to the next teammate by @mention, like any lead reply. Not back to
+    // the ones that just reported (the result is what it's about), and within the usual limits.
+    if let Ok(reply) = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await {
+        let mut spoken = vec![lead.id.clone()];
+        spoken.extend(batch.iter().map(|b| b.specialist_kwant_id.clone()));
+        let user_prompt = state
+            .db
+            .list_messages(d.origin_context().unwrap_or(&lead.id), 100)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .rev()
+            .find(|m| m.sender_role == "user")
+            .map(|m| m.text)
+            .unwrap_or_else(|| d.task.clone());
+        super::routes::run_handoffs_boxed(&scope, &spoken, &[(lead.clone(), reply)], &user_prompt).await;
+    }
 }
 
 // Cancelling, follow-ups, restarts

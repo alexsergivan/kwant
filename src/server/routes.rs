@@ -755,6 +755,9 @@ fn team_context(t: &Team) -> crate::drivers::TeamContext {
 
 /// Max follow-up turns kwants may trigger by @mentioning each other for one user message.
 const MAX_HANDOFFS: usize = 4;
+/// Delegations a lead's @mentions may start for one user message, follow-up rounds included:
+/// a lead resumed with results can hand on again, but never in an endless loop.
+pub const MAX_DELEGATIONS_PER_REQUEST: usize = 8;
 
 #[allow(clippy::too_many_arguments)]
 fn execute_single_turn(
@@ -836,21 +839,40 @@ pub(super) async fn run_routine_turn(
 
 /// Lets teammates that kwants @mentioned in `replies` answer in turn, so kwants can delegate to each other.
 /// `already_spoken` kwants are not handed the turn again.
+/// [`run_handoffs`] for a lead's follow-up after delegation results: boxed with a named type,
+/// because handing on starts delegations whose end resumes the lead again (a cycle of futures).
+pub(super) fn run_handoffs_boxed<'a>(
+    scope: &'a TurnScope,
+    already_spoken: &'a [String],
+    replies: &'a [(Kwant, String)],
+    user_prompt: &'a str,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    Box::pin(run_handoffs(scope, already_spoken, replies, user_prompt))
+}
+
 async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(Kwant, String)], user_prompt: &str) {
     if let [(from, text)] = replies {
         if is_team_channel_lead(scope, from).await {
-            return delegate_mentions(scope, from, text, user_prompt).await;
+            return delegate_mentions(scope, from, text, user_prompt, already_spoken).await;
         }
+    }
+    if scope.teammates.is_empty() {
+        return;
     }
     let mut spoken: Vec<String> = already_spoken.to_vec();
     let mut queue: std::collections::VecDeque<(Kwant, String, String)> = std::collections::VecDeque::new();
-    let enqueue = |queue: &mut std::collections::VecDeque<(Kwant, String, String)>,
-                   spoken: &[String],
-                   from: &Kwant,
-                   text: &str| {
+    let mut skipped: Vec<(String, String)> = Vec::new();
+    let mut enqueue = |queue: &mut std::collections::VecDeque<(Kwant, String, String)>,
+                       spoken: &[String],
+                       from: &Kwant,
+                       text: &str| {
         let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
-        for i in crate::router::handoff_targets(text, &names) {
+        let found = crate::router::handoff_mentions(text, &names);
+        skipped.extend(found.unknown.into_iter().map(|n| (n, String::new())));
+        skipped.extend(found.in_code_block.iter().map(|&i| (scope.teammates[i].name.clone(), IN_CODE_BLOCK.to_string())));
+        for i in found.targets {
             let k = &scope.teammates[i];
+            // Someone who already spoke isn't handed the turn back: no ping-pong
             if k.id != from.id && !spoken.contains(&k.id) && !queue.iter().any(|(q, _, _)| q.id == k.id) {
                 queue.push_back((k.clone(), from.name.clone(), text.to_string()));
             }
@@ -860,7 +882,8 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
         enqueue(&mut queue, &spoken, from, text);
     }
     if queue.is_empty() {
-        return;
+        drop(enqueue);
+        return report_skipped(scope, skipped).await;
     }
 
     let events = scope.state.event_sender.clone();
@@ -904,8 +927,50 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
             None => {}
         }
     }
+    drop(enqueue);
+    if !scope.cancel_token.is_cancelled() {
+        skipped.extend(queue.into_iter().map(|(k, _, _)| (k.name, format!("only {MAX_HANDOFFS} teammates take a turn per message"))));
+    }
 
     let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: done + 1, context_id: Some(context_id.clone()) });
+    report_skipped(scope, skipped).await;
+}
+
+const IN_CODE_BLOCK: &str = "the mention was inside a code block";
+
+/// Says in the chat, and logs, each @mention that handed nothing on: "Growth wasn't asked: <why>".
+/// An empty reason means no teammate has that name; it's worked out here.
+async fn report_skipped(scope: &TurnScope, skipped: Vec<(String, String)>) {
+    let mut said: Vec<String> = Vec::new();
+    for (name, why) in skipped {
+        if said.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
+            continue;
+        }
+        said.push(name.clone());
+        let why = if why.is_empty() { unknown_mention(scope, &name).await } else { why };
+        tracing::info!(context = ?scope.channel_id.as_ref().or(scope.thread_id.as_ref()), mention = %name, "mention handed nothing on: {why}");
+        let note = scope.message("system", "kwnt", format!("{name} wasn't asked: {why}"));
+        if let Some(saved) = scope.save(&note, Some(serde_json::json!({"kind": "handoff_refused", "mention": name}))).await {
+            let _ = scope
+                .state
+                .event_sender
+                .send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or_default() });
+        }
+    }
+}
+
+/// Why `@name` matched no one in this chat.
+async fn unknown_mention(scope: &TurnScope, name: &str) -> String {
+    let space = scope.teammates.first().map(|k| SpaceId::new(&k.space_id));
+    let in_space = match &space {
+        Some(space) => scope.state.db.list_kwants(space).await.unwrap_or_default().iter().any(|k| k.name.eq_ignore_ascii_case(name)),
+        None => false,
+    };
+    if in_space {
+        format!("{name} isn't in this chat")
+    } else {
+        format!("there's no teammate called {name} here")
+    }
 }
 
 /// Whether `kwant` leads the team channel this turn is in (a channel turn, not a thread).
@@ -922,25 +987,46 @@ async fn is_team_channel_lead(scope: &TurnScope, kwant: &Kwant) -> bool {
 /// A team lead's @mentions in its team channel hand work on as delegations, not handoff turns:
 /// each teammate gets the task in its own thread (Sent-to chip, queue, the same guards as the
 /// delegate tool), and when the last one ends the lead is resumed once with every result to give
-/// the user one answer. A refused handoff is said in the channel. Teammates the lead already
-/// delegated to from this channel (with the tool) aren't sent it twice.
-async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_prompt: &str) {
+/// the user one answer; that follow-up may hand on again. `just_reported` teammates (whose results
+/// the follow-up is about) aren't sent it again by a mention, and one user message starts at most
+/// [`MAX_DELEGATIONS_PER_REQUEST`]. Every mention that hands nothing on is said in the channel.
+/// Teammates the lead already delegated to from this channel (with the tool) aren't sent it twice.
+async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_prompt: &str, just_reported: &[String]) {
     let Some(cid) = scope.channel_id.clone() else { return };
     let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
-    let open: Vec<String> = scope
+    let found = crate::router::handoff_mentions(text, &names);
+    let mut skipped: Vec<(String, String)> = found.unknown.into_iter().map(|n| (n, String::new())).collect();
+    skipped.extend(found.in_code_block.iter().map(|&i| (scope.teammates[i].name.clone(), IN_CODE_BLOCK.to_string())));
+    if found.targets.iter().all(|&i| scope.teammates[i].id == lead.id) {
+        return report_skipped(scope, skipped).await;
+    }
+    let mine: Vec<_> = scope
         .state
         .db
         .list_delegations(Some(&lead.id), None, 50)
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|d| d.is_open() && d.origin_channel_id.as_deref() == Some(cid.as_str()))
-        .map(|d| d.specialist_kwant_id)
+        .filter(|d| d.origin_channel_id.as_deref() == Some(cid.as_str()))
         .collect();
+    let open: Vec<&str> = mine.iter().filter(|d| d.is_open()).map(|d| d.specialist_kwant_id.as_str()).collect();
+    // Delegations this user message already started, counting earlier follow-up rounds
+    let messages = scope.state.db.list_messages(&cid, 100).await.unwrap_or_default();
+    let since = messages.iter().rev().find(|m| m.sender_role == "user").or(messages.first()).and_then(|m| m.created_at);
+    let started = mine.iter().filter(|d| d.continue_lead && since.is_some_and(|t| d.created_at >= t)).count();
+    let mut room = MAX_DELEGATIONS_PER_REQUEST.saturating_sub(started);
+
     let mut targets: Vec<&Kwant> = Vec::new();
-    for i in crate::router::handoff_targets(text, &names) {
+    for i in found.targets {
         let k = &scope.teammates[i];
-        if k.id != lead.id && !open.contains(&k.id) && !targets.iter().any(|t| t.id == k.id) {
+        if k.id == lead.id || targets.iter().any(|t| t.id == k.id) {
+            continue;
+        }
+        if just_reported.contains(&k.id) {
+            skipped.push((k.name.clone(), format!("{} just reported back on this. For a correction, delegate a concrete task", k.name)));
+        } else if open.contains(&k.id.as_str()) {
+            skipped.push((k.name.clone(), format!("{} is still working on an earlier task from this chat", k.name)));
+        } else {
             targets.push(k);
         }
     }
@@ -952,7 +1038,18 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
     );
     let title = truncate_chars(user.lines().find(|l| !l.trim().is_empty()).unwrap_or("Task").trim(), 80).to_string();
     let allowed: Vec<String> = scope.teammates.iter().map(|k| k.id.clone()).collect();
-    for specialist in targets.into_iter().take(MAX_HANDOFFS) {
+    for (n, specialist) in targets.into_iter().enumerate() {
+        if n >= MAX_HANDOFFS {
+            skipped.push((specialist.name.clone(), format!("a message hands work to at most {MAX_HANDOFFS} teammates")));
+            continue;
+        }
+        if room == 0 {
+            skipped.push((
+                specialist.name.clone(),
+                format!("this request has already gone to {MAX_DELEGATIONS_PER_REQUEST} teammates. Send a new message to go on"),
+            ));
+            continue;
+        }
         let req = super::delegation::StartRequest {
             lead: lead.clone(),
             specialist: specialist.clone(),
@@ -963,17 +1060,12 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
             origin_depth: scope.delegation_depth,
             allowed: Some(allowed.clone()),
         };
-        if let Err((_, why)) = super::delegation::start(&scope.state, req).await {
-            tracing::info!(lead = %lead.id, specialist = %specialist.id, "mention handoff refused: {why}");
-            let note = scope.message("system", "kwnt", format!("Couldn't hand this to {}: {why}", specialist.name));
-            if let Some(saved) = scope.save(&note, Some(serde_json::json!({"kind": "handoff_refused"}))).await {
-                let _ = scope
-                    .state
-                    .event_sender
-                    .send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or_default() });
-            }
+        match super::delegation::start(&scope.state, req).await {
+            Ok(_) => room -= 1,
+            Err((_, why)) => skipped.push((specialist.name.clone(), why.trim_end_matches('.').to_string())),
         }
     }
+    report_skipped(scope, skipped).await;
 }
 
 /// Runs a moderated team discussion: the lead opens (or pauses to ask the user), teammates react to

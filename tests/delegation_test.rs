@@ -23,7 +23,8 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 /// Replies "answer <tag>" for a prompt with "REPLYTAG:<tag>", followed by "@<name>" for one with
-/// "MENTION:<name>"; a "LONGTASK:<file>" prompt waits (up to 60 s) for that file first. Every prompt is saved under `$KWNT_TEST_PROMPTS`.
+/// "MENTION:<name>", and by "`@<name>`" (inline code, as models write it) for a lead's results
+/// follow-up with "FOLLOWUP:<name>"; a "LONGTASK:<file>" prompt waits (up to 60 s) for that file first. Every prompt is saved under `$KWNT_TEST_PROMPTS`.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1" in
   auth) echo '{"loggedIn":true}'; exit 0 ;;
@@ -37,7 +38,9 @@ if [ -n "$release" ]; then
 fi
 tag=$(printf '%s\n' "$last" | sed -n 's/.*REPLYTAG:\([A-Za-z0-9_]*\).*/\1/p' | tail -n 1)
 mention=$(printf '%s\n' "$last" | sed -n 's/.*MENTION:\([A-Za-z0-9_]*\).*/\1/p' | head -n 1)
-echo "{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"result\":\"answer ${tag:-none}${mention:+ @$mention}\"}"
+followup=$(printf '%s\n' "$last" | sed -n 's/.*FOLLOWUP:\([A-Za-z0-9_]*\).*/\1/p' | head -n 1)
+case "$last" in *"finished the task you delegated"*) ;; *) followup="" ;; esac
+echo "{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"result\":\"answer ${tag:-none}${mention:+ @$mention}${followup:+ \`@$followup\`}\"}"
 "#;
 
 fn prompts_dir() -> &'static PathBuf {
@@ -890,4 +893,126 @@ async fn non_lead_mentions_hand_off_and_refused_mentions_are_reported() {
     for id in held {
         wait_for("a held task to finish", || async { delegation_status(&env, &id).await == "completed" }).await;
     }
+}
+
+/// A third bot on the fake claude, named `name`.
+async fn add_bot(env: &Env, name: &str) -> String {
+    let (s, v) = call(&env.app, "POST", "/api/kwants", Some(json!({"name": name, "title": "Growth Marketer", "persona_prompt": "", "soul": "", "avatar_sprite": "default", "driver_type": "cli", "preferred_model": "claude"}))).await;
+    assert!(s.is_success(), "{s} {v}");
+    v["id"].as_str().or(v["kwant"]["id"].as_str()).unwrap().to_string()
+}
+
+/// A team led by `env.lead` with `members`; returns its channel's id.
+async fn team_channel_with(env: &Env, team: &str, members: &[&str]) -> String {
+    let (s, v) = call(&env.app, "POST", "/api/teams", Some(json!({"name": team, "lead_kwant_id": env.lead, "member_kwants": members}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (_, channels) = call(&env.app, "GET", "/api/channels", None).await;
+    channels.as_array().unwrap().iter().find(|c| c["name"] == format!("team-{team}").as_str()).unwrap()["id"].as_str().unwrap().to_string()
+}
+
+/// A delegation from the lead, started from `channel`, that resumes the lead when it ends.
+async fn delegate_from(env: &Env, channel: &str, to: &str, task: &str, title: &str) -> String {
+    let (s, d) = call(
+        &env.app,
+        "POST",
+        "/api/delegations",
+        Some(json!({"lead_kwant_id": env.lead, "specialist_kwant_id": to, "task": task, "title": title, "channel_id": channel, "continue_lead": true})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{d}");
+    d["id"].as_str().unwrap().to_string()
+}
+
+fn refusals(msgs: &[kwnt::db::models::Message]) -> Vec<String> {
+    msgs.iter().filter(|m| meta_kind(m).as_deref() == Some("handoff_refused")).map(|m| m.text.clone()).collect()
+}
+
+/// Bug 3 (team-Startup, 2026-10-21): the lead's follow-up after results came back said "`@Growth`,
+/// please draft the launch plan" and Growth never ran. The follow-up now hands on like any lead
+/// reply, a name in inline code counts, and mentioning the teammate who just reported back hands
+/// nothing on but says so.
+#[tokio::test]
+async fn a_leads_follow_up_after_results_hands_on_to_the_next_teammate() {
+    let env = setup().await;
+    let growth = add_bot(&env, "Growth").await;
+    let channel = team_channel_with(&env, "startup-follow", &[&env.lead, &env.specialist, &growth]).await;
+    let first = delegate_from(&env, &channel, &env.specialist, "Review the app REPLYTAG:reviewed", "Security review FOLLOWUP:Growth").await;
+    wait_for("the review to complete", || async { delegation_status(&env, &first).await == "completed" }).await;
+
+    let to_growth = || async {
+        env.state.db.list_delegations(Some(&env.lead), None, 20).await.unwrap().into_iter().find(|d| d.specialist_kwant_id == growth)
+    };
+    wait_for("the follow-up's delegation to Growth", || async { to_growth().await.is_some() }).await;
+    let d = to_growth().await.unwrap();
+    assert_eq!(d.origin_channel_id.as_deref(), Some(channel.as_str()));
+    assert!(d.continue_lead && d.depth == 1, "same depth as the first round: {d:?}");
+    assert!(d.task.contains("`@Growth`"), "Growth gets the lead's words: {}", d.task);
+
+    wait_for("Growth's result", || async { delegation_status(&env, &d.id).await == "completed" }).await;
+    // Growth's own follow-up names Growth again (its title carries the marker): not sent back
+    wait_for("the just-reported notice", || async { !refusals(&channel_messages(&env, &channel).await).is_empty() }).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let notes = refusals(&channel_messages(&env, &channel).await);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].starts_with("Growth wasn't asked: Growth just reported back"), "{}", notes[0]);
+    let all = env.state.db.list_delegations(Some(&env.lead), None, 20).await.unwrap();
+    assert_eq!(all.len(), 2, "the review and Growth's plan, no loop: {all:?}");
+}
+
+/// Mentions that hand nothing on are said in the channel: a name no teammate has, and a follow-up
+/// after the request already went to the most teammates one message may reach.
+#[tokio::test]
+async fn mentions_that_hand_nothing_on_are_said_in_the_channel() {
+    let env = setup().await;
+    let lead = name(&env, &env.lead).await;
+    let growth = add_bot(&env, "Growth").await;
+    let channel = team_channel_with(&env, "startup-limits", &[&env.lead, &env.specialist, &growth]).await;
+    say_in(&env, &channel, &format!("@{lead} Who else? UNKNOWNMARK REPLYTAG:who MENTION:Marketer")).await;
+    wait_for("the unknown-name notice", || async { !refusals(&channel_messages(&env, &channel).await).is_empty() }).await;
+    let notes = refusals(&channel_messages(&env, &channel).await);
+    assert_eq!(notes, vec!["Marketer wasn't asked: there's no teammate called Marketer here".to_string()]);
+    assert!(env.state.db.list_delegations(Some(&env.lead), None, 20).await.unwrap().is_empty());
+
+    // This request already started the most delegations it may (earlier rounds, all ended)
+    for _ in 0..routes_limit() {
+        let (_, d) = env
+            .state
+            .db
+            .create_delegation(&kwnt::db::threads::NewDelegation {
+                lead_kwant_id: env.lead.clone(),
+                specialist_kwant_id: env.specialist.clone(),
+                origin_channel_id: Some(channel.clone()),
+                origin_kwant_id: None,
+                origin_thread_id: None,
+                team_id: None,
+                task: "earlier round".into(),
+                title: "Earlier round".into(),
+                continue_lead: true,
+                depth: 1,
+                follow_up_at: None,
+            })
+            .await
+            .unwrap();
+        assert!(env.state.db.finish_delegation(&d.id, "completed", None, None).await.unwrap());
+    }
+    let last = delegate_from(&env, &channel, &env.specialist, "One more REPLYTAG:more", "Last part FOLLOWUP:Growth").await;
+    wait_for("the last part", || async { delegation_status(&env, &last).await == "completed" }).await;
+    let limit_note = || async {
+        refusals(&channel_messages(&env, &channel).await).into_iter().find(|n| n.starts_with("Growth wasn't asked"))
+    };
+    for _ in 0..100 {
+        if limit_note().await.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let msgs: Vec<String> = channel_messages(&env, &channel).await.iter().map(|m| format!("{}: {}", m.sender_id, m.text)).collect();
+    let note = limit_note().await.unwrap_or_else(|| panic!("no limit notice: {msgs:#?}"));
+    assert!(note.starts_with("Growth wasn't asked: this request has already gone to"), "{note}");
+    let delegated_growth = env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap().iter().any(|d| d.specialist_kwant_id == growth);
+    assert!(!delegated_growth, "over the limit, Growth isn't asked");
+}
+
+fn routes_limit() -> usize {
+    kwnt::server::routes::MAX_DELEGATIONS_PER_REQUEST
 }
