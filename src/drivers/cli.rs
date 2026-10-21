@@ -37,7 +37,7 @@ impl Drop for ProcessGroup {
 }
 
 /// Starts the CLI as the leader of its own process group, for [`ProcessGroup`].
-fn own_process_group(cmd: &mut Command) {
+pub(crate) fn own_process_group(cmd: &mut Command) {
     #[cfg(unix)]
     cmd.process_group(0);
     #[cfg(not(unix))]
