@@ -498,13 +498,28 @@ impl Database {
     }
 
     // Teams CRUD
-    /// Fails with [`DbError::OtherSpace`] when the lead or a member is another space's kwant.
+    /// Fails with [`DbError::OtherSpace`] when the lead or a member is another space's kwant, and
+    /// with [`DbError::Conflict`] when the space has a team of that name ignoring case.
+    ///
+    /// The team always gets a fresh, empty chat `team-<name>`. A channel already answering to that
+    /// name (ignoring case) belongs to no team, since team names are unique ignoring case: it was
+    /// left by a team deleted before deletes archived the chat. It is archived first (see
+    /// [`archive_team_chat`]) so the new team never inherits its history.
     pub async fn create_team(&self, space: &SpaceId, input: &NewTeam) -> Result<Team, DbError> {
         let id = Uuid::new_v4().to_string();
         let icon = input.icon.as_deref().unwrap_or("users");
         let members_json = serde_json::to_string(&input.member_kwants)?;
         self.check_members(space, &input.lead_kwant_id, &input.member_kwants).await?;
 
+        let mut tx = self.pool.begin().await?;
+        let (clash,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM teams WHERE space_id = ? AND name = ? COLLATE NOCASE")
+            .bind(space.as_str())
+            .bind(&input.name)
+            .fetch_one(&mut *tx)
+            .await?;
+        if clash > 0 {
+            return Err(DbError::Conflict(format!("a team called {} already exists in this space", input.name)));
+        }
         sqlx::query(
             r#"
             INSERT INTO teams (id, name, description, icon, lead_kwant_id, member_kwants, workspace_path, repo_url, space_id)
@@ -520,22 +535,30 @@ impl Database {
         .bind(&input.workspace_path)
         .bind(&input.repo_url)
         .bind(space.as_str())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
-        // Auto-create a team channel team-{name} if it doesn't already exist
         let channel_name = format!("team-{}", input.name);
-        let channels = self.list_channels(space).await?;
-        if !channels.iter().any(|c| c.name == channel_name) {
-            let chan = NewChannel {
-                name: channel_name,
-                description: input.description.clone(),
-                lead_kwant_id: input.lead_kwant_id.clone(),
-                member_kwants: input.member_kwants.clone(),
-                routing_mode: "auto".into(),
-            };
-            self.create_channel(space, &chan).await?;
+        let leftovers: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, name FROM channels WHERE space_id = ? AND name = ? COLLATE NOCASE")
+                .bind(space.as_str())
+                .bind(&channel_name)
+                .fetch_all(&mut *tx)
+                .await?;
+        for (chat, name) in leftovers {
+            let archived = archive_team_chat(&mut tx, space, &chat, &name).await?;
+            tracing::info!(from = %name, to = %archived, "archived a deleted team's chat before reusing its name");
         }
+        sqlx::query("INSERT INTO channels (id, name, description, lead_kwant_id, member_kwants, routing_mode, space_id) VALUES (?, ?, ?, ?, ?, 'auto', ?)")
+            .bind(Uuid::new_v4().to_string())
+            .bind(&channel_name)
+            .bind(&input.description)
+            .bind(&input.lead_kwant_id)
+            .bind(&members_json)
+            .bind(space.as_str())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
 
         self.get_team(&id)
             .await?
@@ -642,11 +665,28 @@ impl Database {
         team_channel_id(&self.pool, space, team_name).await
     }
 
+    /// Deletes the team and keeps its chat, history and all, as an ordinary channel renamed to
+    /// `archived-team-<name>` (see [`archive_team_chat`]), in the same transaction.
     pub async fn delete_team(&self, id: &str) -> Result<bool, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let Some((space, name)): Option<(String, String)> = sqlx::query_as("SELECT space_id, name FROM teams WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let space = SpaceId::new(space);
+        if let Some(chat) = team_channel_id(&mut *tx, &space, &name).await? {
+            let (chat_name,): (String,) =
+                sqlx::query_as("SELECT name FROM channels WHERE id = ?").bind(&chat).fetch_one(&mut *tx).await?;
+            archive_team_chat(&mut tx, &space, &chat, &chat_name).await?;
+        }
         let res = sqlx::query("DELETE FROM teams WHERE id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(res.rows_affected() > 0)
     }
 
@@ -973,6 +1013,32 @@ pub(crate) async fn insert_message_on(
         .bind(&id)
         .fetch_one(&mut *conn)
         .await?)
+}
+
+/// Renames chat `chat`, now called `chat_name` (`team-<name>`), to `archived-team-<name>`, or
+/// `archived-team-<name>-2`, `-3`… when that is taken (ignoring case). No team answers to an
+/// `archived-` name, so it becomes an ordinary channel; its messages, lead and members stay.
+/// Returns the new name.
+async fn archive_team_chat(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    space: &SpaceId,
+    chat: &str,
+    chat_name: &str,
+) -> Result<String, DbError> {
+    let base = format!("archived-{chat_name}");
+    for n in 1..1000 {
+        let candidate = if n == 1 { base.clone() } else { format!("{base}-{n}") };
+        let (taken,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM channels WHERE space_id = ? AND name = ? COLLATE NOCASE")
+            .bind(space.as_str())
+            .bind(&candidate)
+            .fetch_one(&mut **tx)
+            .await?;
+        if taken == 0 {
+            sqlx::query("UPDATE channels SET name = ? WHERE id = ?").bind(&candidate).bind(chat).execute(&mut **tx).await?;
+            return Ok(candidate);
+        }
+    }
+    Err(DbError::Conflict(format!("too many archived chats called #{base}")))
 }
 
 /// The id of the chat of the team called `team_name`: the channel `team-<name>`, or else the only

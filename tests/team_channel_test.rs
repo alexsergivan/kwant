@@ -160,3 +160,79 @@ async fn lookups_find_a_chat_that_differs_only_in_case() {
     assert!(members.contains(&b), "a new member joins the team's chat too");
     assert_eq!(db.team_channel(&space, "nobody").await.unwrap(), None);
 }
+
+#[tokio::test]
+async fn deleting_a_team_archives_its_chat_with_history() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let space = SpaceId::default_space();
+    let a = db.list_kwants(&space).await.unwrap()[0].id.clone();
+
+    let first = db.create_team(&space, &team("Startup", &a, &[&a])).await.unwrap();
+    let chat = channel_named(&db, "team-Startup").await.unwrap();
+    db.insert_message(&said(&chat.id, "first team's plan")).await.unwrap();
+    assert!(db.delete_team(&first.id).await.unwrap());
+
+    assert!(channel_named(&db, "team-Startup").await.is_none(), "no #team-* left behind");
+    let archived = channel_named(&db, "archived-team-Startup").await.expect("the chat is archived");
+    assert_eq!(archived.id, chat.id, "the same channel, renamed");
+    let history: Vec<String> = db.list_messages(&chat.id, 10).await.unwrap().into_iter().map(|m| m.text).collect();
+    assert_eq!(history, vec!["first team's plan"]);
+
+    // A second team of that name, deleted too, doesn't clobber the first archive.
+    let second = db.create_team(&space, &team("Startup", &a, &[&a])).await.unwrap();
+    let second_chat = channel_named(&db, "team-Startup").await.unwrap();
+    assert_ne!(second_chat.id, chat.id);
+    db.delete_team(&second.id).await.unwrap();
+    assert_eq!(channel_named(&db, "archived-team-Startup").await.unwrap().id, chat.id);
+    assert_eq!(channel_named(&db, "archived-team-Startup-2").await.unwrap().id, second_chat.id);
+    assert!(!db.delete_team(&second.id).await.unwrap(), "a second delete finds nothing");
+}
+
+#[tokio::test]
+async fn a_new_team_never_inherits_an_old_chat() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let space = SpaceId::default_space();
+    let a = db.list_kwants(&space).await.unwrap()[0].id.clone();
+
+    // Delete, then the same name in another case: a fresh, empty chat.
+    let old = db.create_team(&space, &team("Startup", &a, &[&a])).await.unwrap();
+    let old_chat = channel_named(&db, "team-Startup").await.unwrap();
+    db.insert_message(&said(&old_chat.id, "old team's secret")).await.unwrap();
+    db.delete_team(&old.id).await.unwrap();
+    let new = db.create_team(&space, &team("startup", &a, &[&a])).await.unwrap();
+    let new_chat = db.team_channel(&space, &new.name).await.unwrap().expect("the new team has a chat");
+    assert_ne!(new_chat, old_chat.id);
+    assert!(db.list_messages(&new_chat, 10).await.unwrap().is_empty(), "the new chat starts empty");
+    assert_eq!(channel_named(&db, "archived-team-Startup").await.unwrap().id, old_chat.id, "the archive is untouched");
+
+    // A chat left by a delete before deletes archived (a bare `team-x` channel) is archived when
+    // a team of that name is made, in any case, rather than handed to it.
+    let make = |name: &str| NewChannel {
+        name: name.into(),
+        description: None,
+        lead_kwant_id: a.clone(),
+        member_kwants: vec![],
+        routing_mode: "auto".into(),
+    };
+    let orphan = db.create_channel(&space, &make("team-Growth")).await.unwrap();
+    db.insert_message(&said(&orphan.id, "left behind")).await.unwrap();
+    let growth = db.create_team(&space, &team("growth", &a, &[&a])).await.unwrap();
+    let growth_chat = db.team_channel(&space, &growth.name).await.unwrap().unwrap();
+    assert_ne!(growth_chat, orphan.id);
+    assert!(db.list_messages(&growth_chat, 10).await.unwrap().is_empty());
+    assert_eq!(channel_named(&db, "archived-team-Growth").await.unwrap().id, orphan.id);
+    assert_eq!(db.list_messages(&orphan.id, 10).await.unwrap().len(), 1, "the orphan keeps its history");
+
+    // Team names stay unique ignoring case, so a live team's chat is never taken this way.
+    let err = db.create_team(&space, &team("GROWTH", &a, &[&a])).await.unwrap_err();
+    assert!(matches!(err, DbError::Conflict(_)), "{err}");
+    assert_eq!(db.team_channel(&space, "growth").await.unwrap().unwrap(), growth_chat);
+
+    // The startup repair leaves archives alone.
+    drop(db);
+    let db = Database::init(tmp.path()).await.unwrap();
+    assert_eq!(channel_named(&db, "archived-team-Startup").await.unwrap().id, old_chat.id);
+    assert_eq!(db.team_channel(&space, "startup").await.unwrap().unwrap(), new_chat);
+}
