@@ -1,6 +1,6 @@
 // Replies that ended without an answer: cut off by a restart (system note with
-// `turn_interrupted` meta) or stopped by the stall watchdog (the bot's own "⚠️ [Name] The model
-// sent nothing for N s" message). Both get a notice with Retry, which resends the person's message.
+// `turn_interrupted` meta) or stopped by the stall watchdog (the bot's own message with
+// `turn_stalled` meta). Both get a notice with Retry, which resends the person's message.
 import type { ChatMessage } from './components/ChatView';
 import { AttachmentRef, parseAttachments } from './attachments';
 import { parseMetaObject } from './questions';
@@ -12,7 +12,7 @@ export interface Interruption {
   secs?: number;
 }
 
-// Written by routes.rs when the stall watchdog fires; there is no meta on that message.
+// Rows saved before the watchdog tagged its message with `turn_stalled` meta carry only this text.
 const STALL_RE = /^⚠️ \[(.+?)\] The model sent nothing for (\d+) s, so this reply was stopped\./;
 
 export function parseInterruption(msg: ChatMessage): Interruption | null {
@@ -23,6 +23,13 @@ export function parseInterruption(msg: ChatMessage): Interruption | null {
     return { kind: 'restart', botName: name };
   }
   if (msg.sender_role === 'kwant') {
+    const m = parseMetaObject(msg.meta);
+    if (m?.kind === 'turn_stalled') {
+      if (m.stalled !== true) return null;
+      const name = typeof m.kwant_name === 'string' && m.kwant_name.trim() ? m.kwant_name : msg.sender_id || 'The bot';
+      const secs = typeof m.stall_secs === 'number' && m.stall_secs > 0 ? m.stall_secs : undefined;
+      return { kind: 'stall', botName: name, secs };
+    }
     const s = STALL_RE.exec(msg.text.trim());
     if (s) return { kind: 'stall', botName: s[1], secs: Number(s[2]) };
   }
@@ -32,7 +39,9 @@ export function parseInterruption(msg: ChatMessage): Interruption | null {
 export function interruptionText(i: Interruption): string {
   return i.kind === 'restart'
     ? `${i.botName}'s reply was cut off when the app restarted.`
-    : `${i.botName} sent nothing for ${i.secs} s, so the reply was stopped.`;
+    : i.secs
+      ? `${i.botName} sent nothing for ${i.secs} s, so the reply was stopped.`
+      : `${i.botName} went quiet, so the reply was stopped.`;
 }
 
 export interface RetryTarget {

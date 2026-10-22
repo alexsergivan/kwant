@@ -19,7 +19,15 @@ const restartNote = (id, name = 'Architect') => ({
   text: `This reply from ${name} was interrupted by a restart. Send your message again to retry.`,
   meta: JSON.stringify({ kind: 'turn_interrupted', interrupted: true, kwant_id: 'k1', kwant_name: name, turn_id: 't1', started_at: '2026-10-21T19:00:00Z' }),
 });
-// The stall watchdog's message in routes.rs (saved as the bot's reply, no meta).
+// The stall watchdog's message in routes.rs (saved as the bot's reply with turn_stalled meta).
+const taggedStall = (id, name = 'Writer', secs = 120, text = 'anything') => ({
+  id,
+  sender_role: 'kwant',
+  sender_id: name,
+  text,
+  meta: JSON.stringify({ kind: 'turn_stalled', stalled: true, kwant_id: 'k2', kwant_name: name, stall_secs: secs }),
+});
+// Older rows, saved before the watchdog tagged its message: text only.
 const stallNote = (id, name = 'Writer', secs = 120) => ({
   id,
   sender_role: 'kwant',
@@ -37,6 +45,26 @@ test('recognises restart and stall notices, and nothing else', () => {
   assert.equal(m.parseInterruption({ ...restartNote('x'), meta: 'not json' }), null);
   // A person quoting the stall line is not a notice.
   assert.equal(m.parseInterruption({ ...stallNote('s'), sender_role: 'user' }), null);
+});
+
+test('stall stops are recognised by meta first, wording only as a fallback for old rows', () => {
+  // Tagged: found even if the wording changes.
+  assert.deepEqual(m.parseInterruption(taggedStall('t1', 'TechLead', 45, 'Reply stopped (reworded).')), { kind: 'stall', botName: 'TechLead', secs: 45 });
+  // Meta wins over the text: an untagged-looking text with stalled:false is not a notice.
+  assert.equal(
+    m.parseInterruption({ ...stallNote('t2'), meta: JSON.stringify({ kind: 'turn_stalled', stalled: false }) }),
+    null,
+  );
+  // Missing secs or name: still a notice, with gentler wording.
+  const bare = m.parseInterruption({ ...taggedStall('t3', 'Lead'), meta: JSON.stringify({ kind: 'turn_stalled', stalled: true }) });
+  assert.deepEqual(bare, { kind: 'stall', botName: 'Lead', secs: undefined });
+  assert.equal(m.interruptionText(bare), 'Lead went quiet, so the reply was stopped.');
+  // Old row without meta: the wording match still works.
+  assert.deepEqual(m.parseInterruption(stallNote('t4', 'Writer', 120)), { kind: 'stall', botName: 'Writer', secs: 120 });
+  // Other meta kinds on a bot message don't turn into notices through the text fallback either way.
+  assert.equal(m.parseInterruption({ ...bot('b', 'hi'), meta: JSON.stringify({ kind: 'turn_stalled_x' }) }), null);
+  // Tagged stalls get Retry like the rest.
+  assert.equal(m.retryTargets([user('u1', 'build it'), taggedStall('t5')]).get('t5').text, 'build it');
 });
 
 test('Retry targets the person message before the newest notice only', () => {
