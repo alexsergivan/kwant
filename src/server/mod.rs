@@ -34,6 +34,7 @@ pub mod loose_ends_owner;
 pub mod zombie_routes;
 pub mod parallel_routes;
 pub mod document_routes;
+pub mod connections;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -253,6 +254,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/parallel/scenarios/:id/runs", get(parallel_routes::scenario_runs))
         .route("/api/parallel/runs", get(parallel_routes::list_runs))
         .route("/api/parallel/runs/:id", get(parallel_routes::get_run))
+        .route("/api/connections", get(connections::list))
+        .route("/api/connections/composio", post(connections::add_composio))
         .route("/api/mcp/servers", get(mcp_routes::list_servers).post(mcp_routes::create_server))
         .route(
             "/api/mcp/servers/:id",

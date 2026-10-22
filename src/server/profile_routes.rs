@@ -107,7 +107,7 @@ pub(super) async fn keyed_ids(state: &AppState, profiles: &[LlmProfile]) -> Hash
     ids
 }
 
-async fn views(state: &AppState, profiles: Vec<LlmProfile>) -> Vec<ProfileOut> {
+pub(super) async fn views(state: &AppState, profiles: Vec<LlmProfile>) -> Vec<ProfileOut> {
     let endpoints = state.db.list_profile_endpoints().await.unwrap_or_default();
     // Stale checks of Custom API accounts run together, each bounded by its own timeout
     futures::future::join_all(

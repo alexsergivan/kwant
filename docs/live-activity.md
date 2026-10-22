@@ -1,6 +1,7 @@
 # Live activity and human steps: API
 
-Backend for two UI features on branch `live-activity`:
+Backend for two UI features on branch `live-activity` (the third, Connections, is in
+[connections.md](connections.md)):
 
 1. **Live activity**: what a bot is doing while it works (thinking, each tool it runs, waits for
    approval or for the person), streamed over SSE and kept on the reply after a reload.
@@ -54,9 +55,9 @@ turn's list (keyed by `turn_id`); append it if it's new.
 scoped to the turn). The `activity` step of kind `thinking` only marks start (`running`) and end
 (`ok`, with `text`). While it's running, show the `ThinkingDelta` text under it.
 
-A `note` step (status `ok`) explains a limit, e.g. for engines that don't share thinking:
-"This engine doesn't share its thinking here; you'll see what it says between steps and each
-tool it runs." It is the first step of such turns.
+A `note` step (status `ok`) explains a limit. It is the first step of a turn on an API engine:
+"This engine shares its thinking only when its model returns it; otherwise you'll see what it says
+between steps and each tool it runs." Show it as a muted line, not an error.
 
 ### After a reload: `meta.activity` on the reply
 
@@ -88,7 +89,10 @@ Titles, details and thinking text pass through redaction before they leave the s
 | claude (CLI) | yes. Streamed `thinking_delta` blocks (or whole `thinking` blocks), when the model thinks | yes, from `tool_use` / `tool_result`. Failures carry the error text | yes |
 | codex (CLI) | yes, from reasoning summaries (`codex exec --json` `reasoning` items) | yes: commands (with exit code), file changes, MCP calls, web searches, plan updates | yes (kwnt MCP tools) |
 | grok (CLI) | yes, from `thought` stream events | yes, from `tool_call` / `tool_call_update` (failed status carries the error) | yes (kwnt MCP tools) |
-| API engines (anthropic_api, openai_api, xai_api, ollama, custom_api) | **no**. These get the `note` step. The text the model writes before a tool call still arrives as `ThinkingDelta` | yes | yes |
+| API engines (anthropic_api, openai_api, xai_api, ollama, custom_api) | **when the model returns it**, in full: OpenAI-style `reasoning_content` / `reasoning` (DeepSeek, xAI, Ollama, OpenRouter, vLLM…) and Anthropic `thinking` blocks, streamed (`thinking_delta`, `delta.reasoning_content`) or whole per reply. Redacted thinking is skipped. Turns get the `note` step first. The text the model writes before a tool call also arrives as `ThinkingDelta` | yes | yes |
+
+kwnt doesn't switch on Anthropic extended thinking for API accounts itself (it costs tokens and
+changes replies), so Anthropic API turns show thinking only for models that think by default.
 
 ## 2. Human step
 
@@ -101,13 +105,22 @@ browser):
 { "reason": "Log in to GitHub so I can open the PR", "kind": "sign_in", "url": "https://github.com/login" }
 ```
 
-`kind` is one of `sign_in`, `captcha` or `other`. `reason` is required and at most 300
+`kind` is one of `sign_in`, `captcha`, `two_factor` (a one-time code, an authenticator or a
+security key) or `other`. `reason` is required and at most 300
 characters. `url` is optional, must be http(s), and is stored without user info, query or
 fragment.
 
-The turn waits until the person answers, the turn is stopped, or the wait runs out (a few
-minutes). If the wait runs out, the step stays open and the agent is told to end its turn. When
-the person answers later, a **new turn** starts in the same chat with the outcome.
+### Timeouts
+
+- The turn waits **290 seconds** (the 300-second tool-call limit less 10 seconds) for the person to
+  answer, unless the turn is stopped first (then the step is `cancelled`).
+- If the wait runs out, the step **stays open** and the card stays live; the agent is told to end
+  its turn and say what it is waiting for. The bot's browser stays held for the person.
+- Open steps **never expire** on their own. When the person answers later, Done or Skip starts a
+  **new turn** in the same chat with the outcome (`resumed: "new_turn"`), so the bot carries on
+  from where it stopped.
+- "Skip" in the UI is `POST /api/human-steps/:id/decline`: the bot is told the person skipped the
+  step and continues without it.
 
 **Auto-raise:** when a `browser_open`, `browser_page` or `browser_act` tool lands on a CAPTCHA or
 anti-bot wall (`detect_bot_wall`), kwnt raises a `captcha` step itself (`source: "auto"`), waits
@@ -120,6 +133,12 @@ While a step is open in a bot browser:
 - the browser controller is held for the person, so live-view input goes through even without `take_control` (and `take_control` answers `{"type":"control","active":true}`)
 
 The person can use the live view freely.
+
+**Bots never see typed passwords.** The agent's browser tools are `browser_open`, `browser_page`
+and `browser_act` (click by text, type, key, scroll); there is no script tool. Page reads use
+`innerText` and element labels, which never include the value of an input (only submit and button
+labels), and all three tools are refused while the step is open. This covers kwnt's own browser
+tools; a CLI engine's own built-in browser or shell is outside it.
 
 A turn that asks again while its step is open gets the same step back, so no second card is
 created. Each agent can have at most 5 open steps.
@@ -160,7 +179,8 @@ Sent when a step opens and when it closes.
 
 ### The card message
 
-Opening a step also adds a chat message (`message_added`) from the bot. Its text is something like:
+Opening a step also adds a chat message (`message_added`) from the bot. The first line names the kind: "Sign in needed", "Human check needed",
+"Sign-in code needed" (two_factor) or "Your help is needed". Its text is something like:
 
 > Sign in needed: Log in to GitHub so I can open the PR
 > https://github.com/login
@@ -182,7 +202,7 @@ The card's `meta.status` is updated in place when the step closes. Render it as 
 ### Notification
 
 The standard `Notify` event and webhook use `kind: "human_step"`. The title is "<Bot> needs you in
-the browser". The body is "<Sign in needed | Human check needed | Your help is needed>. Open the
+the browser". The body is "<Sign in needed | Human check needed | Sign-in code needed | Your help is needed>. Open the
 chat, do it in the browser panel, then press Done." The body never includes the reason or URL.
 
 `human_step` was added to `NOTIFY_KINDS`. People who saved a custom notification list must turn it

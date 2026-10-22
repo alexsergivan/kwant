@@ -174,6 +174,7 @@ pub(super) async fn run_test(state: &AppState, stored: &McpServer) -> Value {
                                          "stderr_tail": mcp::redact(&stderr_tail, &secrets) }),
     };
     outcome["duration_ms"] = json!(start.elapsed().as_millis() as u64);
+    super::connections::record_mcp_check(&stored.id, &outcome);
     outcome
 }
 

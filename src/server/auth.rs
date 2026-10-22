@@ -248,7 +248,7 @@ fn exempt(path: &str) -> bool {
         || path == "/api/mcp/self"
 }
 
-/// Routes only the person may call: saved passwords and the password vault (Bitwarden), answering an approval card, Loose ends and Parallel Universe, the
+/// Routes only the person may call: saved passwords and the password vault (Bitwarden), answering an approval card, Loose ends, Connections and Parallel Universe, the
 /// approvals switch, and deleting a bot or team or undoing a bot action or import (those delete saved passwords too). A bot's turn token (or any
 /// bearer that isn't the API token) is refused with 403 everywhere. From another machine they need the API token (401);
 /// from this machine they don't, unless `KWNT_REQUIRE_TOKEN=always` (`person_token_needed`).
@@ -259,6 +259,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "passwords", ..] => true,
         // Loose ends read the person's mail: bots never see or change them
         ["", "api", "zombie", ..] => true,
+        // Connections list saved logins and add Composio, which holds the person's app sign-ins
+        ["", "api", "connections", ..] => true,
         // Parallel Universe starts containers on this machine from a directory the person names
         ["", "api", "parallel", ..] => true,
         // Camera-to-Completed: the person's letters
@@ -581,6 +583,8 @@ mod tests {
         assert!(person_only(&post, "/api/passwords/migrate"));
         assert!(person_only(&get, "/api/zombie/cases"));
         assert!(person_only(&post, "/api/zombie/sources/s1/test"));
+        assert!(person_only(&get, "/api/connections"));
+        assert!(person_only(&post, "/api/connections/composio"));
         assert!(person_only(&get, "/api/parallel/prices"));
         assert!(person_only(&post, "/api/parallel/scenarios"));
         assert!(person_only(&post, "/api/documents"));
