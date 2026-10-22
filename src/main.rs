@@ -56,8 +56,12 @@ pub enum Commands {
     /// List channels stored in the local database
     Channels,
 
-    /// Print the API token that browsers and scripts on other machines need
-    Token,
+    /// Print the link that signs a browser on another machine in (`--raw`: just the token, for scripts)
+    Token {
+        /// Print only the token, for `Authorization: Bearer` in scripts
+        #[arg(long)]
+        raw: bool,
+    },
 
     /// Run a tiny MCP test server on stdin/stdout (for tests and smoke checks)
     #[command(hide = true)]
@@ -192,13 +196,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Agents) => print_agents(&config).await?,
         Some(Commands::Teams) => print_teams(&config).await?,
         Some(Commands::Channels) => print_channels(&config).await?,
-        Some(Commands::Token) => {
+        Some(Commands::Token { raw }) => {
             let token = std::env::var("KWNT_API_TOKEN")
                 .ok()
                 .map(|t| t.trim().to_string())
                 .filter(|t| t.len() >= 16)
                 .unwrap_or_else(|| kwnt::server::auth::load_or_create(&config.data_dir));
-            println!("{token}");
+            if raw {
+                println!("{token}");
+            } else {
+                println!("{}", kwnt::server::auth::token_command_link(&config.host, config.port, &token));
+            }
         }
         Some(Commands::McpEchoServer) => unreachable!("handled before config loading"),
         Some(Commands::McpOauthMockServer { .. }) => unreachable!("handled before config loading"),

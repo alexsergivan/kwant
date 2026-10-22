@@ -50,7 +50,7 @@ class Kwnt:
                 time.sleep(0.3)
         else:
             raise SystemExit("server did not start")
-        self.token = subprocess.run([binary, "token"], env=env, capture_output=True, text=True).stdout.strip()
+        self.token = subprocess.run([binary, "token", "--raw"], env=env, capture_output=True, text=True).stdout.strip()
 
     def call(self, method, path, body=None):
         req = urllib.request.Request(self.base + path, method=method, data=json.dumps(body).encode() if body is not None else None)
