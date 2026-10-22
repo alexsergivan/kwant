@@ -44,12 +44,12 @@ DOCS = [d for _, items in DOC_GROUPS for d in items]
 
 LOGO = (
     '<svg viewBox="0 0 32 32" aria-hidden="true">'
-    '<defs><linearGradient id="kg-ID" x1="0" y1="0" x2="1" y2="1">'
-    '<stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs>'
-    '<rect width="32" height="32" rx="9" fill="url(#kg-ID)"/>'
-    '<path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/>'
-    '<circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/>'
-    '<circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg>'
+    '<circle cx="16" cy="16" r="14" fill="#11151c" stroke="#3a4558" stroke-width="1.5"/>'
+    '<path d="M16 5a11 11 0 0 1 10.4 7.4" fill="none" stroke="#5ec4b6" stroke-width="3" stroke-linecap="round"/>'
+    '<path d="M24.6 22.6A11 11 0 0 1 16 27" fill="none" stroke="#ef7d62" stroke-width="3" stroke-linecap="round"/>'
+    '<path d="M7.4 21A11 11 0 0 1 5.4 13" fill="none" stroke="#f0b44c" stroke-width="3" stroke-linecap="round"/>'
+    '<path d="M16 16L11.5 10" stroke="#ece5d6" stroke-width="2" stroke-linecap="round"/>'
+    '<circle cx="16" cy="16" r="2.4" fill="#f0b44c"/></svg>'
 )
 GH_ICON = (
     '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 '
@@ -111,7 +111,7 @@ def header(root, active):
     return f"""<a class="skip" href="#main">Skip to content</a>
 <header class="site-header">
   <div class="wrap">
-    <a class="brand" href="{home}" aria-label="kwant home">{LOGO.replace("ID", "h")}<span>kwant</span></a>
+    <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
     <nav class="nav" aria-label="Main">
       <a class="hide-sm" href="{root}features.html"{cur("features")}>Features</a>
       <a class="hide-sm" href="{home}#how">How it works</a>
@@ -128,7 +128,8 @@ def footer(root):
     return f"""<footer class="site-footer">
   <div class="wrap">
     <div>
-      <a class="brand" href="{home}" aria-label="kwant home">{LOGO.replace("ID", "f")}<span>kwant</span></a>
+      <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
+      <p class="foot-log"><span>07:15</span> End of shift.</p>
       <p>A self-hosted team of AI bots in one binary. Screens and clips on this site come from a real kwant build running sample data.</p>
     </div>
     <nav aria-label="Footer">
@@ -189,7 +190,7 @@ def page(meta, body, root):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(full_title)}</title>
 <meta name="description" content="{desc}">
-<meta name="theme-color" content="#0d0a1d">
+<meta name="theme-color" content="#0b0e13">
 <meta name="color-scheme" content="dark">
 {robots}<link rel="canonical" href="{url}">
 <meta property="og:type" content="website">
@@ -200,12 +201,13 @@ def page(meta, body, root):
 <meta property="og:image" content="{SITE_URL}/assets/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="kwant: a team of AI bots discussing a feature and posting one summary">
+<meta property="og:image:alt" content="kwant: your team of AI bots works the night shift">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="{root}favicon.svg" type="image/svg+xml">
 <link rel="icon" href="{root}favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="{root}apple-touch-icon.png">
-<link rel="preload" href="{root}assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}assets/fonts/fraunces-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}assets/fonts/instrument-sans-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}assets/css/site.css">
 </head>
 <body>
