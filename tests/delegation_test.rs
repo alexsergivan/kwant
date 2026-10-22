@@ -648,6 +648,11 @@ async fn follow_ups_and_restarts_report_in_the_origin_chat() {
     let lead_chat = env.state.db.list_messages(&env.lead, 30).await.unwrap();
     assert!(lead_chat.iter().any(|m| m.text.contains("Cut short") && m.text.contains("retrying it once now")));
     assert!(lead_chat.iter().any(|m| m.text.contains("answer restarted")));
+    // Its prompt warns that the cut-short run may have done part of the work; a first run's doesn't
+    let rerun = prompts_with("Task: Cut short");
+    assert!(!rerun.is_empty() && rerun.iter().all(|p| p.contains(delegation::RESTARTED_NOTE)), "{rerun:?}");
+    let first = prompts_with("REPLYTAG:two");
+    assert!(!first.is_empty() && first.iter().all(|p| !p.contains("kwnt restarted while")), "{first:?}");
 
     // Only once: one cut short a second time becomes interrupted
     let (_, twice) = env.state.db.create_delegation(&left_open("Cut twice")).await.unwrap();

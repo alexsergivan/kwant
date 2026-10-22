@@ -260,13 +260,23 @@ pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (S
     let job = state.turns.start_job([d.id.clone(), thread.id.clone()]);
     let runner_state = state.clone();
     let (lead, specialist, delegation) = (req.lead, req.specialist, d.clone());
-    tokio::spawn(async move { run(runner_state, job, delegation, lead, specialist, false).await });
+    tokio::spawn(async move { run(runner_state, job, delegation, lead, specialist, false, false).await });
     Ok(d)
 }
 
 /// The background part: the specialist's turn in the thread, then the report in the origin chat.
 /// `retried`: the run after a usage limit reset, which never waits for one again.
-async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: Kwant, specialist: Kwant, retried: bool) {
+/// The task's prompt says so when a restart cut an earlier run short (`after_restart`): that run
+/// may have done part of the work already.
+async fn run(
+    state: AppState,
+    job: super::turns::JobGuard,
+    d: Delegation,
+    lead: Kwant,
+    specialist: Kwant,
+    retried: bool,
+    after_restart: bool,
+) {
     let scope = match scope_for(&state, &specialist, None, Some(d.thread_id.clone()), &job, d.depth).await {
         Ok(s) => s,
         Err(why) => return finish(&state, &d, &specialist, Err(why)).await,
@@ -282,10 +292,11 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
     });
     let prompt = format!(
         "{lead} delegated this task to you. Work on it here; when you finish, your reply is posted back to {lead} \
-        and the chat it came from, so make it a complete, self-contained answer.\n\nTask: {title}\n\n{task}",
+        and the chat it came from, so make it a complete, self-contained answer.\n\nTask: {title}\n\n{task}{again}",
         lead = lead.name,
         title = d.title,
         task = d.task,
+        again = if after_restart { RESTARTED_NOTE } else { "" },
     );
     let mut opts = TurnOpts::default();
     opts.on_started = Some(on_started);
@@ -321,6 +332,11 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
     }
     finish(&state, &d, &specialist, outcome).await;
 }
+
+/// Added to a delegated task that runs again because kwnt restarted in the middle of it.
+pub const RESTARTED_NOTE: &str = "\n\n[kwnt restarted while an earlier run of this task was in progress, so it may have partly run: \
+files may already be written, messages sent or settings changed. Check what is already done before redoing anything, \
+and don't repeat a step that can't be undone (sending, posting, deleting, paying) unless you've confirmed it didn't happen.]";
 
 async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: Result<String, String>) {
     let (status, error) = match &outcome {
@@ -582,7 +598,7 @@ pub async fn interrupt_open(state: &AppState) {
             meta("delegation_started", &d, &specialist),
         )
         .await;
-        restart(state, d, false).await;
+        restart(state, d, false, true).await;
     }
 }
 
@@ -604,11 +620,12 @@ pub async fn retry_parked(state: &AppState, delegation_id: &str) -> bool {
         meta("delegation_started", &d, &specialist),
     )
     .await;
-    restart(state, d, true).await
+    restart(state, d, true, false).await
 }
 
-/// Runs an open delegation's task again in its thread.
-async fn restart(state: &AppState, d: Delegation, retried: bool) -> bool {
+/// Runs an open delegation's task again in its thread. `after_restart`: kwnt restarted during
+/// the earlier run (see [`RESTARTED_NOTE`]); a usage-limit retry ran nothing before it parked.
+async fn restart(state: &AppState, d: Delegation, retried: bool, after_restart: bool) -> bool {
     let (Ok(Some(lead)), Ok(Some(specialist))) =
         (state.db.get_kwant(&d.lead_kwant_id).await, state.db.get_kwant(&d.specialist_kwant_id).await)
     else {
@@ -617,7 +634,7 @@ async fn restart(state: &AppState, d: Delegation, retried: bool) -> bool {
     };
     let job = state.turns.start_job([d.id.clone(), d.thread_id.clone()]);
     tracing::info!(delegation = %d.id, retried, "delegation restarted");
-    tokio::spawn(run(state.clone(), job, d, lead, specialist, retried));
+    tokio::spawn(run(state.clone(), job, d, lead, specialist, retried, after_restart));
     true
 }
 
