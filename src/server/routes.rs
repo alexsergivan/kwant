@@ -821,7 +821,7 @@ pub(super) async fn run_routine_turn(
     let job = state.turns.start_job([context_key.clone()]);
     let scope = scope_for(state, kwant, channel_id, thread_id, &job, 0).await?;
     let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts::default()).await;
-    let reply = continue_once_if_capped(&scope, kwant, reply).await;
+    let reply = continue_once_if_capped(&scope, kwant, reply, false).await;
     match reply {
         Ok(text) => {
             let reply_id = state
@@ -849,7 +849,13 @@ This is your one automatic continuation: pick up where you left off, finish the 
 /// For turns nobody is watching (routines, delegations): a turn that stopped at the model-call
 /// cap gets one more turn to finish, never more. Returns both replies joined, so a delegation's
 /// result has all of it. A turn that didn't hit the cap, or failed, is returned as it is.
-pub(super) async fn continue_once_if_capped(scope: &TurnScope, kwant: &Kwant, first: Result<String, String>) -> Result<String, String> {
+/// `always_ask` carries [`TurnOpts::always_ask`] over to the continuation.
+pub(super) async fn continue_once_if_capped(
+    scope: &TurnScope,
+    kwant: &Kwant,
+    first: Result<String, String>,
+    always_ask: bool,
+) -> Result<String, String> {
     let Ok(text) = &first else {
         return first;
     };
@@ -857,7 +863,11 @@ pub(super) async fn continue_once_if_capped(scope: &TurnScope, kwant: &Kwant, fi
         return first;
     }
     tracing::info!(kwant = %kwant.id, "turn hit the model-call cap: one automatic continuation");
-    let opts = TurnOpts { label: Some("Automatic continuation (once): the last turn ran out of model calls".into()), ..Default::default() };
+    let opts = TurnOpts {
+        label: Some("Automatic continuation (once): the last turn ran out of model calls".into()),
+        always_ask,
+        ..Default::default()
+    };
     match try_kwant_turn(scope, kwant, CONTINUE_PROMPT.to_string(), opts).await {
         Ok(more) => Ok(format!("{}\n\n{more}", text.trim_end())),
         Err(_) => first,
@@ -1248,6 +1258,9 @@ pub(super) struct TurnOpts {
     /// (agent, effort) to run on instead of asking Laya: a turn resumed after a late Allow
     /// keeps those of the turn that asked.
     routed: Option<(String, String)>,
+    /// Every call that could change something asks the person, even with approvals off (an
+    /// owner turn kwnt starts on its own; see [`super::loose_ends_owner`]).
+    pub(super) always_ask: bool,
 }
 
 impl TurnOpts {
@@ -1255,6 +1268,12 @@ impl TurnOpts {
     pub(super) fn routed_as(agent: Option<&str>, effort: Option<&str>) -> Self {
         let routed = agent.zip(effort).map(|(a, e)| (a.to_string(), e.to_string()));
         TurnOpts { routed, ..Default::default() }
+    }
+
+    /// Options for a turn nobody asked for, saved under `label`: every call that could change
+    /// something asks (see [`TurnOpts::always_ask`]).
+    pub(super) fn always_asking(label: &str) -> Self {
+        TurnOpts { label: Some(label.to_string()), always_ask: true, ..Default::default() }
     }
 }
 
@@ -1649,6 +1668,7 @@ async fn run_kwant_turn_inner(
         });
         let card_opts = super::mcp_runtime::TurnApprovalOpts {
             routed: Some((target_model.clone(), effort_level.clone())),
+            always_ask: opts.always_ask,
         };
         let mcp_turn = super::mcp_runtime::prepare_turn_with_opts(
             state,

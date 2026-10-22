@@ -236,9 +236,28 @@ pub fn self_server(base_url: &str, token: &str) -> McpServer {
 }
 
 /// Lets calls to the agents' own tools through without a card; everything else goes to `inner`.
+/// With `always_ask`, only the self tools that just read go through; the rest ask too.
 pub struct SelfToolsApprover {
     pub inner: Arc<dyn ToolApprover>,
+    pub always_ask: bool,
 }
+
+/// The agents' own tools that only read: free even in an always-ask turn.
+const READ_ONLY_SELF_TOOLS: &[&str] = &[
+    "search_history",
+    "delegation_status",
+    "routine_list",
+    "bot_list",
+    "settings_get",
+    "space_get",
+    "space_list",
+    "channel_list",
+    "hire_status",
+    "list_attachments",
+    "read_attachment",
+    "mcp_search",
+    "skill_get",
+];
 
 #[async_trait]
 impl ToolApprover for SelfToolsApprover {
@@ -247,7 +266,7 @@ impl ToolApprover for SelfToolsApprover {
     }
 
     async fn decide(&self, req: ToolApprovalRequest) -> crate::mcp::ApprovalOutcome {
-        if req.server == SELF_SERVER_NAME {
+        if req.server == SELF_SERVER_NAME && (!self.always_ask || READ_ONLY_SELF_TOOLS.contains(&req.tool.as_str())) {
             return crate::mcp::ApprovalOutcome::Allowed;
         }
         self.inner.decide(req).await

@@ -240,10 +240,10 @@ async fn start(state: &AppState, space: &SpaceId, events: &[(Event, Vec<CaseRow>
     let id = kwant.id.clone();
     tokio::spawn(async move {
         let _job = job;
-        let mut opts = TurnOpts::default();
-        opts.label = Some("Loose ends: prepare drafts and next steps".into());
+        // Nobody asked for this turn: anything that could change something asks, approvals off or not
+        let opts = TurnOpts::always_asking("Loose ends: prepare drafts and next steps");
         let reply = try_kwant_turn(&scope, &kwant, text, opts).await;
-        let _ = continue_once_if_capped(&scope, &kwant, reply).await;
+        let _ = continue_once_if_capped(&scope, &kwant, reply, true).await;
     });
     Some(id)
 }

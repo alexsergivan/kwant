@@ -125,6 +125,10 @@ pub struct BrokerApprover {
     /// The chat a card left unanswered resumes in after a late Allow (see [`turn_chat`]);
     /// `None` resumes in the bot's direct chat.
     pub chat: Option<Value>,
+    /// Ask even when the bot's approvals are off, and don't use "always allow" answers: for
+    /// turns kwnt starts on its own that nobody asked for (the loose-ends owner). A call the
+    /// person allowed on a card (late Allow) still runs once.
+    pub always_ask: bool,
 }
 
 /// Withdraws the ticket if the waiting turn is cancelled (its future dropped) mid-wait.
@@ -159,7 +163,7 @@ impl ToolApprover for BrokerApprover {
     async fn decide(&self, req: ToolApprovalRequest) -> ApprovalOutcome {
         // Approvals the person switched off: run, and keep a record of what ran. A setting that
         // can't be read asks, as before.
-        let off = self.db.kwant_approvals(&req.kwant_id).await.is_ok_and(|m| m.is_off());
+        let off = !self.always_ask && self.db.kwant_approvals(&req.kwant_id).await.is_ok_and(|m| m.is_off());
         let details = match &req.builtin {
             Some(b) => json!({
                 "source": "claude_builtin",
@@ -195,7 +199,7 @@ impl ToolApprover for BrokerApprover {
             }
             return ApprovalOutcome::Denied;
         }
-        if !off && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
+        if !off && !self.always_ask && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
             return ApprovalOutcome::Allowed;
         }
         if off {
@@ -405,6 +409,9 @@ pub struct TurnApprovalOpts {
     /// The turn's (agent, effort): a card it leaves unanswered resumes on the same ones after a
     /// late Allow.
     pub routed: Option<(String, String)>,
+    /// Every call that could change something asks, approvals off or not (see
+    /// [`BrokerApprover::always_ask`]).
+    pub always_ask: bool,
 }
 
 /// [`prepare_turn_with_self`] with [`TurnApprovalOpts`].
@@ -450,11 +457,12 @@ pub async fn prepare_turn_with_opts(
         timeout: APPROVAL_TIMEOUT,
         conversation: turn_conversation(state, &turn_id),
         chat,
+        always_ask: opts.always_ask,
     });
     let ctx = McpTurnContext {
         servers,
         approver: if self_tools {
-            Arc::new(super::continuity::SelfToolsApprover { inner: broker_approver })
+            Arc::new(super::continuity::SelfToolsApprover { inner: broker_approver, always_ask: opts.always_ask })
         } else {
             broker_approver
         },

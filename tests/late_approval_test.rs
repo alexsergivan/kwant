@@ -19,6 +19,7 @@ fn approver(env: &Env, timeout: Duration) -> Arc<BrokerApprover> {
         timeout,
         conversation: env.a.clone(),
         chat: Some(json!({"direct_kwant_id": env.a})),
+        always_ask: false,
     })
 }
 
@@ -96,6 +97,7 @@ async fn a_grant_runs_once_only_in_its_own_conversation() {
         timeout: Duration::from_millis(200),
         conversation: "some-other-thread".into(),
         chat: Some(json!({"thread_id": "some-other-thread"})),
+        always_ask: false,
     };
     assert_eq!(elsewhere.decide(request(&env, args.clone())).await, ApprovalOutcome::Unanswered);
     // Its own conversation can, once (a new description is fine), and only that call

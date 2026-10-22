@@ -292,7 +292,7 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
     opts.retried = retried;
     opts.delegation_id = Some(d.id.clone());
     let outcome = try_kwant_turn(&scope, &specialist, prompt, opts).await;
-    let outcome = continue_once_if_capped(&scope, &specialist, outcome).await;
+    let outcome = continue_once_if_capped(&scope, &specialist, outcome, false).await;
     let outcome = match outcome {
         Err(_) if job.token.is_cancelled() => Err("stopped".to_string()),
         other => other,

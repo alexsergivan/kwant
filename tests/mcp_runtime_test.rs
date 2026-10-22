@@ -107,6 +107,7 @@ fn approver(state: &AppState, timeout: Duration) -> Arc<BrokerApprover> {
         timeout,
         conversation: "conv-test".into(),
         chat: None,
+        always_ask: false,
     })
 }
 
