@@ -35,3 +35,14 @@ test('the sidebar hides every team chat and nothing else', async () => {
   const shown = channels.filter((c) => ![startup].some((t) => teamChannelOf(channels, t)?.id === c.id));
   assert.deepEqual(shown.map((c) => c.name), ['general', 'team-ghost']);
 });
+
+test("saving Manage Team keeps a hired team's name as it is", async () => {
+  const { teamNameToSave } = await loadBundled(`export * from './src/teamChannel';`);
+  // The bug: any save turned "Startup" into "startup", and the team lost its chat.
+  assert.equal(teamNameToSave('Startup', 'Startup'), 'Startup');
+  assert.equal(teamNameToSave(' Startup ', 'Startup'), 'Startup');
+  // A name the person actually typed is still made into a handle.
+  assert.equal(teamNameToSave('Launch Crew', 'Startup'), 'launch-crew');
+  const src = (await import('node:fs')).readFileSync(new URL('../src/components/ManageTeamModal.tsx', import.meta.url), 'utf8');
+  assert.match(src, /teamNameToSave\(name, team\.name\)/);
+});

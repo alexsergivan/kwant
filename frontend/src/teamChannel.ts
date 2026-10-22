@@ -16,3 +16,8 @@ export const teamChannelOf = <C extends Named>(channels: C[], t: Named): C | und
 /** The team whose chat channel `c` is, if any. */
 export const teamOfChannel = <T extends Named>(teams: T[], c: Named): T | undefined =>
   teams.find((t) => t.id === c.id || c.name === `team-${t.name}`) ?? teams.find((t) => isTeamChannel(c, t));
+
+/** The name Manage Team saves: `typed` made into a handle, unless it is still the team's own name
+ * (a hired team can be called "Startup"), so saving other changes never renames the team. */
+export const teamNameToSave = (typed: string, current: string) =>
+  typed.trim() === current ? current : typed.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
