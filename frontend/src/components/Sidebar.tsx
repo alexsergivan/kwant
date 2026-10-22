@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split, Hand } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
@@ -78,6 +78,8 @@ export interface SidebarProps {
   selectedTeamId?: string | null;
   /** Bots busy outside the open chat -> "Working on …", shown under their name. */
   busyKwants?: Record<string, string>;
+  /** Open browser steps per bot ("Needs you" pill). */
+  needsYou?: Record<string, number>;
   onSelectKwant: (kwant: Kwant) => void;
   onSelectChannel: (channel: Channel) => void;
   onSelectTeam: (team: Team) => void;
@@ -135,6 +137,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isChannel,
   selectedTeamId,
   busyKwants = {},
+  needsYou = {},
   onSelectKwant,
   onSelectChannel,
   onSelectTeam,
@@ -452,6 +455,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 {k.name}
                                 {busyKwants[k.id] && <span className="sr-only"> ({busyKwants[k.id]})</span>}
                               </span>
+                              {needsYou[k.id] > 0 && (
+                                <span className="shrink-0 inline-flex text-amber-300" role="img" aria-label="Needs you in the browser" title="Needs you in the browser">
+                                  <Hand size={11} />
+                                </span>
+                              )}
                               {busyKwants[k.id] && (
                                 <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-sky-400 animate-pulse motion-reduce:animate-none" aria-hidden="true" />
                               )}
@@ -615,6 +623,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-1">
                       <span className="text-xs font-semibold text-zinc-200 truncate">{k.name}</span>
+                      {needsYou[k.id] > 0 && (
+                        <span
+                          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-px rounded-full text-[10px] font-medium bg-amber-400/15 text-amber-200 border border-amber-400/30"
+                          title={`${k.name} needs you in the browser`}
+                        >
+                          <Hand size={10} aria-hidden="true" />
+                          Needs you{needsYou[k.id] > 1 ? ` · ${needsYou[k.id]}` : ''}
+                        </span>
+                      )}
                       {approvalsOff(k) && <ApprovalsOffBadge compact title={`${k.name} runs commands, file writes and tools without asking.`} />}
                       {onEditKwant && (
                         <button

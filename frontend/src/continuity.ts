@@ -99,7 +99,8 @@ export type NotifyKind =
   | 'delegation_finished'
   | 'delegation_stalled'
   | 'skill_proposed'
-  | 'question_asked';
+  | 'question_asked'
+  | 'human_step';
 export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'turn_finished', label: 'A bot finished replying' },
   { id: 'approval_needed', label: 'A bot needs your approval' },
@@ -108,10 +109,11 @@ export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'delegation_stalled', label: 'A delegated task is taking long' },
   { id: 'skill_proposed', label: 'A bot proposed a skill to review' },
   { id: 'question_asked', label: 'A bot has a question for you' },
+  { id: 'human_step', label: 'A bot needs you in the browser' },
 ];
 
 /** Kinds also shown as an in-app toast while kwnt is visible (the others only matter in the background). */
-export const TOAST_KINDS: NotifyKind[] = ['routine_failed', 'delegation_finished', 'delegation_stalled', 'skill_proposed', 'question_asked'];
+export const TOAST_KINDS: NotifyKind[] = ['routine_failed', 'delegation_finished', 'delegation_stalled', 'skill_proposed', 'question_asked', 'human_step'];
 
 export interface NotifyEvent {
   kind: NotifyKind;

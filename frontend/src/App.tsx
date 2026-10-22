@@ -8,6 +8,17 @@ import { DelegationCard } from './components/DelegationCard';
 import { ApprovalsOffBadge } from './components/ApprovalsSetting';
 import { APPROVALS_CHANGED_EVENT, approvalsOff } from './approvalMode';
 import { QuestionCard } from './components/QuestionCard';
+import { HumanStepCard } from './components/HumanStepCard';
+import { LiveActivity, appendThinking, applyActivity, parseStep } from './activity';
+import {
+  HumanStep,
+  HumanStepMeta,
+  applyHumanStep,
+  humanStepsApi,
+  latestOpenStep,
+  openStepsByKwant,
+  turnsAwaitingStep,
+} from './humanSteps';
 import { McpSuggestionCard } from './components/McpSuggestionCard';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
 import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, changesBots, decisionError, hiresApi } from './botActions';
@@ -170,6 +181,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [streamingText, setStreamingText] = useState('');
   const [streamingThinking, setStreamingThinking] = useState('');
   const streamsRef = useRef<Record<string, { text: string; thinking: string }>>({});
+  // Running turns' live steps by turn id (with the chat they belong to), until the saved reply shows.
+  const [activity, setActivity] = useState<Record<string, LiveActivity & { ctx: string }>>({});
+  const activityRef = useRef(activity);
+  const setActivityMap = (next: Record<string, LiveActivity & { ctx: string }>) => {
+    activityRef.current = next;
+    setActivity(next);
+  };
   // Chats with a reply in flight -> who is replying. Several can stream at once.
   const [live, setLive] = useState<Record<string, string>>({});
   const liveRef = useRef(live);
@@ -286,6 +304,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const openSkillsRef = useRef<(kwantId: string) => void>(() => undefined);
   // Opens the chat of a bot's newest open question; false when it has none.
   const openQuestionRef = useRef<(kwantId: string) => boolean>(() => false);
+  // Opens the chat of a bot's newest open browser step; false when it has none.
+  const openHumanStepRef = useRef<(kwantId: string) => boolean>(() => false);
   const openTargetRef = useRef<(t: { channel_id: string | null; kwant_id: string | null }) => boolean>(() => false);
   const showNotification = (n: NotifyEvent) => {
     // Another space's news is the shell's to show, with a way to switch there.
@@ -302,7 +322,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             ? { label: 'Review', onClick: () => openSkillsRef.current(n.kwant_id) }
             : n.kind === 'question_asked'
               ? { label: 'Answer', onClick: () => openQuestionRef.current(n.kwant_id) || openTargetRef.current(target) }
-              : { label: 'Open', onClick: () => openTargetRef.current(target) };
+              : n.kind === 'human_step'
+                ? { label: 'Open', onClick: () => openHumanStepRef.current(n.kwant_id) || openTargetRef.current(target) }
+                : { label: 'Open', onClick: () => openTargetRef.current(target) };
       setToasts((prev) => [...prev.slice(-2), { id, title: n.title, detail: n.body, action }]);
       if (n.kind !== 'routine_failed') playSfx('alert');
       return;
@@ -313,6 +335,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       note.onclick = () => {
         window.focus();
         if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
+        else if (n.kind === 'human_step' && openHumanStepRef.current(n.kwant_id)) setIsVmPaneOpen(true);
         else if (!(n.kind === 'question_asked' && openQuestionRef.current(n.kwant_id))) openTargetRef.current(target);
         note.close();
       };
@@ -448,6 +471,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       });
     }, () => undefined);
     suggestionsApi.list().then((list) => setSuggestions((prev) => list.reduce(applySuggestion, prev)), () => undefined);
+    humanStepsApi.listOpen().then((list) => {
+      setHumanSteps((prev) => {
+        const next: Record<string, HumanStep> = {};
+        for (const st of list) next[st.id] = st;
+        for (const st of Object.values(prev)) if (st.status !== 'open' && !next[st.id]) next[st.id] = st;
+        return next;
+      });
+    }, () => undefined);
     try {
       const { turns: list } = await threadsApi.turns();
       const map = hydrateTurns(list);
@@ -483,6 +514,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [questions, setQuestions] = useState<Record<string, Question>>({});
   const questionsRef = useRef(questions);
   questionsRef.current = questions;
+  // Steps bots asked the person to do in the browser: open ones from the server, plus every human_step_updated.
+  const [humanSteps, setHumanSteps] = useState<Record<string, HumanStep>>({});
+  const humanStepsRef = useRef(humanSteps);
+  humanStepsRef.current = humanSteps;
   // Bots' tool suggestions by id (from the list and mcp_suggestion_updated), and installed
   // servers that still need the person to sign in.
   const [suggestions, setSuggestions] = useState<Record<string, Suggestion>>({});
@@ -599,8 +634,19 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     const completed = new Set<string>();
 
     /** After a reply: drop the chat's stream once nothing else runs or waits there. */
+    /** Live steps of turns in `ctx` that have finished: their saved reply carries them now. */
+    const dropActivity = (ctx: string) => {
+      const cur = activityRef.current;
+      const running = new Set(turnsIn(turnsRef.current, ctx).map((t) => t.turn_id));
+      const gone = Object.keys(cur).filter((id) => cur[id].ctx === ctx && (completed.has(id) || !running.has(id)));
+      if (!gone.length) return;
+      const next = { ...cur };
+      for (const id of gone) delete next[id];
+      setActivityMap(next);
+    };
     const settle = (ctx: string | null) => {
       if (!ctx) return;
+      dropActivity(ctx);
       if (discussionInProgressRef.current && ctx === streamingContextIdRef.current) return;
       if (turnsIn(turnsRef.current, ctx).length > 0) {
         streamsRef.current[ctx] = { text: '', thinking: '' };
@@ -781,6 +827,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const ctx = streamTarget(event, streamingContextIdRef.current);
             if (!ctx) break;
             const buf = (streamsRef.current[ctx] ??= { text: '', thinking: '' });
+            if (event.type === 'ThinkingDelta' && typeof event.turn_id === 'string') {
+              // Thinking under an open thinking step goes into it; anything else is a status line.
+              const cur = activityRef.current[event.turn_id];
+              const next = appendThinking(cur, event.turn_id, String(event.data ?? ''));
+              if (cur && next) {
+                setActivityMap({ ...activityRef.current, [event.turn_id]: { ...next, ctx: cur.ctx } });
+                break;
+              }
+            }
             if (event.type === 'TextDelta') buf.text += event.data;
             else buf.thinking = event.data;
             if (!(ctx in liveRef.current)) markLive(ctx, kwantName(event.kwant_id));
@@ -790,6 +845,25 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 playSfx('blip');
               } else setStreamingThinking(buf.thinking);
             }
+            break;
+          }
+          case 'activity':
+          case 'Activity': {
+            const step = parseStep(event.data?.step);
+            const ctx = streamTarget(event, streamingContextIdRef.current);
+            const turnId: string | undefined = typeof event.turn_id === 'string' ? event.turn_id : undefined;
+            if (!step || !ctx || !turnId) break;
+            const cur = activityRef.current[turnId];
+            setActivityMap({ ...activityRef.current, [turnId]: { ...applyActivity(cur, turnId, step), ctx } });
+            if (!(ctx in liveRef.current)) markLive(ctx, kwantName(event.kwant_id));
+            break;
+          }
+          case 'human_step_updated':
+          case 'HumanStepUpdated': {
+            const st: HumanStep | undefined = event.data?.step;
+            if (!st?.id) break;
+            setHumanSteps((prev) => applyHumanStep(prev, st));
+            if (st.status === 'open') playSfx('alert');
             break;
           }
           case 'routing_started':
@@ -1276,6 +1350,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     if (q.message_id) setHighlightMessageId(q.message_id);
     return true;
   };
+  openHumanStepRef.current = (kwantId: string) => {
+    const st = latestOpenStep(humanStepsRef.current, kwantId);
+    if (!st) return false;
+    if (st.thread_id) openThread(st.kwant_id, st.thread_id);
+    else openTarget({ channel_id: st.channel_id, kwant_id: st.channel_id ? null : st.kwant_id });
+    if (st.message_id) setHighlightMessageId(st.message_id);
+    return true;
+  };
   openSkillsRef.current = (kwantId: string) => {
     const k = kwants.find((x) => x.id === kwantId);
     if (k) openAgentSettings(k, 'skills');
@@ -1422,6 +1504,47 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         waiting={!!turnId && !!turns[turnId]}
         onAnswer={handleAnswerQuestion}
         onDismiss={handleDismissQuestion}
+        flash={flash}
+      />
+    );
+  };
+
+  /** Done or Skip on a browser step. A 409 means it was answered elsewhere: show how it ended. */
+  const answerHumanStep = async (id: string, which: 'done' | 'decline'): Promise<string | void> => {
+    try {
+      const { step } = await (which === 'done' ? humanStepsApi.done(id) : humanStepsApi.decline(id));
+      setHumanSteps((prev) => applyHumanStep(prev, step));
+    } catch (err) {
+      try {
+        const { step } = await humanStepsApi.get(id);
+        setHumanSteps((prev) => applyHumanStep(prev, step));
+        if (step.status === 'done') return 'This was already marked done.';
+        if (step.status === 'declined') return 'This was already skipped.';
+        if (step.status === 'cancelled') return 'This was closed: the reply was stopped.';
+      } catch {
+        // keep the first error
+      }
+      return `Couldn't send that: ${errText(err)}`;
+    }
+  };
+  const renderHumanStep = (msg: ChatMessage, meta: HumanStepMeta, flash: boolean) => {
+    const st = humanSteps[meta.human_step_id];
+    const turnId = st?.turn_id;
+    const name = st ? kwantName(st.kwant_id) : undefined;
+    return (
+      <HumanStepCard
+        meta={meta}
+        messageId={msg.id}
+        kwantName={name ?? (msg.sender_id && msg.sender_id.length <= 20 ? msg.sender_id : chatTitle)}
+        kwantId={st?.kwant_id}
+        live={st}
+        waiting={!!turnId && !!turns[turnId]}
+        onOpenBrowser={() => {
+          setIsVmPaneOpen(true);
+          playSfx('click');
+        }}
+        onDone={(id) => answerHumanStep(id, 'done')}
+        onSkip={(id) => answerHumanStep(id, 'decline')}
         flash={flash}
       />
     );
@@ -2125,8 +2248,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const isCurrentContextStreaming = openCtx in live;
   const openTurns = turnsIn(turns, openCtx);
   // Turns paused on a question wait for the person; they don't make the bot "busy".
-  const awaitingTurns = turnsAwaitingAnswer(questions);
+  const browserTurns = turnsAwaitingStep(humanSteps);
+  const awaitingTurns = new Set([...turnsAwaitingAnswer(questions), ...browserTurns]);
   const awaitingHere = openTurns.some((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) && !openTurns.some((t) => t.state === 'running' && !awaitingTurns.has(t.turn_id));
+  const awaitingBrowserHere = awaitingHere && openTurns.some((t) => t.state === 'running' && browserTurns.has(t.turn_id));
+  // The open chat's running turn's live steps (the newest, when several reply at once).
+  const activityHere = Object.values(activity).filter((a) => a.ctx === openCtx && turns[a.turnId]).pop() ?? null;
+  const needsYouByKwant = openStepsByKwant(humanSteps);
   const waiting = openTurns.some((t) => t.state === 'running') ? undefined : openTurns.find((t) => t.state === 'queued');
   const queuedHere: QueuedState | null = waiting
     ? { position: queuePosition(turns, waiting.turn_id), reason: waiting.reason ?? 'agent_busy', speaker: kwantName(waiting.kwant_id) ?? live[openCtx] ?? 'The bot' }
@@ -2158,7 +2286,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           <Loader2 size={10} className="shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
         )}
         <span className="truncate">
-          {elsewhere[0].state === 'queued' ? 'Waiting to work on ' : awaitingTurns.has(elsewhere[0].turn_id) ? 'Asked you a question in ' : 'Working on '}
+          {elsewhere[0].state === 'queued' ? 'Waiting to work on ' : browserTurns.has(elsewhere[0].turn_id) ? 'Needs you in the browser in ' : awaitingTurns.has(elsewhere[0].turn_id) ? 'Asked you a question in ' : 'Working on '}
           {describeContext(elsewhere[0].context_id, elsewhere[0].kwant_id)}
         </span>
         {elsewhere.length > 1 && <span className="shrink-0 text-sky-300/80">+{elsewhere.length - 1} more</span>}
@@ -2184,7 +2312,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const busyKwants: Record<string, string> = {};
   for (const t of Object.values(turns)) {
     if (t.context_id === openCtx || busyKwants[t.kwant_id]) continue;
-    busyKwants[t.kwant_id] = `${t.state === 'queued' ? 'Waiting to work on' : awaitingTurns.has(t.turn_id) ? 'Asked you a question in' : 'Working on'} ${describeContext(t.context_id, t.kwant_id)}`;
+    busyKwants[t.kwant_id] = `${t.state === 'queued' ? 'Waiting to work on' : browserTurns.has(t.turn_id) ? 'Needs you in the browser in' : awaitingTurns.has(t.turn_id) ? 'Asked you a question in' : 'Working on'} ${describeContext(t.context_id, t.kwant_id)}`;
   }
 
   // Delete is off while the bot runs anywhere, the open chat included.
@@ -2401,6 +2529,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       isChannel={isChannel}
       selectedTeamId={selectedTeamId}
       busyKwants={busyKwants}
+      needsYou={needsYouByKwant}
       onSelectKwant={handleSelectKwant}
       onSelectChannel={handleSelectChannel}
       onSelectTeam={handleSelectTeam}
@@ -2548,6 +2677,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           renderBotAction={renderBotAction}
           renderHire={renderHire}
           awaitingAnswer={awaitingHere}
+          awaitingBrowser={awaitingBrowserHere}
+          liveActivity={isCurrentContextStreaming ? activityHere : null}
+          renderHumanStep={renderHumanStep}
           contextKey={openCtx}
         />
   );

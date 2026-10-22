@@ -11,6 +11,9 @@ import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThr
 import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
 import { QuestionMeta, parseQuestionMeta } from '../questions';
+import { HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
+import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
+import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { SuggestionMeta, parseSuggestionMeta } from '../mcpSuggestions';
 import { BotActionMeta, HireMeta, parseBotActionMeta, parseHireMeta } from '../botActions';
 import {
@@ -174,6 +177,12 @@ export interface ChatViewProps {
   canRun?: boolean | null;
   /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
   awaitingAnswer?: boolean;
+  /** …and the pause is a browser step (sign-in, CAPTCHA) rather than a question. */
+  awaitingBrowser?: boolean;
+  /** The running reply's steps so far (thinking, tools, waits). */
+  liveActivity?: LiveActivity | null;
+  /** Draws a bot's browser-step card (message meta kind "human_step"). */
+  renderHumanStep?: (msg: ChatMessage, meta: HumanStepMeta, flash: boolean) => React.ReactNode;
   /** Changes when another chat opens, so the view jumps to its bottom. */
   contextKey?: string;
 }
@@ -326,6 +335,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onOpenAccounts,
   canRun = null,
   awaitingAnswer,
+  awaitingBrowser,
+  liveActivity,
+  renderHumanStep,
   contextKey,
 }) => {
   const [internalIsVmPaneOpen, setInternalIsVmPaneOpen] = useState(false);
@@ -679,6 +691,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (meta && renderDelegation) return <React.Fragment key={msg.id}>{renderDelegation(msg, meta, flashId === msg.id)}</React.Fragment>;
     const question = msg.meta && renderQuestion ? parseQuestionMeta(msg.meta) : null;
     if (question && renderQuestion) return <React.Fragment key={msg.id}>{renderQuestion(msg, question, flashId === msg.id)}</React.Fragment>;
+    const humanStep = msg.meta && renderHumanStep ? parseHumanStepMeta(msg.meta) : null;
+    if (humanStep && renderHumanStep) return <React.Fragment key={msg.id}>{renderHumanStep(msg, humanStep, flashId === msg.id)}</React.Fragment>;
     const suggestion = msg.meta && renderMcpSuggestion ? parseSuggestionMeta(msg.meta) : null;
     if (suggestion && renderMcpSuggestion) return <React.Fragment key={msg.id}>{renderMcpSuggestion(msg, suggestion, flashId === msg.id)}</React.Fragment>;
     const botAction = msg.meta && renderBotAction ? parseBotActionMeta(msg.meta) : null;
@@ -706,6 +720,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     // A bot's share_file note: the file tiles say it all.
     const filesOnly = files.length > 0 && isSharedFileMessage(msg.meta);
     const isThoughtOpen = !!openThoughts[msg.id];
+    const savedActivity = !isUser && msg.meta ? parseActivityMeta(msg.meta) : null;
     const ranOn = isUser ? null : ranOnLabel(msg.meta);
     const account = isUser ? null : ranOnAccount(msg.meta);
     // Any auto-routed channel, not only #general: the server attaches `routing` wherever it picked the bot.
@@ -748,8 +763,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </p>
           )}
 
-          {/* Collapsible Reasoning Disclosure */}
-          {msg.reasoning_content && (
+          {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
+          {savedActivity && (
+            <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`}>
+              {msg.tool_calls && (
+                <div className="border-t border-zinc-800/60 p-2">
+                  <ToolCallsList raw={msg.tool_calls} />
+                </div>
+              )}
+            </SavedActivityList>
+          )}
+
+          {/* Collapsible Reasoning Disclosure (the steps above already hold the thinking when they have it) */}
+          {msg.reasoning_content && !hasThinkingText(savedActivity) && (
             <div className="mb-2 max-w-full">
               <button
                 type="button"
@@ -789,7 +815,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
           {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} />}
 
-          {!isUser && msg.tool_calls && <ToolCallsList raw={msg.tool_calls} />}
+          {!isUser && msg.tool_calls && !savedActivity && <ToolCallsList raw={msg.tool_calls} />}
 
           {/* Copy action */}
           {!isUser && !filesOnly && (
@@ -1074,7 +1100,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 ) : awaitingAnswer ? (
                   <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
-                    Waiting for your answer
+                    {awaitingBrowser ? 'Waiting for you in the browser' : 'Waiting for your answer'}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
@@ -1084,8 +1110,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 )}
               </div>
 
+              {liveActivity && <LiveActivityList live={liveActivity} idBase={`live-${liveActivity.turnId}`} />}
+
               {streamingThinking && (
-                <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs font-mono text-violet-300/90 flex items-center gap-2 animate-pulse max-w-full">
+                <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs font-mono text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
                   <Sparkles size={13} className="text-violet-400 flex-shrink-0" />
                   <span className="truncate">{streamingThinking}</span>
                 </div>
@@ -1103,7 +1131,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   <MarkdownRenderer content={stripDiscussionMarkers(streamingText)} isStreaming={true} />
                 ) : awaitingAnswer ? (
                   <p className="text-zinc-400" role="status">
-                    Paused on the question above. Answer it there; this reply carries on from it.
+                    {awaitingBrowser
+                      ? 'Paused on the browser step above. Do it in the browser panel and press Done; this reply carries on from it.'
+                      : 'Paused on the question above. Answer it there; this reply carries on from it.'}
                   </p>
                 ) : (
                   <span className="inline-flex gap-1 py-1.5" aria-label="Waiting for the first words">
