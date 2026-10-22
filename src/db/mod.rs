@@ -567,6 +567,10 @@ impl Database {
     }
 
     /// Fails with [`DbError::OtherSpace`] when the lead or a member is another space's kwant.
+    ///
+    /// A rename carries the team's chat along (`team-<old>` becomes `team-<new>`), in the same
+    /// transaction as the team. Fails with [`DbError::Conflict`] when another channel already has
+    /// the new name, rather than leaving the team's chat behind under its old one.
     pub async fn update_team(&self, id: &str, input: &NewTeam) -> Result<Option<Team>, DbError> {
         let icon = input.icon.as_deref().unwrap_or("users");
         let members_json = serde_json::to_string(&input.member_kwants)?;
@@ -575,7 +579,31 @@ impl Database {
         };
         self.check_members(&space, &input.lead_kwant_id, &input.member_kwants).await?;
 
-        let res = sqlx::query(
+        let mut tx = self.pool.begin().await?;
+        let Some((old_name,)): Option<(String,)> = sqlx::query_as("SELECT name FROM teams WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let new_channel = format!("team-{}", input.name);
+        let chat = team_channel_id(&mut *tx, &space, &old_name).await?;
+        let taken: Option<(String,)> = sqlx::query_as("SELECT id FROM channels WHERE space_id = ? AND name = ?")
+            .bind(space.as_str())
+            .bind(&new_channel)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let chat = match (chat, taken) {
+            (Some(chat), Some((other,))) if chat != other => {
+                return Err(DbError::Conflict(format!(
+                    "a channel called #{new_channel} already exists; rename or delete it first"
+                )));
+            }
+            (chat, taken) => chat.or(taken.map(|(t,)| t)),
+        };
+
+        sqlx::query(
             r#"
             UPDATE teams
             SET name = ?, description = ?, icon = ?, lead_kwant_id = ?, member_kwants = ?, workspace_path = ?, repo_url = ?
@@ -590,23 +618,20 @@ impl Database {
         .bind(&input.workspace_path)
         .bind(&input.repo_url)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
-        if res.rows_affected() == 0 {
-            return Ok(None);
+        if let Some(chat) = chat {
+            sqlx::query("UPDATE channels SET name = ?, description = ?, lead_kwant_id = ?, member_kwants = ? WHERE id = ?")
+                .bind(&new_channel)
+                .bind(&input.description)
+                .bind(&input.lead_kwant_id)
+                .bind(&members_json)
+                .bind(&chat)
+                .execute(&mut *tx)
+                .await?;
         }
-
-        // Also update corresponding team channel if it exists
-        let channel_name = format!("team-{}", input.name);
-        let _ = sqlx::query("UPDATE channels SET description = ?, lead_kwant_id = ?, member_kwants = ? WHERE name = ? AND space_id = ?")
-            .bind(&input.description)
-            .bind(&input.lead_kwant_id)
-            .bind(&members_json)
-            .bind(&channel_name)
-            .bind(space.as_str())
-            .execute(&self.pool)
-            .await;
+        tx.commit().await?;
 
         self.get_team(id).await
     }
@@ -903,4 +928,28 @@ pub(crate) async fn insert_message_on(
         .bind(&id)
         .fetch_one(&mut *conn)
         .await?)
+}
+
+/// The id of the chat of the team called `team_name`: the channel `team-<name>`, or else the only
+/// channel whose name matches it ignoring (ASCII) case, as left by a rename before renames carried
+/// the chat along. `None` when there is neither, or several case-insensitive matches.
+pub(crate) async fn team_channel_id<'e, E: sqlx::SqliteExecutor<'e>>(
+    ex: E,
+    space: &SpaceId,
+    team_name: &str,
+) -> Result<Option<String>, DbError> {
+    let wanted = format!("team-{team_name}");
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, name FROM channels WHERE space_id = ? AND name = ? COLLATE NOCASE ORDER BY created_at")
+            .bind(space.as_str())
+            .bind(&wanted)
+            .fetch_all(ex)
+            .await?;
+    if let Some((id, _)) = rows.iter().find(|(_, n)| *n == wanted) {
+        return Ok(Some(id.clone()));
+    }
+    Ok(match rows.as_slice() {
+        [(id, _)] => Some(id.clone()),
+        _ => None,
+    })
 }
