@@ -20,6 +20,20 @@ struct Server {
     done: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
+impl Server {
+    /// Asks kwant to stop and waits for it (it gives Laya 5 s) before returning.
+    fn shutdown(&self) {
+        let stop = self.stop.lock().unwrap().take();
+        if let Some(stop) = stop {
+            let _ = stop.send(());
+        }
+        let done = self.done.lock().unwrap().take();
+        if let Some(done) = done {
+            let _ = done.recv_timeout(Duration::from_secs(8));
+        }
+    }
+}
+
 /// Where the window points: kwant's own page on loopback.
 struct Target {
     port: u16,
@@ -117,14 +131,10 @@ fn start_server(config: kwnt::Config) -> Server {
     }
 }
 
-/// Stops the server this app started and waits for it (it gives Laya 5 s) before the app exits.
+/// Stops the server this app started before the app exits. An attached kwant keeps running.
 fn stop_server(handle: &tauri::AppHandle) {
-    let Some(server) = handle.try_state::<Server>() else { return };
-    if let Some(stop) = server.stop.lock().unwrap().take() {
-        let _ = stop.send(());
-    }
-    if let Some(done) = server.done.lock().unwrap().take() {
-        let _ = done.recv_timeout(Duration::from_secs(8));
+    if let Some(server) = handle.try_state::<Server>() {
+        server.shutdown();
     }
 }
 
@@ -231,12 +241,7 @@ fn check() -> i32 {
     };
     let server = start_server(config);
     let result = startup::wait_for_health(port, Duration::from_secs(60));
-    if let Some(stop) = server.stop.lock().unwrap().take() {
-        let _ = stop.send(());
-    }
-    if let Some(done) = server.done.lock().unwrap().take() {
-        let _ = done.recv_timeout(Duration::from_secs(8));
-    }
+    server.shutdown();
     let _ = std::fs::remove_dir_all(&data_dir);
     match result {
         Some(body) => {
