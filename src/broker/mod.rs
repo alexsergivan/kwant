@@ -36,6 +36,9 @@ pub const GRANT_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 6
 #[derive(Debug, Clone)]
 struct Grant {
     kwant_id: String,
+    /// The chat the card belonged to (thread, else channel or direct chat): the grant only
+    /// works there, not in another conversation of the same bot.
+    conversation: String,
     tool_name: String,
     arguments: Value,
     until: std::time::Instant,
@@ -60,13 +63,15 @@ impl PermissionBroker {
         }
     }
 
-    /// Lets one later call of `tool_name` with these `arguments` by this kwant run without a
-    /// card (a late Allow). Lapses after [`GRANT_TTL`].
-    pub async fn grant_once(&self, kwant_id: &str, tool_name: &str, arguments: &Value) {
+    /// Lets one later call of `tool_name` with these `arguments` by this kwant, in this
+    /// `conversation`, run without a card (a late Allow). Lapses after [`GRANT_TTL`], or when
+    /// [`drop_grant`](Self::drop_grant) is called because the resumed turn ended without it.
+    pub async fn grant_once(&self, kwant_id: &str, conversation: &str, tool_name: &str, arguments: &Value) {
         let mut grants = self.grants.lock().await;
         grants.retain(|g| g.until > std::time::Instant::now());
         grants.push(Grant {
             kwant_id: kwant_id.to_string(),
+            conversation: conversation.to_string(),
             tool_name: tool_name.to_string(),
             arguments: grant_arguments(arguments),
             until: std::time::Instant::now() + GRANT_TTL,
@@ -74,18 +79,37 @@ impl PermissionBroker {
     }
 
     /// Uses up a matching [`grant_once`](Self::grant_once); false when there is none.
-    pub async fn take_grant(&self, kwant_id: &str, tool_name: &str, arguments: &Value) -> bool {
+    pub async fn take_grant(&self, kwant_id: &str, conversation: &str, tool_name: &str, arguments: &Value) -> bool {
         let mut grants = self.grants.lock().await;
         let now = std::time::Instant::now();
         grants.retain(|g| g.until > now);
-        let wanted = grant_arguments(arguments);
-        match grants.iter().position(|g| g.kwant_id == kwant_id && g.tool_name == tool_name && g.arguments == wanted) {
+        match Self::find_grant(&grants, kwant_id, conversation, tool_name, arguments) {
             Some(i) => {
                 grants.remove(i);
                 true
             }
             None => false,
         }
+    }
+
+    /// Forgets a [`grant_once`](Self::grant_once) the resumed turn didn't use, so the same call
+    /// later asks again. True when there was one.
+    pub async fn drop_grant(&self, kwant_id: &str, conversation: &str, tool_name: &str, arguments: &Value) -> bool {
+        let mut grants = self.grants.lock().await;
+        match Self::find_grant(&grants, kwant_id, conversation, tool_name, arguments) {
+            Some(i) => {
+                grants.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn find_grant(grants: &[Grant], kwant_id: &str, conversation: &str, tool_name: &str, arguments: &Value) -> Option<usize> {
+        let wanted = grant_arguments(arguments);
+        grants.iter().position(|g| {
+            g.kwant_id == kwant_id && g.conversation == conversation && g.tool_name == tool_name && g.arguments == wanted
+        })
     }
 
     /// Registers a pending approval ticket and returns a receiver waiting for user choice.

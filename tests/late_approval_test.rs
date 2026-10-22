@@ -66,17 +66,45 @@ async fn an_unanswered_card_stays_open_and_a_late_allow_resumes_the_work() {
     assert!(prompt.contains("[The person allowed a tool call you asked for earlier]"), "{prompt}");
     assert!(prompt.contains("Tool: Bash"));
 
-    // The resumed turn's same call runs once without a card (a new description is fine)
+    // The stub's resumed turn ends without making the call: its grant goes with it, so the
+    // same call later gets a card again instead of running unasked
+    wait_reply(&env, &env.a, "answer none").await;
+    wait_for("the resumed turn to end", || async { env.state.turns.active_turns().is_empty() }).await;
     let a = approver(&env, Duration::from_millis(200));
     let again = json!({"command": "ls LATE_ALLOW_MARK", "description": "list the files"});
-    assert_eq!(tokio::time::timeout(Duration::from_secs(1), a.decide(request(&env, again.clone()))).await.unwrap(), ApprovalOutcome::Allowed);
-    // Only once, and only that call
-    assert_eq!(a.decide(request(&env, again)).await, ApprovalOutcome::Unanswered);
-    assert_eq!(a.decide(request(&env, json!({"command": "rm -rf LATE_ALLOW_MARK"}))).await, ApprovalOutcome::Unanswered);
+    wait_for("the unused grant to be dropped", || async {
+        !env.state.broker.drop_grant(&env.a, &env.a, "Bash", &again).await
+    })
+    .await;
+    assert_eq!(a.decide(request(&env, again)).await, ApprovalOutcome::Unanswered, "an unused grant must not outlive its turn");
 
     // An answered card can't be answered again
     let (s, _) = call(&env.app, "POST", &format!("/api/approvals/{ticket}/resolve"), Some(json!({"decision": "allow_once"}))).await;
     assert_eq!(s.as_u16(), 409);
+}
+
+#[tokio::test]
+async fn a_grant_runs_once_only_in_its_own_conversation() {
+    let env = setup().await;
+    let args = json!({"command": "ls GRANT_SCOPE_MARK", "description": "list"});
+    env.state.broker.grant_once(&env.a, &env.a, "Bash", &args).await;
+    // Another conversation of the same bot can't use it
+    let elsewhere = BrokerApprover {
+        db: env.state.db.clone(),
+        broker: env.state.broker.clone(),
+        events: env.state.event_sender.clone(),
+        timeout: Duration::from_millis(200),
+        conversation: "some-other-thread".into(),
+        chat: Some(json!({"thread_id": "some-other-thread"})),
+    };
+    assert_eq!(elsewhere.decide(request(&env, args.clone())).await, ApprovalOutcome::Unanswered);
+    // Its own conversation can, once (a new description is fine), and only that call
+    let a = approver(&env, Duration::from_millis(200));
+    let again = json!({"command": "ls GRANT_SCOPE_MARK", "description": "list the files"});
+    assert_eq!(tokio::time::timeout(Duration::from_secs(1), a.decide(request(&env, again.clone()))).await.unwrap(), ApprovalOutcome::Allowed);
+    assert_eq!(a.decide(request(&env, again)).await, ApprovalOutcome::Unanswered);
+    env.state.broker.grant_once(&env.a, &env.a, "Bash", &args).await;
+    assert_eq!(a.decide(request(&env, json!({"command": "rm -rf GRANT_SCOPE_MARK"}))).await, ApprovalOutcome::Unanswered);
 }
 
 #[tokio::test]
@@ -101,7 +129,7 @@ async fn kwnt_secrets_stay_refused_even_after_a_late_allow() {
     // A grant can't reach past the secret check (it runs first)
     let secret = json!({"command": "cat ~/.kwnt/api-token"});
     assert!(kwnt::sandbox::credentials::call_touches_kwnt_secrets(&secret, None));
-    env.state.broker.grant_once(&env.a, "Bash", &secret).await;
+    env.state.broker.grant_once(&env.a, &env.a, "Bash", &secret).await;
     assert_eq!(a.decide(request(&env, secret)).await, ApprovalOutcome::Denied);
 }
 

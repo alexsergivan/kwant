@@ -205,7 +205,7 @@ impl ToolApprover for BrokerApprover {
             return ApprovalOutcome::Allowed;
         }
         // The person allowed this exact call on a card its earlier turn stopped waiting for
-        if self.broker.take_grant(&req.kwant_id, &req.tool_name, &req.arguments).await {
+        if self.broker.take_grant(&req.kwant_id, &self.conversation, &req.tool_name, &req.arguments).await {
             tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, "ran a call the person allowed after its turn ended");
             return ApprovalOutcome::Allowed;
         }
@@ -327,7 +327,7 @@ pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: A
     let thread_id = chat["thread_id"].as_str().map(str::to_string);
     let channel_id = chat["channel_id"].as_str().map(str::to_string);
     let conversation = thread_id.clone().or_else(|| channel_id.clone()).or_else(|| chat["direct_kwant_id"].as_str().map(str::to_string)).unwrap_or_else(|| kwant.id.clone());
-    state.broker.grant_once(&kwant.id, &approval.tool_name, &arguments).await;
+    state.broker.grant_once(&kwant.id, &conversation, &approval.tool_name, &arguments).await;
     if decision == ApprovalDecision::AlwaysAllowSession {
         state.broker.allow_for_session(&kwant.id, &conversation, &approval.tool_name).await;
     }
@@ -342,9 +342,14 @@ pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: A
     };
     let prompt = late_approval_prompt(&approval.tool_name, &arguments);
     let target = kwant.clone();
+    let (broker, tool_name) = (state.broker.clone(), approval.tool_name.clone());
     tokio::spawn(async move {
         let _job = job;
         let _ = super::routes::try_kwant_turn(&scope, &target, prompt, Default::default()).await;
+        // The grant was for this turn: unused, it must not let the same call through later
+        if broker.drop_grant(&target.id, &conversation, &tool_name, &arguments).await {
+            tracing::info!(kwant = %target.id, tool = %tool_name, "dropped a late-Allow grant the resumed turn didn't use");
+        }
     });
     Some(json!({"ticket_id": ticket_id, "resolved": true, "status": status, "resumed": "new_turn"}))
 }
