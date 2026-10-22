@@ -1,6 +1,6 @@
 # Connections: API
 
-One list of everything kwnt's bots reach outside the app, with its status, last check and the
+One list of everything kwant's bots reach outside the app, with its status, last check and the
 bots that use it:
 
 - MCP servers
@@ -10,7 +10,7 @@ bots that use it:
 
 Composio is offered as an **optional** MCP connector. It is off by default, and it is labelled
 everywhere as storing the person's app sign-ins on Composio's servers. Every other login stays in
-kwnt's own vault or database.
+kwant's own vault or database.
 
 Both routes are **person-only**, because the list names saved logins:
 
@@ -58,7 +58,7 @@ order each list comes from. Sort or group it on the client.
 | `status_detail` | optional readable reason ("Out of quota until …", the last error) |
 | `last_check` | RFC 3339, or `null` when never checked |
 | `used_by` | the bots that use it, sorted by name. Empty while it is off |
-| `logins_stored` | `vault` (kwnt's password vault or Bitwarden), `kwnt` (kwnt's database or the engine CLI's own login folder), or `composio` (Composio's servers) |
+| `logins_stored` | `vault` (kwant's password vault or Bitwarden), `kwnt` (kwant's database or the engine CLI's own login folder; the value keeps the binary's name and is not shown as is), or `composio` (Composio's servers) |
 | `manage` | the existing API for changing it (link the UI's edit screen from the kind) |
 
 What `detail` holds for each kind:
@@ -82,8 +82,8 @@ What `detail` holds for each kind:
 | last test passed | `connected` |
 | last test needed a sign-in | `needs_sign_in` |
 | last test failed | `error`, with the error |
-| not tested since kwnt started, but signed in with OAuth | `connected` |
-| not tested since kwnt started | `unknown` |
+| not tested since kwant started, but signed in with OAuth | `connected` |
+| not tested since kwant started | `unknown` |
 
 `last_check` is the last `POST /api/mcp/servers/:id/test`. It is kept **in memory**, so it is
 empty again after a restart. Call the test route to refresh it ("Check now").
@@ -103,7 +103,7 @@ empty again after a restart. Call the test route to refresh it ("Check now").
 
 **Saved login**
 
-- Always `connected`. kwnt doesn't try a saved password on its own.
+- Always `connected`. kwant doesn't try a saved password on its own.
 - `last_check` is the time it was last filled into a page.
 
 **Loose ends source**
@@ -122,7 +122,7 @@ empty again after a restart. Call the test route to refresh it ("Check now").
 | kind | bots |
 |---|---|
 | MCP server | every bot in the space, minus bots switched off for that server. Nobody while the server is off |
-| account | bots bound to it, plus bots with no binding on its engine while it is the engine's default |
+| account | bots whose turns on its engine start on it: a bot bound to it, or a bot with no binding (or bound to another engine's account) while it is the engine's default. Bots on "auto" count for every engine, pinned bots only for theirs. Nobody while it is off |
 | browser_login | the bot it was saved for, or the lead and members of the team or channel it was saved for (they share that browser) |
 | email, github | the space's Loose ends bot, when Loose ends ownership is on |
 
@@ -147,7 +147,7 @@ empty again after a restart. Call the test route to refresh it ("Check now").
   "connection_id": null,
   "enabled": false,
   "logins_stored": "composio",
-  "warning": "Composio keeps your app sign-ins on Composio's servers, not in kwnt's vault, and your bots' tool calls through it pass through Composio.",
+  "warning": "Composio keeps your app sign-ins on Composio's servers, not in kwant's vault, and your bots' tool calls through it pass through Composio.",
   "add": "/api/connections/composio"
 }
 ```
@@ -184,7 +184,7 @@ per-bot opt-outs, testing and removing all use those routes.
 ## Known limits
 
 - MCP `last_check` is kept in memory only (see the MCP status rules).
-- Loose ends sources are global in kwnt rather than per space, so every space lists them, and
+- Loose ends sources are global in kwant rather than per space, so every space lists them, and
   `used_by` names the current space's Loose ends bot.
 - Engine CLI logins (`~/.claude`, Codex, Grok) live in each CLI's own folder, reported as
-  `logins_stored: "kwnt"`. kwnt doesn't copy them into the vault.
+  `logins_stored: "kwnt"`. kwant doesn't copy them into the vault.

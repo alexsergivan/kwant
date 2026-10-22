@@ -32,7 +32,7 @@ const REFUSAL: &str = "only the person manages connections";
 /// The name the Composio connector gets as an MCP server.
 pub const COMPOSIO_NAME: &str = "composio";
 /// Said wherever Composio is offered or connected.
-pub const COMPOSIO_WARNING: &str = "Composio keeps your app sign-ins on Composio's servers, not in kwnt's vault, \
+pub const COMPOSIO_WARNING: &str = "Composio keeps your app sign-ins on Composio's servers, not in kwant's vault, \
     and your bots' tool calls through it pass through Composio.";
 
 /// A bot that uses a connection.
@@ -128,8 +128,8 @@ fn mcp_status(server: &McpServer, oauth_connected: bool, check: Option<&McpCheck
         Some(c) if c.ok => ("connected", None),
         Some(c) if c.auth_required => ("needs_sign_in", Some("Sign-in required".into())),
         Some(c) => ("error", c.error.clone()),
-        None if oauth_connected => ("connected", Some("Signed in; not tested since kwnt started".into())),
-        None => ("unknown", Some("Not tested since kwnt started".into())),
+        None if oauth_connected => ("connected", Some("Signed in; not tested since kwant started".into())),
+        None => ("unknown", Some("Not tested since kwant started".into())),
     }
 }
 
@@ -166,18 +166,27 @@ async fn mcp_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]) ->
         .collect()
 }
 
-/// Bots that run on an account: bound to it, or unbound on its engine while it is the default.
+/// Bots that run on an account: those whose turns on its engine start there. A bot on "auto"
+/// may run on any engine, a pinned one only on its own; on that engine the bot's bound account
+/// comes first, else the engine's default (`preference_order`, as a turn picks it).
 fn account_users<'a>(
     profile: &crate::db::models::LlmProfile,
+    profiles: &[crate::db::models::LlmProfile],
     kwants: &'a [Kwant],
     bindings: &HashMap<String, (Option<String>, bool)>,
 ) -> Vec<&'a Kwant> {
-    let engine = Engine::parse(&profile.engine);
+    let Some(engine) = Engine::parse(&profile.engine) else {
+        return Vec::new();
+    };
     kwants
         .iter()
-        .filter(|k| match bindings.get(&k.id).and_then(|(p, _)| p.as_deref()) {
-            Some(bound) => bound == profile.id,
-            None => profile.is_default && engine.is_some() && Engine::from_model(&k.preferred_model) == engine,
+        .filter(|k| match crate::router::parse_pin(&k.preferred_model).family {
+            None => true,
+            Some(family) => family == engine.as_str(),
+        })
+        .filter(|k| {
+            let bound = bindings.get(&k.id).and_then(|(p, _)| p.as_deref());
+            crate::profiles::preference_order(profiles, engine, bound).first().is_some_and(|p| p.id == profile.id)
         })
         .collect()
 }
@@ -186,7 +195,7 @@ async fn account_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]
     let profiles = state.db.list_profiles(space).await.unwrap_or_default();
     let bindings = state.db.list_kwant_bindings(space).await.unwrap_or_default();
     let users: HashMap<String, Vec<UsedBy>> =
-        profiles.iter().map(|p| (p.id.clone(), used(&account_users(p, kwants, &bindings)))).collect();
+        profiles.iter().map(|p| (p.id.clone(), used(&account_users(p, &profiles, kwants, &bindings)))).collect();
     super::profile_routes::views(state, profiles)
         .await
         .into_iter()

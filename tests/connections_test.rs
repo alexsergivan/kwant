@@ -157,3 +157,46 @@ async fn connections_are_person_only() {
     .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn accounts_list_the_bots_that_fall_back_to_them() {
+    let env = setup().await;
+    // `setup` pins two bots to Claude; the third default bot stays on "auto".
+    let (_, kwants) = call(&env.app, "GET", "/api/kwants", None).await;
+    let auto = kwants.as_array().unwrap().iter().find(|k| k["preferred_model"] == "auto").expect("an auto bot")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Before any binding, This machine is the Claude default: all three default bots use it.
+    let (_, list) = call(&env.app, "GET", "/api/connections", None).await;
+    let mut all = vec![env.a.clone(), env.b.clone(), auto.clone()];
+    all.sort();
+    let mut users = user_ids(find(&list, "account:prf_system_claude"));
+    users.sort();
+    assert_eq!(users, all, "unbound bots fall back to the default account");
+    assert_eq!(user_ids(find(&list, "account:prf_system_codex")), vec![auto.clone()], "only an auto bot may run on Codex");
+
+    // A second Claude account with B bound to it: B moves there, the rest stay on the default.
+    let (s, work) = call(
+        &env.app,
+        "POST",
+        "/api/profiles",
+        Some(json!({"engine": "claude", "name": "Work", "kind": "cli_home", "priority": 100})),
+    )
+    .await;
+    assert!(s.is_success(), "{work}");
+    let work_id = work["id"].as_str().unwrap().to_string();
+    let mut body = kwants.as_array().unwrap().iter().find(|k| k["id"] == env.b.as_str()).unwrap().clone();
+    body.as_object_mut()
+        .unwrap()
+        .retain(|key, _| ["name", "title", "persona_prompt", "soul", "avatar_sprite", "preferred_model"].contains(&key.as_str()));
+    body["profile_id"] = json!(work_id);
+    let (s, v) = call(&env.app, "PUT", &format!("/api/kwants/{}", env.b), Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+
+    let (_, list) = call(&env.app, "GET", "/api/connections", None).await;
+    assert_eq!(user_ids(find(&list, &format!("account:{work_id}"))), vec![env.b.clone()]);
+    let users = user_ids(find(&list, "account:prf_system_claude"));
+    assert!(users.contains(&env.a) && users.contains(&auto) && !users.contains(&env.b), "{users:?}");
+}
