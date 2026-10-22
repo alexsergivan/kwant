@@ -26,8 +26,8 @@ export interface Kwant {
   /** Whether turns may move to the engine's next profile when this one is out of usage. */
   profile_failover?: boolean;
   /** Its own approvals setting, and what it comes to with the space's; absent on older servers. */
-  approvals?: 'inherit' | 'ask' | 'off';
-  approvals_effective?: 'ask' | 'off';
+  approvals?: 'inherit' | 'ask' | 'smart' | 'off';
+  approvals_effective?: 'ask' | 'smart' | 'off';
 }
 
 export interface Channel {

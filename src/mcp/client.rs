@@ -50,6 +50,10 @@ pub struct McpTool {
     pub name: String,
     pub description: Option<String>,
     pub input_schema: Value,
+    /// The server marks it read-only (`readOnlyHint: true`, not `destructiveHint: true`). The
+    /// server's own claim: kwnt can't check it.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -310,6 +314,8 @@ impl McpClient {
                     name: name.to_string(),
                     description: t["description"].as_str().map(str::to_string),
                     input_schema: t.get("inputSchema").cloned().unwrap_or_else(|| json!({"type": "object"})),
+                    read_only: t["annotations"]["readOnlyHint"].as_bool() == Some(true)
+                        && t["annotations"]["destructiveHint"].as_bool() != Some(true),
                 });
             }
             cursor = result["nextCursor"].as_str().map(str::to_string);

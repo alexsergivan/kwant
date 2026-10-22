@@ -149,33 +149,53 @@ pub async fn put_window(
     Ok(Json(view(&state).await))
 }
 
-/// Whether the person switched approvals off for the bot or team a local command runs for: a
-/// bot's own setting, else the space of the bot or team. Anything else (or an unreadable
-/// setting) asks.
-async fn local_shell_approvals_off(state: &AppState, target_id: &str) -> bool {
+/// The approvals the person set for the bot or team a local command runs for: a bot's own
+/// setting, else the space of the bot or team. An unreadable setting asks.
+async fn local_shell_approvals(state: &AppState, target_id: &str) -> String {
+    use crate::db::approval_modes::ASK;
     if let Ok(Some(_)) = state.db.space_of_kwant(target_id).await {
-        return state.db.kwant_approvals(target_id).await.is_ok_and(|m| m.is_off());
+        return state.db.kwant_approvals(target_id).await.map_or_else(|_| ASK.into(), |m| m.effective);
     }
     match state.db.space_of_team(target_id).await {
-        Ok(Some(space)) => state.db.space_approvals(&space).await.is_ok_and(|m| m == crate::db::approval_modes::OFF),
-        _ => false,
+        Ok(Some(space)) => state.db.space_approvals(&space).await.unwrap_or_else(|_| ASK.into()),
+        _ => ASK.into(),
     }
 }
 
-/// Asks the person before a shell command runs on their own computer. Every command asks:
-/// "always allow" is honoured for this one command only, never remembered.
-pub async fn approve_local_shell(
+/// Asks the person before a shell command runs on their own computer, with no conversation to
+/// remember "always allow" in (see [`approve_local_shell_in`]).
+pub async fn approve_local_shell(state: &AppState, target_id: &str, command: &str, cwd: &Path) -> bool {
+    approve_local_shell_in(state, target_id, command, cwd, None).await
+}
+
+/// Asks the person before a shell command runs on their own computer. Approvals `off` run it;
+/// "Ask only when risky" runs it when [`crate::mcp::shell_risk`] finds it safe in `cwd`, and
+/// remembers "Always this session" for `execute_shell` in `conversation`. Under `ask` every
+/// command asks and "always allow" counts for this one command only.
+pub async fn approve_local_shell_in(
     state: &AppState,
     target_id: &str,
     command: &str,
     cwd: &Path,
+    conversation: Option<&str>,
 ) -> bool {
-    let details = json!({
+    use crate::db::approval_modes::{OFF, SMART};
+    let mode = local_shell_approvals(state, target_id).await;
+    let verdict = (mode == SMART).then(|| match cwd.canonicalize() {
+        Ok(folder) => crate::mcp::shell_risk::classify(command, &folder),
+        Err(_) => crate::mcp::SmartVerdict::Ask("the bot's folder doesn't exist".into()),
+    });
+    let mut details = json!({
         "source": "local_shell",
         "tool": "execute_shell",
         "arguments": {"command": command, "cwd": cwd.to_string_lossy()},
         "kwant_id": target_id,
     });
+    if let Some(v) = &verdict {
+        details["smart_reason"] = json!(v.reason());
+    }
+    // "Always this session" under smart: per bot and conversation, like claude's tools
+    let remembered = conversation.filter(|_| mode == SMART);
     if crate::sandbox::credentials::call_touches_kwnt_secrets(&details["arguments"], Some(cwd)) {
         tracing::warn!(target = %target_id, "refused a shell command that names kwnt's secret files");
         let record = NewApproval {
@@ -189,7 +209,15 @@ pub async fn approve_local_shell(
         }
         return false;
     }
-    if local_shell_approvals_off(state, target_id).await {
+    if let Some(conversation) = remembered {
+        if state.broker.is_allowed_for_session(target_id, conversation, "execute_shell").await {
+            return true;
+        }
+    }
+    if mode == OFF || verdict.as_ref().is_some_and(|v| v.is_allowed()) {
+        if verdict.is_some() {
+            tracing::info!(target = %target_id, "ran a local command without a card: not risky");
+        }
         let record = NewApproval {
             turn_id: String::new(),
             kwant_id: target_id.to_string(),
@@ -232,7 +260,13 @@ pub async fn approve_local_shell(
         details,
     });
     match tokio::time::timeout(super::mcp_runtime::APPROVAL_TIMEOUT, rx).await {
-        Ok(Ok(ApprovalDecision::AllowOnce | ApprovalDecision::AlwaysAllowSession)) => true,
+        Ok(Ok(ApprovalDecision::AllowOnce)) => true,
+        Ok(Ok(ApprovalDecision::AlwaysAllowSession)) => {
+            if let Some(conversation) = remembered {
+                state.broker.allow_for_session(target_id, conversation, "execute_shell").await;
+            }
+            true
+        }
         Ok(_) => false,
         Err(_) => {
             if state.broker.cancel(&ticket).await {

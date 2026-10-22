@@ -213,6 +213,12 @@ impl McpToolSession {
         }
     }
 
+    /// Whether the offered tool `name` (`mcp__<server>__<tool>`) says it is read-only; `None`
+    /// for a tool this session doesn't offer.
+    pub fn read_only(&self, name: &str) -> Option<bool> {
+        self.tools.iter().find(|t| t.name == name).map(|t| t.tool.read_only)
+    }
+
     /// Runs one model-requested call: approval first, then the MCP call. The record is also
     /// appended to the turn's `tool_calls`.
     pub async fn call(&self, caller: &Caller, call_id: &str, name: &str, raw_arguments: &str) -> CallOutcome {
@@ -243,6 +249,7 @@ impl McpToolSession {
                         tool: t.tool.name.clone(),
                         arguments: arguments.clone(),
                         builtin: None,
+                        smart: Some(read_only_verdict(t.tool.read_only)),
                     })
                     .await;
                 if !outcome.allowed() {
@@ -278,6 +285,15 @@ impl McpToolSession {
         for (_, client) in &mut self.clients {
             client.shutdown().await;
         }
+    }
+}
+
+/// "Ask only when risky" for an MCP tool: read-only tools run, all others ask.
+pub fn read_only_verdict(read_only: bool) -> super::SmartVerdict {
+    if read_only {
+        super::SmartVerdict::Allow("the MCP server marks this tool read-only".into())
+    } else {
+        super::SmartVerdict::Ask("this MCP tool can change things".into())
     }
 }
 

@@ -242,7 +242,9 @@ status (pending|installing|installed|dismissed), server_id, last_error`. Changes
 
 ### Approvals
 
-Every MCP tool call needs approval through the permission broker, for both agent kinds:
+Every MCP tool call needs approval through the permission broker, for both agent kinds, unless the
+bot's approvals are `off`, or `smart` and the server marks the tool `readOnlyHint: true` without
+`destructiveHint: true` (see [approvals.md](approvals.md)):
 
 1. kwnt emits the SSE event
    `{"type":"ApprovalRequired","data":{"id":"<ticket>","tool_name":"mcp__echo__echo","details":{"source":"mcp","server":"echo","tool":"echo","arguments":{…},"kwant_id":"…","kwant_name":"…"}}}`

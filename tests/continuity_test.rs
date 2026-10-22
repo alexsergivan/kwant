@@ -692,6 +692,7 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
         tool: "x".into(),
         arguments: json!({}),
         builtin: None,
+        smart: None,
     };
     assert!(
         ctx.approver.approve(approve(SELF_SERVER_NAME)).await,

@@ -160,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let app = create_router(state);
 
             let addr = format!("{}:{}", config.host, config.port);
+            kwnt::mcp::shell_risk::set_serve_port(config.port);
             let listener = tokio::net::TcpListener::bind(&addr).await?;
 
             tracing::info!(

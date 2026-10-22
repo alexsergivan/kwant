@@ -69,6 +69,7 @@ async fn register(state: &AppState, token: &str, approver: Arc<dyn ToolApprover>
         permission_url: None,
         gateway: None,
         max_tool_iterations: 8,
+        smart_approvals: false,
         records: Default::default(),
     };
     state.mcp_sessions.lock().await.insert(
@@ -254,6 +255,7 @@ async fn ending_the_turn_cancels_a_call_waiting_for_its_card() {
         permission_url: None,
         gateway: None,
         max_tool_iterations: 8,
+        smart_approvals: false,
         records: Default::default(),
     };
     state

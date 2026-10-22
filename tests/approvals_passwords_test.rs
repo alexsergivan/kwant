@@ -295,3 +295,30 @@ async fn approvals_off_of_a_deleted_bot_does_not_count() {
     let (s, v) = e.save("DUMMY-PW-2").await;
     assert_eq!(s, StatusCode::OK, "{v}");
 }
+
+#[tokio::test]
+async fn ask_only_when_risky_follows_the_same_rule_as_off() {
+    let e = setup(false).await;
+    e.local_password().await;
+    let (s, v) = e.space_approvals("smart").await;
+    assert_needs_bitwarden(s, &v, Some(1));
+    assert!(v["error"].as_str().unwrap().contains("Ask only when risky"), "{v}");
+    let (s, v) = e.bot_approvals("smart").await;
+    assert_needs_bitwarden(s, &v, Some(1));
+    assert_eq!(e.effective().await, "ask", "nothing relaxed");
+
+    // With an empty store smart is allowed, and then saving into the built-in store is refused
+    let e = setup(false).await;
+    assert_eq!(e.bot_approvals("smart").await.0, StatusCode::OK);
+    assert_eq!(e.effective().await, "smart");
+    assert_eq!(e.store().await["approvals_off"], true, "smart counts as off");
+    let (s, v) = e.save("DUMMY-PW-2").await;
+    assert_needs_bitwarden(s, &v, None);
+    // A bot inheriting a smart space counts too
+    let e = setup(false).await;
+    assert_eq!(e.bot_approvals("ask").await.0, StatusCode::OK);
+    assert_eq!(e.space_approvals("smart").await.0, StatusCode::OK);
+    e.local_password().await;
+    let (s, v) = e.bot_approvals("inherit").await;
+    assert_needs_bitwarden(s, &v, Some(1));
+}

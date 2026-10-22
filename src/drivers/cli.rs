@@ -162,11 +162,13 @@ const CODEX_MCP_LIST_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// `codex exec` overrides limiting the model's shell commands to codex's "core" env
 /// (PATH, HOME, USER, SHELL...). codex's default passes its whole env, provider key included.
-/// grok's headless mode refuses anything it would ask about. Like claude's policy (see
-/// `mcp::builtin_tools`): fetching pages anywhere, and editing files inside the bot's working
-/// folder, run without asking. Shell commands stay refused: grok has no approval hook for kwnt.
+/// grok's headless mode refuses anything it would ask about, and grok has no approval hook for
+/// kwnt, so only what is safe without a card is allowed: editing files inside the bot's working
+/// folder. Shell commands stay refused. grok's own WebFetch is removed (see
+/// [`GROK_DISALLOWED_TOOLS`]): pre-allowed, it could read kwnt's own API on this machine in every
+/// approval mode. grok bots read pages with kwnt's `browser_*` tools, which go through approvals.
 pub fn grok_builtin_rules(folder: Option<&Path>) -> Vec<String> {
-    let mut rules = vec!["--allow".to_string(), "WebFetch".to_string()];
+    let mut rules = Vec::new();
     // grok matches paths lexically, so the folder's real path keeps a symlinked folder working
     if let Some(dir) = folder.and_then(|d| d.canonicalize().ok()) {
         let dir = dir.display().to_string().replace(')', "\\)");
@@ -195,7 +197,9 @@ pub const CLAUDE_DISALLOWED_TOOLS: &[&str] = &[
 ];
 
 /// grok's own scheduler, for the same reason. Its subagents are already off (`--no-subagents`).
-pub const GROK_DISALLOWED_TOOLS: &[&str] = &["SchedulerCreate", "SchedulerDelete", "SchedulerList"];
+/// Its WebFetch too: grok can't ask kwnt before fetching, so a fetch of kwnt's own API
+/// (`http://localhost:<port>/api/...`) would run without a card (see [`grok_builtin_rules`]).
+pub const GROK_DISALLOWED_TOOLS: &[&str] = &["SchedulerCreate", "SchedulerDelete", "SchedulerList", "WebFetch"];
 
 /// codex features kept off for the same reason: its local automations and its cross-session
 /// memories. `-c features.<name>=false` rather than `--disable`, which refuses names a later codex
@@ -1068,6 +1072,9 @@ impl Driver for CliDriver {
                 // kwnt decides every tool call. claude's own `auto` mode (picked on a fresh
                 // config) would approve Bash itself and never ask kwnt, so no card and no record.
                 cmd.arg("--permission-mode").arg("default");
+                // Each Bash call starts in the bot's folder, so a `cd` kwnt approved once doesn't
+                // carry later commands somewhere "Ask only when risky" never judged
+                cmd.env("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "1");
                 // Skip starting the user's personal MCP servers on every chat turn
                 cmd.arg("--strict-mcp-config");
                 // kwnt's routines and teammates, never claude's own scheduler or sessions
@@ -1098,8 +1105,8 @@ impl Driver for CliDriver {
                 }
                 // claude's own tools follow kwnt's policy (see mcp::builtin_tools); tell the bot
                 let folder = input.workspace_dir.as_deref().filter(|d| d.exists());
-                let tools_block = if input.mcp.is_some() {
-                    crate::mcp::builtin_tools::prompt_block(folder)
+                let tools_block = if let Some(ctx) = &input.mcp {
+                    crate::mcp::builtin_tools::prompt_block(folder, ctx.smart_approvals)
                 } else {
                     String::new()
                 };
@@ -1322,12 +1329,13 @@ mod tests {
     }
 
     #[test]
-    fn grok_may_fetch_pages_and_edit_only_inside_the_folder() {
-        assert_eq!(grok_builtin_rules(None), ["--allow", "WebFetch"]);
+    fn grok_may_edit_only_inside_the_folder_and_never_fetches_on_its_own() {
+        assert!(grok_builtin_rules(None).is_empty());
         let tmp = tempfile::tempdir().unwrap();
         let real = tmp.path().canonicalize().unwrap().display().to_string();
         let rules = grok_builtin_rules(Some(tmp.path()));
-        assert_eq!(rules, ["--allow", "WebFetch", "--allow", &format!("Edit({real}/**)"), "--allow", &format!("Write({real}/**)")]);
+        assert_eq!(rules, ["--allow", &format!("Edit({real}/**)"), "--allow", &format!("Write({real}/**)")]);
+        assert!(!rules.iter().any(|r| r.contains("WebFetch")), "grok's WebFetch can't ask kwnt first");
         assert!(!rules.iter().any(|r| r.starts_with("Bash")), "shell commands stay refused");
     }
 
@@ -1342,7 +1350,8 @@ mod tests {
         // kwnt's own tools and claude's lookups stay usable
         assert!(!tools.iter().any(|t| t.starts_with("mcp__") || ["WebSearch", "WebFetch", "Read"].contains(t)));
 
-        assert_eq!(grok_disallowed_args(), ["--disallowed-tools", "SchedulerCreate,SchedulerDelete,SchedulerList"]);
+        // grok's WebFetch would read kwnt's own API with no card, so it is removed
+        assert_eq!(grok_disallowed_args(), ["--disallowed-tools", "SchedulerCreate,SchedulerDelete,SchedulerList,WebFetch"]);
 
         let codex = codex_feature_args();
         assert_eq!(codex, ["-c", "features.in_app_local_automation=false", "-c", "features.memories=false"]);

@@ -5,10 +5,12 @@ pub mod builtin_tools;
 pub mod cli_config;
 pub mod client;
 pub mod echo_server;
+pub mod fetch_risk;
 pub mod oauth;
 pub mod oauth_mock;
 pub mod registry;
 pub mod session;
+pub mod shell_risk;
 
 pub use client::{McpClient, McpError, McpTool};
 pub use oauth::OAuthStatus;
@@ -260,6 +262,30 @@ pub struct ToolApprovalRequest {
     pub arguments: Value,
     /// Set for one of claude's own tools (Bash, Write, …) rather than an MCP server's.
     pub builtin: Option<BuiltinCall>,
+    /// What "Ask only when risky" makes of this call; `None` asks. Only read when the bot's
+    /// approvals are `smart`.
+    pub smart: Option<SmartVerdict>,
+}
+
+/// Whether a call may run without a card under "Ask only when risky", and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum SmartVerdict {
+    /// Runs and is recorded as `auto_allowed`; says why it is safe.
+    Allow(String),
+    /// Shows the card; says what made it risky (or unreadable).
+    Ask(String),
+}
+
+impl SmartVerdict {
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, SmartVerdict::Allow(_))
+    }
+
+    pub fn reason(&self) -> &str {
+        match self {
+            SmartVerdict::Allow(why) | SmartVerdict::Ask(why) => why,
+        }
+    }
 }
 
 /// Where a built-in tool call would act, for its approval card.
@@ -349,6 +375,9 @@ pub struct McpTurnContext {
     /// kwnt's MCP gateway for this turn, for agent CLIs that can't route approvals themselves.
     pub gateway: Option<GatewayAccess>,
     pub max_tool_iterations: usize,
+    /// The bot's approvals were "Ask only when risky" when the turn started; only tells the bot
+    /// what to expect (the approver reads the live setting for each call).
+    pub smart_approvals: bool,
     /// Tool call records for the reply's `tool_calls` field; drivers and the permission endpoint append.
     pub records: Arc<Mutex<Vec<Value>>>,
 }
