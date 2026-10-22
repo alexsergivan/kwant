@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldAlert, Check, CheckCheck, X, Plug, FileText, Terminal } from 'lucide-react';
+import { ShieldAlert, Check, CheckCheck, X, Plug, FileText, Terminal, Clock } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import { formatArgs, humanizeToolName, parseMcpToolName } from '../mcp';
 
@@ -7,6 +7,11 @@ export interface PendingApproval {
   id: string;
   tool_name: string;
   details: Record<string, unknown>;
+  /**
+   * The bot's turn stopped waiting for this card (status `waiting`), but it's still open: Allow
+   * starts the bot again to make that call, Deny closes it.
+   */
+  waiting?: boolean;
 }
 
 interface ModernApprovalCardProps {
@@ -87,6 +92,10 @@ export const builtinView = (approval: PendingApproval) => {
   return { ...base, kind: 'other' as const, command: null, description: null, path: null, change: null, args: formatArgs(args) };
 };
 
+/** The line under a still-open card's heading. */
+export const waitingNote = (bot: string | null) =>
+  `${bot ?? 'The bot'} stopped waiting for an answer and nothing ran. Allow starts it again to make this call; Deny closes the card.`;
+
 export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   approval,
   onResolve,
@@ -104,13 +113,29 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   const name = builtin?.kwant ?? summary?.kwant;
   const who = name ? <span className="font-medium text-zinc-100">{name}</span> : 'A bot';
   const perSession = !!builtin || !!summary?.builtin;
+  const waiting = approval.waiting === true;
+  const botName = name ?? mcp?.kwant ?? null;
 
   return (
-    <div className="my-3 border border-amber-500/30 bg-amber-950/20 rounded-xl p-4 text-zinc-100 max-w-2xl shadow-lg backdrop-blur-sm">
-      <div className="flex items-center gap-2 mb-2 text-amber-400 font-semibold text-xs tracking-wide">
-        <ShieldAlert size={16} />
-        <span>Action Approval Required</span>
-      </div>
+    <div
+      className={`my-3 border rounded-xl p-4 text-zinc-100 max-w-2xl shadow-lg backdrop-blur-sm ${
+        waiting ? 'border-sky-500/30 bg-sky-950/20' : 'border-amber-500/30 bg-amber-950/20'
+      }`}
+    >
+      {waiting ? (
+        <div className="mb-2 space-y-1">
+          <div className="flex items-center gap-2 text-sky-300 font-semibold text-xs tracking-wide">
+            <Clock size={16} aria-hidden="true" />
+            <span>Still open: you can still Allow</span>
+          </div>
+          <p className="text-[11px] text-zinc-400">{waitingNote(botName)}</p>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 mb-2 text-amber-400 font-semibold text-xs tracking-wide">
+          <ShieldAlert size={16} />
+          <span>Action Approval Required</span>
+        </div>
+      )}
 
       {shell ? (
         <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
@@ -234,11 +259,12 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
           className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Check size={14} />
-          <span>Allow Once</span>
+          <span>{waiting ? 'Allow and continue' : 'Allow Once'}</span>
         </button>
 
-        {/* Local shell approvals are never remembered, so only offer a one-off answer. */}
-        {!shell && (
+        {/* Local shell approvals are never remembered, so only offer a one-off answer. A late
+            answer only lets that one call run, so it gets no "always" either. */}
+        {!shell && !waiting && (
           <button
             type="button"
             disabled={disabled}

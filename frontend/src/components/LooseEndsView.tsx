@@ -9,6 +9,7 @@ import {
   ExternalLink,
   FileText,
   GitBranch,
+  Bot,
   Loader2,
   Mail,
   MessageSquare,
@@ -32,6 +33,8 @@ import {
   ImapFields,
   LooseCase,
   LooseEndsError,
+  LooseOwner,
+  LooseOwnerChange,
   LooseSource,
   NewSource,
   Tone,
@@ -47,6 +50,8 @@ import {
   isLoopbackHost,
   kindLabel,
   looseApi,
+  ownerChange,
+  ownerSummary,
   safeHref,
   shortDate,
   sourceLabel,
@@ -607,6 +612,109 @@ export const LooseSources: React.FC<{
   );
 };
 
+/** Which bot prepares drafts when a review or a letter deadline comes up, in this space. */
+export const LooseOwnerView: React.FC<{
+  owner: LooseOwner | null;
+  bots: Array<{ id: string; name: string }>;
+  error: string | null;
+  busy: boolean;
+  onChange: (next: LooseOwnerChange) => void;
+}> = ({ owner, bots, error, busy, onChange }) => {
+  const id = useId();
+  const lead = owner && !owner.kwant_id ? owner.owner : null;
+  return (
+    <section aria-labelledby={`${id}-h`} className="space-y-2">
+      <h3 id={`${id}-h`} className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+        Who prepares drafts
+      </h3>
+      {!owner ? (
+        error ? (
+          <p className="text-xs text-rose-300">Couldn’t load this setting: {error}</p>
+        ) : (
+          <p className="flex items-center gap-2 text-xs text-zinc-400">
+            <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Loading…
+          </p>
+        )
+      ) : (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 space-y-3" aria-busy={busy}>
+          <label className="flex items-start gap-2.5 text-xs text-zinc-200 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={owner.enabled}
+              disabled={busy}
+              onChange={(e) => onChange(ownerChange(owner, { enabled: e.target.checked }))}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-sky-500"
+            />
+            <span>When a review finds loose ends or a letter deadline comes up, a bot starts preparing drafts and next steps.</span>
+          </label>
+          <div className="flex flex-wrap items-center gap-2 sm:pl-6">
+            <Bot size={14} className="text-sky-400 shrink-0" aria-hidden="true" />
+            <label htmlFor={`${id}-bot`} className="text-xs text-zinc-400">
+              Bot
+            </label>
+            <select
+              id={`${id}-bot`}
+              value={owner.kwant_id ?? ''}
+              disabled={busy || !owner.enabled}
+              onChange={(e) => onChange(ownerChange(owner, { kwant_id: e.target.value || null }))}
+              className={`${field} w-auto min-w-0 max-w-full flex-1 sm:flex-none sm:min-w-[14rem]`}
+            >
+              <option value="">{lead ? `The space lead (${lead.name})` : 'The space lead'}</option>
+              {bots.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+            {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none text-zinc-400" aria-label="Saving" />}
+          </div>
+          <p className={`text-[11px] sm:pl-6 ${owner.enabled ? 'text-zinc-400' : 'text-zinc-500'}`} data-owner-summary>
+            {ownerSummary(owner)}
+          </p>
+          <div role="status" aria-live="polite">
+            {error && <p className="text-xs text-rose-300 sm:pl-6">Couldn’t save: {error}</p>}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+};
+
+/** Loads and saves the owner setting for the current space. */
+export const LooseOwnerSetting: React.FC = () => {
+  const [owner, setOwner] = useState<LooseOwner | null>(null);
+  const [bots, setBots] = useState<Array<{ id: string; name: string }>>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    looseApi.owner().then(
+      (o) => !cancelled && setOwner(o),
+      (e) => !cancelled && setError(e instanceof Error ? e.message : 'something went wrong.'),
+    );
+    looseApi.bots().then(
+      (list) => !cancelled && setBots(Array.isArray(list) ? list.map((k) => ({ id: k.id, name: k.name })) : []),
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const save = async (next: LooseOwnerChange) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setOwner(await looseApi.setOwner(next));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'something went wrong.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <LooseOwnerView owner={owner} bots={bots} error={error} busy={busy} onChange={save} />;
+};
+
 export interface LooseEndsViewProps {
   cases: LooseCase[] | null;
   loading: boolean;
@@ -620,6 +728,8 @@ export interface LooseEndsViewProps {
   now?: number;
   nextReviewAt?: string | null;
   sources: React.ReactNode;
+  /** "Who prepares drafts": the per-space owner setting. */
+  owner?: React.ReactNode;
   onTab: (t: CaseTab) => void;
   onRefresh: () => void;
   onScan: () => void;
@@ -644,6 +754,7 @@ export const LooseEndsView: React.FC<LooseEndsViewProps> = ({
   now = Date.now(),
   nextReviewAt = null,
   sources,
+  owner = null,
   onTab,
   onRefresh,
   onScan,
@@ -762,6 +873,7 @@ export const LooseEndsView: React.FC<LooseEndsViewProps> = ({
             </>
           )}
 
+          {!needsToken && owner}
           {!needsToken && sources}
         </div>
       </div>
@@ -927,6 +1039,7 @@ export const LooseEndsPage: React.FC<{ onBack?: () => void; onOpenChat?: (kwantI
         )
       }
       onBack={onBack}
+      owner={<LooseOwnerSetting />}
       sources={<LooseSources sources={sources} error={sourcesError} onChanged={() => (loadSources(), load())} />}
     />
   );

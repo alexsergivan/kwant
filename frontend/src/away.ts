@@ -76,7 +76,7 @@ export function windowLabel(since: string, now: number = Date.now()): string {
   return `Since you last looked, ${relativeTime(since, now)}`;
 }
 
-export type Tone = 'amber' | 'emerald' | 'rose' | 'zinc';
+export type Tone = 'amber' | 'emerald' | 'rose' | 'sky' | 'zinc';
 
 /** Short label and colour for an item's kind and status. */
 export function itemLabel(item: Pick<AwayItem, 'kind' | 'status'>): { label: string; tone: Tone } {
@@ -84,7 +84,8 @@ export function itemLabel(item: Pick<AwayItem, 'kind' | 'status'>): { label: str
     case 'question':
       return { label: 'Question', tone: 'amber' };
     case 'approval':
-      return { label: 'Needs approval', tone: 'amber' };
+      // Its turn stopped waiting, but the card is open and a late Allow resumes the work.
+      return item.status === 'waiting' ? { label: 'Still open', tone: 'sky' } : { label: 'Needs approval', tone: 'amber' };
     case 'routine_run':
       return item.status === 'ok' ? { label: 'Routine ran', tone: 'emerald' } : { label: 'Routine failed', tone: 'rose' };
     case 'delegation':

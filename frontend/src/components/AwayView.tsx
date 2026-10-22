@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, Inbox, Loader2, RefreshCw } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard } from './ModernApprovalCard';
-import { approvalFromAway } from '../approvals';
+import { approvalFromAway, lateAnswerText } from '../approvals';
 import {
   AWAY_SECTIONS,
   ApprovalDecision,
@@ -24,6 +24,7 @@ const TONES: Record<Tone, string> = {
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
   emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
   rose: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
+  sky: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
   zinc: 'border-zinc-700 bg-zinc-800 text-zinc-300',
 };
 
@@ -268,14 +269,16 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
     };
   }, [load]);
 
-  const act = async (item: AwayItem, run: () => Promise<unknown>) => {
+  const act = async (item: AwayItem, run: () => Promise<unknown>, denied = false) => {
     if (busy) return;
     setBusy(item.id);
     setNotice(null);
     try {
-      await run();
+      const reply = await run();
       setData((d) => (d ? withoutItem(d, 'waiting', item.id) : d));
-      setNotice({ text: `Sent to ${item.kwant_name}: “${item.title}”`, error: false });
+      const late = item.kind === 'approval' && !denied ? lateAnswerText(reply, item.kwant_name) : null;
+      const done = denied ? 'Denied, nothing ran:' : late ?? `Sent to ${item.kwant_name}:`;
+      setNotice({ text: `${done} “${item.title}”`, error: false });
     } catch (err) {
       const status = err instanceof AwayError ? err.status : 0;
       const text = actionErrorText(status, `Couldn't send it: ${err instanceof Error ? err.message : 'Something went wrong.'}`);
@@ -309,7 +312,7 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
             if (err instanceof AwayError && (err.status === 409 || err.status === 404)) onApprovalResolved?.(item.id);
             throw err;
           }
-        })
+        }, decision === 'deny')
       }
     />
   );
