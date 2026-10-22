@@ -1,0 +1,67 @@
+title: Approvals & saved passwords
+description: How kwant asks before bots run commands, the three approval modes, and how saved website passwords are stored, including Bitwarden.
+path: docs/approvals.html
+nav: approvals
+---
+<p class="kicker">Docs</p>
+<h1>Approvals &amp; saved passwords</h1>
+<p class="intro">You decide how much a bot may do without asking. Risky actions wait on a card with the exact command or arguments, and kwant's own secrets are off limits in every mode.</p>
+
+<h2 id="cards">Approval cards</h2>
+<p>When a bot wants to run a command, edit a file outside its folder or call a tool, you see a card with what it will do:</p>
+<ul>
+  <li><strong>Allow once</strong> runs this one call.</li>
+  <li><strong>Always allow</strong> allows that tool for that bot until kwant restarts.</li>
+  <li><strong>Deny</strong> refuses it, and the bot is told.</li>
+</ul>
+<figure>
+  <div class="frame">{{shot:desktop-approval|An Action Approval Required card for a GitHub create pull request call, showing the full arguments with Deny, Allow Once and Always Allow buttons.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>TechLead asks before opening a pull request.</figcaption>
+</figure>
+<p>Only you can answer a card. Bots' own tools can't, and neither can a bot calling kwant's API.</p>
+
+<h2 id="modes">Approval modes</h2>
+<p>Each space has a mode, and each bot can override it or follow the space. Only you can change it.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Mode</th><th>In the app</th><th>What happens</th></tr></thead>
+  <tbody>
+    <tr><td><code>ask</code> (default)</td><td>Ask before running commands</td><td>Every tool call outside the bot's folder shows a card.</td></tr>
+    <tr><td><code>smart</code></td><td>Ask only when risky</td><td>Ordinary work runs without a card. Anything risky or unclear shows the card, with the reason.</td></tr>
+    <tr><td><code>off</code></td><td>Don't ask</td><td>Everything runs.</td></tr>
+  </tbody>
+</table></div>
+<p>In every mode, a call that names kwant's own secret files (the vault, its key, the API token) is refused and recorded as denied. Calls that run without a card are recorded too, and under <code>smart</code> each record says why it was judged safe.</p>
+
+<h3 id="smart">What "Ask only when risky" lets through</h3>
+<ul>
+  <li><strong>Shell commands</strong> in the bot's folder that a fail-closed allowlist recognises as safe: file and text tools like <code>ls</code>, <code>cat</code> or <code>jq</code>, and build tools like <code>cargo</code>, <code>npm</code>, <code>make</code> or <code>git</code>, with checks. Network tools, <code>sudo</code>, containers, <code>git push</code>, package installs, <code>npx</code>, inline code, and any path outside the folder still ask.</li>
+  <li><strong>Reads</strong> outside the folder, unless they touch system data or anything that looks like a credential: <code>.ssh</code>, <code>.aws</code>, <code>.env</code> files, key files, browser profiles, shell histories and more.</li>
+  <li><strong>MCP tools</strong> the server marks read-only and not destructive.</li>
+</ul>
+<p>Requests to kwant itself, on its own port or any loopback <code>/api/</code> path, always ask. Writes and edits outside the folder, and unknown tools, always ask.</p>
+<div class="note warn"><strong><code>smart</code> guards against accidents. It isn't a sandbox.</strong> Scripts in the bot's folder, <code>make</code>, <code>cargo build</code> and <code>npm run</code> run without a card and can do anything the bot's user can, including a script the bot wrote a moment earlier. Use <code>ask</code> for bots or folders you don't trust.</div>
+
+<h3 id="session">"Always this session"</h3>
+<p>Under <code>ask</code> and <code>smart</code>, "Always this session" on a Claude tool's card allows that tool, for example all <code>Bash</code>, for that bot and conversation until kwant restarts.</p>
+
+<h2 id="passwords">Saved passwords</h2>
+<p>kwant can fill website logins in a team's, channel's or bot's browser. Passwords live in one of two stores:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Store</th><th>Where</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Built-in</strong> (default)</td><td>Encrypted files in <code>&lt;data dir&gt;/kwnt-vault/</code>, with the key next to them.</td></tr>
+    <tr><td><strong>Bitwarden</strong></td><td>Your own Bitwarden or Vaultwarden account, folder <code>kwnt</code>, after you unlock it once.</td></tr>
+  </tbody>
+</table></div>
+<p>The built-in store protects against copies of the data folder. It doesn't protect against a bot running as the same user with approvals off, because that bot could read the key. So kwant enforces one rule:</p>
+<div class="note"><strong>Approvals off, or "Ask only when risky", needs Bitwarden</strong> while the built-in store holds any password. Move them to Bitwarden first (<code>POST /api/passwords/migrate</code>): each one is deleted locally only after Bitwarden has it.</div>
+
+<h3 id="bitwarden">How the Bitwarden store works</h3>
+<ul>
+  <li>kwant talks to Bitwarden itself, not through the <code>bw</code> CLI or <code>bw serve</code>.</li>
+  <li>The master password, session and vault key exist only in kwant's memory. Nothing secret is written to disk, passed to a child process or logged.</li>
+  <li>After a restart the vault is <strong>locked</strong>: nothing is filled until you unlock it again.</li>
+  <li>Only items in the <code>kwnt</code> folder that carry kwant's owner field are used. Organisation items, trash and other folders are never read.</li>
+  <li>Showing a password needs your master password. Five wrong tries in a row lock the vault.</li>
+</ul>
+<div class="note warn"><strong>Known gap.</strong> Autofill stays on while approvals are off. Chrome's debugging port listens on loopback without authentication, so a bot with a shell could read a field kwant has just filled. This applies to both stores. A fix that removes the port is planned.</div>

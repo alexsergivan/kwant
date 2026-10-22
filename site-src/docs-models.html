@@ -1,0 +1,63 @@
+title: Models & accounts
+description: The engines kwant runs on, account profiles with automatic failover, custom OpenAI- or Anthropic-compatible servers, and the Laya model router.
+path: docs/models.html
+nav: models
+---
+<p class="kicker">Docs</p>
+<h1>Models &amp; accounts</h1>
+<p class="intro">Bots run on the CLIs you already use or on API keys. Add several accounts per engine, and kwant moves a turn to the next one when an account runs out of usage.</p>
+
+<h2 id="engines">Engines</h2>
+<ul>
+  <li><strong>Host CLIs:</strong> <code>claude</code>, <code>codex</code> and <code>grok</code>, supervised by kwant, with their own file and shell tools.</li>
+  <li><strong>Provider APIs:</strong> Anthropic, OpenAI and xAI keys.</li>
+  <li><strong>Custom API:</strong> any server that speaks the OpenAI chat API (OpenRouter, LM Studio and others) or the Anthropic Messages API.</li>
+</ul>
+<p>Each bot has a preferred model. Set it to <strong>auto</strong> and kwant picks the model and effort for every message.</p>
+
+<h2 id="profiles">Account profiles</h2>
+<p>A profile is one account for an engine, for example a work Claude subscription and a personal one. Every engine starts with a <strong>This machine</strong> profile, which uses the CLI's own login, or the key from Settings or the environment.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Kind</th><th>Runs with</th><th>Signed in by</th></tr></thead>
+  <tbody>
+    <tr><td><code>system</code></td><td>The CLI's default config folder, or the Settings or environment key</td><td>Whatever you did on the host</td></tr>
+    <tr><td><code>cli_home</code></td><td>Its own config folder; host credential variables are removed</td><td>The in-app sign-in, or your own folder</td></tr>
+    <tr><td><code>api_key</code></td><td>The provider's API, with only the profile's key</td><td>The key you paste</td></tr>
+    <tr><td><code>custom_api</code></td><td>Your own server, with its key if it has one</td><td>A check of the server's model list</td></tr>
+  </tbody>
+</table></div>
+<p>Keys are write-only: no API response ever contains one, only whether it's set.</p>
+
+<h3 id="sign-in">Signing in a CLI profile</h3>
+<p>kwant runs the CLI's own login with the profile's folder. For Claude, open the link and paste the code shown back into kwant. For Codex and Grok, open the link and enter the code. A sign-in expires after 10 minutes.</p>
+
+<h3 id="failover">Failover</h3>
+<p>A bot can be pinned to a profile; otherwise the engine's default profile runs. When that profile is out of usage or signed out, and nothing has been shown or done yet in the turn, kwant moves the turn to the engine's next enabled profile by priority, up to 3 attempts, and the chat says so. A profile that ran out is skipped until its reset time. Overloads and rate limits are retried, not failed over. Turn failover off for a bot to keep it on its profile.</p>
+
+<h2 id="custom">Custom API accounts</h2>
+<p>Add an account with the server's base URL and, if needed, a key. kwant checks the server's model list when you save it and shows whether it's ready, unreachable or rejected the key. A space can have several custom accounts, and they belong to that space only.</p>
+<ul>
+  <li>Paste the base URL with or without <code>/chat/completions</code> or <code>/messages</code>: kwant trims it to the API root.</li>
+  <li>MCP tools are offered on OpenAI-chat servers. Anthropic-Messages servers run without tools and say so.</li>
+  <li>Custom API never falls back to the host's accounts.</li>
+</ul>
+
+<h2 id="laya">The Laya router</h2>
+<p><a href="https://huggingface.co/convaiinnovations/laya" rel="noopener">Laya</a> picks which bot answers in a channel, and which model and effort a bot set to auto uses. It's a small Python service, and <code>kwnt serve</code> manages it for you:</p>
+<ol>
+  <li>On first run it installs <code>laya[serve]</code> into <code>~/.kwnt/laya/venv</code>, with <code>uv</code> when present or <code>python3 -m venv</code> otherwise.</li>
+  <li>It starts <code>laya-serve</code> and downloads the English checkpoint (about 420 MB) on first start.</li>
+  <li>It restarts Laya if it exits, and stops it when kwant shuts down.</li>
+</ol>
+<p>The header shows the router's status: green online, amber installing or loading, red offline. While Laya is unavailable, kwant routes by keyword and says so on the routing card.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Setting</th><th><code>config.toml</code></th><th>Environment</th><th>Default</th></tr></thead>
+  <tbody>
+    <tr><td>Laya URL</td><td><code>laya_url</code></td><td><code>LAYA_URL</code></td><td><code>http://127.0.0.1:8000</code></td></tr>
+    <tr><td>Manage a local Laya</td><td><code>laya_managed</code></td><td><code>KWNT_LAYA_MANAGED=0</code> or <code>--no-laya</code> to disable</td><td>on</td></tr>
+    <tr><td>Checkpoints to preload</td><td><code>laya_models</code></td><td><code>KWNT_LAYA_MODELS</code></td><td><code>english</code></td></tr>
+    <tr><td>Existing <code>laya-serve</code></td><td></td><td><code>KWNT_LAYA_SERVE_BIN</code></td><td></td></tr>
+  </tbody>
+</table></div>
+<p>kwant only starts Laya for loopback URLs. If Laya already answers, for example from Docker, kwant uses it as is.</p>
+<div class="note"><strong>Behind a proxy that blocks Hugging Face?</strong> Start kwant once on an open network, or copy an existing <code>~/.kwnt/laya/hf</code> from another machine. After that, Laya starts offline.</div>

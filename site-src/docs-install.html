@@ -1,0 +1,90 @@
+title: Install & run
+description: Build the kwnt binary and run it on your own computer, on a VPS with systemd, or with Docker Compose behind an HTTPS proxy.
+path: docs/install.html
+nav: install
+---
+<p class="kicker">Docs</p>
+<h1>Install &amp; run</h1>
+<p class="intro"><code>kwnt</code> is one self-contained binary with the web app and SQLite built in. Build it once, then run it on your own computer or on a server.</p>
+
+<h2 id="build">Build the release binary</h2>
+<pre><code>make build
+./target/release/kwnt serve</code></pre>
+<p>The binary embeds the web app, so the machine that runs it needs no Node.js. Docker is only needed for VM mode and the bots' shared browser (see <a href="browser.html">Browser</a>).</p>
+
+<h2 id="local">On your own computer</h2>
+<p>Run <code>kwnt serve</code> and open <a href="http://127.0.0.1:8799">http://127.0.0.1:8799</a>. There's nothing to sign in to: requests from this machine need no token, and <code>kwnt serve</code> prints nothing about one.</p>
+<p>"This machine" means a loopback connection with a loopback <code>Host</code> and no proxy headers. A VPS you reach through an SSH tunnel counts too:</p>
+<pre><code>ssh -L 8799:127.0.0.1:8799 user@your-vps</code></pre>
+
+<h2 id="vps">On a VPS</h2>
+<pre><code><span class="c"># 1. Copy the binary to your server</span>
+scp target/release/kwnt user@your-vps:/usr/local/bin/kwnt
+
+<span class="c"># 2. Run it</span>
+ssh user@your-vps "kwnt serve --host 0.0.0.0 --port 8799"</code></pre>
+<p>On a bind other than loopback, <code>kwnt serve</code> prints a ready-to-open sign-in link on its output, never in the log:</p>
+<pre><code>http://&lt;this-host&gt;:8799/#kwnt_token=…</code></pre>
+<p>Swap <code>&lt;this-host&gt;</code> for the server's address and open the link once. The page signs in with an HttpOnly cookie that lasts a year and clears the address bar.</p>
+<ul>
+  <li><strong>Lost the link?</strong> <code>kwnt token</code> prints it again.</li>
+  <li><strong>Scripts:</strong> <code>kwnt token --raw</code> prints just the token, to send as <code>Authorization: Bearer &lt;token&gt;</code>.</li>
+  <li>The token lives in <code>&lt;data dir&gt;/api-token</code> (mode 0600), or set <code>KWNT_API_TOKEN</code> (16+ characters).</li>
+</ul>
+<div class="note warn"><strong>The link signs in as you.</strong> Anyone who can read the server's output, or <code>docker compose logs</code> with Docker, can use it. Keep that output private.</div>
+
+<h3 id="systemd">As a systemd service</h3>
+<p>Create a dedicated user (<code>useradd --system --create-home --home-dir /var/lib/kwnt kwnt</code>), then sign the CLIs in as that user, or add API keys in the app.</p>
+<pre><code><span class="c"># /etc/systemd/system/kwnt.service</span>
+[Unit]
+Description=Kwant AI agent platform
+After=network.target
+
+[Service]
+Type=simple
+User=kwnt
+ExecStart=/usr/local/bin/kwnt serve --host 0.0.0.0 --port 8799
+Restart=always
+Environment=KWNT_DATA_DIR=/var/lib/kwnt
+Environment=LAYA_URL=http://127.0.0.1:8000
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+<pre><code>systemctl daemon-reload
+systemctl enable --now kwnt</code></pre>
+
+<h2 id="docker">With Docker Compose</h2>
+<p><code>docker-compose.yml</code> runs kwant next to a Laya image with the model weights baked in, so the server never downloads them at runtime:</p>
+<pre><code>docker compose up -d --build                  <span class="c"># UI on http://127.0.0.1:8799</span>
+docker compose logs kwnt | grep kwnt_token    <span class="c"># open that link once</span>
+docker compose exec kwnt kwnt token           <span class="c"># print it again later</span></code></pre>
+<p>Requests through Docker's published port arrive from the bridge network, so they count as remote: open the startup link once, using <code>127.0.0.1</code> as the host. Data persists in the <code>kwnt-data</code> volume.</p>
+
+<h2 id="proxy">Behind an HTTPS reverse proxy</h2>
+<p>Only the HTTPS port needs to be reachable from outside. Forward the original <code>Host</code> header, because the live browser stream checks <code>Origin</code> against it, and allow WebSocket upgrades:</p>
+<pre><code>location / {
+    proxy_pass http://127.0.0.1:8799;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_read_timeout 90s;
+}</code></pre>
+<p>Requests carrying proxy headers count as remote, so they need the sign-in link even if the proxy runs on the same machine. Never publish Chromium's debugging port or the Docker socket.</p>
+
+<h2 id="settings">Settings</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Environment</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>KWNT_DATA_DIR</code></td><td>Where kwant keeps its database (<code>kwnt.db</code>), account profiles and saved passwords. Default <code>~/.kwnt</code>.</td></tr>
+    <tr><td><code>KWNT_REQUIRE_TOKEN</code></td><td><code>always</code> requires the token for local requests too; <code>never</code> turns the check off (only behind your own authentication).</td></tr>
+    <tr><td><code>KWNT_API_TOKEN</code></td><td>Use your own API token instead of the generated one.</td></tr>
+    <tr><td><code>KWNT_ALLOWED_ORIGINS</code></td><td>Extra browser origins allowed to call <code>/api</code>, comma separated.</td></tr>
+    <tr><td><code>KWNT_COMPUTER_MODE</code></td><td><code>local</code> or <code>vm</code>, unless a choice is saved in Settings.</td></tr>
+    <tr><td><code>LAYA_URL</code></td><td>Where the Laya router answers. Default <code>http://127.0.0.1:8000</code>.</td></tr>
+    <tr><td><code>KWNT_LAYA_MANAGED=0</code></td><td>Don't install or run Laya; use your own. <code>kwnt serve --no-laya</code> skips it.</td></tr>
+  </tbody>
+</table></div>
+<p><code>~/.kwnt/config.toml</code> can also set <code>host</code>, <code>port</code>, <code>data_dir</code> and the Laya options (<code>laya_url</code>, <code>laya_managed</code>, <code>laya_models</code>). More on Laya is in <a href="models.html#laya">Models &amp; accounts</a>.</p>

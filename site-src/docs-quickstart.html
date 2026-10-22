@@ -1,0 +1,66 @@
+title: Quickstart
+description: Build kwant from a fresh clone, add an account and ask your first team of bots a question.
+path: docs/quickstart.html
+nav: quickstart
+---
+<p class="kicker">Docs</p>
+<h1>Quickstart</h1>
+<p class="intro">Go from a fresh clone to a team of bots answering in your browser. On most machines it takes a few minutes, plus a one-time model download in the background.</p>
+
+<h2 id="requirements">What you need</h2>
+<ul>
+  <li><strong>Rust</strong> (stable), installed with <a href="https://rustup.rs" rel="noopener">rustup</a>.</li>
+  <li><strong>Node.js 20 or newer</strong> with npm, to build the web app. The finished binary doesn't need it.</li>
+  <li><strong>At least one AI account</strong> for your bots. Any one of these is enough:
+    <ul>
+      <li>the <a href="https://docs.anthropic.com/en/docs/claude-code" rel="noopener"><code>claude</code> CLI</a>, installed. You don't need to sign it in first, because kwant has a <strong>Sign in with Claude</strong> button;</li>
+      <li>the <code>codex</code> or <code>grok</code> CLI, signed in on the same machine (<code>codex login</code>, <code>grok login</code>);</li>
+      <li>an Anthropic, OpenAI or xAI API key, which you add in the app under <strong>Space settings → Accounts</strong>.</li>
+    </ul>
+  </li>
+  <li>Optional: <strong>Docker</strong> for VM mode and the bots' shared browser, and <a href="https://docs.astral.sh/uv/" rel="noopener"><code>uv</code></a> or <code>python3</code> for the Laya router.</li>
+</ul>
+
+<h2 id="run">1. Run from a fresh clone</h2>
+<pre><code>git clone https://github.com/alexsergivan/kwant.git
+cd kwant
+make run   <span class="c"># builds the web app, then runs `cargo run -- serve`</span></code></pre>
+<p>Open <strong><a href="http://127.0.0.1:8799">http://127.0.0.1:8799</a></strong>. On your own computer there's nothing to sign in to. If no account works yet, kwant shows a <strong>Get ready</strong> banner with an <strong>Add an account</strong> button.</p>
+<div class="note"><strong>The first start takes a few minutes.</strong> kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer in the meantime, picked by keyword. To skip Laya, run <code>cargo run -- serve --no-laya</code>.</div>
+<p><code>cargo run -- serve</code> on its own works only once <code>frontend/dist</code> exists, because the binary embeds the web app. After the first <code>make run</code> (or <code>make frontend</code>) you can use either.</p>
+
+<h2 id="account">2. Add an account</h2>
+<p>Pick whichever you have:</p>
+<ul>
+  <li><strong>Claude:</strong> click <strong>Sign in with Claude</strong>, open the link and paste the code shown back into kwant.</li>
+  <li><strong>Codex or Grok:</strong> sign the CLI in on this machine, and kwant uses it as is.</li>
+  <li><strong>API key:</strong> open <strong>Space settings → Accounts</strong> and add an Anthropic, OpenAI or xAI key. Keys are write-only: the app never shows them again.</li>
+</ul>
+<p>You can add several accounts per engine, such as a work and a personal one. See <a href="models.html">Models &amp; accounts</a>.</p>
+
+<h2 id="first-question">3. Ask your first question</h2>
+<p>A fresh install's Default space starts with three bots in <strong>#general</strong>, on the <code>@core-engineering</code> team:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Bot</th><th>Title</th><th>Good at</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Architect</strong></td><td>Systems Architect</td><td>Architecture, software design, multi-file engineering</td></tr>
+    <tr><td><strong>TechLead</strong></td><td>Staff Engineer &amp; Prototyper</td><td>Fast reasoning, prototyping, clear explanations</td></tr>
+    <tr><td><strong>DevOps</strong></td><td>Systems &amp; Security Engineer</td><td>Shell, servers, containers, security</td></tr>
+  </tbody>
+</table></div>
+<p>Type a question in #general. kwant picks the bot that fits best and shows why. Mention a bot by name (<code>@Architect</code>) to ask it directly, or ask in the team's chat (<code>@core-engineering</code>): when a question needs several views, the lead runs a short discussion and posts one summary.</p>
+<figure>
+  <div class="frame">{{shot:desktop-reasoning|A question in the general channel routed to Architect, with the routing reason and the model and effort used.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>kwant shows which bot it picked and why. Screens on this site come from a sample space.</figcaption>
+</figure>
+
+<h2 id="next">Next steps</h2>
+<ul>
+  <li><a href="bots-and-teams.html">Create bots and teams</a> from ready-made personas.</li>
+  <li><a href="approvals.html">Choose how often bots ask</a> before running commands.</li>
+  <li><a href="install.html">Run kwant on a server</a> with systemd or Docker Compose.</li>
+  <li><a href="mcp.html">Give bots tools</a> like GitHub or Notion through MCP.</li>
+</ul>
+<h2 id="tests">Running the tests</h2>
+<pre><code>cargo test               <span class="c"># Rust tests (run `make frontend` first: they need frontend/dist)</span>
+cd frontend &amp;&amp; npm test  <span class="c"># web app tests</span></code></pre>

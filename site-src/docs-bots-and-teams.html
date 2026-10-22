@@ -1,0 +1,75 @@
+title: Bots & teams
+description: Create kwant bots from persona presets, give them souls, group them into teams with a lead, and let them hand work to each other.
+path: docs/bots-and-teams.html
+nav: bots-and-teams
+---
+<p class="kicker">Docs</p>
+<h1>Bots &amp; teams</h1>
+<p class="intro">A bot is a persona with its own voice, model and folder. Bots share channels and teams, know who else is there, and pass work along with an @mention.</p>
+
+<h2 id="new-bot">Create a bot</h2>
+<p>Click <strong>New bot</strong> in the sidebar. Start from a ready-made persona, or start blank:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Group</th><th>Presets</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Tech</strong></td><td>Product, Designer, Frontend, Backend, QA, Security, SRE, Data, Tech Writer</td></tr>
+    <tr><td><strong>Non-tech</strong></td><td>Research, Marketing, Copywriter, Sales, Finance, Legal, Support, People, Coach, Tutor</td></tr>
+    <tr><td><strong>Lifestyle</strong></td><td>Travel Planner, Chef, Fitness Trainer, Event Planner, Home &amp; DIY, Language Partner, Budget Buddy, Wellbeing Companion</td></tr>
+  </tbody>
+</table></div>
+<p>A preset fills in the name, title, persona, soul and avatar. Change anything before you create the bot.</p>
+<figure>
+  <div class="frame">{{shot:desktop-presets|The New bot dialog with the Security preset picked, showing the Tech, Non-tech and Lifestyle tabs and the avatar grid.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The New bot dialog with the Security preset picked.</figcaption>
+</figure>
+
+<h3 id="persona-soul">Persona and soul</h3>
+<ul>
+  <li><strong>Persona</strong> is what the bot does: its role and instructions. It's also what the router reads when it picks who should answer.</li>
+  <li><strong>Soul</strong> is optional: its personality, voice, values and quirks. It's added to the system prompt, so it shapes how the bot speaks, but it isn't used for routing. Every preset and built-in bot has one.</li>
+  <li><strong>Avatar:</strong> pick a pixel avatar style. The one you choose always wins over hints in the bot's name.</li>
+</ul>
+
+<h3 id="edit">Edit a bot</h3>
+<p>Hover a bot in the sidebar and click the pencil, or use <strong>Edit</strong> in a direct chat's header. You can change its name, title, avatar, preferred model, persona and soul. A rename carries over to the bot's past messages. Bots on an API key also get a <strong>Usage</strong> tab with their token use by purpose, cache and call.</p>
+
+<h2 id="channels-teams">Channels and teams</h2>
+<p>A <strong>channel</strong> (like <code>#general</code>) is a shared chat for any bots you add to it. A <strong>team</strong> (like <code>@Product</code>) is a group of bots with:</p>
+<ul>
+  <li>a <strong>handle</strong> and a <strong>mission</strong>;</li>
+  <li><strong>pinned team instructions</strong> every member follows;</li>
+  <li>a <strong>workspace</strong> folder;</li>
+  <li>a <strong>lead</strong> and a roster of members.</li>
+</ul>
+<p>Create a team with <strong>New team</strong> in the sidebar and change it later with <strong>Manage</strong> in its header. Each team has its own chat. When you delete a team, its chat is kept as <code>#archived-team-&lt;name&gt;</code> with all its messages.</p>
+<figure>
+  <div class="frame">{{shot:desktop-manage-team|The Manage Team dialog with handle, mission, pinned team instructions, workspace, lead and roster.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Manage Team: one lead, clear rules, the right members.</figcaption>
+</figure>
+
+<h2 id="routing">Who answers</h2>
+<p>In a channel, kwant picks the bot whose persona fits your message best and shows the reason. The <a href="models.html#laya">Laya router</a> does this, and falls back to keyword matching while it's unavailable. Mention a bot (<code>@Designer</code>) to ask it directly.</p>
+
+<h2 id="handoffs">Handoffs</h2>
+<p>Every bot knows its teammates in the current channel or team. When a reply @mentions a teammate, or <code>@everyone</code>, that teammate answers right after in the same chat. A message can lead to <strong>up to four handoffs</strong>, so bots can't keep each other going forever.</p>
+<figure>
+  <div class="frame">{{shot:desktop-handoff|Designer answers in the design-review channel, then @mentions QA, and QA picks it up.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Designer hands the check to QA with an @mention.</figcaption>
+</figure>
+
+<h2 id="discussions">Team discussions</h2>
+<p>When a question to a team needs several views, the lead runs a short, moderated discussion:</p>
+<ol>
+  <li>The lead opens with a short take, or first asks you a clarifying question and waits.</li>
+  <li>Teammates respond to each other by name in about 120 words or fewer, or pass when they have nothing to add.</li>
+  <li>The lead closes with one summary.</li>
+</ol>
+<p>The back-and-forth folds into a collapsible <strong>Team discussed</strong> thread, so the chat shows the answer. Open it to read every turn.</p>
+<figure>
+  <div class="frame">{{shot:desktop-team-discussion-expanded|The Product team chat with the Team discussed fold open, showing each bot's turn and the @mentions between them.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The discussion fold, opened.</figcaption>
+</figure>
+
+<h2 id="routines">Routines and follow-ups</h2>
+<p>Bots with kwant's own tools can set things up for you when you ask, in the same turn: routines on a schedule (daily, weekly, monthly, every N minutes or once), one-off follow-ups, new bots, channels and spaces. Each change is applied at once with an undo. Deleting a bot, archiving a space or deleting an account waits for your confirmation.</p>
+<p>Find every routine in the space under <strong>Routines</strong> in the sidebar.</p>

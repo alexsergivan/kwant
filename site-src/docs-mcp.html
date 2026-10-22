@@ -1,0 +1,52 @@
+title: MCP tools
+description: Give kwant bots tools through Model Context Protocol servers, with per-bot access, masked secrets, OAuth sign-in and approvals.
+path: docs/mcp.html
+nav: mcp
+---
+<p class="kicker">Docs</p>
+<h1>MCP tools</h1>
+<p class="intro">Bots can use tools from <a href="https://modelcontextprotocol.io" rel="noopener">Model Context Protocol</a> servers, like GitHub or Notion. Register a server once, then choose which bots may use it.</p>
+
+<h2 id="add">Add a server</h2>
+<p>Open the tool servers screen, <strong>Give your bots new abilities</strong>, and paste a command or URL from any server's README. kwant supports two transports:</p>
+<ul>
+  <li><strong>stdio:</strong> kwant, or the bot's CLI, starts a command as a child process, for example <code>npx -y @modelcontextprotocol/server-github</code>. No shell is involved.</li>
+  <li><strong>http:</strong> a streamable-HTTP MCP endpoint at a URL.</li>
+</ul>
+<p>Click <strong>Connect</strong> to test it: kwant starts the server, lists its tools and shuts it down again, and shows what the server printed if something fails.</p>
+
+<h2 id="access">Which bots see which tools</h2>
+<p>A bot only ever sees the servers assigned to it, never the host user's own MCP configuration. Pick a bot's servers under <strong>Tools this bot can use</strong>. A disabled server is kept but offered to no bot. Tool names look like <code>mcp__&lt;server&gt;__&lt;tool&gt;</code>.</p>
+
+<h2 id="secrets">Secrets</h2>
+<p>Environment variables and headers are treated as secrets. They're stored, but every value comes back masked as <code>********</code>, with only the keys visible. Secret values never appear in API responses, logs or the CLI's command line, and test output has them replaced too.</p>
+
+<h2 id="oauth">Servers that need a sign-in</h2>
+<p>For HTTP servers that require sign-in, such as <code>https://mcp.notion.com/mcp</code>, kwant follows the MCP authorization spec: it discovers the server's sign-in provider, registers itself, and runs the authorization-code flow with PKCE in a popup. The sign-in must finish within 10 minutes. The API only ever reports whether a server is connected, never its tokens.</p>
+
+<h2 id="suggestions">Bots can suggest servers</h2>
+<p>Bots can search the official MCP Registry and post a suggestion card in the chat. A suggestion installs nothing: you install it, with one click, and only exact versions from the default npm and PyPI registries, Docker images or HTTPS endpoints qualify. Cards for servers that would run on your computer say so.</p>
+
+<h2 id="approvals">Approvals for tools</h2>
+<p>MCP tool calls follow the bot's <a href="approvals.html#modes">approval mode</a>. Under "Ask only when risky", tools the server marks read-only and not destructive run without a card. That's the server's own claim, and if kwant can't check it, the call asks. Every call a bot makes is recorded on its reply.</p>
+
+<h2 id="api">HTTP API</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Route</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>GET /api/mcp/servers</code></td><td>List servers, by name</td></tr>
+    <tr><td><code>POST /api/mcp/servers</code></td><td>Register a server</td></tr>
+    <tr><td><code>PUT /api/mcp/servers/:id</code></td><td>Update one. A masked value keeps the stored secret.</td></tr>
+    <tr><td><code>DELETE /api/mcp/servers/:id</code></td><td>Delete it and remove it from every bot</td></tr>
+    <tr><td><code>POST /api/mcp/servers/:id/test</code></td><td>Initialize, list tools, shut down</td></tr>
+    <tr><td><code>POST /api/mcp/servers/:id/oauth/start</code></td><td>Start a sign-in; returns the URL to open</td></tr>
+    <tr><td><code>GET</code> / <code>PUT /api/kwants/:id/mcp-servers</code></td><td>Read or set a bot's servers</td></tr>
+  </tbody>
+</table></div>
+<pre><code><span class="c"># Register the GitHub server</span>
+curl -X POST http://127.0.0.1:8799/api/mcp/servers \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"github","transport":"stdio","command":"npx",
+       "args":["-y","@modelcontextprotocol/server-github"],
+       "env":{"GITHUB_TOKEN":"…"}}'</code></pre>
+<p>The full contract, including the server object and error codes, is in <a href="https://github.com/alexsergivan/kwant/blob/main/docs/mcp-api.md" rel="noopener">docs/mcp-api.md</a>.</p>
