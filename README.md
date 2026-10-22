@@ -1,78 +1,110 @@
-# ⚡ KWNTS: Multi-Agent AI Platform in Rust
+# kwant
 
-> Inspired by **Grok Bot** & **OpenMausBot**. Built with **Rust**, **Axum**, and **Laya**.
+**Your own team of AI bots, in one self-hosted binary.**
 
-kwant is your team of AI bots: a self-hosted platform packaged as a **single, standalone binary** with an embedded dark-mode web app and SQLite storage. Every bot has its own persona (a fresh install starts with `Architect`, `TechLead` and `DevOps`), picks the right model for each message, and can work in its own folder, shell and browser.
+[![CI](https://github.com/alexsergivan/kwant/actions/workflows/ci.yml/badge.svg)](https://github.com/alexsergivan/kwant/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Docs](https://img.shields.io/badge/docs-kwant.pages.dev-orange.svg)](https://kwant.pages.dev/docs/quickstart)
 
----
+kwant gives you a team of bots that share chats, hand work to each other with an @mention, keep working on a schedule and wait for your OK before anything risky. Keep separate spaces for work and home, each with its own bots and accounts. Run it on your laptop or a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.
 
-## ⚡ Key Highlights
+It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the binary.
 
-- **Single-Binary Deploy**: The built binary (`kwnt`) needs no Node.js: it serves both the Tokio/Axum engine and the embedded React web app in under 25 MB of RAM on your laptop or a VPS. Docker is only needed for VM mode and the bots' shared browser.
-- **Sub-50ms Intelligent Routing with Laya**: By default, task-based model selection queries [convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya) over its `/v1/systemone` API in ~33ms, with seamless offline heuristic fallback and dynamic effort-level selection.
-- **Hybrid Driver Fleet**: Run direct cloud & local APIs (xAI Grok, Anthropic Claude, OpenAI, OpenRouter, local Ollama) or supervise host CLI agents (`claude`, `codex`, `grok` CLIs).
-- **Agent-to-Agent Handoffs**: Every agent knows its teammates in the current channel or team. When a reply @mentions a teammate (or `@everyone`), that teammate answers right after in the same chat, up to 4 handoffs per message.
-- **Moderated Team Discussions**: When a team question needs several perspectives, the lead opens with a short take (or first asks you a clarifying question and waits), teammates respond to each other by name in under ~120 words or pass if they have nothing to add, and the lead closes with one summary. The back-and-forth folds into a collapsible "Team discussed" thread so the chat shows the answer.
-- **Persona Presets & Avatars**: Create agents from ready-made personas grouped into **Tech** (Product, Designer, Frontend, Backend, QA, Security, SRE, Data, Tech Writer) and **Non-tech** (Research, Marketing, Copywriter, Sales, Finance, Legal, Support, People, Coach, Tutor) and **Lifestyle** (Travel Planner, Chef, Fitness Trainer, Event Planner, Home & DIY, Language Partner, Budget Buddy, Wellbeing Companion), or start blank, and pick from twenty-two pixel avatar styles. The chosen avatar always wins over hints in the agent's name.
-- **Agent Souls**: Besides its persona (what it does), every agent has an optional **Soul**: its personality, voice, values, and quirks. The soul is added to the system prompt, so it shapes how the agent speaks. It is not used for routing. Every preset and built-in agent comes with one.
-- **Editable Agents**: Hover any agent in the sidebar (team members or the Agent Fleet) and click the pencil, or use **Edit** in a direct chat header, to change its name, title, avatar, preferred model, persona, or soul. Renames carry over to the agent's past messages.
-- **Human-in-the-Loop Permission Broker**: Security-critical operations (shell execution, workspace file edits) require user approval via modern security cards: `[Allow Once]`, `[Always Allow]`, `[Deny]`.
-- **Sleek Modern Grok Bot Interface**: Dark zinc aesthetics (`zinc-950`), clean typography (`Inter`, `JetBrains Mono`), collapsible reasoning disclosures (`Thought for Xs • Laya [Grok] • Low Effort`), role-based SVG/gradient avatars, and subtle modern micro-interaction click & completion sounds synthesized via the Web Audio API.
+![A kwant channel: Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen.](docs/media/handoff.webp)
+
+**Website and docs: [kwant.pages.dev](https://kwant.pages.dev)**
 
 ---
 
-## 🚀 Quickstart
+## Why kwant
 
-### What you need first
+- **A team, not a chat tab.** Each bot has its own role, voice ("soul") and model. Bots @mention each other to hand work on, a team lead runs short discussions and posts one summary, and the [Laya](#laya-model-router) router picks who answers and with which model and effort.
+- **Spaces.** Separate spaces for work, a side project and home. Each has its own bots, teams, channels, routines, accounts, approval rule and hiring rule.
+- **Every account you have.** Several accounts per engine: Claude, Codex or Grok CLI logins, Anthropic, OpenAI or xAI keys, and your own OpenAI- or Anthropic-compatible server. Set a default and a priority order. When an account runs out of usage, the turn moves to the next one and the chat says so. You can pin a bot to one account.
+- **Nothing risky without your OK.** Shell commands, file edits outside the bot's folder and tool calls show up as approval cards: *Allow once*, *Always allow* or *Deny*. Per space or per bot: ask every time, ask only when risky, or don't ask.
+- **Works while you're away.** Routines on a schedule (bots can set them up when you ask, with an Undo button), follow-ups bots schedule for themselves, and a *While you were away* page with what's waiting on you, what finished and what failed.
+- **Loose ends and letters.** kwant reads your chats and, if you add them, an IMAP inbox and your GitHub issues and pull requests, read-only, and finds what you started and never finished. Photograph a bill or a form and it pulls out the sender, the ask and the deadline and drafts a reply. It never sends anything.
+- **Parallel Universe.** Compare up to three ways to deploy an app with local container tests and dated price estimates. Every number is tagged as verified, an estimate or speculation. No cloud account and no spending.
+- **And more:** memory and skills per bot (you approve new skills), bots that propose hiring a teammate, import a bot from a Claude Code subagent, a SKILL.md, a character card or a JSON export, search across a space's chats, MCP tool servers, a shared browser for bots, saved passwords with an optional Bitwarden store, and Local or VM computer mode.
+
+See every feature, with screenshots, on [kwant.pages.dev/features](https://kwant.pages.dev/features).
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/spaces.webp" alt="The space rail with three spaces, Trailhead, Pixel Quest and Home, each with its own icon and colour. Trailhead is open on #general with a weekly digest posted by a routine."><br><sub><b>Spaces</b>: each with its own bots, channels and routines.</sub></td>
+    <td width="50%"><img src="docs/media/accounts.webp" alt="Space settings, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in."><br><sub><b>Accounts</b>: several per engine, with a default and fallbacks.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/approval.webp" alt="An approval card: TechLead wants to create a pull request on GitHub, with the full arguments shown and Deny, Allow Once and Always Allow buttons."><br><sub><b>Approvals</b>: see exactly what a bot wants to run.</sub></td>
+    <td><img src="docs/media/routine.webp" alt="QA set up a routine when asked to check overnight checkout errors every morning: weekdays at 08:30, posting in the direct chat, with Undo, Edit and Pause buttons."><br><sub><b>Routines</b>: ask for "every morning" and get one, with Undo.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/away.webp" alt="While you were away. Waiting on you: a question with answer buttons. Finished: a handoff and a weekly digest. Failed or stuck: a price scan blocked with a 403 and a smoke test that stopped at 9 of 22."><br><sub><b>While you were away</b>: what's waiting, finished or failed.</sub></td>
+    <td><img src="docs/media/loose-ends.webp" alt="Loose ends with Open, Waiting and Snoozed tabs. The top case is a letter from a water company, with the quote it's based on and a draft reply."><br><sub><b>Loose ends</b>: evidence and a draft. It never sends.</sub></td>
+  </tr>
+</table>
+
+Screenshots come from a demo space with sample data.
+
+---
+
+## Quickstart
+
+### What you need
+
 - **Rust** (stable), installed with [rustup](https://rustup.rs).
 - **Node.js 20 or newer** with npm, to build the web app. The finished binary doesn't need it.
-- **At least one AI account** for your bots to run on. Any one of these is enough:
+- **At least one AI account.** Any one of these is enough:
   - the [`claude`](https://docs.anthropic.com/en/docs/claude-code) CLI, installed. You don't need to sign it in first: kwant has a **Sign in with Claude** button;
   - the `codex` or `grok` CLI, signed in on the same machine (`codex login`, `grok login`);
   - an Anthropic, OpenAI or xAI API key, which you add in the app under **Space settings → Accounts**.
-- Optional: **Docker** for VM mode and the bots' browser, and [`uv`](https://docs.astral.sh/uv/) or `python3` for the Laya router (see below).
+- Optional: **Docker** for VM mode and the bots' shared browser, and [`uv`](https://docs.astral.sh/uv/) or `python3` for the Laya router.
 
-### 1. Run from a fresh clone
+### Run from a fresh clone
+
 ```bash
 git clone https://github.com/alexsergivan/kwant.git
 cd kwant
 make run          # builds the web app (frontend/dist), then runs `cargo run -- serve`
 ```
-Open your browser to: **http://127.0.0.1:8799**. If no account works yet, kwant shows a **Get ready** banner with an **Add an account** button.
 
-`cargo run -- serve` on its own only works once `frontend/dist` exists, because the binary embeds it. After the first `make run` (or `make frontend`) you can use either.
+Open **http://127.0.0.1:8799**. If no account works yet, kwant shows a **Get ready** banner with an **Add an account** button. A fresh install starts with three bots in `#general`: Architect, TechLead and DevOps. Make more with **New bot**, from a ready-made persona or blank.
 
-**First start takes a few minutes:** kwant installs its Laya router and downloads its ~420 MB model in the background (see [Laya](#-laya-model-router-convaiinnovationslaya)). Bots answer meanwhile, picked by keyword. To skip it, run `cargo run -- serve --no-laya`.
+The binary embeds `frontend/dist`, so `cargo run -- serve` on its own only works after the first `make run` (or `make frontend`).
 
-Bot browsing uses a shared headless Chromium service with live WebSocket frames and separate sessions. Code execution containers start independently. See [browser service and VPS hosting](docs/browser-service.md) for Docker setup, HTTPS proxy configuration, control handoff, and session persistence limits.
+**The first start takes a few minutes:** kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer meanwhile, picked by keyword. To skip Laya, run `cargo run -- serve --no-laya`.
 
-### 2. Build Single Release Binary
+### Build a release binary
+
 ```bash
-make build
-# Output located at: target/release/kwnt (~10MB)
+make build                 # web app + cargo build --release
 ./target/release/kwnt serve
 ```
 
+More in the [quickstart](https://kwant.pages.dev/docs/quickstart) and [install](https://kwant.pages.dev/docs/install) docs.
+
 ---
 
-## 🌐 Self-Hosting on a VPS
+## Self-hosting on a VPS
 
-Because `kwnt` is a completely self-contained binary embedding SQLite and the frontend assets, deploying to any VPS takes seconds:
+### The binary
+
+`kwnt` is self-contained: SQLite and the web app are inside it.
 
 ```bash
-# 1. Copy binary to your VPS
-scp target/release/kwnt user@your-vps-ip:/usr/local/bin/kwnt
-
-# 2. Run on VPS
-ssh user@your-vps-ip "kwnt serve --host 0.0.0.0 --port 8799"
+scp target/release/kwnt user@your-vps:/usr/local/bin/kwnt
+ssh user@your-vps "kwnt serve --host 0.0.0.0 --port 8799"
 ```
 
-On your own computer there is nothing to sign in to. From another machine, open the link `kwnt serve` prints at startup once (`http://<this-host>:8799/#kwnt_token=...`, with `<this-host>` swapped for the VPS address); the browser stays signed in for a year. Lost it? `kwnt token` prints it again (Docker Compose: `docker compose exec kwnt kwnt token`). Through `ssh -L 8799:127.0.0.1:8799` no sign-in is needed. The link signs in as you, so anyone who can read the server's output or `docker compose logs` can use it. See [LLM profiles and API access](docs/llm-profiles.md).
+On your own computer there is nothing to sign in to. From another machine, open the link `kwnt serve` prints at startup once (`http://<this-host>:8799/#kwnt_token=...`, with `<this-host>` swapped for the server's address); the browser stays signed in for a year. Lost it? `kwnt token` prints it again. Through `ssh -L 8799:127.0.0.1:8799` no sign-in is needed. The link signs in as you, so anyone who can read the server's output can use it. Put a TLS reverse proxy in front: see [browser service and VPS hosting](docs/browser-service.md).
 
-### Systemd Service (`/etc/systemd/system/kwnt.service`)
+<details>
+<summary>A systemd unit</summary>
+
 ```ini
+# /etc/systemd/system/kwnt.service
 [Unit]
-Description=Kwant AI agent platform
+Description=kwant AI bot platform
 After=network.target
 
 [Service]
@@ -83,77 +115,83 @@ User=kwnt
 ExecStart=/usr/local/bin/kwnt serve --host 0.0.0.0 --port 8799
 Restart=always
 Environment=KWNT_DATA_DIR=/var/lib/kwnt
-Environment=LAYA_URL=http://127.0.0.1:8000
-# kwnt installs and supervises Laya under KWNT_DATA_DIR/laya; set KWNT_LAYA_MANAGED=0 to run your own
-Environment=XAI_API_KEY=your_xai_key_here
-Environment=ANTHROPIC_API_KEY=your_claude_key_here
 
 [Install]
 WantedBy=multi-user.target
 ```
-Enable and start:
+
 ```bash
 systemctl daemon-reload
 systemctl enable --now kwnt
 ```
 
+</details>
+
+### Docker Compose
+
+`docker-compose.yml` runs kwnt with a Laya image that has the model baked in, so the server never downloads it at runtime:
+
+```bash
+docker compose up -d --build                  # UI on http://127.0.0.1:8799
+docker compose logs kwnt | grep kwnt_token    # open that link once, with <this-host> as 127.0.0.1
+```
+
+Data persists in the `kwnt-data` volume. `docker compose exec kwnt kwnt token` prints the sign-in link again.
+
 ---
 
-## 🔮 Laya Model Router (`convaiinnovations/laya`)
+## Laya model router
 
-Laya picks which agent answers in a channel and which model and effort each agent uses when its model is `"auto"`. It runs as a small Python service speaking `/v1/systemone`.
-
-**`kwnt serve` manages Laya for you.** If nothing answers at `laya_url` (default `http://127.0.0.1:8000`), kwnt:
-
-1. installs `laya[serve]==0.4.8` into `~/.kwnt/laya/venv` on first run, using [`uv`](https://docs.astral.sh/uv/) when present (it fetches Python too) or `python3 -m venv` otherwise;
-2. starts `laya-serve` on the configured port, downloading the English checkpoint (~420 MB) into `~/.kwnt/laya/hf` on first start;
-3. restarts it with backoff if it exits, and stops it when kwnt shuts down.
-
-The header shows the router status (green online, amber installing or loading, red offline), and `GET /api/laya/status` returns it with the failure reason. Logs are in `~/.kwnt/laya/laya.log` and `install.log`. While Laya is unavailable, kwnt routes by keyword and says so in the routing card.
+[Laya](https://huggingface.co/convaiinnovations/laya) picks which bot answers in a channel, and which model and effort a bot uses when its model is `auto`. It runs as a small Python service, and **`kwnt serve` manages it for you**: on first run it installs `laya[serve]` into `~/.kwnt/laya/venv` (with `uv` when present, else `python3 -m venv`), starts it, and restarts it if it exits. The header shows its status. While Laya is unavailable, kwant routes by keyword and says so.
 
 | Setting | `config.toml` | Environment | Default |
 |---|---|---|---|
 | Laya URL | `laya_url` | `LAYA_URL` | `http://127.0.0.1:8000` |
-| Manage a local sidecar | `laya_managed` | `KWNT_LAYA_MANAGED=0` to disable, or `kwnt serve --no-laya` | `true` |
+| Manage a local Laya | `laya_managed` | `KWNT_LAYA_MANAGED=0` to disable, or `kwnt serve --no-laya` | `true` |
 | Checkpoints to preload | `laya_models` | `KWNT_LAYA_MODELS` | `english` |
 | Use an existing `laya-serve` binary | | `KWNT_LAYA_SERVE_BIN` | |
 
-kwnt only starts Laya for loopback URLs. If Laya already answers, for example from Docker, kwnt uses it as is.
-
-**Networks that block Hugging Face.** The first start needs `huggingface.co`. If a proxy blocks it, start kwnt once on an open network, or copy an existing `~/.kwnt/laya/hf` from another machine; after that Laya starts offline.
+The first start needs `huggingface.co`. Behind a proxy that blocks it, start kwant once on an open network or copy `~/.kwnt/laya/hf` from another machine.
 
 ---
 
-## 🐳 Docker Compose (VPS)
+## Documentation
 
-`docker-compose.yml` runs kwnt with a Laya image that has the weights baked in, so the server never downloads them at runtime:
+- Website docs: [kwant.pages.dev/docs](https://kwant.pages.dev/docs/quickstart): quickstart, spaces, accounts, routines, approvals, loose ends, Parallel Universe, memory and skills, MCP.
+- In this repo:
+  - [Approvals](docs/approvals.md)
+  - [Bot actions](docs/bot-actions.md)
+  - [Browser service and VPS hosting](docs/browser-service.md)
+  - [LLM profiles (accounts) and API access](docs/llm-profiles.md)
+  - [MCP API](docs/mcp-api.md)
+  - [Saved passwords](docs/saved-passwords.md)
+  - [Loose ends (zombie hunter)](docs/zombie-hunter.md)
+  - [Letters (camera to completed)](docs/camera-to-completed.md)
+  - [Parallel Universe](docs/parallel-universe.md)
+
+---
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send a change, and follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ```bash
-docker compose up -d --build   # UI on http://127.0.0.1:8799
-docker compose logs kwnt | grep kwnt_token   # open that link once, with <this-host> as 127.0.0.1
+make frontend                  # build the web app once (cargo test needs frontend/dist)
+cargo test                     # Rust unit and integration tests
+cd frontend && npm test        # web app tests
 ```
 
-The `laya` image (`docker/laya.Dockerfile`) uses CPU PyTorch and preloads the checkpoints listed in the `LAYA_MODELS` build arg. kwnt runs with `KWNT_LAYA_MANAGED=0` and `LAYA_URL=http://laya:8000`; data persists in the `kwnt-data` volume. Put a TLS reverse proxy in front as described in [browser service and VPS hosting](docs/browser-service.md).
+## Security
 
----
+kwant runs commands and holds API keys and passwords, so please report vulnerabilities privately. See [SECURITY.md](SECURITY.md). Don't open a public issue for a security problem.
 
-## 🎮 The Starter Team
+## License
 
-A fresh install's Default space starts with three bots in #general, on the `@core-engineering` team:
+Licensed under either of
 
-| Bot | Title | Avatar | Specialty |
-|---|---|---|---|
-| **Architect** | Systems Architect | `architect` | Architecture, software design, multi-file engineering |
-| **TechLead** | Staff Engineer & Prototyper | `tech_lead` | Fast reasoning, prototyping, clear explanations |
-| **DevOps** | Systems & Security Engineer | `devops` | Shell, servers, containers, security |
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
 
-Make more with **New bot**: pick a ready-made persona (Tech, Non-tech, Lifestyle) or start blank, and choose a name, avatar, persona and soul.
+at your option.
 
----
-
-## 🧪 Testing
-
-```bash
-cargo test                      # Rust unit and integration tests (needs frontend/dist: run `make frontend` first)
-cd frontend && npm test         # web app tests
-```
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in kwant by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
