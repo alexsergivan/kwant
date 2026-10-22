@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, Sparkles, Pencil, ChevronRight, Brain, CalendarClock, UserRound, ListChecks, Trash2 } from 'lucide-react';
+import { X, Sparkles, Pencil, ChevronRight, Brain, CalendarClock, UserRound, ListChecks, Trash2, Gauge } from 'lucide-react';
 import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
 import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
 import { playSfx } from '../audio/chiptune';
@@ -11,15 +11,17 @@ import { ENGINES, Profile, engineOfModel, profileStatus, profilesForEngine } fro
 import { MemoryPanel } from './MemoryPanel';
 import { RoutinesPanel } from './RoutinesPanel';
 import { SkillsPanel } from './SkillsPanel';
+import { UsagePanel } from './UsagePanel';
 import type { Channel, Kwant } from './Sidebar';
 import { BotApprovalsSetting } from './ApprovalsSetting';
 
-export type EditTab = 'profile' | 'memory' | 'skills' | 'routines';
+export type EditTab = 'profile' | 'memory' | 'skills' | 'routines' | 'usage';
 const EDIT_TABS: Array<{ id: EditTab; label: string; Icon: typeof Brain }> = [
   { id: 'profile', label: 'Profile', Icon: UserRound },
   { id: 'memory', label: 'Memory', Icon: Brain },
   { id: 'skills', label: 'Skills', Icon: ListChecks },
   { id: 'routines', label: 'Routines', Icon: CalendarClock },
+  { id: 'usage', label: 'Usage', Icon: Gauge },
 ];
 
 export interface AgentFormData {
@@ -279,6 +281,11 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
         {isEdit && kwantId && tab === 'routines' && (
           <div role="tabpanel" id="agent-panel-routines" aria-labelledby="agent-tab-routines">
             <RoutinesPanel kwantId={kwantId} kwants={kwants} channels={channels} />
+          </div>
+        )}
+        {isEdit && kwantId && tab === 'usage' && (
+          <div role="tabpanel" id="agent-panel-usage" aria-labelledby="agent-tab-usage">
+            <UsagePanel kwantId={kwantId} kwantName={initial?.name ?? 'This bot'} />
           </div>
         )}
 
