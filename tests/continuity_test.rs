@@ -1000,9 +1000,19 @@ async fn add_routine(
 
 #[tokio::test]
 async fn scheduler_skips_overlaps_and_never_replays() {
+    scheduler_skips_overlaps_at(fixed_noon()).await;
+}
+
+/// A fixed clock for the scheduler tests: midday UTC, well clear of the daily 00:00 slot, so
+/// the result doesn't depend on when the test runs (the scheduler takes `now` as an argument).
+fn fixed_noon() -> chrono::DateTime<Utc> {
+    use chrono::TimeZone;
+    Utc.with_ymd_and_hms(2026, 3, 18, 12, 0, 0).unwrap()
+}
+
+async fn scheduler_skips_overlaps_at(now: chrono::DateTime<Utc>) {
     let (_app, state, _tmp) = setup().await;
     let k = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
-    let now = Utc::now();
 
     // kwnt was down for a day: an interval routine due long ago runs at most once, then moves a full step past now
     let interval = add_routine(
