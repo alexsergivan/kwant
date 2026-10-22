@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browser · kwant</title>
+<meta name="description" content="kwant&#x27;s bot browser, shown live in the app. Run it on your own Chrome in Local mode, or isolated in Docker in VM mode.">
+<meta name="theme-color" content="#0d0a1d">
+<meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://kwant.pages.dev/docs/browser">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kwant">
+<meta property="og:title" content="Browser · kwant">
+<meta property="og:description" content="kwant&#x27;s bot browser, shown live in the app. Run it on your own Chrome in Local mode, or isolated in Docker in VM mode.">
+<meta property="og:url" content="https://kwant.pages.dev/docs/browser">
+<meta property="og:image" content="https://kwant.pages.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="kwant: a team of AI bots discussing a feature and posting one summary">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="preload" href="../assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-h" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-h)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a class="hide-sm" href="../#features">Features</a>
+      <a class="hide-sm" href="../#how">How it works</a>
+      <a class="hide-sm" href="../#faq">FAQ</a>
+      <a href="../docs/quickstart.html" aria-current="page">Docs</a>
+      <a class="btn btn-ghost" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="wrap docs">
+  <nav class="docs-nav" aria-label="Docs">
+    <h2>Docs</h2>
+    <ul>
+      <li><a href="../docs/quickstart.html">Quickstart</a></li>
+      <li><a href="../docs/install.html">Install &amp; run</a></li>
+      <li><a href="../docs/bots-and-teams.html">Bots &amp; teams</a></li>
+      <li><a href="../docs/approvals.html">Approvals &amp; passwords</a></li>
+      <li><a href="../docs/models.html">Models &amp; accounts</a></li>
+      <li><a href="../docs/mcp.html">MCP tools</a></li>
+      <li><a href="../docs/browser.html" aria-current="page">Browser</a></li>
+    </ul>
+  </nav>
+  <article class="prose">
+<p class="kicker">Docs</p>
+<h1>Browser</h1>
+<p class="intro">Bots can browse the web, and you watch it live in the app's browser panel. Take control at any time to sign in or solve a CAPTCHA yourself.</p>
+
+<h2 id="how">How it works</h2>
+<p>kwant runs one long-lived Chromium per installation, with a separate browser context for each bot, channel or team. The app connects to kwant over a same-origin WebSocket. kwant relays the screen frames and your input, so your browser never talks to Chromium directly.</p>
+<ul>
+  <li><strong>Take Control</strong> gives you an exclusive hold. Bot navigation waits until you hand it back, close the panel or disconnect.</li>
+  <li>Closing the panel stops its stream. Slow viewers don't build up a backlog of frames.</li>
+  <li>Restarting kwant reconnects to the existing sessions while Chromium keeps running.</li>
+</ul>
+
+<h2 id="modes">Local or VM mode</h2>
+<p>Choose where bots' browser and shell commands run in <strong>Settings → Computer</strong>, or with the browser panel's mode toggle. Switching takes effect at once, without a restart.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>Local computer</th><th>VM</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Default on</strong></td><td>macOS</td><td>Everywhere else, including a VPS</td></tr>
+    <tr><td><strong>Browser</strong></td><td>Your installed Chrome or Chromium, windowless, with its own profile</td><td>A Chromium container</td></tr>
+    <tr><td><strong>kwant's shell</strong></td><td>On your computer, in the bot's folder. Every command asks first.</td><td>A separate execution container</td></tr>
+    <tr><td><strong>Needs</strong></td><td>A Chrome binary</td><td>Docker, or your own Chromium service</td></tr>
+  </tbody>
+</table></div>
+<p>In Local mode, <strong>Open as window</strong> reopens the same profile as a real window, with each bot's page, so you can sign in yourself. <strong>Show it here instead</strong> brings it back into the panel. kwant never uses your everyday Chrome profile.</p>
+<div class="note warn"><strong>Local mode gives up isolation.</strong> Commands run with your user's access to your files, and other programs on the computer can reach Chrome's debugging port while it runs. Use VM mode for untrusted browsing and shell work. In both modes, the Claude, Codex and Grok CLIs run on the host with their own tools.</div>
+
+<h2 id="vm">VM mode with Docker</h2>
+<p>Install Docker and start kwant. The first browser request builds the browser image from a recipe embedded in the binary and starts a private container, so a VPS with only the binary works too. No desktop or display server is needed. Prebuild the images to skip the first-use wait:</p>
+<pre><code>docker build -t kwnt-browser:v1 -f docker/browser.Dockerfile docker
+docker build -t kwnt-executor:v1 -f docker/executor.Dockerfile docker</code></pre>
+<p>The browser shares a 1.5 GiB memory limit across all bots, rather than one Chromium per bot. Browser contexts keep cookies and local storage apart. They aren't OS isolation between users who don't trust each other.</p>
+
+<h2 id="own-service">Your own Chromium service</h2>
+<p>If you manage Chromium separately, point kwant at its debugging endpoint:</p>
+<pre><code>KWNT_BROWSER_CDP_URL=http://browser:9222 kwnt serve --host 0.0.0.0 --port 8799</code></pre>
+<p>Keep that endpoint private: it grants full control of the browser. Use a dedicated browser, never a person's everyday profile.</p>
+
+<h2 id="settings">Settings</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Environment</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>KWNT_COMPUTER_MODE</code></td><td><code>local</code> or <code>vm</code>, unless a choice is saved in Settings</td></tr>
+    <tr><td><code>KWNT_CHROME_PATH</code></td><td>The browser binary Local mode launches</td></tr>
+    <tr><td><code>KWNT_BROWSER_CDP_URL</code></td><td>Use an existing Chromium service</td></tr>
+  </tbody>
+</table></div>
+<p>Saved website logins for the browser are covered in <a href="approvals.html#passwords">Approvals &amp; saved passwords</a>.</p>
+
+    <nav class="pager" aria-label="Docs pages"><a class="prev" href="../docs/mcp.html"><small>Previous</small>MCP tools</a></nav>
+  </article>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-f)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Screens and clips on this site come from a real kwant build running sample data.</p>
+    </div>
+    <nav aria-label="Footer">
+      <a href="../docs/quickstart.html">Quickstart</a>
+      <a href="../docs/install.html">Install &amp; run</a>
+      <a href="../docs/approvals.html">Approvals</a>
+      <a href="../docs/models.html">Models</a>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</footer>
+<script src="../assets/js/site.js" defer></script>
+</body>
+</html>

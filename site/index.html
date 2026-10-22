@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kwant: your own team of AI bots, in one binary</title>
+<meta name="description" content="kwant is a self-hosted team of AI bots. They run on the Claude, Codex or Grok CLIs or your API keys, hand work to each other, and ask before anything risky. One binary, on your laptop or a VPS.">
+<meta name="theme-color" content="#0d0a1d">
+<meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://kwant.pages.dev/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kwant">
+<meta property="og:title" content="kwant: your own team of AI bots, in one binary">
+<meta property="og:description" content="kwant is a self-hosted team of AI bots. They run on the Claude, Codex or Grok CLIs or your API keys, hand work to each other, and ask before anything risky. One binary, on your laptop or a VPS.">
+<meta property="og:url" content="https://kwant.pages.dev/">
+<meta property="og:image" content="https://kwant.pages.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="kwant: a team of AI bots discussing a feature and posting one summary">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-h" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-h)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a class="hide-sm" href="./#features">Features</a>
+      <a class="hide-sm" href="./#how">How it works</a>
+      <a class="hide-sm" href="./#faq">FAQ</a>
+      <a href="docs/quickstart.html">Docs</a>
+      <a class="btn btn-ghost" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-copy">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Self-hosted · one binary · your data</p>
+      <h1>Your own team of <span class="grad">AI bots</span>, working together.</h1>
+      <p class="lede">kwant gives you a team of bots that share chats, hand work to each other with an @mention and wait for your OK before anything risky. Run it on your laptop or a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="docs/quickstart.html">Get started
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10h12M11 5l5 5-5 5"/></svg></a>
+        <a class="btn btn-ghost" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>View on GitHub</a>
+      </div>
+      <p class="install-line"><span class="p" aria-hidden="true">$</span><code>git clone https://github.com/alexsergivan/kwant.git &amp;&amp; cd kwant &amp;&amp; make run</code></p>
+    </div>
+    <figure class="hero-media">
+      <div class="frame">
+        <div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>127.0.0.1:8799</span></div>
+        <video data-autoplay controls muted playsinline loop preload="metadata" poster="assets/media/clip-handoff-poster.jpg" width="1280" height="800" aria-label="Demo: a question in the design-review channel. Designer answers, then hands it to QA with an @mention, and QA replies with a checklist."><source src="assets/media/clip-handoff.mp4" type="video/mp4"></video>
+      </div>
+      <figcaption class="media-caption">Ask once. Designer answers, then hands the check to QA with an @mention.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="benefits" class="alt">
+  <div class="wrap">
+    <div class="section-head center">
+      <p class="kicker">Why kwant</p>
+      <h2>A real team, not another chat tab</h2>
+      <p>Each bot has its own role, voice and model. They know who else is in the room, and you stay in charge of what they're allowed to do.</p>
+    </div>
+    <div class="benefits">
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span>
+        <h3>One binary</h3>
+        <p><code>kwnt</code> is a single program with the web app and an SQLite database built in. No Node.js at runtime and no database server to set up.</p>
+      </article>
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>
+        <h3>Your laptop or a VPS</h3>
+        <p>On your own computer there's nothing to sign in to. On a server, open the link it prints at startup once. Docker Compose and a systemd unit are included.</p>
+      </article>
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg></span>
+        <h3>Any model, any CLI</h3>
+        <p>Use the <code>claude</code>, <code>codex</code> or <code>grok</code> CLI, Anthropic, OpenAI or xAI API keys, or any OpenAI-compatible server like OpenRouter or LM Studio.</p>
+      </article>
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="16" r="3"/><path d="M10.5 10.5l4 4"/><path d="M17 5v4M15 7h4"/></svg></span>
+        <h3>Bots that hand off</h3>
+        <p>When a reply @mentions a teammate, that teammate answers next in the same chat. For bigger questions the lead runs a short discussion and posts one summary.</p>
+      </article>
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg></span>
+        <h3>You approve risky actions</h3>
+        <p>Commands and edits outside a bot's own folder wait for Allow once, Always allow or Deny. Or let kwant ask only when something looks risky.</p>
+      </article>
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></span>
+        <h3>Your data stays yours</h3>
+        <p>Chats, bots and settings live in kwant's data folder on your machine. Saved website logins can live in your own Bitwarden.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">Features</p>
+      <h2>Everything a small team needs</h2>
+      <p>These are real screens from kwant, running a sample space called Trailhead with a four-bot product team.</p>
+    </div>
+
+    <div class="showcase">
+      <div class="row">
+        <div class="row-copy">
+          <h3>Ask the team. Get one answer.</h3>
+          <p>Ask a team a question that needs several views and the lead takes it from there. It opens with a short take, or asks you first if something's unclear. Teammates reply to each other by name, or pass when they have nothing to add.</p>
+          <ul class="checks">
+            <li>The back-and-forth folds into a <strong>Team discussed</strong> thread</li>
+            <li>The chat shows the lead's summary, with who said what</li>
+            <li>Open the fold to read every turn</li>
+          </ul>
+        </div>
+        <div class="frame"><a class="zoom" href="assets/media/desktop-team-discussion-2880.webp" data-caption="The Product team chat. A question about adding a trip waitlist, a collapsed &quot;Team discussed, 4 turns&quot; fold, and TechLead&#x27;s summary covering flow, backend, hold length, UI and the release gate."><img src="assets/media/desktop-team-discussion-1440.webp" srcset="assets/media/desktop-team-discussion-1440.webp 1440w, assets/media/desktop-team-discussion-2880.webp 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="The Product team chat. A question about adding a trip waitlist, a collapsed &quot;Team discussed, 4 turns&quot; fold, and TechLead&#x27;s summary covering flow, backend, hold length, UI and the release gate."></a></div>
+      </div>
+
+      <div class="row flip">
+        <div class="row-copy">
+          <h3>Nothing risky runs without your OK</h3>
+          <p>When a bot wants to run a command, edit a file outside its folder or call a tool like GitHub, you see exactly what it will do, arguments and all.</p>
+          <ul class="checks">
+            <li><strong>Allow once</strong>, <strong>Always allow</strong> or <strong>Deny</strong>, per action</li>
+            <li>Three modes per space or bot: ask every time, ask only when risky, or don't ask</li>
+            <li>kwant's own secret files are refused in every mode</li>
+          </ul>
+        </div>
+        <div class="frame"><video data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-approval-poster.jpg" width="1280" height="800" aria-label="Demo: TechLead asks to create a GitHub pull request. An approval card shows the full arguments, the user clicks Allow Once, and the reply confirms pull request 482 is open."><source src="assets/media/clip-approval.mp4" type="video/mp4"></video></div>
+      </div>
+
+      <div class="row">
+        <div class="row-copy">
+          <h3>A new teammate in seconds</h3>
+          <p>Start from a ready-made persona: Tech roles like Security, QA or SRE, non-tech ones like Research, Legal or Support, or lifestyle helpers like Travel Planner and Chef. Or start blank.</p>
+          <ul class="checks">
+            <li>Name, role and avatar fill in for you</li>
+            <li>Every preset comes with a <strong>Soul</strong>: its voice, values and quirks</li>
+            <li>Pick a model, or let kwant choose one per message</li>
+          </ul>
+        </div>
+        <div class="frame"><video data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-new-bot-poster.jpg" width="1280" height="800" aria-label="Demo: New bot, the Security preset is picked, the name, role and avatar fill in, and the new SecurityAuditor bot opens ready to chat."><source src="assets/media/clip-new-bot.mp4" type="video/mp4"></video></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" aria-labelledby="more-title">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">And more</p>
+      <h2 id="more-title">Built for day-to-day work</h2>
+    </div>
+    <div class="grid">
+      <article class="card">
+        <span class="shot"><a class="zoom" href="assets/media/desktop-handoff-2880.webp" data-caption="The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen."><img src="assets/media/desktop-handoff-1440.webp" srcset="assets/media/desktop-handoff-1440.webp 1440w, assets/media/desktop-handoff-2880.webp 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen."></a></span>
+        <div class="card-body"><h3>Handoffs with an @mention</h3><p>Mention a teammate, or <code>@everyone</code>, and they pick it up right after, up to four handoffs per message.</p></div>
+      </article>
+      <article class="card">
+        <span class="shot"><a class="zoom" href="assets/media/desktop-reasoning-2880.webp" data-caption="The general channel. kwant routes a Postgres or queue question to Architect and shows why, plus the model and effort it used."><img src="assets/media/desktop-reasoning-1440.webp" srcset="assets/media/desktop-reasoning-1440.webp 1440w, assets/media/desktop-reasoning-2880.webp 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The general channel. kwant routes a Postgres or queue question to Architect and shows why, plus the model and effort it used."></a></span>
+        <div class="card-body"><h3>The right bot and model</h3><p>The Laya router picks who answers in a channel, and the model and effort for bots set to auto. If it's offline, kwant routes by keyword.</p></div>
+      </article>
+      <article class="card">
+        <span class="shot"><a class="zoom" href="assets/media/desktop-manage-team-2880.webp" data-caption="The Manage Team dialog with the team handle, mission, pinned team instructions, workspace, lead and roster."><img src="assets/media/desktop-manage-team-1440.webp" srcset="assets/media/desktop-manage-team-1440.webp 1440w, assets/media/desktop-manage-team-2880.webp 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The Manage Team dialog with the team handle, mission, pinned team instructions, workspace, lead and roster."></a></span>
+        <div class="card-body"><h3>Teams with a lead</h3><p>Give a team a mission, pinned instructions every member follows, a lead and a shared workspace.</p></div>
+      </article>
+      <article class="card">
+        <span class="shot"><a class="zoom" href="assets/media/desktop-usage-2880.webp" data-caption="A bot&#x27;s Usage tab showing calls, cache share, fresh, cached and output tokens, a breakdown by purpose and recent calls."><img src="assets/media/desktop-usage-1440.webp" srcset="assets/media/desktop-usage-1440.webp 1440w, assets/media/desktop-usage-2880.webp 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="A bot&#x27;s Usage tab showing calls, cache share, fresh, cached and output tokens, a breakdown by purpose and recent calls."></a></span>
+        <div class="card-body"><h3>See what each bot uses</h3><p>For API-key bots, a Usage tab breaks tokens down by purpose, cache and call.</p></div>
+      </article>
+      <article class="card">
+        <span class="shot"><a class="zoom" href="assets/media/desktop-approval-done-2880.webp" data-caption="After Allow Once, TechLead reports that pull request 482 is open, with a receipt: used 1 tool, create pull request, done."><img src="assets/media/desktop-approval-done-1440.webp" srcset="assets/media/desktop-approval-done-1440.webp 1440w, assets/media/desktop-approval-done-2880.webp 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="After Allow Once, TechLead reports that pull request 482 is open, with a receipt: used 1 tool, create pull request, done."></a></span>
+        <div class="card-body"><h3>A receipt for every tool</h3><p>Replies list the tools a bot used and how each call ended, so nothing happens out of sight.</p></div>
+      </article>
+      <article class="card">
+        <span class="shot"><a class="zoom" href="assets/media/desktop-presets-2880.webp" data-caption="The New bot dialog with the Security preset picked, showing Tech, Non-tech and Lifestyle tabs and the avatar grid."><img src="assets/media/desktop-presets-1440.webp" srcset="assets/media/desktop-presets-1440.webp 1440w, assets/media/desktop-presets-2880.webp 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The New bot dialog with the Security preset picked, showing Tech, Non-tech and Lifestyle tabs and the avatar grid."></a></span>
+        <div class="card-body"><h3>Personas and souls</h3><p>Every bot has a persona for what it does, a soul for how it speaks, and a pixel avatar.</p></div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="phone-title">
+  <div class="wrap phones">
+    <div class="section-head">
+      <p class="kicker">Anywhere</p>
+      <h2 id="phone-title">Check in from your phone</h2>
+      <p>The web app works on a phone, so you can read the team's summary or approve an action while you're away from your desk.</p>
+    </div>
+    <div class="phone"><a class="zoom" href="assets/media/phone-team-chat-780.webp" data-caption="The Product team summary on a phone screen."><img src="assets/media/phone-team-chat-390.webp" srcset="assets/media/phone-team-chat-390.webp 390w, assets/media/phone-team-chat-780.webp 780w" sizes="260px" width="390" height="844" loading="lazy" decoding="async" alt="The Product team summary on a phone screen."></a></div>
+    <div class="phone lift"><a class="zoom" href="assets/media/phone-approval-780.webp" data-caption="The approval card for a GitHub pull request on a phone screen."><img src="assets/media/phone-approval-390.webp" srcset="assets/media/phone-approval-390.webp 390w, assets/media/phone-approval-780.webp 780w" sizes="260px" width="390" height="844" loading="lazy" decoding="async" alt="The approval card for a GitHub pull request on a phone screen."></a></div>
+  </div>
+</section>
+
+<section id="how" class="alt">
+  <div class="wrap">
+    <div class="section-head center">
+      <p class="kicker">How it works</p>
+      <h2>Running in three steps</h2>
+    </div>
+    <div class="steps">
+      <article class="step">
+        <h3>Build and run</h3>
+        <p>You need Rust and Node.js 20+ to build. The finished binary needs neither.</p>
+<pre><code>git clone https://github.com/alexsergivan/kwant.git
+cd kwant
+make run</code></pre>
+      </article>
+      <article class="step">
+        <h3>Add an account</h3>
+        <p>Use the <strong>Sign in with Claude</strong> button, a signed-in <code>codex</code> or <code>grok</code> CLI, or add an API key under <strong>Space settings → Accounts</strong>.</p>
+      </article>
+      <article class="step">
+        <h3>Ask your team</h3>
+        <p>Open <code>http://127.0.0.1:8799</code>. Architect, TechLead and DevOps are already in #general. Ask them something, or create your own team.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <div class="section-head center">
+      <p class="kicker">FAQ</p>
+      <h2>Questions, answered</h2>
+    </div>
+    <div class="faq">
+      <details>
+        <summary>Do I need an API key?</summary>
+        <div><p>No. Any one account is enough: the <code>claude</code> CLI (kwant has a Sign in with Claude button), the <code>codex</code> or <code>grok</code> CLI signed in on the same machine, or an Anthropic, OpenAI or xAI API key.</p></div>
+      </details>
+      <details>
+        <summary>Where does my data live?</summary>
+        <div><p>In kwant's data folder, <code>~/.kwnt</code> by default, or wherever <code>KWNT_DATA_DIR</code> points. Chats, bots and settings are in an SQLite database there. The models themselves run wherever your chosen CLI or API runs them.</p></div>
+      </details>
+      <details>
+        <summary>Can a bot run commands on my computer?</summary>
+        <div><p>Only within the limits you set. By default every tool call outside the bot's own folder shows an approval card. You can switch a space or a single bot to "Ask only when risky" or "Don't ask". In any mode, calls that name kwant's own secret files are refused.</p></div>
+      </details>
+      <details>
+        <summary>Can I run it on a server?</summary>
+        <div><p>Yes. Copy the binary to a VPS and run <code>kwnt serve --host 0.0.0.0</code>, or use the included Docker Compose file. Open the sign-in link kwant prints at startup once, and that browser stays signed in for a year. Put an HTTPS reverse proxy in front of it.</p></div>
+      </details>
+      <details>
+        <summary>Do I need Docker?</summary>
+        <div><p>Only for VM mode, which runs the bots' shared browser and kwant's built-in shell in containers. In Local mode kwant uses your installed Chrome or Chromium, with its own profile, and asks before every command.</p></div>
+      </details>
+      <details>
+        <summary>What is Laya?</summary>
+        <div><p>A small routing model (<a href="https://huggingface.co/convaiinnovations/laya" rel="noopener">convaiinnovations/laya</a>) that picks which bot answers in a channel, and which model and effort a bot set to auto uses. kwant installs and runs it for you on first start, which downloads about 420 MB. Skip it with <code>--no-laya</code>, and kwant routes by keyword.</p></div>
+      </details>
+      <details>
+        <summary>Can bots use other tools, like GitHub or Notion?</summary>
+        <div><p>Yes, through MCP servers. Add a server once, by pasting a command or URL from its README, then choose which bots can use it. A bot only ever sees the servers you gave it. Servers that need a sign-in use OAuth.</p></div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<section class="tight-top" aria-labelledby="closing-title">
+  <div class="wrap">
+    <div class="closing">
+      <h2 id="closing-title">Put your team to work</h2>
+      <p>Clone it, run <code>make run</code> and ask your first question in a few minutes.</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="docs/quickstart.html">Read the quickstart</a>
+        <a class="btn btn-ghost" href="docs/install.html">Run it on a server</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="./" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-f)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Screens and clips on this site come from a real kwant build running sample data.</p>
+    </div>
+    <nav aria-label="Footer">
+      <a href="docs/quickstart.html">Quickstart</a>
+      <a href="docs/install.html">Install &amp; run</a>
+      <a href="docs/approvals.html">Approvals</a>
+      <a href="docs/models.html">Models</a>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</footer>
+<script src="assets/js/site.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bots &amp; teams · kwant</title>
+<meta name="description" content="Create kwant bots from persona presets, give them souls, group them into teams with a lead, and let them hand work to each other.">
+<meta name="theme-color" content="#0d0a1d">
+<meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://kwant.pages.dev/docs/bots-and-teams">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kwant">
+<meta property="og:title" content="Bots &amp; teams · kwant">
+<meta property="og:description" content="Create kwant bots from persona presets, give them souls, group them into teams with a lead, and let them hand work to each other.">
+<meta property="og:url" content="https://kwant.pages.dev/docs/bots-and-teams">
+<meta property="og:image" content="https://kwant.pages.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="kwant: a team of AI bots discussing a feature and posting one summary">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="preload" href="../assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-h" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-h)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a class="hide-sm" href="../#features">Features</a>
+      <a class="hide-sm" href="../#how">How it works</a>
+      <a class="hide-sm" href="../#faq">FAQ</a>
+      <a href="../docs/quickstart.html" aria-current="page">Docs</a>
+      <a class="btn btn-ghost" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="wrap docs">
+  <nav class="docs-nav" aria-label="Docs">
+    <h2>Docs</h2>
+    <ul>
+      <li><a href="../docs/quickstart.html">Quickstart</a></li>
+      <li><a href="../docs/install.html">Install &amp; run</a></li>
+      <li><a href="../docs/bots-and-teams.html" aria-current="page">Bots &amp; teams</a></li>
+      <li><a href="../docs/approvals.html">Approvals &amp; passwords</a></li>
+      <li><a href="../docs/models.html">Models &amp; accounts</a></li>
+      <li><a href="../docs/mcp.html">MCP tools</a></li>
+      <li><a href="../docs/browser.html">Browser</a></li>
+    </ul>
+  </nav>
+  <article class="prose">
+<p class="kicker">Docs</p>
+<h1>Bots &amp; teams</h1>
+<p class="intro">A bot is a persona with its own voice, model and folder. Bots share channels and teams, know who else is there, and pass work along with an @mention.</p>
+
+<h2 id="new-bot">Create a bot</h2>
+<p>Click <strong>New bot</strong> in the sidebar. Start from a ready-made persona, or start blank:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Group</th><th>Presets</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Tech</strong></td><td>Product, Designer, Frontend, Backend, QA, Security, SRE, Data, Tech Writer</td></tr>
+    <tr><td><strong>Non-tech</strong></td><td>Research, Marketing, Copywriter, Sales, Finance, Legal, Support, People, Coach, Tutor</td></tr>
+    <tr><td><strong>Lifestyle</strong></td><td>Travel Planner, Chef, Fitness Trainer, Event Planner, Home &amp; DIY, Language Partner, Budget Buddy, Wellbeing Companion</td></tr>
+  </tbody>
+</table></div>
+<p>A preset fills in the name, title, persona, soul and avatar. Change anything before you create the bot.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/desktop-presets-2880.webp" data-caption="The New bot dialog with the Security preset picked, showing the Tech, Non-tech and Lifestyle tabs and the avatar grid."><img src="../assets/media/desktop-presets-1440.webp" srcset="../assets/media/desktop-presets-1440.webp 1440w, ../assets/media/desktop-presets-2880.webp 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The New bot dialog with the Security preset picked, showing the Tech, Non-tech and Lifestyle tabs and the avatar grid."></a></div>
+  <figcaption>The New bot dialog with the Security preset picked.</figcaption>
+</figure>
+
+<h3 id="persona-soul">Persona and soul</h3>
+<ul>
+  <li><strong>Persona</strong> is what the bot does: its role and instructions. It's also what the router reads when it picks who should answer.</li>
+  <li><strong>Soul</strong> is optional: its personality, voice, values and quirks. It's added to the system prompt, so it shapes how the bot speaks, but it isn't used for routing. Every preset and built-in bot has one.</li>
+  <li><strong>Avatar:</strong> pick a pixel avatar style. The one you choose always wins over hints in the bot's name.</li>
+</ul>
+
+<h3 id="edit">Edit a bot</h3>
+<p>Hover a bot in the sidebar and click the pencil, or use <strong>Edit</strong> in a direct chat's header. You can change its name, title, avatar, preferred model, persona and soul. A rename carries over to the bot's past messages. Bots on an API key also get a <strong>Usage</strong> tab with their token use by purpose, cache and call.</p>
+
+<h2 id="channels-teams">Channels and teams</h2>
+<p>A <strong>channel</strong> (like <code>#general</code>) is a shared chat for any bots you add to it. A <strong>team</strong> (like <code>@Product</code>) is a group of bots with:</p>
+<ul>
+  <li>a <strong>handle</strong> and a <strong>mission</strong>;</li>
+  <li><strong>pinned team instructions</strong> every member follows;</li>
+  <li>a <strong>workspace</strong> folder;</li>
+  <li>a <strong>lead</strong> and a roster of members.</li>
+</ul>
+<p>Create a team with <strong>New team</strong> in the sidebar and change it later with <strong>Manage</strong> in its header. Each team has its own chat. When you delete a team, its chat is kept as <code>#archived-team-&lt;name&gt;</code> with all its messages.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/desktop-manage-team-2880.webp" data-caption="The Manage Team dialog with handle, mission, pinned team instructions, workspace, lead and roster."><img src="../assets/media/desktop-manage-team-1440.webp" srcset="../assets/media/desktop-manage-team-1440.webp 1440w, ../assets/media/desktop-manage-team-2880.webp 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The Manage Team dialog with handle, mission, pinned team instructions, workspace, lead and roster."></a></div>
+  <figcaption>Manage Team: one lead, clear rules, the right members.</figcaption>
+</figure>
+
+<h2 id="routing">Who answers</h2>
+<p>In a channel, kwant picks the bot whose persona fits your message best and shows the reason. The <a href="models.html#laya">Laya router</a> does this, and falls back to keyword matching while it's unavailable. Mention a bot (<code>@Designer</code>) to ask it directly.</p>
+
+<h2 id="handoffs">Handoffs</h2>
+<p>Every bot knows its teammates in the current channel or team. When a reply @mentions a teammate, or <code>@everyone</code>, that teammate answers right after in the same chat. A message can lead to <strong>up to four handoffs</strong>, so bots can't keep each other going forever.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/desktop-handoff-2880.webp" data-caption="Designer answers in the design-review channel, then @mentions QA, and QA picks it up."><img src="../assets/media/desktop-handoff-1440.webp" srcset="../assets/media/desktop-handoff-1440.webp 1440w, ../assets/media/desktop-handoff-2880.webp 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Designer answers in the design-review channel, then @mentions QA, and QA picks it up."></a></div>
+  <figcaption>Designer hands the check to QA with an @mention.</figcaption>
+</figure>
+
+<h2 id="discussions">Team discussions</h2>
+<p>When a question to a team needs several views, the lead runs a short, moderated discussion:</p>
+<ol>
+  <li>The lead opens with a short take, or first asks you a clarifying question and waits.</li>
+  <li>Teammates respond to each other by name in about 120 words or fewer, or pass when they have nothing to add.</li>
+  <li>The lead closes with one summary.</li>
+</ol>
+<p>The back-and-forth folds into a collapsible <strong>Team discussed</strong> thread, so the chat shows the answer. Open it to read every turn.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/desktop-team-discussion-expanded-2880.webp" data-caption="The Product team chat with the Team discussed fold open, showing each bot&#x27;s turn and the @mentions between them."><img src="../assets/media/desktop-team-discussion-expanded-1440.webp" srcset="../assets/media/desktop-team-discussion-expanded-1440.webp 1440w, ../assets/media/desktop-team-discussion-expanded-2880.webp 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The Product team chat with the Team discussed fold open, showing each bot&#x27;s turn and the @mentions between them."></a></div>
+  <figcaption>The discussion fold, opened.</figcaption>
+</figure>
+
+<h2 id="routines">Routines and follow-ups</h2>
+<p>Bots with kwant's own tools can set things up for you when you ask, in the same turn: routines on a schedule (daily, weekly, monthly, every N minutes or once), one-off follow-ups, new bots, channels and spaces. Each change is applied at once with an undo. Deleting a bot, archiving a space or deleting an account waits for your confirmation.</p>
+<p>Find every routine in the space under <strong>Routines</strong> in the sidebar.</p>
+
+    <nav class="pager" aria-label="Docs pages"><a class="prev" href="../docs/install.html"><small>Previous</small>Install &amp; run</a><a class="next" href="../docs/approvals.html"><small>Next</small>Approvals &amp; passwords</a></nav>
+  </article>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-f)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Screens and clips on this site come from a real kwant build running sample data.</p>
+    </div>
+    <nav aria-label="Footer">
+      <a href="../docs/quickstart.html">Quickstart</a>
+      <a href="../docs/install.html">Install &amp; run</a>
+      <a href="../docs/approvals.html">Approvals</a>
+      <a href="../docs/models.html">Models</a>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</footer>
+<script src="../assets/js/site.js" defer></script>
+</body>
+</html>

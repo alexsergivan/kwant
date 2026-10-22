@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approvals &amp; saved passwords · kwant</title>
+<meta name="description" content="How kwant asks before bots run commands, the three approval modes, and how saved website passwords are stored, including Bitwarden.">
+<meta name="theme-color" content="#0d0a1d">
+<meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://kwant.pages.dev/docs/approvals">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kwant">
+<meta property="og:title" content="Approvals &amp; saved passwords · kwant">
+<meta property="og:description" content="How kwant asks before bots run commands, the three approval modes, and how saved website passwords are stored, including Bitwarden.">
+<meta property="og:url" content="https://kwant.pages.dev/docs/approvals">
+<meta property="og:image" content="https://kwant.pages.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="kwant: a team of AI bots discussing a feature and posting one summary">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="preload" href="../assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-h" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-h)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a class="hide-sm" href="../#features">Features</a>
+      <a class="hide-sm" href="../#how">How it works</a>
+      <a class="hide-sm" href="../#faq">FAQ</a>
+      <a href="../docs/quickstart.html" aria-current="page">Docs</a>
+      <a class="btn btn-ghost" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="wrap docs">
+  <nav class="docs-nav" aria-label="Docs">
+    <h2>Docs</h2>
+    <ul>
+      <li><a href="../docs/quickstart.html">Quickstart</a></li>
+      <li><a href="../docs/install.html">Install &amp; run</a></li>
+      <li><a href="../docs/bots-and-teams.html">Bots &amp; teams</a></li>
+      <li><a href="../docs/approvals.html" aria-current="page">Approvals &amp; passwords</a></li>
+      <li><a href="../docs/models.html">Models &amp; accounts</a></li>
+      <li><a href="../docs/mcp.html">MCP tools</a></li>
+      <li><a href="../docs/browser.html">Browser</a></li>
+    </ul>
+  </nav>
+  <article class="prose">
+<p class="kicker">Docs</p>
+<h1>Approvals &amp; saved passwords</h1>
+<p class="intro">You decide how much a bot may do without asking. Risky actions wait on a card with the exact command or arguments, and kwant's own secrets are off limits in every mode.</p>
+
+<h2 id="cards">Approval cards</h2>
+<p>When a bot wants to run a command, edit a file outside its folder or call a tool, you see a card with what it will do:</p>
+<ul>
+  <li><strong>Allow once</strong> runs this one call.</li>
+  <li><strong>Always allow</strong> allows that tool for that bot until kwant restarts.</li>
+  <li><strong>Deny</strong> refuses it, and the bot is told.</li>
+</ul>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/desktop-approval-2880.webp" data-caption="An Action Approval Required card for a GitHub create pull request call, showing the full arguments with Deny, Allow Once and Always Allow buttons."><img src="../assets/media/desktop-approval-1440.webp" srcset="../assets/media/desktop-approval-1440.webp 1440w, ../assets/media/desktop-approval-2880.webp 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="An Action Approval Required card for a GitHub create pull request call, showing the full arguments with Deny, Allow Once and Always Allow buttons."></a></div>
+  <figcaption>TechLead asks before opening a pull request.</figcaption>
+</figure>
+<p>Only you can answer a card. Bots' own tools can't, and neither can a bot calling kwant's API.</p>
+
+<h2 id="modes">Approval modes</h2>
+<p>Each space has a mode, and each bot can override it or follow the space. Only you can change it.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Mode</th><th>In the app</th><th>What happens</th></tr></thead>
+  <tbody>
+    <tr><td><code>ask</code> (default)</td><td>Ask before running commands</td><td>Every tool call outside the bot's folder shows a card.</td></tr>
+    <tr><td><code>smart</code></td><td>Ask only when risky</td><td>Ordinary work runs without a card. Anything risky or unclear shows the card, with the reason.</td></tr>
+    <tr><td><code>off</code></td><td>Don't ask</td><td>Everything runs.</td></tr>
+  </tbody>
+</table></div>
+<p>In every mode, a call that names kwant's own secret files (the vault, its key, the API token) is refused and recorded as denied. Calls that run without a card are recorded too, and under <code>smart</code> each record says why it was judged safe.</p>
+
+<h3 id="smart">What "Ask only when risky" lets through</h3>
+<ul>
+  <li><strong>Shell commands</strong> in the bot's folder that a fail-closed allowlist recognises as safe: file and text tools like <code>ls</code>, <code>cat</code> or <code>jq</code>, and build tools like <code>cargo</code>, <code>npm</code>, <code>make</code> or <code>git</code>, with checks. Network tools, <code>sudo</code>, containers, <code>git push</code>, package installs, <code>npx</code>, inline code, and any path outside the folder still ask.</li>
+  <li><strong>Reads</strong> outside the folder, unless they touch system data or anything that looks like a credential: <code>.ssh</code>, <code>.aws</code>, <code>.env</code> files, key files, browser profiles, shell histories and more.</li>
+  <li><strong>MCP tools</strong> the server marks read-only and not destructive.</li>
+</ul>
+<p>Requests to kwant itself, on its own port or any loopback <code>/api/</code> path, always ask. Writes and edits outside the folder, and unknown tools, always ask.</p>
+<div class="note warn"><strong><code>smart</code> guards against accidents. It isn't a sandbox.</strong> Scripts in the bot's folder, <code>make</code>, <code>cargo build</code> and <code>npm run</code> run without a card and can do anything the bot's user can, including a script the bot wrote a moment earlier. Use <code>ask</code> for bots or folders you don't trust.</div>
+
+<h3 id="session">"Always this session"</h3>
+<p>Under <code>ask</code> and <code>smart</code>, "Always this session" on a Claude tool's card allows that tool, for example all <code>Bash</code>, for that bot and conversation until kwant restarts.</p>
+
+<h2 id="passwords">Saved passwords</h2>
+<p>kwant can fill website logins in a team's, channel's or bot's browser. Passwords live in one of two stores:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Store</th><th>Where</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Built-in</strong> (default)</td><td>Encrypted files in <code>&lt;data dir&gt;/kwnt-vault/</code>, with the key next to them.</td></tr>
+    <tr><td><strong>Bitwarden</strong></td><td>Your own Bitwarden or Vaultwarden account, folder <code>kwnt</code>, after you unlock it once.</td></tr>
+  </tbody>
+</table></div>
+<p>The built-in store protects against copies of the data folder. It doesn't protect against a bot running as the same user with approvals off, because that bot could read the key. So kwant enforces one rule:</p>
+<div class="note"><strong>Approvals off, or "Ask only when risky", needs Bitwarden</strong> while the built-in store holds any password. Move them to Bitwarden first (<code>POST /api/passwords/migrate</code>): each one is deleted locally only after Bitwarden has it.</div>
+
+<h3 id="bitwarden">How the Bitwarden store works</h3>
+<ul>
+  <li>kwant talks to Bitwarden itself, not through the <code>bw</code> CLI or <code>bw serve</code>.</li>
+  <li>The master password, session and vault key exist only in kwant's memory. Nothing secret is written to disk, passed to a child process or logged.</li>
+  <li>After a restart the vault is <strong>locked</strong>: nothing is filled until you unlock it again.</li>
+  <li>Only items in the <code>kwnt</code> folder that carry kwant's owner field are used. Organisation items, trash and other folders are never read.</li>
+  <li>Showing a password needs your master password. Five wrong tries in a row lock the vault.</li>
+</ul>
+<div class="note warn"><strong>Known gap.</strong> Autofill stays on while approvals are off. Chrome's debugging port listens on loopback without authentication, so a bot with a shell could read a field kwant has just filled. This applies to both stores. A fix that removes the port is planned.</div>
+
+    <nav class="pager" aria-label="Docs pages"><a class="prev" href="../docs/bots-and-teams.html"><small>Previous</small>Bots &amp; teams</a><a class="next" href="../docs/models.html"><small>Next</small>Models &amp; accounts</a></nav>
+  </article>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-f)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Screens and clips on this site come from a real kwant build running sample data.</p>
+    </div>
+    <nav aria-label="Footer">
+      <a href="../docs/quickstart.html">Quickstart</a>
+      <a href="../docs/install.html">Install &amp; run</a>
+      <a href="../docs/approvals.html">Approvals</a>
+      <a href="../docs/models.html">Models</a>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</footer>
+<script src="../assets/js/site.js" defer></script>
+</body>
+</html>

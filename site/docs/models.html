@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Models &amp; accounts · kwant</title>
+<meta name="description" content="The engines kwant runs on, account profiles with automatic failover, custom OpenAI- or Anthropic-compatible servers, and the Laya model router.">
+<meta name="theme-color" content="#0d0a1d">
+<meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://kwant.pages.dev/docs/models">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kwant">
+<meta property="og:title" content="Models &amp; accounts · kwant">
+<meta property="og:description" content="The engines kwant runs on, account profiles with automatic failover, custom OpenAI- or Anthropic-compatible servers, and the Laya model router.">
+<meta property="og:url" content="https://kwant.pages.dev/docs/models">
+<meta property="og:image" content="https://kwant.pages.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="kwant: a team of AI bots discussing a feature and posting one summary">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="preload" href="../assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-h" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-h)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a class="hide-sm" href="../#features">Features</a>
+      <a class="hide-sm" href="../#how">How it works</a>
+      <a class="hide-sm" href="../#faq">FAQ</a>
+      <a href="../docs/quickstart.html" aria-current="page">Docs</a>
+      <a class="btn btn-ghost" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="wrap docs">
+  <nav class="docs-nav" aria-label="Docs">
+    <h2>Docs</h2>
+    <ul>
+      <li><a href="../docs/quickstart.html">Quickstart</a></li>
+      <li><a href="../docs/install.html">Install &amp; run</a></li>
+      <li><a href="../docs/bots-and-teams.html">Bots &amp; teams</a></li>
+      <li><a href="../docs/approvals.html">Approvals &amp; passwords</a></li>
+      <li><a href="../docs/models.html" aria-current="page">Models &amp; accounts</a></li>
+      <li><a href="../docs/mcp.html">MCP tools</a></li>
+      <li><a href="../docs/browser.html">Browser</a></li>
+    </ul>
+  </nav>
+  <article class="prose">
+<p class="kicker">Docs</p>
+<h1>Models &amp; accounts</h1>
+<p class="intro">Bots run on the CLIs you already use or on API keys. Add several accounts per engine, and kwant moves a turn to the next one when an account runs out of usage.</p>
+
+<h2 id="engines">Engines</h2>
+<ul>
+  <li><strong>Host CLIs:</strong> <code>claude</code>, <code>codex</code> and <code>grok</code>, supervised by kwant, with their own file and shell tools.</li>
+  <li><strong>Provider APIs:</strong> Anthropic, OpenAI and xAI keys.</li>
+  <li><strong>Custom API:</strong> any server that speaks the OpenAI chat API (OpenRouter, LM Studio and others) or the Anthropic Messages API.</li>
+</ul>
+<p>Each bot has a preferred model. Set it to <strong>auto</strong> and kwant picks the model and effort for every message.</p>
+
+<h2 id="profiles">Account profiles</h2>
+<p>A profile is one account for an engine, for example a work Claude subscription and a personal one. Every engine starts with a <strong>This machine</strong> profile, which uses the CLI's own login, or the key from Settings or the environment.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Kind</th><th>Runs with</th><th>Signed in by</th></tr></thead>
+  <tbody>
+    <tr><td><code>system</code></td><td>The CLI's default config folder, or the Settings or environment key</td><td>Whatever you did on the host</td></tr>
+    <tr><td><code>cli_home</code></td><td>Its own config folder; host credential variables are removed</td><td>The in-app sign-in, or your own folder</td></tr>
+    <tr><td><code>api_key</code></td><td>The provider's API, with only the profile's key</td><td>The key you paste</td></tr>
+    <tr><td><code>custom_api</code></td><td>Your own server, with its key if it has one</td><td>A check of the server's model list</td></tr>
+  </tbody>
+</table></div>
+<p>Keys are write-only: no API response ever contains one, only whether it's set.</p>
+
+<h3 id="sign-in">Signing in a CLI profile</h3>
+<p>kwant runs the CLI's own login with the profile's folder. For Claude, open the link and paste the code shown back into kwant. For Codex and Grok, open the link and enter the code. A sign-in expires after 10 minutes.</p>
+
+<h3 id="failover">Failover</h3>
+<p>A bot can be pinned to a profile; otherwise the engine's default profile runs. When that profile is out of usage or signed out, and nothing has been shown or done yet in the turn, kwant moves the turn to the engine's next enabled profile by priority, up to 3 attempts, and the chat says so. A profile that ran out is skipped until its reset time. Overloads and rate limits are retried, not failed over. Turn failover off for a bot to keep it on its profile.</p>
+
+<h2 id="custom">Custom API accounts</h2>
+<p>Add an account with the server's base URL and, if needed, a key. kwant checks the server's model list when you save it and shows whether it's ready, unreachable or rejected the key. A space can have several custom accounts, and they belong to that space only.</p>
+<ul>
+  <li>Paste the base URL with or without <code>/chat/completions</code> or <code>/messages</code>: kwant trims it to the API root.</li>
+  <li>MCP tools are offered on OpenAI-chat servers. Anthropic-Messages servers run without tools and say so.</li>
+  <li>Custom API never falls back to the host's accounts.</li>
+</ul>
+
+<h2 id="laya">The Laya router</h2>
+<p><a href="https://huggingface.co/convaiinnovations/laya" rel="noopener">Laya</a> picks which bot answers in a channel, and which model and effort a bot set to auto uses. It's a small Python service, and <code>kwnt serve</code> manages it for you:</p>
+<ol>
+  <li>On first run it installs <code>laya[serve]</code> into <code>~/.kwnt/laya/venv</code>, with <code>uv</code> when present or <code>python3 -m venv</code> otherwise.</li>
+  <li>It starts <code>laya-serve</code> and downloads the English checkpoint (about 420 MB) on first start.</li>
+  <li>It restarts Laya if it exits, and stops it when kwant shuts down.</li>
+</ol>
+<p>The header shows the router's status: green online, amber installing or loading, red offline. While Laya is unavailable, kwant routes by keyword and says so on the routing card.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Setting</th><th><code>config.toml</code></th><th>Environment</th><th>Default</th></tr></thead>
+  <tbody>
+    <tr><td>Laya URL</td><td><code>laya_url</code></td><td><code>LAYA_URL</code></td><td><code>http://127.0.0.1:8000</code></td></tr>
+    <tr><td>Manage a local Laya</td><td><code>laya_managed</code></td><td><code>KWNT_LAYA_MANAGED=0</code> or <code>--no-laya</code> to disable</td><td>on</td></tr>
+    <tr><td>Checkpoints to preload</td><td><code>laya_models</code></td><td><code>KWNT_LAYA_MODELS</code></td><td><code>english</code></td></tr>
+    <tr><td>Existing <code>laya-serve</code></td><td></td><td><code>KWNT_LAYA_SERVE_BIN</code></td><td></td></tr>
+  </tbody>
+</table></div>
+<p>kwant only starts Laya for loopback URLs. If Laya already answers, for example from Docker, kwant uses it as is.</p>
+<div class="note"><strong>Behind a proxy that blocks Hugging Face?</strong> Start kwant once on an open network, or copy an existing <code>~/.kwnt/laya/hf</code> from another machine. After that, Laya starts offline.</div>
+
+    <nav class="pager" aria-label="Docs pages"><a class="prev" href="../docs/approvals.html"><small>Previous</small>Approvals &amp; passwords</a><a class="next" href="../docs/mcp.html"><small>Next</small>MCP tools</a></nav>
+  </article>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-f)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Screens and clips on this site come from a real kwant build running sample data.</p>
+    </div>
+    <nav aria-label="Footer">
+      <a href="../docs/quickstart.html">Quickstart</a>
+      <a href="../docs/install.html">Install &amp; run</a>
+      <a href="../docs/approvals.html">Approvals</a>
+      <a href="../docs/models.html">Models</a>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</footer>
+<script src="../assets/js/site.js" defer></script>
+</body>
+</html>
