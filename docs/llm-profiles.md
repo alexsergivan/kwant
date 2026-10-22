@@ -62,15 +62,21 @@ in `KWNT_ALLOWED_ORIGINS` (comma separated) get `403`.
 Requests that don't come from this machine need the API token. "This machine" means a loopback
 peer, a loopback `Host` and no proxy headers (`X-Forwarded-*`, `Forwarded`, `X-Real-IP`). So:
 
-- `kwnt serve` on your laptop, or a VPS reached through `ssh -L`: nothing changes.
+- `kwnt serve` on your laptop, or a VPS reached through `ssh -L`: no token, no sign-in, and
+  `kwnt serve` prints nothing about it.
 - A VPS reached directly or through a reverse proxy, and Docker (the published port arrives from
-  the bridge network): the token is needed.
+  the bridge network): open the link printed at startup once.
 
-Get the token with `kwnt token` (Docker: `docker compose exec kwnt kwnt token`). It lives in
-`<data_dir>/api-token` (mode 0600), or set `KWNT_API_TOKEN` (16+ characters). Open
-`http://<host>:<port>/#kwnt_token=<token>` once: the UI posts it to `/api/auth/session`, which sets an
-HttpOnly, SameSite=Strict cookie for a year, and clears the address bar. Scripts can send
-`Authorization: Bearer <token>` instead.
+On a bind other than loopback, `kwnt serve` prints a ready-to-open link on stdout (never through the
+log): `http://<host>:<port>/#kwnt_token=<token>`, with the bound host, or `<this-host>` and a note to
+swap in the server's address when it listens on `0.0.0.0`/`::`. The UI posts the token to
+`/api/auth/session`, which sets an HttpOnly, SameSite=Strict cookie for a year, and clears the
+address bar. The link signs in as you: anyone who can read the server's output (`docker compose logs`
+with Docker) can use it.
+
+`kwnt token` prints the same link again (Docker: `docker compose exec kwnt kwnt token`), and
+`kwnt token --raw` just the token, for scripts, which send `Authorization: Bearer <token>`. The token
+lives in `<data_dir>/api-token` (mode 0600), or set `KWNT_API_TOKEN` (16+ characters).
 
 Person-only routes (saved passwords and the vault, answering approval cards, the approvals switch,
 deleting a bot or team, undo, Loose ends, Parallel Universe, letters) refuse a bot's turn token, or
@@ -79,7 +85,7 @@ token (401 `{person_only:true}`); from this machine they don't, so the person on
 A bot with a shell here could call them with a bare `curl`, but it could also read the token file.
 
 `KWNT_REQUIRE_TOKEN=always` requires the token for local requests too, person-only routes included
-(the strict setup); `never` turns the check
+(the strict setup; `kwnt serve` then prints the sign-in link on loopback too); `never` turns the check
 off (only behind your own authentication). Always open: `/api/health`, `/api/auth/*`, the MCP
 OAuth callback and the MCP endpoints, which carry their own per-turn tokens.
 
@@ -89,7 +95,7 @@ Errors are `{"error": "<message>"}`. Bodies with unknown fields are refused.
 
 ### Auth
 
-- `GET /api/auth/status` → `{"auth_required": bool, "authenticated": bool}`
+- `GET /api/auth/status` → `{"auth_required": bool, "authenticated": bool, "person_auth_required": bool, "person_authenticated": bool}`
 - `POST /api/auth/session` `{"token": "..."}` → `204` + `Set-Cookie: kwnt_token=...`; `401` when wrong
 - `DELETE /api/auth/session` → `204`, clears the cookie
 

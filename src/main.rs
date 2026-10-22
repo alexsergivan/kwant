@@ -56,8 +56,12 @@ pub enum Commands {
     /// List channels stored in the local database
     Channels,
 
-    /// Print the API token that browsers and scripts on other machines need
-    Token,
+    /// Print the link that signs a browser on another machine in (`--raw`: just the token, for scripts)
+    Token {
+        /// Print only the token, for `Authorization: Bearer` in scripts
+        #[arg(long)]
+        raw: bool,
+    },
 
     /// Run a tiny MCP test server on stdin/stdout (for tests and smoke checks)
     #[command(hide = true)]
@@ -157,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             kwnt::server::scheduler::spawn_background(state.clone(), shutdown.clone());
             kwnt::server::engine_routes::spawn_startup_check(state.clone());
             kwnt::server::parallel_routes::spawn_startup_sweep(state.clone());
+            let api_token = state.api_token.clone();
             let app = create_router(state);
 
             let addr = format!("{}:{}", config.host, config.port);
@@ -174,16 +179,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "⚡ kwant bots: your team of super-intelligent bots, listening at http://{}",
                 addr
             );
-            if !is_loopback_bind(&config.host) {
-                println!(
-                    "🔒 Requests from other machines need the API token: run `kwnt token` and open http://<this-host>:{}/#kwnt_token=<token>",
-                    config.port
-                );
-            } else {
-                println!(
-                    "🔒 Saved passwords and approvals need the API token here too: run `kwnt token` and open http://localhost:{}/#kwnt_token=<token> once",
-                    config.port
-                );
+            // stdout only: the link carries the token
+            for line in kwnt::server::auth::startup_notice(&config.host, config.port, api_token.require, api_token.reveal()) {
+                println!("{line}");
             }
 
             let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
@@ -198,13 +196,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Agents) => print_agents(&config).await?,
         Some(Commands::Teams) => print_teams(&config).await?,
         Some(Commands::Channels) => print_channels(&config).await?,
-        Some(Commands::Token) => {
+        Some(Commands::Token { raw }) => {
             let token = std::env::var("KWNT_API_TOKEN")
                 .ok()
                 .map(|t| t.trim().to_string())
                 .filter(|t| t.len() >= 16)
                 .unwrap_or_else(|| kwnt::server::auth::load_or_create(&config.data_dir));
-            println!("{token}");
+            if raw {
+                println!("{token}");
+            } else {
+                println!("{}", kwnt::server::auth::token_command_link(&config.host, config.port, &token));
+            }
         }
         Some(Commands::McpEchoServer) => unreachable!("handled before config loading"),
         Some(Commands::McpOauthMockServer { .. }) => unreachable!("handled before config loading"),
@@ -215,14 +217,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-fn is_loopback_bind(host: &str) -> bool {
-    host == "localhost"
-        || host
-            .trim_matches(['[', ']'])
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The data dir holds the database (keys, MCP tokens) and profile logins: owner only.

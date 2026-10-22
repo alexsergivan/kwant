@@ -136,6 +136,71 @@ pub fn load_or_create(data_dir: &Path) -> String {
     token
 }
 
+/// Whether `kwnt serve --host <host>` listens on this machine only.
+pub fn is_loopback_bind(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_matches(['[', ']'])
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// The link that signs a browser in once: `http://<host>:<port>/#kwnt_token=<token>`. The UI
+/// posts the token to `/api/auth/session` and clears it from the address bar.
+pub fn sign_in_link(host: &str, port: u16, token: &str) -> String {
+    let bare = host.trim_matches(['[', ']']);
+    let host = match bare.parse::<IpAddr>() {
+        Ok(IpAddr::V6(_)) => format!("[{bare}]"),
+        _ => bare.to_string(),
+    };
+    format!("http://{host}:{port}/#kwnt_token={token}")
+}
+
+/// What `kwnt serve` says about signing in, for stdout only: the link carries the token, so it
+/// must never go through tracing into log files. On a loopback bind nobody needs the token,
+/// unless `KWNT_REQUIRE_TOKEN=always`.
+pub fn startup_notice(host: &str, port: u16, require: Require, token: &str) -> Vec<String> {
+    match require {
+        Require::Never => Vec::new(),
+        Require::Auto if is_loopback_bind(host) => Vec::new(),
+        Require::Always if is_loopback_bind(host) => vec![format!(
+            "🔒 Open this link once to sign in (it signs in as you, keep it private): {}",
+            sign_in_link(host, port, token)
+        )],
+        _ if is_any_bind(host) => {
+            // No "localhost needs no sign-in" here: in Docker the published port arrives from the bridge
+            vec![
+                format!(
+                    "🔒 To sign in from another computer, open this link once (it signs in as you, keep it private): {}",
+                    sign_in_link(THIS_HOST, port, token)
+                ),
+                format!("   Replace {THIS_HOST} with this server's address."),
+            ]
+        }
+        _ => vec![format!(
+            "🔒 To sign in from another computer, open this link once (it signs in as you, keep it private): {}",
+            sign_in_link(host, port, token)
+        )],
+    }
+}
+
+/// Stands in for the server's address when kwnt listens on every address.
+pub const THIS_HOST: &str = "<this-host>";
+
+/// `0.0.0.0` or `::`: every address, so the bound host says nothing about how to reach it.
+fn is_any_bind(host: &str) -> bool {
+    host.is_empty()
+        || host
+            .trim_matches(['[', ']'])
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.is_unspecified())
+}
+
+/// The link `kwnt token` prints for the configured bind.
+pub fn token_command_link(host: &str, port: u16, token: &str) -> String {
+    sign_in_link(if is_any_bind(host) { THIS_HOST } else { host }, port, token)
+}
+
 fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut opts = std::fs::OpenOptions::new();
@@ -285,7 +350,7 @@ pub(super) fn require_person_token(state: &AppState, headers: &HeaderMap, peer: 
 fn person_token_required() -> Response {
     (
         StatusCode::UNAUTHORIZED,
-        Json(json!({ "error": "this needs the API token: sign in with `kwnt token`", "person_only": true })),
+        Json(json!({ "error": "this needs the API token: open the sign-in link kwant printed when it started, or run `kwnt token`", "person_only": true })),
     )
         .into_response()
 }
@@ -534,6 +599,51 @@ mod tests {
         assert!(!person_only(&put, "/api/kwants/k1"));
         assert!(!person_only(&get, "/api/teams/t1"));
         assert!(!person_only(&post, "/api/bot-actions/b1/confirm"));
+    }
+
+    #[test]
+    fn loopback_start_prints_no_token_line_unless_always() {
+        let tok = "abcdefghijklmnopqrstuvwxyz012345";
+        for host in ["127.0.0.1", "localhost", "::1", "[::1]"] {
+            assert!(startup_notice(host, 8899, Require::Auto, tok).is_empty(), "{host}");
+            assert!(startup_notice(host, 8899, Require::Never, tok).is_empty(), "{host}");
+        }
+        let always = startup_notice("127.0.0.1", 8899, Require::Always, tok).join("\n");
+        assert!(always.contains("http://127.0.0.1:8899/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345"), "{always}");
+        assert!(!always.contains("kwnt token`"), "{always}");
+        let v6 = startup_notice("::1", 8899, Require::Always, tok).join("\n");
+        assert!(v6.contains("http://[::1]:8899/#kwnt_token="), "{v6}");
+    }
+
+    #[test]
+    fn remote_start_prints_one_ready_to_open_link() {
+        let tok = "abcdefghijklmnopqrstuvwxyz012345";
+        let specific = startup_notice("203.0.113.9", 8799, Require::Auto, tok);
+        assert_eq!(specific.len(), 1);
+        assert!(specific[0].ends_with("http://203.0.113.9:8799/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345"), "{specific:?}");
+        let named = startup_notice("kwnt.example.com", 8799, Require::Auto, tok).join("\n");
+        assert!(named.contains("http://kwnt.example.com:8799/#kwnt_token="), "{named}");
+        for any in ["0.0.0.0", "::", "[::]"] {
+            let lines = startup_notice(any, 8799, Require::Auto, tok);
+            assert_eq!(lines.len(), 2, "{any}");
+            assert!(lines[0].ends_with("http://<this-host>:8799/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345"), "{lines:?}");
+            assert_eq!(lines[1].trim(), "Replace <this-host> with this server's address.");
+        }
+        assert_eq!(startup_notice("0.0.0.0", 8799, Require::Always, tok).len(), 2);
+        assert!(startup_notice("0.0.0.0", 8799, Require::Never, tok).is_empty());
+        // Nothing sends the person off to run a command any more
+        assert!(!specific.iter().chain(&lines_for_all(tok)).any(|l| l.contains("kwnt token")));
+        assert_eq!(token_command_link("0.0.0.0", 8799, tok), "http://<this-host>:8799/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345");
+        assert_eq!(token_command_link("127.0.0.1", 8899, tok), "http://127.0.0.1:8899/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345");
+        assert_eq!(token_command_link("::1", 8899, tok), "http://[::1]:8899/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345");
+    }
+
+    fn lines_for_all(tok: &str) -> Vec<String> {
+        ["127.0.0.1", "0.0.0.0", "203.0.113.9"]
+            .iter()
+            .flat_map(|h| [Require::Auto, Require::Always].map(|r| startup_notice(h, 8799, r, tok)))
+            .flatten()
+            .collect()
     }
 
     #[test]
