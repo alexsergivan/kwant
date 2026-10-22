@@ -4,7 +4,7 @@ contact_links:
     url: https://github.com/alexsergivan/kwant/discussions
     about: Ask how to do something or share an early idea.
   - name: Documentation
-    url: https://kwant.pages.dev/docs/quickstart
+    url: https://kwant.si/docs/quickstart
     about: Install, spaces, accounts, routines, approvals and more.
   - name: Report a security problem
     url: https://github.com/alexsergivan/kwant/security/advisories/new

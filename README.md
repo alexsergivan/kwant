@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/alexsergivan/kwant/actions/workflows/ci.yml/badge.svg)](https://github.com/alexsergivan/kwant/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![Docs](https://img.shields.io/badge/docs-kwant.pages.dev-orange.svg)](https://kwant.pages.dev/docs/quickstart)
+[![Docs](https://img.shields.io/badge/docs-kwant.si-orange.svg)](https://kwant.si/docs/quickstart)
 
 kwant gives you a team of bots that share chats, hand work to each other with an @mention, keep working on a schedule and wait for your OK before anything risky. Keep separate spaces for work and home, each with its own bots and accounts. Run it on your laptop or a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.
 
@@ -12,7 +12,7 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 
 ![A kwant channel: Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen.](docs/media/handoff.webp)
 
-**Website and docs: [kwant.pages.dev](https://kwant.pages.dev)**
+**Website and docs: [kwant.si](https://kwant.si)**
 
 ---
 
@@ -27,7 +27,7 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **Parallel Universe.** Compare up to three ways to deploy an app with local container tests and dated price estimates. Every number is tagged as verified, an estimate or speculation. No cloud account and no spending.
 - **And more:** memory and skills per bot (you approve new skills), bots that propose hiring a teammate, import a bot from a Claude Code subagent, a SKILL.md, a character card or a JSON export, search across a space's chats, MCP tool servers, a shared browser for bots, saved passwords with an optional Bitwarden store, and Local or VM computer mode.
 
-See every feature, with screenshots, on [kwant.pages.dev/features](https://kwant.pages.dev/features).
+See every feature, with screenshots, on [kwant.si/features](https://kwant.si/features).
 
 <table>
   <tr>
@@ -81,7 +81,7 @@ make build                 # web app + cargo build --release
 ./target/release/kwnt serve
 ```
 
-More in the [quickstart](https://kwant.pages.dev/docs/quickstart) and [install](https://kwant.pages.dev/docs/install) docs.
+More in the [quickstart](https://kwant.si/docs/quickstart) and [install](https://kwant.si/docs/install) docs.
 
 ---
 
@@ -157,7 +157,7 @@ The first start needs `huggingface.co`. Behind a proxy that blocks it, start kwa
 
 ## Documentation
 
-- Website docs: [kwant.pages.dev/docs](https://kwant.pages.dev/docs/quickstart): quickstart, spaces, accounts, routines, approvals, loose ends, Parallel Universe, memory and skills, MCP.
+- Website docs: [kwant.si/docs](https://kwant.si/docs/quickstart): quickstart, spaces, accounts, routines, approvals, loose ends, Parallel Universe, memory and skills, MCP.
 - In this repo:
   - [Approvals](docs/approvals.md)
   - [Bot actions](docs/bot-actions.md)
