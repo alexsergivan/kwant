@@ -5,7 +5,8 @@ The output is committed, so serving or deploying site/ needs no build step.
 Run `python3 scripts/build_site.py` after editing anything in site-src/.
 
 Each page source starts with a header block of `key: value` lines, then `---`, then HTML.
-Keys: title, description, path (output path under site/), nav (docs nav id, docs pages only).
+Keys: title, description, path (output path under site/), nav (docs nav id, docs pages only),
+active (header link to mark current on non-docs pages).
 Shortcodes in the HTML:
   {{root}}                                relative path back to site/
   {{shot:NAME|ALT|SIZES}}                 a zoomable responsive screenshot (desktop-* or phone-*)
@@ -22,15 +23,24 @@ OUT = ROOT / "site"
 SITE_URL = "https://kwant.si"
 GITHUB = "https://github.com/alexsergivan/kwant"
 
-DOCS = [
-    ("quickstart", "Quickstart"),
-    ("install", "Install & run"),
-    ("bots-and-teams", "Bots & teams"),
-    ("approvals", "Approvals & passwords"),
-    ("models", "Models & accounts"),
-    ("mcp", "MCP tools"),
-    ("browser", "Browser"),
+DOC_GROUPS = [
+    ("Get started", [("quickstart", "Quickstart"), ("install", "Install & run")]),
+    ("Using kwant", [
+        ("spaces", "Spaces"),
+        ("bots-and-teams", "Bots & teams"),
+        ("accounts", "Accounts & profiles"),
+        ("models", "Models & routing"),
+        ("approvals", "Approvals & passwords"),
+    ]),
+    ("Works on its own", [
+        ("routines", "Routines & bot actions"),
+        ("memory-skills", "Memory, skills & search"),
+        ("loose-ends", "Loose ends & letters"),
+        ("parallel-universe", "Parallel Universe"),
+    ]),
+    ("Connect", [("mcp", "MCP tools"), ("browser", "Browser")]),
 ]
+DOCS = [d for _, items in DOC_GROUPS for d in items]
 
 LOGO = (
     '<svg viewBox="0 0 32 32" aria-hidden="true">'
@@ -103,7 +113,7 @@ def header(root, active):
   <div class="wrap">
     <a class="brand" href="{home}" aria-label="kwant home">{LOGO.replace("ID", "h")}<span>kwant</span></a>
     <nav class="nav" aria-label="Main">
-      <a class="hide-sm" href="{home}#features">Features</a>
+      <a class="hide-sm" href="{root}features.html"{cur("features")}>Features</a>
       <a class="hide-sm" href="{home}#how">How it works</a>
       <a class="hide-sm" href="{home}#faq">FAQ</a>
       <a href="{root}docs/quickstart.html"{cur("docs")}>Docs</a>
@@ -124,8 +134,10 @@ def footer(root):
     <nav aria-label="Footer">
       <a href="{root}docs/quickstart.html">Quickstart</a>
       <a href="{root}docs/install.html">Install &amp; run</a>
+      <a href="{root}features.html">All features</a>
+      <a href="{root}docs/spaces.html">Spaces</a>
+      <a href="{root}docs/accounts.html">Accounts</a>
       <a href="{root}docs/approvals.html">Approvals</a>
-      <a href="{root}docs/models.html">Models</a>
       <a href="{GITHUB}" rel="noopener">GitHub</a>
     </nav>
   </div>
@@ -136,8 +148,13 @@ def footer(root):
 def docs_shell(root, current, body):
     here = ' aria-current="page"'
     items = "\n".join(
-        f'      <li><a href="{root}docs/{slug}.html"{here if slug == current else ""}>{html.escape(label)}</a></li>'
-        for slug, label in DOCS
+        f'    <div class="docs-group"><h3>{html.escape(group)}</h3><ul>'
+        + "".join(
+            f'<li><a href="{root}docs/{slug}.html"{here if slug == current else ""}>{html.escape(label)}</a></li>'
+            for slug, label in links
+        )
+        + "</ul></div>"
+        for group, links in DOC_GROUPS
     )
     idx = [s for s, _ in DOCS].index(current)
     prev_link = next_link = ""
@@ -150,9 +167,7 @@ def docs_shell(root, current, body):
     return f"""<div class="wrap docs">
   <nav class="docs-nav" aria-label="Docs">
     <h2>Docs</h2>
-    <ul>
 {items}
-    </ul>
   </nav>
   <article class="prose">
 {body}
@@ -194,7 +209,7 @@ def page(meta, body, root):
 <link rel="stylesheet" href="{root}assets/css/site.css">
 </head>
 <body>
-{header(root, "docs" if meta.get("nav") else "home")}
+{header(root, "docs" if meta.get("nav") else meta.get("active", "home"))}
 <main id="main">
 {body}
 </main>

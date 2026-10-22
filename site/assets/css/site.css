@@ -299,6 +299,8 @@ dialog.lightbox button { min-height: 32px; padding: 4px 12px; border-radius: 8px
 .docs-nav { position: sticky; top: 88px; align-self: start; max-height: calc(100vh - 110px); overflow-y: auto; }
 .docs-nav h2 { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin: 0 0 10px 12px; }
 .docs-nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.docs-group + .docs-group { margin-top: 18px; }
+.docs-group h3 { margin: 0 0 6px 12px; font-size: 13px; font-weight: 600; letter-spacing: 0; color: var(--muted); }
 .docs-nav a { display: block; padding: 8px 12px; border-radius: 8px; color: var(--muted); font-size: 15px; font-weight: 500; }
 .docs-nav a:hover { background: var(--surface); color: var(--text); text-decoration: none; }
 .docs-nav a[aria-current="page"] { background: rgba(108, 88, 224, 0.16); color: #e4e0ff; box-shadow: inset 2px 0 0 var(--accent-hi); }
@@ -347,9 +349,38 @@ td code { white-space: nowrap; }
 .notfound { min-height: 60vh; display: grid; place-items: center; text-align: center; padding: 80px 24px; }
 .notfound .code { font: 700 96px/1 var(--mono); color: var(--line); letter-spacing: -0.04em; }
 
+
+/* "What makes kwant different" tiles: whole tile links to its section */
+.benefit.link { display: flex; flex-direction: column; color: inherit; transition: border-color .2s ease, transform .2s ease; }
+.benefit.link:hover { text-decoration: none; border-color: var(--line); transform: translateY(-2px); }
+.benefit .more { margin-top: auto; padding-top: 14px; color: var(--accent-text); font-size: 14.5px; font-weight: 600; }
+.benefit.link:hover .more { text-decoration: underline; text-underline-offset: 3px; }
+.section-foot { margin: 40px 0 0; text-align: center; }
+.row-copy .more-link { display: inline-block; margin-top: 22px; font-weight: 600; }
+.grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Tags for honest status notes */
+.tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; letter-spacing: 0; vertical-align: 3px; color: #f7d08a; background: rgba(244, 157, 10, 0.12); border: 1px solid rgba(244, 157, 10, 0.35); }
+/* Features page */
+.page-head { padding: 72px 0 8px; text-align: center; }
+.page-head h1 { font-size: clamp(36px, 5vw, 56px); font-weight: 750; letter-spacing: -0.035em; line-height: 1.06; }
+.page-head .lede { margin-top: 18px; }
+.jump { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 32px auto 0; padding: 0; list-style: none; max-width: 900px; }
+.jump a { display: inline-block; padding: 7px 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line-soft); color: var(--muted); font-size: 14.5px; font-weight: 500; }
+.jump a:hover { color: var(--text); border-color: var(--line); text-decoration: none; }
+.fgroup { padding: 72px 0 0; }
+.fgroup:last-of-type { padding-bottom: 96px; }
+.fgroup .section-head { margin-bottom: 32px; }
+.fgroup h2 { font-size: clamp(26px, 3.2vw, 34px); }
+.flist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 40px; margin: 32px 0 0; padding: 0; list-style: none; }
+.flist li { padding: 18px 0; border-top: 1px solid var(--line-soft); }
+.flist h3 { font-size: 16.5px; font-weight: 650; letter-spacing: -0.01em; }
+.flist p { margin: 6px 0 0; color: var(--muted); font-size: 15px; }
+.flist p code { padding: 1px 6px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line-soft); color: #d9d4ff; }
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1024px) {
   .benefits, .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .page-head { padding-top: 56px; }
   .row, .row.flip { grid-template-columns: minmax(0, 1fr); gap: 32px; }
   .row.flip .row-copy { order: 0; }
   .phones { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -361,7 +392,10 @@ td code { white-space: nowrap; }
   .docs { grid-template-columns: minmax(0, 1fr); gap: 28px; padding-top: 20px; }
   .docs-nav { position: static; max-height: none; margin: 0 -24px; padding: 0 24px 12px; border-bottom: 1px solid var(--line-soft); overflow-x: auto; }
   .docs-nav h2 { display: none; }
-  .docs-nav ul { display: flex; gap: 6px; width: max-content; }
+  .docs-nav { display: flex; gap: 6px; }
+  .docs-group { display: contents; }
+  .docs-group h3 { display: none; }
+  .docs-nav ul { display: contents; }
   .docs-nav a { white-space: nowrap; padding: 7px 12px; border: 1px solid var(--line-soft); font-size: 14px; }
   .docs-nav a[aria-current="page"] { box-shadow: none; border-color: rgba(125, 107, 234, 0.5); }
   .steps { grid-template-columns: minmax(0, 1fr); }
@@ -370,8 +404,9 @@ td code { white-space: nowrap; }
   .nav .hide-sm { display: none; }
   section { padding: 72px 0; }
   .hero { padding-top: 56px; }
-  .benefits, .grid { grid-template-columns: minmax(0, 1fr); }
+  .benefits, .grid, .grid.two, .flist { grid-template-columns: minmax(0, 1fr); }
   .showcase { gap: 80px; }
+  .fgroup { padding-top: 56px; }
   .frame-bar { height: 28px; }
   .frame-bar i { width: 9px; height: 9px; }
   .frame-bar span { display: none; }
