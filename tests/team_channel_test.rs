@@ -141,3 +141,22 @@ async fn startup_leaves_ambiguous_chats_alone() {
     assert!(channel_named(&db, "team-DUP").await.is_some());
     assert!(channel_named(&db, "team-dup").await.is_none(), "two candidates: neither is guessed at");
 }
+
+#[tokio::test]
+async fn lookups_find_a_chat_that_differs_only_in_case() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let space = SpaceId::default_space();
+    let ks = db.list_kwants(&space).await.unwrap();
+    let (a, b) = (ks[0].id.clone(), ks[1].id.clone());
+    let t = db.create_team(&space, &team("Startup", &a, &[&a])).await.unwrap();
+    let chat = channel_named(&db, "team-Startup").await.unwrap();
+    // Renamed behind the running app's back, as an older version did.
+    rename_team_only(tmp.path(), "Startup", "startup", &serde_json::to_string(&[&a]).unwrap()).await;
+
+    assert_eq!(db.team_channel(&space, "startup").await.unwrap(), Some(chat.id.clone()));
+    assert!(db.add_team_member(&t.id, &b).await.unwrap());
+    let members: Vec<String> = serde_json::from_str(&channel_named(&db, "team-Startup").await.unwrap().member_kwants).unwrap();
+    assert!(members.contains(&b), "a new member joins the team's chat too");
+    assert_eq!(db.team_channel(&space, "nobody").await.unwrap(), None);
+}

@@ -75,6 +75,7 @@ import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
 import { claudeNeedsSignIn } from './claudeLogin';
 import { personFetch } from './auth';
+import { teamChannelOf, teamOfChannel } from './teamChannel';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -539,9 +540,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           selectedIdRef.current = init.id;
           setIsChannel(true);
           isChannelRef.current = true;
-          const matchedTeam = normalizedTeams.find(
-            (t) => `team-${t.name}` === init.name || t.id === init.id
-          );
+          const matchedTeam = teamOfChannel(normalizedTeams, init);
           setSelectedTeamId(matchedTeam ? matchedTeam.id : null);
         }
       } catch (err) {
@@ -857,9 +856,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const initialSpeakerName =
               kwantsRef.current.find((k) => k.id === initialSpeakerId)?.name || initialSpeakerId;
 
-            const matchedChannel = channelsRef.current.find(
-              (c) => c.name === `team-${event.data?.team_name}` || c.id === teamId
-            );
+            const matchedChannel = teamChannelOf(channelsRef.current, { id: teamId ?? '', name: event.data?.team_name ?? '' });
             const contextId = matchedChannel ? matchedChannel.id : (teamId || selectedIdRef.current);
 
             streamingContextIdRef.current = contextId;
@@ -1190,9 +1187,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setShowParallel(false);
     setPhoneView('chat');
     setSelectedTeamId(team.id);
-    const targetChannel = channels.find(
-      (c) => c.name === `team-${team.name}` || c.id === team.id
-    );
+    const targetChannel = teamChannelOf(channels, team);
     if (targetChannel) {
       setSelectedId(targetChannel.id);
       selectedIdRef.current = targetChannel.id;
@@ -1209,9 +1204,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         .then((r) => (r.ok ? r.json() : []))
         .then((freshChannels: Channel[]) => {
           setChannels(freshChannels);
-          const match = freshChannels.find(
-            (c) => c.name === `team-${team.name}` || c.id === team.id
-          );
+          const match = teamChannelOf(freshChannels, team);
           if (match) {
             setSelectedId(match.id);
             selectedIdRef.current = match.id;
@@ -1235,9 +1228,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     selectedIdRef.current = channel.id;
     setIsChannel(true);
     isChannelRef.current = true;
-    const matchedTeam = teams.find(
-      (t) => `team-${t.name}` === channel.name || t.id === channel.id
-    );
+    const matchedTeam = teamOfChannel(teams, channel);
     setSelectedTeamId(matchedTeam ? matchedTeam.id : null);
     setMessages(messagesCacheRef.current[channel.id] || []);
     playSfx('click');
@@ -1811,9 +1802,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         if (cRes.ok) {
           const freshChannels: Channel[] = await cRes.json();
           setChannels(freshChannels);
-          const teamChan = freshChannels.find(
-            (c) => c.name === `team-${created.name}` || c.id === created.id
-          );
+          const teamChan = teamChannelOf(freshChannels, created);
           if (teamChan) {
             setSelectedId(teamChan.id);
             selectedIdRef.current = teamChan.id;
@@ -1953,7 +1942,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const currentTeam = selectedTeamId
     ? teams.find((t) => t.id === selectedTeamId)
     : isChannel && currentChannel?.name.startsWith('team-')
-    ? teams.find((t) => `team-${t.name}` === currentChannel.name)
+    ? teamOfChannel(teams, currentChannel)
     : null;
 
   const activeSandboxId = currentTeam?.id || currentKwant?.id || selectedTeamId || (isChannel ? selectedId : 'default');

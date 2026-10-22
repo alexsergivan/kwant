@@ -637,6 +637,11 @@ impl Database {
         self.get_team(id).await
     }
 
+    /// The id of the team's chat (see [`team_channel_id`]).
+    pub async fn team_channel(&self, space: &SpaceId, team_name: &str) -> Result<Option<String>, DbError> {
+        team_channel_id(&self.pool, space, team_name).await
+    }
+
     pub async fn delete_team(&self, id: &str) -> Result<bool, DbError> {
         let res = sqlx::query("DELETE FROM teams WHERE id = ?")
             .bind(id)

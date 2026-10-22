@@ -672,8 +672,8 @@ async fn accept(state: &AppState, h: &Hire, auto: bool) -> Result<Hire, (StatusC
         };
         match state.db.create_team(&space, &new_team).await {
             Ok(team) => {
-                let channel = state.db.list_channels(&space).await.unwrap_or_default().into_iter().find(|c| c.name == format!("team-{}", team.name));
-                made_team = Some(json!({"id": team.id, "name": team.name, "channel_id": channel.map(|c| c.id)}));
+                let channel = state.db.team_channel(&space, &team.name).await.ok().flatten();
+                made_team = Some(json!({"id": team.id, "name": team.name, "channel_id": channel}));
             }
             Err(e) => {
                 let _ = remove_made(state, &ids, None).await;
