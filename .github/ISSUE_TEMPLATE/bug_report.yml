@@ -1,0 +1,71 @@
+name: Bug report
+description: Something in kwant doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please don't paste API keys, tokens, sign-in links (`#kwnt_token=…`) or passwords.
+        **Security problems:** don't file them here. Use the Security tab → *Report a vulnerability*.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a space with …
+        2. Ask the bot to …
+        3. See …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: kwant version or commit
+      description: "`git rev-parse --short HEAD`, or the release you downloaded."
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How do you run kwant?
+      options:
+        - make run / cargo run from a clone
+        - Release binary on my computer
+        - Release binary on a server (VPS)
+        - Docker Compose
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and browser
+      placeholder: macOS 15, Safari 18 / Ubuntu 24.04, Chrome 130
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Which engines are involved?
+      multiple: true
+      options:
+        - Claude Code CLI
+        - Codex CLI
+        - Grok CLI
+        - Anthropic API key
+        - OpenAI API key
+        - xAI API key
+        - Custom OpenAI- or Anthropic-compatible server
+        - Ollama
+        - Not engine-related
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Server output around the problem, the browser console, or a screenshot. Remove anything private first.
+      render: text

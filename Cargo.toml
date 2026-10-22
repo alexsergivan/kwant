@@ -2,7 +2,15 @@
 name = "kwnt"
 version = "0.1.0"
 edition = "2021"
-description = "Kwants: Multi-Agent AI Platform in Rust"
+description = "A self-hosted team of AI bots: spaces, multiple accounts, handoffs, approvals and routines, in one binary"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/alexsergivan/kwant"
+homepage = "https://kwant.pages.dev"
+documentation = "https://kwant.pages.dev/docs/quickstart"
+readme = "README.md"
+keywords = ["ai", "agents", "llm", "self-hosted", "chatbot"]
+categories = ["command-line-utilities", "web-programming::http-server"]
+publish = false
 
 [lib]
 name = "kwnt"
