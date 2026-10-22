@@ -30,7 +30,7 @@
   <div class="wrap">
     <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-h" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-h)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
     <nav class="nav" aria-label="Main">
-      <a class="hide-sm" href="../#features">Features</a>
+      <a class="hide-sm" href="../features.html">Features</a>
       <a class="hide-sm" href="../#how">How it works</a>
       <a class="hide-sm" href="../#faq">FAQ</a>
       <a href="../docs/quickstart.html" aria-current="page">Docs</a>
@@ -42,15 +42,10 @@
 <div class="wrap docs">
   <nav class="docs-nav" aria-label="Docs">
     <h2>Docs</h2>
-    <ul>
-      <li><a href="../docs/quickstart.html">Quickstart</a></li>
-      <li><a href="../docs/install.html" aria-current="page">Install &amp; run</a></li>
-      <li><a href="../docs/bots-and-teams.html">Bots &amp; teams</a></li>
-      <li><a href="../docs/approvals.html">Approvals &amp; passwords</a></li>
-      <li><a href="../docs/models.html">Models &amp; accounts</a></li>
-      <li><a href="../docs/mcp.html">MCP tools</a></li>
-      <li><a href="../docs/browser.html">Browser</a></li>
-    </ul>
+    <div class="docs-group"><h3>Get started</h3><ul><li><a href="../docs/quickstart.html">Quickstart</a></li><li><a href="../docs/install.html" aria-current="page">Install &amp; run</a></li></ul></div>
+    <div class="docs-group"><h3>Using kwant</h3><ul><li><a href="../docs/spaces.html">Spaces</a></li><li><a href="../docs/bots-and-teams.html">Bots &amp; teams</a></li><li><a href="../docs/accounts.html">Accounts &amp; profiles</a></li><li><a href="../docs/models.html">Models &amp; routing</a></li><li><a href="../docs/approvals.html">Approvals &amp; passwords</a></li></ul></div>
+    <div class="docs-group"><h3>Works on its own</h3><ul><li><a href="../docs/routines.html">Routines &amp; bot actions</a></li><li><a href="../docs/memory-skills.html">Memory, skills &amp; search</a></li><li><a href="../docs/loose-ends.html">Loose ends &amp; letters</a></li><li><a href="../docs/parallel-universe.html">Parallel Universe</a></li></ul></div>
+    <div class="docs-group"><h3>Connect</h3><ul><li><a href="../docs/mcp.html">MCP tools</a></li><li><a href="../docs/browser.html">Browser</a></li></ul></div>
   </nav>
   <article class="prose">
 <p class="kicker">Docs</p>
@@ -137,9 +132,9 @@ docker compose exec kwnt kwnt token           <span class="c"># print it again l
     <tr><td><code>KWNT_LAYA_MANAGED=0</code></td><td>Don't install or run Laya; use your own. <code>kwnt serve --no-laya</code> skips it.</td></tr>
   </tbody>
 </table></div>
-<p><code>~/.kwnt/config.toml</code> can also set <code>host</code>, <code>port</code>, <code>data_dir</code> and the Laya options (<code>laya_url</code>, <code>laya_managed</code>, <code>laya_models</code>). More on Laya is in <a href="models.html#laya">Models &amp; accounts</a>.</p>
+<p><code>~/.kwnt/config.toml</code> can also set <code>host</code>, <code>port</code>, <code>data_dir</code> and the Laya options (<code>laya_url</code>, <code>laya_managed</code>, <code>laya_models</code>). More on Laya is in <a href="models.html#laya">Models &amp; routing</a>.</p>
 
-    <nav class="pager" aria-label="Docs pages"><a class="prev" href="../docs/quickstart.html"><small>Previous</small>Quickstart</a><a class="next" href="../docs/bots-and-teams.html"><small>Next</small>Bots &amp; teams</a></nav>
+    <nav class="pager" aria-label="Docs pages"><a class="prev" href="../docs/quickstart.html"><small>Previous</small>Quickstart</a><a class="next" href="../docs/spaces.html"><small>Next</small>Spaces</a></nav>
   </article>
 </div>
 </main>
@@ -152,8 +147,10 @@ docker compose exec kwnt kwnt token           <span class="c"># print it again l
     <nav aria-label="Footer">
       <a href="../docs/quickstart.html">Quickstart</a>
       <a href="../docs/install.html">Install &amp; run</a>
+      <a href="../features.html">All features</a>
+      <a href="../docs/spaces.html">Spaces</a>
+      <a href="../docs/accounts.html">Accounts</a>
       <a href="../docs/approvals.html">Approvals</a>
-      <a href="../docs/models.html">Models</a>
       <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
     </nav>
   </div>

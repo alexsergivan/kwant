@@ -1,0 +1,45 @@
+title: Parallel Universe
+description: Compare up to three ways to deploy an app before you pick one. kwant load-tests each option in a sealed Docker container and sets it next to a dated price estimate, with no cloud account and no spending.
+path: docs/parallel-universe.html
+nav: parallel-universe
+---
+<p class="kicker">Docs</p>
+<h1>Parallel Universe</h1>
+<p class="intro">Managed hosting, a VPS or serverless? Describe your app and up to three ways to run it. kwant runs each option on your own server, load-tests it and compares it with a price estimate, so you can pick before you spend anything.</p>
+<figure>
+  <div class="frame">{{shot:v2-parallel-universe|Parallel Universe comparing three ways to host an API on cost, p95 latency, ops burden and rollback, with the fastest and cheapest option marked. The figures are sample data.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A comparison of three options. The figures in this screenshot are sample data.</figcaption>
+</figure>
+
+<h2 id="options">Options</h2>
+<p>Each option is a Docker image or a build context, with:</p>
+<ul>
+  <li>a health path kwant waits for before testing</li>
+  <li>your expected traffic</li>
+  <li>load-test settings</li>
+</ul>
+
+<h2 id="run">How a run works</h2>
+<ol>
+  <li>Options run one after another, each in its own container with resource limits.</li>
+  <li>The container is on an internal network with no internet and no access to the host. Builds are offline by default.</li>
+  <li>kwant load-tests it with <code>oha</code>, then removes the container.</li>
+  <li>Results are set next to price estimates for your traffic.</li>
+</ol>
+<p>Only one run happens at a time.</p>
+
+<h2 id="honest">What the numbers mean</h2>
+<p>Every figure is tagged:</p>
+<ul>
+  <li><strong>Verified:</strong> measured in this run.</li>
+  <li><strong>Estimate:</strong> worked out from a listed price.</li>
+  <li><strong>Speculation:</strong> a guess, and labelled as one.</li>
+</ul>
+<p>Prices come from a table built into kwant, with dated sources for Hetzner, DigitalOcean, Fly.io and AWS Lambda. A price older than 180 days is flagged as stale.</p>
+<div class="note"><strong>Latency is this server's.</strong> Tests run on the machine running kwant, not at the provider, so latency tells you how the options compare, not what you'd see in production.</div>
+
+<h2 id="needs">What it needs</h2>
+<ul>
+  <li>Docker on the machine that runs kwant.</li>
+  <li>No cloud account. kwant never creates anything at a provider and never spends money.</li>
+</ul>

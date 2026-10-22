@@ -1,0 +1,68 @@
+title: Routines & bot actions
+description: Schedule work in kwant with routines and follow-ups, let bots set things up for you with an Undo on every change, and decide how bots may hire new teammates.
+path: docs/routines.html
+nav: routines
+---
+<p class="kicker">Docs</p>
+<h1>Routines &amp; bot actions</h1>
+<p class="intro">Bots keep working when you're not there. A routine runs a prompt on a schedule, a follow-up checks back once, and bots can set either up for you, with an Undo on every change.</p>
+
+<h2 id="routines">Routines</h2>
+<p>A routine sends a prompt to a bot on a schedule and posts the answer in a channel, the bot's direct chat or a thread. Create one with <strong>New routine</strong> in a bot's Routines tab or under <strong>Space settings → Routines</strong>, or ask a bot to do it.</p>
+<figure>
+  <div class="frame">{{shot:v2-routines|The routines panel: a Monday metrics digest, a paused competitor price scan whose last run failed, a weekday morning release check and a follow-up, each with Run now, History, Edit and Delete.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>Schedule</th><th>Runs</th></tr></thead>
+  <tbody>
+    <tr><td>Once</td><td>At one date and time</td></tr>
+    <tr><td>Daily</td><td>Every day at a time</td></tr>
+    <tr><td>Weekly</td><td>On the days you pick</td></tr>
+    <tr><td>Monthly</td><td>On a day of the month</td></tr>
+    <tr><td>Every…</td><td>Every 5 minutes up to every week</td></tr>
+    <tr><td>Custom</td><td>A cron rule</td></tr>
+  </tbody>
+</table></div>
+<p>Each routine has <strong>Run now</strong>, a history of its last 200 runs, edit, delete and an on/off switch. Archiving a space pauses its routines.</p>
+
+<h3 id="follow-ups">Follow-ups</h3>
+<p>A bot can set itself a one-off follow-up, for example to check a deploy in an hour. Only bots create follow-ups.</p>
+
+<h2 id="actions">Bots that set things up</h2>
+<p>Ask a bot for a routine, a channel or a new bot and it makes the change itself. Each change shows a card with what was done and an <strong>Undo</strong> button.</p>
+<figure>
+  <div class="frame">{{shot:v2-action-undo|TechLead created the channel #launch-waitlist when asked. The card says Done and has an Undo button.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+<ul>
+  <li>Bots can create bots, spaces and channels, change settings, and create, update, pause, resume, run or delete routines.</li>
+  <li>At most 10 changes per turn, and only in the bot's own space.</li>
+  <li>Deleting a bot, deleting an account and archiving a space wait until you confirm.</li>
+  <li>Bots can't touch keys or secrets, engines or sign-ins, approval rules, computer mode, or install MCP servers.</li>
+</ul>
+
+<h2 id="hiring">Hiring</h2>
+<p>When a specialist would do a job better, a bot can propose hiring one. The card shows why, what the proposal is based on, and the new bot's model and tools.</p>
+<figure>
+  <div class="frame">{{shot:v2-hire-card|TechLead proposes hiring a Support bot, with the reason, what it is based on, its model and tools, and Deny, Accept once and Always accept buttons.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+<ul>
+  <li><strong>Deny</strong>, <strong>Accept once</strong> or <strong>Always accept</strong>. You can undo a hire afterwards.</li>
+  <li>A proposal for a whole team has <strong>Approve all</strong>.</li>
+  <li>A bot can make one proposal per turn, and kwant remembers what you denied.</li>
+  <li>Each space sets its rule: <strong>Ask me each time</strong>, or <strong>Hire at once</strong> with at most 3 automatic hires per 24 hours.</li>
+</ul>
+<figure>
+  <div class="frame">{{shot:v2-hire-policy|Space settings, Kwant bots tab: the bot list with Export and Edit, and the hiring rule, Ask me each time or Hire at once, with 0 of 3 automatic hires used in 24 hours.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+
+<h2 id="away">While you were away</h2>
+<p>Open <strong>While you were away</strong> from the sidebar (the badge counts what's new) or the inbox tab on a phone. It lists what changed since you last marked it seen, or the last 7 days the first time.</p>
+<ul>
+  <li><strong>Waiting on you:</strong> questions and approvals, which you can answer right there.</li>
+  <li><strong>Finished:</strong> handoffs and routine runs that are done.</li>
+  <li><strong>Failed or stuck:</strong> failed runs, and handoffs with no reply after 30 minutes.</li>
+</ul>
+<figure>
+  <div class="frame">{{shot:v2-away|While you were away, with a question waiting for an answer, two finished items and two failed or stuck ones.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+<p>For a ping when something needs you, turn on browser notifications or add an HTTPS webhook such as ntfy in settings. Webhook messages carry only a title and one line.</p>

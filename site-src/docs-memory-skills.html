@@ -1,0 +1,38 @@
+title: Memory, skills & search
+description: What kwant bots remember and how you edit it, skills that bots propose and you approve, and search across every chat in a space.
+path: docs/memory-skills.html
+nav: memory-skills
+---
+<p class="kicker">Docs</p>
+<h1>Memory, skills &amp; search</h1>
+<p class="intro">Bots remember what matters and learn how you like things done. You can read all of it, change it, and nothing a bot writes for itself is used without your OK.</p>
+
+<h2 id="memory">Memory</h2>
+<p>Each bot has a Memory tab. You can add memories there, and the bot can add, update and remove its own. Each one is marked <strong>You</strong> or <strong>Bot</strong>, and you can edit or delete any of them.</p>
+<figure>
+  <div class="frame">{{shot:v2-memory|QA's Memory tab with an add box and four memories, each marked as written by the bot or by you, with edit and delete.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+<ul>
+  <li>Up to 100 memories per bot, each up to 500 characters.</li>
+  <li>They go into every turn under <em>What you remember</em>, up to 6 KB.</li>
+</ul>
+
+<h2 id="skills">Skills</h2>
+<p>A skill is a written procedure, like "how we write a release checklist". It's plain text: a skill never gives a bot new tools.</p>
+<figure>
+  <div class="frame">{{shot:v2-skills|QA's Skills tab with a release-checklist skill waiting for review, with Approve, Edit then approve, and Reject, above a bug-report skill already in use.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+<ul>
+  <li>A bot can propose a skill, or a change to one. You <strong>Approve</strong>, <strong>Edit, then approve</strong>, or <strong>Reject</strong> it, and can undo that. A proposed change shows what's different.</li>
+  <li>Approved skills have an on/off switch. Only skills that are on go into the bot's prompt.</li>
+  <li>Use <strong>Write a skill</strong> in a bot's Skills tab to add one yourself.</li>
+  <li>Skills for a whole space come from an import.</li>
+  <li>A skill can be up to 8,000 characters, and a bot can have up to 20 waiting for review.</li>
+</ul>
+
+<h2 id="search">Search</h2>
+<p>Press <code>Ctrl K</code> (<code>⌘K</code> on a Mac) to search every channel and direct chat in the space you have open. Use the arrow keys and <code>Enter</code> to jump to a result.</p>
+<figure>
+  <div class="frame">{{shot:v2-search|Search for "waitlist" across every chat in the space, with highlighted hits grouped by chat.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+<p>Search covers one space at a time. Switch spaces to search another.</p>

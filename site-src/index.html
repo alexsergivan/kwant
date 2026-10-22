@@ -1,5 +1,5 @@
 title: kwant: your own team of AI bots, in one binary
-description: kwant is a self-hosted team of AI bots. They run on the Claude, Codex or Grok CLIs or your API keys, hand work to each other, and ask before anything risky. One binary, on your laptop or a VPS.
+description: kwant is a self-hosted team of AI bots with separate spaces, every account you have, routines that run while you're away, and approvals before anything risky. One binary, on your laptop or a VPS.
 path: index.html
 ---
 <section class="hero">
@@ -7,7 +7,7 @@ path: index.html
     <div class="hero-copy">
       <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Self-hosted · one binary · your data</p>
       <h1>Your own team of <span class="grad">AI bots</span>, working together.</h1>
-      <p class="lede">kwant gives you a team of bots that share chats, hand work to each other with an @mention and wait for your OK before anything risky. Run it on your laptop or a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.</p>
+      <p class="lede">kwant gives you a team of bots that share chats, hand work to each other with an @mention, keep working on a schedule and wait for your OK before anything risky. Keep separate spaces for work and home, each with its own bots and accounts. Run it on your laptop or a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.</p>
       <div class="cta">
         <a class="btn btn-primary" href="docs/quickstart.html">Get started
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10h12M11 5l5 5-5 5"/></svg></a>
@@ -25,54 +25,102 @@ path: index.html
   </div>
 </section>
 
-<section id="benefits" class="alt">
+<section id="different" class="alt">
   <div class="wrap">
     <div class="section-head center">
-      <p class="kicker">Why kwant</p>
-      <h2>A real team, not another chat tab</h2>
-      <p>Each bot has its own role, voice and model. They know who else is in the room, and you stay in charge of what they're allowed to do.</p>
+      <p class="kicker">What makes kwant different</p>
+      <h2>More than a chat with a bot</h2>
+      <p>kwant runs a whole working setup on your own machine: separate spaces, every account you have, and bots that keep going when you close the tab.</p>
     </div>
     <div class="benefits">
-      <article class="benefit">
-        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span>
-        <h3>One binary</h3>
-        <p><code>kwnt</code> is a single program with the web app and an SQLite database built in. No Node.js at runtime and no database server to set up.</p>
-      </article>
-      <article class="benefit">
-        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>
-        <h3>Your laptop or a VPS</h3>
-        <p>On your own computer there's nothing to sign in to. On a server, open the link it prints at startup once. Docker Compose and a systemd unit are included.</p>
-      </article>
-      <article class="benefit">
-        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg></span>
-        <h3>Any model, any CLI</h3>
-        <p>Use the <code>claude</code>, <code>codex</code> or <code>grok</code> CLI, Anthropic, OpenAI or xAI API keys, or any OpenAI-compatible server like OpenRouter or LM Studio.</p>
-      </article>
-      <article class="benefit">
+      <a class="benefit link" href="#spaces">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg></span>
+        <h3>Spaces</h3>
+        <p>Separate spaces for work, a side project and home. Each has its own bots, teams, channels, routines, accounts and approval rules.</p>
+        <span class="more">See spaces →</span>
+      </a>
+      <a class="benefit link" href="#accounts">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M16 4.5a3.5 3.5 0 010 7M18 14.5c1.8.9 3 2.9 3 5.5"/></svg></span>
+        <h3>Every account you have</h3>
+        <p>Two Claude logins, a ChatGPT plan, an API key and your own server, side by side. When one runs out, kwant moves the turn to the next.</p>
+        <span class="more">See accounts →</span>
+      </a>
+      <a class="benefit link" href="#team">
         <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="16" r="3"/><path d="M10.5 10.5l4 4"/><path d="M17 5v4M15 7h4"/></svg></span>
-        <h3>Bots that hand off</h3>
-        <p>When a reply @mentions a teammate, that teammate answers next in the same chat. For bigger questions the lead runs a short discussion and posts one summary.</p>
-      </article>
-      <article class="benefit">
-        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg></span>
-        <h3>You approve risky actions</h3>
-        <p>Commands and edits outside a bot's own folder wait for Allow once, Always allow or Deny. Or let kwant ask only when something looks risky.</p>
-      </article>
-      <article class="benefit">
-        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></span>
-        <h3>Your data stays yours</h3>
-        <p>Chats, bots and settings live in kwant's data folder on your machine. Saved website logins can live in your own Bitwarden.</p>
-      </article>
+        <h3>A team that hands off</h3>
+        <p>Bots @mention each other, a lead runs short discussions and posts one summary, and the Laya router picks who answers and with which model.</p>
+        <span class="more">See the team →</span>
+      </a>
+      <a class="benefit link" href="#away">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+        <h3>Works while you're away</h3>
+        <p>Routines on a schedule, bots that check back on their own, and one page with what finished, what failed and what's waiting on you.</p>
+        <span class="more">See routines →</span>
+      </a>
+      <a class="benefit link" href="#loose-ends">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16v12H4z"/><path d="M4 7l8 6 8-6"/></svg></span>
+        <h3>Loose ends and letters</h3>
+        <p>Finds what you started and never finished in your chats, email and GitHub, and reads the letters you photograph. It drafts the reply. It never sends.</p>
+        <span class="more">See loose ends →</span>
+      </a>
+      <a class="benefit link" href="#more">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 109-9"/><path d="M3 4v5h5"/></svg></span>
+        <h3>Bots that set things up</h3>
+        <p>Ask for a routine or a channel and the bot makes it, with an Undo button. Bots can even propose hiring a teammate. You decide.</p>
+        <span class="more">See bot actions →</span>
+      </a>
+    </div>
+    <p class="section-foot"><a class="btn btn-ghost" href="features.html">See every feature</a></p>
+  </div>
+</section>
+
+<section id="spaces">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">Spaces &amp; accounts</p>
+      <h2>Keep work, side projects and home apart</h2>
+      <p>One kwant, as many spaces as you need. Nothing leaks from one to the next: not the bots, not the chats, not the accounts.</p>
+    </div>
+    <div class="showcase">
+      <div class="row">
+        <div class="row-copy">
+          <h3>A space for each part of your life</h3>
+          <p>Give each space a name, an icon and a colour. Its bots, teams, channels, tool servers, skills and routines stay inside it.</p>
+          <ul class="checks">
+            <li>Its own approval rule: ask every time, ask only when risky, or don't ask</li>
+            <li>Its own hiring rule for bots that propose new teammates</li>
+            <li>Switch from the rail or with <code>Ctrl</code>/<code>⌘</code> + <code>1</code>–<code>9</code>. Each space reopens where you left it</li>
+            <li>Archive a space to pause it. Its bots and chats are kept</li>
+          </ul>
+          <a class="more-link" href="docs/spaces.html">How spaces work →</a>
+        </div>
+        <div class="frame">{{shot:v2-spaces-rail|The space rail with three spaces, Trailhead, Pixel Quest and Home, each with its own icon and colour. Trailhead is open on #general with a weekly digest posted by a routine.}}</div>
+      </div>
+
+      <div class="row flip" id="accounts">
+        <div class="row-copy">
+          <h3>Every account, side by side</h3>
+          <p>Add as many accounts per engine as you have: Claude or Codex or Grok CLI logins, Anthropic, OpenAI or xAI keys, and your own server that speaks the OpenAI or Anthropic API.</p>
+          <ul class="checks">
+            <li>A default and a priority order for each engine</li>
+            <li>Out of usage? The turn moves to the next account, and the chat says so</li>
+            <li>Pin a bot to one account, or keep it from switching</li>
+            <li>Keys are write-only: kwant never shows them again</li>
+          </ul>
+          <a class="more-link" href="docs/accounts.html">Accounts &amp; profiles →</a>
+        </div>
+        <div class="frame">{{shot:v2-accounts|Space settings, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in.}}</div>
+      </div>
     </div>
   </div>
 </section>
 
-<section id="features">
+<section id="team" class="alt">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">Features</p>
-      <h2>Everything a small team needs</h2>
-      <p>These are real screens from kwant, running a sample space called Trailhead with a four-bot product team.</p>
+      <p class="kicker">Your team</p>
+      <h2>A real team, not another chat tab</h2>
+      <p>Each bot has its own role, voice and model. They know who else is in the room, and you stay in charge of what they're allowed to do. These screens come from a sample space called Trailhead with a four-bot product team.</p>
     </div>
 
     <div class="showcase">
@@ -118,13 +166,126 @@ path: index.html
   </div>
 </section>
 
-<section class="alt" aria-labelledby="more-title">
+<section id="away">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">Works while you're away</p>
+      <h2>kwant keeps going when you close the tab</h2>
+      <p>Routines run on a schedule, bots check back on their own, and kwant keeps track of everything that's still open.</p>
+    </div>
+    <div class="showcase">
+      <div class="row">
+        <div class="row-copy">
+          <h3>Say "every morning". Get a routine.</h3>
+          <p>Ask a bot to check something every morning and it sets up the routine itself, with an Undo button on the card. Or make one yourself: once, daily, weekly, monthly, every few minutes or hours, or a cron rule.</p>
+          <ul class="checks">
+            <li>Run now, history, pause and edit for every routine</li>
+            <li>Results post in a channel, the bot's direct chat or a thread</li>
+            <li>Bots can set a one-off follow-up to check back later</li>
+          </ul>
+          <a class="more-link" href="docs/routines.html">Routines &amp; bot actions →</a>
+        </div>
+        <div class="frame">{{video:clip-spaces-routine|Demo: switching from the Trailhead space to Home and back, then asking QA to check overnight checkout errors every morning. QA sets up a weekday routine and a follow-up, each with Undo, Edit and Pause.}}</div>
+      </div>
+
+      <div class="row flip">
+        <div class="row-copy">
+          <h3>Come back to what changed</h3>
+          <p>"While you were away" collects what happened since you last looked, instead of a wall of chat.</p>
+          <ul class="checks">
+            <li><strong>Waiting on you:</strong> answer questions and approvals right there</li>
+            <li><strong>Finished:</strong> handoffs and routine runs that are done</li>
+            <li><strong>Failed or stuck:</strong> including a handoff with no reply after 30 minutes</li>
+            <li>Optional notifications in your browser, or to your phone through an HTTPS webhook such as ntfy</li>
+          </ul>
+        </div>
+        <div class="frame">{{shot:v2-away|While you were away. Waiting on you: Designer's question about a hero image, with answer buttons. Finished: a handoff and a weekly digest. Failed or stuck: a price scan blocked with a 403 and a smoke test that stopped at 9 of 22.}}</div>
+      </div>
+
+      <div class="row" id="loose-ends">
+        <div class="row-copy">
+          <h3>Nothing you started gets lost</h3>
+          <p>Loose ends reads your kwant chats and, if you add them, an email inbox over IMAP and your GitHub issues and pull requests. It finds what's still hanging: a question nobody answered, a promise that lapsed, a reply you owe.</p>
+          <ul class="checks">
+            <li>Every case shows the quote it's based on and a drafted next step</li>
+            <li>Read-only: no email is marked, moved or deleted</li>
+            <li>It never sends. Copy the draft or open it in your mail app</li>
+            <li>Snooze it, dismiss it, or mark it done</li>
+          </ul>
+          <a class="more-link" href="docs/loose-ends.html">Loose ends &amp; letters →</a>
+        </div>
+        <div class="frame">{{shot:v2-loose-ends-stalled|Loose ends. Designer has waited four days for your pick of a hero image, and you promised Mara a press kit by email. Each case quotes the message it is based on and has a draft reply.}}</div>
+      </div>
+
+      <div class="row flip">
+        <div class="row-copy">
+          <h3>Snap a letter. Get the deadline.</h3>
+          <p>Photograph or upload a bill, form or notice, up to five pages. kwant pulls out who sent it, what they want, the deadline, references and amounts, each next to the line it came from, and drafts a reply.</p>
+          <ul class="checks">
+            <li>Anything kwant isn't sure of is marked for you to check</li>
+            <li>Reminders 7 days before, the day before and on the day</li>
+            <li>Reading photos needs a Claude account</li>
+            <li>Nothing is ever sent for you</li>
+          </ul>
+        </div>
+        <div class="frame">{{shot:v2-letter|A scanned letter from a fictional water company next to what kwant read from it: who it's from, what they want and the deadline of November 5, each with the quote it came from and editable.}}</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="parallel" class="alt">
+  <div class="wrap">
+    <div class="row">
+      <div class="row-copy">
+        <p class="kicker">Parallel Universe</p>
+        <h3>Try every way to deploy before you pick one</h3>
+        <p>Managed hosting, a VPS or serverless? Describe your app and up to three ways to run it. kwant runs each one in a sealed-off container on your own server, load-tests it, and sets it next to a price estimate from a dated price table.</p>
+        <ul class="checks">
+          <li>Every number says where it came from: measured here, estimated from a price, or a guess</li>
+          <li>No cloud account and no spending. The test containers have no internet</li>
+          <li>Latency is measured on your server, not the provider's, and the report says so</li>
+          <li>Needs Docker on the machine that runs kwant</li>
+        </ul>
+        <a class="more-link" href="docs/parallel-universe.html">How Parallel Universe works →</a>
+      </div>
+      <div class="frame">{{shot:v2-parallel-universe|Parallel Universe comparing three ways to host an API on cost, p95 latency, ops burden and rollback, with the fastest and cheapest option marked. The figures are sample data.}}</div>
+    </div>
+  </div>
+</section>
+
+<section id="more" aria-labelledby="more-title">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">And more</p>
-      <h2 id="more-title">Built for day-to-day work</h2>
+      <h2 id="more-title">Bots that grow with you</h2>
+      <p>They set things up when you ask, remember what matters, and learn your way of working, with you approving each step.</p>
     </div>
     <div class="grid">
+      <article class="card">
+        <span class="shot">{{shot:v2-action-undo|TechLead created the channel #launch-waitlist when asked. The card says Done and has an Undo button.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
+        <div class="card-body"><h3>Changes with an Undo</h3><p>Bots create routines, channels and bots when you ask, up to 10 changes a turn. Deleting a bot or archiving a space waits for your OK.</p></div>
+      </article>
+      <article class="card">
+        <span class="shot">{{shot:v2-hire-card|TechLead proposes hiring a Support bot, with the reason, what it is based on, its model and tools, and Deny, Accept once and Always accept buttons.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
+        <div class="card-body"><h3>Bots that propose a hire</h3><p>When a specialist would do better, a bot can propose a new teammate. Accept it once, always, or deny it. Each space sets its own rule.</p></div>
+      </article>
+      <article class="card">
+        <span class="shot">{{shot:v2-skills|QA's Skills tab with a release-checklist skill waiting for review, with Approve, Edit then approve, and Reject, above a bug-report skill already in use.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
+        <div class="card-body"><h3>Skills you approve</h3><p>A bot can write down how it does a task as a skill. Nothing is used until you approve it, edit it or turn it off.</p></div>
+      </article>
+      <article class="card">
+        <span class="shot">{{shot:v2-memory|QA's Memory tab with an add box and four memories, each marked as written by the bot or by you, with edit and delete.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
+        <div class="card-body"><h3>Memory you can read</h3><p>Each bot keeps up to 100 short memories. You see every one, who wrote it, and can edit or delete it.</p></div>
+      </article>
+      <article class="card">
+        <span class="shot">{{shot:v2-search|Search for "waitlist" across every chat in the space, with highlighted hits grouped by chat.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
+        <div class="card-body"><h3>Search every chat</h3><p>Press <code>Ctrl K</code> or <code>⌘K</code> to search every channel and direct chat in a space.</p></div>
+      </article>
+      <article class="card">
+        <span class="shot">{{shot:v2-import|The import dialog: Bring a bot from Grok, ChatGPT, Claude or another app, or upload a file.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
+        <div class="card-body"><h3>Bring your bots</h3><p>Import bots from Grok, ChatGPT, Claude or a file. They arrive with no tools and no keys, and their skills and routines wait for you.</p></div>
+      </article>
       <article class="card">
         <span class="shot">{{shot:desktop-handoff|The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
         <div class="card-body"><h3>Handoffs with an @mention</h3><p>Mention a teammate, or <code>@everyone</code>, and they pick it up right after, up to four handoffs per message.</p></div>
@@ -134,22 +295,11 @@ path: index.html
         <div class="card-body"><h3>The right bot and model</h3><p>The Laya router picks who answers in a channel, and the model and effort for bots set to auto. If it's offline, kwant routes by keyword.</p></div>
       </article>
       <article class="card">
-        <span class="shot">{{shot:desktop-manage-team|The Manage Team dialog with the team handle, mission, pinned team instructions, workspace, lead and roster.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
-        <div class="card-body"><h3>Teams with a lead</h3><p>Give a team a mission, pinned instructions every member follows, a lead and a shared workspace.</p></div>
-      </article>
-      <article class="card">
-        <span class="shot">{{shot:desktop-usage|A bot's Usage tab showing calls, cache share, fresh, cached and output tokens, a breakdown by purpose and recent calls.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
-        <div class="card-body"><h3>See what each bot uses</h3><p>For API-key bots, a Usage tab breaks tokens down by purpose, cache and call.</p></div>
-      </article>
-      <article class="card">
-        <span class="shot">{{shot:desktop-approval-done|After Allow Once, TechLead reports that pull request 482 is open, with a receipt: used 1 tool, create pull request, done.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
-        <div class="card-body"><h3>A receipt for every tool</h3><p>Replies list the tools a bot used and how each call ended, so nothing happens out of sight.</p></div>
-      </article>
-      <article class="card">
-        <span class="shot">{{shot:desktop-presets|The New bot dialog with the Security preset picked, showing Tech, Non-tech and Lifestyle tabs and the avatar grid.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
-        <div class="card-body"><h3>Personas and souls</h3><p>Every bot has a persona for what it does, a soul for how it speaks, and a pixel avatar.</p></div>
+        <span class="shot">{{shot:v2-computer-mode|App settings: the Laya router status and the choice of computer for browsing and commands, Local computer or VM.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 370px}}</span>
+        <div class="card-body"><h3>Local or VM</h3><p>Bots browse and run commands on your computer, or in Docker containers kept away from your files.</p></div>
       </article>
     </div>
+    <p class="section-foot"><a class="btn btn-ghost" href="features.html">See every feature</a></p>
   </div>
 </section>
 
@@ -162,6 +312,48 @@ path: index.html
     </div>
     <div class="phone">{{shot:phone-team-chat|The Product team summary on a phone screen.|260px}}</div>
     <div class="phone lift">{{shot:phone-approval|The approval card for a GitHub pull request on a phone screen.|260px}}</div>
+  </div>
+</section>
+
+<section id="basics" class="alt">
+  <div class="wrap">
+    <div class="section-head center">
+      <p class="kicker">The basics</p>
+      <h2>Simple to run, yours to keep</h2>
+      <p>No cloud service to sign up for. kwant runs where you put it and keeps everything in one folder.</p>
+    </div>
+    <div class="benefits">
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span>
+        <h3>One binary</h3>
+        <p><code>kwnt</code> is a single program with the web app and an SQLite database built in. No Node.js at runtime and no database server to set up.</p>
+      </article>
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>
+        <h3>Your laptop or a VPS</h3>
+        <p>On your own computer there's nothing to sign in to. On a server, open the link it prints at startup once. Docker Compose and a systemd unit are included.</p>
+      </article>
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></svg></span>
+        <h3>Any model, any CLI</h3>
+        <p>Use the <code>claude</code>, <code>codex</code> or <code>grok</code> CLI, Anthropic, OpenAI or xAI API keys, or any OpenAI-compatible server like OpenRouter or LM Studio.</p>
+      </article>
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 7l3-3 3 3-3 3"/><path d="M10 17l-3 3-3-3 3-3"/><path d="M17 4v6a4 4 0 01-4 4h-2a4 4 0 00-4 4v2"/></svg></span>
+        <h3>Tools through MCP</h3>
+        <p>Give bots GitHub, Notion or any other MCP server. Paste a command or URL from its README, then pick which bots can use it.</p>
+      </article>
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg></span>
+        <h3>You approve risky actions</h3>
+        <p>Commands and edits outside a bot's own folder wait for Allow once, Always allow or Deny. Or let kwant ask only when something looks risky.</p>
+      </article>
+      <article class="benefit">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></span>
+        <h3>Your data stays yours</h3>
+        <p>Chats, bots and settings live in kwant's data folder on your machine. Saved website logins can live in your own Bitwarden.</p>
+      </article>
+    </div>
   </div>
 </section>
 
@@ -225,6 +417,34 @@ make run</code></pre>
       <details>
         <summary>Can bots use other tools, like GitHub or Notion?</summary>
         <div><p>Yes, through MCP servers. Add a server once, by pasting a command or URL from its README, then choose which bots can use it. A bot only ever sees the servers you gave it. Servers that need a sign-in use OAuth.</p></div>
+      </details>
+      <details>
+        <summary>What is a space?</summary>
+        <div><p>A separate area with its own bots, teams, channels, routines, skills, tool servers and accounts. Use one for work and another for home, and switch with <code>Ctrl</code>/<code>⌘</code> + a number. Each space has its own approval and hiring rules.</p></div>
+      </details>
+      <details>
+        <summary>Can I use more than one Claude account?</summary>
+        <div><p>Yes. Add as many accounts per engine as you like: CLI logins, API keys, or your own OpenAI- or Anthropic-compatible server. Set a default and an order, and pin a bot to one account if you want.</p></div>
+      </details>
+      <details>
+        <summary>What happens when an account runs out of usage?</summary>
+        <div><p>If nothing has been shown yet in that turn, kwant moves it to the next account in your order, up to three tries, and says so in the chat. The account that ran out is skipped until it resets. You can turn this off for a bot.</p></div>
+      </details>
+      <details>
+        <summary>Can kwant send email or reply for me?</summary>
+        <div><p>No. Loose ends reads your inbox and GitHub without changing anything, and letters are read from photos you upload. kwant drafts the reply, and you copy it or open it in your mail app.</p></div>
+      </details>
+      <details>
+        <summary>Does Parallel Universe spend money or need a cloud account?</summary>
+        <div><p>No. It runs each option in a sealed-off Docker container on your own server and estimates prices from a dated table built into kwant. It needs Docker, and runs one comparison at a time.</p></div>
+      </details>
+      <details>
+        <summary>Can bots change settings or create other bots?</summary>
+        <div><p>Yes, when you ask: routines, channels, bots and more, up to 10 changes a turn, each on a card with Undo. Deleting a bot or archiving a space waits for your OK. Bots can't touch keys, sign-ins, approval rules or computer mode.</p></div>
+      </details>
+      <details>
+        <summary>Can I bring my bots from ChatGPT, Claude or Grok?</summary>
+        <div><p>Yes. kwant gives you a prompt to paste into the other app, and you paste its reply back, or upload a file such as a Claude Code subagent or a <code>SKILL.md</code>. Imported bots start with no tools and no keys, and their skills and routines wait for you.</p></div>
       </details>
     </div>
   </div>

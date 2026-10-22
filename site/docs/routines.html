@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Routines &amp; bot actions · kwant</title>
+<meta name="description" content="Schedule work in kwant with routines and follow-ups, let bots set things up for you with an Undo on every change, and decide how bots may hire new teammates.">
+<meta name="theme-color" content="#0d0a1d">
+<meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://kwant.si/docs/routines">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="kwant">
+<meta property="og:title" content="Routines &amp; bot actions · kwant">
+<meta property="og:description" content="Schedule work in kwant with routines and follow-ups, let bots set things up for you with an Undo on every change, and decide how bots may hire new teammates.">
+<meta property="og:url" content="https://kwant.si/docs/routines">
+<meta property="og:image" content="https://kwant.si/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="kwant: a team of AI bots discussing a feature and posting one summary">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="preload" href="../assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-h" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-h)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a class="hide-sm" href="../features.html">Features</a>
+      <a class="hide-sm" href="../#how">How it works</a>
+      <a class="hide-sm" href="../#faq">FAQ</a>
+      <a href="../docs/quickstart.html" aria-current="page">Docs</a>
+      <a class="btn btn-ghost" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="wrap docs">
+  <nav class="docs-nav" aria-label="Docs">
+    <h2>Docs</h2>
+    <div class="docs-group"><h3>Get started</h3><ul><li><a href="../docs/quickstart.html">Quickstart</a></li><li><a href="../docs/install.html">Install &amp; run</a></li></ul></div>
+    <div class="docs-group"><h3>Using kwant</h3><ul><li><a href="../docs/spaces.html">Spaces</a></li><li><a href="../docs/bots-and-teams.html">Bots &amp; teams</a></li><li><a href="../docs/accounts.html">Accounts &amp; profiles</a></li><li><a href="../docs/models.html">Models &amp; routing</a></li><li><a href="../docs/approvals.html">Approvals &amp; passwords</a></li></ul></div>
+    <div class="docs-group"><h3>Works on its own</h3><ul><li><a href="../docs/routines.html" aria-current="page">Routines &amp; bot actions</a></li><li><a href="../docs/memory-skills.html">Memory, skills &amp; search</a></li><li><a href="../docs/loose-ends.html">Loose ends &amp; letters</a></li><li><a href="../docs/parallel-universe.html">Parallel Universe</a></li></ul></div>
+    <div class="docs-group"><h3>Connect</h3><ul><li><a href="../docs/mcp.html">MCP tools</a></li><li><a href="../docs/browser.html">Browser</a></li></ul></div>
+  </nav>
+  <article class="prose">
+<p class="kicker">Docs</p>
+<h1>Routines &amp; bot actions</h1>
+<p class="intro">Bots keep working when you're not there. A routine runs a prompt on a schedule, a follow-up checks back once, and bots can set either up for you, with an Undo on every change.</p>
+
+<h2 id="routines">Routines</h2>
+<p>A routine sends a prompt to a bot on a schedule and posts the answer in a channel, the bot's direct chat or a thread. Create one with <strong>New routine</strong> in a bot's Routines tab or under <strong>Space settings → Routines</strong>, or ask a bot to do it.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v2-routines-2880.webp" data-caption="The routines panel: a Monday metrics digest, a paused competitor price scan whose last run failed, a weekday morning release check and a follow-up, each with Run now, History, Edit and Delete."><img src="../assets/media/v2-routines-1440.webp" srcset="../assets/media/v2-routines-1440.webp 1440w, ../assets/media/v2-routines-2880.webp 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The routines panel: a Monday metrics digest, a paused competitor price scan whose last run failed, a weekday morning release check and a follow-up, each with Run now, History, Edit and Delete."></a></div>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>Schedule</th><th>Runs</th></tr></thead>
+  <tbody>
+    <tr><td>Once</td><td>At one date and time</td></tr>
+    <tr><td>Daily</td><td>Every day at a time</td></tr>
+    <tr><td>Weekly</td><td>On the days you pick</td></tr>
+    <tr><td>Monthly</td><td>On a day of the month</td></tr>
+    <tr><td>Every…</td><td>Every 5 minutes up to every week</td></tr>
+    <tr><td>Custom</td><td>A cron rule</td></tr>
+  </tbody>
+</table></div>
+<p>Each routine has <strong>Run now</strong>, a history of its last 200 runs, edit, delete and an on/off switch. Archiving a space pauses its routines.</p>
+
+<h3 id="follow-ups">Follow-ups</h3>
+<p>A bot can set itself a one-off follow-up, for example to check a deploy in an hour. Only bots create follow-ups.</p>
+
+<h2 id="actions">Bots that set things up</h2>
+<p>Ask a bot for a routine, a channel or a new bot and it makes the change itself. Each change shows a card with what was done and an <strong>Undo</strong> button.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v2-action-undo-2880.webp" data-caption="TechLead created the channel #launch-waitlist when asked. The card says Done and has an Undo button."><img src="../assets/media/v2-action-undo-1440.webp" srcset="../assets/media/v2-action-undo-1440.webp 1440w, ../assets/media/v2-action-undo-2880.webp 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="TechLead created the channel #launch-waitlist when asked. The card says Done and has an Undo button."></a></div>
+</figure>
+<ul>
+  <li>Bots can create bots, spaces and channels, change settings, and create, update, pause, resume, run or delete routines.</li>
+  <li>At most 10 changes per turn, and only in the bot's own space.</li>
+  <li>Deleting a bot, deleting an account and archiving a space wait until you confirm.</li>
+  <li>Bots can't touch keys or secrets, engines or sign-ins, approval rules, computer mode, or install MCP servers.</li>
+</ul>
+
+<h2 id="hiring">Hiring</h2>
+<p>When a specialist would do a job better, a bot can propose hiring one. The card shows why, what the proposal is based on, and the new bot's model and tools.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v2-hire-card-2880.webp" data-caption="TechLead proposes hiring a Support bot, with the reason, what it is based on, its model and tools, and Deny, Accept once and Always accept buttons."><img src="../assets/media/v2-hire-card-1440.webp" srcset="../assets/media/v2-hire-card-1440.webp 1440w, ../assets/media/v2-hire-card-2880.webp 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="TechLead proposes hiring a Support bot, with the reason, what it is based on, its model and tools, and Deny, Accept once and Always accept buttons."></a></div>
+</figure>
+<ul>
+  <li><strong>Deny</strong>, <strong>Accept once</strong> or <strong>Always accept</strong>. You can undo a hire afterwards.</li>
+  <li>A proposal for a whole team has <strong>Approve all</strong>.</li>
+  <li>A bot can make one proposal per turn, and kwant remembers what you denied.</li>
+  <li>Each space sets its rule: <strong>Ask me each time</strong>, or <strong>Hire at once</strong> with at most 3 automatic hires per 24 hours.</li>
+</ul>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v2-hire-policy-2880.webp" data-caption="Space settings, Kwant bots tab: the bot list with Export and Edit, and the hiring rule, Ask me each time or Hire at once, with 0 of 3 automatic hires used in 24 hours."><img src="../assets/media/v2-hire-policy-1440.webp" srcset="../assets/media/v2-hire-policy-1440.webp 1440w, ../assets/media/v2-hire-policy-2880.webp 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Space settings, Kwant bots tab: the bot list with Export and Edit, and the hiring rule, Ask me each time or Hire at once, with 0 of 3 automatic hires used in 24 hours."></a></div>
+</figure>
+
+<h2 id="away">While you were away</h2>
+<p>Open <strong>While you were away</strong> from the sidebar (the badge counts what's new) or the inbox tab on a phone. It lists what changed since you last marked it seen, or the last 7 days the first time.</p>
+<ul>
+  <li><strong>Waiting on you:</strong> questions and approvals, which you can answer right there.</li>
+  <li><strong>Finished:</strong> handoffs and routine runs that are done.</li>
+  <li><strong>Failed or stuck:</strong> failed runs, and handoffs with no reply after 30 minutes.</li>
+</ul>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v2-away-2880.webp" data-caption="While you were away, with a question waiting for an answer, two finished items and two failed or stuck ones."><img src="../assets/media/v2-away-1440.webp" srcset="../assets/media/v2-away-1440.webp 1440w, ../assets/media/v2-away-2880.webp 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="While you were away, with a question waiting for an answer, two finished items and two failed or stuck ones."></a></div>
+</figure>
+<p>For a ping when something needs you, turn on browser notifications or add an HTTPS webhook such as ntfy in settings. Webhook messages carry only a title and one line.</p>
+
+    <nav class="pager" aria-label="Docs pages"><a class="prev" href="../docs/approvals.html"><small>Previous</small>Approvals &amp; passwords</a><a class="next" href="../docs/memory-skills.html"><small>Next</small>Memory, skills &amp; search</a></nav>
+  </article>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div>
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="kg-f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7dff"/><stop offset="1" stop-color="#5a43d6"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#kg-f)"/><path d="M10.5 21.5L16 11l5.5 10.5" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="10.5" r="3.2" fill="#fff"/><circle cx="10" cy="22" r="3.2" fill="#fff"/><circle cx="22" cy="22" r="3.2" fill="#f6b549"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Screens and clips on this site come from a real kwant build running sample data.</p>
+    </div>
+    <nav aria-label="Footer">
+      <a href="../docs/quickstart.html">Quickstart</a>
+      <a href="../docs/install.html">Install &amp; run</a>
+      <a href="../features.html">All features</a>
+      <a href="../docs/spaces.html">Spaces</a>
+      <a href="../docs/accounts.html">Accounts</a>
+      <a href="../docs/approvals.html">Approvals</a>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</footer>
+<script src="../assets/js/site.js" defer></script>
+</body>
+</html>

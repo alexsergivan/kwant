@@ -1,0 +1,46 @@
+title: Accounts & profiles
+description: Add several accounts per engine in kwant: CLI logins, API keys and your own OpenAI- or Anthropic-compatible server, with a default, a priority order and automatic failover.
+path: docs/accounts.html
+nav: accounts
+---
+<p class="kicker">Docs</p>
+<h1>Accounts &amp; profiles</h1>
+<p class="intro">Use every account you have. A space can hold several accounts per engine, for example a work Claude subscription, a personal one and an API key. When one runs out of usage, kwant moves the turn to the next.</p>
+<figure>
+  <div class="frame">{{shot:v2-accounts|Space settings, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Accounts live under <strong>Space settings → Accounts</strong>, and belong to that space.</figcaption>
+</figure>
+
+<h2 id="profiles">Account profiles</h2>
+<p>A profile is one account for an engine, for example a work Claude subscription and a personal one. Every engine starts with a <strong>This machine</strong> profile, which uses the CLI's own login, or the key from Settings or the environment.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Kind</th><th>Runs with</th><th>Signed in by</th></tr></thead>
+  <tbody>
+    <tr><td><code>system</code></td><td>The CLI's default config folder, or the Settings or environment key</td><td>Whatever you did on the host</td></tr>
+    <tr><td><code>cli_home</code></td><td>Its own config folder; host credential variables are removed</td><td>The in-app sign-in, or your own folder</td></tr>
+    <tr><td><code>api_key</code></td><td>The provider's API, with only the profile's key</td><td>The key you paste</td></tr>
+    <tr><td><code>custom_api</code></td><td>Your own server, with its key if it has one</td><td>A check of the server's model list</td></tr>
+  </tbody>
+</table></div>
+<p>Keys are write-only: no API response ever contains one, only whether it's set.</p>
+
+<h3 id="sign-in">Signing in a CLI profile</h3>
+<p>kwant runs the CLI's own login with the profile's folder. For Claude, open the link and paste the code shown back into kwant. For Codex and Grok, open the link and enter the code. A sign-in expires after 10 minutes.</p>
+
+<h3 id="failover">Failover</h3>
+<p>A bot can be pinned to a profile; otherwise the engine's default profile runs. When that profile is out of usage or signed out, and nothing has been shown or done yet in the turn, kwant moves the turn to the engine's next enabled profile by priority, up to 3 attempts, and the chat says so. A profile that ran out is skipped until its reset time. Overloads and rate limits are retried, not failed over. Turn failover off for a bot to keep it on its profile.</p>
+
+<h2 id="pin">Pinning a bot</h2>
+<p>In a bot's settings, pick the account it should use, or leave it on the engine's default. Clear <strong>Switch to the engine's next account when this one runs out of usage or is signed out</strong> to keep the bot on its account.</p>
+<figure>
+  <div class="frame">{{shot:v2-bot-account-pin|Editing QA: engine, model and the account Team gateway, ready, with the switch to move to the engine's next account when this one runs out, and the approval override.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+
+<h2 id="custom">Custom API accounts</h2>
+<p>Add an account with the server's base URL and, if needed, a key. kwant checks the server's model list when you save it and shows whether it's ready, unreachable or rejected the key. A space can have several custom accounts, and they belong to that space only.</p>
+<ul>
+  <li>Paste the base URL with or without <code>/chat/completions</code> or <code>/messages</code>: kwant trims it to the API root.</li>
+  <li>MCP tools are offered on OpenAI-chat servers. Anthropic-Messages servers run without tools and say so.</li>
+  <li>Custom API never falls back to the host's accounts.</li>
+</ul>
+<div class="note"><strong>Keep a space off this machine.</strong> Each space has a <strong>Use This machine</strong> switch. Turn it off to keep the space on its own accounts: its bots never fall back to the CLIs signed in on the computer running kwant.</div>

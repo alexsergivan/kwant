@@ -1,0 +1,46 @@
+title: Loose ends & letters
+description: kwant finds what you started and never finished in your chats, email and GitHub, and reads letters you photograph. It drafts the next step and never sends anything.
+path: docs/loose-ends.html
+nav: loose-ends
+---
+<p class="kicker">Docs</p>
+<h1>Loose ends &amp; letters</h1>
+<p class="intro">Loose ends looks for things that went quiet: a question nobody answered, a promise that lapsed, a reply you owe. It shows the quote each case is based on and drafts the next step. It never sends anything.</p>
+<figure>
+  <div class="frame">{{shot:v2-loose-ends-stalled|Loose ends. Designer has waited four days for your pick of a hero image, and you promised Mara a press kit by email. Each case quotes the message it is based on and has a draft reply.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+
+<h2 id="sources">Sources</h2>
+<ul>
+  <li><strong>Your bot chats, tasks and questions</strong> are always read: kwant's own threads, open questions and failed handoffs.</li>
+  <li><strong>Email (IMAP)</strong>, optional: a mail server with TLS or STARTTLS.</li>
+  <li><strong>GitHub</strong>, optional: your issues and pull requests. A GitHub Enterprise address works too.</li>
+</ul>
+<p>Add a source with <strong>Add a source</strong>. kwant tests the connection first, and the login goes into the password vault. Sources are read-only: email is opened without marking, moving or deleting anything, and GitHub is only read.</p>
+<figure>
+  <div class="frame">{{shot:v2-loose-ends|Loose ends with Open, Waiting and Snoozed tabs. The top case is a letter from a water company, with the quote it's based on and a draft reply.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+
+<h2 id="cases">Cases</h2>
+<p>A case opens when something has been quiet for 14 days, or 3 days in a kwant chat. kwant looks for:</p>
+<ul>
+  <li>someone waiting for your reply, or you waiting for theirs</li>
+  <li>a promise someone made you that lapsed, or one you made</li>
+  <li>a stale issue, a failed task, or an unanswered question</li>
+</ul>
+<p>Each case shows the quote it's based on and a draft: an email you open in your mail app or copy, a link to the GitHub issue, or the kwant chat. Then mark it done, say you followed up, snooze it for 3 days, a week or a month, or dismiss it, just this one or everything from that sender. Cases sit in the <strong>Open</strong>, <strong>Waiting</strong>, <strong>Snoozed</strong> and <strong>Done</strong> tabs. <strong>Scan now</strong> checks right away.</p>
+<p>Message text is never written to logs, and cases are kept for 90 days.</p>
+<div class="note"><strong>API only:</strong> an extra model check of each case and a weekly review are settings in kwant's API, not in the app. Both are off by default.</div>
+
+<h2 id="letters">Letters</h2>
+<p>Use <strong>Add a letter</strong> to photograph or upload a bill, form or notice: up to 5 pages of PNG, JPEG, WebP or PDF, 20 MB each.</p>
+<figure>
+  <div class="frame">{{shot:v2-letter|A scanned letter from a fictional water company next to what kwant read from it: who it's from, what they want and the deadline of November 5, each with the quote it came from and editable.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+<p>kwant reads who it's from, what they want, the deadline, where to reply, references, amounts and a checklist. Every field shows the line it came from and you can edit it. Fields kwant isn't sure of are marked for you to check.</p>
+<ul>
+  <li>Once the deadline is confirmed, kwant reminds you 7 days before, the day before and on the day, at 09:00. Notifications carry only counts, not the letter.</li>
+  <li>Reading photos needs a Claude account. A PDF with a text layer is read without a model.</li>
+  <li>The reply is a draft to copy or open in your mail app. Nothing is sent for you.</li>
+  <li>Deleting a letter removes its pages and everything read from them.</li>
+</ul>

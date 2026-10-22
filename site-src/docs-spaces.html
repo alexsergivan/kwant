@@ -1,0 +1,68 @@
+title: Spaces
+description: kwant spaces keep work, side projects and home apart. Each space has its own bots, teams, channels, routines, skills, tool servers, accounts and approval rules.
+path: docs/spaces.html
+nav: spaces
+---
+<p class="kicker">Docs</p>
+<h1>Spaces</h1>
+<p class="intro">A space is a separate area of kwant with its own bots and everything they use. Keep one for work, one for a side project and one for home, and nothing leaks between them.</p>
+<figure>
+  <div class="frame">{{shot:v2-spaces-rail|The space rail with three spaces, Trailhead, Pixel Quest and Home, each with its own icon and colour. Trailhead is open on #general.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The rail on the left shows every space. The open one is highlighted.</figcaption>
+</figure>
+
+<h2 id="contents">What belongs to a space</h2>
+<ul>
+  <li>Bots and teams, with their channels and direct chats</li>
+  <li>Routines and skills</li>
+  <li>MCP tool servers</li>
+  <li>Accounts, including custom API servers (see <a href="accounts.html">Accounts &amp; profiles</a>)</li>
+  <li>Its approval rule and hiring rule</li>
+</ul>
+<p>Search, "While you were away" and Loose ends always show the space you have open.</p>
+
+<h2 id="create">Creating and switching</h2>
+<p>Create a space from the rail. Give it a name of up to 60 characters, one of 8 icons and one of 8 colours. Every install starts with a <strong>Default</strong> space, which you can rename but not archive.</p>
+<p>Switch spaces by clicking the rail, from the space menu, or with <code>Ctrl</code> + <code>1</code>–<code>9</code> (<code>⌘</code> on a Mac). Each space has its own address, <code>/s/&lt;space&gt;/…</code>, so you can bookmark one or keep it in its own tab.</p>
+
+<h2 id="settings">Space settings</h2>
+<figure>
+  <div class="frame">{{shot:v2-space-settings|Space settings for a space, General tab: name, icon, colour, the approval rule with Ask before running commands, Ask only when risky and Don't ask, and Archive space.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>Tab</th><th>What's there</th></tr></thead>
+  <tbody>
+    <tr><td>General</td><td>Name, icon, colour, the approval rule, and <strong>Archive space</strong></td></tr>
+    <tr><td>Accounts</td><td>This space's accounts for each engine</td></tr>
+    <tr><td>Kwant bots</td><td>The bots in this space, and the hiring rule</td></tr>
+    <tr><td>Teams</td><td>Teams and their leads</td></tr>
+    <tr><td>Tools</td><td>MCP servers and which bots can use them</td></tr>
+    <tr><td>Skills</td><td>Skills for the whole space</td></tr>
+    <tr><td>Routines</td><td>Every routine in the space</td></tr>
+    <tr><td>Import &amp; export</td><td>Bring bots in, or export the space</td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="rules">Approval and hiring rules</h3>
+<p>Each space picks how bots ask before acting: <strong>Ask before running commands</strong>, <strong>Ask only when risky</strong> or <strong>Don't ask</strong>. A bot can follow the space or override it. See <a href="approvals.html">Approvals &amp; passwords</a>.</p>
+<p>The hiring rule decides what happens when a bot proposes a new teammate: <strong>Ask me each time</strong>, or <strong>Hire at once</strong> with at most 3 automatic hires in 24 hours. See <a href="routines.html#hiring">hiring</a>.</p>
+
+<h3 id="this-machine">Use This machine</h3>
+<p>When it's on, bots in the space can use the CLIs signed in on the computer running kwant. Turn it off to keep the space on its own accounts only. Bots never fall back to it.</p>
+
+<h2 id="archive">Archiving</h2>
+<p>Archive a space to put it away. Its routines pause and its bots, chats and settings are kept. Restore it any time from <strong>Archived spaces</strong>. kwant has no hard delete for spaces. When a bot asks to archive a space, it waits for your OK.</p>
+
+<h2 id="import">Import &amp; export</h2>
+<p><strong>Bring a bot from…</strong> Grok, ChatGPT, Claude or another app: kwant gives you a prompt to paste into that app, and you paste its reply back. Or upload a file: <code>.json</code>, <code>.md</code>, <code>.png</code>, <code>.zip</code> or <code>.txt</code> up to 20 MB, such as a Claude Code subagent, a <code>SKILL.md</code>, a character card, an OpenMausBot export or a <code>.kwant.json</code> file. A pasted reply can be up to 256 KB.</p>
+<figure>
+  <div class="frame">{{shot:v2-import|The import dialog: Bring a bot from Grok, ChatGPT, Claude or another app, or upload a file.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+<p>Imports start safe:</p>
+<ul>
+  <li>Imported bots have no tools until you give them some.</li>
+  <li>Imported skills wait for your approval.</li>
+  <li>Imported routines start paused.</li>
+  <li>Any keys in the file are removed.</li>
+</ul>
+<p>You can undo an import. Export a whole space or one bot as a file. Exports leave out chat history, files, tools and keys.</p>
