@@ -107,6 +107,7 @@ fn kind_label(kind: &str) -> &'static str {
     match kind {
         "sign_in" => "Sign in needed",
         "captcha" => "Human check needed",
+        "two_factor" => "Sign-in code needed",
         _ => "Your help is needed",
     }
 }
@@ -192,8 +193,8 @@ pub async fn browser_is_held(state: &AppState, target: &str) -> bool {
 // Agent tool
 
 pub const DESCRIPTION: &str = "Ask the person to do one step in the bot browser that only they can do: sign in \
-    (kind sign_in), solve a CAPTCHA or human check (kind captcha), or something else that needs them (kind other, \
-    e.g. approve a 2FA prompt). Never ask for passwords or codes in chat; use this instead. The browser is handed to \
+    (kind sign_in), solve a CAPTCHA or human check (kind captcha), enter a one-time code or approve a 2FA prompt \
+    (kind two_factor), or something else that needs them (kind other). Never ask for passwords or codes in chat; use this instead. The browser is handed to \
     them and your turn waits (a few minutes at most) until they press Done or Decline; the tool returns which. \
     After Done, look at the page again before you continue.";
 
@@ -205,7 +206,7 @@ pub fn tools() -> Vec<Value> {
             "type": "object",
             "properties": {
                 "reason": {"type": "string", "description": "What to do and why, in one sentence (max 300 characters)"},
-                "kind": {"type": "string", "enum": ["sign_in", "captcha", "other"]},
+                "kind": {"type": "string", "enum": ["sign_in", "captcha", "two_factor", "other"]},
                 "url": {"type": "string", "description": "The page it happens on (optional)"},
             },
             "required": ["reason", "kind"],

@@ -14,7 +14,7 @@ pub const MAX_URL_CHARS: usize = 300;
 /// Most open steps per agent; an agent can't flood the person.
 pub const MAX_OPEN_PER_KWANT: i64 = 5;
 
-pub const HUMAN_STEP_KINDS: [&str; 3] = ["sign_in", "captcha", "other"];
+pub const HUMAN_STEP_KINDS: [&str; 4] = ["sign_in", "captcha", "two_factor", "other"];
 /// "open", "done", "declined" or "cancelled" (its turn was stopped).
 pub const HUMAN_STEP_STATUSES: [&str; 4] = ["open", "done", "declined", "cancelled"];
 
@@ -94,7 +94,7 @@ pub fn clean_url(raw: &str) -> Option<String> {
 pub fn clean_request(kind: &str, reason: &str, url: Option<&str>) -> Result<(String, String, Option<String>), HumanStepError> {
     let kind = kind.trim();
     if !HUMAN_STEP_KINDS.contains(&kind) {
-        return Err(HumanStepError::Invalid("kind must be sign_in, captcha or other".into()));
+        return Err(HumanStepError::Invalid("kind must be sign_in, captcha, two_factor or other".into()));
     }
     let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
     if reason.is_empty() {
@@ -134,7 +134,7 @@ impl Database {
                 direct_kwant_id TEXT,
                 thread_id TEXT,
                 turn_id TEXT,
-                kind TEXT NOT NULL CHECK (kind IN ('sign_in', 'captcha', 'other')),
+                kind TEXT NOT NULL CHECK (kind IN ('sign_in', 'captcha', 'two_factor', 'other')),
                 reason TEXT NOT NULL,
                 url TEXT,
                 sandbox_target TEXT,
