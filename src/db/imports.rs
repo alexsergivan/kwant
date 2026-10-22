@@ -259,12 +259,7 @@ impl Database {
             .await?;
             created.teams.push(team_id);
             let channel = format!("team-{name}");
-            let (exists,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM channels WHERE space_id = ? AND name = ?")
-                .bind(space.as_str())
-                .bind(&channel)
-                .fetch_one(&mut *tx)
-                .await?;
-            if exists == 0 {
+            if super::team_channel_id(&mut *tx, space, &name).await?.is_none() {
                 created.channels.push(insert_channel(&mut tx, space, &channel, None, &lead, &members_json).await?);
             }
         }

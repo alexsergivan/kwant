@@ -11,6 +11,7 @@ import { SpaceSwitcher, SpaceTile } from './Spaces';
 import { isMac } from './LayaStatus';
 import { ApprovalsOffBadge } from './ApprovalsSetting';
 import { approvalsOff, spaceOffLine } from '../approvalMode';
+import { teamChannelOf } from '../teamChannel';
 
 export interface Kwant {
   id: string;
@@ -184,7 +185,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Channels to display: hide auto-created team channels to avoid duplication with Teams section
   const displayChannels = channels.filter(
-    (c) => !teams.some((t) => c.name === `team-${t.name}`)
+    (c) => !teams.some((t) => teamChannelOf(channels, t)?.id === c.id)
   );
 
   const isTeamActive = (team: Team) => {
@@ -193,7 +194,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
     return (
       (isChannel && selectedId === team.id) ||
-      channels.some((c) => c.id === selectedId && c.name === `team-${team.name}`)
+      (!!selectedId && teamChannelOf(channels, team)?.id === selectedId)
     );
   };
 

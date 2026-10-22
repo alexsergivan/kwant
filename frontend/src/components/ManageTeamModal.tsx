@@ -6,6 +6,7 @@ import { FolderBrowserModal } from './FolderBrowserModal';
 import { playSfx } from '../audio/chiptune';
 import { InstructionsField } from './Instructions';
 import { MAX_INSTRUCTIONS } from '../continuity';
+import { teamNameToSave } from '../teamChannel';
 
 interface ManageTeamModalProps {
   isOpen: boolean;
@@ -148,7 +149,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanName = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    const cleanName = teamNameToSave(name, team.name);
     if (!cleanName) {
       setError('Please provide a valid team name.');
       return;

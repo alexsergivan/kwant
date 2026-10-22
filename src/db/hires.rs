@@ -404,11 +404,11 @@ impl Database {
         let json = serde_json::to_string(&members)?;
         let mut tx = self.pool.begin().await?;
         sqlx::query("UPDATE teams SET member_kwants = ? WHERE id = ?").bind(&json).bind(team_id).execute(&mut *tx).await?;
-        let channel: Option<(String, String)> = sqlx::query_as("SELECT id, member_kwants FROM channels WHERE name = ? AND space_id = ?")
-            .bind(format!("team-{}", team.name))
-            .bind(&team.space_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+        let space = SpaceId::new(team.space_id.clone());
+        let channel: Option<(String, String)> = match super::team_channel_id(&mut *tx, &space, &team.name).await? {
+            Some(cid) => sqlx::query_as("SELECT id, member_kwants FROM channels WHERE id = ?").bind(cid).fetch_optional(&mut *tx).await?,
+            None => None,
+        };
         if let Some((cid, raw)) = channel {
             let mut cm: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
             if !cm.iter().any(|m| m == kwant_id) {
