@@ -680,7 +680,15 @@ mod tests {
             if let Some(profile) = chrome_on {
                 cmd.arg("chrome").arg(format!("--user-data-dir={}", profile.display()));
             }
-            Self(cmd.stdin(std::process::Stdio::piped()).spawn().unwrap())
+            let child = cmd.stdin(std::process::Stdio::piped()).spawn().unwrap();
+            // just after the spawn its command line can still read as empty, which made
+            // `profile_owner` miss it on busy machines; wait until `sh` shows up there
+            let started = std::time::Instant::now();
+            while !command_line(child.id()).is_some_and(|line| line.contains("read _")) {
+                assert!(started.elapsed() < Duration::from_secs(5), "test process did not start");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Self(child)
         }
         fn id(&self) -> u32 { self.0.id() }
     }
