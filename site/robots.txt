@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://kwant.pages.dev/sitemap.xml
+Sitemap: https://kwant.si/sitemap.xml

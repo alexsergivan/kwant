@@ -19,7 +19,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "site-src"
 OUT = ROOT / "site"
-SITE_URL = "https://kwant.pages.dev"  # Change once the real domain is chosen.
+SITE_URL = "https://kwant.si"
 GITHUB = "https://github.com/alexsergivan/kwant"
 
 DOCS = [

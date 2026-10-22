@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://kwant.pages.dev/docs/approvals</loc></url>
-  <url><loc>https://kwant.pages.dev/docs/bots-and-teams</loc></url>
-  <url><loc>https://kwant.pages.dev/docs/browser</loc></url>
-  <url><loc>https://kwant.pages.dev/docs/install</loc></url>
-  <url><loc>https://kwant.pages.dev/docs/mcp</loc></url>
-  <url><loc>https://kwant.pages.dev/docs/models</loc></url>
-  <url><loc>https://kwant.pages.dev/docs/quickstart</loc></url>
-  <url><loc>https://kwant.pages.dev/</loc></url>
+  <url><loc>https://kwant.si/docs/approvals</loc></url>
+  <url><loc>https://kwant.si/docs/bots-and-teams</loc></url>
+  <url><loc>https://kwant.si/docs/browser</loc></url>
+  <url><loc>https://kwant.si/docs/install</loc></url>
+  <url><loc>https://kwant.si/docs/mcp</loc></url>
+  <url><loc>https://kwant.si/docs/models</loc></url>
+  <url><loc>https://kwant.si/docs/quickstart</loc></url>
+  <url><loc>https://kwant.si/</loc></url>
 </urlset>
