@@ -1,0 +1,28 @@
+[package]
+name = "kwant"
+version = "0.1.0"
+edition = "2021"
+description = "kwant for Mac: the kwant server and its UI in one app, with a menu-bar icon"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/alexsergivan/kwant"
+publish = false
+
+# Its own workspace and lockfile: Tauri never enters the kwnt crate's build or the Linux CI
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+kwnt = { path = "../.." }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tokio = { version = "1.40", features = ["rt-multi-thread", "sync", "macros"] }
+serde_json = "1.0"
+dirs = "5.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+codegen-units = 4
+lto = "thin"
+strip = "debuginfo"
