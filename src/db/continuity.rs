@@ -29,12 +29,26 @@ pub struct Memory {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A chat turn in progress: where its reply would go.
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct RunningTurn {
+    pub turn_id: String,
+    pub kwant_id: String,
+    pub kwant_name: String,
+    pub channel_id: Option<String>,
+    pub direct_kwant_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub started_at: DateTime<Utc>,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum MemoryError {
     Empty,
     TooLong,
     TooMany,
     NotFound,
+    /// A bot tried to change a memory the person wrote
+    PersonWritten,
     Db(String),
 }
 
@@ -63,6 +77,11 @@ impl std::fmt::Display for MemoryError {
                 "this bot already has {MAX_MEMORIES_PER_KWANT} memories; remove one first"
             ),
             MemoryError::NotFound => write!(f, "no such memory"),
+            MemoryError::PersonWritten => write!(
+                f,
+                "the person wrote this memory, so only they can change or remove it. \
+                 Ask them in your reply if you think it should change"
+            ),
             MemoryError::Db(_) => write!(f, "database error"),
         }
     }
@@ -185,6 +204,15 @@ impl Database {
                 .execute(&self.pool)
                 .await;
         }
+
+        // Chat turns in progress, so a restart can say which replies it cut off
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS running_turns (\
+             turn_id TEXT PRIMARY KEY, kwant_id TEXT NOT NULL, kwant_name TEXT NOT NULL, \
+             channel_id TEXT, direct_kwant_id TEXT, thread_id TEXT, started_at DATETIME NOT NULL)",
+        )
+        .execute(&self.pool)
+        .await?;
 
         let had_index: Option<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'",
@@ -376,7 +404,8 @@ impl Database {
         })
     }
 
-    /// Only the kwant's own memory can be changed.
+    /// The person editing a memory. Only the kwant's own memory can be changed, and the edited
+    /// entry becomes the person's (`source = 'user'`), so the bot can no longer change or remove it.
     pub async fn update_memory(
         &self,
         kwant_id: &str,
@@ -385,7 +414,7 @@ impl Database {
     ) -> Result<Memory, MemoryError> {
         let text = clean_memory_text(text)?;
         let res = sqlx::query(
-            "UPDATE kwant_memories SET text = ?, updated_at = ? WHERE id = ? AND kwant_id = ?",
+            "UPDATE kwant_memories SET text = ?, source = 'user', updated_at = ? WHERE id = ? AND kwant_id = ?",
         )
         .bind(&text)
         .bind(Utc::now())
@@ -401,6 +430,64 @@ impl Database {
             .fetch_one(&self.pool)
             .await
             .map_err(Into::into)
+    }
+
+    /// A bot changing its own memory: like [`Self::update_memory`], but entries the person wrote
+    /// are refused.
+    pub async fn agent_update_memory(
+        &self,
+        kwant_id: &str,
+        id: &str,
+        text: &str,
+    ) -> Result<Memory, MemoryError> {
+        let text = clean_memory_text(text)?;
+        let res = sqlx::query(
+            "UPDATE kwant_memories SET text = ?, updated_at = ? \
+             WHERE id = ? AND kwant_id = ? AND source <> 'user'",
+        )
+        .bind(&text)
+        .bind(Utc::now())
+        .bind(id)
+        .bind(kwant_id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(self.why_agent_cannot_touch(kwant_id, id).await);
+        }
+        sqlx::query_as::<_, Memory>("SELECT id, kwant_id, text, source, created_at, updated_at FROM kwant_memories WHERE id = ?")
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// A bot removing its own memory; entries the person wrote are refused.
+    pub async fn agent_delete_memory(&self, kwant_id: &str, id: &str) -> Result<(), MemoryError> {
+        let res = sqlx::query(
+            "DELETE FROM kwant_memories WHERE id = ? AND kwant_id = ? AND source <> 'user'",
+        )
+        .bind(id)
+        .bind(kwant_id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(self.why_agent_cannot_touch(kwant_id, id).await);
+        }
+        Ok(())
+    }
+
+    async fn why_agent_cannot_touch(&self, kwant_id: &str, id: &str) -> MemoryError {
+        let found: Result<Option<(String,)>, _> =
+            sqlx::query_as("SELECT source FROM kwant_memories WHERE id = ? AND kwant_id = ?")
+                .bind(id)
+                .bind(kwant_id)
+                .fetch_optional(&self.pool)
+                .await;
+        match found {
+            Ok(Some(_)) => MemoryError::PersonWritten,
+            Ok(None) => MemoryError::NotFound,
+            Err(e) => e.into(),
+        }
     }
 
     pub async fn delete_memory(&self, kwant_id: &str, id: &str) -> Result<bool, DbError> {
@@ -634,6 +721,39 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn add_running_turn(&self, turn: &RunningTurn) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO running_turns (turn_id, kwant_id, kwant_name, channel_id, direct_kwant_id, thread_id, started_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&turn.turn_id)
+        .bind(&turn.kwant_id)
+        .bind(&turn.kwant_name)
+        .bind(&turn.channel_id)
+        .bind(&turn.direct_kwant_id)
+        .bind(&turn.thread_id)
+        .bind(turn.started_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn remove_running_turn(&self, turn_id: &str) -> Result<(), DbError> {
+        sqlx::query("DELETE FROM running_turns WHERE turn_id = ?").bind(turn_id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Takes every turn a previous run of kwnt left running (it stopped mid-reply).
+    pub async fn take_running_turns(&self) -> Result<Vec<RunningTurn>, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let turns = sqlx::query_as::<_, RunningTurn>("SELECT * FROM running_turns ORDER BY started_at")
+            .fetch_all(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM running_turns").execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(turns)
     }
 
     /// Runs left 'running' by a kwnt that stopped mid-run.

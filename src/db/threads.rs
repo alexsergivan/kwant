@@ -336,6 +336,37 @@ impl Database {
         .await?)
     }
 
+    /// The same task from the same lead to the same specialist, from the same chat, since `since`,
+    /// that is still open or finished with a result. One that failed, was cancelled or was
+    /// interrupted doesn't count, so retrying it right away is allowed.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn find_recent_delegation(
+        &self,
+        lead: &str,
+        specialist: &str,
+        origin_channel_id: Option<&str>,
+        origin_kwant_id: Option<&str>,
+        origin_thread_id: Option<&str>,
+        task: &str,
+        since: DateTime<Utc>,
+    ) -> Result<Option<Delegation>, DbError> {
+        Ok(sqlx::query_as::<_, Delegation>(
+            "SELECT * FROM delegations WHERE lead_kwant_id = ? AND specialist_kwant_id = ? \
+             AND origin_channel_id IS ? AND origin_kwant_id IS ? AND origin_thread_id IS ? \
+             AND task = ? AND created_at >= ? AND status IN ('queued', 'running', 'completed') \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(lead)
+        .bind(specialist)
+        .bind(origin_channel_id)
+        .bind(origin_kwant_id)
+        .bind(origin_thread_id)
+        .bind(task)
+        .bind(since)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
     pub async fn count_open_delegations(&self, lead: &str) -> Result<i64, DbError> {
         let (n,): (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM delegations WHERE lead_kwant_id = ? AND status IN ('queued', 'running')",

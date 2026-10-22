@@ -907,11 +907,11 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
             break;
         }
         let prompt = format!(
-            "{from} handed this conversation to you by mentioning you.\n\nThe user's original request:\n{user}\n\n{from} wrote:\n{text}\n\n\
+            "{from} handed this conversation to you by mentioning you.\n\nThe user's original request:\n{user}\n\n{text}\n\n\
             Reply to the user now with your own part of this, in character. Don't repeat what {from} already said.",
             from = from,
             user = user_prompt,
-            text = truncate_chars(&from_text, 4000),
+            text = crate::drivers::peer_message(&from, truncate_chars(&from_text, 4000)),
         );
         let _ = events.send(RuntimeEvent::DiscussionTurnStarted {
             speaker_id: kwant.id.clone(),
@@ -1042,7 +1042,7 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
     }
     let user = truncate_chars(user_prompt.trim(), 3000);
     let task = format!(
-        "The user asked in the team channel:\n{user}\n\n{lead} wrote, mentioning you:\n{text}",
+        "The user asked in the team channel:\n{user}\n\n{lead} mentioned you:\n{text}",
         lead = lead.name,
         text = truncate_chars(text.trim(), 4000),
     );
@@ -1253,6 +1253,7 @@ pub(super) async fn try_kwant_turn(
         turns: turns.clone(),
         tag: tag.clone(),
         outcome: "cancelled",
+        running_row: None,
     };
     let Some(_slot) = turns.acquire(&tag, &scope.cancel_token, &scope.state.event_sender).await else {
         return Err("stopped by the user".into());
@@ -1265,6 +1266,20 @@ pub(super) async fn try_kwant_turn(
         state: "running".into(),
         since: chrono::Utc::now(),
     });
+    // Kept until the turn ends, so a restart mid-reply is said in the chat (see interrupt_running_turns)
+    let running = crate::db::continuity::RunningTurn {
+        turn_id: tag.turn_id.clone(),
+        kwant_id: target_kwant.id.clone(),
+        kwant_name: target_kwant.name.clone(),
+        channel_id: scope.channel_id.clone(),
+        // Where scope.save puts the reply
+        direct_kwant_id: scope.kwant_id.clone(),
+        thread_id: scope.thread_id.clone(),
+        started_at: chrono::Utc::now(),
+    };
+    if scope.state.db.add_running_turn(&running).await.is_ok() {
+        ended.running_row = Some(scope.state.db.clone());
+    }
     let _ = scope.state.event_sender.send(RuntimeEvent::TurnStarted {
         kwant_id: target_kwant.id.clone(),
         context_id: Some(tag.context_id.clone()),
@@ -1288,6 +1303,43 @@ pub(super) async fn try_kwant_turn(
         (Err(_), false) => "failed",
     };
     reply.map_err(|why| truncate_chars(&scrub_urls(why.trim()), MAX_FAILURE_CHARS).to_string())
+}
+
+/// Says in each chat which reply a previous run of kwnt cut off by stopping mid-turn. Runs once at
+/// startup, before any new turn can start. The note's meta is
+/// `{"kind":"turn_interrupted","interrupted":true,"kwant_id","kwant_name","turn_id","started_at"}`.
+pub async fn interrupt_running_turns(state: &AppState) -> usize {
+    let Ok(turns) = state.db.take_running_turns().await else {
+        return 0;
+    };
+    for t in &turns {
+        let msg = NewMessage {
+            channel_id: t.channel_id.clone(),
+            direct_kwant_id: t.direct_kwant_id.clone(),
+            sender_role: "system".into(),
+            sender_id: "kwnt".into(),
+            text: format!("This reply from {} was interrupted by a restart. Send your message again to retry.", t.kwant_name),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 0,
+        };
+        let meta = json!({
+            "kind": "turn_interrupted",
+            "interrupted": true,
+            "kwant_id": t.kwant_id,
+            "kwant_name": t.kwant_name,
+            "turn_id": t.turn_id,
+            "started_at": t.started_at,
+        });
+        let _ = state.db.insert_message_with(&msg, &MessageExtra { thread_id: t.thread_id.clone(), meta: Some(meta) }).await;
+        if let Some(tid) = &t.thread_id {
+            let _ = state.db.touch_thread(tid).await;
+        }
+    }
+    if !turns.is_empty() {
+        tracing::info!(count = turns.len(), "marked chat replies cut short by a restart as interrupted");
+    }
+    turns.len()
 }
 
 /// `text` with every URL cut to scheme and host, so a failure reason that names a custom
@@ -1318,11 +1370,19 @@ struct TurnEndedGuard {
     turns: super::turns::TurnRegistry,
     tag: crate::drivers::events::TurnTag,
     outcome: &'static str,
+    /// Set once the turn is recorded as running; the record is removed when the turn ends.
+    running_row: Option<crate::db::Database>,
 }
 
 impl Drop for TurnEndedGuard {
     fn drop(&mut self) {
         self.turns.end_turn(&self.tag.turn_id);
+        if let (Some(db), Ok(rt)) = (self.running_row.take(), tokio::runtime::Handle::try_current()) {
+            let turn_id = self.tag.turn_id.clone();
+            rt.spawn(async move {
+                let _ = db.remove_running_turn(&turn_id).await;
+            });
+        }
         let tag = std::mem::take(&mut self.tag);
         let _ = self.sender.send(RuntimeEvent::TurnEnded {
             kwant_id: tag.kwant_id,
@@ -1378,6 +1438,22 @@ impl RanOn {
             "account": self.account,
         })
     }
+}
+
+/// Setting: seconds a streaming model may stay silent (outside tool runs) before its turn is stopped.
+pub const STALL_SETTING: &str = "turn_stall_secs";
+pub const DEFAULT_STALL_SECS: u64 = 120;
+
+/// The stall limit from settings: missing or unreadable means the default, 0 turns it off.
+async fn stall_limit(db: &crate::db::Database) -> Option<std::time::Duration> {
+    let secs = db
+        .get_setting(STALL_SETTING)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_STALL_SECS);
+    (secs > 0).then(|| std::time::Duration::from_secs(secs))
 }
 
 async fn run_kwant_turn_inner(
@@ -1639,12 +1715,15 @@ async fn run_kwant_turn_inner(
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();
+        let stall_after = stall_limit(&state.db).await;
         let turn_start = std::time::Instant::now();
         // Notices about profile switches, kept with the saved reply
         let mut notices: Vec<String> = Vec::new();
         let mut cancelled = false;
         let mut driver_result = None;
         let mut gave_up: Option<String> = None;
+        // Saved with the gave-up reply, so a client can offer Retry without reading its wording
+        let mut gave_up_meta: Option<serde_json::Value> = None;
         let mut ran_on: Option<RanOn> = None;
         if attempts.is_empty() {
             let text = format!(
@@ -1732,26 +1811,50 @@ async fn run_kwant_turn_inner(
                 account: super::profile_turn::account_name(profile.as_ref(), e),
                 choice: if unlisted_api { None } else { choice.clone() },
             });
+            let stall_limit = if driver.streams_progress() { stall_after } else { None };
             let (driver_tx, mut driver_rx) = mpsc::channel(32);
             let driver_task =
                 tokio::spawn(async move { driver.stream_turn(input, driver_tx).await });
+            // Stall watchdog: silence while no tool runs, for longer than the limit, stops the turn
+            let mut last_output = tokio::time::Instant::now();
+            let mut tools_running = 0usize;
+            let mut stalled = false;
 
             // The driver's TurnComplete is held back: it's re-sent with the kwant and profile,
             // or dropped when the turn moves to another profile.
             let mut held_complete = None;
             let mut side_effects = false;
             loop {
+                let stall_at = stall_limit.filter(|_| tools_running == 0).map(|d| last_output + d);
                 tokio::select! {
                     _ = cancel_token.cancelled() => {
                         cancelled = true;
                         driver_task.abort();
                         break;
                     }
+                    _ = async {
+                        match stall_at {
+                            Some(at) => tokio::time::sleep_until(at).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        stalled = true;
+                        driver_task.abort();
+                        break;
+                    }
                     event_opt = driver_rx.recv() => {
+                        last_output = tokio::time::Instant::now();
+                        match &event_opt {
+                            Some(RuntimeEvent::ToolCallPending { .. }) => tools_running += 1,
+                            Some(RuntimeEvent::ToolCallCompleted { .. }) => tools_running = tools_running.saturating_sub(1),
+                            _ => {}
+                        }
                         match event_opt {
                             Some(RuntimeEvent::TurnComplete { tokens, duration_ms, .. }) => {
                                 held_complete = Some((tokens, duration_ms));
                             }
+                            // Only resets the stall clock (above)
+                            Some(RuntimeEvent::Progress) => {}
                             Some(event) => {
                                 let visible = match &event {
                                     RuntimeEvent::TextDelta(t) => !t.trim().is_empty(),
@@ -1767,6 +1870,30 @@ async fn run_kwant_turn_inner(
                 }
             }
             if cancelled {
+                break;
+            }
+            if stalled {
+                let secs = stall_limit.map_or(0, |d| d.as_secs());
+                let text = format!(
+                    "⚠️ [{}] The model sent nothing for {secs} s, so this reply was stopped. Send your message again to retry.",
+                    target_kwant.name
+                );
+                tracing::warn!(kwant = %target_kwant.id, secs, "turn stopped by the stall watchdog");
+                event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
+                event_broadcast.send(RuntimeEvent::TurnComplete {
+                    tokens: 0,
+                    duration_ms: turn_start.elapsed().as_millis() as u64,
+                    kwant_id: Some(target_kwant.id.clone()),
+                    profile_id: profile.as_ref().map(|p| p.id.clone()),
+                });
+                gave_up = Some(text);
+                gave_up_meta = Some(json!({
+                    "kind": "turn_stalled",
+                    "stalled": true,
+                    "kwant_id": target_kwant.id,
+                    "kwant_name": target_kwant.name,
+                    "stall_secs": secs,
+                }));
                 break;
             }
             let result = driver_task.await;
@@ -1874,7 +2001,7 @@ async fn run_kwant_turn_inner(
                 reasoning_content: with_notices(opts.label.clone()),
                 ..scope.message("kwant", &target_kwant.name, text.clone())
             };
-            scope.save(&msg, None).await;
+            scope.save(&msg, gave_up_meta).await;
             return Err(text);
         } else if let Some(Ok(Ok(output))) = driver_result {
             // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM

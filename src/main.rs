@@ -152,6 +152,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Saved passwords left in a bot's folder by older versions move into the vault
             kwnt::server::passwords::migrate_all(&state).await;
             kwnt::server::passwords::warn_if_exposed(&state).await;
+            // Before anything can start a turn: say which replies the last run cut off
+            kwnt::server::routes::interrupt_running_turns(&state).await;
             kwnt::server::scheduler::spawn_background(state.clone(), shutdown.clone());
             kwnt::server::engine_routes::spawn_startup_check(state.clone());
             kwnt::server::parallel_routes::spawn_startup_sweep(state.clone());

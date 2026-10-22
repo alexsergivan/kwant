@@ -600,7 +600,7 @@ impl Driver for ApiDriver {
                 let (role, content) = match msg.sender_role.as_str() {
                     "kwant" if msg.sender_id == input.kwant.name => ("assistant", msg.text.clone()),
                     // Teammates' replies are context from other speakers, not this kwant's own turns
-                    "kwant" => ("user", format!("[{}]: {}", msg.sender_id, msg.text)),
+                    "kwant" => ("user", super::peer_message(&msg.sender_id, &msg.text)),
                     "system" => ("system", msg.text.clone()),
                     _ => ("user", msg.text.clone()),
                 };
