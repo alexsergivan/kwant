@@ -159,6 +159,7 @@ impl Database {
             db.migrate_bot_actions().await?;
             db.migrate_hires().await?;
             db.migrate_imports().await?;
+            db.repair_team_channels().await?;
             db.migrate_approval_modes().await?;
         }
         db.pool.close().await;
@@ -642,6 +643,45 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    /// Relinks each team whose chat lost it: a team renamed before renames carried the chat
+    /// along kept a chat called `team-<old name>`. When no channel is called `team-<name>` and
+    /// exactly one matches it ignoring case, that one is renamed and gets the team's lead and
+    /// members again. Never merges or deletes channels or messages; safe to run on every start.
+    /// Returns how many chats it relinked.
+    pub(super) async fn repair_team_channels(&self) -> Result<usize, DbError> {
+        let teams: Vec<(String, String, String, String)> =
+            sqlx::query_as("SELECT space_id, name, lead_kwant_id, member_kwants FROM teams").fetch_all(&self.pool).await?;
+        let mut fixed = 0;
+        for (space, name, lead, members) in teams {
+            let wanted = format!("team-{name}");
+            let rows: Vec<(String, String)> =
+                sqlx::query_as("SELECT id, name FROM channels WHERE space_id = ? AND name = ? COLLATE NOCASE")
+                    .bind(&space)
+                    .bind(&wanted)
+                    .fetch_all(&self.pool)
+                    .await?;
+            if rows.iter().any(|(_, n)| *n == wanted) {
+                continue;
+            }
+            match rows.as_slice() {
+                [(id, old)] => {
+                    sqlx::query("UPDATE channels SET name = ?, lead_kwant_id = ?, member_kwants = ? WHERE id = ?")
+                        .bind(&wanted)
+                        .bind(&lead)
+                        .bind(&members)
+                        .bind(id)
+                        .execute(&self.pool)
+                        .await?;
+                    tracing::info!(from = %old, to = %wanted, "relinked a team to its chat");
+                    fixed += 1;
+                }
+                [] => {}
+                _ => tracing::warn!(team = %name, "several chats match this team ignoring case; leaving them as they are"),
+            }
+        }
+        Ok(fixed)
     }
 
     // MCP servers
