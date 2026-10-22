@@ -48,24 +48,24 @@ const panel = (engines, profiles = [machine, personal], error = null) =>
 const card = (html, id) => html.split(`data-engine="${id}"`)[1].split('</li></ul></div></li>')[0];
 const summary = (html, id) => card(html, id).match(/data-summary="true"[^>]*>(.*?)<\/p>/)[1].replace(/<[^>]+>/g, '');
 
-// Oleks's setup: Claude on, the host login signed out, Personal signed in and Default.
-const oleksOn = engine('claude', { status: 'signed_out', detail: 'Not signed in: run `claude auth login`', uses: { profile_id: 'prf_personal', label: 'Personal' } });
+// Alex's setup: Claude on, the host login signed out, Personal signed in and Default.
+const alexOn = engine('claude', { status: 'signed_out', detail: 'Not signed in: run `claude auth login`', uses: { profile_id: 'prf_personal', label: 'Personal' } });
 
 test('ready comes from `ready`, not the host login or the model list', () => {
-  assert.ok(m.isUsable(oleksOn));
-  assert.equal(m.statusView(oleksOn).label, 'Ready');
-  assert.ok(!m.isUsable({ ...oleksOn, enabled: false }));
+  assert.ok(m.isUsable(alexOn));
+  assert.equal(m.statusView(alexOn).label, 'Ready');
+  assert.ok(!m.isUsable({ ...alexOn, enabled: false }));
   assert.ok(!m.isUsable(engine('claude', { ready: false })));
   // An older server without `ready` still reads the host check.
   assert.ok(m.isUsable(engine('claude', { ready: undefined })));
   assert.ok(!m.isUsable(engine('claude', { ready: undefined, status: 'signed_out' })));
   // Claude is fine through Personal, so nothing nags to sign in.
-  assert.ok(!m.claudeNeedsSignIn([oleksOn]));
-  assert.ok(m.claudeNeedsSignIn([{ ...oleksOn, ready: false, uses: null }]));
+  assert.ok(!m.claudeNeedsSignIn([alexOn]));
+  assert.ok(m.claudeNeedsSignIn([{ ...alexOn, ready: false, uses: null }]));
 });
 
-test('Oleks: one Claude card says bots use Personal, with This machine first and signed out', () => {
-  const html = panel([oleksOn]);
+test('Alex: one Claude card says bots use Personal, with This machine first and signed out', () => {
+  const html = panel([alexOn]);
   assert.match(html, /Engines &amp; accounts/);
   // The summary replaces the headline: Claude runs on Claude Code CLI through Personal.
   assert.match(html, /What runs your kwant bots/);
@@ -125,7 +125,7 @@ test('API-key accounts sit on the API engine card; an engine missing but with an
   assert.deepEqual(m.newAccountFor('claude'), { engine: 'claude', kind: 'cli_home' });
   assert.equal(m.newAccountFor('ollama'), null);
   const apiEngine = engine('anthropic_api', { status: 'not_installed', ready: true, uses: { profile_id: 'prf_key', label: 'Team key' } });
-  const html = panel([oleksOn, apiEngine, engine('ollama', { status: 'not_installed', ready: false })], [machine, personal, key]);
+  const html = panel([alexOn, apiEngine, engine('ollama', { status: 'not_installed', ready: false })], [machine, personal, key]);
   assert.match(html, /data-engine="anthropic_api" data-status="ready"/);
   assert.equal(summary(html, 'anthropic_api'), 'Bots use Team key');
   assert.match(html, /Not available on this computer \(1\)/);
@@ -134,8 +134,8 @@ test('API-key accounts sit on the API engine card; an engine missing but with an
 });
 
 test('accounts load and fail with a next step', () => {
-  assert.match(m.renderToStaticMarkup(h(m.EnginesPanel, { api: api([oleksOn]), accounts: accounts(null), now: NOW })), /Loading accounts…/);
-  const html = panel([oleksOn], null, 'Request failed (HTTP 500).');
+  assert.match(m.renderToStaticMarkup(h(m.EnginesPanel, { api: api([alexOn]), accounts: accounts(null), now: NOW })), /Loading accounts…/);
+  const html = panel([alexOn], null, 'Request failed (HTTP 500).');
   assert.match(html, /role="alert"[^>]*>.*Couldn’t load accounts: Request failed \(HTTP 500\)\./);
   assert.match(html, /Try again<\/button>/);
 });
@@ -155,12 +155,12 @@ const picker = (value, engines) =>
   m.renderToStaticMarkup(h(m.ModelPicker, { value, onChange: () => {}, engines, onOpenSettings: () => {}, onSignInClaude: () => {} }));
 
 test('the kwant form takes Claude as ready through Personal, even with no model list', () => {
-  const html = picker('claude', [oleksOn]);
+  const html = picker('claude', [alexOn]);
   assert.doesNotMatch(html, /can&#x27;t run right now/);
   assert.match(html, /<option value="claude"[^>]*>Claude · Claude Code CLI<\/option>/);
-  assert.deepEqual(m.pickHealth('auto', [oleksOn]), { kind: 'ok' });
+  assert.deepEqual(m.pickHealth('auto', [alexOn]), { kind: 'ok' });
   // Switched off: the hint says so instead of "No API key".
-  const off = [{ ...oleksOn, enabled: false, status: 'disabled', ready: false }, engine('anthropic_api', { status: 'not_installed', ready: false, detail: 'No API key: add one in Settings' })];
+  const off = [{ ...alexOn, enabled: false, status: 'disabled', ready: false }, engine('anthropic_api', { status: 'not_installed', ready: false, detail: 'No API key: add one in Settings' })];
   assert.deepEqual(m.pickHealth('claude', off), { kind: 'engine_unavailable', family: 'claude', reason: 'Switched off in Settings' });
 });
 
@@ -168,7 +168,7 @@ test('a new space with no keys still offers every engine an account can be added
   // What a fresh space sees: the CLIs signed in on this machine, no API keys, Ollama not running.
   const noKey = (id) => engine(id, { status: 'not_installed', detail: 'No API key: add one in Settings', ready: false, uses: null });
   const html = panel(
-    [oleksOn, engine('codex'), noKey('anthropic_api'), noKey('openai_api'), noKey('xai_api'), engine('ollama', { status: 'not_installed', ready: false })],
+    [alexOn, engine('codex'), noKey('anthropic_api'), noKey('openai_api'), noKey('xai_api'), engine('ollama', { status: 'not_installed', ready: false })],
     [machine],
   );
   for (const id of ['anthropic_api', 'openai_api', 'xai_api']) {

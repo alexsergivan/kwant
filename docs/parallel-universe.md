@@ -3,8 +3,8 @@
 Compares up to three ways to deploy one app ("stay on managed hosting, move to a VPS, or go serverless?") without
 a cloud account or any spending. The code is `src/parallel/`, `src/db/parallel.rs` and `src/server/parallel_routes.rs`.
 
-**Status: slice 2.** This covers the scenario store, the container harness, the price table, runs and the comparison report.
-The multi-bot advisor (a bot per option) is slice 3, if wanted. The full design is in `/home/maus/shared/ship-software-safely/parallel-universe/design.md`.
+This covers the scenario store, the container harness, the price table, runs and the comparison report.
+A multi-bot advisor (one bot per option) is not built yet.
 
 ## Where numbers come from
 

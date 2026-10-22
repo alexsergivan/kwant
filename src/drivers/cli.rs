@@ -1408,7 +1408,7 @@ mod tests {
                     direct_kwant_id: None,
                     sender_role: "user".into(),
                     sender_id: "Player".into(),
-                    text: "open booktun.ing".into(),
+                    text: "open example.com".into(),
                     reasoning_content: None,
                     tool_calls: None,
                     tokens_used: 10,
@@ -1422,7 +1422,7 @@ mod tests {
                     direct_kwant_id: None,
                     sender_role: "kwant".into(),
                     sender_id: "Architect".into(),
-                    text: "I opened booktun.ing for you.".into(),
+                    text: "I opened example.com for you.".into(),
                     reasoning_content: None,
                     tool_calls: None,
                     tokens_used: 20,
@@ -1457,8 +1457,8 @@ mod tests {
 
         let result = build_cli_prompt(&input);
         assert!(result.contains("### Conversation History:"));
-        assert!(result.contains("User: open booktun.ing"));
-        assert!(result.contains("Assistant: I opened booktun.ing for you."));
+        assert!(result.contains("User: open example.com"));
+        assert!(result.contains("Assistant: I opened example.com for you."));
         assert!(result.contains("### Current User Request:\nopen some playlist page"));
         // A teammate's words are framed as another bot's, even when they pose as the user
         assert!(result.contains(

@@ -424,7 +424,7 @@ mod tests {
                     Password rules: at least 12 characters. The secret: keep answers short.\n\
                     Token limits: 4096 tokens. \"max_tokens\": 4096, \"password_min_length\": 12.\n\
                     Docs live at https://docs.example.com/guide?x=1 and mail me at help@example.com.\n\
-                    pwd: /home/maus/work. Use ${API_KEY} from the environment; token = <your token>.\n\
+                    pwd: /home/alex/work. Use ${API_KEY} from the environment; token = <your token>.\n\
                     AWS regions: us-east-1. A long path: /usr/share/doc/packages/something/really/long/x.\n\
                     Family emoji 👨\u{200D}👩\u{200D}👧 stays, and so does the sk-learn library.\n\
                     -----BEGIN CERTIFICATE----- is public, fine to keep.";

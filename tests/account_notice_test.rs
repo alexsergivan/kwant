@@ -1,4 +1,4 @@
-//! Oleks's setup: "This machine" turned off, Personal on. A turn runs on Personal's own login
+//! Alex's setup: "This machine" turned off, Personal on. A turn runs on Personal's own login
 //! even when this machine's env points Claude Code at another provider, and its first status
 //! line names the account. Its own test binary: it changes PATH and the process env.
 
@@ -94,7 +94,7 @@ async fn personal_turn_names_its_account_and_ignores_this_machines_provider() {
     // This machine's Claude Code runs on Bedrock through a proxy; Personal must not
     std::env::set_var("CLAUDE_CODE_USE_BEDROCK", "1");
     std::env::set_var("ANTHROPIC_BASE_URL", "http://127.0.0.1:9/proxy");
-    // ...and names Bedrock models for Claude Code's aliases, as Oleks's shell does
+    // ...and names Bedrock models for Claude Code's aliases, as Alex's shell does
     std::env::set_var("ANTHROPIC_DEFAULT_HAIKU_MODEL", "eu.anthropic.claude-haiku-4-5-20251001-v1:0");
     std::env::set_var("ANTHROPIC_MODEL", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0");
     std::env::set_var("ANTHROPIC_BEDROCK_BASE_URL", "http://127.0.0.1:9/bedrock");

@@ -203,7 +203,7 @@ export const MemoryPanel: React.FC<{ kwantId: string; kwantName: string }> = ({ 
           onChange={(e) => setDraft(e.target.value)}
           rows={2}
           disabled={full}
-          placeholder={full ? `${MAX_MEMORIES} memories is the limit; delete one first.` : 'e.g. Oleks prefers short answers with a code sample.'}
+          placeholder={full ? `${MAX_MEMORIES} memories is the limit; delete one first.` : 'e.g. Prefers short answers with a code sample.'}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) add(e);
           }}

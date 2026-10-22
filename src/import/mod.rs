@@ -798,7 +798,7 @@ mod tests {
     #[test]
     fn schedule_text_time_zones() {
         let berlin = Some((cron("0 7 * * *", "Europe/Berlin"), None));
-        // Oleks's first real import, 2026-10-19
+        // Alex's first real import, 2026-10-19
         assert_eq!(schedule_from_text("0 7 * * * (Europe/Berlin)"), berlin);
         assert_eq!(schedule_from_text("0 7 * * * Europe/Berlin"), berlin);
         assert_eq!(schedule_from_text("0 7 * * * [Europe/Berlin]"), berlin);

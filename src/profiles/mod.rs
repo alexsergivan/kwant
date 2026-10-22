@@ -508,7 +508,7 @@ mod tests {
         for provider in ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_BASE_URL"] {
             assert!(env.remove.contains(&provider.to_string()), "{provider}");
         }
-        // Oleks's Bedrock shell: its model names must not reach a profile's own login
+        // Alex's Bedrock shell: its model names must not reach a profile's own login
         let shell = [
             "ANTHROPIC_DEFAULT_HAIKU_MODEL",
             "ANTHROPIC_DEFAULT_SONNET_MODEL",

@@ -549,7 +549,7 @@ async fn github_mock() -> (String, Arc<Mutex<Vec<String>>>) {
                 if !authed(&h) {
                     return (StatusCode::UNAUTHORIZED, Json(json!({"message": "Bad credentials"})));
                 }
-                (StatusCode::OK, Json(json!({"login": "oleks", "type": "User"})))
+                (StatusCode::OK, Json(json!({"login": "alex", "type": "User"})))
             }),
         )
         .route(
@@ -571,7 +571,7 @@ async fn github_mock() -> (String, Arc<Mutex<Vec<String>>>) {
                             "number": 12, "title": "Release checklist for 2.0", "body": "The checklist for the 2.0 release.",
                             "state": "open", "html_url": "https://github.com/kwant/kwant/issues/12",
                             "repository_url": "https://api.github.com/repos/kwant/kwant",
-                            "user": {"login": "oleks", "type": "User"}, "assignees": [], "created_at": old, "comments": 1
+                            "user": {"login": "alex", "type": "User"}, "assignees": [], "created_at": old, "comments": 1
                         }])),
                     )
                 }

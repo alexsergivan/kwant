@@ -4,8 +4,7 @@ The person photographs or uploads a letter (a bill, a council form, a tax notice
 want, by when and what to quote back, and puts it in Loose ends as a case with a reply draft and deadline reminders. Nothing is ever
 sent: the draft is copy or `mailto:` only. The code is `src/documents/`, `src/db/documents.rs` and `src/server/document_routes.rs`.
 
-**Status: backend slice.** The API, reading, fields, reminders and delete are here; the UI is Pixel's. The plan is
-`/home/maus/shared/ship-software-safely/camera-to-completed/plan.md`.
+The app shows letters in **Loose ends → Letters**. This page covers the API, reading, fields, reminders and delete.
 
 ## API
 

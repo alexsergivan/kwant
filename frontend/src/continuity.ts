@@ -1,5 +1,4 @@
 // Agent continuity: pinned instructions, chat search, kwant memory, routines and notifications.
-// Shapes follow /home/maus/shared/ship-software-safely/agent-continuity/contract.md ("Lin's implementation notes").
 
 import type { DeletedSkill, Skill } from './skills';
 

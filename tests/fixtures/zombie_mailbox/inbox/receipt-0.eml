@@ -1,5 +1,5 @@
 From: Orders <orders@shop.example>
-To: Oleks Example <oleks@example.org>
+To: Alex Example <alex@example.org>
 Subject: Your order 88213 receipt
 Date: {{DATE:33}}
 Message-ID: <receipt-0@fixture.example>

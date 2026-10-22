@@ -1,4 +1,4 @@
-// Oleks (2026-10-21): "Ask only when risky" next to Ask and Don't ask, so bots get on with ordinary
+// Alex (2026-10-21): "Ask only when risky" next to Ask and Don't ask, so bots get on with ordinary
 // work in their folder and a card shows only for risky calls.
 import assert from 'node:assert/strict';
 import test from 'node:test';

@@ -324,7 +324,7 @@ export const ScenarioForm: React.FC<{
       </div>
 
       <div className={`${card} space-y-3`}>
-        <TextInput label="Name" value={d.title} onChange={(v) => set({ title: v })} error={shown.title} placeholder="Move booktun.ing off managed hosting?" />
+        <TextInput label="Name" value={d.title} onChange={(v) => set({ title: v })} error={shown.title} placeholder="Move my blog off managed hosting?" />
         <Field label="The question (optional)" error={shown.question}>
           {(id, desc) => (
             <textarea

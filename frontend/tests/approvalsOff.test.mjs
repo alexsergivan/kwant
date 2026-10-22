@@ -1,4 +1,4 @@
-// Oleks (2026-10-20): a switch that turns every approval off, per space with a per-bot override,
+// Alex (2026-10-20): a switch that turns every approval off, per space with a per-bot override,
 // and a marker wherever a bot runs without asking.
 import assert from 'node:assert/strict';
 import test from 'node:test';

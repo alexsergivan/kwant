@@ -1,5 +1,5 @@
 From: Pia Photo <pia@photo.example>
-To: Oleks Example <oleks@example.org>
+To: Alex Example <alex@example.org>
 Subject: Re: Wedding photos
 Date: {{DATE:30}}
 Message-ID: <photos-1@fixture.example>
@@ -8,4 +8,4 @@ References: <photos-0@fixture.example>
 MIME-Version: 1.0
 Content-Type: text/plain; charset=utf-8
 
-Hi Oleks! Editing is almost done, I'll send you the link soon.
+Hi Alex! Editing is almost done, I'll send you the link soon.

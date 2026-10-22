@@ -1,10 +1,10 @@
-//! Routing in a space of unrelated bots: Oleks's "create a team to build a new startup…" went to
+//! Routing in a space of unrelated bots: Alex's "create a team to build a new startup…" went to
 //! FitnessCoach because the message shared one everyday word with it and it led the space.
 use kwnt::db::models::{Kwant, Team};
 use kwnt::router::team::{is_team_building_request, pick_member, LayaGuess};
 use kwnt::router::{heuristic_team_decision, LayaRouter, TeamDecision};
 
-const OLEKS: &str = "create a team to build a new startup. Analize what bots we need and do everythign needed";
+const ALEX: &str = "create a team to build a new startup. Analize what bots we need and do everythign needed";
 
 fn bot(id: &str, name: &str, title: &str, persona: &str) -> Kwant {
     Kwant {
@@ -64,10 +64,10 @@ fn unsure_frontend(members: &[Kwant]) -> Option<LayaGuess<'_>> {
 }
 
 #[test]
-fn olekss_message_is_a_team_building_request_for_the_lead() {
+fn alexs_message_is_a_team_building_request_for_the_lead() {
     let members = space();
     for laya in [None, unsure_frontend(&members)] {
-        let pick = pick_member(OLEKS, "fit", &members, laya, "channel lead").unwrap();
+        let pick = pick_member(ALEX, "fit", &members, laya, "channel lead").unwrap();
         assert_eq!((pick.kwant.id.as_str(), pick.basis), ("fit", "team"));
         assert!(pick.reason.starts_with("This asks to put a team of bots together"), "{}", pick.reason);
         assert!(pick.reason.contains("hire card"), "{}", pick.reason);
@@ -78,17 +78,17 @@ fn olekss_message_is_a_team_building_request_for_the_lead() {
 #[test]
 fn a_team_request_settles_without_a_discussion() {
     let members = space();
-    match heuristic_team_decision(OLEKS, &team(), &members) {
+    match heuristic_team_decision(ALEX, &team(), &members) {
         TeamDecision::Direct { kwant_id, basis, .. } => assert_eq!((kwant_id.as_str(), basis.as_str()), ("fit", "team")),
         other => panic!("expected the lead to take it, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn channel_route_for_olekss_message_states_the_intent() {
+async fn channel_route_for_alexs_message_states_the_intent() {
     let members = space();
     let laya = LayaRouter::new("http://127.0.0.1:9".into());
-    let r = laya.route_channel_query_detailed(OLEKS, "general", "fit", &members).await;
+    let r = laya.route_channel_query_detailed(ALEX, "general", "fit", &members).await;
     assert_eq!((r.kwant_id.as_str(), r.basis.as_str()), ("fit", "team"));
     assert!(r.reason.contains("team of bots"), "{}", r.reason);
 }
@@ -96,7 +96,7 @@ async fn channel_route_for_olekss_message_states_the_intent() {
 #[test]
 fn team_building_requests_are_recognised() {
     for msg in [
-        OLEKS,
+        ALEX,
         "Create a team for my podcast",
         "hire a designer bot",
         "Hire a copywriter",

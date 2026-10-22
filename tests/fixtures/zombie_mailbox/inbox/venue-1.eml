@@ -1,5 +1,5 @@
 From: Venue <events@venue.example>
-To: Oleks Example <oleks@example.org>
+To: Alex Example <alex@example.org>
 Subject: Re: Venue booking for the 12th
 Date: {{DATE:29}}
 Message-ID: <venue-1@fixture.example>
@@ -8,7 +8,7 @@ References: <venue-0@fixture.example>
 MIME-Version: 1.0
 Content-Type: text/plain; charset=utf-8
 
-Hi Oleks,
+Hi Alex,
 
 Yes, it's confirmed for the 12th.
 

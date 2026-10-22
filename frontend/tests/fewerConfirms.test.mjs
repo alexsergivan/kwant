@@ -150,7 +150,7 @@ const skill = (over = {}) => ({
   id: 's1', kwant_id: 'k1', name: 'weekly-report', description: 'Friday report', body: 'steps', status: 'enabled', source: 'user', proposed_by: null,
   replaces_id: null, created_at: '2026-10-17T10:00:00Z', updated_at: '2026-10-17T10:00:00Z', reviewed_at: null, ...over,
 });
-const memory = { id: 'm1', text: 'Oleks likes short replies', source: 'user', created_at: '2026-10-20T08:00:00Z', updated_at: '2026-10-20T08:00:00Z' };
+const memory = { id: 'm1', text: 'Alex likes short replies', source: 'user', created_at: '2026-10-20T08:00:00Z', updated_at: '2026-10-20T08:00:00Z' };
 const noop = () => {};
 const none = async () => {};
 

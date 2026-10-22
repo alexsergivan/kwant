@@ -1,4 +1,4 @@
-From: Oleks Example <oleks@example.org>
+From: Alex Example <alex@example.org>
 To: Billing <billing@supplier.example>
 Subject: Invoice 2026-118 payment
 Date: {{DATE:26}}
@@ -10,4 +10,4 @@ Hello,
 
 Can you confirm you received payment for invoice 2026-118?
 
-Oleks
+Alex

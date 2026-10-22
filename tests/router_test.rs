@@ -415,7 +415,7 @@ async fn test_ollama_not_offered_when_server_is_down() {
     assert_eq!(kwnt::drivers::first_ollama_model("http://127.0.0.1:59998").await, None);
 }
 
-/// Oleks's finding 4: in a Go trading repo, "Create a new test simple strategy" went to Frontend
+/// Alex's finding 4: in a Go trading repo, "Create a new test simple strategy" went to Frontend
 /// because Laya only compares titles. A code request goes to the role it belongs to; anything that
 /// matches no role, or several, goes to the lead; the reason says which.
 fn trading_team() -> (Team, Vec<Kwant>) {
@@ -497,7 +497,7 @@ fn code_requests_go_to_the_matching_role_and_the_rest_to_the_lead() {
 #[test]
 fn a_weak_laya_pick_no_longer_overrides_the_role() {
     let (team, members) = trading_team();
-    // What Oleks saw: Laya sure enough to discuss, and its lead pick is Frontend
+    // What Alex saw: Laya sure enough to discuss, and its lead pick is Frontend
     let laya = json!({"answers": {
         "team_decision": {"choice": "discuss", "probabilities": {"discuss": 0.86, "direct": 0.14}},
         "lead_kwant": {"choice": "Pixel", "probabilities": {"Pixel": 0.4, "Lin": 0.2, "Ada": 0.2, "Ops": 0.1, "Rigel": 0.1}}

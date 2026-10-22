@@ -1,4 +1,4 @@
-// Oleks's Mac findings (2026-10-19): Delete bot, team hires on one card, readable approval cards
+// Alex's Mac findings (2026-10-19): Delete bot, team hires on one card, readable approval cards
 // for Claude CLI built-in tools, a short tool list in Import, and an honest routing line.
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -31,7 +31,7 @@ const buttons = (html) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g
 
 // ---------------------------------------------------------------- built-in tool approvals
 
-const bash = { id: 'b1', tool_name: 'Bash', details: { source: 'claude_builtin', tool: 'Bash', kwant_name: 'Frontend', cwd: '/Users/oleks/trader', arguments: { command: 'go test ./internal/strategy/', description: 'Run the strategy tests' } } };
+const bash = { id: 'b1', tool_name: 'Bash', details: { source: 'claude_builtin', tool: 'Bash', kwant_name: 'Frontend', cwd: '/Users/alex/trader', arguments: { command: 'go test ./internal/strategy/', description: 'Run the strategy tests' } } };
 
 test('a Bash approval shows who, the command and the folder, with the three choices, and no raw JSON', () => {
   const html = m.approval(bash);
@@ -39,18 +39,18 @@ test('a Bash approval shows who, the command and the folder, with the three choi
   assert.match(t, /Frontend wants to run a command\./);
   assert.match(t, /Run the strategy tests/);
   assert.match(html, /<pre[^>]*>go test \.\/internal\/strategy\/<\/pre>/);
-  assert.match(t, /In folder: \/Users\/oleks\/trader/);
+  assert.match(t, /In folder: \/Users\/alex\/trader/);
   assert.deepEqual(buttons(html), ['Deny', 'Allow Once', 'Always this session']);
   assert.doesNotMatch(html, /&quot;source&quot;|claude_builtin|kwant_name/);
 });
 
 test('a Write outside its folder names the file, the size and its own folder', () => {
-  const html = m.approval({ id: 'w1', tool_name: 'Write', details: { source: 'claude_builtin', tool: 'Write', kwant_name: 'Frontend', cwd: '/Users/oleks/bots/frontend', outside_folder: true, arguments: { file_path: '/Users/oleks/trader/internal/strategy/smacross.go', content: 'package strategy\n\nfunc x() {}\n' } } });
+  const html = m.approval({ id: 'w1', tool_name: 'Write', details: { source: 'claude_builtin', tool: 'Write', kwant_name: 'Frontend', cwd: '/Users/alex/bots/frontend', outside_folder: true, arguments: { file_path: '/Users/alex/trader/internal/strategy/smacross.go', content: 'package strategy\n\nfunc x() {}\n' } } });
   const t = text(html);
   assert.match(t, /Frontend wants to write a file outside its own folder\./);
-  assert.match(t, /\/Users\/oleks\/trader\/internal\/strategy\/smacross\.go/);
+  assert.match(t, /\/Users\/alex\/trader\/internal\/strategy\/smacross\.go/);
   assert.match(t, /Write 4 lines/);
-  assert.match(t, /Its folder: \/Users\/oleks\/bots\/frontend/);
+  assert.match(t, /Its folder: \/Users\/alex\/bots\/frontend/);
   assert.doesNotMatch(t, /package strategy/, 'file contents are not dumped on the card');
 });
 

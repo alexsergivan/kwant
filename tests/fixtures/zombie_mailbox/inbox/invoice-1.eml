@@ -1,5 +1,5 @@
 From: Billing <billing@supplier.example>
-To: Oleks Example <oleks@example.org>
+To: Alex Example <alex@example.org>
 Subject: Re: Invoice 2026-118 payment
 Date: {{DATE:24}}
 Message-ID: <invoice-1@fixture.example>
@@ -8,7 +8,7 @@ References: <invoice-0@fixture.example>
 MIME-Version: 1.0
 Content-Type: text/plain; charset=utf-8
 
-Hello Oleks,
+Hello Alex,
 
 Payment received. The invoice is paid in full.
 

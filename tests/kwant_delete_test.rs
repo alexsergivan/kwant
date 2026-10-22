@@ -75,7 +75,7 @@ async fn the_person_deletes_any_bot_with_its_history() {
     state.db.insert_message(&dm(&bot.id, "user", "hello")).await.unwrap();
     state.db.insert_message(&dm(&bot.id, "kwant", "hi")).await.unwrap();
     let thread = state.db.create_thread(&bot.id, "Strategy", "chat", None, "user").await.unwrap();
-    state.db.add_memory(&bot.id, "Oleks trades in Go.", "user").await.unwrap();
+    state.db.add_memory(&bot.id, "Alex trades in Go.", "user").await.unwrap();
     let (s, v) = call(&app, "POST", "/api/skills", Some(json!({"name": "backtest", "description": "How to backtest", "body": "1. run", "kwant_id": bot.id}))).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     let routine = json!({"kwant_id": bot.id, "name": "Digest", "instructions": "Summarise.", "schedule": {"type": "interval", "every_minutes": 60}});

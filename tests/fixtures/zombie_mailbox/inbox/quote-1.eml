@@ -1,5 +1,5 @@
 From: Bob Builder <bob@builders.example>
-To: Oleks Example <oleks@example.org>
+To: Alex Example <alex@example.org>
 Subject: Re: Kitchen renovation quote
 Date: {{DATE:28}}
 Message-ID: <quote-1@fixture.example>
@@ -8,7 +8,7 @@ References: <quote-0@fixture.example>
 MIME-Version: 1.0
 Content-Type: text/plain; charset=utf-8
 
-Hi Oleks,
+Hi Alex,
 
 Thanks, I'll get back to you with a quote by Friday.
 

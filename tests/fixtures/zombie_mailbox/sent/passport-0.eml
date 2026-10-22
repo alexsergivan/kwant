@@ -1,4 +1,4 @@
-From: Oleks Example <oleks@example.org>
+From: Alex Example <alex@example.org>
 To: Passport Office <appointments@gov.example>
 Subject: Passport renewal appointment
 Date: {{DATE:21}}
@@ -10,4 +10,4 @@ Hello,
 
 Is there an appointment available next month for a passport renewal?
 
-Oleks
+Alex

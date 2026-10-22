@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use zeroize::Zeroizing;
 
-const USER: &str = "oleks@example.org";
+const USER: &str = "alex@example.org";
 const PASSWORD: &str = "throwaway-test-only";
 
 type Session = async_imap::Session<tokio::net::TcpStream>;

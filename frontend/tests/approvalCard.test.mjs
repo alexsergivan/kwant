@@ -12,7 +12,7 @@ const m = await loadBundled(`
 `);
 
 // Shaped like approve_local_shell in src/server/computer.rs.
-const shellTicket = (command, cwd = '/Users/oleks/project') => ({
+const shellTicket = (command, cwd = '/Users/alex/project') => ({
   id: 'a1',
   tool_name: 'execute_shell',
   details: { source: 'local_shell', tool: 'execute_shell', arguments: { command, cwd }, kwant_id: 'team-1' },
@@ -24,7 +24,7 @@ test('a local shell ticket shows the command and folder, without Always Allow', 
   const html = render(shellTicket('ls -la && git status'));
   assert.match(html, /run a command on your computer/);
   assert.match(html, /<pre[^>]*whitespace-pre-wrap[^>]*>ls -la &amp;&amp; git status<\/pre>/);
-  assert.match(html, /In folder:.*\/Users\/oleks\/project/);
+  assert.match(html, /In folder:.*\/Users\/alex\/project/);
   assert.match(html, /Allow Once/);
   assert.match(html, /Deny/);
   assert.doesNotMatch(html, /Always Allow/);

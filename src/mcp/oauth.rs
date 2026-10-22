@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn validates_callback_origin() {
-        assert_eq!(validate_origin("https://maus.jumpin.games", &["maus.jumpin.games"]).unwrap(), "https://maus.jumpin.games");
+        assert_eq!(validate_origin("https://app.example.com", &["app.example.com"]).unwrap(), "https://app.example.com");
         assert_eq!(validate_origin("http://127.0.0.1:7777", &["127.0.0.1:7777"]).unwrap(), "http://127.0.0.1:7777");
         assert_eq!(validate_origin("https://k.dev/", &["k.dev:443"]).unwrap(), "https://k.dev");
         // Proxy: Host is internal, X-Forwarded-Host is public

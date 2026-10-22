@@ -9,7 +9,7 @@ const general = { id: 'c0', name: 'general' };
 const oldChat = { id: 'c1', name: 'team-Startup' };
 
 test('a chat left under a differently-cased name is still the team chat', () => {
-  // What Oleks saw: @startup in Teams, and its chat listed again as #team-Startup.
+  // What Alex saw: @startup in Teams, and its chat listed again as #team-Startup.
   assert.equal(isTeamChannel(oldChat, startup), true);
   assert.equal(teamChannelOf([general, oldChat], startup), oldChat);
   assert.equal(teamOfChannel([startup], oldChat), startup);

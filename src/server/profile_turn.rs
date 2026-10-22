@@ -480,8 +480,8 @@ mod tests {
         (r.0, r.1.map(|a| a.label))
     }
 
-    /// Oleks's setup: This machine plus a Personal Claude account that is the default.
-    fn oleks() -> Vec<LlmProfile> {
+    /// Alex's setup: This machine plus a Personal Claude account that is the default.
+    fn alex() -> Vec<LlmProfile> {
         vec![
             profile("prf_system_claude", "This machine", "system", 0, false),
             profile("p_personal", "Personal", "cli_home", 100, true),
@@ -492,20 +492,20 @@ mod tests {
     fn engine_off_is_not_ready_even_with_a_signed_in_account() {
         let r = report(EngineId::Claude, false, EngineStatus::Disabled);
         let avail = signed_in(&["p_personal"]);
-        assert_eq!(readiness(&r, &oleks(), &avail, now()), (false, None));
+        assert_eq!(readiness(&r, &alex(), &avail, now()), (false, None));
     }
 
     #[test]
     fn host_signed_out_but_personal_signed_in_is_ready_on_personal() {
         let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
-        let got = readiness(&r, &oleks(), &signed_in(&["p_personal"]), now());
+        let got = readiness(&r, &alex(), &signed_in(&["p_personal"]), now());
         assert!(got.0);
         assert_eq!(
             got.1,
             Some(EngineAccount { profile_id: "p_personal".into(), label: "Personal".into() })
         );
         // Host signed out and no account signed in: not ready
-        let got = readiness(&r, &oleks(), &Availability::default(), now());
+        let got = readiness(&r, &alex(), &Availability::default(), now());
         assert_eq!(got, (false, None));
     }
 
@@ -513,9 +513,9 @@ mod tests {
     fn unknown_sign_in_is_not_ready_but_routing_still_tries_it() {
         let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
         let unknown = Availability::default();
-        assert_eq!(readiness(&r, &oleks(), &unknown, now()), (false, None));
+        assert_eq!(readiness(&r, &alex(), &unknown, now()), (false, None));
         // Routing keeps the lenient bar: an unchecked profile is still tried by a turn
-        let personal = &oleks()[1];
+        let personal = &alex()[1];
         assert!(unknown.admits(personal, now(), SignInBar::NotSignedOut));
         assert!(!unknown.admits(personal, now(), SignInBar::SignedIn));
     }
@@ -535,9 +535,9 @@ mod tests {
             ..signed_in(&["p_personal"])
         };
         let avail = limited(now() + Duration::hours(1));
-        assert_eq!(readiness(&r, &oleks(), &avail, now()), (false, None));
+        assert_eq!(readiness(&r, &alex(), &avail, now()), (false, None));
         let avail = limited(now() - Duration::minutes(1));
-        assert_eq!(uses(readiness(&r, &oleks(), &avail, now())), (true, Some("Personal".into())));
+        assert_eq!(uses(readiness(&r, &alex(), &avail, now())), (true, Some("Personal".into())));
     }
 
     #[test]
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn disabled_profiles_and_other_engines_accounts_do_not_count() {
         let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
-        let mut profiles = oleks();
+        let mut profiles = alex();
         profiles[1].enabled = false;
         assert_eq!(readiness(&r, &profiles, &signed_in(&["p_personal"]), now()), (false, None));
         // An API-key account runs on the Anthropic API, not the Claude CLI, and needs its key
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn this_machine_off_is_never_a_fallback_even_when_the_host_is_ready() {
         let r = report(EngineId::Claude, true, EngineStatus::Ready);
-        let mut profiles = oleks();
+        let mut profiles = alex();
         profiles[0].enabled = false;
         assert_eq!(readiness(&r, &profiles, &Availability::default(), now()), (false, None));
         // Another account of the space still makes it ready

@@ -663,7 +663,7 @@ async fn qa_f4_f5_cap_wording_and_hidden_characters_in_names() {
     assert!(routines.iter().any(|r| r.name == "Backup"), "{:?}", routines.iter().map(|r| &r.name).collect::<Vec<_>>());
 }
 
-/// Oleks's first real import (2026-10-19): "0 7 * * * (Europe/Berlin)" is a valid cron line with
+/// Alex's first real import (2026-10-19): "0 7 * * * (Europe/Berlin)" is a valid cron line with
 /// a zone, and used to arrive as daily 09:00 UTC with a "couldn't read" warning.
 #[tokio::test]
 async fn pasted_schedule_with_a_time_zone_keeps_it_and_stays_paused() {

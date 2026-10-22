@@ -1,5 +1,5 @@
 From: Dental Clinic <desk@dental.example>
-To: Oleks Example <oleks@example.org>
+To: Alex Example <alex@example.org>
 Subject: Re: Appointment confirmation
 Date: {{DATE:16}}
 Message-ID: <dentist-1@fixture.example>
@@ -8,7 +8,7 @@ References: <dentist-0@fixture.example>
 MIME-Version: 1.0
 Content-Type: text/plain; charset=utf-8
 
-Hello Oleks,
+Hello Alex,
 
 Please confirm your appointment for Tuesday at 10:00.
 
