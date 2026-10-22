@@ -31,11 +31,29 @@ async fn completions(State(mock): State<Mock>, Json(body): Json<Value>) -> Json<
 
 async fn start_mock(replies: Vec<Value>) -> (String, Mock) {
     let mock = Mock { replies: Arc::new(replies), ..Default::default() };
-    let app = Router::new().route("/v1/chat/completions", post(completions)).with_state(mock.clone());
+    let app = Router::new()
+        .route("/v1/chat/completions", post(completions))
+        .route("/v1/messages", post(completions))
+        .with_state(mock.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (format!("http://{addr}/v1/chat/completions"), mock)
+}
+
+/// `start_mock` as an Anthropic Messages endpoint.
+async fn start_anthropic_mock(replies: Vec<Value>) -> (String, Mock) {
+    let (url, mock) = start_mock(replies).await;
+    (url.replace("/v1/chat/completions", "/v1/messages"), mock)
+}
+
+fn tool_use(id: &str, name: &str, input: Value) -> Value {
+    json!({"content": [{"type": "text", "text": "Let me check."}, {"type": "tool_use", "id": id, "name": name, "input": input}],
+        "stop_reason": "tool_use", "usage": {"input_tokens": 6, "output_tokens": 4}})
+}
+
+fn anthropic_answer(text: &str) -> Value {
+    json!({"content": [{"type": "text", "text": text}], "stop_reason": "end_turn", "usage": {"input_tokens": 5, "output_tokens": 2}})
 }
 
 fn tool_call(id: &str, name: &str, args: Value) -> Value {
@@ -80,6 +98,8 @@ fn ctx(approver: Arc<dyn ToolApprover>, timeout_secs: i64, max: usize) -> McpTur
 fn input(mcp: Option<McpTurnContext>) -> TurnInput {
     TurnInput {
         continuity: String::new(),
+        skills: String::new(),
+        store: None,
         browser_api_url: None,
         thread_id: "t1".into(),
         kwant: Kwant {
@@ -254,4 +274,51 @@ async fn kwant_without_servers_makes_a_single_plain_call() {
     let requests = mock.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].get("tools").is_none());
+}
+
+#[tokio::test]
+async fn anthropic_bots_call_mcp_tools_in_the_messages_format() {
+    let (url, mock) =
+        start_anthropic_mock(vec![tool_use("toolu_1", "mcp__echo__echo", json!({"text": "hello"})), anthropic_answer("The tool said hello.")]).await;
+    let c = ctx(Arc::new(FixedApprover(true)), 10, 8);
+    let (out, events) = run(url, input(Some(c.clone()))).await;
+
+    assert_eq!(out.text, "The tool said hello.");
+    let requests = mock.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let tools = requests[0]["tools"].as_array().unwrap();
+    assert_eq!(tools[0]["name"], "mcp__echo__echo");
+    assert_eq!(tools[0]["input_schema"]["required"], json!(["text"]));
+    assert!(tools.iter().all(|t| t.get("function").is_none() && t["input_schema"]["type"] == "object"));
+    // The second request replays the model's tool_use and answers it with a tool_result
+    let msgs = requests[1]["messages"].as_array().unwrap();
+    let (asked, answered) = (&msgs[msgs.len() - 2], &msgs[msgs.len() - 1]);
+    assert_eq!(asked["role"], "assistant");
+    assert_eq!(asked["content"][0], json!({"type": "text", "text": "Let me check."}));
+    assert_eq!(asked["content"][1], json!({"type": "tool_use", "id": "toolu_1", "name": "mcp__echo__echo", "input": {"text": "hello"}}));
+    assert_eq!(answered["role"], "user");
+    assert_eq!(answered["content"][0]["type"], "tool_result");
+    assert_eq!(answered["content"][0]["tool_use_id"], "toolu_1");
+    assert_eq!(answered["content"][0]["content"], "hello");
+    // The tool round is cached up to its result, and the system prompt behind the tools
+    assert_eq!(answered["content"][0]["cache_control"], json!({"type": "ephemeral"}));
+    assert!(requests[1]["system"].as_array().unwrap().iter().any(|b| b.get("cache_control").is_some()));
+    assert!(requests.iter().all(|r| r.get("tool_choice").is_none() && r["messages"][0]["role"] == "user"));
+
+    assert!(events.iter().any(|e| matches!(e, RuntimeEvent::ToolCallPending { id, name, .. } if id == "toolu_1" && name == "mcp__echo__echo")));
+    assert!(!events.iter().any(|e| matches!(e, RuntimeEvent::ThinkingDelta(t) if t.contains("aren't offered"))));
+    let records = c.take_records();
+    assert_eq!((records.len(), records[0]["status"].as_str()), (1, Some("ok")));
+}
+
+#[tokio::test]
+async fn anthropic_tool_calls_go_through_the_approver() {
+    let (url, mock) = start_anthropic_mock(vec![tool_use("toolu_1", "mcp__echo__add", json!({"a": 1, "b": 2})), anthropic_answer("ok, no tool")]).await;
+    let c = ctx(Arc::new(FixedApprover(false)), 10, 8);
+    let (out, _) = run(url, input(Some(c.clone()))).await;
+    assert_eq!(out.text, "ok, no tool");
+    let requests = mock.requests.lock().unwrap().clone();
+    let last = requests[1]["messages"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["content"][0]["content"], "The user denied this tool call.");
+    assert_eq!(c.take_records()[0]["status"], "denied");
 }

@@ -1395,6 +1395,8 @@ mod tests {
         };
         let input = TurnInput {
             continuity: String::new(),
+            skills: String::new(),
+            store: None,
             browser_api_url: None,
             thread_id: "t1".into(),
             kwant,
@@ -1485,6 +1487,8 @@ mod tests {
         };
         let input = TurnInput {
             continuity: String::new(),
+            skills: String::new(),
+            store: None,
             browser_api_url: None,
             thread_id: "t1".into(),
             kwant,

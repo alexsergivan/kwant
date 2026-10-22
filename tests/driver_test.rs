@@ -83,6 +83,8 @@ async fn test_mock_driver_streaming() {
 
     let input = TurnInput {
         continuity: String::new(),
+        skills: String::new(),
+        store: None,
             browser_api_url: None,
         thread_id: "thread-1".into(),
         kwant: dummy_kwant,
@@ -145,6 +147,8 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
     // 1. Without team context
     let input_solo = TurnInput {
         continuity: String::new(),
+        skills: String::new(),
+        store: None,
         browser_api_url: None,
         thread_id: "thread-1".into(),
         kwant: kwant.clone(),
@@ -190,6 +194,8 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
     // 2. With team context
     let input_team = TurnInput {
         continuity: String::new(),
+        skills: String::new(),
+        store: None,
         browser_api_url: None,
         thread_id: "thread-team".into(),
         kwant: kwant.clone(),
@@ -220,6 +226,8 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
     // 3. With team context including workspace and repo URL
     let input_workspace = TurnInput {
         continuity: String::new(),
+        skills: String::new(),
+        store: None,
         browser_api_url: None,
         thread_id: "thread-workspace".into(),
         kwant: kwant.clone(),

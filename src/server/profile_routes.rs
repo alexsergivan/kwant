@@ -76,7 +76,7 @@ pub struct CustomOut {
     /// What the server listed at the last check.
     pub models: Vec<crate::drivers::engines::EngineModel>,
     pub checked_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Whether turns on it can call MCP tools (OpenAI chat: yes; Anthropic Messages: not yet).
+    /// Whether turns on it can call MCP tools (both protocols now do).
     pub supports_tools: bool,
 }
 

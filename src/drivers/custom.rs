@@ -40,10 +40,10 @@ impl Protocol {
         }
     }
 
-    /// Whether turns on this protocol get the bot's MCP tools. OpenAI chat sends them as
-    /// `tools` and kwnt runs the calls; the Anthropic Messages path has no tool support yet.
+    /// Whether turns on this protocol get the bot's MCP tools. Both send them as `tools` and
+    /// kwnt runs the calls; kept for clients that still show a "no tools" badge.
     pub fn supports_tools(self) -> bool {
-        self == Protocol::OpenaiChat
+        true
     }
 }
 

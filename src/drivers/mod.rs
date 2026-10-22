@@ -62,6 +62,14 @@ pub struct TurnInput {
     /// (see `crate::server::continuity`). Empty when there are none.
     #[serde(default)]
     pub continuity: String,
+    /// This turn's "[Skills]" block, picked from the prompt (see `crate::server::skills`), so it
+    /// can change every turn. Prompts show it right after `continuity`.
+    #[serde(default)]
+    pub skills: String,
+    /// Where an API turn keeps per-conversation state between turns (its cached prompt prefix);
+    /// `None` runs without it, as tests and one-off calls do.
+    #[serde(skip)]
+    pub store: Option<crate::db::Database>,
     /// MCP servers, approver and records for this turn; `None` when the kwant has none.
     #[serde(skip)]
     pub mcp: Option<crate::mcp::McpTurnContext>,
@@ -224,6 +232,14 @@ impl TurnInput {
     }
 
     pub fn format_system_prompt_with(&self, browser: BrowserAccess) -> String {
+        let p = self.system_prompt_parts(browser);
+        format!("{}{}{}{}{}{}", p.head, p.date, p.team, self.continuity, self.skills, p.tail)
+    }
+
+    /// The system prompt split by how often each part changes, for callers that cache it: `head`,
+    /// `team` and `tail` stay the same between turns, `date` changes every minute,
+    /// `self.continuity` when the bot's notes change and `self.skills` can change every turn. `format_system_prompt_with` joins them in order.
+    pub fn system_prompt_parts(&self, browser: BrowserAccess) -> SystemPromptParts {
         let mut base = format!(
             "{}\n\nYou are {}, {}.",
             self.kwant.persona_prompt, self.kwant.name, self.kwant.title
@@ -237,7 +253,7 @@ impl TurnInput {
                 soul
             ));
         }
-        base.push_str(&current_date_block(chrono::Local::now().fixed_offset()));
+        let date = current_date_block(chrono::Local::now().fixed_offset());
         let team_block = if let Some(ref team) = self.team_context {
             let desc = team.description.as_deref().unwrap_or("General team objectives");
             let mut ws_info = String::new();
@@ -331,8 +347,22 @@ impl TurnInput {
             )
         };
 
-        format!("{}{}{}{}{}", base, team_block, self.continuity, teammates_block, sandbox_rules)
+        SystemPromptParts {
+            head: base,
+            date,
+            team: team_block,
+            tail: format!("{teammates_block}{sandbox_rules}"),
+        }
     }
+}
+
+/// See `TurnInput::system_prompt_parts`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemPromptParts {
+    pub head: String,
+    pub date: String,
+    pub team: String,
+    pub tail: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -561,6 +591,8 @@ mod tests {
             sandbox_id: None,
             teammates: vec![],
             continuity: String::new(),
+            skills: String::new(),
+            store: None,
             mcp: None,
         }
     }

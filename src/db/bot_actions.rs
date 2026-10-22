@@ -323,7 +323,7 @@ impl Database {
     }
 
     /// Deletes a bot the person chose to remove, with its direct chat, threads, memories,
-    /// skills, routines, questions, approvals, suggestions, proposals and memberships, in one
+    /// skills, routines, questions, approvals, suggestions, proposals, cached API prompts, model usage and memberships, in one
     /// transaction. Channels and teams it led get another lead (`new_lead`, which must be in
     /// the same space). What it wrote in shared channels stays, as the room's history; so does
     /// the space's log of bot actions.
@@ -347,6 +347,8 @@ impl Database {
             "DELETE FROM kwant_memories WHERE kwant_id = ?1",
             "DELETE FROM kwant_mcp_disabled WHERE kwant_id = ?1",
             "DELETE FROM kwant_mcp_servers WHERE kwant_id = ?1",
+            "DELETE FROM api_contexts WHERE kwant_id = ?1",
+            "DELETE FROM model_usage WHERE kwant_id = ?1",
         ] {
             sqlx::query(sql).bind(id).execute(&mut *tx).await?;
         }
