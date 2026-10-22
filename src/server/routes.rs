@@ -1245,6 +1245,17 @@ pub(super) struct TurnOpts {
     pub(super) retried: bool,
     /// The delegation this turn works on; a parked retry restarts the delegation.
     pub(super) delegation_id: Option<String>,
+    /// (agent, effort) to run on instead of asking Laya: a turn resumed after a late Allow
+    /// keeps those of the turn that asked.
+    routed: Option<(String, String)>,
+}
+
+impl TurnOpts {
+    /// Options that run the turn on `agent` at `effort` (both needed), skipping Laya.
+    pub(super) fn routed_as(agent: Option<&str>, effort: Option<&str>) -> Self {
+        let routed = agent.zip(effort).map(|(a, e)| (a.to_string(), e.to_string()));
+        TurnOpts { routed, ..Default::default() }
+    }
 }
 
 /// Runs one kwant turn: picks model/effort, syncs the bot browser, streams the reply and saves it.
@@ -1459,7 +1470,20 @@ async fn run_kwant_turn_inner(
             scope.save(&msg, Some(meta)).await;
             return Err(text);
         }
-        let route = match router.route_prompt_with_models(&prompt, "chat", &available_models).await {
+        let route = match &opts.routed {
+            Some((agent, effort)) => Ok(crate::router::RouteDecision {
+                selected_model: agent.clone(),
+                effort_level: effort.clone(),
+                confidence: 1.0,
+                provider_endpoint: None,
+                is_fallback: false,
+                tier: None,
+                model: None,
+                reasoning: "Same agent and effort as the turn that asked for this tool".into(),
+            }),
+            None => router.route_prompt_with_models(&prompt, "chat", &available_models).await,
+        };
+        let route = match route {
             Ok(r) => r,
             Err(_) => crate::router::RouteDecision {
                 selected_model: target_kwant.preferred_model.clone(),
@@ -1623,12 +1647,16 @@ async fn run_kwant_turn_inner(
                 sandbox_target: Some(sandbox_target.clone()),
             }
         });
-        let mcp_turn = super::mcp_runtime::prepare_turn_with_self(
+        let card_opts = super::mcp_runtime::TurnApprovalOpts {
+            routed: Some((target_model.clone(), effort_level.clone())),
+        };
+        let mcp_turn = super::mcp_runtime::prepare_turn_with_opts(
             state,
             target_kwant,
             Some(tag.turn_id.clone()),
             workspace_dir.clone(),
             self_scope,
+            card_opts,
         )
         .await;
         let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());

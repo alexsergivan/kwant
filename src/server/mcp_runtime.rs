@@ -343,9 +343,11 @@ pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: A
     let prompt = late_approval_prompt(&approval.tool_name, &arguments);
     let target = kwant.clone();
     let (broker, tool_name) = (state.broker.clone(), approval.tool_name.clone());
+    // The same agent and effort as the turn that asked, not what Laya makes of this prompt
+    let opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
     tokio::spawn(async move {
         let _job = job;
-        let _ = super::routes::try_kwant_turn(&scope, &target, prompt, Default::default()).await;
+        let _ = super::routes::try_kwant_turn(&scope, &target, prompt, opts).await;
         // The grant was for this turn: unused, it must not let the same call through later
         if broker.drop_grant(&target.id, &conversation, &tool_name, &arguments).await {
             tracing::info!(kwant = %target.id, tool = %tool_name, "dropped a late-Allow grant the resumed turn didn't use");
@@ -394,6 +396,26 @@ pub async fn prepare_turn_with_self(
     cwd: Option<PathBuf>,
     self_scope: Option<super::continuity::SelfScope>,
 ) -> Option<(McpTurnContext, String)> {
+    prepare_turn_with_opts(state, kwant, turn_id, cwd, self_scope, TurnApprovalOpts::default()).await
+}
+
+/// How a turn's cards behave, beyond the bot's approval setting.
+#[derive(Debug, Default, Clone)]
+pub struct TurnApprovalOpts {
+    /// The turn's (agent, effort): a card it leaves unanswered resumes on the same ones after a
+    /// late Allow.
+    pub routed: Option<(String, String)>,
+}
+
+/// [`prepare_turn_with_self`] with [`TurnApprovalOpts`].
+pub async fn prepare_turn_with_opts(
+    state: &AppState,
+    kwant: &Kwant,
+    turn_id: Option<String>,
+    cwd: Option<PathBuf>,
+    self_scope: Option<super::continuity::SelfScope>,
+    opts: TurnApprovalOpts,
+) -> Option<(McpTurnContext, String)> {
     let mut servers = match state.db.list_active_mcp_servers_for_kwant(&kwant.id).await {
         Ok(s) => s,
         Err(e) => {
@@ -415,13 +437,19 @@ pub async fn prepare_turn_with_self(
     }
     let setting = state.db.get_setting("mcp_max_tool_iterations").await.ok().flatten();
     let turn_id = turn_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let mut chat = turn_chat(state, &turn_id).await;
+    if let Some((agent, effort)) = &opts.routed {
+        let chat = chat.get_or_insert_with(|| json!({"direct_kwant_id": kwant.id}));
+        chat["agent"] = json!(agent);
+        chat["effort"] = json!(effort);
+    }
     let broker_approver: Arc<dyn ToolApprover> = Arc::new(BrokerApprover {
         db: state.db.clone(),
         broker: state.broker.clone(),
         events: state.event_sender.clone(),
         timeout: APPROVAL_TIMEOUT,
         conversation: turn_conversation(state, &turn_id),
-        chat: turn_chat(state, &turn_id).await,
+        chat,
     });
     let ctx = McpTurnContext {
         servers,

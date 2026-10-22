@@ -107,6 +107,28 @@ async fn a_grant_runs_once_only_in_its_own_conversation() {
     assert_eq!(a.decide(request(&env, json!({"command": "rm -rf GRANT_SCOPE_MARK"}))).await, ApprovalOutcome::Unanswered);
 }
 
+/// The resumed turn runs on the agent and effort of the turn that asked (kept with the card),
+/// not on whatever Laya makes of the resume prompt (here Laya is down, which would mean
+/// "medium").
+#[tokio::test]
+async fn the_resumed_turn_keeps_the_asking_turns_effort() {
+    let env = setup().await;
+    let a = Arc::new(BrokerApprover {
+        chat: Some(json!({"direct_kwant_id": env.a, "agent": "claude", "effort": "low"})),
+        ..Arc::try_unwrap(approver(&env, Duration::from_millis(200))).ok().unwrap()
+    });
+    let args = json!({"command": "ls EFFORT_MARK", "description": "list"});
+    assert_eq!(a.decide(request(&env, args)).await, ApprovalOutcome::Unanswered);
+    let rows = env.state.db.list_approvals(&kwnt::db::spaces::SpaceId::default_space(), Some("waiting"), Some(&env.a)).await.unwrap();
+    let ticket = rows.first().expect("a waiting card").id.clone();
+
+    let (s, v) = call(&env.app, "POST", &format!("/api/approvals/{ticket}/resolve"), Some(json!({"decision": "allow_once"}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let reply = wait_reply(&env, &env.a, "answer none").await;
+    let meta: Value = serde_json::from_str(reply.meta.as_deref().expect("reply meta")).unwrap();
+    assert_eq!(meta["ran_on"]["effort"], "low", "{meta}");
+}
+
 #[tokio::test]
 async fn a_late_deny_closes_the_card_and_starts_nothing() {
     let env = setup().await;
