@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split, Hand } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split, Hand, Plug } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
@@ -93,6 +93,8 @@ export interface SidebarProps {
   awayCount?: number;
   awayActive?: boolean;
   looseActive?: boolean;
+  connectionsActive?: boolean;
+  onOpenConnections?: () => void;
   onOpenLooseEnds?: () => void;
   parallelActive?: boolean;
   onOpenParallel?: () => void;
@@ -149,6 +151,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   awayCount = 0,
   awayActive = false,
   looseActive = false,
+  connectionsActive = false,
+  onOpenConnections,
   parallelActive = false,
   onOpenParallel,
   onOpenLooseEnds,
@@ -296,6 +300,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button type="button" onClick={onOpenParallel} aria-current={parallelActive ? 'page' : undefined} className={navRow(parallelActive)}>
             <Split size={15} className={parallelActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
             <span className="truncate flex-1">Parallel Universe</span>
+          </button>
+          )}
+          {onOpenConnections && (
+          <button type="button" onClick={onOpenConnections} aria-current={connectionsActive ? 'page' : undefined} className={navRow(connectionsActive)}>
+            <Plug size={15} className={connectionsActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
+            <span className="truncate flex-1">Connections</span>
           </button>
           )}
           <button type="button" onClick={onOpenRoutines} className={navRow(false)}>

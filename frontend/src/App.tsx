@@ -28,6 +28,7 @@ import type { RoutineFocus } from './components/RoutinesPanel';
 import { AwayPage } from './components/AwayView';
 import { LooseEndsPage } from './components/LooseEndsView';
 import { ParallelPage } from './components/ParallelUniverseView';
+import { ConnectionsPage } from './components/ConnectionsView';
 import { AlertTriangle, Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { ChatApproval, OpenChat, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
@@ -281,6 +282,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // "While you were away": open instead of a chat, and its unseen count for the sidebar badge.
   const [showAway, setShowAway] = useState(false);
   const [showLoose, setShowLoose] = useState(false);
+  const [showConnections, setShowConnections] = useState(false);
   const [showParallel, setShowParallel] = useState(false);
   const [awayCount, setAwayCount] = useState(0);
   const awaySinceRef = useRef<string | null>(null);
@@ -1258,6 +1260,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setOpenThreadId(null);
     setShowAway(false);
     setShowLoose(false);
+    setShowConnections(false);
     setShowParallel(false);
     setPhoneView('chat');
     setSelectedTeamId(team.id);
@@ -1296,6 +1299,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setOpenThreadId(null);
     setShowAway(false);
     setShowLoose(false);
+    setShowConnections(false);
     setShowParallel(false);
     setPhoneView('chat');
     setSelectedId(channel.id);
@@ -1312,6 +1316,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setOpenThreadId(null);
     setShowAway(false);
     setShowLoose(false);
+    setShowConnections(false);
     setShowParallel(false);
     setPhoneView('chat');
     setSelectedId(kwant.id);
@@ -1378,6 +1383,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     knownThreadsRef.current.add(threadId);
     setShowAway(false);
     setShowLoose(false);
+    setShowConnections(false);
     setShowParallel(false);
     if (selectedIdRef.current !== kwant.id || isChannelRef.current) handleSelectKwant(kwant);
     else playSfx('click');
@@ -1393,6 +1399,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     if (!ok) return pushToast('That chat no longer exists.');
     setShowAway(false);
     setShowLoose(false);
+    setShowConnections(false);
     setShowParallel(false);
   };
 
@@ -2557,11 +2564,22 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpenParallel={() => {
         setShowParallel(true);
         setShowLoose(false);
+        setShowConnections(false);
+        setShowAway(false);
+        setPhoneView('chat');
+        playSfx('click');
+      }}
+      connectionsActive={showConnections}
+      onOpenConnections={() => {
+        setShowConnections(true);
+        setShowLoose(false);
+        setShowParallel(false);
         setShowAway(false);
         setPhoneView('chat');
         playSfx('click');
       }}
       onOpenLooseEnds={() => {
+        setShowConnections(false);
         setShowLoose(true);
         setShowParallel(false);
         setShowAway(false);
@@ -2571,6 +2589,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpenAway={() => {
         setShowAway(true);
         setShowLoose(false);
+        setShowConnections(false);
         setShowParallel(false);
         setPhoneView('chat');
         playSfx('click');
@@ -2584,6 +2603,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     />
   );
   const parallel = <ParallelPage onBack={isPhone ? () => { setShowParallel(false); setPhoneView('list'); } : undefined} />;
+  const connectionsPage = (
+    <ConnectionsPage
+      onBack={isPhone ? () => { setShowConnections(false); setPhoneView('list'); } : undefined}
+      onOpenTools={() => setIsMcpOpen(true)}
+      onOpenAccounts={openSettings}
+      onOpenLooseEnds={() => { setShowConnections(false); setShowLoose(true); }}
+    />
+  );
   const loose = <LooseEndsPage onBack={isPhone ? () => { setShowLoose(false); setPhoneView('list'); } : undefined} onOpenChat={openThread} />;
   const chat = (
         <ChatView
@@ -2683,7 +2710,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           contextKey={openCtx}
         />
   );
-  const mainPane = needsSetup ? setupChecklist : showParallel ? parallel : showLoose ? loose : showAway ? away : !loaded ? (
+  const mainPane = needsSetup ? setupChecklist : showParallel ? parallel : showConnections ? connectionsPage : showLoose ? loose : showAway ? away : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…
     </main>
@@ -2732,6 +2759,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                       if (t.id === 'inbox') {
                         setShowAway(true);
                         setShowLoose(false);
+                        setShowConnections(false);
                         setShowParallel(false);
                         setPhoneView('chat');
                         return;
