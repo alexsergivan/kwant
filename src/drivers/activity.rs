@@ -406,8 +406,9 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
 pub fn thinking_note(engine: &str) -> Option<&'static str> {
     match engine {
         "claude" | "codex" | "grok" => None,
-        // the API drivers read whole replies: no reasoning, only what the model says between tools
-        _ => Some("This engine doesn't share its thinking here; you'll see what it says between steps and each tool it runs."),
+        // the API drivers pass on reasoning only when the server returns it (reasoning_content,
+        // reasoning, Anthropic thinking blocks); kwnt doesn't turn on extended thinking itself
+        _ => Some("This engine shares its thinking only when its model returns it; otherwise you'll see what it says between steps and each tool it runs."),
     }
 }
 

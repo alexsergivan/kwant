@@ -566,6 +566,35 @@ fn reply_text(reply: &Value) -> Option<String> {
         .or(anthropic_text)
 }
 
+/// The model's own reasoning in a non-streamed reply, when the server sends it: OpenAI-compatible
+/// `reasoning_content` or `reasoning` (xAI, DeepSeek, Ollama, vLLM, OpenRouter) or Anthropic
+/// `thinking` blocks. Redacted thinking and empty text count as none.
+fn reply_reasoning(reply: &Value) -> Option<String> {
+    let message = &reply["choices"][0]["message"];
+    let openai = ["reasoning_content", "reasoning"].iter().find_map(|k| message[*k].as_str()).map(str::to_string);
+    let anthropic = reply["content"].as_array().map(|blocks| {
+        blocks
+            .iter()
+            .filter(|b| b["type"] == "thinking")
+            .filter_map(|b| b["thinking"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    });
+    openai.or(anthropic).filter(|t| !t.trim().is_empty())
+}
+
+/// The reasoning piece in one streamed event: Anthropic's `thinking_delta`, or an OpenAI-compatible
+/// `delta.reasoning_content` / `delta.reasoning`.
+fn stream_reasoning(event: &Value, anthropic: bool) -> Option<&str> {
+    if anthropic {
+        return (event["type"] == "content_block_delta" && event["delta"]["type"] == "thinking_delta")
+            .then(|| event["delta"]["thinking"].as_str())
+            .flatten();
+    }
+    let delta = &event["choices"][0]["delta"];
+    ["reasoning_content", "reasoning"].iter().find_map(|k| delta[*k].as_str())
+}
+
 /// Token counts of one model call. On the Anthropic API `input_tokens` is only the part after the
 /// last cache breakpoint; the cached prefix is counted in the two cache fields.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -640,6 +669,9 @@ async fn stream_reply(
         .is_some_and(|v| v.contains("text/event-stream"));
     if !is_sse {
         let reply = resp.json::<Value>().await.unwrap_or(Value::Null);
+        if let Some(thinking) = reply_reasoning(&reply) {
+            let _ = event_tx.send(RuntimeEvent::ThinkingDelta(thinking)).await;
+        }
         let text = reply_text(&reply).unwrap_or_else(|| "No response content".into());
         let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
         return (text, Usage::parse(&reply["usage"]));
@@ -673,6 +705,9 @@ async fn stream_reply(
             if event.get("error").is_some_and(|e| !e.is_null()) {
                 failure = Some(error_message(data));
                 break 'read;
+            }
+            if let Some(thinking) = stream_reasoning(&event, anthropic).filter(|t| !t.is_empty()) {
+                let _ = event_tx.send(RuntimeEvent::ThinkingDelta(thinking.to_string())).await;
             }
             let piece = if anthropic {
                 match event["type"].as_str() {
@@ -1065,6 +1100,9 @@ impl ApiDriver {
             }
             let purpose = if round == 0 { crate::db::usage::PURPOSE_REPLY } else { crate::db::usage::PURPOSE_TOOL_ROUND };
             record_call(request, purpose, usage, &body).await;
+            if let Some(thinking) = reply_reasoning(&reply) {
+                let _ = event_tx.send(RuntimeEvent::ThinkingDelta(thinking)).await;
+            }
             let content = reply_text(&reply);
             let calls = reply_tool_calls(&reply);
 
@@ -1603,6 +1641,76 @@ mod tests {
         assert_eq!(text, "Hi");
         let u = usage.unwrap();
         assert_eq!((u.input, u.cache_read, u.output, u.tokens()), (3, 2000, 5, 2008));
+    }
+
+    #[test]
+    fn reasoning_is_read_from_openai_and_anthropic_replies() {
+        let openai = json!({"choices": [{"message": {"content": "4", "reasoning_content": "2 plus 2 is 4"}}]});
+        assert_eq!(reply_reasoning(&openai).as_deref(), Some("2 plus 2 is 4"));
+        let ollama = json!({"choices": [{"message": {"content": "4", "reasoning": "adding"}}]});
+        assert_eq!(reply_reasoning(&ollama).as_deref(), Some("adding"));
+        let anthropic = json!({"content": [
+            {"type": "thinking", "thinking": "first", "signature": "x"},
+            {"type": "redacted_thinking", "data": "opaque"},
+            {"type": "thinking", "thinking": "second"},
+            {"type": "text", "text": "4"},
+        ]});
+        assert_eq!(reply_reasoning(&anthropic).as_deref(), Some("first\n\nsecond"));
+        assert_eq!(reply_text(&anthropic).as_deref(), Some("4"), "thinking never leaks into the reply text");
+        assert_eq!(reply_reasoning(&json!({"choices": [{"message": {"content": "4", "reasoning_content": " "}}]})), None);
+        assert_eq!(reply_reasoning(&json!({"content": [{"type": "redacted_thinking", "data": "x"}]})), None);
+    }
+
+    async fn stream_events(sse: &'static str, anthropic: bool) -> (String, Vec<RuntimeEvent>) {
+        let app = Router::new().route(
+            "/v1/chat",
+            post(move || async move { ([(axum::http::header::CONTENT_TYPE, "text/event-stream")], sse) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/chat", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let resp = reqwest::Client::new().post(&url).send().await.unwrap();
+        let (tx, mut rx) = mpsc::channel(32);
+        let (text, _) = stream_reply(resp, anthropic, &tx).await;
+        drop(tx);
+        let mut events = Vec::new();
+        while let Some(e) = rx.recv().await {
+            events.push(e);
+        }
+        (text, events)
+    }
+
+    fn thinking_of(events: &[RuntimeEvent]) -> String {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                RuntimeEvent::ThinkingDelta(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn streamed_reasoning_goes_out_as_thinking_not_text() {
+        let anthropic = concat!(
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Let me \"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"check.\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"abc\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Done\"}}\n\n",
+        );
+        let (text, events) = stream_events(anthropic, true).await;
+        assert_eq!(text, "Done");
+        assert_eq!(thinking_of(&events), "Let me check.");
+
+        let openai = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Hmm, \"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"ok.\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Yes\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (text, events) = stream_events(openai, false).await;
+        assert_eq!(text, "Yes");
+        assert_eq!(thinking_of(&events), "Hmm, ok.");
     }
 
     fn message(id: &str, role: &str, sender: &str, text: &str) -> crate::db::models::Message {
