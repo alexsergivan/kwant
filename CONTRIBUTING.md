@@ -58,7 +58,7 @@ CI runs the same commands on every pull request: see [.github/workflows/ci.yml](
 
 ## Style
 
-- **Rust:** keep to the style of the file you're editing. Run `cargo clippy --all-targets` and don't add new warnings. The codebase isn't fully `rustfmt`-formatted yet, so format only the code you change rather than whole files; that keeps diffs reviewable.
+- **Rust:** keep to the style of the file you're editing. `cargo clippy --all-targets -- -D warnings` must pass: the code has no Clippy warnings today, and CI keeps it that way. The codebase isn't fully `rustfmt`-formatted yet, so format only the code you change rather than whole files; that keeps diffs reviewable.
 - **TypeScript:** `npm run build` must pass with no type errors. Tailwind classes, no new CSS frameworks.
 - **Interface text:** short, plain sentences. Name things the way the app already does (bots, spaces, accounts, routines).
 - **Tests:** add or update a test for every behaviour change. Use neutral sample data: names like "Alex", `example.com` addresses, `/Users/alex/project` paths, and obviously fake keys. Never commit a real key, token, password or personal email.
