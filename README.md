@@ -67,7 +67,7 @@ scp target/release/kwnt user@your-vps-ip:/usr/local/bin/kwnt
 ssh user@your-vps-ip "kwnt serve --host 0.0.0.0 --port 8799"
 ```
 
-Requests from other machines need the API token: run `kwnt token` on the VPS (or `docker compose exec kwnt kwnt token` with Docker Compose) and open `http://your-vps-ip:8799/#kwnt_token=<token>` once. Through `ssh -L 8799:127.0.0.1:8799` no token is needed. See [LLM profiles and API access](docs/llm-profiles.md).
+On your own computer there is nothing to sign in to. From another machine, open the link `kwnt serve` prints at startup once (`http://<this-host>:8799/#kwnt_token=...`, with `<this-host>` swapped for the VPS address); the browser stays signed in for a year. Lost it? `kwnt token` prints it again (Docker Compose: `docker compose exec kwnt kwnt token`). Through `ssh -L 8799:127.0.0.1:8799` no sign-in is needed. The link signs in as you, so anyone who can read the server's output or `docker compose logs` can use it. See [LLM profiles and API access](docs/llm-profiles.md).
 
 ### Systemd Service (`/etc/systemd/system/kwnt.service`)
 ```ini
@@ -130,7 +130,7 @@ kwnt only starts Laya for loopback URLs. If Laya already answers, for example fr
 
 ```bash
 docker compose up -d --build   # UI on http://127.0.0.1:8799
-docker compose exec kwnt kwnt token   # open http://127.0.0.1:8799/#kwnt_token=<token> once
+docker compose logs kwnt | grep kwnt_token   # open that link once, with <this-host> as 127.0.0.1
 ```
 
 The `laya` image (`docker/laya.Dockerfile`) uses CPU PyTorch and preloads the checkpoints listed in the `LAYA_MODELS` build arg. kwnt runs with `KWNT_LAYA_MANAGED=0` and `LAYA_URL=http://laya:8000`; data persists in the `kwnt-data` volume. Put a TLS reverse proxy in front as described in [browser service and VPS hosting](docs/browser-service.md).
