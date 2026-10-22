@@ -136,6 +136,43 @@ pub fn load_or_create(data_dir: &Path) -> String {
     token
 }
 
+/// Whether `kwnt serve --host <host>` listens on this machine only.
+pub fn is_loopback_bind(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_matches(['[', ']'])
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// The link that signs a browser in once: `http://<host>:<port>/#kwnt_token=<token>`. The UI
+/// posts the token to `/api/auth/session` and clears it from the address bar.
+pub fn sign_in_link(host: &str, port: u16, token: &str) -> String {
+    let bare = host.trim_matches(['[', ']']);
+    let host = match bare.parse::<IpAddr>() {
+        Ok(IpAddr::V6(_)) => format!("[{bare}]"),
+        _ => bare.to_string(),
+    };
+    format!("http://{host}:{port}/#kwnt_token={token}")
+}
+
+/// What `kwnt serve` says about signing in, for stdout only: the link carries the token, so it
+/// must never go through tracing into log files. On a loopback bind nobody needs the token,
+/// unless `KWNT_REQUIRE_TOKEN=always`.
+pub fn startup_notice(host: &str, port: u16, require: Require, token: &str) -> Vec<String> {
+    match require {
+        Require::Never => Vec::new(),
+        Require::Auto if is_loopback_bind(host) => Vec::new(),
+        Require::Always if is_loopback_bind(host) => vec![format!(
+            "🔒 Open this link once to sign in (it signs in as you, keep it private): {}",
+            sign_in_link(host, port, token)
+        )],
+        _ => vec![format!(
+            "🔒 Requests from other machines need the API token: run `kwnt token` and open http://<this-host>:{port}/#kwnt_token=<token>"
+        )],
+    }
+}
+
 fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut opts = std::fs::OpenOptions::new();
@@ -534,6 +571,20 @@ mod tests {
         assert!(!person_only(&put, "/api/kwants/k1"));
         assert!(!person_only(&get, "/api/teams/t1"));
         assert!(!person_only(&post, "/api/bot-actions/b1/confirm"));
+    }
+
+    #[test]
+    fn loopback_start_prints_no_token_line_unless_always() {
+        let tok = "abcdefghijklmnopqrstuvwxyz012345";
+        for host in ["127.0.0.1", "localhost", "::1", "[::1]"] {
+            assert!(startup_notice(host, 8899, Require::Auto, tok).is_empty(), "{host}");
+            assert!(startup_notice(host, 8899, Require::Never, tok).is_empty(), "{host}");
+        }
+        let always = startup_notice("127.0.0.1", 8899, Require::Always, tok).join("\n");
+        assert!(always.contains("http://127.0.0.1:8899/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345"), "{always}");
+        assert!(!always.contains("kwnt token`"), "{always}");
+        let v6 = startup_notice("::1", 8899, Require::Always, tok).join("\n");
+        assert!(v6.contains("http://[::1]:8899/#kwnt_token="), "{v6}");
     }
 
     #[test]

@@ -157,6 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             kwnt::server::scheduler::spawn_background(state.clone(), shutdown.clone());
             kwnt::server::engine_routes::spawn_startup_check(state.clone());
             kwnt::server::parallel_routes::spawn_startup_sweep(state.clone());
+            let api_token = state.api_token.clone();
             let app = create_router(state);
 
             let addr = format!("{}:{}", config.host, config.port);
@@ -174,16 +175,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "⚡ kwant bots: your team of super-intelligent bots, listening at http://{}",
                 addr
             );
-            if !is_loopback_bind(&config.host) {
-                println!(
-                    "🔒 Requests from other machines need the API token: run `kwnt token` and open http://<this-host>:{}/#kwnt_token=<token>",
-                    config.port
-                );
-            } else {
-                println!(
-                    "🔒 Saved passwords and approvals need the API token here too: run `kwnt token` and open http://localhost:{}/#kwnt_token=<token> once",
-                    config.port
-                );
+            // stdout only: the link carries the token
+            for line in kwnt::server::auth::startup_notice(&config.host, config.port, api_token.require, api_token.reveal()) {
+                println!("{line}");
             }
 
             let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
@@ -215,14 +209,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-fn is_loopback_bind(host: &str) -> bool {
-    host == "localhost"
-        || host
-            .trim_matches(['[', ']'])
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The data dir holds the database (keys, MCP tokens) and profile logins: owner only.
