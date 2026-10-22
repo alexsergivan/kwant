@@ -1,0 +1,101 @@
+name: mac
+
+# Builds kwant for Mac: a universal (Apple silicon + Intel), ad-hoc-signed .dmg as a workflow
+# artifact. No release and no tag: this only proves the app builds and starts.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/mac/**"
+      - ".github/workflows/mac.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  dmg:
+    name: dmg
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # kwnt embeds frontend/dist, so the UI is built first
+      - name: Build the web UI
+        working-directory: frontend
+        run: npm ci && npm run build
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/mac
+      - name: Unit tests (PATH merge, port choice)
+        working-directory: apps/mac
+        run: cargo test --locked
+      - name: Build the universal app and .dmg
+        working-directory: apps/mac
+        run: npx --yes @tauri-apps/cli@2 build --ci --target universal-apple-darwin --bundles app,dmg -- --locked
+      - name: Inspect the bundle
+        id: bundle
+        working-directory: apps/mac/target/universal-apple-darwin/release/bundle
+        run: |
+          set -euo pipefail
+          app="macos/kwant.app"
+          dmg=$(ls dmg/*.dmg)
+          lipo -archs "$app/Contents/MacOS/kwant"
+          lipo -archs "$app/Contents/MacOS/kwant" | grep -q arm64
+          lipo -archs "$app/Contents/MacOS/kwant" | grep -q x86_64
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv "$app" 2>&1 | grep -E "Signature|Identifier|Format"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$app/Contents/Info.plist"
+          ls -l "$dmg"
+          du -sh "$app"
+          echo "dmg=$PWD/$dmg" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$dmg")" >> "$GITHUB_OUTPUT"
+      - name: Smoke test, headless (kwant --check)
+        working-directory: apps/mac/target/universal-apple-darwin/release/bundle
+        run: |
+          macos/kwant.app/Contents/MacOS/kwant --check
+          arch -x86_64 macos/kwant.app/Contents/MacOS/kwant --check
+      - name: Smoke test, the real app from the .dmg
+        run: |
+          set -euo pipefail
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/kwant-dmg "${{ steps.bundle.outputs.dmg }}"
+          test -d /tmp/kwant-dmg/kwant.app
+          test -L /tmp/kwant-dmg/Applications
+          export KWNT_DATA_DIR="$RUNNER_TEMP/kwant-data"
+          /tmp/kwant-dmg/kwant.app/Contents/MacOS/kwant > "$RUNNER_TEMP/kwant-app.out" 2>&1 &
+          pid=$!
+          ok=""
+          for _ in $(seq 1 90); do
+            if body=$(curl -fsS http://127.0.0.1:8799/api/health 2>/dev/null); then ok=1; break; fi
+            sleep 1
+          done
+          echo "health: ${body:-none}"
+          ps -p $pid > /dev/null
+          kill $pid || true
+          wait $pid 2>/dev/null || true
+          hdiutil detach /tmp/kwant-dmg || true
+          cat "$KWNT_DATA_DIR/mac-app.log" || true
+          test -n "$ok"
+          echo "$body" | grep -q '"app":"kwnt"'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.bundle.outputs.name }}
+          path: ${{ steps.bundle.outputs.dmg }}
+          if-no-files-found: error
+          retention-days: 14

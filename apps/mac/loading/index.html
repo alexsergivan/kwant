@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>kwant</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; height: 100vh; display: grid; place-items: center;
+         font: 15px -apple-system, BlinkMacSystemFont, sans-serif; background: #11151c; color: #ece5d6; }
+  .failed { display: none; color: #ef7d62; }
+  body[data-state="failed"] .starting { display: none; }
+  body[data-state="failed"] .failed { display: block; }
+  p { text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <p class="starting">Starting kwant…</p>
+  <p class="failed">kwant didn't start.<br>Details are in ~/.kwnt/mac-app.log</p>
+</body>
+</html>
