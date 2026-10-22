@@ -18,7 +18,7 @@ import { AwayPage } from './components/AwayView';
 import { LooseEndsPage } from './components/LooseEndsView';
 import { ParallelPage } from './components/ParallelUniverseView';
 import { AlertTriangle, Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
-import { ChatApproval, OpenChat, approvalFromEvent, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
+import { ChatApproval, OpenChat, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ManageTeamModal } from './components/ManageTeamModal';
@@ -1162,8 +1162,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       });
       // 409/404: it lapsed meanwhile (turn ended, expired, answered elsewhere).
       if (res.ok || res.status === 409 || res.status === 404) {
+        const card = pendingApprovals.find((a) => a.id === ticketId);
         dropApproval(ticketId);
         if (!res.ok) pushToast('This request expired', 'The bot is no longer waiting for this answer.');
+        else if (card?.waiting && decision !== 'deny') {
+          const bot = typeof card.details.kwant_name === 'string' ? card.details.kwant_name : null;
+          const text = lateAnswerText(await res.json().catch(() => null), bot);
+          if (text) pushToast('Card answered', text);
+        }
         refreshAwayCount(300);
       } else if (res.status === 401) {
         // Person-only: the token dialog is open; the card stays so the person can answer again.

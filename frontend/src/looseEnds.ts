@@ -249,6 +249,38 @@ export interface NewSource {
   secret: string;
 }
 
+/**
+ * Who gets a turn when a review picks cases or a letter deadline comes up (`/api/zombie/owner`,
+ * per space). The bot only prepares drafts and next steps; nothing is sent without the person.
+ */
+export interface LooseOwner {
+  enabled: boolean;
+  /** The picked bot, or null for the space's lead. */
+  kwant_id: string | null;
+  daily_cap: number;
+  /** The bot that would get the turn now (the pick or the lead), or null when there is none. */
+  owner: { id: string; name: string } | null;
+  used_today: number;
+}
+export type LooseOwnerChange = Pick<LooseOwner, 'enabled' | 'kwant_id' | 'daily_cap'>;
+
+/** The PUT body for one change, keeping the rest as it is. */
+export const ownerChange = (o: LooseOwner, change: Partial<LooseOwnerChange>): LooseOwnerChange => ({
+  enabled: o.enabled,
+  kwant_id: o.kwant_id,
+  daily_cap: o.daily_cap,
+  ...change,
+});
+
+/** The line under the setting: who, how often, and how much of today's cap is used. */
+export function ownerSummary(o: LooseOwner): string {
+  if (!o.enabled) return 'Off. Reviews and deadlines still notify you, but no bot starts on them.';
+  if (!o.owner) return 'No bot to start: this space has no lead yet. Pick a bot below.';
+  if (o.daily_cap === 0) return `${o.owner.name} is picked, but the daily limit is 0, so no turn starts.`;
+  const used = Math.min(o.used_today, o.daily_cap);
+  return `${o.owner.name} prepares drafts and next steps, up to ${o.daily_cap} ${o.daily_cap === 1 ? 'time' : 'times'} a day (${used} used today, UTC). Nothing is sent without you.`;
+}
+
 export const looseApi = {
   cases: () => call<{ cases: LooseCase[]; running: boolean }>('/api/zombie/cases'),
   act: (id: string, action: CaseAction, body?: unknown) => call<LooseCase>(`/api/zombie/cases/${enc(id)}/${action}`, 'POST', body ?? {}),
@@ -259,6 +291,9 @@ export const looseApi = {
   testSource: (id: string) => call<{ ok: boolean; test: unknown }>(`/api/zombie/sources/${enc(id)}/test`, 'POST'),
   run: () => call<{ started: boolean }>('/api/zombie/run', 'POST', {}),
   status: () => call<{ running: boolean; next_review_at: string | null }>('/api/zombie/status'),
+  owner: () => call<LooseOwner>('/api/zombie/owner'),
+  setOwner: (o: LooseOwnerChange) => call<LooseOwner>('/api/zombie/owner', 'PUT', o),
+  bots: () => call<Array<{ id: string; name: string }>>('/api/kwants'),
 };
 
 /** IMAP over plain text or with a self-signed certificate is only for a server on this computer. */

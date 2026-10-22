@@ -30,7 +30,22 @@ export function approvalFromAway(item: AwayItem): ChatApproval {
     ? { kwant_name: item.kwant_name, ...item.details }
     : { source: 'summary', tool, summary: item.summary, kwant_id: item.kwant_id, kwant_name: item.kwant_name };
   const link = item.link && (item.link.thread_id || item.link.channel_id || item.link.direct_kwant_id) ? item.link : null;
-  return { id: item.id, tool_name: tool, details, kwant_id: item.kwant_id || str(details.kwant_id), link };
+  const approval: ChatApproval = { id: item.id, tool_name: tool, details, kwant_id: item.kwant_id || str(details.kwant_id), link };
+  if (item.status === 'waiting') approval.waiting = true;
+  return approval;
+}
+
+/**
+ * What to tell the person after they answered a card. A late Allow on a still-open card starts
+ * the bot again (`resumed: "new_turn"`); otherwise null (nothing worth saying).
+ */
+export function lateAnswerText(reply: unknown, bot: string | null): string | null {
+  if (!reply || typeof reply !== 'object') return null;
+  const r = reply as { resumed?: unknown; reason?: unknown };
+  const who = bot ?? 'The bot';
+  if (r.resumed === 'new_turn') return `Allowed. ${who} is picking the work back up.`;
+  if (typeof r.reason === 'string' && r.reason) return `Allowed, but ${who} couldn't continue: ${r.reason}.`;
+  return null;
 }
 
 /** The server's waiting approvals, newest first, as cards. */
@@ -44,6 +59,9 @@ export function upsertApproval(list: ChatApproval[], next: ChatApproval): ChatAp
   const prev = list[i];
   const keepPrev = prev.details.source !== 'summary' && next.details.source === 'summary';
   const merged: ChatApproval = keepPrev ? { ...prev, link: next.link ?? prev.link } : { ...next, link: next.link ?? prev.link };
+  // Whether the bot still waits on it comes from the newer copy (the server's, on a sync).
+  if (next.waiting) merged.waiting = true;
+  else delete merged.waiting;
   return list.map((a, j) => (j === i ? merged : a));
 }
 
