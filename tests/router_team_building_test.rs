@@ -228,3 +228,95 @@ fn everyday_team_phrases_get_no_hire_card() {
         assert!(is_team_building_request(msg), "{msg}");
     }
 }
+
+fn team_led_by(lead: &str) -> Team {
+    Team { lead_kwant_id: lead.into(), ..team() }
+}
+
+fn direct_to(decision: &TeamDecision) -> Option<&str> {
+    match decision {
+        TeamDecision::Direct { kwant_id, .. } => Some(kwant_id),
+        _ => None,
+    }
+}
+
+/// Rigel's R1 (gate2): "plan" made these a team discussion in which TravelPlanner spoke before
+/// FitnessCoach. The decision itself, not only `pick_member`, now goes straight to the specialist.
+#[test]
+fn one_clear_specialist_skips_the_discussion() {
+    let members = space();
+    let cases = [
+        ("need a new workout plan", "fit"),
+        ("plan my workout routine", "fit"),
+        ("I need a workout and meal plan", "fit"),
+        ("plan a trip to Rome", "travel"),
+    ];
+    for lead in ["be", "fit"] {
+        for (msg, want) in cases {
+            let decision = heuristic_team_decision(msg, &team_led_by(lead), &members);
+            assert_eq!(direct_to(&decision), Some(want), "lead {lead}, {msg}: {decision:?}");
+        }
+    }
+}
+
+/// Naming two bots still asks for their views together.
+#[test]
+fn naming_two_bots_still_starts_a_discussion() {
+    let members = space();
+    for lead in ["be", "fit"] {
+        let msg = "FitnessCoach and TravelPlanner, plan my workout routine for the trip";
+        match heuristic_team_decision(msg, &team_led_by(lead), &members) {
+            TeamDecision::Discuss { speakers, .. } => {
+                assert!(speakers.iter().any(|s| s == "fit") && speakers.iter().any(|s| s == "travel"), "lead {lead}: {speakers:?}");
+            }
+            other => panic!("lead {lead}: {other:?}"),
+        }
+    }
+}
+
+/// Rigel's R2: a discussion request nothing in the message matches goes to the lead alone instead
+/// of pulling in whoever is listed first; a bot that shares no words never speaks.
+#[test]
+fn no_unrelated_bot_joins_a_discussion() {
+    let members = space();
+    for lead in ["be", "fit"] {
+        let decision = heuristic_team_decision("review my pull request", &team_led_by(lead), &members);
+        if let TeamDecision::Discuss { speakers, .. } = &decision {
+            for s in speakers.iter().skip(1) {
+                let m = members.iter().find(|m| &m.id == s).unwrap();
+                assert!(!["fit", "travel"].contains(&m.id.as_str()), "lead {lead}: {} has nothing to add: {decision:?}", m.name);
+            }
+        }
+        if lead == "fit" {
+            // Backend's persona mentions code reviews; a fitness lead with no word in common answers or hands on
+            assert!(!matches!(&decision, TeamDecision::Discuss { speakers, .. } if speakers.len() > 1 && speakers[1] == "fit"), "{decision:?}");
+        }
+        // With no shared words, only an engineering-role bot may be added
+        let decision = heuristic_team_decision("what are the tradeoffs here", &team_led_by(lead), &members);
+        if let TeamDecision::Discuss { speakers, .. } = &decision {
+            assert!(!speakers.iter().skip(1).any(|s| s == "fit" || s == "travel"), "lead {lead}: {decision:?}");
+        }
+    }
+    // A space with no engineering roles: the lead answers alone instead of pulling in a stranger
+    let lifestyle: Vec<Kwant> = members.iter().filter(|m| m.id == "fit" || m.id == "travel").cloned().collect();
+    for lead in ["fit", "travel"] {
+        let decision = heuristic_team_decision("what are the tradeoffs here", &team_led_by(lead), &lifestyle);
+        assert_eq!(direct_to(&decision), Some(lead), "lead {lead}: {decision:?}");
+    }
+}
+
+/// Rigel's R2: "find" is an everyday verb, so QA's "find bugs" no longer ties with TravelPlanner's
+/// "flights".
+#[test]
+fn find_cheap_flights_goes_to_the_travel_planner() {
+    let members = space();
+    for lead in ["be", "fit", "qa"] {
+        let pick = pick_member("find cheap flights to Rome", lead, &members, None, "channel lead").unwrap();
+        assert_eq!(pick.kwant.id, "travel", "lead {lead}: {}", pick.reason);
+        let decision = heuristic_team_decision("find cheap flights to Rome", &team_led_by(lead), &members);
+        assert_eq!(direct_to(&decision), Some("travel"), "lead {lead}: {decision:?}");
+    }
+    // QA still gets its own work
+    let pick = pick_member("find the flaky tests", "be", &members, None, "channel lead").unwrap();
+    assert_eq!(pick.kwant.id, "qa", "{}", pick.reason);
+}

@@ -521,7 +521,8 @@ const GENERIC_WORDS: &[&str] = &[
     "creating", "do", "doing", "done", "everything", "anything", "something", "thing", "things", "help",
     "work", "working", "get", "start", "starting", "set", "setup", "analyze", "analyse", "analize", "bot",
     "bots", "agent", "agents", "good", "best", "first", "next", "now", "today", "also", "just", "like",
-    "know", "look", "let", "lets", "let's", "go", "going", "think", "sure", "people", "way",
+    "know", "look", "let", "lets", "let's", "go", "going", "think", "sure", "people", "way", "find",
+    "finding",
 ];
 
 /// Said to the lead with a team-building request, so it proposes the bots instead of treating the
@@ -608,10 +609,18 @@ fn direct(pick: Option<Pick<'_>>, team: &Team) -> TeamDecision {
 }
 
 /// A clear single-role code request, or a message addressed to one bot, goes straight to that bot even
-/// when it reads like a discussion ("Create a new test simple strategy" used to start one).
-fn settles_without_discussion(prompt: &str, pick: &Option<Pick<'_>>) -> bool {
+/// when it reads like a discussion ("Create a new test simple strategy" used to start one). So does a
+/// message whose only discussion word is an everyday one ("plan"), whose own words point to one
+/// specialist, and that names no other bot: "need a new workout plan" is FitnessCoach's, and shouldn't
+/// start a discussion that puts TravelPlanner first. "Plan the migration…" still is a discussion.
+fn settles_without_discussion(prompt: &str, pick: &Option<Pick<'_>>, members: &[Kwant]) -> bool {
     let Some(p) = pick else { return true };
-    p.basis == "team" || p.reason.contains("was named in your message") || (is_code_request(prompt) && matches!(p.basis, "keywords" | "skills" | "only"))
+    if p.basis == "team" || p.reason.contains("was named in your message") || (is_code_request(prompt) && matches!(p.basis, "keywords" | "skills" | "only")) {
+        return true;
+    }
+    let words = tokens(prompt);
+    let named = members.iter().filter(|m| words.iter().any(|w| *w == m.name.trim().to_lowercase())).count();
+    matches!(p.basis, "keywords" | "skills") && !p.terms.is_empty() && named <= 1 && !has_strong_discussion_word(prompt)
 }
 
 pub fn parse_laya_team_answers(
@@ -645,7 +654,7 @@ pub fn parse_laya_team_answers(
     let discuss = match discuss_probability {
         Some(p) => p >= 0.8 || (p >= 0.5 && is_complex_query(prompt)),
         None => choice == "discuss",
-    } && !settles_without_discussion(prompt, &pick);
+    } && !settles_without_discussion(prompt, &pick, members);
 
     if discuss {
         // Laya's runner-up for the lead role is the best second voice; fall back to any other member.
@@ -687,7 +696,7 @@ pub fn heuristic_team_decision(
     members: &[Kwant],
 ) -> TeamDecision {
     let pick = pick_member(prompt, &team.lead_kwant_id, members, None, "team lead");
-    if members.is_empty() || !is_complex_query(prompt) || settles_without_discussion(prompt, &pick) {
+    if members.is_empty() || !is_complex_query(prompt) || settles_without_discussion(prompt, &pick, members) {
         return direct(pick, team);
     }
 
@@ -698,19 +707,26 @@ pub fn heuristic_team_decision(
         members[0].id.clone()
     };
 
-    let mut other_members: Vec<&Kwant> = members.iter().filter(|m| m.id != lead_id).collect();
-    // Rank other members by relevance to prompt
-    other_members.sort_by_key(|m| std::cmp::Reverse(calculate_kwant_relevance(prompt, m)));
-
-    let mut speakers = vec![lead_id];
-    if !other_members.is_empty() {
-        speakers.push(other_members[0].id.clone());
+    // Other members whose name, title, persona or role shares words with the message, best first.
+    // When none does, an engineering-role member may still join an engineering discussion, but a bot
+    // with no such role has nothing to add: "review my pull request" used to bring in FitnessCoach
+    // because it was listed first. With nobody to add, the lead answers alone.
+    let words = tokens(prompt);
+    let score = |m: &Kwant| calculate_kwant_relevance(prompt, m) + role_score(&words, m).0;
+    let mut other_members: Vec<(&Kwant, usize)> =
+        members.iter().filter(|m| m.id != lead_id).map(|m| (m, score(m))).filter(|(_, s)| *s > 0).collect();
+    other_members.sort_by_key(|(_, s)| std::cmp::Reverse(*s));
+    if other_members.is_empty() {
+        other_members.extend(members.iter().filter(|m| m.id != lead_id && !roles_of(m).is_empty()).take(1).map(|m| (m, 0)));
+    }
+    if other_members.is_empty() && members.len() > 1 {
+        return direct(pick, team);
     }
 
-    // If 3+ members and next member has specific relevance, include them (up to 3 turns)
-    if other_members.len() >= 2 && calculate_kwant_relevance(prompt, other_members[1]) > 0 {
-        speakers.push(other_members[1].id.clone());
-    } else if speakers.len() < 2 {
+    let mut speakers = vec![lead_id];
+    // Up to two other voices (3 turns)
+    speakers.extend(other_members.iter().take(2).map(|(m, _)| m.id.clone()));
+    if speakers.len() < 2 {
         // If team only had 1 member
         speakers.push(speakers[0].clone());
     }
@@ -728,9 +744,15 @@ pub fn heuristic_team_decision(
 /// Words that ask for a discussion. Whole words only ("explain" isn't "plan"); "strategy" and
 /// "design" are left out because in a code repo they are usually the thing to build.
 fn is_complex_query(prompt: &str) -> bool {
+    tokens(prompt).iter().any(|w| w == "plan") || has_strong_discussion_word(prompt)
+}
+
+/// The discussion words other than "plan", which everyday requests use for one person's work
+/// ("a workout plan", "plan a trip").
+fn has_strong_discussion_word(prompt: &str) -> bool {
     const COMPLEX: &[&str] = &[
         "architecture", "architectural", "tradeoff", "tradeoffs", "trade-off", "trade-offs", "migration",
-        "migrations", "migrate", "plan", "review", "refactor", "overhaul", "rfc", "compare", "comparison", "vs",
+        "migrations", "migrate", "review", "refactor", "overhaul", "rfc", "compare", "comparison", "vs",
         "versus",
     ];
     tokens(prompt).iter().any(|w| COMPLEX.contains(&w.as_str()))
