@@ -33,6 +33,7 @@ fn request(env: &Env, args: Value) -> ToolApprovalRequest {
         tool: "Bash".into(),
         arguments: args,
         builtin: None,
+        smart: None,
     }
 }
 

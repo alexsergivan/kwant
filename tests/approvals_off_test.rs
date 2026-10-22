@@ -275,6 +275,7 @@ async fn an_always_ask_turn_asks_even_with_approvals_off() {
             tool: "Bash".into(),
             arguments: json!({"command": "touch y"}),
             builtin: None,
+            smart: None,
         };
         put(&e, &format!("/api/kwants/{}/approvals", e.bot.id), "ask").await;
         assert_eq!(approver.decide(req).await, want, "always_ask {always_ask}");
