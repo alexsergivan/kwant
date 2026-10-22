@@ -15,6 +15,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Debug info makes each of the ~70 test binaries hundreds of MB, which
+  # fills the runner's disk and crashes the linker. CI doesn't need it.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
 
 jobs:
   frontend:
@@ -59,4 +63,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Tests
-        run: cargo test --locked
+        run: cargo test --locked --no-fail-fast
+      - name: Disk usage
+        if: always()
+        run: df -h / && du -sh target || true
