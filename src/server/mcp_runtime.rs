@@ -408,13 +408,25 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value
         }
         _ => {
             let folder = mcp::builtin_tools::canonical_folder(session.cwd.as_deref());
-            match mcp::builtin_tools::decide(tool_name, &input, folder.as_deref()) {
+            // A WebFetch check may resolve a host name: keep that off the async workers
+            let (decision, smart_verdict) = {
+                let (tool, input, folder) = (tool_name.to_string(), input.clone(), folder.clone());
+                tokio::task::spawn_blocking(move || {
+                    let decision = mcp::builtin_tools::decide(&tool, &input, folder.as_deref());
+                    let ask = matches!(decision, mcp::builtin_tools::BuiltinDecision::Ask { .. });
+                    let verdict = (smart && ask).then(|| mcp::builtin_tools::smart_verdict(&tool, &input, folder.as_deref()));
+                    (decision, verdict)
+                })
+                .await
+                .unwrap_or((mcp::builtin_tools::BuiltinDecision::Ask { outside_folder: false }, None))
+            };
+            match decision {
                 mcp::builtin_tools::BuiltinDecision::Allow => {
                     return json!({"behavior": "allow", "updatedInput": input});
                 }
                 mcp::builtin_tools::BuiltinDecision::Ask { outside_folder } => {
                     if smart {
-                        verdict = Some(mcp::builtin_tools::smart_verdict(tool_name, &input, folder.as_deref()));
+                        verdict = Some(smart_verdict.unwrap_or_else(|| mcp::SmartVerdict::Ask("kwnt couldn't finish checking this call".into())));
                     }
                     let cwd = folder.or_else(|| session.cwd.clone()).map(|f| f.display().to_string());
                     ("", tool_name, Some(mcp::BuiltinCall { cwd, outside_folder }))

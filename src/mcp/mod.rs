@@ -5,6 +5,7 @@ pub mod builtin_tools;
 pub mod cli_config;
 pub mod client;
 pub mod echo_server;
+pub mod fetch_risk;
 pub mod oauth;
 pub mod oauth_mock;
 pub mod registry;

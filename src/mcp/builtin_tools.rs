@@ -134,19 +134,24 @@ fn malformed_read(tool: &str, input: &Value) -> Option<String> {
     }
 }
 
-/// Whether a WebFetch could reach kwnt's own API on this computer (see
-/// [`super::shell_risk::kwnt_url`]), or names no URL kwnt can read.
+/// Whether a WebFetch could reach this computer or the local network (see
+/// [`super::fetch_risk`]), or names no URL kwnt can read. May resolve the host name, so call
+/// it off the async workers.
 fn fetches_kwnt(input: &Value) -> bool {
+    fetch_reason(input).is_some()
+}
+
+fn fetch_reason(input: &Value) -> Option<String> {
     match input.get("url").and_then(Value::as_str) {
-        Some(url) => super::shell_risk::kwnt_url(url.trim()),
-        None => true,
+        Some(url) => super::fetch_risk::fetch_risk(url),
+        None => Some("kwnt can't tell which page this fetches (no `url`)".into()),
     }
 }
 
 /// What "Ask only when risky" makes of a call [`decide`] would ask about.
 pub fn smart_verdict(tool: &str, input: &Value, folder: Option<&Path>) -> SmartVerdict {
     if tool == "WebFetch" {
-        return SmartVerdict::Ask("it fetches from kwnt itself, whose settings only the person may change".into());
+        return SmartVerdict::Ask(fetch_reason(input).unwrap_or_else(|| "it fetches from this computer or the local network".into()));
     }
     if tool == "Bash" {
         let Some(folder) = folder else { return SmartVerdict::Ask("the bot has no working folder this turn".into()) };
@@ -464,7 +469,7 @@ mod tests {
     #[test]
     fn lookups_run_without_asking() {
         for tool in ["WebSearch", "WebFetch", "TodoWrite", "Task"] {
-            assert_eq!(decide(tool, &json!({"url": "https://x"}), None), BuiltinDecision::Allow, "{tool}");
+            assert_eq!(decide(tool, &json!({"url": "https://93.184.216.34/"}), None), BuiltinDecision::Allow, "{tool}");
         }
     }
 
@@ -598,13 +603,17 @@ mod tests {
             "http://[::1]:8800/",
             "http://0.0.0.0:8799/api/spaces",
             "http://localhost:3000/api/spaces",
+            "http://2130706433:8799/api/passwords/store",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://192.168.1.1/",
         ] {
             let input = json!({"url": url, "prompt": "read it"});
             assert_eq!(decide("WebFetch", &input, None), BuiltinDecision::Ask { outside_folder: false }, "{url}");
             assert!(!smart_verdict("WebFetch", &input, None).is_allowed(), "{url}");
         }
         assert_eq!(decide("WebFetch", &json!({"prompt": "x"}), None), BuiltinDecision::Ask { outside_folder: false });
-        for url in ["https://example.com/api/x", "http://localhost:3000/"] {
+        // (a public IP, so the test needs no DNS; names are covered in fetch_risk's tests)
+        for url in ["https://93.184.216.34/api/x", "http://localhost:3000/"] {
             assert_eq!(decide("WebFetch", &json!({"url": url, "prompt": "x"}), None), BuiltinDecision::Allow, "{url}");
         }
     }

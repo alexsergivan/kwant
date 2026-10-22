@@ -99,7 +99,7 @@ async fn claude_asks(app: &Router, token: &str, tool_name: &str) -> String {
         app,
         &format!("/api/mcp/permission/{token}"),
         None,
-        rpc("tools/call", json!({"name": PERMISSION_TOOL, "arguments": {"tool_name": tool_name, "input": {"url": "x"}, "tool_use_id": "u1"}})),
+        rpc("tools/call", json!({"name": PERMISSION_TOOL, "arguments": {"tool_name": tool_name, "input": {"url": "http://93.184.216.34/"}, "tool_use_id": "u1"}})),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{v}");

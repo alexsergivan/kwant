@@ -92,7 +92,8 @@ async fn built_in_tools_follow_the_folder_policy() {
     // Looking things up and writing inside the folder: no card
     for (tool, input) in [
         ("WebSearch", json!({"query": "sma crossover"})),
-        ("WebFetch", json!({"url": "https://example.com", "prompt": "summary"})),
+        // A public IP, so the check needs no DNS (a name that doesn't resolve asks)
+        ("WebFetch", json!({"url": "https://93.184.216.34/", "prompt": "summary"})),
         ("Write", json!({"file_path": real.join("strategy.go").display().to_string(), "content": "package x"})),
         ("Edit", json!({"file_path": "strategy.go", "old_string": "x", "new_string": "y"})),
         ("Read", json!({"file_path": "strategy.go"})),
