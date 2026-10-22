@@ -1356,6 +1356,7 @@ pub(super) async fn try_kwant_turn(
     let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts, &tag).await;
     if scope.cancel_token.is_cancelled() {
         super::questions::cancel_for_turn(&scope.state, &tag.turn_id).await;
+        super::human_steps::cancel_for_turn(&scope.state, &tag.turn_id).await;
     }
     ended.outcome = match (&reply, scope.cancel_token.is_cancelled()) {
         (Ok(_), _) => "completed",
@@ -1458,6 +1459,8 @@ impl Drop for TurnEndedGuard {
 struct TurnEvents {
     sender: tokio::sync::broadcast::Sender<RuntimeEvent>,
     tag: crate::drivers::events::TurnTag,
+    /// The turn's live steps, fed by the driver's events.
+    activity: std::sync::Arc<super::activity::TurnActivity>,
 }
 
 impl TurnEvents {
@@ -1524,7 +1527,11 @@ async fn run_kwant_turn_inner(
     tag: &crate::drivers::events::TurnTag,
 ) -> Result<String, String> {
     let state = &scope.state;
-    let event_broadcast = TurnEvents { sender: state.event_sender.clone(), tag: tag.clone() };
+    let event_broadcast = TurnEvents {
+        sender: state.event_sender.clone(),
+        tag: tag.clone(),
+        activity: super::activity::TurnActivity::start(state.event_sender.clone(), tag.clone()),
+    };
     let park_prompt = prompt.clone();
     let db = state.db.clone();
     let router = state.router.clone();
@@ -1756,6 +1763,9 @@ async fn run_kwant_turn_inner(
         )
         .await;
         let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());
+        if let Some(ctx) = &mcp_ctx {
+            event_broadcast.activity.add_secrets(ctx.secret_values());
+        }
         let with_tools = mcp_ctx
             .as_ref()
             .is_some_and(|c| c.servers.iter().any(|s| s.name == crate::mcp::SELF_SERVER_NAME));
@@ -1886,6 +1896,11 @@ async fn run_kwant_turn_inner(
                         .unwrap_or_default(),
                 )));
             }
+            if ran_on.is_none() {
+                if let Some(note) = runs_on.and_then(|e| crate::drivers::activity::thinking_note(e.as_str())) {
+                    event_broadcast.activity.note(note);
+                }
+            }
             ran_on = runs_on.map(|e| RanOn {
                 engine: e,
                 profile_id: profile.as_ref().map(|p| p.id.clone()),
@@ -1943,6 +1958,7 @@ async fn run_kwant_turn_inner(
                                     _ => false,
                                 };
                                 side_effects |= visible;
+                                event_broadcast.activity.observe(&event);
                                 event_broadcast.send(event);
                             }
                             None => break,
@@ -2070,6 +2086,8 @@ async fn run_kwant_turn_inner(
             super::mcp_runtime::finish_turn(state, token).await;
         }
         let mcp_records = mcp_ctx.map(|c| c.take_records()).filter(|r| !r.is_empty());
+        // Ends what still runs; kept on the reply so the steps show after a reload
+        let activity = event_broadcast.activity.finish();
 
         let with_notices = |reasoning: Option<String>| -> Option<String> {
             if notices.is_empty() {
@@ -2088,7 +2106,7 @@ async fn run_kwant_turn_inner(
                 reasoning_content: with_notices(opts.label.clone()),
                 ..scope.message("kwant", &target_kwant.name, text.clone())
             };
-            scope.save(&msg, gave_up_meta).await;
+            scope.save(&msg, super::activity::with_activity(gave_up_meta, activity)).await;
             return Err(text);
         } else if let Some(Ok(Ok(output))) = driver_result {
             // This chat got through: a turn parked behind a usage limit would only repeat it
@@ -2152,6 +2170,7 @@ async fn run_kwant_turn_inner(
                 if let Some(routing) = &opts.routing {
                     meta.get_or_insert_with(|| serde_json::json!({}))["routing"] = routing.clone();
                 }
+                let meta = super::activity::with_activity(meta, activity);
                 scope.save(&asst_msg, meta).await;
             }
             return Ok(output.text);

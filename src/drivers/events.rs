@@ -90,6 +90,16 @@ pub enum RuntimeEvent {
     /// A question an agent asked the user was asked, answered or cancelled.
     #[serde(rename = "question_updated", alias = "QuestionUpdated")]
     QuestionUpdated { question: Value },
+    /// A step of a running turn started or changed (thinking, a tool run, a wait for an approval
+    /// or for the person). Only sent inside a turn (`Scoped`); `step` is the whole step, so a
+    /// client replaces the one with the same `id`. See [`crate::drivers::activity::Step`].
+    #[serde(rename = "activity", alias = "Activity")]
+    Activity { step: Value },
+    /// A bot asked the person to do a step in the browser (sign in, solve a CAPTCHA), or the
+    /// step was done, declined or cancelled; `step` is the whole record. See
+    /// `crate::db::human_steps`.
+    #[serde(rename = "human_step_updated", alias = "HumanStepUpdated")]
+    HumanStepUpdated { step: Value },
     /// An MCP server an agent suggested was suggested, installed or dismissed; `suggestion` is the
     /// whole record. See `crate::db::mcp_suggestions`.
     #[serde(rename = "mcp_suggestion_updated", alias = "McpSuggestionUpdated")]
@@ -218,8 +228,8 @@ pub enum RuntimeEvent {
         run_id: String,
         status: String,
     },
-    /// Something the user asked to be told about. `kind` is "turn_finished", "approval_needed"
-    /// or "routine_failed". `body` never holds chat text, tool arguments or secrets.
+    /// Something the user asked to be told about. `kind` is one of `continuity::NOTIFY_KINDS`
+    /// ("turn_finished", "approval_needed", "human_step", …). `body` never holds chat text, tool arguments or secrets.
     #[serde(rename = "notify", alias = "Notify")]
     Notify {
         kind: String,

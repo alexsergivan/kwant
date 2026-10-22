@@ -18,6 +18,8 @@ pub mod delegation;
 pub mod parked;
 pub mod attachments;
 pub mod questions;
+pub mod activity;
+pub mod human_steps;
 pub mod skills;
 pub mod spaces;
 pub mod away;
@@ -78,6 +80,8 @@ pub struct AppState {
     pub scheduler_wake: Arc<tokio::sync::Notify>,
     /// `ask_user` calls waiting for the user's answer.
     pub questions: Arc<questions::QuestionHub>,
+    /// `request_human_step` calls waiting for the person to sign in or solve a CAPTCHA.
+    pub human_steps: Arc<human_steps::HumanStepHub>,
     /// "Sign in with Claude" for the Claude engine.
     pub claude_login: Arc<engine_login::ClaudeLogin>,
     /// The MCP Registry agents search and suggest servers from (`KWNT_MCP_REGISTRY_URL`).
@@ -127,6 +131,7 @@ impl AppState {
             running_routines: Default::default(),
             scheduler_wake: Default::default(),
             questions: Default::default(),
+            human_steps: Default::default(),
             claude_login: Default::default(),
             mcp_registry: Arc::new(crate::mcp::registry::McpRegistry::from_env()),
             credentials: Arc::new(crate::sandbox::vault::PasswordVault::open(&config_data_dir)),
@@ -303,6 +308,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/questions/:id", get(questions::get))
         .route("/api/questions/:id/answer", post(questions::answer))
         .route("/api/questions/:id/cancel", post(questions::cancel))
+        .route("/api/human-steps", get(human_steps::list))
+        .route("/api/human-steps/:id", get(human_steps::get))
+        .route("/api/human-steps/:id/done", post(human_steps::done))
+        .route("/api/human-steps/:id/decline", post(human_steps::decline))
         .route("/api/skills", get(skills::list).post(skills::create))
         .route("/api/skills/:id", get(skills::get).patch(skills::update).delete(skills::remove))
         .route("/api/skills/:id/diff", get(skills::diff))

@@ -236,6 +236,9 @@ pub struct BrowserController {
     target_id: Option<String>,
     browser_level: bool,
     pub control: Arc<RwLock<()>>,
+    /// Held while a human step (sign in, CAPTCHA) waits on the person: bot actions get
+    /// `HumanControl` and the person's live-view input goes through without taking control.
+    held_for_person: Arc<std::sync::Mutex<Option<OwnedRwLockWriteGuard<()>>>>,
 }
 
 impl std::fmt::Debug for BrowserController {
@@ -262,6 +265,7 @@ impl BrowserController {
             target_id: None,
             browser_level: false,
             control: Arc::new(RwLock::new(())),
+            held_for_person: Arc::default(),
         }
     }
 
@@ -280,6 +284,27 @@ impl BrowserController {
 
     pub async fn take_control(&self) -> Result<OwnedRwLockWriteGuard<()>, BrowserError> {
         self.control.clone().try_write_owned().map_err(|_| BrowserError::HumanControl)
+    }
+
+    /// Locks the browser to the person until [`Self::release_person_hold`]. Waits briefly for a
+    /// bot action in flight; `false` if it couldn't (the person already has control, say).
+    pub async fn hold_for_person(&self) -> bool {
+        if self.is_held_for_person() {
+            return true;
+        }
+        let Ok(guard) = timeout(std::time::Duration::from_secs(5), self.control.clone().write_owned()).await else {
+            return false;
+        };
+        *self.held_for_person.lock().unwrap_or_else(|e| e.into_inner()) = Some(guard);
+        true
+    }
+
+    pub fn release_person_hold(&self) {
+        self.held_for_person.lock().unwrap_or_else(|e| e.into_inner()).take();
+    }
+
+    pub fn is_held_for_person(&self) -> bool {
+        self.held_for_person.lock().unwrap_or_else(|e| e.into_inner()).is_some()
     }
 
     pub fn is_managed_session(&self) -> bool { self.target_id.is_some() }

@@ -263,9 +263,17 @@ impl ToolApprover for BrokerApprover {
             tool_name: req.tool_name.clone(),
             details,
         });
+        super::activity::approval_waiting(&req.turn_id, &ticket, &req.tool_name);
 
         let decision = tokio::time::timeout(self.timeout, rx).await;
         guard.id = None;
+        let settled = match &decision {
+            Ok(Ok(ApprovalDecision::AllowOnce | ApprovalDecision::AlwaysAllowSession)) => "ok",
+            Ok(_) => "declined",
+            // the card stays up, but this turn stops waiting for it
+            Err(_) => "stopped",
+        };
+        super::activity::approval_settled(&req.turn_id, &ticket, settled);
         match decision {
             Ok(Ok(ApprovalDecision::AllowOnce)) => ApprovalOutcome::Allowed,
             Ok(Ok(ApprovalDecision::AlwaysAllowSession)) => {

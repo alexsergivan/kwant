@@ -52,7 +52,11 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
     match event {
         E::Scoped { tag, .. } => contexts([&Some(tag.context_id.clone()), &Some(tag.kwant_id.clone())]),
         // Only ever sent inside a turn (`Scoped`); bare, they belong nowhere
-        E::TextDelta(_) | E::ThinkingDelta(_) | E::ToolCallPending { .. } | E::ToolCallCompleted { .. } => Vec::new(),
+        E::TextDelta(_)
+        | E::ThinkingDelta(_)
+        | E::ToolCallPending { .. }
+        | E::ToolCallCompleted { .. }
+        | E::Activity { .. } => Vec::new(),
         // Never broadcast: the turn's stall watchdog takes it
         E::Progress => Vec::new(),
         E::ApprovalRequired { id, .. } | E::ApprovalWithdrawn { id } => vec![Owner::Approval(id.clone())],
@@ -77,8 +81,8 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
             out.extend(fields(skill, &["id"], Owner::Skill));
             out
         }
-        E::QuestionUpdated { question } => fields(
-            question,
+        E::QuestionUpdated { question: v } | E::HumanStepUpdated { step: v } => fields(
+            v,
             &["kwant_id", "channel_id", "direct_kwant_id", "thread_id"],
             Owner::Context,
         ),
@@ -215,6 +219,8 @@ mod tests {
             E::MessageAdded { message: json!({"id": "m", "channel_id": "c"}) },
             E::SkillUpdated { skill: json!({"id": "s", "kwant_id": null, "deleted": true}) },
             E::QuestionUpdated { question: json!({"id": "q", "kwant_id": "k"}) },
+            E::Activity { step: json!({"id": "s1"}) },
+            E::HumanStepUpdated { step: json!({"id": "h", "kwant_id": "k"}) },
             E::McpSuggestionUpdated { suggestion: json!({"id": "g", "space_id": "spc_default", "kwant_id": "k"}) },
             E::BotActionUpdated { action: json!({"id": "b", "space_id": "spc_default", "kwant_id": "k"}) },
             E::HireUpdated { hire: json!({"id": "h", "space_id": "spc_default", "kwant_id": "k"}) },
@@ -293,6 +299,8 @@ mod tests {
                 | E::MessageAdded { .. }
                 | E::SkillUpdated { .. }
                 | E::QuestionUpdated { .. }
+                | E::Activity { .. }
+                | E::HumanStepUpdated { .. }
                 | E::McpSuggestionUpdated { .. }
                 | E::BotActionUpdated { .. }
                 | E::HireUpdated { .. }
@@ -322,7 +330,7 @@ mod tests {
     #[test]
     fn every_event_is_placed_in_a_space_or_is_global() {
         // Only ever sent inside a turn; bare, they are dropped from scoped streams on purpose
-        let turn_only = ["TextDelta", "ThinkingDelta", "ToolCallPending", "ToolCallCompleted", "Progress"];
+        let turn_only = ["TextDelta", "ThinkingDelta", "ToolCallPending", "ToolCallCompleted", "Progress", "activity"];
         for e in samples() {
             let t = wire_type(&e);
             if turn_only.contains(&t.as_str()) && !matches!(e, RuntimeEvent::Scoped { .. }) {

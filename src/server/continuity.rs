@@ -34,7 +34,7 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 8] = [
+pub const NOTIFY_KINDS: [&str; 9] = [
     "turn_finished",
     "approval_needed",
     "routine_failed",
@@ -43,6 +43,7 @@ pub const NOTIFY_KINDS: [&str; 8] = [
     "skill_proposed",
     "question_asked",
     "loose_ends",
+    "human_step",
 ];
 const MASK: &str = "••••••••";
 
@@ -289,6 +290,9 @@ fn tool_list(scope: &SelfScope) -> Value {
             list.extend(super::attachments::tools());
             if scope.cancel.is_some() {
                 list.extend(super::questions::tools());
+                if scope.sandbox_target.is_some() {
+                    list.extend(super::human_steps::tools());
+                }
             }
         }
     }
@@ -336,7 +340,32 @@ pub const BROWSER_ACT: &str = "browser_act";
 
 /// Runs one `browser_*` tool on the turn's own sandbox through the same handlers as the HTTP
 /// browser API, so control (409), CAPTCHA notices and panel updates behave the same.
-async fn call_browser_tool(state: &AppState, target: &str, name: &str, args: &Value) -> (String, bool) {
+async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, name: &str, args: &Value) -> (String, bool) {
+    if super::human_steps::browser_is_held(state, target).await {
+        return (
+            "The browser is waiting on the person (a sign-in or CAPTCHA step). Stop browser actions until they finish it.".into(),
+            true,
+        );
+    }
+    let (text, is_error) = run_browser_tool(state, target, name, args).await;
+    // A CAPTCHA wall: ask the person to solve it, then show the agent the page they left
+    if !is_error {
+        if let Ok(page) = serde_json::from_str::<Value>(&text) {
+            if page["blocked"] == json!(true) {
+                if let Some(note) = super::human_steps::raise_for_bot_wall(state, scope, &page).await {
+                    if super::human_steps::browser_is_held(state, target).await {
+                        return (note, false);
+                    }
+                    let (after, _) = run_browser_tool(state, target, BROWSER_PAGE, &Value::Null).await;
+                    return (format!("{note}\n\nThe page now:\n{after}"), false);
+                }
+            }
+        }
+    }
+    (text, is_error)
+}
+
+async fn run_browser_tool(state: &AppState, target: &str, name: &str, args: &Value) -> (String, bool) {
     use super::routes::{act_sandbox, get_sandbox_page, navigate_sandbox, InteractPayload, NavigatePayload};
     let state = State(state.clone());
     let target = Path(target.to_string());
@@ -641,12 +670,13 @@ async fn call_tool(
             }
         }
         BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT => match &scope.sandbox_target {
-            Some(target) => call_browser_tool(state, target, name, args).await,
+            Some(target) => call_browser_tool(state, scope, target, name, args).await,
             None => (format!("Unknown tool {name}."), true),
         },
         "skill_propose" => super::skills::tool_propose(state, scope, args).await,
         "skill_get" => super::skills::tool_get(state, scope, args).await,
         "ask_user" => super::questions::tool_ask(state, scope, args).await,
+        super::human_steps::TOOL => super::human_steps::tool_request(state, scope, args).await,
         "mcp_search" => super::mcp_suggest::tool_search(state, scope, args).await,
         "mcp_suggest" => super::mcp_suggest::tool_suggest(state, scope, args).await,
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,

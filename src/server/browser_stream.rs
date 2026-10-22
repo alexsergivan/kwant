@@ -150,7 +150,8 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
                         }
                     }
                     "take_control" => {
-                        if lease.is_none() {
+                        // A pending human step already holds the browser for the person
+                        if lease.is_none() && !ctrl.is_held_for_person() {
                             match ctrl.take_control().await {
                                 Ok(guard) => lease = Some(guard),
                                 Err(error) => { send(&mut socket, json!({"type":"error","error":error.to_string()})).await?; continue; }
@@ -163,7 +164,7 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
                         send(&mut socket, json!({"type":"control","active":false})).await?;
                     }
                     _ => {
-                        let result = if lease.is_none() { Err(BrowserError::HumanControl) } else {
+                        let result = if lease.is_none() && !ctrl.is_held_for_person() { Err(BrowserError::HumanControl) } else {
                             match serde_json::from_value::<BrowserInput>(value.clone()) {
                                 Ok(input) => ctrl.dispatch_input(input).await,
                                 Err(_) => Err(BrowserError::Protocol("Invalid browser input".into())),

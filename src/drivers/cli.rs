@@ -522,7 +522,20 @@ impl CliDriver {
             }
             super::grok::StreamEvent::Error(message) => run.errors.push(message),
             super::grok::StreamEvent::End { stop_reason } => run.stop_reason = stop_reason,
-            super::grok::StreamEvent::ToolCall => run.tool_calls = true,
+            super::grok::StreamEvent::Thought(text) => {
+                let _ = event_tx.send(RuntimeEvent::ThinkingDelta(text)).await;
+            }
+            super::grok::StreamEvent::ToolStart { id, name, args } => {
+                run.tool_calls = true;
+                let _ = event_tx.send(RuntimeEvent::ToolCallPending { id, name, args }).await;
+            }
+            super::grok::StreamEvent::ToolEnd { id, ok, error } => {
+                let result = match error {
+                    Some(why) if !ok => serde_json::json!({ "status": "error", "error": why }),
+                    _ => serde_json::json!({ "status": "ok" }),
+                };
+                let _ = event_tx.send(RuntimeEvent::ToolCallCompleted { id, result }).await;
+            }
         }
     }
 
@@ -678,8 +691,9 @@ const CLAUDE_SHOWN_ARGS_MAX: usize = 2000;
 const CLAUDE_PROGRESS_EVERY: Duration = Duration::from_secs(1);
 
 /// What `claude -p --output-format stream-json` prints, one JSON object per line, turned into
-/// events as it arrives: each tool call claude starts and finishes, and `Progress` for anything
-/// else, so the turn's stall watchdog sees a claude that is still working and pauses while a tool
+/// events as it arrives: its thinking (`ThinkingDelta`, from the partial `thinking_delta`s, or
+/// from whole `thinking` blocks when it doesn't stream them), each tool call claude starts and
+/// finishes, and `Progress` for anything else, so the turn's stall watchdog sees a claude that is still working and pauses while a tool
 /// (or its approval card) runs. Keeps the final `result` line for [`ClaudeResult::parse`].
 #[derive(Default)]
 struct ClaudeStream {
@@ -691,6 +705,8 @@ struct ClaudeStream {
     /// Output that isn't JSON (an older claude without `stream-json`).
     plain: String,
     last_progress: Option<Instant>,
+    /// Thinking arrived as partial deltas, so the whole `thinking` blocks repeat it.
+    thinking_streamed: bool,
 }
 
 impl ClaudeStream {
@@ -710,7 +726,23 @@ impl ClaudeStream {
         let blocks = v["message"]["content"].as_array().map(Vec::as_slice).unwrap_or_default();
         match v["type"].as_str() {
             Some("result") => self.result_line = Some(line.to_string()),
+            Some("stream_event") => {
+                let delta = &v["event"]["delta"];
+                if v["event"]["type"] == "content_block_delta" && delta["type"] == "thinking_delta" {
+                    if let Some(text) = delta["thinking"].as_str().filter(|t| !t.is_empty()) {
+                        self.thinking_streamed = true;
+                        events.push(RuntimeEvent::ThinkingDelta(text.to_string()));
+                    }
+                }
+            }
             Some("assistant") => {
+                if !self.thinking_streamed {
+                    for b in blocks.iter().filter(|b| b["type"] == "thinking") {
+                        if let Some(text) = b["thinking"].as_str().filter(|t| !t.trim().is_empty()) {
+                            events.push(RuntimeEvent::ThinkingDelta(format!("{text}\n")));
+                        }
+                    }
+                }
                 for b in blocks.iter().filter(|b| b["type"] == "tool_use") {
                     let Some(id) = b["id"].as_str().filter(|id| self.seen.insert(id.to_string())) else {
                         continue;
@@ -758,9 +790,41 @@ impl ClaudeStream {
     }
 }
 
+/// A CLI's line-per-event stdout, read as it arrives.
+trait LineStream {
+    fn line(&mut self, line: &str, now: Instant) -> Vec<RuntimeEvent>;
+    /// For a line too long to read whole.
+    fn skipped(&mut self, now: Instant) -> Vec<RuntimeEvent>;
+}
+
+impl LineStream for ClaudeStream {
+    fn line(&mut self, line: &str, now: Instant) -> Vec<RuntimeEvent> {
+        ClaudeStream::line(self, line, now)
+    }
+    fn skipped(&mut self, now: Instant) -> Vec<RuntimeEvent> {
+        self.progress(now)
+    }
+}
+
+impl LineStream for super::codex_json::CodexStream {
+    fn line(&mut self, line: &str, _: Instant) -> Vec<RuntimeEvent> {
+        super::codex_json::CodexStream::line(self, line)
+    }
+    fn skipped(&mut self, _: Instant) -> Vec<RuntimeEvent> {
+        Vec::new()
+    }
+}
+
 /// Reads claude's `stream-json` stdout to the end, sending its events as they arrive.
-async fn read_claude_stream<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, event_tx: &mpsc::Sender<RuntimeEvent>) -> String {
+async fn read_claude_stream<R: tokio::io::AsyncRead + Unpin>(pipe: R, event_tx: &mpsc::Sender<RuntimeEvent>) -> String {
     let mut stream = ClaudeStream::default();
+    read_lines(pipe, &mut stream, event_tx).await;
+    stream.into_stdout()
+}
+
+/// Reads a CLI's stdout to the end, one line at a time, sending the events `stream` makes of
+/// each line as they arrive. A line longer than [`CLAUDE_LINE_MAX`] is skipped.
+async fn read_lines<R: tokio::io::AsyncRead + Unpin, S: LineStream>(mut pipe: R, stream: &mut S, event_tx: &mpsc::Sender<RuntimeEvent>) {
     let mut line: Vec<u8> = Vec::new();
     // The rest of a line longer than CLAUDE_LINE_MAX is being skipped
     let mut skipping = false;
@@ -785,7 +849,7 @@ async fn read_claude_stream<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, event_
                 }
             }
             let events = if ended {
-                let events = if skipping { stream.progress(Instant::now()) } else { stream.line(&String::from_utf8_lossy(&line), Instant::now()) };
+                let events = if skipping { stream.skipped(Instant::now()) } else { stream.line(&String::from_utf8_lossy(&line), Instant::now()) };
                 line.clear();
                 skipping = false;
                 events
@@ -802,7 +866,6 @@ async fn read_claude_stream<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, event_
             let _ = event_tx.send(event).await;
         }
     }
-    stream.into_stdout()
 }
 
 /// What `claude -p --output-format stream-json` reports on its final `result` line.
@@ -989,7 +1052,9 @@ impl Driver for CliDriver {
                     // commands; blank it there (a `set` entry merges, keeping the user's policy)
                     cmd.arg("-c").arg(format!("shell_environment_policy.set.{}=\"\"", crate::mcp::GATEWAY_TOKEN_ENV));
                 }
-                cmd.arg("-o")
+                // its steps as JSON events on stdout (live activity); the reply still comes from -o
+                cmd.arg("--json")
+                    .arg("-o")
                     .arg(&out_file)
                     .arg(&full_prompt);
                 codex_out_file = Some(out_file);
@@ -1123,13 +1188,9 @@ impl Driver for CliDriver {
             cmd.args(&env.args);
         }
 
-        // codex's reply comes from its -o file; an unread pipe could fill up and stall the CLI
+        // codex's reply comes from its -o file; its stdout carries the `--json` steps
         cmd.stdin(Stdio::null());
-        cmd.stdout(if codex_out_file.is_some() {
-            Stdio::null()
-        } else {
-            Stdio::piped()
-        });
+        cmd.stdout(Stdio::piped());
         // codex reports a usage limit or sign-out only on stderr
         cmd.stderr(if codex_out_file.is_some() {
             Stdio::piped()
@@ -1145,8 +1206,15 @@ impl Driver for CliDriver {
                 let mut group = ProcessGroup::of(&child);
                 let stdout_pipe = child.stdout.take();
                 let stderr_pipe = child.stderr.take();
+                let is_codex = codex_out_file.is_some();
+                let mut codex_stream = super::codex_json::CodexStream::default();
+                let codex_stream_ref = &mut codex_stream;
                 let read_stdout = async {
                     match stdout_pipe {
+                        Some(stdout) if is_codex => {
+                            read_lines(stdout, codex_stream_ref, &event_tx).await;
+                            String::new()
+                        }
                         Some(stdout) => read_claude_stream(stdout, &event_tx).await,
                         None => String::new(),
                     }
@@ -1168,8 +1236,11 @@ impl Driver for CliDriver {
                         .unwrap_or_default();
                     let _ = tokio::fs::remove_file(out_file).await;
                     let failed = !exit.is_some_and(|s| s.success());
-                    if content.trim().is_empty() && failed && !codex_had_effects(&stderr) {
-                        if let Some(failure) = refusal(&codex_error_lines(&stderr)) {
+                    // with --json the final error and the steps are on stdout, not stderr
+                    let had_effects = codex_stream.had_effects || codex_had_effects(&stderr);
+                    if content.trim().is_empty() && failed && !had_effects {
+                        let errors = format!("{}\n{}", codex_error_lines(&stderr), codex_stream.errors);
+                        if let Some(failure) = refusal(errors.trim()) {
                             return Ok(TurnOutput::refused(failure));
                         }
                     }

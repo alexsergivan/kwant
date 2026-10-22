@@ -7,6 +7,7 @@ pub mod parallel;
 pub mod documents;
 pub mod history;
 pub mod attachments;
+pub mod human_steps;
 pub mod questions;
 pub mod skills;
 pub mod away;
@@ -139,6 +140,7 @@ impl Database {
         db.migrate_threads().await?;
         db.migrate_skills().await?;
         db.migrate_questions().await?;
+        db.migrate_human_steps().await?;
         db.migrate_attachments().await?;
         db.migrate_history().await?;
         db.migrate_away().await?;

@@ -1,5 +1,7 @@
+pub mod activity;
 pub mod api;
 pub mod cli;
+pub mod codex_json;
 pub mod custom;
 pub mod engines;
 pub mod events;

@@ -332,8 +332,12 @@ pub enum StreamEvent {
     Error(String),
     /// The run ended; `stop_reason` is e.g. `end_turn`, `refusal`, `cancelled`.
     End { stop_reason: Option<String> },
-    /// grok called a tool: the turn has had effects, so it must not be retried elsewhere.
-    ToolCall,
+    /// A piece of grok's thinking (`thought`).
+    Thought(String),
+    /// grok started a tool: the turn has had effects, so it must not be retried elsewhere.
+    ToolStart { id: String, name: String, args: serde_json::Value },
+    /// A tool grok started finished; `error` says why when it didn't succeed.
+    ToolEnd { id: String, ok: bool, error: Option<String> },
 }
 
 /// Splits grok's NDJSON output into events. Lines that aren't JSON are passed on as text, so
@@ -341,6 +345,10 @@ pub enum StreamEvent {
 #[derive(Debug, Default)]
 pub struct StreamParser {
     pending: String,
+    /// Tools started and not yet finished, by `toolCallId`.
+    running: std::collections::HashSet<String>,
+    /// Tools seen at all, so a repeated update doesn't start one again.
+    seen: std::collections::HashSet<String>,
 }
 
 impl StreamParser {
@@ -349,7 +357,7 @@ impl StreamParser {
         let mut events = Vec::new();
         while let Some(end) = self.pending.find('\n') {
             let line: String = self.pending.drain(..=end).collect();
-            events.extend(parse_line(&line));
+            events.extend(self.parse_line(&line));
         }
         events
     }
@@ -357,7 +365,44 @@ impl StreamParser {
     /// Whatever is left after the last newline.
     pub fn finish(&mut self) -> Vec<StreamEvent> {
         let rest = std::mem::take(&mut self.pending);
-        parse_line(&rest).into_iter().collect()
+        self.parse_line(&rest)
+    }
+
+    fn parse_line(&mut self, line: &str) -> Vec<StreamEvent> {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+            return parse_line(line).into_iter().collect();
+        };
+        if !matches!(value["type"].as_str(), Some("tool_call" | "tool_call_update")) {
+            return parse_line(line).into_iter().collect();
+        }
+        // `tool_call` starts a tool, `tool_call_update` moves it on; either can come first
+        let id = match value["toolCallId"].as_str().filter(|i| !i.is_empty()) {
+            Some(id) => id.to_string(),
+            None => format!("grok-{}", self.seen.len() + 1),
+        };
+        let mut events = Vec::new();
+        if self.seen.insert(id.clone()) {
+            let name = ["toolName", "title", "kind"]
+                .iter()
+                .find_map(|k| value[*k].as_str().filter(|n| !n.is_empty()))
+                .unwrap_or("tool")
+                .to_string();
+            let args = value.get("rawInput").cloned().unwrap_or(serde_json::Value::Null);
+            self.running.insert(id.clone());
+            events.push(StreamEvent::ToolStart { id: id.clone(), name, args });
+        }
+        let status = value["status"].as_str().unwrap_or_default();
+        if matches!(status, "completed" | "failed" | "cancelled") && self.running.remove(&id) {
+            let error = (status != "completed").then(|| {
+                value["rawOutput"]["error"]
+                    .as_str()
+                    .or_else(|| value["error"].as_str())
+                    .unwrap_or(status)
+                    .to_string()
+            });
+            events.push(StreamEvent::ToolEnd { id, ok: status == "completed", error });
+        }
+        events
     }
 }
 
@@ -382,7 +427,10 @@ fn parse_line(line: &str) -> Option<StreamEvent> {
         Some("end") => Some(StreamEvent::End {
             stop_reason: value["stopReason"].as_str().map(str::to_string),
         }),
-        Some("tool_call") | Some("tool_call_update") => Some(StreamEvent::ToolCall),
+        Some("thought") => value["data"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+            .map(|t| StreamEvent::Thought(t.to_string())),
         Some(_) => None,
         None => Some(StreamEvent::Text(line.to_string())),
     }
@@ -557,7 +605,7 @@ include_only = ["*"]
             [
                 StreamEvent::Text("Hel".into()),
                 StreamEvent::Text("lo\n".into()),
-                StreamEvent::ToolCall,
+                StreamEvent::ToolStart { id: "c1".into(), name: "tool".into(), args: serde_json::Value::Null },
                 StreamEvent::Text("plain line\n".into()),
                 StreamEvent::Error("boom".into()),
                 StreamEvent::End {
@@ -566,6 +614,40 @@ include_only = ["*"]
             ]
         );
         assert!(parser.finish().is_empty());
+    }
+
+    /// A grok turn in `--output-format streaming-json`, shaped like the headless-mode guide's
+    /// examples: thoughts, a tool that works, one that fails, and an update repeated.
+    const STREAMING_JSON: &str = include_str!("fixtures/grok_streaming.jsonl");
+
+    #[test]
+    fn grok_stream_reports_thoughts_and_tool_runs() {
+        let mut parser = StreamParser::default();
+        let mut events = parser.push(STREAMING_JSON);
+        events.extend(parser.finish());
+        let shown: Vec<String> = events
+            .iter()
+            .map(|e| match e {
+                StreamEvent::Thought(t) => format!("think {t}"),
+                StreamEvent::ToolStart { id, name, args } => format!("start {id} {name} {args}"),
+                StreamEvent::ToolEnd { id, ok, error } => format!("end {id} {ok} {}", error.as_deref().unwrap_or("-")),
+                StreamEvent::Text(t) => format!("text {t}"),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "think Let me look at the entry point. ",
+                "think Then run the tests.",
+                r#"start call_1 read_file {"path":"src/main.rs"}"#,
+                "end call_1 true -",
+                r#"start call_2 run_terminal_cmd {"command":"cargo test"}"#,
+                "end call_2 false exit status 101",
+                "text Two tests fail.",
+                "End { stop_reason: Some(\"end_turn\") }",
+            ]
+        );
     }
 
     #[test]
