@@ -36,6 +36,7 @@
 
 #![allow(clippy::result_large_err)]
 
+use super::loose_ends_owner::{self, OwnerSettings};
 use super::AppState;
 use crate::db::zombie::{CaseRow, SourceRow, CASE_STATUSES};
 use crate::sandbox::credentials::{normalize_origin, CredentialStore, StoreError};
@@ -603,4 +604,43 @@ pub async fn reviews(State(state): State<AppState>, headers: HeaderMap) -> Res {
         })
         .collect();
     Ok(Json(json!({"reviews": reviews})).into_response())
+}
+
+/// `GET /api/zombie/owner?space=`: who gets a turn when a review or letter deadline comes up.
+pub async fn get_owner(State(state): State<AppState>, headers: HeaderMap, super::spaces::Scope(space): super::spaces::Scope) -> Res {
+    person(&state, &headers).await?;
+    owner_view(&state, &space).await
+}
+
+/// `PUT /api/zombie/owner?space=`: `{enabled, kwant_id (null: the space's lead), daily_cap}`.
+pub async fn put_owner(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    super::spaces::Scope(space): super::spaces::Scope,
+    Json(s): Json<OwnerSettings>,
+) -> Res {
+    person(&state, &headers).await?;
+    s.validate().map_err(|e| error(StatusCode::BAD_REQUEST, &e))?;
+    if let Some(id) = s.kwant_id.as_deref().filter(|id| !id.is_empty()) {
+        let ok = state.db.kwants_in_space(&space, &[id]).await.map_err(db_error)?;
+        if !ok {
+            return Err(error(StatusCode::BAD_REQUEST, "the owner must be a bot in this space"));
+        }
+    }
+    s.save(&state.db, &space).await.map_err(db_error)?;
+    owner_view(&state, &space).await
+}
+
+async fn owner_view(state: &AppState, space: &crate::db::spaces::SpaceId) -> Res {
+    let s = OwnerSettings::load(&state.db, space).await.map_err(db_error)?;
+    let owner = loose_ends_owner::owner(&state.db, space, &s).await;
+    let used = loose_ends_owner::runs_today(&state.db, space, Utc::now()).await;
+    Ok(Json(json!({
+        "enabled": s.enabled,
+        "kwant_id": s.kwant_id,
+        "daily_cap": s.daily_cap,
+        "owner": owner.map(|k| json!({"id": k.id, "name": k.name})),
+        "used_today": used,
+    }))
+    .into_response())
 }

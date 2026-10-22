@@ -231,10 +231,10 @@ impl McpToolSession {
             Some(_) if !arguments.is_object() => ("error", "Tool arguments must be a JSON object.".to_string()),
             Some(t) => {
                 let (server, client) = &self.clients[t.server_index];
-                let approved = self
+                let outcome = self
                     .ctx
                     .approver
-                    .approve(ToolApprovalRequest {
+                    .decide(ToolApprovalRequest {
                         kwant_id: caller.kwant_id.clone(),
                         kwant_name: caller.kwant_name.clone(),
                         turn_id: caller.turn_id.clone(),
@@ -245,8 +245,8 @@ impl McpToolSession {
                         builtin: None,
                     })
                     .await;
-                if !approved {
-                    ("denied", "The user denied this tool call.".to_string())
+                if !outcome.allowed() {
+                    (outcome.record_status(), outcome.refusal_text().to_string())
                 } else {
                     match client.call_tool(&t.tool.name, arguments.clone()).await {
                         Ok(r) if r.is_error => ("error", r.text),
@@ -267,7 +267,7 @@ impl McpToolSession {
             "status": status,
             "duration_ms": start.elapsed().as_millis() as u64,
         });
-        if status != "denied" {
+        if status != "denied" && status != "unanswered" {
             record["result"] = json!(truncate_text(&text, RECORD_RESULT_MAX_CHARS));
         }
         self.ctx.record(record.clone());

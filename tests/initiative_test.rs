@@ -333,7 +333,7 @@ async fn bots_with_tools_are_told_how_to_work_and_bots_without_are_not() {
     let section = &with[with.find("[How to work]").unwrap()..];
     let section = &section[..section[1..].find("\n\n[").map_or(section.len(), |i| i + 1)];
     // Proactive extras and check-ins, but never ones that cost money or reach outside, and no asking for reversible ones
-    for words in ["Be proactive", "shopping list", "a few days in", "Don't ask permission", "End by naming every extra", "I also added a shopping list", "list or tips in your reply", "Undo", "10 changes", "costs money", "Never redo what the person undid", "a sample of what it will send", "saved notes don't"] {
+    for words in ["Be proactive", "shopping list", "a few days in", "Don't ask permission", "End by naming every extra", "I also added a shopping list", "list or tips in your reply", "Undo", "10 changes", "costs money", "Never redo what the person undid", "a sample of what it will send", "saved notes don't", "state the assumption in your reply", "can't be undone or reaches outside"] {
         assert!(section.contains(words), "{words}: {section}");
     }
     // Bots' own tools can only be refused by name: the prompt says where the person switches them

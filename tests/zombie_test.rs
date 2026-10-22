@@ -382,6 +382,8 @@ async fn setup() -> Env {
     let tmp = tempdir().unwrap();
     let data = tmp.path().join("data");
     let db = Database::init(&data).await.unwrap();
+    // No owner-bot turns here: they would reach a real model (see loose_ends_test for those)
+    no_owner_turns(&db).await;
     let config = Config { data_dir: data.clone(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let state = AppState::new(config.clone(), db, ToolRunner::new(data.join("workspace")), PermissionBroker::new(), LayaRouter::new(config.laya_url.clone()));
     Env { app: create_router(state.clone()), state, _tmp: tmp }
@@ -822,4 +824,9 @@ async fn a_review_notifies_with_counts_only_and_is_silent_when_empty() {
     let (_, v) = e.person("GET", "/api/zombie/reviews", None).await;
     assert_eq!(v["reviews"][0]["shown"].as_array().map(Vec::len), Some(5), "{v}");
     assert_eq!(v["reviews"][0]["status"], "ok");
+}
+
+async fn no_owner_turns(db: &Database) {
+    let off = kwnt::server::loose_ends_owner::OwnerSettings { enabled: false, ..Default::default() };
+    off.save(db, &kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
 }

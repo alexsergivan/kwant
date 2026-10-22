@@ -12,7 +12,7 @@ use crate::mcp::{
     self,
     client::PROTOCOL_VERSION,
     session::{Caller, GatewayNaming, McpToolSession},
-    GatewayAccess, McpTurnContext, ToolApprovalRequest, ToolApprover,
+    ApprovalOutcome, GatewayAccess, McpTurnContext, ToolApprovalRequest, ToolApprover,
 };
 use async_trait::async_trait;
 use axum::{
@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 /// How long `finish_turn` waits for cancelled in-flight calls to release the turn's servers.
 const CLOSE_GRACE: Duration = Duration::from_secs(10);
 
-/// How long a tool call waits for the user before it is denied.
+/// How long a tool call waits for the user before its turn stops waiting (the card stays open).
 pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(mcp::APPROVAL_TIMEOUT_SECS);
 /// The tool claude calls for permission decisions: `mcp__kwnt__approve`.
 pub use crate::mcp::PERMISSION_TOOL;
@@ -122,6 +122,13 @@ pub struct BrokerApprover {
     pub timeout: Duration,
     /// The conversation "always allow" answers are kept for (see [`turn_conversation`]).
     pub conversation: String,
+    /// The chat a card left unanswered resumes in after a late Allow (see [`turn_chat`]);
+    /// `None` resumes in the bot's direct chat.
+    pub chat: Option<Value>,
+    /// Ask even when the bot's approvals are off, and don't use "always allow" answers: for
+    /// turns kwnt starts on its own that nobody asked for (the loose-ends owner). A call the
+    /// person allowed on a card (late Allow) still runs once.
+    pub always_ask: bool,
 }
 
 /// Withdraws the ticket if the waiting turn is cancelled (its future dropped) mid-wait.
@@ -150,9 +157,13 @@ impl Drop for TicketGuard {
 #[async_trait]
 impl ToolApprover for BrokerApprover {
     async fn approve(&self, req: ToolApprovalRequest) -> bool {
+        self.decide(req).await.allowed()
+    }
+
+    async fn decide(&self, req: ToolApprovalRequest) -> ApprovalOutcome {
         // Approvals the person switched off: run, and keep a record of what ran. A setting that
         // can't be read asks, as before.
-        let off = self.db.kwant_approvals(&req.kwant_id).await.is_ok_and(|m| m.is_off());
+        let off = !self.always_ask && self.db.kwant_approvals(&req.kwant_id).await.is_ok_and(|m| m.is_off());
         let details = match &req.builtin {
             Some(b) => json!({
                 "source": "claude_builtin",
@@ -186,16 +197,21 @@ impl ToolApprover for BrokerApprover {
             if let Err(e) = self.db.save_refused(&record).await {
                 tracing::warn!(error = %e, "could not record a refused call");
             }
-            return false;
+            return ApprovalOutcome::Denied;
         }
-        if !off && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
-            return true;
+        if !off && !self.always_ask && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
+            return ApprovalOutcome::Allowed;
         }
         if off {
             if let Err(e) = self.db.save_auto_allowed(&record).await {
                 tracing::warn!(error = %e, "could not record a call that ran with approvals off");
             }
-            return true;
+            return ApprovalOutcome::Allowed;
+        }
+        // The person allowed this exact call on a card its earlier turn stopped waiting for
+        if self.broker.take_grant(&req.kwant_id, &self.conversation, &req.tool_name, &req.arguments).await {
+            tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, "ran a call the person allowed after its turn ended");
+            return ApprovalOutcome::Allowed;
         }
         let ticket = match self
             .db
@@ -205,7 +221,7 @@ impl ToolApprover for BrokerApprover {
             Ok(a) => a.id,
             Err(e) => {
                 tracing::warn!(error = %e, "could not store MCP approval ticket; denying");
-                return false;
+                return ApprovalOutcome::Denied;
             }
         };
         let rx = self
@@ -232,18 +248,27 @@ impl ToolApprover for BrokerApprover {
         let decision = tokio::time::timeout(self.timeout, rx).await;
         guard.id = None;
         match decision {
-            Ok(Ok(ApprovalDecision::AllowOnce)) => true,
+            Ok(Ok(ApprovalDecision::AllowOnce)) => ApprovalOutcome::Allowed,
             Ok(Ok(ApprovalDecision::AlwaysAllowSession)) => {
                 self.broker.allow_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await;
-                true
+                ApprovalOutcome::Allowed
             }
-            Ok(Ok(ApprovalDecision::Deny)) | Ok(Err(_)) => false,
+            Ok(Ok(ApprovalDecision::Deny)) | Ok(Err(_)) => ApprovalOutcome::Denied,
+            // Nobody answered: the card stays up as `waiting`, and a late Allow resumes the work
+            // (see `resume_late_approval`)
             Err(_) => {
-                if self.broker.cancel(&ticket).await {
-                    let _ = self.db.update_approval_status(&ticket, "expired").await;
-                    let _ = self.events.send(RuntimeEvent::ApprovalWithdrawn { id: ticket });
+                if !self.broker.cancel(&ticket).await {
+                    return ApprovalOutcome::Denied;
                 }
-                false
+                let chat = self.chat.clone().unwrap_or_else(|| json!({"direct_kwant_id": req.kwant_id}));
+                match self.db.park_approval(&ticket, &chat).await {
+                    Ok(true) => ApprovalOutcome::Unanswered,
+                    _ => {
+                        let _ = self.db.update_approval_status(&ticket, "expired").await;
+                        let _ = self.events.send(RuntimeEvent::ApprovalWithdrawn { id: ticket });
+                        ApprovalOutcome::Denied
+                    }
+                }
             }
         }
     }
@@ -268,6 +293,82 @@ fn turn_conversation(state: &AppState, turn_id: &str) -> String {
         .find(|t| t.turn_id == turn_id)
         .map(|t| t.thread_id.unwrap_or(t.context_id))
         .unwrap_or_else(|| format!("turn:{turn_id}"))
+}
+
+/// The chat a tracked turn runs in, as `{"thread_id"}`, `{"channel_id"}` or
+/// `{"direct_kwant_id"}`; `None` for a turn kwnt isn't tracking.
+async fn turn_chat(state: &AppState, turn_id: &str) -> Option<Value> {
+    let turn = state.turns.active_turns().into_iter().find(|t| t.turn_id == turn_id)?;
+    Some(match turn.thread_id {
+        Some(thread) => json!({"thread_id": thread}),
+        None if state.db.get_channel(&turn.context_id).await.ok().flatten().is_some() => {
+            json!({"channel_id": turn.context_id})
+        }
+        None => json!({"direct_kwant_id": turn.context_id}),
+    })
+}
+
+/// A late answer to a card whose turn stopped waiting (`waiting`). Deny just closes it. Allow
+/// lets that one call run once without a new card and starts a turn in the card's chat telling
+/// the bot to make it again; "always allow" also remembers the tool for that conversation.
+/// Approvals, secrets and the space are checked again when the call is made. Returns the JSON
+/// reply, or `None` when the card isn't waiting (anymore).
+pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: ApprovalDecision, status: &str) -> Option<Value> {
+    let (approval, chat) = state.db.claim_waiting_approval(ticket_id, status).await.ok().flatten()?;
+    let _ = state.event_sender.send(RuntimeEvent::ApprovalWithdrawn { id: ticket_id.to_string() });
+    if decision == ApprovalDecision::Deny {
+        return Some(json!({"ticket_id": ticket_id, "resolved": true, "status": status, "resumed": false}));
+    }
+    let not_resumed = |why: &str| Some(json!({"ticket_id": ticket_id, "resolved": true, "status": status, "resumed": false, "reason": why}));
+    let Ok(Some(kwant)) = state.db.get_kwant(&approval.kwant_id).await else {
+        return not_resumed("the bot no longer exists");
+    };
+    if super::spaces::ensure_active(state, &crate::db::spaces::SpaceId::new(&kwant.space_id)).await.is_err() {
+        return not_resumed("the bot's space is archived");
+    }
+    let details: Value = serde_json::from_str(&approval.parameters).unwrap_or(Value::Null);
+    let arguments = details.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let thread_id = chat["thread_id"].as_str().map(str::to_string);
+    let channel_id = chat["channel_id"].as_str().map(str::to_string);
+    let conversation = thread_id.clone().or_else(|| channel_id.clone()).or_else(|| chat["direct_kwant_id"].as_str().map(str::to_string)).unwrap_or_else(|| kwant.id.clone());
+    state.broker.grant_once(&kwant.id, &conversation, &approval.tool_name, &arguments).await;
+    if decision == ApprovalDecision::AlwaysAllowSession {
+        state.broker.allow_for_session(&kwant.id, &conversation, &approval.tool_name).await;
+    }
+    let depth = match &thread_id {
+        Some(t) => state.db.delegation_for_thread(t).await.ok().flatten().map(|d| d.depth).unwrap_or(0),
+        None => 0,
+    };
+    let job = state.turns.start_job([conversation.clone(), ticket_id.to_string()]);
+    let scope = match super::routes::scope_for(state, &kwant, channel_id, thread_id, &job, depth).await {
+        Ok(s) => s,
+        Err(why) => return not_resumed(&why),
+    };
+    let prompt = late_approval_prompt(&approval.tool_name, &arguments);
+    let target = kwant.clone();
+    let (broker, tool_name) = (state.broker.clone(), approval.tool_name.clone());
+    // The same agent and effort as the turn that asked, not what Laya makes of this prompt
+    let opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
+    tokio::spawn(async move {
+        let _job = job;
+        let _ = super::routes::try_kwant_turn(&scope, &target, prompt, opts).await;
+        // The grant was for this turn: unused, it must not let the same call through later
+        if broker.drop_grant(&target.id, &conversation, &tool_name, &arguments).await {
+            tracing::info!(kwant = %target.id, tool = %tool_name, "dropped a late-Allow grant the resumed turn didn't use");
+        }
+    });
+    Some(json!({"ticket_id": ticket_id, "resolved": true, "status": status, "resumed": "new_turn"}))
+}
+
+/// The resumed turn's prompt after a late Allow.
+pub fn late_approval_prompt(tool_name: &str, arguments: &Value) -> String {
+    let args = serde_json::to_string_pretty(arguments).unwrap_or_default();
+    let args: String = args.chars().take(2000).collect();
+    format!(
+        "[The person allowed a tool call you asked for earlier]\nTool: {tool_name}\nArguments: {args}\n\n\
+Your earlier turn ended before they answered. Make this same call again now, with the same arguments \
+(it runs once without a new card), then continue the task from where you stopped."
+    )
 }
 
 /// Address agent CLIs on this host use to reach kwnt.
@@ -299,6 +400,29 @@ pub async fn prepare_turn_with_self(
     cwd: Option<PathBuf>,
     self_scope: Option<super::continuity::SelfScope>,
 ) -> Option<(McpTurnContext, String)> {
+    prepare_turn_with_opts(state, kwant, turn_id, cwd, self_scope, TurnApprovalOpts::default()).await
+}
+
+/// How a turn's cards behave, beyond the bot's approval setting.
+#[derive(Debug, Default, Clone)]
+pub struct TurnApprovalOpts {
+    /// The turn's (agent, effort): a card it leaves unanswered resumes on the same ones after a
+    /// late Allow.
+    pub routed: Option<(String, String)>,
+    /// Every call that could change something asks, approvals off or not (see
+    /// [`BrokerApprover::always_ask`]).
+    pub always_ask: bool,
+}
+
+/// [`prepare_turn_with_self`] with [`TurnApprovalOpts`].
+pub async fn prepare_turn_with_opts(
+    state: &AppState,
+    kwant: &Kwant,
+    turn_id: Option<String>,
+    cwd: Option<PathBuf>,
+    self_scope: Option<super::continuity::SelfScope>,
+    opts: TurnApprovalOpts,
+) -> Option<(McpTurnContext, String)> {
     let mut servers = match state.db.list_active_mcp_servers_for_kwant(&kwant.id).await {
         Ok(s) => s,
         Err(e) => {
@@ -320,17 +444,25 @@ pub async fn prepare_turn_with_self(
     }
     let setting = state.db.get_setting("mcp_max_tool_iterations").await.ok().flatten();
     let turn_id = turn_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let mut chat = turn_chat(state, &turn_id).await;
+    if let Some((agent, effort)) = &opts.routed {
+        let chat = chat.get_or_insert_with(|| json!({"direct_kwant_id": kwant.id}));
+        chat["agent"] = json!(agent);
+        chat["effort"] = json!(effort);
+    }
     let broker_approver: Arc<dyn ToolApprover> = Arc::new(BrokerApprover {
         db: state.db.clone(),
         broker: state.broker.clone(),
         events: state.event_sender.clone(),
         timeout: APPROVAL_TIMEOUT,
         conversation: turn_conversation(state, &turn_id),
+        chat,
+        always_ask: opts.always_ask,
     });
     let ctx = McpTurnContext {
         servers,
         approver: if self_tools {
-            Arc::new(super::continuity::SelfToolsApprover { inner: broker_approver })
+            Arc::new(super::continuity::SelfToolsApprover { inner: broker_approver, always_ask: opts.always_ask })
         } else {
             broker_approver
         },
@@ -390,7 +522,7 @@ async fn decide(session: &PermissionSession, args: &Value) -> Value {
             }
         }
     };
-    let approval = session.ctx.approver.approve(ToolApprovalRequest {
+    let approval = session.ctx.approver.decide(ToolApprovalRequest {
         kwant_id: session.kwant_id.clone(),
         kwant_name: session.kwant_name.clone(),
         turn_id: session.turn_id.clone(),
@@ -401,8 +533,8 @@ async fn decide(session: &PermissionSession, args: &Value) -> Value {
         builtin,
     });
     // Dropping the approval withdraws its card when the turn ends first
-    let allowed = tokio::select! {
-        allowed = approval => allowed,
+    let outcome = tokio::select! {
+        outcome = approval => outcome,
         _ = session.ended.cancelled() => {
             session.ctx.record(cancelled_record(&tool_use_id, tool_name, server, tool, &input));
             return json!({"behavior": "deny", "message": "The turn ended before the user answered."});
@@ -414,12 +546,12 @@ async fn decide(session: &PermissionSession, args: &Value) -> Value {
         "server": server,
         "tool": tool,
         "arguments": input,
-        "status": if allowed { "allowed" } else { "denied" },
+        "status": outcome.record_status(),
     }));
-    if allowed {
+    if outcome.allowed() {
         json!({"behavior": "allow", "updatedInput": input})
     } else {
-        json!({"behavior": "deny", "message": "The user denied this tool call."})
+        json!({"behavior": "deny", "message": outcome.refusal_text()})
     }
 }
 

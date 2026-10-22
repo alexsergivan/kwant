@@ -650,7 +650,7 @@ impl TurnScope {
             .unwrap_or_else(|| speaker.id.clone())
     }
 
-    fn message(&self, sender_role: &str, sender_id: &str, text: String) -> NewMessage {
+    pub(super) fn message(&self, sender_role: &str, sender_id: &str, text: String) -> NewMessage {
         NewMessage {
             channel_id: self.channel_id.clone(),
             direct_kwant_id: self.kwant_id.clone(),
@@ -821,6 +821,7 @@ pub(super) async fn run_routine_turn(
     let job = state.turns.start_job([context_key.clone()]);
     let scope = scope_for(state, kwant, channel_id, thread_id, &job, 0).await?;
     let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts::default()).await;
+    let reply = continue_once_if_capped(&scope, kwant, reply, false).await;
     match reply {
         Ok(text) => {
             let reply_id = state
@@ -837,6 +838,39 @@ pub(super) async fn run_routine_turn(
         }
         Err(_) if job.token.is_cancelled() => Err("stopped by the user".into()),
         Err(why) => Err(format!("the bot's turn failed: {why}")),
+    }
+}
+
+/// The prompt of the one automatic continuation a routine's or delegation's turn gets when it ran
+/// out of model calls (see [`continue_once_if_capped`]).
+pub const CONTINUE_PROMPT: &str = "[kwnt: your last turn stopped at the limit of model calls before you finished. \
+This is your one automatic continuation: pick up where you left off, finish the task, and end with a complete answer.]";
+
+/// For turns nobody is watching (routines, delegations): a turn that stopped at the model-call
+/// cap gets one more turn to finish, never more. Returns both replies joined, so a delegation's
+/// result has all of it. A turn that didn't hit the cap, or failed, is returned as it is.
+/// `always_ask` carries [`TurnOpts::always_ask`] over to the continuation.
+pub(super) async fn continue_once_if_capped(
+    scope: &TurnScope,
+    kwant: &Kwant,
+    first: Result<String, String>,
+    always_ask: bool,
+) -> Result<String, String> {
+    let Ok(text) = &first else {
+        return first;
+    };
+    if !crate::drivers::api::hit_call_cap(text) || scope.cancel_token.is_cancelled() {
+        return first;
+    }
+    tracing::info!(kwant = %kwant.id, "turn hit the model-call cap: one automatic continuation");
+    let opts = TurnOpts {
+        label: Some("Automatic continuation (once): the last turn ran out of model calls".into()),
+        always_ask,
+        ..Default::default()
+    };
+    match try_kwant_turn(scope, kwant, CONTINUE_PROMPT.to_string(), opts).await {
+        Ok(more) => Ok(format!("{}\n\n{more}", text.trim_end())),
+        Err(_) => first,
     }
 }
 
@@ -1140,6 +1174,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
             discussion: Some(opening.then(|| discussion::question_label(&kwant.name, &team.name))),
             routing: None,
             on_started: None,
+            ..Default::default()
         };
         let Some(raw) = run_kwant_turn(scope, &kwant, prompt, opts).await else {
             if scope.cancel_token.is_cancelled() {
@@ -1193,6 +1228,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
             discussion: None,
             routing: None,
             on_started: None,
+            ..Default::default()
         };
         run_kwant_turn(scope, &lead, prompt, opts).await;
     }
@@ -1204,17 +1240,41 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
 #[derive(Default)]
 pub(super) struct TurnOpts {
     /// Saved as the message's `reasoning_content` instead of the driver's reasoning.
-    label: Option<String>,
+    pub(super) label: Option<String>,
     /// Text checked for a URL to open in the bot browser; defaults to the prompt.
     nav_prompt: Option<String>,
     /// Discussion reply handling: `[PASS]` replies aren't saved; `Some(label)` lets an `[ASK_USER]`
     /// reply be saved as a question for the user under that label.
-    discussion: Option<Option<String>>,
+    pub(super) discussion: Option<Option<String>>,
     /// How this reply's agent was picked, saved as the reply's `meta.routing`.
     routing: Option<serde_json::Value>,
     /// Awaited once the turn has its slot and is running, before the driver starts; a turn
     /// that is stopped while queued never calls it.
     pub(super) on_started: Option<futures::future::BoxFuture<'static, ()>>,
+    /// The retry of a turn a usage limit stopped (see [`super::parked`]): it never parks again.
+    pub(super) retried: bool,
+    /// The delegation this turn works on; a parked retry restarts the delegation.
+    pub(super) delegation_id: Option<String>,
+    /// (agent, effort) to run on instead of asking Laya: a turn resumed after a late Allow
+    /// keeps those of the turn that asked.
+    routed: Option<(String, String)>,
+    /// Every call that could change something asks the person, even with approvals off (an
+    /// owner turn kwnt starts on its own; see [`super::loose_ends_owner`]).
+    pub(super) always_ask: bool,
+}
+
+impl TurnOpts {
+    /// Options that run the turn on `agent` at `effort` (both needed), skipping Laya.
+    pub(super) fn routed_as(agent: Option<&str>, effort: Option<&str>) -> Self {
+        let routed = agent.zip(effort).map(|(a, e)| (a.to_string(), e.to_string()));
+        TurnOpts { routed, ..Default::default() }
+    }
+
+    /// Options for a turn nobody asked for, saved under `label`: every call that could change
+    /// something asks (see [`TurnOpts::always_ask`]).
+    pub(super) fn always_asking(label: &str) -> Self {
+        TurnOpts { label: Some(label.to_string()), always_ask: true, ..Default::default() }
+    }
 }
 
 /// Runs one kwant turn: picks model/effort, syncs the bot browser, streams the reply and saves it.
@@ -1465,6 +1525,7 @@ async fn run_kwant_turn_inner(
 ) -> Result<String, String> {
     let state = &scope.state;
     let event_broadcast = TurnEvents { sender: state.event_sender.clone(), tag: tag.clone() };
+    let park_prompt = prompt.clone();
     let db = state.db.clone();
     let router = state.router.clone();
     let channel_id = scope.channel_id.clone();
@@ -1504,7 +1565,20 @@ async fn run_kwant_turn_inner(
             scope.save(&msg, Some(meta)).await;
             return Err(text);
         }
-        let route = match router.route_prompt_with_models(&prompt, "chat", &available_models).await {
+        let route = match &opts.routed {
+            Some((agent, effort)) => Ok(crate::router::RouteDecision {
+                selected_model: agent.clone(),
+                effort_level: effort.clone(),
+                confidence: 1.0,
+                provider_endpoint: None,
+                is_fallback: false,
+                tier: None,
+                model: None,
+                reasoning: "Same agent and effort as the turn that asked for this tool".into(),
+            }),
+            None => router.route_prompt_with_models(&prompt, "chat", &available_models).await,
+        };
+        let route = match route {
             Ok(r) => r,
             Err(_) => crate::router::RouteDecision {
                 selected_model: target_kwant.preferred_model.clone(),
@@ -1668,12 +1742,17 @@ async fn run_kwant_turn_inner(
                 sandbox_target: Some(sandbox_target.clone()),
             }
         });
-        let mcp_turn = super::mcp_runtime::prepare_turn_with_self(
+        let card_opts = super::mcp_runtime::TurnApprovalOpts {
+            routed: Some((target_model.clone(), effort_level.clone())),
+            always_ask: opts.always_ask,
+        };
+        let mcp_turn = super::mcp_runtime::prepare_turn_with_opts(
             state,
             target_kwant,
             Some(tag.turn_id.clone()),
             workspace_dir.clone(),
             self_scope,
+            card_opts,
         )
         .await;
         let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());
@@ -1936,6 +2015,12 @@ async fn run_kwant_turn_inner(
                         failure.detail
                     ),
                 };
+                let mut text = text;
+                if failure.class == crate::profiles::classify::FailClass::Quota && !side_effects {
+                    if let Some(line) = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), failure.retry_at).await {
+                        text = format!("{text}\n\n{line}");
+                    }
+                }
                 event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
                 event_broadcast.send(RuntimeEvent::TurnComplete {
                     tokens: 0,
@@ -2004,6 +2089,10 @@ async fn run_kwant_turn_inner(
             scope.save(&msg, gave_up_meta).await;
             return Err(text);
         } else if let Some(Ok(Ok(output))) = driver_result {
+            // This chat got through: a turn parked behind a usage limit would only repeat it
+            let _ = db
+                .drop_parked_for_chat(&target_kwant.id, scope.channel_id.as_deref(), scope.kwant_id.as_deref(), scope.thread_id.as_deref())
+                .await;
             // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM
             if let Some(bot_url) = extract_url_from_text(&output.text) {
                 if let Some(ctrl) = get_or_create_browser_controller(state, &sandbox_target).await {
@@ -2628,9 +2717,18 @@ pub async fn resolve_approval(
 
     // Only a ticket still waiting can be answered; a withdrawn one (turn ended, expired)
     // keeps its status and its tool never runs
-    let resolved = state.broker.resolve(&ticket_id, decision).await;
+    let resolved = state.broker.resolve(&ticket_id, decision.clone()).await;
     if !resolved {
-        return Err(StatusCode::CONFLICT);
+        // A card whose turn stopped waiting: a late answer, and Allow resumes the work
+        return match super::mcp_runtime::resume_late_approval(&state, &ticket_id, decision, status_str).await {
+            Some(mut reply) => {
+                reply["ticket_id"] = json!(ticket_id);
+                reply["resolved"] = json!(true);
+                reply["status"] = json!(status_str);
+                Ok(Json(reply))
+            }
+            None => Err(StatusCode::CONFLICT),
+        };
     }
     let _ = state.db.update_approval_status(&ticket_id, status_str).await;
 

@@ -145,8 +145,25 @@ pub async fn run_once(state: &crate::server::AppState, now: DateTime<Utc>) -> Fi
             },
         )
         .await;
+        owner_turn(state, &fired).await;
     }
     fired
+}
+
+/// The Loose ends owner prepares what the due letters need (see `server::loose_ends_owner`).
+async fn owner_turn(state: &crate::server::AppState, fired: &Fired) {
+    use crate::server::loose_ends_owner::{on_events, Event};
+    let mut events = Vec::new();
+    for (offset, ids) in &fired.by_offset {
+        let mut cases = Vec::new();
+        for id in ids {
+            if let Ok(Some(c)) = state.db.zombie_case(id).await {
+                cases.push(c);
+            }
+        }
+        events.push((Event::Deadline(*offset), cases));
+    }
+    on_events(state, events).await;
 }
 
 #[cfg(test)]

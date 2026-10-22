@@ -14,6 +14,7 @@ pub mod continuity;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
+pub mod parked;
 pub mod attachments;
 pub mod questions;
 pub mod skills;
@@ -26,6 +27,7 @@ pub mod hires;
 pub mod import_routes;
 pub mod approval_modes;
 pub mod passwords;
+pub mod loose_ends_owner;
 pub mod zombie_routes;
 pub mod parallel_routes;
 pub mod document_routes;
@@ -233,6 +235,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/zombie/status", get(zombie_routes::status))
         .route("/api/zombie/settings", get(zombie_routes::get_settings).put(zombie_routes::put_settings))
         .route("/api/zombie/reviews", get(zombie_routes::reviews))
+        .route("/api/zombie/owner", get(zombie_routes::get_owner).put(zombie_routes::put_owner))
         .route("/api/parallel/scenarios", get(parallel_routes::list).post(parallel_routes::create))
         .route(
             "/api/parallel/scenarios/:id",

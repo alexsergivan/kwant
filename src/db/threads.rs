@@ -52,6 +52,9 @@ pub struct Delegation {
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
+    /// Times a kwnt restart sent it back to the queue (at most once).
+    #[sqlx(default)]
+    pub retries: i64,
 }
 
 impl Delegation {
@@ -280,6 +283,7 @@ impl Database {
             created_at: now,
             started_at: None,
             ended_at: None,
+            retries: 0,
         };
         sqlx::query(
             "INSERT INTO delegations (id, thread_id, lead_kwant_id, specialist_kwant_id, origin_channel_id, origin_kwant_id, \
@@ -435,19 +439,36 @@ impl Database {
         Ok(due)
     }
 
-    /// Delegations left open by a kwnt that stopped; they become `interrupted`.
-    pub async fn interrupt_open_delegations(&self) -> Result<Vec<Delegation>, DbError> {
-        let open = sqlx::query_as::<_, Delegation>("SELECT * FROM delegations WHERE status IN ('queued', 'running')")
-            .fetch_all(&self.pool)
-            .await?;
-        sqlx::query(
-            "UPDATE delegations SET status = 'interrupted', error = 'kwnt stopped before the task finished', ended_at = ? \
-             WHERE status IN ('queued', 'running')",
+    /// Delegations left open by a kwnt that stopped. Each is restarted once: the first time it's
+    /// queued again (returned in `.0`); one cut short a second time becomes `interrupted` (`.1`).
+    /// One waiting out a usage limit (a parked turn) is left alone: its retry restarts it.
+    pub async fn restart_open_delegations(&self) -> Result<(Vec<Delegation>, Vec<Delegation>), DbError> {
+        let open = sqlx::query_as::<_, Delegation>(
+            "SELECT * FROM delegations WHERE status IN ('queued', 'running') AND id NOT IN \
+             (SELECT delegation_id FROM parked_turns WHERE status = 'pending' AND delegation_id IS NOT NULL)",
         )
-        .bind(Utc::now())
-        .execute(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        Ok(open)
+        let (mut again, mut cut) = (Vec::new(), Vec::new());
+        for d in open {
+            if d.retries < 1 {
+                sqlx::query("UPDATE delegations SET status = 'queued', retries = retries + 1, started_at = NULL WHERE id = ?")
+                    .bind(&d.id)
+                    .execute(&self.pool)
+                    .await?;
+                again.push(d);
+            } else {
+                sqlx::query(
+                    "UPDATE delegations SET status = 'interrupted', error = 'kwnt stopped before the task finished', ended_at = ? WHERE id = ?",
+                )
+                .bind(Utc::now())
+                .bind(&d.id)
+                .execute(&self.pool)
+                .await?;
+                cut.push(d);
+            }
+        }
+        Ok((again, cut))
     }
 }
 

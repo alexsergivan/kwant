@@ -559,6 +559,7 @@ pub async fn review(state: &AppState, trigger: &str) -> Result<Vec<String>, Scan
                     },
                 )
                 .await;
+                crate::server::loose_ends_owner::on_event(state, crate::server::loose_ends_owner::Event::Review, picked).await;
             }
             let _ = state.db.zombie_finish_review(&id, total as i64, &ids, None).await;
             Ok(ids)

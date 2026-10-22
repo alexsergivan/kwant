@@ -28,7 +28,9 @@ pub const RESERVED_SERVER_NAME: &str = "kwnt";
 /// Server name of the agents' own continuity tools (`mcp__kwnt_tools__memory_add`, …).
 pub const SELF_SERVER_NAME: &str = "kwnt_tools";
 pub const DEFAULT_TIMEOUT_SECS: i64 = 30;
-pub const DEFAULT_MAX_TOOL_ITERATIONS: usize = 8;
+/// Model calls an API-driver turn may make for tools; routines and delegations also get one
+/// automatic continuation when a turn runs out (see `routes::continue_once_if_capped`).
+pub const DEFAULT_MAX_TOOL_ITERATIONS: usize = 25;
 /// Longest tool result kept in a message's `tool_calls` record.
 pub const RECORD_RESULT_MAX_CHARS: usize = 4000;
 /// How long an MCP tool call waits for the user's approval before it is denied.
@@ -273,6 +275,55 @@ pub struct BuiltinCall {
 #[async_trait]
 pub trait ToolApprover: Send + Sync {
     async fn approve(&self, request: ToolApprovalRequest) -> bool;
+
+    /// [`approve`](Self::approve), telling a refusal apart from a card nobody answered in time.
+    async fn decide(&self, request: ToolApprovalRequest) -> ApprovalOutcome {
+        if self.approve(request).await {
+            ApprovalOutcome::Allowed
+        } else {
+            ApprovalOutcome::Denied
+        }
+    }
+}
+
+/// What became of a call that may have needed a card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    Allowed,
+    Denied,
+    /// Nobody answered before the wait ran out. The card stays open, and a late Allow starts a
+    /// new turn to continue.
+    Unanswered,
+}
+
+/// What the bot is told when the person refused a call.
+pub const DENIED_TEXT: &str = "The user denied this tool call.";
+/// What the bot is told when nobody answered the card in time.
+pub const UNANSWERED_TEXT: &str = "No one has answered the approval card for this call yet, so it did not run. \
+The card stays open: if the person allows it later, you will be started again to make this same call and continue. \
+Don't retry it now. Finish what you can without it, then end your turn saying what you were about to do and why.";
+
+impl ApprovalOutcome {
+    pub fn allowed(self) -> bool {
+        self == ApprovalOutcome::Allowed
+    }
+
+    /// The tool result a call that didn't run gets.
+    pub fn refusal_text(self) -> &'static str {
+        match self {
+            ApprovalOutcome::Unanswered => UNANSWERED_TEXT,
+            _ => DENIED_TEXT,
+        }
+    }
+
+    /// The record status of a call that didn't run.
+    pub fn record_status(self) -> &'static str {
+        match self {
+            ApprovalOutcome::Allowed => "allowed",
+            ApprovalOutcome::Denied => "denied",
+            ApprovalOutcome::Unanswered => "unanswered",
+        }
+    }
 }
 
 /// Approves or denies everything; for tests and tooling.

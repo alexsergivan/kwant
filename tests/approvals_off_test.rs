@@ -26,6 +26,7 @@ use kwnt::{
     },
     tools::ToolRunner,
 };
+use kwnt::mcp::{ApprovalOutcome, ToolApprovalRequest, ToolApprover};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tempfile::{tempdir, TempDir};
@@ -83,6 +84,11 @@ async fn put(e: &Env, uri: &str, approvals: &str) -> Value {
 
 /// A live turn of `bot` in the general channel with its own tools; returns its token.
 async fn turn(e: &Env, bot: &Kwant) -> (String, String, TempDir) {
+    turn_with(e, bot, false).await
+}
+
+/// [`turn`]; `always_ask` makes it a turn like the loose-ends owner's.
+async fn turn_with(e: &Env, bot: &Kwant, always_ask: bool) -> (String, String, TempDir) {
     let turn_id = uuid::Uuid::new_v4().to_string();
     let folder = tempdir().unwrap();
     let scope = SelfScope {
@@ -92,8 +98,9 @@ async fn turn(e: &Env, bot: &Kwant) -> (String, String, TempDir) {
         turn_id: Some(turn_id.clone()),
         ..Default::default()
     };
+    let opts = mcp_runtime::TurnApprovalOpts { always_ask, ..Default::default() };
     let (_, token) =
-        mcp_runtime::prepare_turn_with_self(&e.state, bot, Some(turn_id.clone()), Some(folder.path().to_path_buf()), Some(scope))
+        mcp_runtime::prepare_turn_with_opts(&e.state, bot, Some(turn_id.clone()), Some(folder.path().to_path_buf()), Some(scope), opts)
             .await
             .unwrap();
     e.state.turns.set_turn(ActiveTurn {
@@ -110,10 +117,15 @@ async fn turn(e: &Env, bot: &Kwant) -> (String, String, TempDir) {
 /// What claude's permission prompt gets back for `Bash {command}`: `Some(allowed)` when kwnt
 /// answers without a card, `None` when it shows one (the card is then denied, to end the wait).
 async fn ask_bash(e: &Env, bot: &Kwant, command: &str) -> Option<bool> {
-    let (turn_id, token, _folder) = turn(e, bot).await;
+    ask_tool(e, bot, "Bash", json!({"command": command}), false).await
+}
+
+/// [`ask_bash`] for any tool, in a turn that may be `always_ask`.
+async fn ask_tool(e: &Env, bot: &Kwant, tool: &str, input: Value, always_ask: bool) -> Option<bool> {
+    let (turn_id, token, _folder) = turn_with(e, bot, always_ask).await;
     let mut events = e.state.event_sender.subscribe();
     let ask = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",
-        "arguments": {"tool_name": "Bash", "input": {"command": command}, "tool_use_id": "tu_1"}}});
+        "arguments": {"tool_name": tool, "input": input, "tool_use_id": "tu_1"}}});
     let app = e.app.clone();
     let path = format!("/api/mcp/permission/{token}");
     let mut prompt = tokio::spawn(async move { call(&app, "POST", &path, None, Some(ask)).await });
@@ -218,6 +230,55 @@ async fn space_off_runs_bash_without_a_card_and_records_it() {
     // Back on: it asks again
     put(&e, "/api/spaces/spc_default/approvals", "ask").await;
     assert_eq!(ask_bash(&e, &e.bot, "touch y").await, None);
+}
+
+/// The loose-ends owner's turn (nobody asked for it) asks before anything that could change
+/// something, even with approvals off; tools that only read still run.
+#[tokio::test]
+async fn an_always_ask_turn_asks_even_with_approvals_off() {
+    let e = setup().await;
+    put(&e, "/api/spaces/spc_default/approvals", "off").await;
+    put(&e, &format!("/api/kwants/{}/approvals", e.bot.id), "off").await;
+    assert_eq!(ask_tool(&e, &e.bot, "Bash", json!({"command": "touch x"}), false).await, Some(true), "an ordinary turn runs it");
+
+    let self_tool = |name: &str| format!("mcp__{}__{name}", kwnt::mcp::SELF_SERVER_NAME);
+    for (tool, input) in [
+        ("Bash".to_string(), json!({"command": "touch x"})),
+        ("Write".to_string(), json!({"file_path": "/tmp/kwnt-owner-test", "content": "x"})),
+        (self_tool("routine_create"), json!({"name": "r", "instructions": "x", "schedule": {"type": "daily", "time": "09:00"}})),
+        (self_tool("delegate"), json!({"to": "Other", "task": "send it"})),
+        (self_tool("memory_add"), json!({"text": "x"})),
+    ] {
+        assert_eq!(ask_tool(&e, &e.bot, &tool, input, true).await, None, "{tool} must ask in an owner turn");
+    }
+    for tool in ["search_history", "routine_list", "delegation_status"] {
+        assert_eq!(ask_tool(&e, &e.bot, &self_tool(tool), json!({}), true).await, Some(true), "{tool} only reads");
+    }
+    // "Always allow" for the conversation doesn't carry into an owner turn either
+    e.state.broker.allow_for_session(&e.bot.id, &e.general, "Bash").await;
+    for (always_ask, want) in [(false, ApprovalOutcome::Allowed), (true, ApprovalOutcome::Unanswered)] {
+        let approver = mcp_runtime::BrokerApprover {
+            db: e.state.db.clone(),
+            broker: e.state.broker.clone(),
+            events: e.state.event_sender.clone(),
+            timeout: Duration::from_millis(200),
+            conversation: e.general.clone(),
+            chat: None,
+            always_ask,
+        };
+        let req = ToolApprovalRequest {
+            kwant_id: e.bot.id.clone(),
+            kwant_name: e.bot.name.clone(),
+            turn_id: "t-owner".into(),
+            tool_name: "Bash".into(),
+            server: String::new(),
+            tool: "Bash".into(),
+            arguments: json!({"command": "touch y"}),
+            builtin: None,
+        };
+        put(&e, &format!("/api/kwants/{}/approvals", e.bot.id), "ask").await;
+        assert_eq!(approver.decide(req).await, want, "always_ask {always_ask}");
+    }
 }
 
 #[tokio::test]

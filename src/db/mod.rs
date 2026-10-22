@@ -17,6 +17,7 @@ pub mod bot_actions;
 pub mod hires;
 pub mod imports;
 pub mod approval_modes;
+pub mod parked;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -127,6 +128,8 @@ impl Database {
         let _ = sqlx::query("ALTER TABLE teams ADD COLUMN workspace_path TEXT;").execute(&pool).await;
         let _ = sqlx::query("ALTER TABLE teams ADD COLUMN repo_url TEXT;").execute(&pool).await;
         let _ = sqlx::query("ALTER TABLE kwants ADD COLUMN soul TEXT NOT NULL DEFAULT '';").execute(&pool).await;
+        // The chat a card that outlived its turn resumes in (see `park_approval`)
+        let _ = sqlx::query("ALTER TABLE approvals ADD COLUMN resume TEXT;").execute(&pool).await;
 
         let db = Self { pool };
         db.migrate_profiles().await?;
@@ -140,6 +143,7 @@ impl Database {
         db.migrate_zombie().await?;
         db.migrate_parallel().await?;
         db.migrate_documents().await?;
+        db.migrate_parked().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;

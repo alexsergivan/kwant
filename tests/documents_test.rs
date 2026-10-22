@@ -46,6 +46,8 @@ async fn setup_with(reader: Arc<dyn LetterReader>) -> Env {
     let tmp = tempdir().unwrap();
     let data = tmp.path().join("data");
     let db = Database::init(&data).await.unwrap();
+    // No owner-bot turns here: they would reach a real model (see loose_ends_test for those)
+    no_owner_turns(&db).await;
     let config = Config { data_dir: data.clone(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let mut state = AppState::new(config.clone(), db, ToolRunner::new(data.join("workspace")), PermissionBroker::new(), LayaRouter::new(config.laya_url.clone()));
     state.documents = Arc::new(Desk::with_reader(reader));
@@ -510,4 +512,9 @@ fn the_reminder_schedule_follows_the_injected_clock() {
     let s = reminders::schedule(deadline, "UTC", late);
     assert_eq!(s.iter().map(|(o, _)| *o).collect::<Vec<_>>(), vec![1, 0]);
     assert_eq!(s[0].1, late, "the reminder due earlier today fires now");
+}
+
+async fn no_owner_turns(db: &Database) {
+    let off = kwnt::server::loose_ends_owner::OwnerSettings { enabled: false, ..Default::default() };
+    off.save(db, &kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
 }

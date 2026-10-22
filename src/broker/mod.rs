@@ -25,6 +25,33 @@ pub struct PermissionBroker {
     /// (kwant_id, conversation, tool_name) the user chose "always allow" for: that bot may use
     /// that tool again in that one conversation, until kwnt restarts.
     always_allowed: Arc<Mutex<HashSet<(String, String, String)>>>,
+    /// Calls the person allowed after their turn had stopped waiting: the resumed turn's same
+    /// call runs once without a new card, until the grant lapses.
+    grants: Arc<Mutex<Vec<Grant>>>,
+}
+
+/// How long a late Allow waits for the resumed turn to make its call again.
+pub const GRANT_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+#[derive(Debug, Clone)]
+struct Grant {
+    kwant_id: String,
+    /// The chat the card belonged to (thread, else channel or direct chat): the grant only
+    /// works there, not in another conversation of the same bot.
+    conversation: String,
+    tool_name: String,
+    arguments: Value,
+    until: std::time::Instant,
+}
+
+/// Arguments compared for a grant: claude's free-text `description` of a Bash call may change
+/// between attempts, what runs may not.
+fn grant_arguments(arguments: &Value) -> Value {
+    let mut a = arguments.clone();
+    if let Some(map) = a.as_object_mut() {
+        map.remove("description");
+    }
+    a
 }
 
 impl PermissionBroker {
@@ -32,7 +59,57 @@ impl PermissionBroker {
         Self {
             pending: Arc::new(Mutex::new(HashMap::new())),
             always_allowed: Arc::new(Mutex::new(HashSet::new())),
+            grants: Default::default(),
         }
+    }
+
+    /// Lets one later call of `tool_name` with these `arguments` by this kwant, in this
+    /// `conversation`, run without a card (a late Allow). Lapses after [`GRANT_TTL`], or when
+    /// [`drop_grant`](Self::drop_grant) is called because the resumed turn ended without it.
+    pub async fn grant_once(&self, kwant_id: &str, conversation: &str, tool_name: &str, arguments: &Value) {
+        let mut grants = self.grants.lock().await;
+        grants.retain(|g| g.until > std::time::Instant::now());
+        grants.push(Grant {
+            kwant_id: kwant_id.to_string(),
+            conversation: conversation.to_string(),
+            tool_name: tool_name.to_string(),
+            arguments: grant_arguments(arguments),
+            until: std::time::Instant::now() + GRANT_TTL,
+        });
+    }
+
+    /// Uses up a matching [`grant_once`](Self::grant_once); false when there is none.
+    pub async fn take_grant(&self, kwant_id: &str, conversation: &str, tool_name: &str, arguments: &Value) -> bool {
+        let mut grants = self.grants.lock().await;
+        let now = std::time::Instant::now();
+        grants.retain(|g| g.until > now);
+        match Self::find_grant(&grants, kwant_id, conversation, tool_name, arguments) {
+            Some(i) => {
+                grants.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Forgets a [`grant_once`](Self::grant_once) the resumed turn didn't use, so the same call
+    /// later asks again. True when there was one.
+    pub async fn drop_grant(&self, kwant_id: &str, conversation: &str, tool_name: &str, arguments: &Value) -> bool {
+        let mut grants = self.grants.lock().await;
+        match Self::find_grant(&grants, kwant_id, conversation, tool_name, arguments) {
+            Some(i) => {
+                grants.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn find_grant(grants: &[Grant], kwant_id: &str, conversation: &str, tool_name: &str, arguments: &Value) -> Option<usize> {
+        let wanted = grant_arguments(arguments);
+        grants.iter().position(|g| {
+            g.kwant_id == kwant_id && g.conversation == conversation && g.tool_name == tool_name && g.arguments == wanted
+        })
     }
 
     /// Registers a pending approval ticket and returns a receiver waiting for user choice.
@@ -83,6 +160,7 @@ impl PermissionBroker {
     /// Forgets a deleted bot's "always allow" answers.
     pub async fn forget_kwant(&self, kwant_id: &str) {
         self.always_allowed.lock().await.retain(|(k, _, _)| k != kwant_id);
+        self.grants.lock().await.retain(|g| g.kwant_id != kwant_id);
     }
 
     pub async fn is_allowed_for_session(&self, kwant_id: &str, conversation: &str, tool_name: &str) -> bool {
