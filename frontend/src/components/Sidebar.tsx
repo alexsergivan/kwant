@@ -434,7 +434,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               playSfx('click');
                               onManageTeam(t);
                             }}
-                            className="opacity-0 group-hover:opacity-100 p-1 hover:text-zinc-100 hover:bg-zinc-700/60 rounded transition-all text-zinc-400"
+                            className="opacity-0 group-hover:opacity-100 max-md:opacity-100 p-1 hover:text-zinc-100 hover:bg-zinc-700/60 rounded transition-all text-zinc-400"
                             title={`Team settings for @${t.name}`}
                           >
                             <Settings2 size={12} />

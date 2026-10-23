@@ -31,6 +31,13 @@ type GateState =
 
 installUnauthorizedListener();
 
+/** What the start screen says when the server didn't answer. */
+export function offlineMessage(e: unknown, online: boolean): string {
+  if (!online) return "You're offline. kwant bots opens once your phone is connected again.";
+  if (e instanceof Error && e.message !== 'Failed to fetch' && e.message !== 'Load failed') return e.message;
+  return "Can't reach the kwant bots server. Check that it's running and that this device can reach it.";
+}
+
 /** Shows its children once the API answers, and the token screen while it needs a token. */
 export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<GateState>({ kind: 'checking' });
@@ -51,7 +58,7 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
       const s = await fetchAuthStatus();
       setState(s.auth_required && !s.authenticated ? { kind: 'locked', notice } : { kind: 'ready', authRequired: s.auth_required });
     } catch (e) {
-      setState({ kind: 'offline', message: e instanceof Error && e.message !== 'Failed to fetch' ? e.message : "Can't reach the kwant bots server. Is it running?" });
+      setState({ kind: 'offline', message: offlineMessage(e, navigator.onLine) });
     } finally {
       checking.current = false;
     }
@@ -67,12 +74,16 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
     const onHash = () => {
       if (window.location.hash.includes('kwnt_token=')) consumeTokenLink().then((linkError) => check(linkError));
     };
+    // Back on the network (the installed app opened offline): try again without a tap.
+    const onOnline = () => check();
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     window.addEventListener('hashchange', onHash);
+    window.addEventListener('online', onOnline);
     return () => {
       cancelled = true;
       window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
       window.removeEventListener('hashchange', onHash);
+      window.removeEventListener('online', onOnline);
     };
   }, [check]);
 
@@ -105,7 +116,7 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
   }
 
   return (
-    <div className="min-h-screen w-screen flex items-center justify-center bg-zinc-950 text-zinc-100 p-4 font-sans">
+    <div className="min-h-[100dvh] w-screen flex items-center justify-center bg-zinc-950 text-zinc-100 p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] font-sans">
       <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-5">
         <div className="flex items-center gap-3">
           <ModernAvatar role="brand" name="kwant bots" size={36} />
@@ -128,7 +139,7 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
                 setState({ kind: 'checking' });
                 check();
               }}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 transition-colors"
+              className="flex items-center gap-1.5 min-h-[44px] px-4 rounded-lg text-xs font-medium bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 transition-colors"
             >
               <RefreshCw size={13} /> Try again
             </button>

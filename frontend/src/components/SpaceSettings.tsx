@@ -369,7 +369,7 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, onSpaceSaved, onAr
                 aria-pressed={icon === i}
                 aria-label={`Icon ${i}`}
                 onClick={() => setIcon(i)}
-                className={`w-9 h-9 rounded-lg text-lg flex items-center justify-center border ${icon === i ? 'border-sky-400 bg-sky-500/10' : 'border-zinc-800 hover:border-zinc-600'}`}
+                className={`w-9 h-9 max-md:w-11 max-md:h-11 rounded-lg text-lg flex items-center justify-center border ${icon === i ? 'border-sky-400 bg-sky-500/10' : 'border-zinc-800 hover:border-zinc-600'}`}
               >
                 {i}
               </button>
