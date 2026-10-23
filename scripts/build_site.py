@@ -155,7 +155,7 @@ def video(root, name, label, eager=False):
     lbl = html.escape(label, quote=True)
     return (
         f'<video data-autoplay controls muted playsinline loop preload="{"metadata" if eager else "none"}" '
-        f'poster="{base}-poster.jpg" width="1280" height="800" aria-label="{lbl}">'
+        f'poster="{base}-poster.webp" width="1280" height="800" aria-label="{lbl}">'
         f'<source src="{base}.mp4" type="video/mp4"></video>'
     )
 
