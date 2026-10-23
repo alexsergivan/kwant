@@ -1127,6 +1127,7 @@ impl Ctx<'_> {
         // requested_by_person is only this bot's word, so it shares the daily cap on bots made
         // without a card; past it, the person confirms the bot themselves
         let cap = crate::db::hires::AUTO_HIRES_PER_DAY;
+        let _cap = super::hires::AUTO_HIRE_CAP.lock().await;
         if self.state.db.auto_hires_today(&self.space).await.unwrap_or(i64::MAX) >= cap {
             return fail(format!(
                 "Nothing was created: {cap} bots were already made without a card in the last 24 hours. \

@@ -153,10 +153,11 @@ async fn stream_input_control_lease_and_origin_protection() {
 
 /// Opt in after building docker/browser.Dockerfile. Uses disposable data and a local HTML page.
 #[tokio::test]
-#[ignore = "requires Docker and the kwnt-browser:v1 image"]
+#[ignore = "requires Docker and the kwnt-browser:v2 image"]
 async fn live_chromium_stream_and_isolated_sessions() {
     let _ = tracing_subscriber::fmt().with_max_level(tracing::Level::WARN).try_init();
     let tmp = tempfile::tempdir().unwrap();
+    let _container = Container(kwnt::sandbox::service::managed_container_name(tmp.path()));
     let config = Config { data_dir: tmp.path().into(), ..Config::default() };
     let db = Database::init(tmp.path()).await.unwrap();
     let bots = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
@@ -208,4 +209,42 @@ async fn live_chromium_stream_and_isolated_sessions() {
     state.browser_service.reset(&id).await.unwrap();
     state.browser_service.reset(&bots[1].id).await.unwrap();
     task.abort();
+}
+
+/// Removes a test's browser container when the test ends: kwant starts it with
+/// `--restart unless-stopped` and never removes it, so each disposable data folder would leave
+/// one running.
+struct Container(String);
+
+impl Drop for Container {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("docker").args(["rm", "-f", &self.0]).output();
+    }
+}
+
+/// Opt in after building docker/browser.Dockerfile as kwnt-browser:v2, with kwnt-browser:v1 kept:
+/// a browser container made from an older image is replaced, so an image change reaches it.
+#[tokio::test]
+#[ignore = "requires Docker and the kwnt-browser:v1 and :v2 images"]
+async fn a_browser_container_from_an_older_image_is_replaced() {
+    let tmp = tempfile::tempdir().unwrap();
+    let name = kwnt::sandbox::service::managed_container_name(tmp.path());
+    let _container = Container(name.clone());
+    let made = std::process::Command::new("docker")
+        .args(["run", "-d", "--name", &name, "--init", "-p", "127.0.0.1::9222", "kwnt-browser:v1"])
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let image = || {
+        let out = std::process::Command::new("docker").args(["inspect", "--format", "{{.Config.Image}}", &name]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(image(), "kwnt-browser:v1");
+
+    let service = BrowserService::new(tmp.path().into(), None);
+    service.set_mode(kwnt::sandbox::computer::ComputerMode::Vm).await;
+    let ctrl = service.session("bot", tmp.path()).await.expect("a browser from the new image");
+    assert_eq!(image(), kwnt::sandbox::service::BROWSER_IMAGE);
+    let agent = ctrl.send_cdp_command("Runtime.evaluate", json!({"expression": "navigator.userAgent", "returnByValue": true})).await.unwrap();
+    assert!(agent.to_string().contains("Chrome/") && !agent.to_string().contains("Headless"), "{agent}");
 }

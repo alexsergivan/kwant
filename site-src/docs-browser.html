@@ -31,7 +31,7 @@ nav: browser
 
 <h2 id="vm">VM mode with Docker</h2>
 <p>Install Docker and start kwant. The first browser request builds the browser image from a recipe embedded in the binary and starts a private container, so a VPS with only the binary works too. No desktop or display server is needed. Prebuild the images to skip the first-use wait:</p>
-<pre><code>docker build -t kwnt-browser:v1 -f docker/browser.Dockerfile docker
+<pre><code>docker build -t kwnt-browser:v2 -f docker/browser.Dockerfile docker
 docker build -t kwnt-executor:v1 -f docker/executor.Dockerfile docker</code></pre>
 <p>The browser shares a 1.5 GiB memory limit across all bots, rather than one Chromium per bot. Browser contexts keep cookies and local storage apart. They aren't OS isolation between users who don't trust each other.</p>
 

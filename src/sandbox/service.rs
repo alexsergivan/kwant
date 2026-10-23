@@ -7,6 +7,13 @@ use serde_json::json;
 use std::{collections::HashMap, path::{Path, PathBuf}, time::Duration};
 use tokio::{process::Command, sync::Mutex, time::{sleep, timeout}};
 
+/// The VM browser's image. Bump it whenever `docker/browser.Dockerfile` or
+/// `docker/browser-entrypoint.sh` change: kwant builds an image only when its tag is missing, and
+/// replaces a browser container made from another tag, so the bump is what ships the change.
+pub const BROWSER_IMAGE: &str = "kwnt-browser:v2";
+const BROWSER_DOCKERFILE: &str = include_str!("../../docker/browser.Dockerfile");
+const BROWSER_ENTRYPOINT: &str = include_str!("../../docker/browser-entrypoint.sh");
+
 #[derive(Clone, Serialize, Deserialize)]
 struct SessionTarget {
     context: String,
@@ -184,29 +191,30 @@ impl BrowserService {
     }
 
     async fn managed_endpoint(&self) -> Result<String, BrowserError> {
-        // A deterministic installation name avoids collisions between local Kwnt instances.
-        use std::hash::{Hash, Hasher};
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        self.root.hash(&mut hash);
-        let name = format!("kwnt-browser-{:016x}", hash.finish());
-        if !matches!(Self::docker(&["inspect", "--format", "{{.State.Running}}", &name], 5).await.as_deref(), Ok("true")) {
-            if Self::docker(&["inspect", "--format", "{{.Id}}", &name], 5).await.is_ok() {
+        let name = managed_container_name(&self.root);
+        let image = Self::docker(&["inspect", "--format", "{{.Config.Image}}", &name], 5).await.ok();
+        // A container made from an older image keeps that image's browser: make a new one
+        if image.as_deref().is_some_and(|i| i != BROWSER_IMAGE) {
+            Self::docker(&["rm", "-f", &name], 30).await?;
+        }
+        if image.as_deref() == Some(BROWSER_IMAGE) {
+            if !matches!(Self::docker(&["inspect", "--format", "{{.State.Running}}", &name], 5).await.as_deref(), Ok("true")) {
                 Self::docker(&["start", &name], 30).await?;
-            } else {
-                if Self::docker(&["image", "inspect", "kwnt-browser:v1"], 5).await.is_err() {
-                    let build = self.root.join("browser-image");
-                    tokio::fs::create_dir_all(&build).await.map_err(|e| BrowserError::Http(e.to_string()))?;
-                    tokio::fs::write(build.join("Dockerfile"), include_str!("../../docker/browser.Dockerfile")).await
-                        .map_err(|e| BrowserError::Http(e.to_string()))?;
-                    tokio::fs::write(build.join("browser-entrypoint.sh"), include_str!("../../docker/browser-entrypoint.sh")).await
-                        .map_err(|e| BrowserError::Http(e.to_string()))?;
-                    Self::docker(&["build", "-t", "kwnt-browser:v1", &build.to_string_lossy()], 600).await?;
-                }
-                Self::docker(&["run", "-d", "--name", &name, "--restart", "unless-stopped",
-                    "--init", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--memory=1536m",
-                    "--cpus=2", "--pids-limit=512", "--read-only", "--tmpfs", "/tmp:rw,nosuid,size=512m",
-                    "-p", "127.0.0.1::9222", "kwnt-browser:v1"], 30).await?;
             }
+        } else {
+            if Self::docker(&["image", "inspect", BROWSER_IMAGE], 5).await.is_err() {
+                let build = self.root.join("browser-image");
+                tokio::fs::create_dir_all(&build).await.map_err(|e| BrowserError::Http(e.to_string()))?;
+                tokio::fs::write(build.join("Dockerfile"), BROWSER_DOCKERFILE).await
+                    .map_err(|e| BrowserError::Http(e.to_string()))?;
+                tokio::fs::write(build.join("browser-entrypoint.sh"), BROWSER_ENTRYPOINT).await
+                    .map_err(|e| BrowserError::Http(e.to_string()))?;
+                Self::docker(&["build", "-t", BROWSER_IMAGE, &build.to_string_lossy()], 600).await?;
+            }
+            Self::docker(&["run", "-d", "--name", &name, "--restart", "unless-stopped",
+                "--init", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--memory=1536m",
+                "--cpus=2", "--pids-limit=512", "--read-only", "--tmpfs", "/tmp:rw,nosuid,size=512m",
+                "-p", "127.0.0.1::9222", BROWSER_IMAGE], 30).await?;
         }
         let binding = Self::docker(&["port", &name, "9222/tcp"], 5).await?;
         let port = binding.lines().next().and_then(|line| line.rsplit(':').next())
@@ -332,5 +340,35 @@ impl BrowserService {
             }
         }
         Ok(())
+    }
+}
+
+/// The VM browser container of the kwant whose data folder is `root`: one name per installation
+/// avoids collisions between local kwant instances.
+pub fn managed_container_name(root: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    root.hash(&mut hash);
+    format!("kwnt-browser-{:016x}", hash.finish())
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::{BROWSER_DOCKERFILE, BROWSER_ENTRYPOINT, BROWSER_IMAGE};
+    use sha2::{Digest, Sha256};
+
+    /// The browser files `kwnt-browser:v2` was built from. A change to them without a new
+    /// [`BROWSER_IMAGE`] would never reach a computer that already has the old tag.
+    #[test]
+    fn the_browser_image_tag_moves_with_its_files() {
+        let mut files = Sha256::new();
+        files.update(BROWSER_DOCKERFILE);
+        files.update(BROWSER_ENTRYPOINT);
+        let hash: String = files.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            (BROWSER_IMAGE, hash.as_str()),
+            ("kwnt-browser:v2", "52d86739629ce24f"),
+            "docker/browser files changed: bump BROWSER_IMAGE, then record the new hash here"
+        );
     }
 }

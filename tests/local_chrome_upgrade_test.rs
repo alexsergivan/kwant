@@ -1,6 +1,9 @@
 //! Upgrading kwant with its windowless Chrome still running: that Chrome was started without
 //! kwant's user agent and tells sites it is "HeadlessChrome", so kwant restarts it once, and never
 //! again after. Skipped when no Chrome is installed.
+#[path = "support/chrome_guard.rs"]
+mod chrome_guard;
+use chrome_guard::ChromeGuard;
 use kwnt::sandbox::{
     computer::{self, ComputerMode},
     service::BrowserService,
@@ -23,6 +26,7 @@ async fn an_older_kwants_headless_chrome_is_restarted_once() {
     let tmp = tempfile::tempdir().unwrap();
     let profile = tmp.path().join("local-chrome");
     std::fs::create_dir_all(&profile).unwrap();
+    let _chrome = ChromeGuard(profile.clone());
 
     // what an older kwant left running: windowless, its own user agent, no launch record
     let mut old = std::process::Command::new(&chrome)

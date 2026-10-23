@@ -39,12 +39,12 @@ Local mode gives up isolation: commands run with your user's access to your file
 
 ## VM mode on a Mac or Linux VPS
 
-Install Docker and start Kwnt normally. The first browser request builds the embedded browser image and starts a private container. Neither a desktop session nor a display server is required on the VPS. Subsequent requests reuse Chromium. The managed debugging port binds only to 127.0.0.1.
+Install Docker and start Kwnt normally. The first browser request builds the embedded browser image and starts a private container. Neither a desktop session nor a display server is required on the VPS. Subsequent requests reuse Chromium. When an update ships a new browser image tag, the first browser request builds it and replaces kwant's browser container, so the bots' open pages close once. The managed debugging port binds only to 127.0.0.1.
 
 Prebuild images to avoid first-use latency:
 
 ```bash
-docker build -t kwnt-browser:v1 -f docker/browser.Dockerfile docker
+docker build -t kwnt-browser:v2 -f docker/browser.Dockerfile docker
 docker build -t kwnt-executor:v1 -f docker/executor.Dockerfile docker
 ./target/release/kwnt serve --host 127.0.0.1 --port 8799
 ```

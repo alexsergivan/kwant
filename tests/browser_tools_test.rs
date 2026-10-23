@@ -4,6 +4,9 @@
 //! only the turn's own sandbox. The browser part runs a real windowless Chrome in Local mode and
 //! is skipped when none is installed.
 
+#[path = "support/chrome_guard.rs"]
+mod chrome_guard;
+use chrome_guard::ChromeGuard;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -113,6 +116,7 @@ async fn claude_turn_gets_browser_tools_that_drive_its_own_panel() {
     std::env::remove_var("WAYLAND_DISPLAY");
     std::env::set_var("KWNT_COMPUTER_MODE", "local");
     let (app, state, _tmp) = setup().await;
+    let _chrome = ChromeGuard(state.config.data_dir.join("local-chrome"));
     let kwants = state.db.list_kwants(&SpaceId::default_space()).await.unwrap();
     let (bot, other) = (&kwants[0], &kwants[1]);
     let scope = |sandbox: Option<&str>| SelfScope {

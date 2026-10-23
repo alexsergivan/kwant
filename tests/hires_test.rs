@@ -595,3 +595,44 @@ async fn bot_create_counts_against_the_daily_auto_hire_cap() {
     assert!(text.contains("Nothing is created"), "{text}");
     assert_eq!(latest(&e).await["status"], "pending");
 }
+
+/// Counting the day's automatic hires and making the bot are one step: bots creating bots at
+/// the same moment, and "always accept" hiring alongside them, still stop at the daily cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn simultaneous_hires_cannot_pass_the_daily_cap() {
+    let e = setup().await;
+    let (_, _) = call(&e.app, "PUT", "/api/spaces/spc_default/hire-policy", None, Some(json!({"policy": "auto"}))).await;
+    let roles = [
+        ("Taxman", "Tax advisor"),
+        ("Coach", "Fitness coach"),
+        ("Gardener", "Garden designer"),
+        ("Painter", "Portrait painter"),
+        ("Baker", "Bread recipe planner"),
+        ("Pilot", "Flight route planner"),
+    ];
+    let mut tokens = Vec::new();
+    for i in 0..roles.len() {
+        tokens.push(turn(&e, &format!("t-race{i}")).await);
+    }
+    let calls = roles.iter().zip(&tokens).enumerate().map(|(i, ((name, role), token))| {
+        let e = &e;
+        async move {
+            if i % 2 == 0 {
+                let args = json!({"name": name, "title": role, "instructions": format!("You are {name}."), "requested_by_person": true});
+                tool(e, token, "bot_create", args).await;
+            } else {
+                tool(e, token, "propose_hire", specialist(name, role)).await;
+            }
+        }
+    });
+    futures::future::join_all(calls).await;
+    let mut made = Vec::new();
+    for (name, _) in roles {
+        if bot_named(&e, "spc_default", name).await.is_some() {
+            made.push(name);
+        }
+    }
+    assert_eq!(made.len(), 3, "only 3 bots a day without the person: {made:?}");
+    let (_, p) = call(&e.app, "GET", "/api/spaces/spc_default/hire-policy", None, None).await;
+    assert_eq!(p["auto_hires_last_24h"], 3, "{p}");
+}

@@ -298,7 +298,8 @@ pub fn redact(text: &str, secrets: &[String]) -> String {
 }
 
 /// Replaces home folders in text shown to other people and bots with `~`: this computer's home
-/// and anything shaped like `/home/<name>` or `/Users/<name>`, so a username doesn't leak.
+/// and anything shaped like `/home/<name>`, `/Users/<name>` or `C:\Users\<name>`, so a username
+/// doesn't leak.
 pub fn hide_home_paths(text: &str) -> String {
     let mut text = text.to_string();
     // A home elsewhere (`/root`, `/var/lib/kwant`); only whole folders, so `/rooted` stays
@@ -309,8 +310,13 @@ pub fn hide_home_paths(text: &str) -> String {
     }
     let mut out = String::with_capacity(text.len());
     let mut rest = text.as_str();
-    while let Some((at, len)) = ["/home/", "/Users/"].iter().filter_map(|p| rest.find(p).map(|i| (i, p.len()))).min() {
-        let name_len = rest[at + len..].find(|c: char| c == '/' || c.is_whitespace() || "\"'`)]>:,;".contains(c)).unwrap_or(rest.len() - at - len);
+    loop {
+        let unix = ["/home/", "/Users/"].iter().filter_map(|p| rest.find(p).map(|i| (i, p.len()))).min();
+        let Some((at, len)) = [unix, windows_users_folder(rest)].into_iter().flatten().min() else {
+            break;
+        };
+        let quote = rest[..at].chars().next_back().filter(|c| "\"'`".contains(*c));
+        let name_len = home_name_len(&rest[at + len..], quote);
         // `/home/` on its own (or inside a longer word like `/x/home/`) isn't someone's home
         let starts_path = at == 0 || !rest[..at].ends_with(|c: char| c.is_alphanumeric() || "_-.".contains(c));
         if name_len == 0 || !starts_path {
@@ -324,6 +330,61 @@ pub fn hide_home_paths(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// The length of the user name at the start of `s`, just after a home's `Users/`. A name with
+/// spaces (`Oleks Smith`, up to three words) counts only when the path goes on after it or the
+/// quote it opened with closes, so `/home/ann and more` stays `~ and more`.
+fn home_name_len(s: &str, quote: Option<char>) -> usize {
+    let word_end = |s: &str| s.find(|c: char| c == '/' || c == '\\' || c.is_whitespace() || "\"'`)]>:,;".contains(c)).unwrap_or(s.len());
+    let first = word_end(s);
+    let mut len = first;
+    for _ in 0..2 {
+        if first == 0 || !s[len..].starts_with(' ') {
+            break;
+        }
+        let word = word_end(&s[len + 1..]);
+        if word == 0 {
+            break;
+        }
+        len += 1 + word;
+        let next = s[len..].chars().next();
+        if matches!(next, Some('/' | '\\')) || (next.is_some() && next == quote) {
+            return len;
+        }
+    }
+    first
+}
+
+/// Where the first Windows users folder (`C:\Users\`, `c:/users/`, or JSON-escaped
+/// `C:\\Users\\`) starts in `text`, and its length up to the user name.
+fn windows_users_folder(text: &str) -> Option<(usize, usize)> {
+    let b = text.as_bytes();
+    let separators = |mut j: usize| {
+        while j < b.len() && (b[j] == b'\\' || b[j] == b'/') {
+            j += 1;
+        }
+        j
+    };
+    let mut from = 0;
+    while let Some(off) = text[from..].find(':') {
+        let colon = from + off;
+        from = colon + 1;
+        // A drive letter on its own: `C:`, not the end of a word like `http:`
+        if colon == 0 || !b[colon - 1].is_ascii_alphabetic() || (colon >= 2 && (b[colon - 2].is_ascii_alphanumeric() || b[colon - 2] == b'_')) {
+            continue;
+        }
+        let users = separators(colon + 1);
+        if users == colon + 1 || !b[users..].get(..5).is_some_and(|w| w.eq_ignore_ascii_case(b"users")) {
+            continue;
+        }
+        let name = separators(users + 5);
+        if name == users + 5 {
+            continue;
+        }
+        return Some((colon - 1, name - (colon - 1)));
+    }
+    None
 }
 
 fn arg<'a>(args: &'a Value, keys: &[&str]) -> Option<&'a str> {
@@ -543,8 +604,18 @@ mod tests {
     fn home_folders_are_hidden() {
         assert_eq!(
             hide_home_paths("open /home/oleks/.kwnt/data.db failed; see /Users/Oleks Smith/x and /home/ann"),
-            "open ~/.kwnt/data.db failed; see ~ Smith/x and ~"
+            "open ~/.kwnt/data.db failed; see ~/x and ~"
         );
+        // A name with spaces, whole, when the path goes on or its quotes close
+        assert_eq!(hide_home_paths("at /Users/Ann Marie Lee/Library/x"), "at ~/Library/x");
+        assert_eq!(hide_home_paths("open '/Users/Oleks Smith' failed"), "open '~' failed");
+        assert_eq!(hide_home_paths("/home/ann and then /tmp/x"), "~ and then /tmp/x", "a sentence after a name isn't the name");
+        // Windows homes, either slash, any case, and escaped in JSON
+        assert_eq!(hide_home_paths(r"C:\Users\Oleks Smith\AppData\kwnt.log"), r"~\AppData\kwnt.log");
+        assert_eq!(hide_home_paths("d:/users/oleks/x and C:/Users/ann"), "~/x and ~");
+        assert_eq!(hide_home_paths(r#"{"path":"C:\\Users\\oleks\\x"}"#), r#"{"path":"~\\x"}"#);
+        // Not a Windows home: another folder, or a URL scheme
+        assert_eq!(hide_home_paths(r"C:\Program Files\kwnt and note:\Users\x"), r"C:\Program Files\kwnt and note:\Users\x");
         // Not a home: a bare `/home/`, or `home` inside another path
         assert_eq!(hide_home_paths("/home/ and /srv/home/app"), "/home/ and /srv/home/app");
         assert_eq!(hide_home_paths("no paths here"), "no paths here");
