@@ -40,6 +40,38 @@
     }
   });
 
+  // Install box: tabs (arrow keys move between them) and a copy button per command.
+  document.querySelectorAll("[data-tabs]").forEach(function (box) {
+    var tabs = [].slice.call(box.querySelectorAll("[role=tab]"));
+    function pick(t, focus) {
+      tabs.forEach(function (o) {
+        var on = o === t;
+        o.setAttribute("aria-selected", on ? "true" : "false");
+        o.tabIndex = on ? 0 : -1;
+        document.getElementById(o.getAttribute("aria-controls")).hidden = !on;
+      });
+      if (focus) t.focus();
+    }
+    tabs.forEach(function (t, i) {
+      t.addEventListener("click", function () { pick(t); });
+      t.addEventListener("keydown", function (e) {
+        var j = e.key === "ArrowRight" ? i + 1 : e.key === "ArrowLeft" ? i - 1 : e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : null;
+        if (j === null) return;
+        e.preventDefault();
+        pick(tabs[(j + tabs.length) % tabs.length], true);
+      });
+    });
+  });
+  document.querySelectorAll(".copy-cmd").forEach(function (btn) {
+    if (!navigator.clipboard) { btn.hidden = true; return; }
+    btn.addEventListener("click", function () {
+      navigator.clipboard.writeText(btn.parentNode.querySelector("code").textContent).then(function () {
+        btn.textContent = "copied";
+        setTimeout(function () { btn.textContent = "copy"; }, 1600);
+      });
+    });
+  });
+
   // Copy buttons on code blocks.
   document.querySelectorAll("pre > code").forEach(function (code) {
     if (!navigator.clipboard) return;

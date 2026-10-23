@@ -186,6 +186,7 @@ active: features
       <li><h3>Laptop or VPS</h3><p>Nothing to sign in to locally. On a server, open the link it prints once. Docker Compose and a systemd unit are included.</p></li>
       <li><h3>Any CLI or API</h3><p>The <code>claude</code>, <code>codex</code> or <code>grok</code> CLI, or Anthropic, OpenAI or xAI keys.</p></li>
       <li><h3>MCP tools</h3><p>Add any MCP server and pick which bots can use it. OAuth for servers that need a sign-in.</p></li>
+      <li><h3>Composio, optional</h3><p>Under <strong>Connections</strong>, add Composio to reach Gmail, Slack, Notion, Linear and more. It's off until you switch it on, and those sign-ins live on Composio's servers, not in kwant's vault.</p></li>
       <li><h3>A shared browser</h3><p>Bots browse in kwant's own browser profile, or in a container in VM mode.</p></li>
       <li><h3>Your data, one folder</h3><p>Chats, bots and settings live in <code>~/.kwnt</code> by default.</p></li>
     </ul>
@@ -193,15 +194,19 @@ active: features
   </div>
 </section>
 
-<section aria-labelledby="closing-title">
-  <div class="wrap">
-    <div class="closing">
-      <h2 id="closing-title">Put your team to work</h2>
+<section class="closing-band" aria-labelledby="closing-title">
+  <div class="wrap closing-grid">
+    <div>
+      <h2 id="closing-title">Clock in your team</h2>
       <p>Clone it, run <code>make run</code> and ask your first question in a few minutes.</p>
+    </div>
+    <div class="closing-act">
+      {{install:end}}
       <div class="cta">
-        <a class="btn btn-primary" href="docs/quickstart.html">Read the quickstart</a>
-        <a class="btn btn-ghost" href="docs/install.html">Run it on a server</a>
+        <a class="btn btn-light" href="docs/quickstart.html">Read the quickstart</a>
+        <a class="btn btn-line" href="docs/install.html">Run it on a server</a>
       </div>
     </div>
   </div>
+  <div class="scene street" data-scene="street"><canvas aria-hidden="true"></canvas></div>
 </section>

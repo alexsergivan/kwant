@@ -27,6 +27,10 @@ nav: mcp
 <h2 id="suggestions">Bots can suggest servers</h2>
 <p>Bots can search the official MCP Registry and post a suggestion card in the chat. A suggestion installs nothing: you install it, with one click, and only exact versions from the default npm and PyPI registries, Docker images or HTTPS endpoints qualify. Cards for servers that would run on your computer say so.</p>
 
+<h2 id="composio">Composio (optional)</h2>
+<p><a href="https://composio.dev" rel="noopener">Composio</a> gives your bots Gmail, Slack, Notion, Linear and many more apps through one MCP server. Open <strong>Connections → Optional connectors → Composio → Add</strong>, then paste the MCP address from your Composio dashboard (an https address on composio.dev) and your Composio API key. It's added switched off, so switch it on when you're ready.</p>
+<div class="note warn"><strong>Composio keeps those app sign-ins on its own servers,</strong> not in kwant's vault. The Connections page says so next to the button.</div>
+
 <h2 id="approvals">Approvals for tools</h2>
 <p>MCP tool calls follow the bot's <a href="approvals.html#modes">approval mode</a>. Under "Ask only when risky", tools the server marks read-only and not destructive run without a card. That's the server's own claim, and if kwant can't check it, the call asks. Every call a bot makes is recorded on its reply.</p>
 

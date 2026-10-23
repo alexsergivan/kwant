@@ -11,6 +11,7 @@ Shortcodes in the HTML:
   {{root}}                                relative path back to site/
   {{shot:NAME|ALT|SIZES}}                 a zoomable responsive screenshot (desktop-* or phone-*)
   {{video:NAME|LABEL}}                    a muted looping demo clip with its poster
+  {{install:ID}}                          the install command box with macOS/Linux and Docker tabs
 """
 import html
 import pathlib
@@ -42,14 +43,17 @@ DOC_GROUPS = [
 ]
 DOCS = [d for _, items in DOC_GROUPS for d in items]
 
+# The mark is the kwant app's antenna bot, the same 8-bit creature the bots use as avatars.
+LOGO_RECTS = [
+    (10, 4, 1, 1, "#1d1147"), (10, 1, 2, 2, "#ddd5ff"), (4, 5, 8, 1, "#fff"), (3, 6, 10, 1, "#fff"), (2, 7, 12, 7, "#fff"),
+    (3, 14, 10, 1, "#fff"), (4, 15, 8, 1, "#ddd5ff"), (13, 7, 1, 7, "#ddd5ff"), (5, 8, 2, 3, "#1d1147"), (9, 8, 2, 3, "#1d1147"),
+    (3, 11, 2, 1, "#b8a9fb"), (11, 11, 2, 1, "#b8a9fb"), (6, 12, 1, 1, "#1d1147"), (9, 12, 1, 1, "#1d1147"), (7, 13, 2, 1, "#1d1147"),
+    (4, 16, 2, 1, "#ddd5ff"), (10, 16, 2, 1, "#ddd5ff"),
+]
 LOGO = (
-    '<svg viewBox="0 0 32 32" aria-hidden="true">'
-    '<circle cx="16" cy="16" r="14" fill="#11151c" stroke="#3a4558" stroke-width="1.5"/>'
-    '<path d="M16 5a11 11 0 0 1 10.4 7.4" fill="none" stroke="#5ec4b6" stroke-width="3" stroke-linecap="round"/>'
-    '<path d="M24.6 22.6A11 11 0 0 1 16 27" fill="none" stroke="#ef7d62" stroke-width="3" stroke-linecap="round"/>'
-    '<path d="M7.4 21A11 11 0 0 1 5.4 13" fill="none" stroke="#f0b44c" stroke-width="3" stroke-linecap="round"/>'
-    '<path d="M16 16L11.5 10" stroke="#ece5d6" stroke-width="2" stroke-linecap="round"/>'
-    '<circle cx="16" cy="16" r="2.4" fill="#f0b44c"/></svg>'
+    '<svg viewBox="0 0 16 17" shape-rendering="crispEdges" aria-hidden="true">'
+    + "".join(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{c}"/>' for x, y, w, h, c in LOGO_RECTS)
+    + "</svg>"
 )
 GH_ICON = (
     '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 '
@@ -94,8 +98,33 @@ def video(root, name, label, eager=False):
     )
 
 
+INSTALL = [
+    ("src", "macOS · Linux", "git clone https://github.com/alexsergivan/kwant && cd kwant && make run"),
+    ("docker", "Docker", "git clone https://github.com/alexsergivan/kwant && cd kwant && docker compose up -d --build"),
+]
+
+
+NOTAB = ' tabindex="-1"'
+
+
+def install(uid):
+    tabs = "".join(
+        f'<button type="button" role="tab" id="{uid}-t-{k}" aria-controls="{uid}-p-{k}" '
+        f'aria-selected="{"true" if i == 0 else "false"}"{"" if i == 0 else NOTAB}>{html.escape(label)}</button>'
+        for i, (k, label, _) in enumerate(INSTALL)
+    )
+    panels = "".join(
+        f'<div class="cmd" role="tabpanel" id="{uid}-p-{k}" aria-labelledby="{uid}-t-{k}"{"" if i == 0 else " hidden"}>'
+        f'<span class="p" aria-hidden="true">$</span><code>{html.escape(cmd)}</code>'
+        f'<button type="button" class="copy-cmd" aria-label="Copy the {html.escape(label)} install command">copy</button></div>'
+        for i, (k, label, cmd) in enumerate(INSTALL)
+    )
+    return f'<div class="install" data-tabs><div class="tabs" role="tablist" aria-label="Install with">{tabs}</div>{panels}</div>'
+
+
 def expand(body, root):
     body = body.replace("{{root}}", root)
+    body = re.sub(r"\{\{install:([a-z0-9-]+)\}\}", lambda m: install(m[1]), body)
     body = re.sub(r"\{\{shot:([^|}]+)\|([^|}]+)(?:\|([^}]*))?\}\}", lambda m: shot(root, m[1], m[2], m[3]), body)
     body = re.sub(
         r"\{\{video(!?):([^|}]+)\|([^}]+)\}\}", lambda m: video(root, m[2], m[3], eager=m[1] == "!"), body
@@ -108,16 +137,15 @@ def header(root, active):
     def cur(name):
         return ' aria-current="page"' if active == name else ""
 
+    over = " over" if active == "home" else ""
     return f"""<a class="skip" href="#main">Skip to content</a>
-<header class="site-header">
+<header class="site-header{over}">
   <div class="wrap">
     <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
     <nav class="nav" aria-label="Main">
-      <a class="hide-sm" href="{root}features.html"{cur("features")}>Features</a>
-      <a class="hide-sm" href="{home}#how">How it works</a>
-      <a class="hide-sm" href="{home}#faq">FAQ</a>
+      <a href="{root}features.html"{cur("features")}>Features</a>
       <a href="{root}docs/quickstart.html"{cur("docs")}>Docs</a>
-      <a class="btn btn-ghost" href="{GITHUB}" rel="noopener">{GH_ICON}<span>GitHub</span></a>
+      <a class="btn btn-light" href="{GITHUB}" rel="noopener">{GH_ICON}<span>GitHub</span></a>
     </nav>
   </div>
 </header>"""
@@ -127,23 +155,34 @@ def footer(root):
     home = root or "./"
     return f"""<footer class="site-footer">
   <div class="wrap">
-    <div>
+    <div class="foot-brand">
       <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
-      <p class="foot-log"><span>07:15</span> End of shift.</p>
-      <p>A self-hosted team of AI bots in one binary. Screens and clips on this site come from a real kwant build running sample data.</p>
+      <p>A self-hosted team of AI bots in one binary. Free and open source, MIT or Apache-2.0.</p>
     </div>
-    <nav aria-label="Footer">
+    <nav aria-label="Product">
+      <h2>Product</h2>
+      <a href="{root}features.html">Features</a>
       <a href="{root}docs/quickstart.html">Quickstart</a>
       <a href="{root}docs/install.html">Install &amp; run</a>
-      <a href="{root}features.html">All features</a>
+      <a href="{root}docs/mcp.html">MCP tools</a>
+    </nav>
+    <nav aria-label="Using kwant">
+      <h2>Using kwant</h2>
       <a href="{root}docs/spaces.html">Spaces</a>
       <a href="{root}docs/accounts.html">Accounts</a>
       <a href="{root}docs/approvals.html">Approvals</a>
+      <a href="{root}docs/routines.html">Routines</a>
+    </nav>
+    <nav aria-label="Project">
+      <h2>Project</h2>
       <a href="{GITHUB}" rel="noopener">GitHub</a>
+      <a href="{GITHUB}/issues" rel="noopener">Issues</a>
+      <a href="{GITHUB}/blob/main/SECURITY.md" rel="noopener">Security</a>
     </nav>
   </div>
 </footer>
-<script src="{root}assets/js/site.js" defer></script>"""
+<script src="{root}assets/js/site.js" defer></script>
+<script src="{root}assets/js/pixel.js" defer></script>"""
 
 
 def docs_shell(root, current, body):
@@ -190,8 +229,8 @@ def page(meta, body, root):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(full_title)}</title>
 <meta name="description" content="{desc}">
-<meta name="theme-color" content="#0b0e13">
-<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#4024a8">
+<meta name="color-scheme" content="light">
 {robots}<link rel="canonical" href="{url}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="kwant">
@@ -201,16 +240,16 @@ def page(meta, body, root):
 <meta property="og:image" content="{SITE_URL}/assets/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="kwant: your team of AI bots works the night shift">
+<meta property="og:image:alt" content="kwant: little pixel bots working in a violet night town">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="{root}favicon.svg" type="image/svg+xml">
 <link rel="icon" href="{root}favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="{root}apple-touch-icon.png">
-<link rel="preload" href="{root}assets/fonts/fraunces-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="{root}assets/fonts/instrument-sans-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}assets/fonts/funnel-display-500.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}assets/css/site.css">
 </head>
-<body>
+<body class="page-{meta.get("active", "docs" if meta.get("nav") else "home") if meta["path"] != "404.html" else "404"}">
 {header(root, "docs" if meta.get("nav") else meta.get("active", "home"))}
 <main id="main">
 {body}

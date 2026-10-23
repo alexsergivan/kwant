@@ -2,14 +2,15 @@ title: Page not found
 description: This page doesn't exist. Head back to the kwant home page or the docs.
 path: 404.html
 ---
-<section class="notfound">
-  <div>
-    <p class="code" aria-hidden="true">404</p>
-    <h1>This page wandered off</h1>
+<section class="notfound" aria-labelledby="nf-title">
+  <div class="wrap">
+    <p class="cap">404 · not found</p>
+    <h1 id="nf-title">This page wandered off</h1>
     <p class="lede">The link may be old, or the page has moved.</p>
     <div class="cta">
-      <a class="btn btn-primary" href="/">Go home</a>
-      <a class="btn btn-ghost" href="/docs/quickstart">Read the docs</a>
+      <a class="btn btn-light" href="/">Go home</a>
+      <a class="btn btn-line" href="/docs/quickstart">Read the docs</a>
     </div>
   </div>
+  <div class="scene street" data-scene="street" data-lost><canvas aria-hidden="true"></canvas></div>
 </section>
