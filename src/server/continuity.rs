@@ -89,8 +89,9 @@ pub async fn prompt_block(
     let memories = db.list_memories(&kwant.id).await.unwrap_or_default();
     out.push_str(&memory_block(&memories, with_tools));
     if with_tools {
+        out.push_str(crate::drivers::APP_TOOLS_MARKER);
         out.push_str(&format!(
-            "\n\n[Your tools for continuity]\n\
+            "\n\
             If you have the `{SELF_SERVER_NAME}` tools:\n\
             - `search_history` finds earlier messages in chats you can see; use it when the user refers to something said before that isn't in this conversation.\n\
             - `memory_add`, `memory_update` and `memory_remove` keep your notes. Save only durable facts worth knowing in later chats \

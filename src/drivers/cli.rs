@@ -973,7 +973,7 @@ impl Driver for CliDriver {
             "invoking local CLI"
         );
 
-        let system_prompt = input.format_system_prompt();
+        let mut system_prompt = input.format_system_prompt();
         let effective_prompt = build_cli_prompt(&input);
 
         // Prevent CLI tools from spawning desktop browser windows on host
@@ -1162,6 +1162,11 @@ impl Driver for CliDriver {
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, "could not write MCP config; running without MCP");
+                            // Without the config no tool server starts: don't promise kwnt's tools
+                            let mut bare = input.clone();
+                            bare.drop_app_tools();
+                            bare.mcp = None;
+                            system_prompt = bare.format_system_prompt();
                             let _ = event_tx
                                 .send(RuntimeEvent::ThinkingDelta("MCP tools are unavailable this turn (config file error).".into()))
                                 .await;

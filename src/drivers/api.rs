@@ -1183,7 +1183,7 @@ impl ApiDriver {
 impl Driver for ApiDriver {
     async fn stream_turn(
         &self,
-        input: TurnInput,
+        mut input: TurnInput,
         event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<TurnOutput, DriverError> {
         let start = Instant::now();
@@ -1204,15 +1204,9 @@ impl Driver for ApiDriver {
 
         // If target is a real live API endpoint with API key or local Ollama, call HTTP streaming
         if api_key.is_some() || is_ollama(target_model) || custom {
-            // An API turn has no shell: the browser is reachable only through the tools
-            let browser = if input.has_self_tools() {
-                super::BrowserAccess::Tools
-            } else {
-                super::BrowserAccess::Unavailable
-            };
             let anthropic = is_anthropic(&url);
-            let parts = input.system_prompt_parts(browser);
-            let effort = input.effort_level.as_deref().unwrap_or("medium");
+            let effort_owned = input.effort_level.clone().unwrap_or_else(|| "medium".into());
+            let effort = effort_owned.as_str();
             let max_tokens = match effort {
                 "low" => 512,
                 "high" => 4096,
@@ -1228,18 +1222,32 @@ impl Driver for ApiDriver {
                 Ok(m) => m,
                 Err(why) => return Err(DriverError::Execution(why)),
             };
-            let mcp = input.mcp.as_ref();
-            let session = match mcp {
+            let mut self_failed = false;
+            let session = match input.mcp.as_ref() {
                 Some(ctx) => {
                     let cwd = input.workspace_dir.as_deref().filter(|d| d.exists());
                     let (session, problems) = McpToolSession::open(ctx, cwd).await;
+                    let own = format!("{}:", crate::mcp::SELF_SERVER_NAME);
                     for problem in problems {
+                        self_failed |= problem.starts_with(&own);
                         let _ = event_tx.send(RuntimeEvent::ThinkingDelta(format!("MCP server unavailable: {problem}"))).await;
                     }
                     Some(session)
                 }
                 None => None,
             };
+            // The prompt promises kwnt's tools only once they really started
+            if self_failed {
+                input.drop_app_tools();
+            }
+            // An API turn has no shell: the browser is reachable only through the tools
+            let browser = if input.has_self_tools() {
+                super::BrowserAccess::Tools
+            } else {
+                super::BrowserAccess::Unavailable
+            };
+            let parts = input.system_prompt_parts(browser);
+            let mcp = input.mcp.as_ref();
             let request = ChatRequest {
                 url: &url,
                 api_key: api_key.as_deref(),

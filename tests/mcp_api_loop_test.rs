@@ -322,3 +322,37 @@ async fn anthropic_tool_calls_go_through_the_approver() {
     assert_eq!(last["content"][0]["content"], "The user denied this tool call.");
     assert_eq!(c.take_records()[0]["status"], "denied");
 }
+
+/// The system prompt of the model's first request.
+fn system_prompt(mock: &Mock) -> String {
+    let requests = mock.requests.lock().unwrap();
+    requests[0]["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "system").map(|m| m["content"].to_string()).collect()
+}
+
+fn with_app_tools(server: McpServer) -> TurnInput {
+    let mut c = ctx(Arc::new(FixedApprover(true)), 10, 8);
+    c.servers = vec![McpServer { name: kwnt::mcp::SELF_SERVER_NAME.into(), ..server }];
+    let mut i = input(Some(c));
+    i.continuity = format!("\n\n[Your notes]\n- likes tea{}\n- `routine_create` schedules it", kwnt::drivers::APP_TOOLS_MARKER);
+    i
+}
+
+#[tokio::test]
+async fn app_tools_that_fail_to_start_are_not_promised() {
+    let broken = McpServer { command: Some("/nonexistent/kwnt-tools".into()), ..echo_server(5) };
+    let (url, mock) = start_mock(vec![answer("I can't schedule that right now.")]).await;
+    let (out, events) = run(url, with_app_tools(broken)).await;
+    assert_eq!(out.text, "I can't schedule that right now.");
+    let system = system_prompt(&mock);
+    assert!(!system.contains("routine_create"), "{system}");
+    assert!(system.contains("likes tea") && system.contains("Your kwant app tools didn't start this turn"), "{system}");
+    assert!(system.contains("You have no kwant tools this turn"), "{system}");
+    assert!(mock.requests.lock().unwrap()[0].get("tools").is_none_or(|t| t.as_array().is_none_or(|a| a.is_empty())));
+    assert!(events.iter().any(|e| matches!(e, RuntimeEvent::ThinkingDelta(t) if t.contains("MCP server unavailable"))));
+
+    // A server that starts keeps the instructions
+    let (url, mock) = start_mock(vec![answer("ok")]).await;
+    run(url, with_app_tools(echo_server(5))).await;
+    let system = system_prompt(&mock);
+    assert!(system.contains("routine_create") && !system.contains("didn't start this turn"), "{system}");
+}

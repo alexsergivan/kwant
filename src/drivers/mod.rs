@@ -219,7 +219,31 @@ pub enum BrowserAccess {
     Unavailable,
 }
 
+/// Where the instructions for kwnt's own tools start in `TurnInput::continuity`
+/// (see `server::continuity::prompt_block`); everything from here on assumes the tools work.
+pub const APP_TOOLS_MARKER: &str = "\n\n[Your tools for continuity]";
+
+/// Replaces the tool instructions when kwnt's tools server didn't start for a turn.
+pub const NO_APP_TOOLS_NOTE: &str = "\n\n[Your app tools]\n\
+    Your kwant app tools didn't start this turn, so you can't save notes, schedule routines or follow-ups, delegate, share \
+    files, ask the person through a card or change any settings right now. Don't say you did any of these. If the person \
+    asks for one, tell them plainly it didn't work this time and that they can try again in a moment.";
+
 impl TurnInput {
+    /// For a turn whose kwnt tools server failed to start: drop it from the turn and swap the
+    /// prompt's tool instructions for a plain note that they are unavailable.
+    pub fn drop_app_tools(&mut self) {
+        if let Some(ctx) = &mut self.mcp {
+            ctx.servers.retain(|s| s.name != crate::mcp::SELF_SERVER_NAME);
+        }
+        if let Some(at) = self.continuity.find(APP_TOOLS_MARKER) {
+            self.continuity.truncate(at);
+        }
+        if !self.continuity.contains(NO_APP_TOOLS_NOTE) {
+            self.continuity.push_str(NO_APP_TOOLS_NOTE);
+        }
+    }
+
     /// Whether kwnt's own tools server (which carries the `browser_*` tools) is attached.
     pub fn has_self_tools(&self) -> bool {
         self.mcp
@@ -597,6 +621,17 @@ mod tests {
             store: None,
             mcp: None,
         }
+    }
+
+    #[test]
+    fn dropping_app_tools_swaps_their_instructions_for_a_note() {
+        let mut i = input();
+        i.continuity = format!("\n\n[Your notes]\n- likes tea{APP_TOOLS_MARKER}\n- `routine_create` schedules it");
+        i.drop_app_tools();
+        assert!(i.continuity.contains("likes tea") && !i.continuity.contains("routine_create"), "{}", i.continuity);
+        assert!(i.continuity.ends_with(NO_APP_TOOLS_NOTE));
+        i.drop_app_tools();
+        assert_eq!(i.continuity.matches("didn't start this turn").count(), 1);
     }
 
     #[test]
