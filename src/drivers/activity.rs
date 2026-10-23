@@ -297,6 +297,35 @@ pub fn redact(text: &str, secrets: &[String]) -> String {
     out
 }
 
+/// Replaces home folders in text shown to other people and bots with `~`: this computer's home
+/// and anything shaped like `/home/<name>` or `/Users/<name>`, so a username doesn't leak.
+pub fn hide_home_paths(text: &str) -> String {
+    let mut text = text.to_string();
+    // A home elsewhere (`/root`, `/var/lib/kwant`); only whole folders, so `/rooted` stays
+    if let Some(home) = dirs::home_dir().and_then(|h| h.to_str().map(|h| h.trim_end_matches('/').to_string())) {
+        if home.len() > 1 {
+            text = text.replace(&format!("{home}/"), "~/");
+        }
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some((at, len)) = ["/home/", "/Users/"].iter().filter_map(|p| rest.find(p).map(|i| (i, p.len()))).min() {
+        let name_len = rest[at + len..].find(|c: char| c == '/' || c.is_whitespace() || "\"'`)]>:,;".contains(c)).unwrap_or(rest.len() - at - len);
+        // `/home/` on its own (or inside a longer word like `/x/home/`) isn't someone's home
+        let starts_path = at == 0 || !rest[..at].ends_with(|c: char| c.is_alphanumeric() || "_-.".contains(c));
+        if name_len == 0 || !starts_path {
+            out.push_str(&rest[..at + len]);
+            rest = &rest[at + len..];
+            continue;
+        }
+        out.push_str(&rest[..at]);
+        out.push('~');
+        rest = &rest[at + len + name_len..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn arg<'a>(args: &'a Value, keys: &[&str]) -> Option<&'a str> {
     keys.iter().find_map(|k| args.get(*k).and_then(Value::as_str)).filter(|s| !s.trim().is_empty())
 }
@@ -508,6 +537,17 @@ mod tests {
         let s = log.observe(&pending("1", "Bash", json!({"command": long})));
         assert!(s[0].title.chars().count() <= MAX_TITLE);
         assert!(s[0].detail.as_ref().unwrap().chars().count() <= MAX_DETAIL);
+    }
+
+    #[test]
+    fn home_folders_are_hidden() {
+        assert_eq!(
+            hide_home_paths("open /home/oleks/.kwnt/data.db failed; see /Users/Oleks Smith/x and /home/ann"),
+            "open ~/.kwnt/data.db failed; see ~ Smith/x and ~"
+        );
+        // Not a home: a bare `/home/`, or `home` inside another path
+        assert_eq!(hide_home_paths("/home/ and /srv/home/app"), "/home/ and /srv/home/app");
+        assert_eq!(hide_home_paths("no paths here"), "no paths here");
     }
 
     #[test]

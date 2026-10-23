@@ -54,6 +54,11 @@ impl TurnActivity {
         self.with_log(|log| log.add_secrets(secrets));
     }
 
+    /// Masks the turn's secrets, credentials and home folders in text saved for others to read.
+    pub fn redact(&self, text: &str) -> String {
+        crate::drivers::activity::hide_home_paths(&self.with_log(|log| log.redact(text)))
+    }
+
     pub fn observe(&self, event: &RuntimeEvent) {
         let steps = self.with_log(|log| log.observe(event));
         self.send(steps);

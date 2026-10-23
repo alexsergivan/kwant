@@ -566,3 +566,32 @@ async fn bot_create_obeys_the_hire_policy_and_turned_down_kinds() {
     assert!(!err, "{text}");
     assert!(bot_named(&e, "spc_default", "Gardener").await.is_some());
 }
+
+/// `requested_by_person` is only the bot's word, so bots it makes share the daily cap with
+/// "always accept"; past it, the person confirms the next bot on a card.
+#[tokio::test]
+async fn bot_create_counts_against_the_daily_auto_hire_cap() {
+    let e = setup().await;
+    let create = |name: &str, role: &str| {
+        json!({"name": name, "title": role, "instructions": format!("You are {name}."), "requested_by_person": true})
+    };
+    for (i, (name, role)) in [("Taxman", "Tax advisor"), ("Coach", "Fitness coach"), ("Gardener", "Garden designer")].iter().enumerate() {
+        let token = turn(&e, &format!("t-cap{i}")).await;
+        let (text, err) = tool(&e, &token, "bot_create", create(name, role)).await;
+        assert!(!err, "{name}: {text}");
+    }
+    let (_, p) = call(&e.app, "GET", "/api/spaces/spc_default/hire-policy", None, None).await;
+    assert_eq!(p["auto_hires_last_24h"], 3, "{p}");
+
+    // The fourth in 24 hours isn't created; the bot is pointed at a card
+    let token = turn(&e, "t-cap3").await;
+    let (text, err) = tool(&e, &token, "bot_create", create("Painter", "Portrait painter")).await;
+    assert!(err && text.contains("without a card") && text.contains("propose_hire"), "{text}");
+    assert!(bot_named(&e, "spc_default", "Painter").await.is_none());
+
+    // And "always accept" can't add more on top: its next hire asks the person too
+    let (_, _) = call(&e.app, "PUT", "/api/spaces/spc_default/hire-policy", None, Some(json!({"policy": "auto"}))).await;
+    let text = ok(&e, &token, specialist("Painter", "Portrait painter")).await;
+    assert!(text.contains("Nothing is created"), "{text}");
+    assert_eq!(latest(&e).await["status"], "pending");
+}
