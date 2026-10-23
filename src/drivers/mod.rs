@@ -83,16 +83,24 @@ pub struct Teammate {
     pub title: String,
 }
 
-/// Models only know their training cutoff, so every turn is told the real date and how to use it.
 /// Drops the newest history message when it is the person's message this turn answers: callers
 /// save it before reading history and then pass it again as the prompt, so the model saw it twice.
+/// The prompt must be that message exactly, or it plus a block kwant appends itself, so a routine
+/// prompt that merely begins with the person's last words keeps that line.
 pub fn drop_current_message(history: &mut Vec<crate::db::models::Message>, prompt: &str) {
     let Some(last) = history.last() else { return };
     let text = last.text.trim();
-    if last.sender_role == "user" && !text.is_empty() && prompt.trim_start().starts_with(text) {
+    let is_current = !text.is_empty()
+        && prompt.trim_start().strip_prefix(text).is_some_and(|rest| {
+            rest.trim().is_empty() || KWANT_PROMPT_SUFFIXES.iter().any(|s| rest.starts_with(s))
+        });
+    if last.sender_role == "user" && is_current {
         history.pop();
     }
 }
+
+/// Blocks kwant adds after the person's own words in a turn's prompt (attachments, routing note).
+const KWANT_PROMPT_SUFFIXES: [&str; 2] = ["\n\n[Attached files]", "\n\n(kwant routing note:"];
 
 /// Frames text another bot wrote, wherever it reaches a bot (history, handoffs, delegated tasks
 /// and their results), so it is never mistaken for the person's own words or authority.
@@ -615,9 +623,12 @@ mod tests {
     #[test]
     fn the_current_message_is_not_repeated_in_history() {
         let mut h = vec![said("user", "hi"), said("kwant", "hello"), said("user", "plan my week")];
-        drop_current_message(&mut h, "plan my week\n\n[Files attached: a.pdf]");
+        drop_current_message(&mut h, "plan my week\n\n[Attached files]\n- a.pdf");
         assert_eq!(h.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["hi", "hello"]);
-        // Only the newest, only the person's, only when the prompt starts with it
+        let mut h = vec![said("user", "plan my week ")];
+        drop_current_message(&mut h, "  plan my week\n");
+        assert!(h.is_empty());
+        // Only the newest, only the person's, only when the prompt is exactly it
         for (last, prompt) in [("kwant", "hello again"), ("user", "something else")] {
             let mut h = vec![said("user", "hi"), said(last, "hello")];
             if last == "user" {
@@ -625,6 +636,12 @@ mod tests {
             }
             drop_current_message(&mut h, prompt);
             assert_eq!(h.len(), 2, "{last} {prompt}");
+        }
+        // A routine whose prompt only begins with the person's last words keeps that line
+        for prompt in ["plan my week and email it", "plan my week\n\nThen send the summary."] {
+            let mut h = vec![said("user", "plan my week")];
+            drop_current_message(&mut h, prompt);
+            assert_eq!(h.len(), 1, "{prompt}");
         }
         let mut h = vec![said("user", "  ")];
         drop_current_message(&mut h, "anything");
