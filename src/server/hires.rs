@@ -246,6 +246,27 @@ fn clash(name: &str, key: &str, bots: &[crate::db::models::Kwant], denials: &[Hi
     None
 }
 
+/// Why `bot_create` can't add this bot right away, if it can't: the same name, role, pending and
+/// turned-down checks as a hire proposal. A kind of bot the person turned down only comes back
+/// through `propose_hire`, so the person confirms it on a card.
+pub(super) async fn create_clash(state: &AppState, space: &SpaceId, name: &str, role: &str) -> Option<String> {
+    let key = role_key(role);
+    let name = name.trim_start_matches('@');
+    let denials = state.db.active_denials(space).await.unwrap_or_default();
+    if let Some(d) = denials.iter().find(|d| d.name.eq_ignore_ascii_case(name) || similar_roles(&d.role_key, &key)) {
+        return Some(format!(
+            "The person turned down hiring {} ({}) in this space on {}. If they asked for it again, propose it with propose_hire \
+            (requested_by_person true) so they confirm it on a card.",
+            d.name,
+            d.role,
+            d.resolved_at.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_default()
+        ));
+    }
+    let bots = state.db.list_kwants(space).await.unwrap_or_default();
+    let pending = state.db.list_hires(space, Some("pending")).await.unwrap_or_default();
+    clash(name, &key, &bots, &[], &pending, true)
+}
+
 async fn propose(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Value) -> ToolResult {
     if let Err(e) = super::spaces::ensure_active(state, space).await {
         let _ = e;

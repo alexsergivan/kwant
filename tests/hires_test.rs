@@ -528,3 +528,41 @@ async fn a_team_is_one_proposal_on_one_card() {
     assert!(bot_named(&e, "spc_default", "Gopher").await.is_none());
     assert_eq!(e.state.db.list_kwants(&space).await.unwrap().len(), before);
 }
+
+#[tokio::test]
+async fn bot_create_obeys_the_hire_policy_and_turned_down_kinds() {
+    let e = setup().await;
+    let token = turn(&e, "t-bc1").await;
+    let create = |name: &str, role: &str, requested: bool| {
+        json!({"name": name, "title": role, "instructions": format!("You are {name}."), "requested_by_person": requested})
+    };
+
+    // A bot the person didn't ask for goes through propose_hire, not bot_create
+    for args in [create("Gardener", "Garden helper", false), json!({"name": "Gardener", "title": "Garden helper", "instructions": "x"})] {
+        let (text, err) = tool(&e, &token, "bot_create", args).await;
+        assert!(err && text.contains("propose_hire"), "{text}");
+    }
+    assert!(bot_named(&e, "spc_default", "Gardener").await.is_none());
+
+    // A kind of bot already waiting for the person can't be created around the card
+    ok(&e, &token, specialist("Chef", "Recipe planner")).await;
+    let (text, err) = tool(&e, &token, "bot_create", create("Cook", "recipes planner", true)).await;
+    assert!(err && text.contains("already waiting"), "{text}");
+    assert!(bot_named(&e, "spc_default", "Cook").await.is_none());
+
+    // A turned-down kind stays out of bot_create, even with "always accept"; it goes back on a card
+    let h = latest(&e).await;
+    let (status, _) = call(&e.app, "POST", &format!("/api/hires/{}/deny", h["id"].as_str().unwrap()), None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _) = call(&e.app, "PUT", "/api/spaces/spc_default/hire-policy", None, Some(json!({"policy": "auto"}))).await;
+    for (name, role) in [("Menu", "Weekly recipe planner"), ("Chef", "Kitchen helper")] {
+        let (text, err) = tool(&e, &token, "bot_create", create(name, role, true)).await;
+        assert!(err && text.contains("turned down") && text.contains("propose_hire"), "{name}: {text}");
+        assert!(bot_named(&e, "spc_default", name).await.is_none(), "{name}");
+    }
+
+    // What the person asked for, of a new kind, is created at once
+    let (text, err) = tool(&e, &token, "bot_create", create("Gardener", "Garden helper", true)).await;
+    assert!(!err, "{text}");
+    assert!(bot_named(&e, "spc_default", "Gardener").await.is_some());
+}

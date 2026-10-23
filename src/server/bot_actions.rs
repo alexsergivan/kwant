@@ -160,7 +160,8 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bot_create",
-            "description": "Add a new bot to your space. It applies at once and the person sees a card with Undo.",
+            "description": "Add a new bot the person asked for in this conversation. It applies at once and the person sees a card \
+                with Undo. To suggest a bot they didn't ask for, use propose_hire instead.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -171,8 +172,9 @@ pub fn tools() -> Vec<Value> {
                     "model": {"type": "string", "description": "\"auto\" (default), an engine (claude, codex, grok, ollama, custom) or engine/model, from bot_list"},
                     "profile_id": {"type": "string", "description": "Optional account (from bot_list) for that engine"},
                     "avatar": {"type": "string", "enum": AVATARS},
+                    "requested_by_person": {"type": "boolean", "description": "true only when the person asked for this bot in this conversation"},
                 },
-                "required": ["name", "title", "instructions"],
+                "required": ["name", "title", "instructions", "requested_by_person"],
             },
         }),
         json!({
@@ -1113,6 +1115,15 @@ impl Ctx<'_> {
         let (Some(name), Some(title), Some(instructions)) = (arg(args, "name"), arg(args, "title"), arg(args, "instructions")) else {
             return fail("name, title and instructions are required");
         };
+        if args["requested_by_person"].as_bool() != Some(true) {
+            return fail(
+                "Nothing was created: bot_create is only for a bot the person asked for in this conversation (set \
+                requested_by_person). To suggest a new bot yourself, use propose_hire; the space's hire policy decides.",
+            );
+        }
+        if let Some(why) = super::hires::create_clash(self.state, &self.space, name, title).await {
+            return fail(format!("Nothing was created. {why}"));
+        }
         let spec = json!({
             "name": name,
             "title": title,

@@ -266,13 +266,13 @@ async fn bots_are_created_and_updated_and_the_person_undoes_it() {
     let origin = TurnOrigin { direct_kwant_id: Some(e.bot.id.clone()), ..Default::default() };
     let token = turn_in(&e, &e.bot, origin, "t-bots").await;
 
-    refused(&e, &token, "bot_create", json!({"name": "Two words", "title": "x", "instructions": "x"})).await;
-    let text = refused(&e, &token, "bot_create", json!({"name": "Chef", "title": "x", "instructions": "x", "model": "nonsense-model"})).await;
+    refused(&e, &token, "bot_create", json!({"requested_by_person": true, "name": "Two words", "title": "x", "instructions": "x"})).await;
+    let text = refused(&e, &token, "bot_create", json!({"requested_by_person": true, "name": "Chef", "title": "x", "instructions": "x", "model": "nonsense-model"})).await;
     assert!(text.contains("Unknown model"), "{text}");
-    let text = refused(&e, &token, "bot_create", json!({"name": e.other.name, "title": "x", "instructions": "x"})).await;
-    assert!(text.contains("not created"), "{text}");
+    let text = refused(&e, &token, "bot_create", json!({"requested_by_person": true, "name": e.other.name, "title": "x", "instructions": "x"})).await;
+    assert!(text.contains("already a bot called"), "{text}");
 
-    let text = ok(&e, &token, "bot_create", json!({"name": "Chef", "title": "Recipe helper",
+    let text = ok(&e, &token, "bot_create", json!({"requested_by_person": true, "name": "Chef", "title": "Recipe helper",
         "instructions": "You suggest recipes from what is in the fridge.", "model": "claude", "avatar": "chef"})).await;
     assert!(text.contains("Created bot Chef"), "{text}");
     let chef = e.state.db.list_kwants(&SpaceId::default_space()).await.unwrap().into_iter().find(|k| k.name == "Chef").expect("Chef");
@@ -326,7 +326,7 @@ async fn bots_are_created_and_updated_and_the_person_undoes_it() {
 async fn deleting_a_bot_waits_for_the_person() {
     let e = setup().await;
     let token = turn(&e, "t-del").await;
-    ok(&e, &token, "bot_create", json!({"name": "Temp", "title": "t", "instructions": "t"})).await;
+    ok(&e, &token, "bot_create", json!({"requested_by_person": true, "name": "Temp", "title": "t", "instructions": "t"})).await;
     let temp = e.state.db.list_kwants(&SpaceId::default_space()).await.unwrap().into_iter().find(|k| k.name == "Temp").unwrap();
     let text = ok(&e, &token, "bot_delete", json!({"bot": "Temp", "reason": "not needed"})).await;
     assert!(text.contains("confirm"), "{text}");
@@ -408,7 +408,7 @@ async fn what_stays_with_the_person_is_refused_with_where_to_do_it() {
     // MCP env/header values and keys can't ride along on a bot
     let text = refused(&e, &token, "bot_update", json!({"bot": e.bot.name, "env": {"GITHUB_TOKEN": "x"}})).await;
     assert!(text.contains("Tools") && text.contains("mcp_suggest"), "{text}");
-    let text = refused(&e, &token, "bot_create", json!({"name": "Spy", "title": "x", "instructions": "x", "api_key": "k"})).await;
+    let text = refused(&e, &token, "bot_create", json!({"requested_by_person": true, "name": "Spy", "title": "x", "instructions": "x", "api_key": "k"})).await;
     assert!(text.contains("secret"), "{text}");
 
     // No tool resolves approvals, answers questions, installs MCP, signs in or picks the computer
@@ -512,7 +512,7 @@ async fn card_text_follows_the_decision_and_monthly_schedules_read_naturally() {
 
     // Confirmed and declined requests read that way too
     for (name, route, lead) in [("Temp1", "confirm", "Confirmed: "), ("Temp2", "decline", "Declined: ")] {
-        ok(&e, &token, "bot_create", json!({"name": name, "title": "t", "instructions": "t"})).await;
+        ok(&e, &token, "bot_create", json!({"requested_by_person": true, "name": name, "title": "t", "instructions": "t"})).await;
         ok(&e, &token, "bot_delete", json!({"bot": name, "reason": "not needed"})).await;
         let req = last_action(&e).await;
         let card = find(messages(&e, &e.general.id).await, card_of(&req));

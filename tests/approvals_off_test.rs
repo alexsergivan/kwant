@@ -322,7 +322,7 @@ async fn only_the_person_changes_approvals() {
     assert!(err, "{text}");
     let (text, err) = self_tool(&e, &token, "bot_update", json!({"bot": e.bot.id, "approvals": "off"})).await;
     assert!(err && text.contains("approvals"), "{text}");
-    let (text, err) = self_tool(&e, &token, "bot_create", json!({"name": "Free", "title": "t", "instructions": "i", "approvals": "off"})).await;
+    let (text, err) = self_tool(&e, &token, "bot_create", json!({"requested_by_person": true, "name": "Free", "title": "t", "instructions": "i", "approvals": "off"})).await;
     assert!(err && text.contains("approvals"), "{text}");
     let (text, err) = self_tool(&e, &token, "space_update", json!({"name": "X", "approvals": "off"})).await;
     assert!(err && text.contains("approvals"), "{text}");
