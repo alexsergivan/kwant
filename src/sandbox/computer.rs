@@ -236,20 +236,62 @@ pub fn chrome_user_agent(chrome: &Path) -> Option<String> {
     headed_user_agent(&String::from_utf8_lossy(&out.stdout), std::env::consts::OS)
 }
 
-/// A normal Chrome user agent for kwant's plain HTTP requests (`web_fetch`): the local Chrome's,
-/// or, without one, a recent Chrome on this platform. Worked out once per process.
-pub fn browser_user_agent() -> &'static str {
-    static AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    AGENT.get_or_init(|| {
-        local_chrome_path()
-            .and_then(|chrome| chrome_user_agent(&chrome))
-            .or_else(|| headed_user_agent("Chrome 141.0.0.0", std::env::consts::OS))
-            .unwrap_or_default()
-    })
+/// [`chrome_user_agent`] for the local Chrome, run off the async workers: a slow `--version` (a
+/// snap wrapper takes about a second) would otherwise stall every task on that worker.
+pub async fn local_chrome_user_agent() -> Option<String> {
+    tokio::task::spawn_blocking(|| local_chrome_path().and_then(|chrome| chrome_user_agent(&chrome)))
+        .await
+        .ok()
+        .flatten()
 }
 
-/// Whether a running Chrome is windowless, from its `/json/version` user agent. Only a fallback
-/// where its command line can't be read: kwant's windowless Chrome no longer says so there.
+/// A normal Chrome user agent for kwant's plain HTTP requests (`web_fetch`): the local Chrome's,
+/// or, without one, a recent Chrome on this platform. Worked out once per process.
+pub async fn browser_user_agent() -> &'static str {
+    static AGENT: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+    AGENT
+        .get_or_init(|| async {
+            local_chrome_user_agent()
+                .await
+                .or_else(|| headed_user_agent("Chrome 141.0.0.0", std::env::consts::OS))
+                .unwrap_or_default()
+        })
+        .await
+}
+
+/// The file in kwant's Chrome profile that says which form kwant last started it in: "headless"
+/// or "window". Written before every start, so it describes the Chrome running there.
+const LAUNCH_MODE_FILE: &str = "kwant-launch-mode";
+
+fn record_launch_mode(profile: &Path, headless: bool) -> std::io::Result<()> {
+    std::fs::write(profile.join(LAUNCH_MODE_FILE), if headless { "headless" } else { "window" })
+}
+
+/// Whether kwant last started the Chrome on `profile` windowless. `None` for a Chrome started by
+/// an older kwant, which wrote no such file.
+pub fn launched_headless(profile: &Path) -> Option<bool> {
+    match std::fs::read_to_string(profile.join(LAUNCH_MODE_FILE)).ok()?.trim() {
+        "headless" => Some(true),
+        "window" => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether a running kwant Chrome is windowless: from its command line, else from the form kwant
+/// recorded when it started it, else from its user agent (only an older kwant's Chrome has
+/// neither, and that one still says "HeadlessChrome" when windowless). The user agent alone is
+/// wrong for kwant's own windowless Chrome, which reads like a windowed one: trusting it made
+/// every call see the wrong form and restart Chrome.
+pub fn is_windowless(command_line: Option<&str>, launched_headless: Option<bool>, user_agent: &str) -> bool {
+    match (command_line, launched_headless) {
+        (Some(line), _) => is_headless_command_line(line),
+        (None, Some(recorded)) => recorded,
+        (None, None) => is_headless_user_agent(user_agent),
+    }
+}
+
+/// Whether a running Chrome is windowless, from its `/json/version` user agent. Only right for a
+/// Chrome started without kwant's user agent (see [`is_windowless`]).
 pub fn is_headless_user_agent(user_agent: &str) -> bool {
     user_agent.contains("HeadlessChrome")
 }
@@ -277,16 +319,13 @@ async fn user_agent(endpoint: &str) -> Option<String> {
 }
 
 /// The kwant Chrome running on `profile`: its CDP endpoint and whether it is windowless. That comes
-/// from the `--headless` flag on its command line, since its user agent reads like a windowed one.
+/// from [`is_windowless`], since its user agent reads like a windowed one.
 pub async fn running_local_chrome(profile: &Path) -> Option<(String, bool)> {
     let port = read_devtools_port(profile)?;
     let endpoint = format!("http://127.0.0.1:{port}");
     let agent = user_agent(&endpoint).await?;
-    let headless = match profile_owner(profile).and_then(command_line) {
-        Some(line) => is_headless_command_line(&line),
-        None => is_headless_user_agent(&agent),
-    };
-    Some((endpoint, headless))
+    let line = profile_owner(profile).and_then(command_line);
+    Some((endpoint, is_windowless(line.as_deref(), launched_headless(profile), &agent)))
 }
 
 /// Whether the Chrome at `endpoint` still tells sites it is "HeadlessChrome": one started before
@@ -536,6 +575,9 @@ fn launch_local_chrome(profile: &Path, headless: bool) -> Result<(), String> {
         }
     }
     std::fs::create_dir_all(profile).map_err(|e| e.to_string())?;
+    // without it, a Chrome whose command line can't be read would be taken for the wrong form
+    record_launch_mode(profile, headless)
+        .map_err(|e| format!("Could not write to {}: {e}", profile.display()))?;
     let agent = if headless { chrome_user_agent(&chrome) } else { None };
     let mut cmd = std::process::Command::new(&chrome);
     cmd.args(chrome_args(profile, headless, agent.as_deref()))
@@ -719,8 +761,12 @@ mod tests {
         assert!(!args.iter().any(|a| a.contains("Headless") && a.starts_with("--user-agent")));
         // a window already sends the normal one
         assert!(!chrome_args(Path::new("/p"), false, Some(&agent)).iter().any(|a| a.starts_with("--user-agent")));
-        assert!(!browser_user_agent().contains("Headless"));
-        assert!(browser_user_agent().contains(" Chrome/"));
+    }
+
+    #[tokio::test]
+    async fn the_fetch_user_agent_is_a_normal_chrome() {
+        assert!(!browser_user_agent().await.contains("Headless"));
+        assert!(browser_user_agent().await.contains(" Chrome/"));
     }
 
     #[test]
@@ -733,6 +779,54 @@ mod tests {
         // a profile or user agent that merely mentions it is not the flag
         assert!(!is_headless_command_line("chrome --user-data-dir=/home/me/--headless-notes"));
         assert!(!is_headless_command_line("chrome --user-agent=Mozilla/5.0 HeadlessChrome/154 --headlessly"));
+    }
+
+    #[test]
+    fn an_unreadable_command_line_falls_back_to_the_launch_record() {
+        let agent = headed_user_agent("Chromium 154.0.8037.92", "linux").unwrap();
+        // kwant's own windowless Chrome sends a windowed user agent: the record decides
+        assert!(is_windowless(None, Some(true), &agent));
+        assert!(!is_windowless(None, Some(false), &agent));
+        // the command line wins over both
+        assert!(!is_windowless(Some("chromium --user-data-dir=/p"), Some(true), "HeadlessChrome/154"));
+        assert!(is_windowless(Some("chromium --headless=new"), Some(false), &agent));
+        // an older kwant's Chrome left no record and still says so in its user agent
+        assert!(is_windowless(None, None, "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/154.0.0.0"));
+        assert!(!is_windowless(None, None, &agent));
+
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(launched_headless(dir.path()), None);
+        record_launch_mode(dir.path(), true).unwrap();
+        assert_eq!(launched_headless(dir.path()), Some(true));
+        record_launch_mode(dir.path(), false).unwrap();
+        assert_eq!(launched_headless(dir.path()), Some(false));
+    }
+
+    /// Rigel's finding on #22: kwant's windowless Chrome answers with a windowed user agent, and
+    /// when its command line can't be read (no `SingletonLock` here, so no owner) it was taken for
+    /// a window, so every call saw the wrong form and restarted it.
+    #[tokio::test]
+    async fn windowless_chrome_with_an_unreadable_command_line_is_still_windowless() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let body = r#"{"Browser":"Chrome/154.0.8037.92","User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"}"#;
+                let reply = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
+                let _ = stream.write_all(reply.as_bytes()).await;
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("DevToolsActivePort"), format!("{port}\n/devtools/browser/x\n")).unwrap();
+        record_launch_mode(dir.path(), true).unwrap();
+        let (_, headless) = running_local_chrome(dir.path()).await.expect("chrome answers");
+        assert!(headless, "kwant started it windowless");
+        record_launch_mode(dir.path(), false).unwrap();
+        let (_, headless) = running_local_chrome(dir.path()).await.unwrap();
+        assert!(!headless);
     }
 
     #[test]

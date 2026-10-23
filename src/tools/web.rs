@@ -15,7 +15,7 @@ pub async fn web_fetch(args: &Value) -> Result<Value, ToolError> {
 
     let resp = client
         .get(url)
-        .header("User-Agent", crate::sandbox::computer::browser_user_agent())
+        .header("User-Agent", crate::sandbox::computer::browser_user_agent().await)
         .send()
         .await
         .map_err(|e| ToolError::Execution(format!("Web request failed: {}", e)))?;
