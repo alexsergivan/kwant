@@ -103,30 +103,16 @@ impl LayaRouter {
             }
         }
 
-        let payload = json!({
-            "state": {
-                "prompt": prompt,
-                "context": context
-            },
-            "questions": {
-                "model_selection": {
-                    "type": "choice",
-                    "instructions": "Which available model is best suited for this task?",
-                    "criteria": criteria
-                },
-                "effort_level": {
-                    "type": "choice",
-                    "instructions": "What reasoning effort / compute depth is needed for this task?",
-                    "criteria": {
-                        "low": "quick answers, greetings, short definitions, simple edits",
-                        "medium": "standard coding, explanations, moderate feature implementation",
-                        "high": "deep architecture, difficult bug root cause analysis, complex refactoring"
-                    }
-                }
-            }
-        });
-
+        let payload = model_payload(prompt, context, criteria);
         let endpoint = format!("{}/v1/systemone", self.base_url.trim_end_matches('/'));
+
+        let started = std::time::Instant::now();
+        let fallback = |why: &str| {
+            // Info, not debug: on a slow machine Laya can miss the 1.5s limit on most messages, and
+            // then keywords are routing without anyone knowing.
+            tracing::info!(elapsed_ms = started.elapsed().as_millis() as u64, reason = why, "Laya didn't pick the model for this message; using keyword fallback");
+            crate::router::fallback::heuristic_fallback_with_models(prompt, context, &candidate_models)
+        };
 
         match self.client.post(&endpoint).json(&payload).send().await {
             Ok(resp) if resp.status().is_success() => {
@@ -141,24 +127,53 @@ impl LayaRouter {
                             return Ok(decision);
                         }
                         tracing::warn!("Laya response missing expected fields, using fallback");
-                        Ok(crate::router::fallback::heuristic_fallback_with_models(prompt, context, &candidate_models))
+                        Ok(fallback("missing fields"))
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to parse Laya response body, using fallback");
-                        Ok(crate::router::fallback::heuristic_fallback_with_models(prompt, context, &candidate_models))
+                        Ok(fallback(if e.is_timeout() { "timeout" } else { "unreadable body" }))
                     }
                 }
             }
             Ok(resp) => {
                 tracing::warn!(status = %resp.status(), "Laya service returned error, using fallback");
-                Ok(crate::router::fallback::heuristic_fallback_with_models(prompt, context, &candidate_models))
+                Ok(fallback("error status"))
             }
             Err(e) => {
                 tracing::debug!(error = %e, "Laya service unreachable, using fallback");
-                Ok(crate::router::fallback::heuristic_fallback_with_models(prompt, context, &candidate_models))
+                Ok(fallback(if e.is_timeout() { "timeout" } else { "unreachable" }))
             }
         }
     }
+}
+
+/// The `/v1/systemone` request for picking a model and effort. Laya's answers depend on the order of
+/// the questions and options it sees: with serde_json's default sorted maps, `effort_level` comes
+/// before `model_selection` and options are alphabetical, which measured 30/33 on the routing eval
+/// against 24-25/33 in written order (laya-eval/results.md, P5). A test pins the exact bytes.
+pub fn model_payload(prompt: &str, context: &str, criteria: serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
+    json!({
+        "state": {
+            "prompt": prompt,
+            "context": context
+        },
+        "questions": {
+            "model_selection": {
+                "type": "choice",
+                "instructions": "Which available model is best suited for this task?",
+                "criteria": criteria
+            },
+            "effort_level": {
+                "type": "choice",
+                "instructions": "What reasoning effort / compute depth is needed for this task?",
+                "criteria": {
+                    "low": "quick answers, greetings, short definitions, simple edits",
+                    "medium": "standard coding, explanations, moderate feature implementation",
+                    "high": "deep architecture, difficult bug root cause analysis, complex refactoring"
+                }
+            }
+        }
+    })
 }
 
 /// Accepts either the Laya root (`http://host:8000`) or a full endpoint URL

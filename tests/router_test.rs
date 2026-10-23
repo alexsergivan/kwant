@@ -394,7 +394,9 @@ fn test_blend_effort_overrides_only_clear_signals() {
     use kwnt::router::fallback::blend_effort;
     assert_eq!(blend_effort("hi there", "medium"), "low");
     assert_eq!(blend_effort("Tell me a joke about Kubernetes", "medium"), "low");
-    assert_eq!(blend_effort("Should we split our monolith? Compare tradeoffs", "low"), "high");
+    assert_eq!(blend_effort("Should we split our monolith? Compare tradeoffs", "medium"), "high");
+    // Laya's "low" stands: a keyword alone no longer raises it (laya-eval a01, a03)
+    assert_eq!(blend_effort("Should we split our monolith? Compare tradeoffs", "low"), "low");
     assert_eq!(blend_effort("Postgres latency doubled, find the root cause", "medium"), "high");
     assert_eq!(blend_effort("Plan a 5-day trip to Lisbon in November", "medium"), "medium");
     assert_eq!(blend_effort("Plan a 5-day trip to Lisbon in November", "low"), "low");
@@ -543,4 +545,171 @@ async fn channel_routing_reports_its_basis() {
     assert!(r.reason.starts_with("No one's role matched this, so it went to the channel lead, Ada"), "{}", r.reason);
     let r = laya.route_channel_query_detailed("hello", "desk", "lead", &members[1..2]).await;
     assert_eq!((r.kwant_id.as_str(), r.basis.as_str()), ("fe", "only"));
+}
+
+// Cases below come from the Laya routing eval (shared/ship-software-safely/laya-eval/eval.json); the
+// id in each message is the eval prompt's id.
+
+const EVAL_MODELS: [&str; 4] = ["claude", "grok", "codex", "local_ollama"];
+
+fn offline_model(prompt: &str) -> String {
+    let models: Vec<String> = EVAL_MODELS.iter().map(|m| m.to_string()).collect();
+    kwnt::router::fallback::heuristic_fallback_with_models(prompt, "chat", &models).selected_model
+}
+
+#[test]
+fn offline_keywords_match_whole_words_only() {
+    // "local" inside another word, or a local business, is not a request to stay on this machine
+    for (id, prompt) in [
+        ("m17", "Why does my React app fail to reach localhost:3000 from inside the Docker container?"),
+        ("m18", "How do I set the locale to de_DE in a Python script for number formatting?"),
+        ("m25", "Is it safe to store JWTs in localStorage?"),
+        ("a07", "My local coffee shop wants a tagline for its new menu. Give me 5 ideas."),
+    ] {
+        assert_ne!(offline_model(prompt), "local_ollama", "{id}: {prompt}");
+    }
+    // "script" inside "description" is not code
+    assert_eq!(offline_model("Write a punchy product description for our handmade soy candle shop"), "claude", "m11");
+    assert_eq!(offline_model("I don't trust this vendor, draft a polite email asking for references"), "claude", "'rust' in 'trust'");
+
+    // Explicit requests still stay local
+    for (id, prompt) in [
+        ("m14", "Summarize my private medical lab results: total cholesterol 240, LDL 160, HDL 38"),
+        ("m15", "This is confidential: find duplicate entries in my password manager export"),
+        ("m16", "I'm offline on a plane. Rename these photos by date taken"),
+        ("-", "Use a local model for this, it's private data"),
+        ("-", "Run this locally with ollama"),
+    ] {
+        assert_eq!(offline_model(prompt), "local_ollama", "{id}: {prompt}");
+    }
+    // And whole words still route as before, plurals included
+    assert_eq!(offline_model("How do I set the locale to de_DE in a Python script for number formatting?"), "codex", "m18");
+    assert_eq!(offline_model("Write two Python scripts that rename every .jpeg file to .jpg"), "codex", "m21");
+    assert_eq!(offline_model("Design a multi-tenant billing system and explain the tradeoffs"), "claude", "m10");
+}
+
+#[test]
+fn negated_and_idiomatic_keywords_dont_make_offline_effort_high() {
+    use kwnt::router::fallback::heuristic_effort;
+    assert_eq!(heuristic_effort("Please don't refactor anything, just tell me what time zone Paris is in", "chat"), "low", "a01");
+    assert_ne!(heuristic_effort("Write a friendly reminder text for the security guards about the Friday night shift", "chat"), "high", "a02");
+    assert_eq!(heuristic_effort("Explain what a 'deep copy' is in Python in one line", "chat"), "low", "a03");
+    // Real signals still count
+    for (id, prompt) in [
+        ("m08", "Refactor the auth module across the 12 files in src/auth to use one Session trait and update every call site"),
+        ("m09", "Our checkout service times out under load but only on Tuesdays. Help me find the root cause; CPU and DB look normal."),
+        ("m10", "Design a multi-tenant billing system with usage-based pricing and explain the tradeoffs"),
+        ("-", "Do a security review of the login flow"),
+        ("-", "Plan the migration of our orders table"),
+    ] {
+        assert_eq!(heuristic_effort(prompt, "chat"), "high", "{id}: {prompt}");
+    }
+    // A Chinese paragraph is many words, not one trivial word
+    assert_ne!(heuristic_effort("请帮我分析这个微服务架构的取舍，并给出迁移方案", "chat"), "low", "m24");
+    assert_eq!(heuristic_effort("你好", "chat"), "low");
+}
+
+#[test]
+fn keywords_raise_layas_medium_but_not_its_low() {
+    use kwnt::router::fallback::blend_effort;
+    // Laya said medium; a clear keyword makes these high (m08-m10)
+    assert_eq!(blend_effort("Refactor the auth module across the 12 files in src/auth to use one Session trait and update every call site", "medium"), "high", "m08");
+    assert_eq!(blend_effort("Our checkout service times out under load but only on Tuesdays. Help me find the root cause; CPU and DB look normal.", "medium"), "high", "m09");
+    assert_eq!(blend_effort("Design a multi-tenant billing system with usage-based pricing and explain the tradeoffs", "medium"), "high", "m10");
+    // Laya said low; a keyword that is only mentioned doesn't overrule it (a01, a03)
+    assert_eq!(blend_effort("Please don't refactor anything, just tell me what time zone Paris is in", "low"), "low", "a01");
+    assert_eq!(blend_effort("Explain what a 'deep copy' is in Python in one line", "low"), "low", "a03");
+    // Not a deep signal at all (a02)
+    assert_eq!(blend_effort("Write a friendly reminder text for the security guards about the Friday night shift", "medium"), "medium", "a02");
+}
+
+#[test]
+fn laya_model_payload_keeps_its_measured_key_order() {
+    // Laya's picks depend on the order it sees questions and options in. Sorted keys (effort_level
+    // first, options alphabetical) scored 30/33 on the routing eval; written order scored 24-25/33.
+    // If this fails because serde_json's preserve_order got enabled, re-run the eval before accepting it.
+    let mut criteria = serde_json::Map::new();
+    criteria.insert("grok".into(), json!("g"));
+    criteria.insert("claude".into(), json!("c"));
+    criteria.insert("local_ollama".into(), json!("l"));
+    criteria.insert("codex".into(), json!("x"));
+    let payload = kwnt::router::laya::model_payload("hi", "chat", criteria);
+    assert_eq!(
+        serde_json::to_string(&payload).unwrap(),
+        concat!(
+            r#"{"questions":{"effort_level":{"criteria":{"high":"deep architecture, difficult bug root cause analysis, complex refactoring","#,
+            r#""low":"quick answers, greetings, short definitions, simple edits","#,
+            r#""medium":"standard coding, explanations, moderate feature implementation"},"#,
+            r#""instructions":"What reasoning effort / compute depth is needed for this task?","type":"choice"},"#,
+            r#""model_selection":{"criteria":{"claude":"c","codex":"x","grok":"g","local_ollama":"l"},"#,
+            r#""instructions":"Which available model is best suited for this task?","type":"choice"}},"#,
+            r#""state":{"context":"chat","prompt":"hi"}}"#,
+        )
+    );
+}
+
+/// The 5-bot team from the routing eval, each bot with its title and one-line persona.
+fn eval_team() -> Vec<Kwant> {
+    let bot = |name: &str, title: &str, persona: &str| {
+        let mut k = agent(&name.to_lowercase(), name, title);
+        k.persona_prompt = persona.into();
+        k
+    };
+    vec![
+        bot("Dev", "Full-stack Software Engineer", "You are a senior full-stack engineer who writes and reviews code."),
+        bot("Mia", "Marketing Manager", "You write marketing copy, campaigns and newsletters."),
+        bot("Remy", "Research Analyst", "You research markets and competitors and analyze data."),
+        bot("Dana", "UI/UX Designer", "You design interfaces, logos and brand visuals."),
+        bot("Quinn", "QA Engineer", "You test software and write test plans."),
+    ]
+}
+
+#[test]
+fn marketing_research_design_and_generic_engineers_have_roles() {
+    let members = eval_team();
+    let pick = |prompt: &str| kwnt::router::team::pick_member(prompt, "dev", &members, None, "channel lead").unwrap().kwant.name.clone();
+    for (id, prompt, who) in [
+        ("b03", "Write 5 tweets announcing our launch", "Mia"),
+        ("b13", "Improve the SEO of our landing page copy", "Mia"),
+        ("x02", "Write a test plan for our ad campaign A/B test", "Mia"),
+        ("b04", "Find three competitors and compare their pricing", "Remy"),
+        ("b07", "What's the market size for language-learning apps?", "Remy"),
+        ("b22", "Analyze our churn data and suggest why users leave", "Remy"),
+        ("b15", "Is the new checkout flow confusing? Do a usability review", "Dana"),
+        ("b21", "Make the onboarding screens prettier", "Dana"),
+        ("b06", "Design a new logo concept for the app", "Dana"),
+        ("b23", "Write a Python script to scrape competitor prices", "Dev"),
+        ("b02", "Fix the 500 error in the /orders endpoint", "Dev"),
+        ("b05", "Write test cases for the password reset flow", "Quinn"),
+    ] {
+        assert_eq!(pick(prompt), who, "{id}: {prompt}");
+    }
+    // A specific title wins over the generic "engineer": Quinn is QA, not backend
+    assert_eq!(pick("Add a database index to speed up the search queries"), "Dev", "b09");
+}
+
+#[test]
+fn a_clear_laya_pick_beats_words_only_in_a_persona() {
+    let members = eval_team();
+    let laya_says = |name: &str| {
+        let mut probs = serde_json::Map::new();
+        for m in &members {
+            probs.insert(m.name.clone(), json!(if m.name == name { 0.6 } else { 0.1 }));
+        }
+        json!({"answers": {"lead_kwant": {"choice": name, "probabilities": probs}}})
+    };
+    let route = |prompt: &str, laya: &serde_json::Value| {
+        let guess = kwnt::router::team::laya_guess(laya, &members);
+        let p = kwnt::router::team::pick_member(prompt, "dev", &members, guess, "channel lead").unwrap();
+        (p.kwant.name.clone(), p.basis)
+    };
+    // "plan" is only in Quinn's persona ("writes test plans"); Laya is sure it's Mia's
+    assert_eq!(route("Plan our content calendar for next month", &laya_says("Mia")), ("Mia".into(), "skills"));
+    // "review" is only in Dev's persona ("reviews code"); Laya is sure it's Dana's
+    assert_eq!(route("Give the checkout flow a quick review", &laya_says("Dana")), ("Dana".into(), "skills"));
+    // A near-tie from Laya doesn't override them
+    let unsure = json!({"answers": {"lead_kwant": {"choice": "Mia", "probabilities": {"Mia": 0.3, "Quinn": 0.25, "Dev": 0.2, "Remy": 0.15, "Dana": 0.1}}}});
+    assert_eq!(route("Plan our content calendar for next month", &unsure).0, "Quinn");
+    // A word in a bot's title still beats Laya: that is the role the person named
+    assert_eq!(route("Ask the designer about this", &laya_says("Mia")).0, "Dana");
 }
