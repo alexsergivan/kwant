@@ -166,14 +166,32 @@ section { padding: 112px 0; }
 .notfound .lede { margin: 14px 0 28px; font-size: 19px; color: #ece7ff; }
 
 /* Features page */
-.page-head { background: var(--v4); color: #fff; padding: 72px 0 0; }
+.page-head { background: var(--v4); color: #fff; padding: 72px 0 40px; }
 .page-head .kicker { color: var(--v8); }
 .page-head h1 { margin-top: 10px; font-size: clamp(40px, 5.5vw, 68px); }
 .page-head .lede { margin-top: 16px; max-width: 640px; font-size: 19px; color: #ece7ff; }
-.jump { list-style: none; margin: 48px 0 0; padding: 0; display: flex; flex-wrap: wrap; }
-.jump a { display: block; padding: 12px 16px; color: #fff; text-decoration: none; font: 400 14px var(--mono); }
-.jump a:hover { background: var(--v3); color: #fff; }
-.jump li:first-child a { padding-left: 0; }
+/* "On this page" bar: one row of chips that stays at the top while the features page scrolls. */
+html:has(.jump-bar) { scroll-padding-top: 72px; }
+.jump-bar { position: sticky; top: 0; z-index: 9; background: var(--v4); color: #fff; border-bottom: 1px solid var(--v3); }
+.jump-bar .wrap { position: relative; }
+.fgroup[id] { scroll-margin-top: -40px; }
+.jump-scroll { display: flex; align-items: center; gap: 8px; padding: 10px 0; overflow-x: auto; scrollbar-width: none; }
+.jump-scroll::-webkit-scrollbar { display: none; }
+.jump-label { flex: none; margin: 0 8px 0 0; font: 400 12px var(--mono); color: var(--v8); white-space: nowrap; }
+.jump-label::before { content: "↓ "; }
+.jump { list-style: none; margin: 0; padding: 0; display: flex; gap: 8px; }
+.jump li { flex: none; }
+.jump a { display: flex; align-items: center; min-height: 44px; padding: 0 14px; border: 1px solid var(--v7); color: #fff; text-decoration: none; white-space: nowrap; font: 400 14px var(--mono); }
+.jump a[aria-current] { background: #fff; border-color: #fff; color: var(--v4); }
+.jump a:focus-visible { outline: 2px solid #fff; outline-offset: -5px; }
+.jump a[aria-current]:focus-visible { outline-color: var(--v4); }
+@media (hover: hover) {
+  .jump a:hover { background: var(--v3); border-color: #fff; color: #fff; }
+  .jump a[aria-current]:hover { background: var(--v9); color: var(--v3); }
+}
+/* A fade at the right edge says the row scrolls; site.js removes it once the row is scrolled to the end. */
+.jump-bar .wrap::after { content: ""; position: absolute; top: 1px; right: 0; bottom: 1px; width: 48px; background: linear-gradient(to right, rgba(64, 36, 168, 0), var(--v4)); pointer-events: none; opacity: 0; transition: opacity 0.15s; }
+.jump-bar.more .wrap::after { opacity: 1; }
 .kicker { font: 400 13px var(--mono); color: var(--v5); letter-spacing: 0; }
 .section-head { max-width: 720px; margin-bottom: 40px; }
 .section-head h2 { margin-top: 8px; font-size: clamp(30px, 3.6vw, 42px); }
@@ -303,12 +321,15 @@ td code { white-space: nowrap; }
   .site-footer .wrap { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .flist { grid-template-columns: minmax(0, 1fr); }
   .fgroup { padding: 72px 0; }
-  .page-head { padding-top: 48px; }
-  .jump { margin-top: 32px; }
-  .jump li:first-child a { padding-left: 16px; }
-  .jump a { padding: 10px 16px 10px 0; }
+  .page-head { padding: 48px 0 32px; }
+  .jump-bar .wrap { width: 100%; }
+  .jump-scroll { padding: 8px 20px; scroll-padding-inline: 20px; }
+  .jump-label { margin-right: 4px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  html:has(.jump-bar) { scroll-behavior: smooth; }
 }
 @media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
+  html, html:has(.jump-bar) { scroll-behavior: auto; }
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }

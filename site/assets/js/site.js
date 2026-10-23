@@ -31,6 +31,53 @@
     if (strip.scrollWidth > strip.clientWidth) strip.scrollLeft = current.offsetLeft - strip.offsetLeft - 18;
   }
 
+  // Features "On this page" bar: mark the group being read and keep its chip in view.
+  var jumpBar = document.querySelector(".jump-bar");
+  if (jumpBar) {
+    var row = jumpBar.querySelector(".jump-scroll");
+    var chips = [].slice.call(jumpBar.querySelectorAll(".jump a"));
+    var groups = chips.map(function (a) { return document.getElementById(a.getAttribute("href").slice(1)); });
+    var shown = null;
+    var edge = function () {
+      jumpBar.classList.toggle("more", row.scrollLeft + row.clientWidth < row.scrollWidth - 2);
+    };
+    // Scroll only the row sideways; scrollIntoView would also move the page.
+    var reveal = function (a) {
+      var pad = parseFloat(getComputedStyle(row).paddingLeft) || 0;
+      var left = a.offsetLeft - row.offsetLeft;
+      if (left < row.scrollLeft + pad || left + a.offsetWidth > row.scrollLeft + row.clientWidth - pad) {
+        row.scrollTo({ left: left - pad - 40, behavior: reduce.matches ? "auto" : "smooth" });
+      }
+    };
+    var mark = function (a) {
+      if (a === shown) return;
+      shown = a;
+      chips.forEach(function (o) {
+        if (o === a) o.setAttribute("aria-current", "true"); else o.removeAttribute("aria-current");
+      });
+      if (a) reveal(a);
+    };
+    var spy = function () {
+      var line = jumpBar.getBoundingClientRect().bottom + window.innerHeight * 0.25;
+      var hit = null;
+      groups.forEach(function (g, i) { if (g && g.getBoundingClientRect().top <= line) hit = chips[i]; });
+      var last = groups[groups.length - 1];
+      if (last && last.getBoundingClientRect().bottom < jumpBar.getBoundingClientRect().bottom) hit = null;
+      mark(hit);
+    };
+    var queued = false;
+    window.addEventListener("scroll", function () {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(function () { queued = false; spy(); });
+    }, { passive: true });
+    window.addEventListener("resize", function () { edge(); spy(); });
+    row.addEventListener("scroll", edge, { passive: true });
+    row.addEventListener("focusin", function (e) { if (e.target.tagName === "A") reveal(e.target); });
+    edge();
+    spy();
+  }
+
   // Scrollable tables can be reached and scrolled with the keyboard.
   document.querySelectorAll(".table-wrap").forEach(function (w) {
     if (w.scrollWidth > w.clientWidth) {
