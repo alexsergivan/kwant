@@ -17,7 +17,8 @@ pub const HIRE_STATUSES: [&str; 5] = ["pending", "accepted", "auto_accepted", "d
 
 /// Proposals one turn may make.
 pub const MAX_PROPOSALS_PER_TURN: i64 = 1;
-/// Bots "always accept" may create in a space in 24 hours; past it, proposals ask again.
+/// Bots "always accept" and `bot_create` may make in a space in 24 hours; past it, the person
+/// confirms each new bot on a card.
 pub const AUTO_HIRES_PER_DAY: i64 = 3;
 
 #[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
@@ -224,13 +225,17 @@ impl Database {
         Ok(n)
     }
 
-    /// Bots the space's policy created in the last 24 hours (undone ones count too).
+    /// Bots made in the space in the last 24 hours without the person confirming a card: hires
+    /// "always accept" took, plus bots a bot made itself with `bot_create` (undone ones count too).
     pub async fn auto_hires_today(&self, space: &SpaceId) -> Result<i64, DbError> {
+        let since = Utc::now() - Duration::hours(24);
         let (n,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM hire_proposals WHERE space_id = ? AND auto = 1 AND resolved_at > ?",
+            "SELECT (SELECT COUNT(*) FROM hire_proposals WHERE space_id = ?1 AND auto = 1 AND resolved_at > ?2)
+                  + (SELECT COUNT(*) FROM bot_actions WHERE space_id = ?1 AND action = 'bot_create'
+                       AND status IN ('applied', 'confirmed', 'undone') AND created_at > ?2)",
         )
         .bind(space.as_str())
-        .bind(Utc::now() - Duration::hours(24))
+        .bind(since)
         .fetch_one(&self.pool)
         .await?;
         Ok(n)

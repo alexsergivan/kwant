@@ -598,6 +598,18 @@ async fn get_configured_endpoint(db: &crate::db::Database, target_model: &str) -
     }
 }
 
+/// Longest driver error kept in a saved `turn_failed` message, in bytes.
+const MAX_SAVED_ERROR_BYTES: usize = 600;
+
+/// The chat message saved when a turn fails. Other bots read it as history, so the turn's secrets,
+/// credentials and home folders are masked and a long error is clipped.
+fn turn_failed_text(name: &str, why: &str, activity: &super::activity::TurnActivity) -> String {
+    let shown = scrub_urls(&activity.redact(why));
+    let clipped = truncate_chars(&shown, MAX_SAVED_ERROR_BYTES);
+    let ellipsis = if clipped.len() < shown.len() { "…" } else { "" };
+    format!("⚠️ [{name}] Couldn't finish this reply: {clipped}{ellipsis}")
+}
+
 /// Truncates to at most `max` bytes without splitting a UTF-8 character.
 pub(super) fn truncate_chars(text: &str, max: usize) -> &str {
     if text.len() <= max {
@@ -2192,7 +2204,7 @@ async fn run_kwant_turn_inner(
         // Saved like a reply, so the failure is still there after a reload (the live error event isn't)
         let msg = NewMessage {
             reasoning_content: with_notices(opts.label.clone()),
-            ..scope.message("kwant", &target_kwant.name, format!("⚠️ [{}] Couldn't finish this reply: {why}", target_kwant.name))
+            ..scope.message("kwant", &target_kwant.name, turn_failed_text(&target_kwant.name, &why, &event_broadcast.activity))
         };
         scope.save(&msg, super::activity::with_activity(Some(json!({"kind": "turn_failed"})), activity)).await;
         if let Some(e) = driver_error {
@@ -3722,7 +3734,33 @@ pub async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
-    use super::scrub_urls;
+    use super::{scrub_urls, turn_failed_text};
+
+    #[test]
+    fn a_saved_turn_failure_hides_secrets_and_home_folders() {
+        let tag = crate::drivers::events::TurnTag {
+            turn_id: "t-fail".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+        };
+        let activity = super::super::activity::TurnActivity::start(tokio::sync::broadcast::channel(4).0, tag);
+        activity.add_secrets(vec!["hunter2-mcp-value".into()]);
+        let why = format!(
+            "the claude driver failed: 401 key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX for /home/oleks/.kwnt/secrets.json \
+            (env hunter2-mcp-value) {}",
+            "x".repeat(2000)
+        );
+        let text = turn_failed_text("Lin", &why, &activity);
+        assert!(text.starts_with("⚠️ [Lin] Couldn't finish this reply: the claude driver failed: 401 key"), "{text}");
+        for leak in ["sk-ant-api03-ABCDEF", "/home/oleks", "hunter2-mcp-value"] {
+            assert!(!text.contains(leak), "{leak} in {text}");
+        }
+        assert!(text.contains("~/.kwnt/secrets.json"), "{text}");
+        assert!(text.ends_with('…') && text.len() < 700, "{} bytes", text.len());
+        // A short error is kept whole
+        assert!(!turn_failed_text("Lin", "the turn ended without a reply", &activity).ends_with('…'));
+    }
 
     #[test]
     fn failure_reasons_drop_url_credentials() {
