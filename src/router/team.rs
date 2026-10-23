@@ -126,11 +126,15 @@ impl LayaRouter {
         lead_kwant_id: &str,
         members: &[Kwant],
     ) -> ChannelRoute {
+        let started = std::time::Instant::now();
         let laya = match self.query_laya_for_kwant(prompt, channel_name, members).await {
             Ok(data) => laya_guess(&data, members),
             Err(e) => {
+                let elapsed_ms = started.elapsed().as_millis() as u64;
                 if self.status().is_up() {
-                    tracing::warn!(error = %e, url = %self.base_url, "Laya channel routing failed, using keyword fallback");
+                    tracing::warn!(error = %e, url = %self.base_url, elapsed_ms, "Laya channel routing failed, using keyword fallback");
+                } else {
+                    tracing::info!(error = %e, elapsed_ms, "Laya didn't pick the bot for this message; using keyword fallback");
                 }
                 None
             }
@@ -255,7 +259,7 @@ pub struct LayaGuess<'a> {
     pub confident: bool,
 }
 
-fn laya_guess<'a>(data: &serde_json::Value, members: &'a [Kwant]) -> Option<LayaGuess<'a>> {
+pub fn laya_guess<'a>(data: &serde_json::Value, members: &'a [Kwant]) -> Option<LayaGuess<'a>> {
     let lead = data.get("answers")?.get("lead_kwant")?;
     let kwant = resolve_kwant_choice(lead.get("choice")?.as_str()?, members)?;
     let mut probs: Vec<f64> = lead
@@ -293,7 +297,7 @@ pub struct Pick<'a> {
     pub terms: Vec<String>,
 }
 
-/// Engineering roles and the words in a request that belong to them. A bot has a role when its title
+/// Roles and the words in a request that belong to them. A bot has a role when its title
 /// (or, without a title, the first line of its persona) names it; Laya only compares titles, so it
 /// can't tell that "strategy" in a trading repo is backend code, and picked Frontend for it.
 struct Role {
@@ -309,6 +313,7 @@ const ROLES: &[Role] = &[
             ("ui", 2), ("ux", 2), ("frontend", 2), ("front-end", 2), ("page", 2), ("button", 2), ("css", 2),
             ("component", 2), ("layout", 2), ("screen", 2), ("react", 2), ("modal", 2), ("responsive", 2),
             ("style", 1), ("styling", 2), ("dashboard", 1), ("form", 1), ("color", 1), ("colour", 1), ("dark", 1),
+            ("screens", 2), ("pages", 1), ("ipad", 1), ("iphone", 1),
         ],
     },
     Role {
@@ -319,6 +324,8 @@ const ROLES: &[Role] = &[
             ("migration", 2), ("server", 2), ("service", 1), ("strategy", 2), ("strategies", 2), ("backtest", 2),
             ("trading", 2), ("indicator", 2), ("order", 1), ("orders", 1), ("algorithm", 2), ("query", 1),
             ("sql", 2), ("golang", 2), ("go", 1), ("rust", 1), ("function", 1), ("cli", 1), ("parser", 2),
+            ("python", 1), ("script", 2), ("scripts", 2), ("scrape", 2), ("scraper", 2), ("crash", 2),
+            ("crashes", 2), ("crashing", 2), ("traceback", 2), ("exception", 2), ("error", 1),
         ],
     },
     Role {
@@ -336,7 +343,61 @@ const ROLES: &[Role] = &[
             ("terraform", 2), ("outage", 2), ("uptime", 2), ("release", 1), ("logs", 1),
         ],
     },
+    Role {
+        titles: &["designer", "design", "graphic", "visual", "brand", "branding", "illustrator", "art", "creative", "ux", "ui"],
+        signals: &[
+            ("logo", 2), ("logos", 2), ("palette", 2), ("mockup", 2), ("mockups", 2), ("wireframe", 2),
+            ("wireframes", 2), ("figma", 2), ("usability", 2), ("typography", 2), ("illustration", 2), ("icon", 2),
+            ("icons", 2), ("visuals", 2), ("branding", 2), ("redesign", 2), ("brand", 1), ("font", 1),
+            ("prettier", 1), ("design", 1), ("visual", 1), ("color", 1), ("colour", 1),
+        ],
+    },
+    Role {
+        titles: &["marketing", "marketer", "growth", "seo", "copywriter", "content", "social", "community", "pr"],
+        signals: &[
+            ("marketing", 2), ("seo", 2), ("landing-page", 2), ("copywriting", 2), ("campaign", 2),
+            ("campaigns", 2), ("ad", 2), ("ads", 2), ("tweet", 2), ("tweets", 2), ("newsletter", 2), ("blog", 2),
+            ("tagline", 2), ("slogan", 2), ("headline", 2), ("headlines", 2), ("announcement", 2),
+            ("instagram", 2), ("tiktok", 2), ("linkedin", 2), ("copy", 1), ("launch", 1), ("social", 1),
+            ("audience", 1), ("conversion", 1), ("post", 1),
+        ],
+    },
+    Role {
+        titles: &["research", "researcher", "analyst", "analytics", "insights"],
+        signals: &[
+            ("research", 2), ("market-size", 2), ("market-research", 2), ("survey", 2), ("surveys", 2),
+            ("churn", 2), ("retention", 2), ("trends", 2), ("insights", 2), ("study", 2), ("studies", 2),
+            ("market", 1), ("competitor", 1), ("competitors", 1), ("competition", 1), ("pricing", 1),
+            ("compare", 1), ("analyze", 1), ("analyse", 1), ("analysis", 1), ("data", 1), ("report", 1),
+            ("interviews", 1),
+        ],
+    },
 ];
+
+/// Titles that say "engineer" without saying which kind. They count as the backend (code) role, but
+/// only for a bot no other title word places: a "QA Engineer" is QA, a "Full-stack Software
+/// Engineer" writes the code.
+const GENERIC_ENGINEER_TITLES: &[&str] = &[
+    "engineer", "engineering", "developer", "dev", "software", "full-stack", "fullstack", "programmer", "coder", "swe",
+];
+
+/// Two words that mean something else together: a landing page is marketing, not a UI page.
+const COMPOUNDS: &[(&str, &str)] = &[("landing", "page"), ("market", "size"), ("market", "research")];
+
+/// [`tokens`] with [`COMPOUNDS`] joined by a hyphen, for role matching.
+fn role_words(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for w in tokens(text) {
+        if let Some(prev) = out.last_mut() {
+            if COMPOUNDS.iter().any(|(a, b)| prev == a && w == *b) {
+                *prev = format!("{prev}-{w}");
+                continue;
+            }
+        }
+        out.push(w);
+    }
+    out
+}
 
 fn tokens(text: &str) -> Vec<String> {
     text.to_lowercase()
@@ -349,10 +410,16 @@ fn tokens(text: &str) -> Vec<String> {
 fn roles_of(kwant: &Kwant) -> Vec<&'static Role> {
     let mut own = tokens(&kwant.title);
     own.extend(tokens(&kwant.name));
-    let mut roles: Vec<&Role> = ROLES.iter().filter(|r| r.titles.iter().any(|t| own.iter().any(|o| o == t))).collect();
-    if roles.is_empty() && kwant.title.trim().is_empty() {
+    if kwant.title.trim().is_empty() {
+        own = tokens(&kwant.name);
         let first = tokens(kwant.persona_prompt.split(['.', '\n']).next().unwrap_or(""));
-        roles = ROLES.iter().filter(|r| r.titles.iter().any(|t| first.iter().any(|o| o == t))).collect();
+        if !ROLES.iter().any(|r| r.titles.iter().any(|t| own.iter().any(|o| o == t))) {
+            own = first;
+        }
+    }
+    let roles: Vec<&Role> = ROLES.iter().filter(|r| r.titles.iter().any(|t| own.iter().any(|o| o == t))).collect();
+    if roles.is_empty() && own.iter().any(|o| GENERIC_ENGINEER_TITLES.contains(&o.as_str())) {
+        return ROLES.iter().filter(|r| r.titles.contains(&"backend")).collect();
     }
     roles
 }
@@ -444,8 +511,9 @@ pub fn pick_member<'a>(
     }
 
     // 3. The request's words belong to a role
+    let role_words = role_words(prompt);
     let roles: Vec<(&Kwant, usize, Vec<String>)> =
-        members.iter().map(|m| (m, role_score(&words, m))).map(|(m, (s, t))| (m, s, t)).collect();
+        members.iter().map(|m| (m, role_score(&role_words, m))).map(|(m, (s, t))| (m, s, t)).collect();
     let strong: Vec<&(&Kwant, usize, Vec<String>)> = roles.iter().filter(|(_, s, _)| *s >= 2).collect();
     let distinct_roles = |set: &[&(&Kwant, usize, Vec<String>)]| {
         let mut terms: Vec<Vec<String>> = set.iter().map(|(_, _, t)| { let mut t = t.clone(); t.sort(); t }).collect();
@@ -481,26 +549,41 @@ pub fn pick_member<'a>(
     //    rather than send the message to whoever happens to lead.
     let matches: Vec<Vec<(String, usize)>> = members.iter().map(|m| relevance_terms(prompt, m)).collect();
     let shared = |w: &str| matches.iter().filter(|terms| terms.iter().any(|(t, _)| t == w)).count() > 1;
-    let scored: Vec<(&Kwant, usize, Vec<String>)> = members
+    // (bot, score, terms, whether a term matched its name or title rather than only its persona)
+    let scored: Vec<(&Kwant, usize, Vec<String>, bool)> = members
         .iter()
         .zip(&roles)
         .zip(&matches)
         .map(|((m, (_, rs, rt)), terms)| {
             let own: Vec<&(String, usize)> = terms.iter().filter(|(t, _)| !shared(t)).collect();
             let s = own.iter().map(|(_, s)| s).sum::<usize>();
+            let named = own.iter().any(|(_, s)| *s >= 2);
             let mut t: Vec<String> = own.iter().map(|(t, _)| t.clone()).collect();
             for w in rt {
                 if !t.contains(w) {
                     t.push(w.clone());
                 }
             }
-            (m, s + rs, t)
+            (m, s + rs, t, named)
         })
         .collect();
-    let top = scored.iter().map(|(_, s, _)| *s).max().unwrap_or(0);
+    let top = scored.iter().map(|(_, s, _, _)| *s).max().unwrap_or(0);
     let best: Vec<usize> = (0..scored.len()).filter(|&i| top > 0 && scored[i].1 == top).collect();
+    // Words only in a bot's persona, or a weak role hint ("plan" in "writes test plans", "page"),
+    // are a guess too, so a clear Laya pick of another bot wins over them.
+    let laya_clear = laya.filter(|g| g.confident);
+    let weak = |i: usize| !scored[i].3;
+    if let ([i], Some(g)) = (best.as_slice(), laya_clear) {
+        if weak(*i) && scored[*i].0.id != g.kwant.id {
+            let reason = format!(
+                "Laya matched this to {}'s role ({}); the only words in your message that pointed elsewhere were in {}'s description",
+                g.kwant.name, g.kwant.title, scored[*i].0.name
+            );
+            return Some(Pick { kwant: g.kwant, basis: "skills", reason, terms: vec![] });
+        }
+    }
     if let [i] = best.as_slice() {
-        let (k, _, terms) = &scored[*i];
+        let (k, _, terms, _) = &scored[*i];
         let how = format!("shares words with your message: {}", terms.join(", "));
         return Some(chosen(k, terms.clone(), &how));
     }
