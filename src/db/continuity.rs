@@ -14,6 +14,20 @@ pub const MAX_INSTRUCTIONS_CHARS: usize = 4000;
 pub const MAX_MEMORY_CHARS: usize = 500;
 /// Most memories one kwant may keep.
 pub const MAX_MEMORIES_PER_KWANT: i64 = 100;
+/// Most pinned memories per kwant. Pinned notes always reach the prompt, so ten notes of at most
+/// [`MAX_MEMORY_CHARS`] keep them inside the prompt's memory budget for ordinary text.
+pub const MAX_PINNED_PER_KWANT: i64 = 10;
+/// Most results from one memory search.
+pub const MAX_MEMORY_SEARCH_LIMIT: i64 = 20;
+/// Columns a [`Memory`] row is read with.
+const MEMORY_COLUMNS: &str = "id, kwant_id, text, source, pinned_by, created_at, updated_at";
+/// Undoes the pinning and memory-search migration (see [`Database::migrate_continuity`]): the
+/// table goes back to the shape older releases read. Kept for rollbacks and tested.
+pub const MEMORY_PINS_DOWN: &str = "DROP TRIGGER IF EXISTS kwant_memories_fts_ai; \
+    DROP TRIGGER IF EXISTS kwant_memories_fts_ad; \
+    DROP TRIGGER IF EXISTS kwant_memories_fts_au; \
+    DROP TABLE IF EXISTS kwant_memories_fts; \
+    ALTER TABLE kwant_memories DROP COLUMN pinned_by";
 /// Most search results per request.
 pub const MAX_SEARCH_LIMIT: i64 = 50;
 /// Most runs kept per routine; older ones are pruned when a run starts.
@@ -25,8 +39,23 @@ pub struct Memory {
     pub kwant_id: String,
     pub text: String,
     pub source: String,
+    /// Who pinned it ('user' or 'agent'); `None` when it isn't pinned. Pinned notes always load first.
+    pub pinned_by: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl Memory {
+    pub fn pinned(&self) -> bool {
+        self.pinned_by.is_some()
+    }
+}
+
+/// A pin change: who asks, and whether it should be pinned afterwards.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PinChange {
+    pub pinned: bool,
+    pub by_person: bool,
 }
 
 /// A chat turn in progress: where its reply would go.
@@ -46,6 +75,9 @@ pub enum MemoryError {
     Empty,
     TooLong,
     TooMany,
+    TooManyPinned,
+    /// A bot tried to unpin a note the person pinned
+    PersonPinned,
     NotFound,
     /// A bot tried to change a memory the person wrote
     PersonWritten,
@@ -75,6 +107,14 @@ impl std::fmt::Display for MemoryError {
             MemoryError::TooMany => write!(
                 f,
                 "this bot already has {MAX_MEMORIES_PER_KWANT} memories; remove one first"
+            ),
+            MemoryError::TooManyPinned => write!(
+                f,
+                "{MAX_PINNED_PER_KWANT} notes are already pinned; unpin one first"
+            ),
+            MemoryError::PersonPinned => write!(
+                f,
+                "the person pinned this note, so only they can unpin it"
             ),
             MemoryError::NotFound => write!(f, "no such memory"),
             MemoryError::PersonWritten => write!(
@@ -241,6 +281,45 @@ impl Database {
                 .execute(&self.pool)
                 .await?;
         }
+        self.migrate_memory_pins().await
+    }
+
+    /// Additive and reversible ([`MEMORY_PINS_DOWN`]): a `pinned_by` column and a search index
+    /// over memories, filled from existing notes the first time. Older binaries ignore both, and
+    /// the triggers keep the index current for their writes too.
+    async fn migrate_memory_pins(&self) -> Result<(), DbError> {
+        let _ = sqlx::query(
+            "ALTER TABLE kwant_memories ADD COLUMN pinned_by TEXT CHECK (pinned_by IN ('user', 'agent'))",
+        )
+        .execute(&self.pool)
+        .await;
+        let had_index: Option<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'kwant_memories_fts'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS kwant_memories_fts USING fts5(\
+             text, content='kwant_memories', content_rowid='rowid', tokenize='unicode61 remove_diacritics 2')",
+        )
+        .execute(&self.pool)
+        .await?;
+        for trigger in [
+            "CREATE TRIGGER IF NOT EXISTS kwant_memories_fts_ai AFTER INSERT ON kwant_memories BEGIN \
+             INSERT INTO kwant_memories_fts(rowid, text) VALUES (new.rowid, new.text); END",
+            "CREATE TRIGGER IF NOT EXISTS kwant_memories_fts_ad AFTER DELETE ON kwant_memories BEGIN \
+             INSERT INTO kwant_memories_fts(kwant_memories_fts, rowid, text) VALUES ('delete', old.rowid, old.text); END",
+            "CREATE TRIGGER IF NOT EXISTS kwant_memories_fts_au AFTER UPDATE OF text ON kwant_memories BEGIN \
+             INSERT INTO kwant_memories_fts(kwant_memories_fts, rowid, text) VALUES ('delete', old.rowid, old.text); \
+             INSERT INTO kwant_memories_fts(rowid, text) VALUES (new.rowid, new.text); END",
+        ] {
+            sqlx::query(trigger).execute(&self.pool).await?;
+        }
+        if had_index.is_none() {
+            sqlx::query("INSERT INTO kwant_memories_fts(kwant_memories_fts) VALUES ('rebuild')")
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
     }
 
@@ -357,10 +436,9 @@ impl Database {
 
     /// Oldest first.
     pub async fn list_memories(&self, kwant_id: &str) -> Result<Vec<Memory>, DbError> {
-        Ok(sqlx::query_as::<_, Memory>(
-            "SELECT id, kwant_id, text, source, created_at, updated_at FROM kwant_memories \
-             WHERE kwant_id = ? ORDER BY created_at, rowid",
-        )
+        Ok(sqlx::query_as::<_, Memory>(&format!(
+            "SELECT {MEMORY_COLUMNS} FROM kwant_memories WHERE kwant_id = ? ORDER BY created_at, rowid"
+        ))
         .bind(kwant_id)
         .fetch_all(&self.pool)
         .await?)
@@ -371,6 +449,17 @@ impl Database {
         kwant_id: &str,
         text: &str,
         source: &str,
+    ) -> Result<Memory, MemoryError> {
+        self.add_memory_pinned(kwant_id, text, source, false).await
+    }
+
+    /// [`Self::add_memory`], pinned by its writer when `pinned`.
+    pub async fn add_memory_pinned(
+        &self,
+        kwant_id: &str,
+        text: &str,
+        source: &str,
+        pinned: bool,
     ) -> Result<Memory, MemoryError> {
         let text = clean_memory_text(text)?;
         let id = Uuid::new_v4().to_string();
@@ -384,11 +473,16 @@ impl Database {
         if count >= MAX_MEMORIES_PER_KWANT {
             return Err(MemoryError::TooMany);
         }
-        sqlx::query("INSERT INTO kwant_memories (id, kwant_id, text, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+        let pinned_by = pinned.then(|| source.to_string());
+        if pinned && pinned_count(&mut tx, kwant_id).await? >= MAX_PINNED_PER_KWANT {
+            return Err(MemoryError::TooManyPinned);
+        }
+        sqlx::query("INSERT INTO kwant_memories (id, kwant_id, text, source, pinned_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(&id)
             .bind(kwant_id)
             .bind(&text)
             .bind(source)
+            .bind(&pinned_by)
             .bind(now)
             .bind(now)
             .execute(&mut *tx)
@@ -399,6 +493,7 @@ impl Database {
             kwant_id: kwant_id.into(),
             text,
             source: source.into(),
+            pinned_by,
             created_at: now,
             updated_at: now,
         })
@@ -425,11 +520,7 @@ impl Database {
         if res.rows_affected() == 0 {
             return Err(MemoryError::NotFound);
         }
-        sqlx::query_as::<_, Memory>("SELECT id, kwant_id, text, source, created_at, updated_at FROM kwant_memories WHERE id = ?")
-            .bind(id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(Into::into)
+        self.get_memory(id).await
     }
 
     /// A bot changing its own memory: like [`Self::update_memory`], but entries the person wrote
@@ -454,11 +545,7 @@ impl Database {
         if res.rows_affected() == 0 {
             return Err(self.why_agent_cannot_touch(kwant_id, id).await);
         }
-        sqlx::query_as::<_, Memory>("SELECT id, kwant_id, text, source, created_at, updated_at FROM kwant_memories WHERE id = ?")
-            .bind(id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(Into::into)
+        self.get_memory(id).await
     }
 
     /// A bot removing its own memory; entries the person wrote are refused.
@@ -488,6 +575,83 @@ impl Database {
             Ok(None) => MemoryError::NotFound,
             Err(e) => e.into(),
         }
+    }
+
+    async fn get_memory(&self, id: &str) -> Result<Memory, MemoryError> {
+        sqlx::query_as::<_, Memory>(&format!("SELECT {MEMORY_COLUMNS} FROM kwant_memories WHERE id = ?"))
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Pins or unpins one of the kwant's notes. The person may pin or unpin any of them. A bot may
+    /// only pin its own notes, and may not unpin one the person pinned. Pinning doesn't change who
+    /// wrote the note.
+    pub async fn set_memory_pinned(
+        &self,
+        kwant_id: &str,
+        id: &str,
+        change: PinChange,
+    ) -> Result<Memory, MemoryError> {
+        let mut tx = self.pool.begin().await?;
+        let row: Option<(String, Option<String>)> =
+            sqlx::query_as("SELECT source, pinned_by FROM kwant_memories WHERE id = ? AND kwant_id = ?")
+                .bind(id)
+                .bind(kwant_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some((source, pinned_by)) = row else {
+            return Err(MemoryError::NotFound);
+        };
+        if !change.by_person {
+            if source == "user" {
+                return Err(MemoryError::PersonWritten);
+            }
+            if pinned_by.as_deref() == Some("user") && !change.pinned {
+                return Err(MemoryError::PersonPinned);
+            }
+        }
+        if change.pinned == pinned_by.is_some() {
+            drop(tx);
+            return self.get_memory(id).await;
+        }
+        if change.pinned && pinned_count(&mut tx, kwant_id).await? >= MAX_PINNED_PER_KWANT {
+            return Err(MemoryError::TooManyPinned);
+        }
+        let by = change.pinned.then_some(if change.by_person { "user" } else { "agent" });
+        sqlx::query("UPDATE kwant_memories SET pinned_by = ? WHERE id = ? AND kwant_id = ?")
+            .bind(by)
+            .bind(id)
+            .bind(kwant_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        self.get_memory(id).await
+    }
+
+    /// The kwant's notes matching every word of `q` (as prefixes), best match first. Empty for a
+    /// query with no words.
+    pub async fn search_memories(
+        &self,
+        kwant_id: &str,
+        q: &str,
+        limit: i64,
+    ) -> Result<Vec<Memory>, DbError> {
+        let Some(query) = fts_query(q) else {
+            return Ok(Vec::new());
+        };
+        Ok(sqlx::query_as::<_, Memory>(&format!(
+            "SELECT {} FROM kwant_memories_fts f JOIN kwant_memories m ON m.rowid = f.rowid \
+             WHERE kwant_memories_fts MATCH ? AND m.kwant_id = ? \
+             ORDER BY bm25(kwant_memories_fts), m.created_at DESC, m.rowid DESC LIMIT ?",
+            MEMORY_COLUMNS.split(", ").map(|c| format!("m.{c}")).collect::<Vec<_>>().join(", ")
+        ))
+        .bind(query)
+        .bind(kwant_id)
+        .bind(limit.clamp(1, MAX_MEMORY_SEARCH_LIMIT))
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     pub async fn delete_memory(&self, kwant_id: &str, id: &str) -> Result<bool, DbError> {
@@ -780,6 +944,15 @@ impl Database {
         .fetch_all(&self.pool)
         .await?)
     }
+}
+
+async fn pinned_count(tx: &mut sqlx::Transaction<'_, Sqlite>, kwant_id: &str) -> Result<i64, sqlx::Error> {
+    let (n,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM kwant_memories WHERE kwant_id = ? AND pinned_by IS NOT NULL")
+            .bind(kwant_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    Ok(n)
 }
 
 #[cfg(test)]

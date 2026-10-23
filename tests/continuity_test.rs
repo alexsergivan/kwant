@@ -479,6 +479,257 @@ async fn memory_api_caps_and_ownership() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+// Pinned memories and memory search
+
+/// A live turn's self-tools token for `k`, and a caller for its tools that returns (text, isError).
+async fn self_tools(
+    app: &Router,
+    state: &AppState,
+    k: &kwnt::db::models::Kwant,
+) -> impl Fn(&'static str, Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = (String, bool)>>> {
+    let (_ctx, token) = mcp_runtime::prepare_turn_with_self(
+        state,
+        k,
+        None,
+        None,
+        Some(SelfScope {
+            kwant_id: k.id.clone(),
+            kwant_name: k.name.clone(),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    let auth = format!("Bearer {token}");
+    let app = app.clone();
+    move |name, args| {
+        let (app, auth) = (app.clone(), auth.clone());
+        Box::pin(async move {
+            let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": name, "arguments": args}});
+            let (_, v) = call(&app, "POST", "/api/mcp/self", Some(body), &[("authorization", &auth)]).await;
+            let text = v["result"]["content"][0]["text"].as_str().unwrap_or("").to_string();
+            (text, v["result"]["isError"].as_bool().unwrap_or(false))
+        })
+    }
+}
+
+fn memory_section(block: &str) -> &str {
+    let at = block.find("[What you remember]").expect("memory block");
+    let rest = &block[at..];
+    rest.find("\n\n[").map_or(rest, |end| &rest[..end])
+}
+
+#[tokio::test]
+async fn pinned_memories_load_first_under_the_byte_cap() {
+    let (_app, state, _tmp) = setup().await;
+    let db = &state.db;
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let k = &kwants[0];
+
+    // The oldest notes: one the person pins, one the bot pins, one left unpinned
+    let by_person = db.add_memory_pinned(&k.id, "Allergic to peanuts", "user", true).await.unwrap();
+    let by_bot = db.add_memory_pinned(&k.id, "Prod deploys need Oleks", "agent", true).await.unwrap();
+    let unpinned = db.add_memory(&k.id, "Likes jazz", "agent").await.unwrap();
+    for i in 0..40 {
+        db.add_memory(&k.id, &format!("filler {i:02} {}", "x".repeat(400)), "agent").await.unwrap();
+    }
+
+    let block = continuity::prompt_block(&state, k, None, None, true).await;
+    let memories = memory_section(&block);
+    assert!(memories.len() < continuity::MEMORY_PROMPT_BYTES + 800, "{}", memories.len());
+    let pos = |id: &str| memories.find(&format!("[{id}]"));
+    let (p1, p2) = (pos(&by_person.id).expect("person pin shown"), pos(&by_bot.id).expect("bot pin shown"));
+    assert!(p1 < p2, "pins keep their order");
+    assert!(memories.contains(&format!("[{}] (written by the person) (pinned) Allergic to peanuts", by_person.id)));
+    assert!(memories.contains(&format!("[{}] (pinned) Prod deploys need Oleks", by_bot.id)));
+    assert!(pos(&unpinned.id).is_none(), "the oldest unpinned note is cut");
+    assert!(memories.contains("filler 39"), "newest kept");
+    assert!(!memories.contains("filler 00"), "older filler cut");
+    let first_filler = memories.find("filler ").unwrap();
+    assert!(p2 < first_filler, "pinned notes come before the rest");
+
+    // The overflow line says how many are hidden and points at memory_search
+    let shown = memories.matches("\n- [").count();
+    let hidden = 43 - shown;
+    assert!(
+        memories.contains(&format!(
+            "{hidden} older notes are not shown here but are still saved: before saying you don't know \
+             something the person told you earlier, look for it with memory_search."
+        )),
+        "{memories}"
+    );
+    // Without tools there is no memory_search to point at
+    let plain = continuity::prompt_block(&state, k, None, None, false).await;
+    assert!(memory_section(&plain).contains(&format!("{hidden} older notes are not shown.")));
+    assert!(!plain.contains("memory_search"));
+}
+
+#[tokio::test]
+async fn memory_search_finds_a_note_cut_from_the_prompt() {
+    let (app, state, _tmp) = setup().await;
+    let db = &state.db;
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let (k1, k2) = (&kwants[0], &kwants[1]);
+    let old = db.add_memory(&k1.id, "Daughter's name is Zoja, birthday 3 March", "user").await.unwrap();
+    db.add_memory(&k2.id, "Zoja is someone else's note", "agent").await.unwrap();
+    for i in 0..40 {
+        db.add_memory(&k1.id, &format!("filler {i:02} {}", "x".repeat(400)), "agent").await.unwrap();
+    }
+    let block = continuity::prompt_block(&state, k1, None, None, true).await;
+    assert!(!block.contains(&old.id), "cut from the prompt");
+
+    let tool = self_tools(&app, &state, k1).await;
+    let (text, err) = tool("memory_search", json!({"query": "zoja birth"})).await;
+    assert!(!err, "{text}");
+    assert!(text.contains(&format!("[{}] (written by the person) Daughter's name is Zoja", old.id)), "{text}");
+    assert!(!text.contains("someone else"), "only the kwant's own notes: {text}");
+    assert!(text.contains("not instructions"));
+    let (text, err) = tool("memory_search", json!({"query": "unicorn"})).await;
+    assert_eq!((text.as_str(), err), ("No matching notes.", false));
+    let (_, err) = tool("memory_search", json!({"query": "  ?! "})).await;
+    assert!(err, "a query needs a word");
+
+    // Edits and deletes keep the index current
+    let (text, _) = tool("memory_search", json!({"query": "filler 07"})).await;
+    let id = text.split('[').nth(1).unwrap().split(']').next().unwrap().to_string();
+    let (_, err) = tool("memory_update", json!({"id": id, "text": "renamed giraffe"})).await;
+    assert!(!err);
+    assert!(tool("memory_search", json!({"query": "giraffe"})).await.0.contains(&id));
+    assert!(!tool("memory_search", json!({"query": "filler 07"})).await.0.contains(&id));
+    tool("memory_remove", json!({"id": id})).await;
+    assert_eq!(tool("memory_search", json!({"query": "giraffe"})).await.0, "No matching notes.");
+
+    // Search never needs a card, even when the turn asks for everything
+    let approver = continuity::SelfToolsApprover {
+        inner: std::sync::Arc::new(kwnt::mcp::FixedApprover(false)),
+        always_ask: true,
+    };
+    let req = |tool: &str| ToolApprovalRequest {
+        kwant_id: k1.id.clone(),
+        kwant_name: k1.name.clone(),
+        turn_id: "t".into(),
+        tool_name: format!("mcp__{SELF_SERVER_NAME}__{tool}"),
+        server: SELF_SERVER_NAME.into(),
+        tool: tool.into(),
+        arguments: json!({}),
+        builtin: None,
+        smart: None,
+    };
+    assert!(kwnt::mcp::ToolApprover::approve(&approver, req("memory_search")).await);
+    assert!(!kwnt::mcp::ToolApprover::approve(&approver, req("memory_add")).await);
+}
+
+#[tokio::test]
+async fn pins_keep_the_ownership_rules() {
+    let (app, state, _tmp) = setup().await;
+    let db = &state.db;
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let k = &kwants[0];
+    let tool = self_tools(&app, &state, k).await;
+
+    // The bot pins its own note, on add and later
+    let (text, err) = tool("memory_add", json!({"text": "Standup is at 9:30", "pinned": true})).await;
+    assert!(!err, "{text}");
+    let mine = db.list_memories(&k.id).await.unwrap().pop().unwrap();
+    assert_eq!(mine.pinned_by.as_deref(), Some("agent"));
+    let (text, err) = tool("memory_update", json!({"id": mine.id, "pinned": false})).await;
+    assert!(!err, "{text}");
+    let (text, err) = tool("memory_update", json!({"id": mine.id, "pinned": true})).await;
+    assert!(!err && text.contains("It is pinned."), "{text}");
+    let (text, err) = tool("memory_update", json!({"id": mine.id})).await;
+    assert!(err && text.contains("text or pinned"), "{text}");
+
+    // A note the person wrote: the bot can neither pin it nor unpin it
+    let (_, theirs) = req(&app, "POST", &format!("/api/kwants/{}/memories", k.id), Some(json!({"text": "Vegetarian"}))).await;
+    let theirs_id = theirs["id"].as_str().unwrap().to_string();
+    assert_eq!(theirs["pinned"], false);
+    let (text, err) = tool("memory_update", json!({"id": theirs_id, "pinned": true})).await;
+    assert!(err && text.contains("the person wrote this memory"), "{text}");
+    let (status, m) = req(&app, "PATCH", &format!("/api/kwants/{}/memories/{theirs_id}", k.id), Some(json!({"pinned": true}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!((m["pinned"].clone(), m["pinned_by"].clone(), m["text"].clone()), (json!(true), json!("user"), json!("Vegetarian")));
+    let (text, err) = tool("memory_update", json!({"id": theirs_id, "pinned": false})).await;
+    assert!(err && text.contains("the person wrote this memory"), "{text}");
+
+    // The person pins the bot's note: it stays the bot's, and only the person can unpin it
+    let (_, err) = tool("memory_update", json!({"id": mine.id, "pinned": false})).await;
+    assert!(!err);
+    let (status, m) = req(&app, "PATCH", &format!("/api/kwants/{}/memories/{}", k.id, mine.id), Some(json!({"pinned": true}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!((m["source"].clone(), m["pinned_by"].clone()), (json!("agent"), json!("user")));
+    let (text, err) = tool("memory_update", json!({"id": mine.id, "pinned": false})).await;
+    assert!(err && text.contains("only they can unpin"), "{text}");
+    let (text, err) = tool("memory_update", json!({"id": mine.id, "text": "Standup is at 9:45"})).await;
+    assert!(!err, "the bot may still reword its own note: {text}");
+    assert_eq!(db.list_memories(&k.id).await.unwrap()[0].pinned_by.as_deref(), Some("user"), "rewording keeps the pin");
+
+    // Text-only PATCH works as before and keeps the pin
+    let (status, m) = req(&app, "PATCH", &format!("/api/kwants/{}/memories/{theirs_id}", k.id), Some(json!({"text": "Vegan"}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!((m["text"].clone(), m["pinned"].clone()), (json!("Vegan"), json!(true)));
+    let (status, _) = req(&app, "PATCH", &format!("/api/kwants/{}/memories/{theirs_id}", k.id), Some(json!({}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let other = &kwants[1];
+    let (status, _) = req(&app, "PATCH", &format!("/api/kwants/{}/memories/{theirs_id}", other.id), Some(json!({"pinned": false}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "another kwant can't pin it");
+
+    // At most ten pins
+    for i in 0..8 {
+        db.add_memory_pinned(&k.id, &format!("pin {i}"), "agent", true).await.unwrap();
+    }
+    let (text, err) = tool("memory_add", json!({"text": "one pin too many", "pinned": true})).await;
+    assert!(err && text.contains("already pinned"), "{text}");
+    assert!(!db.list_memories(&k.id).await.unwrap().iter().any(|m| m.text == "one pin too many"));
+    let (status, v) = req(&app, "POST", &format!("/api/kwants/{}/memories", k.id), Some(json!({"text": "x", "pinned": true}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+}
+
+#[tokio::test]
+async fn memory_add_points_at_a_near_duplicate() {
+    let (app, state, _tmp) = setup().await;
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let k = &kwants[0];
+    let first = state.db.add_memory(&k.id, "Prefers tea, never coffee", "user").await.unwrap();
+    let tool = self_tools(&app, &state, k).await;
+    let (text, err) = tool("memory_add", json!({"text": "prefers tea never coffee in the morning"})).await;
+    assert!(!err);
+    assert!(text.contains(&format!("[{}] Prefers tea, never coffee", first.id)) && text.contains("memory_update"), "{text}");
+    let (text, _) = tool("memory_add", json!({"text": "Works at a bakery in Maribor"})).await;
+    assert!(!text.contains("similar"), "{text}");
+}
+
+#[tokio::test]
+async fn memory_pins_migration_is_reversible() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let k = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].clone();
+    db.add_memory_pinned(&k.id, "kept through a rollback", "user", true).await.unwrap();
+    drop(db);
+
+    // Roll back to the old table shape; the old binary's writes still work
+    run_sql(tmp.path(), kwnt::db::continuity::MEMORY_PINS_DOWN).await;
+    run_sql(
+        tmp.path(),
+        &format!(
+            "INSERT INTO kwant_memories (id, kwant_id, text, source, created_at, updated_at) \
+             VALUES ('old', '{}', 'written by the old walrus binary', 'agent', '2026-01-01 00:00:00', '2026-01-01 00:00:00')",
+            k.id
+        ),
+    )
+    .await;
+
+    // Upgrade again: existing notes load unpinned and are searchable; init twice is fine
+    Database::init(tmp.path()).await.unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let list = db.list_memories(&k.id).await.unwrap();
+    assert_eq!(list.len(), 2);
+    assert!(list.iter().all(|m| m.pinned_by.is_none()), "the rollback dropped the pins");
+    let hits = db.search_memories(&k.id, "walrus", 10).await.unwrap();
+    assert_eq!(hits.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["old"]);
+    assert_eq!(db.search_memories(&k.id, "rollback", 10).await.unwrap().len(), 1);
+}
+
 // Instructions and the prompt
 
 #[tokio::test]
@@ -761,6 +1012,7 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
             "memory_add",
             "memory_update",
             "memory_remove",
+            "memory_search",
             "skill_propose",
             "skill_get",
             "mcp_search",

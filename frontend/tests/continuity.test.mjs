@@ -200,3 +200,11 @@ test('monthly and cron schedules in plain words', () => {
   assert.equal(c.describeSchedule({ type: 'cron', expression: '0 9 * * MON#2', tz: 'UTC' }), 'Custom rule 0 9 * * MON#2 (UTC)');
   assert.equal(c.describeSchedule({ type: 'lunar' }), 'Unknown schedule');
 });
+
+test('memory tab lists pinned notes first, then newest first', () => {
+  const m = (id, pinned) => ({ id, text: id, source: 'agent', pinned, created_at: '', updated_at: '' });
+  const order = c.memoriesForDisplay([m('a', false), m('b', true), m('c', false), m('d', true)]).map((x) => x.id);
+  assert.deepEqual(order, ['d', 'b', 'c', 'a']);
+  assert.deepEqual(c.memoriesForDisplay([m('x', undefined)]).map((x) => x.id), ['x'], 'older servers send no pinned field');
+  assert.equal(c.MAX_PINNED, 10);
+});

@@ -22,9 +22,21 @@ export interface Memory {
   id: string;
   text: string;
   source: 'user' | 'agent';
+  /** Pinned notes always reach the bot's prompt, before the rest. */
+  pinned?: boolean;
+  pinned_by?: 'user' | 'agent' | null;
   created_at: string;
   updated_at: string;
 }
+
+/** Most pinned notes per bot (the server's MAX_PINNED_PER_KWANT). */
+export const MAX_PINNED = 10;
+
+/** The Memory tab's order: pinned first, then newest first. Takes the API's oldest-first list. */
+export const memoriesForDisplay = (list: Memory[]): Memory[] => {
+  const newest = [...list].reverse();
+  return [...newest.filter((m) => m.pinned), ...newest.filter((m) => !m.pinned)];
+};
 
 export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
 export const WEEKDAYS: Array<{ id: Weekday; label: string }> = [
@@ -509,6 +521,8 @@ export const continuityApi = {
   addMemory: (kwantId: string, text: string) => request<Memory>('POST', `/api/kwants/${enc(kwantId)}/memories`, { text }),
   updateMemory: (kwantId: string, id: string, text: string) =>
     request<Memory>('PATCH', `/api/kwants/${enc(kwantId)}/memories/${enc(id)}`, { text }),
+  pinMemory: (kwantId: string, id: string, pinned: boolean) =>
+    request<Memory>('PATCH', `/api/kwants/${enc(kwantId)}/memories/${enc(id)}`, { pinned }),
   removeMemory: (kwantId: string, id: string) => request<void>('DELETE', `/api/kwants/${enc(kwantId)}/memories/${enc(id)}`),
 
   routines: () => request<Routine[]>('GET', '/api/routines'),

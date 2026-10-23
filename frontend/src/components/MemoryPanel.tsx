@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useUndoableDelete } from '../undoDelete';
 import { UndoNotice } from './UndoNotice';
-import { Bot, Check, Loader2, Pencil, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
-import { MAX_MEMORIES, MAX_MEMORY, Memory, continuityApi, formatWhen, onContinuity } from '../continuity';
+import { Bot, Check, Loader2, Pencil, Pin, PinOff, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
+import { MAX_MEMORIES, MAX_MEMORY, MAX_PINNED, Memory, continuityApi, formatWhen, memoriesForDisplay, onContinuity } from '../continuity';
 import { playSfx } from '../audio/chiptune';
 
 const smallBtn =
@@ -26,9 +26,10 @@ export const MemoryRow: React.FC<{
   memory: Memory;
   onSave: (text: string) => Promise<string | void>;
   onDelete: () => Promise<string | void>;
+  onPin?: (pinned: boolean) => Promise<string | void>;
   /** Tests: start in the Undo window. */
   initialPending?: boolean;
-}> = ({ memory, onSave, onDelete, initialPending = false }) => {
+}> = ({ memory, onSave, onDelete, onPin, initialPending = false }) => {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(memory.text);
   const [busy, setBusy] = useState(false);
@@ -52,6 +53,14 @@ export const MemoryRow: React.FC<{
     }
   };
 
+  const togglePin = async () => {
+    if (!onPin) return;
+    setBusy(true);
+    const err = await onPin(!memory.pinned);
+    setBusy(false);
+    setError(err || null);
+  };
+
   const remove = () => {
     setError(null);
     removal.start(async () => {
@@ -63,14 +72,34 @@ export const MemoryRow: React.FC<{
   if (removal.pending) return <UndoNotice as="li" text="Memory deleted." onUndo={removal.undo} />;
 
   return (
-    <li className="p-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60 space-y-1.5">
+    <li
+      className={`p-2.5 rounded-lg border space-y-1.5 ${memory.pinned ? 'border-amber-500/30 bg-amber-500/5' : 'border-zinc-800 bg-zinc-950/60'}`}
+    >
       <div className="flex items-center gap-2 text-[10px] text-zinc-500">
         <SourceBadge source={memory.source} />
+        {memory.pinned && (
+          <span className="inline-flex items-center gap-1 text-amber-300">
+            <Pin size={10} aria-hidden="true" /> Pinned
+          </span>
+        )}
         <span title={`Added ${formatWhen(memory.created_at)}`}>
           {memory.updated_at !== memory.created_at ? 'Edited ' : ''}
           {formatWhen(memory.updated_at)}
         </span>
         <span className="ml-auto flex items-center gap-1">
+          {onPin && !editing && (
+            <button
+              type="button"
+              onClick={togglePin}
+              disabled={busy}
+              className={quietBtn}
+              aria-label={memory.pinned ? 'Unpin memory' : 'Pin memory'}
+              aria-pressed={!!memory.pinned}
+              title={memory.pinned ? 'Unpin' : 'Pin: always load this note first'}
+            >
+              {memory.pinned ? <PinOff size={11} /> : <Pin size={11} />}
+            </button>
+          )}
           {!editing && (
             <button type="button" onClick={() => setEditing(true)} className={quietBtn} aria-label="Edit memory">
               <Pencil size={11} />
@@ -190,7 +219,8 @@ export const MemoryPanel: React.FC<{ kwantId: string; kwantName: string }> = ({ 
   return (
     <div className="space-y-3">
       <p className="text-[11px] text-zinc-500 leading-relaxed">
-        {kwantName} reads these at the start of every turn and can add to them itself. Newest are kept when the list gets long.
+        {kwantName} reads these at the start of every turn and can add to them itself. Pinned notes always load first; when the
+        list gets long, the newest of the rest are shown and {kwantName} can search the others.
       </p>
 
       <form onSubmit={add} className="space-y-1.5">
@@ -249,14 +279,15 @@ export const MemoryPanel: React.FC<{ kwantId: string; kwantName: string }> = ({ 
       {memories && memories.length > 0 && (
         <>
           <p className="text-[10px] text-zinc-500">
-            {memories.length} of {MAX_MEMORIES} · newest first
+            {memories.length} of {MAX_MEMORIES} · {memories.filter((m) => m.pinned).length} of {MAX_PINNED} pinned · pinned, then newest first
           </p>
           <ul className="space-y-1.5" aria-label={`${kwantName}'s memories`}>
-            {[...memories].reverse().map((m) => (
+            {memoriesForDisplay(memories).map((m) => (
               <MemoryRow
                 key={m.id}
                 memory={m}
                 onSave={(t) => wrap(() => continuityApi.updateMemory(kwantId, m.id, t))()}
+                onPin={(pinned) => wrap(() => continuityApi.pinMemory(kwantId, m.id, pinned))()}
                 onDelete={wrap(() => continuityApi.removeMemory(kwantId, m.id))}
               />
             ))}
