@@ -200,6 +200,8 @@
       }
     });
     if (this.o.foreground) this.o.foreground(this, g);
+    // Reveal the canvas only once a whole frame has drawn; until then the still image behind it shows.
+    if (!this.shown && this.o.host) { this.shown = true; this.o.host.classList.add("live"); }
   };
   Scene.prototype.step = function (dt) {
     this.t += dt;
@@ -376,18 +378,25 @@
           end: function () { near.state = "work"; near.jump = 0.35; s.changed(); } });
         s.changed();
       },
+      host: opts.host,
       onChange: opts.onChange
     });
   }
   function approve(s, b) { b.state = "work"; b.jump = 0.35; s.changed(); }
 
+  // Each scene starts on its own, so one that fails leaves only its own still image, not a blank page section.
+  function guard(fn) {
+    try { fn(); } catch (e) { if (window.console) console.warn("kwant scene skipped:", e); }
+  }
+
   // ---- Hero ----
   var hero = document.querySelector("[data-scene=hero]");
-  if (hero) {
+  if (hero) guard(function () {
     var chip = document.querySelector("[data-scene-status]");
     var okBtn = document.querySelector("[data-scene-approve]");
     var heroScene = town(hero.querySelector("canvas"), {
       framed: true,
+      host: hero,
       onChange: function (s) {
         if (!chip) return;
         var w = bots(s, "work").length + s.fx.filter(function (f) { return f.kind === "hand"; }).length;
@@ -397,18 +406,17 @@
         if (okBtn) okBtn.hidden = !wait;
       }
     });
-    hero.classList.add("live");
     if (okBtn) okBtn.addEventListener("click", function () {
       var w = bots(heroScene, "wait")[0];
       if (w) { approve(heroScene, w); if (heroScene.still) heroScene.draw(); }
     });
     heroScene.start();
-  }
+  });
 
   // ---- Closing panel and 404: the same town, quieter ----
-  document.querySelectorAll("[data-scene=street]").forEach(function (el) {
-    var s = town(el.querySelector("canvas"), { low: true, count: el.hasAttribute("data-lost") ? 1 : 6 });
-    el.classList.add("live");
-    s.start();
+  Array.prototype.forEach.call(document.querySelectorAll("[data-scene=street]"), function (el) {
+    guard(function () {
+      town(el.querySelector("canvas"), { low: true, host: el, count: el.hasAttribute("data-lost") ? 1 : 6 }).start();
+    });
   });
 })();
