@@ -254,3 +254,45 @@ async fn every_question_route_needs_auth() {
         assert_eq!(call_remote(&env.app, m, u).await, StatusCode::UNAUTHORIZED, "{m} {u}");
     }
 }
+
+/// A specialist's question in a delegation thread that the person answers after the wait ran
+/// out: the lead hears the question is waiting, and once answered, the specialist continues, its
+/// new result is posted where the task came from, and the lead is resumed with it.
+#[tokio::test]
+async fn a_late_answer_in_a_delegation_reaches_the_lead() {
+    let env = setup().await;
+    env.state.questions.set_wait(Duration::from_millis(300));
+    let task = format!("Pick a region. {} REPLYTAG:asked", ask_marker("Which region for the delegated job?", &["eu", "us"]));
+    let (s, d) = call(
+        &env.app,
+        "POST",
+        "/api/delegations",
+        Some(json!({"lead_kwant_id": env.a, "specialist_kwant_id": env.b, "task": task, "title": "Region pick", "kwant_id": env.a})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{d}");
+    let thread = d["thread_id"].as_str().unwrap().to_string();
+
+    // The wait runs out: the lead is told the question is waiting, not to redo the work
+    wait_for("the lead's turn", || async { !invocations_with("finished the task you delegated (“Region pick”)").is_empty() }).await;
+    let lead = invocations_with("finished the task you delegated (“Region pick”)").pop().unwrap();
+    assert!(lead.contains("Which region for the delegated job?") && lead.contains("Don't redo this task"), "{lead}");
+    let origin = messages(&env, &env.a).await;
+    assert!(origin.iter().any(|m| m.text.contains("is waiting for your answer") && m.text.contains("Which region")), "{origin:?}");
+
+    let q = open_question(&env, &thread).await;
+    let id = q["id"].as_str().unwrap();
+    let (s, v) = call(&env.app, "POST", &format!("/api/questions/{id}/answer"), Some(json!({"text": "eu REPLYTAG:afteranswer"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["resumed"], "new_turn");
+
+    // The specialist continues in the thread, the result comes back, and the lead gets it
+    wait_for("the lead's turn with the late result", || async { !invocations_with("got the person's answer").is_empty() }).await;
+    let lead = invocations_with("got the person's answer").pop().unwrap();
+    assert!(lead.contains("“Region pick”") && lead.contains("answer afteranswer"), "{lead}");
+    let origin = messages(&env, &env.a).await;
+    let late = origin.iter().find(|m| m.text == "answer afteranswer").expect("the late result in the origin chat");
+    let meta: Value = serde_json::from_str(late.meta.as_deref().unwrap()).unwrap();
+    assert_eq!((meta["kind"].as_str(), meta["late"].as_bool()), (Some("delegation_result"), Some(true)));
+    assert_eq!(invocations_with("got the person's answer").len(), 1, "the lead is resumed once");
+}

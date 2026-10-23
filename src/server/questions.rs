@@ -361,23 +361,32 @@ pub async fn answer(State(state): State<AppState>, Path(id): Path<String>, Json(
     Json(json!({"question": q, "resumed": if live { "turn" } else { "new_turn" }})).into_response()
 }
 
-/// A late answer: a new turn in the question's chat, queued like any other turn.
+/// A late answer: a new turn in the question's chat, queued like any other turn. In an ended
+/// delegation's thread the result also goes back to the lead (see
+/// [`super::delegation::resume_after_answer`]).
 async fn resume(state: &AppState, q: &Question, answer: &str) {
     let Ok(Some(kwant)) = state.db.get_kwant(&q.kwant_id).await else {
         return;
     };
-    let depth = match &q.thread_id {
-        Some(t) => state.db.delegation_for_thread(t).await.ok().flatten().map(|d| d.depth).unwrap_or(0),
-        None => 0,
-    };
-    let job = state.turns.start_job([q.context_id(), q.id.clone()]);
-    let Ok(scope) = scope_for(state, &kwant, q.channel_id.clone(), q.thread_id.clone(), &job, depth).await else {
-        return;
+    let delegation = match &q.thread_id {
+        Some(t) => state.db.delegation_for_thread(t).await.ok().flatten(),
+        None => None,
     };
     let prompt = format!(
         "[The user answered the question you asked earlier]\nQuestion: {}\nAnswer: {answer}\n\nContinue the task with this answer.",
         q.question
     );
+    // The specialist of an ended delegation asked it: its new result goes back to the lead
+    if let Some(d) = delegation.clone().filter(|d| d.specialist_kwant_id == q.kwant_id) {
+        if super::delegation::resume_after_answer(state, d, &q.id, prompt.clone()).await {
+            return;
+        }
+    }
+    let depth = delegation.map(|d| d.depth).unwrap_or(0);
+    let job = state.turns.start_job([q.context_id(), q.id.clone()]);
+    let Ok(scope) = scope_for(state, &kwant, q.channel_id.clone(), q.thread_id.clone(), &job, depth).await else {
+        return;
+    };
     tokio::spawn(async move {
         let _job = job;
         let _ = try_kwant_turn(&scope, &kwant, prompt, TurnOpts::default()).await;

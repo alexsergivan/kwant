@@ -24,13 +24,15 @@ use tower::ServiceExt;
 
 /// Replies "answer <tag>" for a prompt with "REPLYTAG:<tag>", followed by "@<name>" for one with
 /// "MENTION:<name>", and by "`@<name>`" (inline code, as models write it) for a lead's results
-/// follow-up with "FOLLOWUP:<name>"; a "LONGTASK:<file>" prompt waits (up to 60 s) for that file first. Every prompt is saved under `$KWNT_TEST_PROMPTS`.
+/// follow-up with "FOLLOWUP:<name>"; a "LONGTASK:<file>" prompt waits (up to 60 s) for that file first, and a
+/// "FAILTASK" prompt fails. Every prompt is saved under `$KWNT_TEST_PROMPTS`.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1" in
   auth) echo '{"loggedIn":true}'; exit 0 ;;
 esac
 for a; do last="$a"; done
 printf '%s' "$last" > "$KWNT_TEST_PROMPTS/$$-$(date +%s%N)"
+case "$last" in *FAILTASK*) echo "boom" >&2; exit 1 ;; esac
 release=$(printf '%s\n' "$last" | sed -n 's/.*LONGTASK:\([^ ]*\).*/\1/p' | head -n 1)
 if [ -n "$release" ]; then
   i=0
@@ -847,9 +849,11 @@ async fn run_fan_in(env: &Env, third: String) {
     assert!(prompts_with("(“Fan part A”)").is_empty(), "no turn for A alone");
     std::fs::write(&rel_b, "").unwrap();
     wait_for("part B to complete", || async { delegation_status(env, &ids[1]).await == "completed" }).await;
-    wait_for("the lead's one continuation turn", || async { !prompts_with("All 2 tasks you delegated have ended").is_empty() }).await;
+    // Other tests in this binary end batches of two as well
+    let resumed = || prompts_with("All 2 tasks you delegated have ended").into_iter().filter(|p| p.contains("Fan part A")).collect::<Vec<_>>();
+    wait_for("the lead's one continuation turn", || async { !resumed().is_empty() }).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let resumed = prompts_with("All 2 tasks you delegated have ended");
+    let resumed = resumed();
     assert_eq!(resumed.len(), 1, "exactly one resume");
     let p = &resumed[0];
     assert!(p.contains("answer fanA") && p.contains("answer fanB"), "both results: {p}");
@@ -1146,4 +1150,83 @@ fn per_bot_limit() -> usize {
 
 fn routes_limit() -> usize {
     kwnt::server::routes::MAX_DELEGATIONS_PER_REQUEST
+}
+
+/// Starts a delegation from the lead to the specialist that resumes the lead when it ends.
+async fn delegate_resuming(env: &Env, task: &str, title: &str) -> String {
+    let (s, d) = call(
+        &env.app,
+        "POST",
+        "/api/delegations",
+        Some(json!({"lead_kwant_id": env.lead, "specialist_kwant_id": env.specialist, "task": task, "title": title, "kwant_id": env.lead})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{d}");
+    d["id"].as_str().unwrap().to_string()
+}
+
+/// A task that fails or that restarts cut short twice still gives the lead a turn, with what
+/// happened and what to do about it, so the person isn't left without an answer.
+#[tokio::test]
+async fn a_failed_or_interrupted_task_still_resumes_the_lead() {
+    let env = setup().await;
+    let id = delegate_resuming(&env, "Broken FAILTASK", "Doomed job").await;
+    wait_for("the task to fail", || async { delegation_status(&env, &id).await == "failed" }).await;
+    wait_for("the lead's turn", || async { !prompts_with("(“Doomed job”) ended without a result: failed").is_empty() }).await;
+    let p = prompts_with("(“Doomed job”) ended without a result: failed").pop().unwrap();
+    assert!(p.contains("Decide whether to retry it") && p.contains("say so plainly"), "{p}");
+
+    let (_, open) = env
+        .state
+        .db
+        .create_delegation(&kwnt::db::threads::NewDelegation {
+            lead_kwant_id: env.lead.clone(),
+            specialist_kwant_id: env.specialist.clone(),
+            origin_channel_id: None,
+            origin_kwant_id: Some(env.lead.clone()),
+            origin_thread_id: None,
+            team_id: None,
+            task: "t REPLYTAG:never".into(),
+            title: "Cut twice for the lead".into(),
+            continue_lead: true,
+            depth: 1,
+            follow_up_at: None,
+        })
+        .await
+        .unwrap();
+    env.state.db.restart_open_delegations().await.unwrap();
+    delegation::interrupt_open(&env.state).await;
+    assert_eq!(delegation_status(&env, &open.id).await, "interrupted");
+    let marker = "(“Cut twice for the lead”) ended without a result: interrupted";
+    wait_for("the lead's turn", || async { !prompts_with(marker).is_empty() }).await;
+    assert!(prompts_with(marker)[0].contains("kwnt restarted twice"));
+}
+
+/// The person's Stop on a lone task doesn't wake the lead, but stopping the last open task of a
+/// batch still hands the lead the results that did come back.
+#[tokio::test]
+async fn a_stop_resumes_the_lead_only_for_the_rest_of_its_batch() {
+    let env = setup().await;
+    let solo = env.release_file("solo");
+    let id = delegate_resuming(&env, &format!("Solo LONGTASK:{} REPLYTAG:solo", solo.display()), "Solo stop").await;
+    wait_for("the task to run", || async { delegation_status(&env, &id).await == "running" }).await;
+    let (s, _) = call(&env.app, "POST", &format!("/api/delegations/{id}/cancel"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    std::fs::write(&solo, "").unwrap();
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert!(prompts_with("(“Solo stop”) ended without a result").is_empty(), "a lone stop doesn't wake the lead");
+
+    let (keep, drop_) = (env.release_file("keep"), env.release_file("drop"));
+    let kept = delegate_resuming(&env, &format!("Part LONGTASK:{} REPLYTAG:keepme", keep.display()), "Kept part").await;
+    let stopped = delegate_resuming(&env, &format!("Part LONGTASK:{} REPLYTAG:dropme", drop_.display()), "Stopped part").await;
+    std::fs::write(&keep, "").unwrap();
+    wait_for("the first part to complete", || async { delegation_status(&env, &kept).await == "completed" }).await;
+    wait_for("the second part to run", || async { delegation_status(&env, &stopped).await == "running" }).await;
+    let (s, _) = call(&env.app, "POST", &format!("/api/delegations/{stopped}/cancel"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    std::fs::write(&drop_, "").unwrap();
+    let resumed = || prompts_with("All 2 tasks you delegated have ended").into_iter().filter(|p| p.contains("Kept part")).collect::<Vec<_>>();
+    wait_for("the lead's turn", || async { !resumed().is_empty() }).await;
+    let p = resumed().pop().unwrap();
+    assert!(p.contains("answer keepme") && p.contains("It was stopped"), "{p}");
 }

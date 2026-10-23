@@ -48,6 +48,17 @@ fn clip(text: &str, max: usize) -> String {
     out
 }
 
+/// A specialist's reply as posted to the origin chat: clipped, saying where the rest is.
+fn result_text(reply: &str) -> String {
+    let full = reply.trim();
+    let mut text = clip(full, RESULT_CHARS);
+    // Counted in chars like `clip`: in bytes, the added "…" can make a clipped text look longer
+    if text.chars().count() < full.chars().count() {
+        text.push_str("\n\n(The full answer is in the delegation thread.)");
+    }
+    text
+}
+
 /// Minutes after which an unfinished delegation gets one "still working" note; 0 turns it off.
 pub async fn follow_up_minutes(state: &AppState) -> i64 {
     state
@@ -369,20 +380,30 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
         return;
     };
     let text = match &outcome {
-        Ok(reply) => {
-            let full = reply.trim();
-            let mut text = clip(full, RESULT_CHARS);
-            if text.len() < full.len() {
-                text.push_str("\n\n(The full answer is in the delegation thread.)");
-            }
-            text
-        }
+        Ok(reply) => result_text(reply),
         Err(_) if status == "cancelled" => format!("Stopped work on “{}”.", done.title),
         Err(e) => format!("Couldn't finish “{}”: {}", done.title, clip(e, 500)),
     };
     let result_id = post_to_origin(state, &done, "kwant", &specialist.name, text, meta("delegation_result", &done, &specialist.name)).await;
     if let Some(id) = &result_id {
         let _ = state.db.set_delegation_result_message(&done.id, id).await;
+    }
+    // The specialist asked the person something and ended its turn waiting: say where to answer
+    if let Some(q) = open_question(state, &done).await {
+        post_to_origin(
+            state,
+            &done,
+            "system",
+            "kwnt",
+            format!(
+                "{} is waiting for your answer to “{}” in the thread of “{}”. Answer it there; the result will come back here.",
+                specialist.name,
+                clip(&q.question, 200),
+                done.title
+            ),
+            meta("delegation_waiting", &done, &specialist.name),
+        )
+        .await;
     }
     let done = state.db.get_delegation(&d.id).await.ok().flatten().unwrap_or(done);
     emit_delegation(state, &done);
@@ -400,11 +421,83 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
         },
     )
     .await;
-    if done.continue_lead {
-        if let Some(batch) = finished_batch(state, &done).await {
-            continue_lead(state, &done, &batch).await;
-        }
+    report_to_lead(state, &done, None).await;
+}
+
+/// Resumes the lead once `d` ended, if it was the last of its batch to end (see
+/// [`finished_batch`]). `opening` replaces the first line of the lead's prompt.
+async fn report_to_lead(state: &AppState, d: &Delegation, opening: Option<String>) {
+    if !d.continue_lead {
+        return;
     }
+    if let Some(batch) = finished_batch(state, d).await {
+        continue_lead(state, d, &batch, opening).await;
+    }
+}
+
+/// [`report_to_lead`] in the background, for callers that must not wait for the lead's turn.
+fn spawn_report_to_lead(state: &AppState, d: Delegation) {
+    let state = state.clone();
+    tokio::spawn(async move { report_to_lead(&state, &d, None).await });
+}
+
+/// A question the specialist asked in the delegation's thread that the person hasn't answered.
+async fn open_question(state: &AppState, d: &Delegation) -> Option<crate::db::questions::Question> {
+    state
+        .db
+        .list_questions(Some("open"), Some(&d.thread_id), None)
+        .await
+        .ok()?
+        .into_iter()
+        .find(|q| q.kwant_id == d.specialist_kwant_id && q.thread_id.as_deref() == Some(d.thread_id.as_str()))
+}
+
+/// A late answer to a question the specialist asked in an ended delegation's thread: the
+/// specialist continues there, its new result is posted to the origin chat, and the lead gets
+/// a turn with it. `false` when the delegation can't continue (a bot is gone, or it is still
+/// running and the answer is just a new turn in its thread).
+pub async fn resume_after_answer(state: &AppState, d: Delegation, question_id: &str, prompt: String) -> bool {
+    if d.is_open() {
+        return false;
+    }
+    let (Ok(Some(_)), Ok(Some(specialist))) =
+        (state.db.get_kwant(&d.lead_kwant_id).await, state.db.get_kwant(&d.specialist_kwant_id).await)
+    else {
+        return false;
+    };
+    let job = state.turns.start_job([d.id.clone(), d.thread_id.clone(), question_id.to_string()]);
+    let state = state.clone();
+    tokio::spawn(async move {
+        let scope = match scope_for(&state, &specialist, None, Some(d.thread_id.clone()), &job, d.depth).await {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let outcome = try_kwant_turn(&scope, &specialist, prompt, TurnOpts::default()).await;
+        let outcome = continue_once_if_capped(&scope, &specialist, outcome, false).await;
+        let stopped = job.token.is_cancelled();
+        drop(job);
+        let reply = match outcome {
+            Ok(reply) => reply,
+            // A failed turn already said why in the thread; a stopped one was the person's choice
+            Err(e) if stopped => return tracing::info!(delegation = %d.id, error = %e, "late answer's turn stopped"),
+            Err(e) => format!("Couldn't finish “{}” after your answer: {}", d.title, clip(&e, 500)),
+        };
+        let text = result_text(&reply);
+        let mut m = meta("delegation_result", &d, &specialist.name);
+        m["late"] = json!(true);
+        if let Some(id) = post_to_origin(&state, &d, "kwant", &specialist.name, text, m).await {
+            let _ = state.db.set_delegation_result_message(&d.id, &id).await;
+        }
+        tracing::info!(delegation = %d.id, "delegation continued after a late answer");
+        if d.continue_lead {
+            let opening = format!(
+                "{} got the person's answer to its question and continued the task you delegated (“{}”).",
+                specialist.name, d.title
+            );
+            continue_lead(&state, &d, std::slice::from_ref(&d), Some(opening)).await;
+        }
+    });
+    true
 }
 
 /// The delegations a lead sent from one chat that ran at the same time as `d`, once all of them
@@ -442,7 +535,9 @@ async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegati
         }
     }
     let last = batch.iter().max_by(|a, b| end(a).cmp(&end(b)).then_with(|| a.id.cmp(&b.id)))?;
-    if last.id != d.id || !batch.iter().any(|b| b.status == "completed") {
+    // A batch the person stopped entirely stays stopped; anything else (a result, a failure, a
+    // restart cutting it short) is the lead's to report
+    if last.id != d.id || batch.iter().all(|b| b.status == "cancelled") {
         return None;
     }
     batch.sort_by_key(|b| b.created_at);
@@ -465,8 +560,8 @@ async fn result_of(state: &AppState, d: &Delegation) -> String {
 }
 
 /// Gives the lead one turn in the origin chat with every result of the batch, so it checks them
-/// and gives the user one answer.
-async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation]) {
+/// and gives the user one answer. Tasks that didn't complete say what the lead should do about it.
+async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], opening: Option<String>) {
     let Ok(Some(lead)) = state.db.get_kwant(&d.lead_kwant_id).await else {
         return;
     };
@@ -483,17 +578,38 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation]) {
             "completed" => clip(&result_of(state, b).await, budget),
             _ => format!("({}: {})", b.status, b.error.as_deref().unwrap_or("no result")),
         };
-        results.push_str(&format!("### {who}: “{}”\n{}\n\n", b.title, crate::drivers::peer_message(&who, &body)));
+        results.push_str(&format!("### {who}: “{}”\n{}\n", b.title, crate::drivers::peer_message(&who, &body)));
+        if let Some(q) = open_question(state, b).await {
+            results.push_str(&format!(
+                "(Waiting: {who} asked the person “{}” in its thread and has no answer yet. Don't redo this task: tell the \
+                person the question is waiting in that thread. When they answer, {who} continues and you get its result.)\n",
+                clip(&q.question, 200)
+            ));
+        }
+        if let Some(next) = status_guidance(&b.status) {
+            results.push_str(next);
+            results.push('\n');
+        }
+        results.push('\n');
     }
-    let opening = match batch {
-        [one] => format!("{} finished the task you delegated (“{}”).", name_of(state, &one.specialist_kwant_id).await, one.title),
-        _ => format!("All {} tasks you delegated have ended.", batch.len()),
+    let opening = match (opening, batch) {
+        (Some(o), _) => o,
+        (None, [one]) if one.status == "completed" => {
+            format!("{} finished the task you delegated (“{}”).", name_of(state, &one.specialist_kwant_id).await, one.title)
+        }
+        (None, [one]) => format!(
+            "The task you delegated to {} (“{}”) ended without a result: {}.",
+            name_of(state, &one.specialist_kwant_id).await,
+            one.title,
+            one.status
+        ),
+        (None, _) => format!("All {} tasks you delegated have ended.", batch.len()),
     };
     let prompt = format!(
         "{opening} The results are in the chat above, quoted here:\n\n{results}\
         Check each result against what the user asked. If something is missing or wrong, delegate a concrete \
         correction. Otherwise continue with the user's request and give them one answer that uses the results. \
-        Don't repeat the results in full."
+        If a task failed, was stopped or was cut short, say so plainly. Don't repeat the results in full."
     );
     // The follow-up may hand on to the next teammate by @mention, like any lead reply. Not back to
     // the ones that just reported (the result is what it's about), and within the usual limits.
@@ -511,6 +627,16 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation]) {
             .map(|m| m.text)
             .unwrap_or_else(|| d.task.clone());
         super::routes::run_handoffs_boxed(&scope, &spoken, &[(lead.clone(), reply)], &user_prompt).await;
+    }
+}
+
+/// What the lead should do about a task that ended without a result.
+fn status_guidance(status: &str) -> Option<&'static str> {
+    match status {
+        "failed" => Some("(It failed. Decide whether to retry it, give it to someone else or do it yourself, and tell the person which.)"),
+        "cancelled" => Some("(It was stopped. Don't restart it unless the person asks.)"),
+        "interrupted" => Some("(kwnt restarted twice while it ran, so it may be partly done. Tell the person and offer to run it again.)"),
+        _ => None,
     }
 }
 
@@ -538,6 +664,8 @@ pub async fn cancel(state: &AppState, id: &str) -> Option<Delegation> {
         let _ = state.db.set_delegation_result_message(&done.id, &mid).await;
     }
     emit_delegation(state, &done);
+    // A stopped task alone doesn't wake the lead, but other results of its batch must not be lost
+    spawn_report_to_lead(state, done.clone());
     Some(done)
 }
 
@@ -600,6 +728,7 @@ pub async fn interrupt_open(state: &AppState) {
             meta("delegation_result", &done, &specialist),
         )
         .await;
+        spawn_report_to_lead(state, done);
     }
     for d in again {
         let Ok(Some(d)) = state.db.get_delegation(&d.id).await else {
@@ -646,7 +775,22 @@ async fn restart(state: &AppState, d: Delegation, retried: bool, after_restart: 
     let (Ok(Some(lead)), Ok(Some(specialist))) =
         (state.db.get_kwant(&d.lead_kwant_id).await, state.db.get_kwant(&d.specialist_kwant_id).await)
     else {
-        let _ = state.db.finish_delegation(&d.id, "failed", Some("the bot no longer exists"), None).await;
+        if state.db.finish_delegation(&d.id, "failed", Some("the bot no longer exists"), None).await.unwrap_or(false) {
+            if let Ok(Some(done)) = state.db.get_delegation(&d.id).await {
+                let specialist = name_of(state, &done.specialist_kwant_id).await;
+                post_to_origin(
+                    state,
+                    &done,
+                    "system",
+                    "kwnt",
+                    format!("Couldn't restart “{}”: the bot no longer exists.", done.title),
+                    meta("delegation_result", &done, &specialist),
+                )
+                .await;
+                emit_delegation(state, &done);
+                spawn_report_to_lead(state, done);
+            }
+        }
         return false;
     };
     let job = state.turns.start_job([d.id.clone(), d.thread_id.clone()]);
