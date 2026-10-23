@@ -713,3 +713,109 @@ fn a_clear_laya_pick_beats_words_only_in_a_persona() {
     // A word in a bot's title still beats Laya: that is the role the person named
     assert_eq!(route("Ask the designer about this", &laya_says("Mia")).0, "Dana");
 }
+
+// Follow-ups from Rigel's PR #28 review (laya-eval/rigel-check-28.md); h/hb ids are from eval-holdout.json.
+
+#[test]
+fn whole_word_keywords_still_match_possessives_hyphens_and_versions() {
+    for (prompt, model) in [
+        ("Explain Rust's borrow checker", "codex"),
+        ("Why is Python's GIL a problem here?", "codex"),
+        ("python3 is failing to import my module", "codex"),
+        ("Explain this codebase to me", "codex"),
+        ("I'm scripting a nightly backup", "codex"),
+        ("Do a code-review of this diff", "codex"),
+        ("Use Ollama's smallest model for this", "local_ollama"),
+        ("Run it on-device, please", "local_ollama"),
+    ] {
+        assert_eq!(offline_model(prompt), model, "{prompt}");
+    }
+    use kwnt::router::fallback::heuristic_effort;
+    assert_eq!(heuristic_effort("Give me a deep analysis of our churn", "chat"), "high");
+    assert_eq!(heuristic_effort("Think deeply about this design", "chat"), "high");
+    assert_eq!(heuristic_effort("Let's do a deep-dive on the auth flow", "chat"), "high");
+    // The #28 traps stay fixed
+    assert_ne!(offline_model("Open localhost:3000 and tell me why the proxy returns 502"), "local_ollama", "h01");
+    assert_ne!(offline_model("Keep the app local-first and sync later"), "local_ollama");
+    assert_eq!(offline_model("Write a punchy product description for our candle shop"), "claude", "m11");
+    assert_eq!(heuristic_effort("Explain what a 'deep copy' is in Python in one line", "chat"), "low", "a03");
+}
+
+#[test]
+fn a_private_browser_mode_is_not_a_request_for_the_local_model() {
+    assert_ne!(
+        offline_model("localStorage.setItem throws in Safari private mode. Can you review the code and fix the bug?"),
+        "local_ollama",
+        "h16"
+    );
+    assert_ne!(offline_model("Why is this Kotlin method private?"), "local_ollama");
+    // The person's own private data still stays here
+    assert_eq!(offline_model("Summarize my private medical lab results: total cholesterol 240, LDL 160, HDL 38"), "local_ollama", "m14");
+    assert_eq!(offline_model("This is private data, keep it on this machine"), "local_ollama");
+}
+
+#[test]
+fn a_negation_that_asks_not_to_skip_something_still_counts() {
+    use kwnt::router::fallback::{blend_effort, heuristic_effort};
+    assert_eq!(heuristic_effort("Don't ignore security warnings from npm audit", "chat"), "high");
+    assert_eq!(blend_effort("Don't ignore security warnings from npm audit", "medium"), "high");
+    assert_eq!(heuristic_effort("Please don't refactor anything, just tell me what time zone Paris is in", "chat"), "low", "a01");
+    assert_ne!(heuristic_effort("Don't refactor the module yet, just rename it", "chat"), "high");
+}
+
+fn qa_team() -> Vec<Kwant> {
+    let bot = |name: &str, title: &str, persona: &str| {
+        let mut k = agent(&name.to_lowercase(), name, title);
+        k.persona_prompt = persona.into();
+        k
+    };
+    vec![
+        bot("Sam", "Software Engineer", "You build and maintain backend and frontend features."),
+        bot("Quincy", "QA Engineer", "You test software, find defects and write test plans."),
+        bot("Pia", "Product Designer", "You design screens and user flows."),
+    ]
+}
+
+#[test]
+fn a_test_plan_goes_to_qa_even_when_laya_is_sure_it_is_the_engineers() {
+    let members = qa_team();
+    // Laya's real answer for hb17: Sam 0.58, Quincy 0.29
+    let laya = json!({"answers": {"lead_kwant": {"choice": "Sam", "probabilities": {"Sam": 0.58, "Quincy": 0.29, "Pia": 0.13}}}});
+    let route = |prompt: &str| {
+        let guess = kwnt::router::team::laya_guess(&laya, &members);
+        kwnt::router::team::pick_member(prompt, "sam", &members, guess, "channel lead").unwrap().kwant.name.clone()
+    };
+    assert_eq!(route("Write a test plan for the payment feature"), "Quincy", "hb17");
+    assert_eq!(route("Write test cases for the password reset flow"), "Quincy");
+    assert_eq!(route("Draft acceptance tests for the refund flow"), "Quincy");
+    // Code work still goes to the engineer
+    assert_eq!(route("Implement pagination in the users API"), "Sam", "hb16");
+    // #28's protection holds: a word only in a persona doesn't beat a confident Laya
+    let members = eval_team();
+    let mia = json!({"answers": {"lead_kwant": {"choice": "Mia", "probabilities": {"Mia": 0.6, "Dev": 0.1, "Remy": 0.1, "Dana": 0.1, "Quinn": 0.1}}}});
+    let guess = kwnt::router::team::laya_guess(&mia, &members);
+    let pick = |p: &str| kwnt::router::team::pick_member(p, "dev", &members, guess, "channel lead").unwrap().kwant.name.clone();
+    assert_eq!(pick("Plan our content calendar for next month"), "Mia");
+    assert_eq!(pick("Write a test plan for our ad campaign A/B test"), "Mia", "x02");
+}
+
+#[test]
+fn roles_come_from_titles_in_any_spelling_not_from_names() {
+    let pick = |members: &[Kwant], prompt: &str| {
+        let lead = members.last().unwrap().id.clone();
+        kwnt::router::team::pick_member(prompt, &lead, members, None, "channel lead").unwrap().kwant.name.clone()
+    };
+    let mia = agent("mia", "Mia", "Marketing Manager");
+    let sam = agent("sam", "Sam", "Software Engineer");
+    assert_eq!(pick(&[agent("zed", "Zed", "Front End Developer"), mia.clone()], "Fix the button css layout"), "Zed");
+    assert_eq!(pick(&[agent("zed", "Zed", "SDET"), sam.clone()], "Write regression tests for checkout"), "Zed");
+    assert_eq!(pick(&[agent("zed", "Zed", "Q.A. Engineer"), sam.clone()], "Write regression tests for checkout"), "Zed");
+    // A bot named Art is a software engineer by title, not a designer by name
+    assert_eq!(pick(&[agent("art", "Art", "Software Engineer"), mia.clone()], "Fix the crash in the parser"), "Art");
+    // A name still counts when the title names no role
+    assert_eq!(pick(&[agent("ui", "Frontend", "Helper"), mia.clone()], "Fix the button css layout"), "Frontend");
+    // "strategy" next to a marketing word is a marketing strategy, not a trading one (hb05)
+    let members = eval_team();
+    let p = kwnt::router::team::pick_member("Plan our SEO keyword strategy for Q4", "dev", &members, None, "channel lead").unwrap();
+    assert_eq!(p.kwant.name, "Mia", "hb05");
+}

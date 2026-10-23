@@ -329,10 +329,14 @@ const ROLES: &[Role] = &[
         ],
     },
     Role {
-        titles: &["qa", "quality", "test", "tests", "testing", "tester", "verification"],
+        titles: &["qa", "q-a", "quality", "test", "tests", "testing", "tester", "verification", "sdet"],
         signals: &[
             ("tests", 2), ("testing", 2), ("qa", 2), ("e2e", 2), ("regression", 2), ("coverage", 2),
             ("flaky", 2), ("test", 1), ("verify", 1), ("bug", 1), ("repro", 2),
+            // Phrases only QA writes. Weight 1 so they don't outvote another role's clear words ("a test
+            // plan for our ad campaign" is marketing's), but see NAMES_THE_WORK.
+            ("test-plan", 1), ("test-plans", 1), ("test-case", 1), ("test-cases", 1), ("acceptance-test", 1),
+            ("acceptance-tests", 1),
         ],
     },
     Role {
@@ -359,7 +363,9 @@ const ROLES: &[Role] = &[
             ("campaigns", 2), ("ad", 2), ("ads", 2), ("tweet", 2), ("tweets", 2), ("newsletter", 2), ("blog", 2),
             ("tagline", 2), ("slogan", 2), ("headline", 2), ("headlines", 2), ("announcement", 2),
             ("instagram", 2), ("tiktok", 2), ("linkedin", 2), ("copy", 1), ("launch", 1), ("social", 1),
-            ("audience", 1), ("conversion", 1), ("post", 1),
+            ("audience", 1), ("conversion", 1), ("post", 1), ("seo-strategy", 2), ("keyword-strategy", 2),
+            ("content-strategy", 2), ("marketing-strategy", 2), ("growth-strategy", 2), ("brand-strategy", 2),
+            ("social-strategy", 2), ("launch-strategy", 2), ("a-b-test", 1), ("a-b-tests", 1), ("a-b-testing", 1),
         ],
     },
     Role {
@@ -381,8 +387,22 @@ const GENERIC_ENGINEER_TITLES: &[&str] = &[
     "engineer", "engineering", "developer", "dev", "software", "full-stack", "fullstack", "programmer", "coder", "swe",
 ];
 
-/// Two words that mean something else together: a landing page is marketing, not a UI page.
-const COMPOUNDS: &[(&str, &str)] = &[("landing", "page"), ("market", "size"), ("market", "research")];
+/// Two words that mean something else together: a landing page is marketing, not a UI page, an SEO
+/// strategy isn't a trading strategy, and an A/B test is a marketing experiment. A pair can extend an
+/// earlier one ("a-b" then "test").
+const COMPOUNDS: &[(&str, &str)] = &[
+    ("landing", "page"), ("market", "size"), ("market", "research"), ("test", "plan"), ("test", "plans"),
+    ("test", "case"), ("test", "cases"), ("acceptance", "test"), ("acceptance", "tests"), ("seo", "strategy"),
+    ("keyword", "strategy"), ("content", "strategy"), ("marketing", "strategy"), ("growth", "strategy"),
+    ("brand", "strategy"), ("social", "strategy"), ("launch", "strategy"), ("front", "end"), ("back", "end"),
+    ("q", "a"), ("a", "b"), ("a-b", "test"), ("a-b", "tests"), ("a-b", "testing"),
+];
+
+/// A matched role phrase such as "test plan" names the work as plainly as a title does, so a confident
+/// Laya pick of another bot doesn't override it (a QA bot's own "test plan", not a guess from its persona).
+fn names_the_work(term: &str) -> bool {
+    term.contains('-') && COMPOUNDS.iter().any(|(a, b)| term == format!("{a}-{b}"))
+}
 
 /// [`tokens`] with [`COMPOUNDS`] joined by a hyphen, for role matching.
 fn role_words(text: &str) -> Vec<String> {
@@ -407,21 +427,29 @@ fn tokens(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn roles_of(kwant: &Kwant) -> Vec<&'static Role> {
-    let mut own = tokens(&kwant.title);
-    own.extend(tokens(&kwant.name));
-    if kwant.title.trim().is_empty() {
-        own = tokens(&kwant.name);
-        let first = tokens(kwant.persona_prompt.split(['.', '\n']).next().unwrap_or(""));
-        if !ROLES.iter().any(|r| r.titles.iter().any(|t| own.iter().any(|o| o == t))) {
-            own = first;
-        }
-    }
+/// The roles that `text`'s words (a title, a name or a persona's first line) name.
+fn roles_named_by(text: &str) -> Vec<&'static Role> {
+    let own = role_words(text);
     let roles: Vec<&Role> = ROLES.iter().filter(|r| r.titles.iter().any(|t| own.iter().any(|o| o == t))).collect();
     if roles.is_empty() && own.iter().any(|o| GENERIC_ENGINEER_TITLES.contains(&o.as_str())) {
         return ROLES.iter().filter(|r| r.titles.contains(&"backend")).collect();
     }
     roles
+}
+
+/// A bot's roles come from its title. Its name only counts when the title names no role (a bot named
+/// "Art" titled "Software Engineer" writes code, it isn't a designer), and the persona's first line
+/// only when there is no title and the name names no role.
+fn roles_of(kwant: &Kwant) -> Vec<&'static Role> {
+    let from_title = roles_named_by(&kwant.title);
+    if !from_title.is_empty() {
+        return from_title;
+    }
+    let from_name = roles_named_by(&kwant.name);
+    if !from_name.is_empty() || !kwant.title.trim().is_empty() {
+        return from_name;
+    }
+    roles_named_by(kwant.persona_prompt.split(['.', '\n']).next().unwrap_or(""))
 }
 
 /// The request words that belong to `kwant`'s role, and their weight.
@@ -557,7 +585,7 @@ pub fn pick_member<'a>(
         .map(|((m, (_, rs, rt)), terms)| {
             let own: Vec<&(String, usize)> = terms.iter().filter(|(t, _)| !shared(t)).collect();
             let s = own.iter().map(|(_, s)| s).sum::<usize>();
-            let named = own.iter().any(|(_, s)| *s >= 2);
+            let named = own.iter().any(|(_, s)| *s >= 2) || rt.iter().any(|t| names_the_work(t));
             let mut t: Vec<String> = own.iter().map(|(t, _)| t.clone()).collect();
             for w in rt {
                 if !t.contains(w) {

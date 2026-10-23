@@ -9,7 +9,7 @@ const DEEP_SIGNALS: &[&str] = &[
     "optimise", "optimized", "optimised", "optimizing", "optimising", "optimization", "optimisation",
     "investigate", "investigating", "investigation", "root cause", "root-cause", "tradeoff", "trade-off",
     "trade off", "monolith", "monolithic", "microservice", "migrate", "migrated", "migrating", "migration",
-    "postmortem", "post-mortem",
+    "postmortem", "post-mortem", "deep analysis", "think deeply", "think hard", "go deep", "dig deep",
 ];
 
 /// Everyday phrases that contain a deep signal but ask for nothing deep.
@@ -18,25 +18,38 @@ const NOT_DEEP: &[&str] = &["security guard", "security deposit", "social securi
 /// Words that, just before a signal, say the person doesn't want it ("don't refactor anything").
 const NEGATIONS: &[&str] = &["don't", "dont", "do not", "not", "no", "never", "without"];
 
-/// Lower-case words of `text`. Hyphens and apostrophes stay inside a word ("trade-off", "don't"), and
-/// are trimmed from its ends ("'deep copy'").
+/// After a negation, these turn it back into a request: "don't ignore security warnings" wants them looked at.
+const UNDO_NEGATION: &[&str] = &["ignore", "skip", "forget", "overlook", "neglect", "miss", "underestimate"];
+
+/// Lower-case words of `text`. Apostrophes stay inside a word ("don't") but a possessive "'s" is
+/// dropped ("Rust's" is "rust"). Hyphens split a word ("code-review" is "code review"), and keyword
+/// phrases are split the same way, so "trade-off" still matches "trade-off" and "trade off".
 pub(crate) fn words(text: &str) -> Vec<String> {
     text.to_lowercase()
         .replace('\u{2019}', "'")
-        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '\'')
-        .map(|w| w.trim_matches(|c| c == '-' || c == '\''))
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .map(|w| w.trim_matches('\''))
+        .map(|w| w.strip_suffix("'s").unwrap_or(w))
         .filter(|w| !w.is_empty())
         .map(str::to_string)
         .collect()
 }
 
-/// Where `phrase` (one or more words) starts in `words`. A word also matches its plural ("tradeoffs").
+/// Where `phrase` (one or more words) starts in `words`. A word also matches its plural ("tradeoffs")
+/// and a version number after it ("python3").
 fn phrase_at(words: &[String], phrase: &str) -> Vec<usize> {
-    let parts: Vec<&str> = phrase.split(' ').collect();
+    let parts: Vec<&str> = phrase.split([' ', '-']).filter(|p| !p.is_empty()).collect();
     if parts.is_empty() || words.len() < parts.len() {
         return Vec::new();
     }
-    let same = |w: &str, p: &str| w == p || w.strip_suffix('s').is_some_and(|x| x == p) || w.strip_suffix("es").is_some_and(|x| x == p);
+    let unversioned = |w: &str| {
+        let stem = w.trim_end_matches(|c: char| c.is_ascii_digit());
+        if stem.len() >= 4 && stem.chars().all(char::is_alphabetic) { stem.to_string() } else { w.to_string() }
+    };
+    let same = |w: &str, p: &str| {
+        let w = unversioned(w);
+        w == p || w.strip_suffix('s').is_some_and(|x| x == p) || w.strip_suffix("es").is_some_and(|x| x == p)
+    };
     (0..=words.len() - parts.len())
         .filter(|&i| parts.iter().enumerate().all(|(j, p)| same(&words[i + j], p)))
         .collect()
@@ -55,7 +68,7 @@ fn has_any(words: &[String], phrases: &[&str]) -> bool {
 fn has_deep_signal(text: &str) -> bool {
     let mut ws = words(text);
     for idiom in NOT_DEEP {
-        let len = idiom.split(' ').count();
+        let len = idiom.split([' ', '-']).count();
         for i in phrase_at(&ws, idiom) {
             for w in &mut ws[i..i + len] {
                 w.clear();
@@ -64,7 +77,7 @@ fn has_deep_signal(text: &str) -> bool {
     }
     let negated = |i: usize| {
         let before = &ws[i.saturating_sub(2)..i];
-        NEGATIONS.iter().any(|n| has_phrase(before, n))
+        NEGATIONS.iter().any(|n| has_phrase(before, n)) && !has_any(before, UNDO_NEGATION)
     };
     DEEP_SIGNALS.iter().any(|s| phrase_at(&ws, s).into_iter().any(|i| !negated(i)))
 }
@@ -127,11 +140,12 @@ pub fn blend_effort(prompt: &str, laya_effort: &str) -> String {
     }
 }
 
-/// Asks to keep the work on this machine. Bare "local" is not one of them: "localhost", "locale" and
-/// "my local coffee shop" aren't private.
+/// Asks to keep the work on this machine. Bare "local" and "private" are not among them: "localhost",
+/// "my local coffee shop", "Safari private mode" and "a private method" aren't about where it runs.
 const PRIVATE: &[&str] = &[
-    "private", "confidential", "sensitive", "offline", "ollama", "local model", "local llm", "locally",
-    "on-device", "on device", "on my machine", "private data",
+    "confidential", "sensitive", "offline", "ollama", "local model", "local llm", "locally", "on-device",
+    "on my machine", "private data", "private files", "private documents", "private info",
+    "private information", "my private", "keep it private", "keep this private",
 ];
 
 /// Needs long reasoning or writing.
@@ -142,7 +156,8 @@ const REASONING: &[&str] = &[
 
 /// Asks for code.
 const CODING: &[&str] = &[
-    "python", "rust", "javascript", "typescript", "code", "script", "regex", "algorithm", "function",
+    "python", "rust", "javascript", "typescript", "code", "codebase", "coding", "script", "scripting",
+    "regex", "algorithm", "function",
 ];
 
 /// Evaluates a prompt using local keyword scoring heuristics when Laya is offline.
