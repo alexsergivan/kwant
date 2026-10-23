@@ -84,6 +84,16 @@ pub struct Teammate {
 }
 
 /// Models only know their training cutoff, so every turn is told the real date and how to use it.
+/// Drops the newest history message when it is the person's message this turn answers: callers
+/// save it before reading history and then pass it again as the prompt, so the model saw it twice.
+pub fn drop_current_message(history: &mut Vec<crate::db::models::Message>, prompt: &str) {
+    let Some(last) = history.last() else { return };
+    let text = last.text.trim();
+    if last.sender_role == "user" && !text.is_empty() && prompt.trim_start().starts_with(text) {
+        history.pop();
+    }
+}
+
 /// Frames text another bot wrote, wherever it reaches a bot (history, handoffs, delegated tasks
 /// and their results), so it is never mistaken for the person's own words or authority.
 /// The frame's markers can't be forged from inside: any "[Message from" / "[End of message" in the
@@ -585,6 +595,44 @@ pub fn create_driver_for_kwant(kwant: &Kwant) -> Box<dyn Driver> {
 
 #[cfg(test)]
 mod tests {
+    fn said(role: &str, text: &str) -> crate::db::models::Message {
+        crate::db::models::Message {
+            id: text.into(),
+            channel_id: None,
+            direct_kwant_id: None,
+            sender_role: role.into(),
+            sender_id: "u".into(),
+            text: text.into(),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 0,
+            created_at: None,
+            thread_id: None,
+            meta: None,
+        }
+    }
+
+    #[test]
+    fn the_current_message_is_not_repeated_in_history() {
+        let mut h = vec![said("user", "hi"), said("kwant", "hello"), said("user", "plan my week")];
+        drop_current_message(&mut h, "plan my week\n\n[Files attached: a.pdf]");
+        assert_eq!(h.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["hi", "hello"]);
+        // Only the newest, only the person's, only when the prompt starts with it
+        for (last, prompt) in [("kwant", "hello again"), ("user", "something else")] {
+            let mut h = vec![said("user", "hi"), said(last, "hello")];
+            if last == "user" {
+                h[1].text = "plan".into();
+            }
+            drop_current_message(&mut h, prompt);
+            assert_eq!(h.len(), 2, "{last} {prompt}");
+        }
+        let mut h = vec![said("user", "  ")];
+        drop_current_message(&mut h, "anything");
+        assert_eq!(h.len(), 1);
+        let mut empty = Vec::new();
+        drop_current_message(&mut empty, "x");
+    }
+
     use super::*;
 
     fn input() -> TurnInput {

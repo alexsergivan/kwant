@@ -1623,7 +1623,8 @@ async fn run_kwant_turn_inner(
 
         let context_id = tag.context_id.clone();
 
-        let history = db.list_messages(&context_id, 20).await.unwrap_or_default();
+        let mut history = db.list_messages(&context_id, 20).await.unwrap_or_default();
+        crate::drivers::drop_current_message(&mut history, &prompt);
 
         let configured_key = get_configured_key(&db, &target_model).await;
         let endpoint = get_configured_endpoint(&db, &target_model).await;
