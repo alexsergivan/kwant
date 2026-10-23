@@ -471,6 +471,7 @@ async fn propose(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Va
             note = Some("A team proposal always asks you, even with \"always accept\".".to_string());
         }
     } else if policy == "auto" && denied.is_none() {
+        let _cap = AUTO_HIRE_CAP.lock().await;
         let used = state.db.auto_hires_today(space).await.unwrap_or(i64::MAX);
         if used < AUTO_HIRES_PER_DAY {
             return match accept(state, &hire, true).await {
@@ -630,6 +631,10 @@ pub(super) async fn undone(state: &AppState, id: &str) {
     }
     refresh(state, id, None).await;
 }
+
+/// Held from counting today's automatic hires until the new one is recorded, by automatic
+/// accepts and `bot_create`, so two at once can't both see room under [`AUTO_HIRES_PER_DAY`].
+pub(super) static AUTO_HIRE_CAP: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Creates the bot for a pending proposal: same path as `bot_create`, plus its tools and team,
 /// logged as a `bot_hire` action for Undo. Puts the proposal back to pending on failure.

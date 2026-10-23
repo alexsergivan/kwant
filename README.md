@@ -70,7 +70,7 @@ make run          # builds the web app (frontend/dist), then runs `cargo run -- 
 
 Open **http://127.0.0.1:8799**. If no account works yet, kwant shows a **Get ready** banner with an **Add an account** button. A fresh install starts with three bots in `#general`: Architect, TechLead and DevOps. Make more with **New bot**, from a ready-made persona or blank.
 
-The binary embeds `frontend/dist`, so `cargo run -- serve` on its own only works after the first `make run` (or `make frontend`).
+The binary embeds `frontend/dist`, so on a fresh clone `cargo build`, `cargo test` and `cargo run -- serve` fail to compile until you've run `make run` or `make frontend` once.
 
 **The first start takes a few minutes:** kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer meanwhile, picked by keyword. To skip Laya, run `cargo run -- serve --no-laya`.
 

@@ -1,6 +1,9 @@
 //! Local mode against a real Chrome/Chromium: it runs without a window, pages render and take
 //! input at the viewer's 1280x800 size, and the window switch reopens the same page in a real
 //! window and back. Skipped when no Chrome is installed; the window part needs Xvfb on Linux.
+#[path = "support/chrome_guard.rs"]
+mod chrome_guard;
+use chrome_guard::ChromeGuard;
 use kwnt::sandbox::{
     computer::{self, ComputerMode},
     service::BrowserService,
@@ -62,6 +65,7 @@ async fn local_chrome_runs_windowless_and_can_open_as_a_window() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let profile = tmp.path().join("local-chrome");
+    let _chrome = ChromeGuard(profile.clone());
     let service = BrowserService::new(tmp.path().to_path_buf(), None);
     service.set_mode(ComputerMode::Local).await;
     let url = serve_page().await;

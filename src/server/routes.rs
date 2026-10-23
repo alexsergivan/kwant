@@ -3760,6 +3760,10 @@ mod tests {
         assert!(text.ends_with('…') && text.len() < 700, "{} bytes", text.len());
         // A short error is kept whole
         assert!(!turn_failed_text("Lin", "the turn ended without a reply", &activity).ends_with('…'));
+        // Whole user names, with spaces and on Windows
+        let text = turn_failed_text("Lin", r"no config at /Users/Oleks Smith/.kwnt or C:\Users\Oleks Smith\.kwnt", &activity);
+        assert!(!text.contains("Oleks") && !text.contains("Smith"), "{text}");
+        assert!(text.ends_with(r"no config at ~/.kwnt or ~\.kwnt"), "{text}");
     }
 
     #[test]
