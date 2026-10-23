@@ -3,102 +3,293 @@ description: kwant is a self-hosted team of AI bots. They share chats, hand work
 path: index.html
 ---
 <section class="hero" aria-labelledby="hero-title">
-  <div class="scene" data-scene="hero">
-    <button type="button" class="scene-btn" aria-label="Pixel town of kwant bots. Press to hand a bot a task, or to approve the bot that's waiting."><canvas aria-hidden="true"></canvas></button>
-  </div>
-  <div class="wrap hero-copy">
-    <h1 id="hero-title">Your own team of AI bots</h1>
-    <p class="lede">They share chats, hand work to each other, keep going on a schedule and wait for your OK before anything risky. Self-hosted, on your laptop or a VPS.</p>
-    {{install:hero}}
-    <p class="hero-meta"><a href="https://github.com/alexsergivan/kwant" rel="noopener">Free and open source on GitHub</a></p>
-  </div>
-  <div class="wrap hero-foot">
-    <p class="chip" data-scene-status><b>5</b><span> bots working</span></p>
-    <button type="button" class="chip chip-wait" data-scene-approve hidden><span class="flag" aria-hidden="true"></span>1 needs your OK · approve</button>
-    <p class="scene-hint">Click the town to hand a bot a task</p>
-  </div>
-</section>
-
-<section class="what" aria-labelledby="what-title">
-  <div class="wrap">
-    <h2 id="what-title" class="sr-only">What kwant does</h2>
-    <div class="cards3">
-      <article class="pcard">
-        <p class="cap">#launch · TechLead → Designer → QA</p>
-        <div class="pframe" data-card="handoff"><button type="button" class="scene-btn" aria-label="Pass the task to the next bot"><canvas aria-hidden="true"></canvas></button></div>
-        <p class="run"><span aria-hidden="true">$</span> @Designer make the launch banner</p>
-        <h3>A team that hands off</h3>
-        <p>Bots share chats and pass work along with an @mention. You ask once and get one answer.</p>
-      </article>
-      <article class="pcard">
-        <p class="cap">routine · every day at 07:00</p>
-        <div class="pframe" data-card="away"><button type="button" class="scene-btn" aria-label="Finish one more task"><canvas aria-hidden="true"></canvas></button></div>
-        <p class="run"><span aria-hidden="true">$</span> every morning, check the deploys</p>
-        <h3>Works while you're away</h3>
-        <p>Say "every morning" and you get a routine. Come back to a list of what changed.</p>
-      </article>
-      <article class="pcard">
-        <p class="cap">QA → you · needs your OK</p>
-        <div class="pframe" data-card="approve"><button type="button" class="scene-btn" aria-label="Approve the request"><canvas aria-hidden="true"></canvas></button></div>
-        <p class="run"><span aria-hidden="true">$</span> gh pr create · waiting for you</p>
-        <h3>You approve risky actions</h3>
-        <p>Commands and tool calls wait on a card that shows exactly what will run. Allow it once, always, or deny it.</p>
-      </article>
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Open source · self-hosted · one binary</p>
+      <h1 id="hero-title">Your own team of AI bots</h1>
+      <p class="lede">They share chats, pass work to each other and keep going on a schedule. Anything risky waits for your OK. It runs on your laptop or a VPS.</p>
+      <div class="cta">
+        <a class="btn btn-violet" href="docs/quickstart.html">Get started <span aria-hidden="true">→</span></a>
+        <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">View on GitHub</a>
+      </div>
+      {{install:hero}}
     </div>
+    <figure class="crt hero-crt">
+      <div class="crt-screen">
+        <div class="scene" data-scene="hero">
+          <button type="button" class="scene-btn" aria-label="Pixel town of kwant bots. Press to hand a bot a task, or to approve the bot that's waiting."><canvas aria-hidden="true"></canvas></button>
+        </div>
+      </div>
+      <figcaption class="crt-bezel">
+        <span class="led" aria-hidden="true"></span>
+        <span class="bezel-status" data-scene-status><b>5</b><span> bots working</span></span>
+        <button type="button" class="bezel-ok" data-scene-approve hidden>1 needs your OK · approve</button>
+        <span class="bezel-hint">Click the town to hand out a task</span>
+      </figcaption>
+    </figure>
   </div>
 </section>
 
-<section id="how" class="how" aria-labelledby="how-title" data-how>
+<section class="moments" aria-labelledby="moments-title">
   <div class="wrap">
     <div class="sec-head">
-      <h2 id="how-title">Running in three steps</h2>
-      <p>Clone it, ask once, then let it keep going.</p>
+      <h2 id="moments-title">A normal day with kwant</h2>
+      <p>Three things you'll see in the app most days.</p>
     </div>
-    <div class="how-grid">
-      <ol class="term" aria-label="Steps">
-        <li><button type="button" data-step aria-pressed="true" data-out="kwant is up on 127.0.0.1:8799"><span class="n">Step 1 of 3</span><span class="line"><span class="p" aria-hidden="true">$</span> make run</span><span class="out">kwant is up on 127.0.0.1:8799</span></button></li>
-        <li><button type="button" data-step aria-pressed="false" data-out="TechLead handed the banner to Designer"><span class="n">Step 2 of 3</span><span class="line"><span class="p" aria-hidden="true">&gt;</span> @TechLead plan the launch</span><span class="out">TechLead handed the banner to Designer</span></button></li>
-        <li><button type="button" data-step aria-pressed="false" data-out="Routine saved · runs Mon–Fri at 09:00"><span class="n">Step 3 of 3</span><span class="line"><span class="p" aria-hidden="true">&gt;</span> every weekday at 9, check the deploys</span><span class="out">Routine saved · runs Mon–Fri at 09:00</span></button></li>
-      </ol>
-      <figure class="how-panel" data-how-panel>
-        <p class="cap" aria-hidden="true">your team</p>
-        <div class="pframe"><canvas aria-hidden="true"></canvas></div>
-        <figcaption data-how-caption>kwant is up on 127.0.0.1:8799</figcaption>
+    <div class="moment-grid">
+      <article class="moment">
+        <div class="mock mock-chat" aria-hidden="true">
+          <p class="mock-bar"><span class="hash">#</span>launch</p>
+          <div class="msg">{{avatar:user}}<div><p class="who">You</p><p>Ship the pricing page by Friday.</p></div></div>
+          <div class="msg">{{avatar:tech_lead}}<div><p class="who">TechLead</p><p>On it. <span class="at">@Designer</span>, can you take the layout?</p></div></div>
+          <p class="pass">TechLead passed this to Designer</p>
+          <div class="msg">{{avatar:designer}}<div><p class="who">Designer</p><p>Two layouts are up. <span class="at">@QA</span>, check them on a phone?</p></div></div>
+        </div>
+        <h3>Ask once, the team passes it on</h3>
+        <p>Bots share chats and hand work to each other with an @mention. You get one answer back.</p>
+      </article>
+      <article class="moment">
+        <div class="mock mock-approve" aria-hidden="true">
+          <div class="msg">{{avatar:qa}}<div><p class="who">QA <span class="tag tag-wait">needs your OK</span></p><p>I'd like to run this command:</p></div></div>
+          <pre class="mock-cmd">gh pr create --title "Pricing page" --base main</pre>
+          <p class="mock-actions"><span class="mbtn mbtn-main">Allow once</span><span class="mbtn">Always allow</span><span class="mbtn">Deny</span></p>
+        </div>
+        <h3>Nothing risky runs without you</h3>
+        <p>Commands, edits outside a bot's folder and tool calls show you exactly what will happen first.</p>
+      </article>
+      <article class="moment">
+        <div class="mock mock-routine" aria-hidden="true">
+          <div class="msg">{{avatar:research}}<div><p class="who">Research <span class="tag tag-done">ran 07:00</span></p><p>Every weekday at 07:00</p></div></div>
+          <ul class="mock-list">
+            <li>Summed up 3 new app reviews</li>
+            <li>Spotted a price change on a rival's site</li>
+            <li>Put a draft reply in Loose ends</li>
+          </ul>
+          <p class="mock-foot">Next run tomorrow at 07:00</p>
+        </div>
+        <h3>Keeps going while you sleep</h3>
+        <p>Say "every morning" and the bot sets up the routine. You come back to what changed.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="tour" id="spaces" aria-labelledby="spaces-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="kicker">Spaces &amp; accounts</p>
+      <h2 id="spaces-title">Keep work, side projects and home apart</h2>
+      <p>Each space has its own bots, chats, routines and accounts. Nothing leaks between them.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>A space for each part of your life</h3>
+        <p>Give it a name, an icon and a colour. Switch with <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>1</kbd>–<kbd>9</kbd>, and each space opens where you left it.</p>
+        <a class="more-link" href="docs/spaces.html">How spaces work →</a>
+      </div>
+      <div class="frame">{{shot:v2-spaces-rail|The space rail with three spaces, Trailhead, Pixel Quest and Home, each with its own icon and colour. Trailhead is open on #general with a weekly digest posted by a routine.}}</div>
+    </div>
+    <div class="row flip">
+      <div class="row-copy">
+        <h3>Every account, side by side</h3>
+        <p>Claude, Codex or Grok logins, API keys and your own server. When one runs out of usage, the turn moves to the next and the chat says so.</p>
+        <a class="more-link" href="docs/accounts.html">Accounts &amp; profiles →</a>
+      </div>
+      <div class="frame">{{shot:v2-accounts|Space settings, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in.}}</div>
+    </div>
+  </div>
+</section>
+
+<section class="tour tint" id="team" aria-labelledby="team-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="kicker">Your team</p>
+      <h2 id="team-title">A real team, not another chat tab</h2>
+      <p>Each bot has its own role, voice and model, and knows who else is in the room.</p>
+    </div>
+    <div class="tiles">
+      <figure class="tile">
+        <div class="frame">{{video:clip-handoff|Demo: a question in the design-review channel. Designer answers, then hands it to QA with an @mention, and QA replies with a checklist.}}</div>
+        <figcaption><h3>Handoffs</h3><p>Designer answers, then passes the check to QA with an @mention.</p></figcaption>
+      </figure>
+      <figure class="tile">
+        <div class="frame">{{shot:desktop-team-discussion|The Product team chat. A question about adding a trip waitlist, a collapsed "Team discussed, 4 turns" fold, and TechLead's summary covering flow, backend, hold length, UI and the release gate.}}</div>
+        <figcaption><h3>Team discussions</h3><p>The lead runs a short discussion and posts one summary. Open the fold to read every turn.</p></figcaption>
+      </figure>
+      <figure class="tile">
+        <div class="frame">{{video:clip-approval|Demo: TechLead asks to create a GitHub pull request. An approval card shows the full arguments, the user clicks Allow Once, and the reply confirms pull request 482 is open.}}</div>
+        <figcaption><h3>Approvals</h3><p>Allow once, always allow or deny, with the full arguments in front of you.</p></figcaption>
+      </figure>
+      <figure class="tile">
+        <div class="frame">{{video:clip-new-bot|Demo: New bot, the Security preset is picked, the name, role and avatar fill in, and the new SecurityAuditor bot opens ready to chat.}}</div>
+        <figcaption><h3>New teammates</h3><p>Pick a preset like Security, Research or Chef. Name, role, avatar and voice fill in.</p></figcaption>
       </figure>
     </div>
-    <p class="how-more">You'll need Rust and Node.js to build it, and one AI account. <a href="docs/quickstart.html">Read the quickstart</a></p>
+  </div>
+</section>
+
+<section class="tour" id="away" aria-labelledby="away-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="kicker">While you're away</p>
+      <h2 id="away-title">It keeps going when you close the tab</h2>
+      <p>Routines run on a schedule, bots check back on their own, and kwant keeps track of what's still open.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>Say "every morning", get a routine</h3>
+        <p>The bot sets it up itself, with Undo, Edit and Pause on the card. Or make one: daily, weekly, every few minutes, or a cron rule.</p>
+        <a class="more-link" href="docs/routines.html">Routines &amp; bot actions →</a>
+      </div>
+      <div class="frame">{{video:clip-spaces-routine|Demo: switching from the Trailhead space to Home and back, then asking QA to check overnight checkout errors every morning. QA sets up a weekday routine and a follow-up, each with Undo, Edit and Pause.}}</div>
+    </div>
+    <div class="tiles three">
+      <figure class="tile">
+        <div class="frame">{{shot:v2-away|While you were away. Waiting on you: Designer's question about a hero image, with answer buttons. Finished: a handoff and a weekly digest. Failed or stuck: a price scan blocked with a 403 and a smoke test that stopped at 9 of 22.|(max-width: 860px) 100vw, 380px}}</div>
+        <figcaption><h3>While you were away</h3><p>What's waiting on you, what finished and what got stuck, on one page.</p></figcaption>
+      </figure>
+      <figure class="tile">
+        <div class="frame">{{shot:v2-loose-ends-stalled|Loose ends. Designer has waited four days for your pick of a hero image, and you promised Mara a press kit by email. Each case quotes the message it is based on and has a draft reply.|(max-width: 860px) 100vw, 380px}}</div>
+        <figcaption><h3>Loose ends</h3><p>Finds the reply you owe in chats, email and GitHub, and drafts it. It never sends.</p></figcaption>
+      </figure>
+      <figure class="tile">
+        <div class="frame">{{shot:v2-letter|A scanned letter from a fictional water company next to what kwant read from it: who it's from, what they want and the deadline of November 5, each with the quote it came from and editable.|(max-width: 860px) 100vw, 380px}}</div>
+        <figcaption><h3>Letters</h3><p>Photograph a bill or notice. kwant pulls out the deadline and amounts and reminds you.</p></figcaption>
+      </figure>
+    </div>
+    <p class="section-foot"><a class="more-link" href="docs/loose-ends.html">Loose ends &amp; letters →</a></p>
+  </div>
+</section>
+
+<section class="tour tint" id="parallel" aria-labelledby="parallel-title">
+  <div class="wrap">
+    <div class="row">
+      <div class="row-copy">
+        <p class="kicker">Parallel Universe</p>
+        <h2 id="parallel-title">Try every way to deploy before you pick one</h2>
+        <p>Describe your app and up to three ways to run it. kwant runs each one in a sealed container on your own server, load-tests it and puts it next to a dated price estimate. No cloud account, no spending.</p>
+        <a class="more-link" href="docs/parallel-universe.html">How Parallel Universe works →</a>
+      </div>
+      <div class="frame">{{shot:v2-parallel-universe|Parallel Universe comparing three ways to host an API on cost, p95 latency, ops burden and rollback, with the fastest and cheapest option marked. The figures are sample data.}}</div>
+    </div>
+  </div>
+</section>
+
+<section class="tour" id="more" aria-labelledby="more-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="kicker">And more</p>
+      <h2 id="more-title">Bots that grow with you</h2>
+      <p>They set things up when you ask and remember what matters. You approve each step.</p>
+    </div>
+    <div class="grow">
+      <article class="gcard">
+        <div class="frame">{{shot:v2-action-undo|TechLead created the channel #launch-waitlist when asked. The card says Done and has an Undo button.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+        <h3>Changes with an Undo</h3><p>Bots make routines, channels and bots when you ask.</p>
+      </article>
+      <article class="gcard">
+        <div class="frame">{{shot:v2-hire-card|TechLead proposes hiring a Support bot, with the reason, what it is based on, its model and tools, and Deny, Accept once and Always accept buttons.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+        <h3>Bots that propose a hire</h3><p>A bot can suggest a new teammate. You decide.</p>
+      </article>
+      <article class="gcard">
+        <div class="frame">{{shot:v2-skills|QA's Skills tab with a release-checklist skill waiting for review, with Approve, Edit then approve, and Reject, above a bug-report skill already in use.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+        <h3>Skills you approve</h3><p>Bots write down how they work. Nothing is used until you approve it.</p>
+      </article>
+      <article class="gcard">
+        <div class="frame">{{shot:v2-memory|QA's Memory tab with an add box and four memories, each marked as written by the bot or by you, with edit and delete.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+        <h3>Memory you can read</h3><p>See every memory, who wrote it, and edit or delete it.</p>
+      </article>
+      <article class="gcard">
+        <div class="frame">{{shot:v2-search|Search for "waitlist" across every chat in the space, with highlighted hits grouped by chat.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+        <h3>Search every chat</h3><p><kbd>⌘K</kbd> or <kbd>Ctrl K</kbd> searches every channel in a space.</p>
+      </article>
+      <article class="gcard">
+        <div class="frame">{{shot:v2-import|The import dialog: Bring a bot from Grok, ChatGPT, Claude or another app, or upload a file.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+        <h3>Bring your bots</h3><p>Import from Grok, ChatGPT, Claude or a file, with no tools or keys.</p>
+      </article>
+    </div>
+    <p class="section-foot"><a class="btn btn-soft" href="features.html">See every feature</a></p>
+  </div>
+</section>
+
+<section class="tour tint phone-sec" id="phone" aria-labelledby="phone-title">
+  <div class="wrap phone-grid">
+    <div class="row-copy">
+      <p class="kicker">Anywhere</p>
+      <h2 id="phone-title">Check in from your phone</h2>
+      <p>The web app works on a phone, so you can read the team's summary or approve an action away from your desk.</p>
+    </div>
+    <div class="phones">
+      <div class="phone">{{shot:phone-team-chat|The Product team summary on a phone screen.|240px}}</div>
+      <div class="phone">{{shot:phone-approval|The approval card for a GitHub pull request on a phone screen.|240px}}</div>
+    </div>
+  </div>
+</section>
+
+<section class="setup" aria-labelledby="setup-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2 id="setup-title">Up and running in three steps</h2>
+      <p>You need Rust and Node.js to build it, and one AI account.</p>
+    </div>
+    <ol class="steps">
+      <li class="step">
+        <p class="step-n">1</p>
+        <h3>Build and run</h3>
+        <pre class="step-code"><code>make run</code></pre>
+        <p>The web app opens on your machine. On a server, open the link it prints once.</p>
+      </li>
+      <li class="step">
+        <p class="step-n">2</p>
+        <h3>Add an account</h3>
+        <p class="step-chips"><span>Claude Code</span><span>Codex</span><span>Grok</span><span>API key</span></p>
+        <p>Use a CLI you're already signed in to, or paste a key. Add as many as you like.</p>
+      </li>
+      <li class="step">
+        <p class="step-n">3</p>
+        <h3>Ask your team</h3>
+        <p class="step-say">"Every weekday at 9, check the deploys."</p>
+        <p>The bot answers, or sets up a routine with an Undo button.</p>
+      </li>
+    </ol>
+    <p class="section-foot"><a class="more-link" href="docs/quickstart.html">Read the quickstart →</a></p>
   </div>
 </section>
 
 <section class="runs" aria-labelledby="runs-title">
   <div class="wrap">
     <div class="sec-head">
-      <h2 id="runs-title">Runs on what you already have</h2>
+      <h2 id="runs-title">Works with what you already have</h2>
       <p>One binary with the web app and its database built in. Your data stays in one folder.</p>
     </div>
-    <ul class="runs-list">
-      <li><span class="k">CLI</span>Claude Code</li>
-      <li><span class="k">CLI</span>Codex</li>
-      <li><span class="k">CLI</span>Grok</li>
-      <li><span class="k">API keys</span>Anthropic, OpenAI, xAI</li>
-      <li><span class="k">Tools</span>Any MCP server</li>
-      <li><span class="k">Optional</span><span><a href="features.html#running">Composio</a>: Gmail, Slack, Notion</span></li>
-      <li><span class="k">Where</span>Your laptop or a VPS</li>
-      <li><span class="k">OS</span>macOS, Linux, Docker</li>
-    </ul>
+    <dl class="runs-list">
+      <div><dt>CLI</dt><dd>Claude Code, Codex, Grok</dd></div>
+      <div><dt>API keys</dt><dd>Anthropic, OpenAI, xAI</dd></div>
+      <div><dt>Tools</dt><dd>Any MCP server</dd></div>
+      <div><dt>Optional</dt><dd><a href="features.html#running">Composio</a> for Gmail, Slack, Notion</dd></div>
+      <div><dt>Where</dt><dd>Your laptop or a VPS</dd></div>
+      <div><dt>OS</dt><dd>macOS, Linux, Docker</dd></div>
+    </dl>
   </div>
 </section>
 
-<section class="closing-band" aria-labelledby="closing-title">
-  <div class="wrap closing-grid">
-    <div>
-      <h2 id="closing-title">Clock in your team</h2>
-      <p>Running in a few minutes, on your laptop or a VPS.</p>
-    </div>
-    <div class="closing-act">
-      {{install:end}}
-      <a class="btn btn-light" href="docs/quickstart.html">Read the quickstart</a>
+<section class="outro" aria-labelledby="outro-title">
+  <div class="wrap">
+    <div class="outro-panel">
+      <div class="outro-copy">
+        <h2 id="outro-title">Give it a try tonight</h2>
+        <p>One command to start. Your bots, your accounts, your machine.</p>
+        {{install:end}}
+        <div class="cta">
+          <a class="btn btn-violet" href="docs/quickstart.html">Read the quickstart</a>
+          <a class="btn btn-soft" href="docs/install.html">Run it on a server</a>
+        </div>
+      </div>
+      <div class="crt crt-small">
+        <div class="crt-screen street-screen">
+          <div class="scene street" data-scene="street"><canvas aria-hidden="true"></canvas></div>
+        </div>
+      </div>
     </div>
   </div>
-  <div class="scene street" data-scene="street"><canvas aria-hidden="true"></canvas></div>
 </section>

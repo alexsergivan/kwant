@@ -12,11 +12,17 @@ Shortcodes in the HTML:
   {{shot:NAME|ALT|SIZES}}                 a zoomable responsive screenshot (desktop-* or phone-*)
   {{video:NAME|LABEL}}                    a muted looping demo clip with its poster
   {{install:ID}}                          the install command box with macOS/Linux and Docker tabs
+  {{avatar:ROLE}}                         a kwant app avatar (the same CRT-framed creature the app draws)
+
+It also writes the favicons (favicon.svg, favicon-32.png, apple-touch-icon.png, favicon.ico) from LOGO_RECTS,
+so the tab icon is always the header logo.
 """
 import html
 import pathlib
 import re
+import struct
 import sys
+import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "site-src"
@@ -63,6 +69,62 @@ GH_ICON = (
     '.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 '
     '.21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>'
 )
+
+
+# ---- App avatars, ported from frontend/src/components/ModernAvatar.tsx (framed, 26-grid) ----
+AV_FRAME, AV_PANEL, AV_SCAN, AV_INK, AV_BLUSH = "#4a3f8a", "#15112e", "#0d0a1f", "#1b1033", "#ff6b81"
+AV_PALETTES = {
+    "yellow": ("#fdc934", "#d98a1f", "#fff0a0", "#5ce1ff"),
+    "green": ("#3ccf6e", "#1f8f4c", "#a8f5bf", "#c6ff6b"),
+    "cyan": ("#5ce1ff", "#2a92c9", "#d2f7ff", "#ff6b81"),
+    "violet": ("#a98bff", "#6d4fd6", "#e1d6ff", "#ffd23f"),
+    "blue": ("#6d9bff", "#3c5fcf", "#cddcff", "#ff7eb6"),
+    "coral": ("#ff8a7a", "#cf5446", "#ffd6cf", "#6d4fd6"),
+    "red": ("#ff6b6b", "#c43c4c", "#ffc9c9", "#5ce1ff"),
+    "mint": ("#9be564", "#5e9e33", "#e2ffc7", "#ffe066"),
+}
+AV_ROLES = {
+    "brand": ("yellow", "antenna"), "user": ("blue", "ears"), "architect": ("violet", "horns"),
+    "tech_lead": ("cyan", "visor"), "devops": ("green", "spikes"), "designer": ("coral", "beret"),
+    "qa": ("red", "goggles"), "research": ("mint", "bulb"),
+}
+
+
+def avatar_rects(role):
+    pal, acc = AV_ROLES[role]
+    body, shade, light, accent = AV_PALETTES[pal]
+    head = {
+        "antenna": [(15, 6, 1, 1, AV_INK), (15, 3, 2, 2, accent), (15, 3, 1, 1, "#ffffff")],
+        "spikes": [(10, 5, 1, 2, body), (13, 4, 1, 3, body), (16, 5, 1, 2, body), (6, 10, 1, 1, shade), (6, 13, 1, 1, shade),
+                   (19, 10, 1, 1, shade), (19, 13, 1, 1, shade), (13, 4, 1, 1, light)],
+        "ears": [(8, 5, 2, 3, body), (16, 5, 2, 3, shade), (8, 6, 1, 1, AV_BLUSH), (17, 6, 1, 1, AV_BLUSH)],
+        "horns": [(8, 5, 1, 2, accent), (9, 6, 1, 1, accent), (17, 5, 1, 2, accent), (16, 6, 1, 1, accent)],
+        "visor": [(9, 5, 8, 1, accent), (8, 6, 1, 3, accent), (17, 6, 1, 3, accent), (6, 10, 2, 3, accent), (18, 10, 2, 3, accent)],
+        "beret": [(9, 5, 8, 2, accent), (8, 6, 1, 1, accent), (13, 4, 1, 1, accent), (10, 5, 2, 1, "#9a7cff")],
+        "bulb": [(12, 2, 2, 1, accent), (11, 3, 4, 2, accent), (12, 3, 1, 1, "#ffffff"), (12, 5, 2, 1, "#8a8aa8"), (12, 6, 2, 1, AV_INK)],
+    }.get(acc, [])
+    face = {
+        "goggles": [(7, 8, 12, 1, AV_INK), (9, 7, 3, 2, accent), (14, 7, 3, 2, accent), (9, 7, 1, 1, "#ffffff"), (14, 7, 1, 1, "#ffffff")],
+    }.get(acc, [])
+    return [(7, 20, 12, 1, "#261d4a")] + head + [
+        (9, 7, 8, 1, body), (8, 8, 10, 1, body), (7, 9, 12, 7, body), (8, 16, 10, 1, body), (9, 17, 8, 1, shade),
+        (18, 9, 1, 7, shade), (17, 16, 1, 1, shade), (7, 15, 1, 1, shade), (8, 16, 1, 1, shade), (10, 8, 2, 1, light), (9, 9, 1, 1, light),
+        (10, 10, 2, 3, AV_INK), (14, 10, 2, 3, AV_INK), (10, 10, 1, 1, "#f5f2ff"), (14, 10, 1, 1, "#f5f2ff"),
+        (8, 13, 2, 1, AV_BLUSH), (16, 13, 2, 1, AV_BLUSH), (11, 14, 1, 1, AV_INK), (14, 14, 1, 1, AV_INK), (12, 15, 2, 1, AV_INK),
+        (9, 18, 2, 1, AV_INK), (15, 18, 2, 1, AV_INK),
+    ] + face
+
+
+AV_FRAME_FILL = [(6, 2, 14, 22), (4, 3, 18, 20), (3, 4, 20, 18), (2, 6, 22, 14)]
+
+
+def avatar(role):
+    r = lambda x, y, w, h, c: f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{c}"/>'
+    parts = [r(x - 1, y - 1, w + 2, h + 2, AV_FRAME) for x, y, w, h in AV_FRAME_FILL]
+    parts += [r(x, y, w, h, AV_PANEL) for x, y, w, h in AV_FRAME_FILL]
+    parts += [r(3.5, 4.5 + i, 19, 0.25, AV_SCAN) for i in range(16)]
+    parts += [r(*a) for a in avatar_rects(role)]
+    return f'<svg class="av" viewBox="0 0 26 26" shape-rendering="crispEdges" aria-hidden="true">{"".join(parts)}</svg>'
 
 
 def parse(path):
@@ -119,12 +181,16 @@ def install(uid):
         f'<button type="button" class="copy-cmd" aria-label="Copy the {html.escape(label)} install command">copy</button></div>'
         for i, (k, label, cmd) in enumerate(INSTALL)
     )
-    return f'<div class="install" data-tabs><div class="tabs" role="tablist" aria-label="Install with">{tabs}</div>{panels}</div>'
+    return (
+        f'<div class="install" data-tabs><div class="install-top"><span class="install-k" aria-hidden="true">Install</span>'
+        f'<div class="tabs" role="tablist" aria-label="Install with">{tabs}</div></div>{panels}</div>'
+    )
 
 
 def expand(body, root):
     body = body.replace("{{root}}", root)
     body = re.sub(r"\{\{install:([a-z0-9-]+)\}\}", lambda m: install(m[1]), body)
+    body = re.sub(r"\{\{avatar:([a-z_]+)\}\}", lambda m: avatar(m[1]), body)
     body = re.sub(r"\{\{shot:([^|}]+)\|([^|}]+)(?:\|([^}]*))?\}\}", lambda m: shot(root, m[1], m[2], m[3]), body)
     body = re.sub(
         r"\{\{video(!?):([^|}]+)\|([^}]+)\}\}", lambda m: video(root, m[2], m[3], eager=m[1] == "!"), body
@@ -137,15 +203,14 @@ def header(root, active):
     def cur(name):
         return ' aria-current="page"' if active == name else ""
 
-    over = " over" if active == "home" else ""
     return f"""<a class="skip" href="#main">Skip to content</a>
-<header class="site-header{over}">
+<header class="site-header">
   <div class="wrap">
     <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
     <nav class="nav" aria-label="Main">
       <a href="{root}features.html"{cur("features")}>Features</a>
       <a href="{root}docs/quickstart.html"{cur("docs")}>Docs</a>
-      <a class="btn btn-light" href="{GITHUB}" rel="noopener">{GH_ICON}<span>GitHub</span></a>
+      <a class="btn btn-soft" href="{GITHUB}" rel="noopener">{GH_ICON}<span>GitHub</span></a>
     </nav>
   </div>
 </header>"""
@@ -229,7 +294,7 @@ def page(meta, body, root):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(full_title)}</title>
 <meta name="description" content="{desc}">
-<meta name="theme-color" content="#4024a8">
+<meta name="theme-color" content="#f4f1ff">
 <meta name="color-scheme" content="light">
 {robots}<link rel="canonical" href="{url}">
 <meta property="og:type" content="website">
@@ -240,12 +305,12 @@ def page(meta, body, root):
 <meta property="og:image" content="{SITE_URL}/assets/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="kwant: little pixel bots working in a violet night town">
+<meta property="og:image:alt" content="kwant: your own team of AI bots, with the pixel town of kwant bots on a small violet screen">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="{root}favicon.svg" type="image/svg+xml">
 <link rel="icon" href="{root}favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="{root}apple-touch-icon.png">
-<link rel="preload" href="{root}assets/fonts/funnel-display-500.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}assets/fonts/pixelify-sans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="{root}assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}assets/css/site.css">
 </head>
@@ -258,6 +323,72 @@ def page(meta, body, root):
 </body>
 </html>
 """
+
+
+# ---- Favicons, drawn from LOGO_RECTS ----
+# The logo's pixels span x 2..13 and y 1..16, so a 16x16 box from y=1 holds it exactly: crisp at 16, 32 and 48 px.
+FAV_BG = "#4024a8"
+
+
+def favicon_svg():
+    rects = "".join(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{c}"/>' for x, y, w, h, c in LOGO_RECTS)
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 1 16 16" shape-rendering="crispEdges">'
+        f'<rect x="0" y="1" width="16" height="16" rx="3" fill="{FAV_BG}"/>{rects}</svg>\n'
+    )
+
+
+def hexrgb(c):
+    c = c.lstrip("#")
+    if len(c) == 3:
+        c = "".join(ch * 2 for ch in c)
+    return tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def favicon_pixels(size, scale, corner):
+    """RGBA rows: the violet square (corners cut by `corner` px) with the logo scaled by an integer `scale`."""
+    bg = hexrgb(FAV_BG) + (255,)
+    px = [[bg] * size for _ in range(size)]
+    for y in range(size):
+        for x in range(size):
+            dx = max(corner - x, x - (size - 1 - corner), 0)
+            dy = max(corner - y, y - (size - 1 - corner), 0)
+            if corner and dx and dy and dx * dx + dy * dy > corner * corner:
+                px[y][x] = (0, 0, 0, 0)
+    ox, oy = (size - 12 * scale) // 2 - 2 * scale, (size - 16 * scale) // 2 - scale
+    for x, y, w, h, c in LOGO_RECTS:
+        col = hexrgb(c) + (255,)
+        for yy in range(oy + y * scale, oy + (y + h) * scale):
+            for xx in range(ox + x * scale, ox + (x + w) * scale):
+                px[yy][xx] = col
+    return px
+
+
+def png_bytes(px):
+    h, w = len(px), len(px[0])
+    raw = b"".join(b"\x00" + bytes(v for p in row for v in p) for row in px)
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+
+def ico_bytes(pngs):
+    head = struct.pack("<HHH", 0, 1, len(pngs))
+    offset = 6 + 16 * len(pngs)
+    entries = data = b""
+    for size, png in pngs:
+        entries += struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32, len(png), offset)
+        offset += len(png)
+        data += png
+    return head + entries + data
+
+
+def write_favicons():
+    (OUT / "favicon.svg").write_text(favicon_svg())
+    p16, p32 = png_bytes(favicon_pixels(16, 1, 0)), png_bytes(favicon_pixels(32, 2, 4))
+    (OUT / "favicon-32.png").write_bytes(p32)
+    (OUT / "favicon.ico").write_bytes(ico_bytes([(16, p16), (32, p32)]))
+    # iOS rounds the corners itself, so the touch icon is a full square with room around the logo.
+    (OUT / "apple-touch-icon.png").write_bytes(png_bytes(favicon_pixels(180, 8, 0)))
 
 
 def main():
@@ -279,6 +410,7 @@ def main():
         sitemap.append(f"  <url><loc>{SITE_URL}/{p.replace('index.html', '').replace('.html', '')}</loc></url>")
     sitemap.append("</urlset>")
     (OUT / "sitemap.xml").write_text("\n".join(sitemap) + "\n")
+    write_favicons()
     (OUT / "robots.txt").write_text(f"User-agent: *\nAllow: /\n\nSitemap: {SITE_URL}/sitemap.xml\n")
     print("wrote", ", ".join(written), file=sys.stderr)
 

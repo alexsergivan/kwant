@@ -1,5 +1,5 @@
 // kwant site: the pixel scenes. The bots are the same 8-bit creatures as the kwant app's avatars,
-// drawn in one violet ramp. Every scene has a still frame for reduced motion, and the page reads fine without it.
+// drawn in one violet ramp on a small CRT screen. Every scene has a still image behind it, so the screen is never empty.
 (function () {
   "use strict";
 
@@ -269,7 +269,7 @@
         for (var i = 0; i < W * H / 300; i++) {
           var sx = Math.floor(r() * W), sy = Math.floor(r() * s.ground * 0.75);
           // Keep the sky behind the headline quiet.
-          if (!opts.low && sx < W * 0.6 && sy > s.ground * 0.1 && r() < 0.8) continue;
+          if (!opts.low && !opts.framed && sx < W * 0.6 && sy > s.ground * 0.1 && r() < 0.8) continue;
           stars.push({ x: sx, y: sy, p: r() * 6 });
         }
         s.buildings = [];
@@ -277,7 +277,7 @@
         while (x < W) {
           var w = 10 + Math.floor(r() * 16);
           // Lower roofs on the left of the hero, where the headline sits.
-          var maxH = opts.low || x < W * 0.55 && W > 200 ? 0.26 : 0.5;
+          var maxH = opts.low || !opts.framed && x < W * 0.55 && W > 200 ? 0.26 : 0.5;
           var h = Math.floor((0.12 + r() * maxH) * s.ground);
           s.buildings.push({ x: x, w: w, h: h, far: r() < 0.45 });
           x += w + (r() < 0.3 ? 2 : 0);
@@ -387,6 +387,7 @@
     var chip = document.querySelector("[data-scene-status]");
     var okBtn = document.querySelector("[data-scene-approve]");
     var heroScene = town(hero.querySelector("canvas"), {
+      framed: true,
       onChange: function (s) {
         if (!chip) return;
         var w = bots(s, "work").length + s.fx.filter(function (f) { return f.kind === "hand"; }).length;
@@ -404,199 +405,10 @@
     heroScene.start();
   }
 
-  // ---- Closing band and 404: the same town, quieter ----
+  // ---- Closing panel and 404: the same town, quieter ----
   document.querySelectorAll("[data-scene=street]").forEach(function (el) {
     var s = town(el.querySelector("canvas"), { low: true, count: el.hasAttribute("data-lost") ? 1 : 6 });
     el.classList.add("live");
     s.start();
   });
-
-  // ---- Feature cards: small light scenes ----
-  function lightFloor(s, g, horizon) {
-    for (var y = 0; y < s.H; y++) for (var x = 0; x < s.W; x++) {
-      var v = y < horizon ? 9 - (horizon - y) / horizon * 0.9 : 8.2 - (y - horizon) / (s.H - horizon) * 1.6;
-      g.fillStyle = ditherColor(v, x, y);
-      g.fillRect(x, y, 1, 1);
-    }
-    rect(g, 0, horizon, s.W, 1, V[6]);
-  }
-  var cards = {
-    handoff: {
-      layout: function (s) {
-        s.ground = s.H - 14;
-        s.bots = [];
-        var gap = (s.W - 24) / 3;
-        ["visor", "beret", "goggles"].forEach(function (k, i) { s.addBot(k, Math.round(12 + gap * i + gap / 2 - 8), s.ground - 15, i ? "idle" : "work"); });
-        s.next = 0.6; s.at = 0;
-      },
-      background: function (s, g) { lightFloor(s, g, s.ground + 4); },
-      tick: function (s, dt) {
-        s.next -= dt;
-        if (s.next > 0 || s.fx.length) return;
-        var from = s.bots[s.at], to = s.bots[(s.at + 1) % 3];
-        if (s.at === 2) { s.bots.forEach(function (b, i) { b.state = i ? "idle" : "work"; }); s.at = 0; s.next = 1.4; return; }
-        s.handoff(from, to, 10);
-        s.at++; s.next = 1.2;
-      },
-      still: function (s) { s.bots[0].state = "idle"; s.bots[1].state = "work"; s.bots[2].state = "idle"; },
-      foreground: function (s, g) {
-        if (!s.still) return;
-        var a = s.bots[1], b = s.bots[2];
-        dottedArc(g, { x: a.x + 8, y: a.y + 4 }, { x: b.x + 8, y: b.y + 4 }, 10, 0, V[4], 1);
-      },
-      click: function (s) { if (!s.fx.length) s.next = 0; }
-    },
-    away: {
-      layout: function (s) {
-        s.ground = s.H - 12;
-        s.bots = [];
-        s.addBot("antenna", Math.round(s.W * 0.22), s.ground - 15, "work");
-        s.done = 2; s.next = 1.4;
-      },
-      background: function (s, g) {
-        for (var y = 0; y < s.H; y++) for (var x = 0; x < s.W; x++) {
-          var v = y < s.ground ? 3.2 + y / s.ground * 2.4 : 8 - (y - s.ground) / (s.H - s.ground);
-          g.fillStyle = ditherColor(v, x, y);
-          g.fillRect(x, y, 1, 1);
-        }
-        // A window frame on the wall
-        var wx = Math.round(s.W * 0.62), wy = 6;
-        rect(g, wx - 1, wy - 1, 30, 22, V[2]);
-        rect(g, wx, wy, 28, 20, V[1]);
-        rect(g, wx + 13, wy, 1, 20, V[2]);
-        rect(g, 0, s.ground, s.W, 1, V[6]);
-      },
-      ambient: function (s, g) {
-        // The moon crosses the window over a loop; the night outside slowly passes.
-        var wx = Math.round(s.W * 0.62), p = s.still ? 0.6 : (s.t / 12) % 1;
-        var mx = wx + 3 + Math.round(p * 22), my = 6 + 4 + Math.round(Math.abs(p - 0.5) * 12);
-        rect(g, mx - 1, my - 2, 3, 5, V[9]); rect(g, mx - 2, my - 1, 5, 3, V[9]);
-        if (Math.floor(s.t) % 3 === 0) rect(g, wx + 20, 9, 1, 1, V[8]);
-        // Finished items stack up beside the bot
-        for (var i = 0; i < s.done; i++) {
-          var x = Math.round(s.W * 0.22) + 30, y = s.ground - 4 - i * 5;
-          rect(g, x, y, 14, 4, V[4]); rect(g, x + 1, y + 1, 8, 1, V[8]); rect(g, x + 11, y + 1, 2, 2, V[8]);
-        }
-      },
-      tick: function (s, dt) {
-        s.next -= dt;
-        if (s.next > 0) return;
-        s.next = 1.6;
-        s.done = s.done >= 5 ? 0 : s.done + 1;
-        s.bots[0].jump = s.done ? 0 : 0.35;
-      },
-      still: function (s) { s.done = 4; },
-      click: function (s) { s.done = Math.min(5, s.done + 1); s.next = 1.6; }
-    },
-    approve: {
-      layout: function (s) {
-        s.ground = s.H - 12;
-        s.bots = [];
-        s.addBot("goggles", Math.round(s.W * 0.18), s.ground - 15, "wait");
-        s.phase = 0; s.next = 1.6;
-      },
-      background: function (s, g) { lightFloor(s, g, s.ground + 4); },
-      foreground: function (s, g) {
-        // The approval card the bot is holding up, with Approve and Deny.
-        var x = Math.round(s.W * 0.42), y = 8, w = Math.min(54, s.W - x - 6), ok = s.phase === 2;
-        rect(g, x + 2, y + 2, w, 30, V[7]);
-        rect(g, x, y, w, 30, V[9]);
-        rect(g, x, y, w, 1, V[4]); rect(g, x, y + 29, w, 1, V[4]); rect(g, x, y, 1, 30, V[4]); rect(g, x + w - 1, y, 1, 30, V[4]);
-        rect(g, x, y, w, 6, V[4]);
-        rect(g, x + 3, y + 2, 3, 2, AMBER);
-        if (!ok) {
-          rect(g, x + 4, y + 10, w - 14, 2, V[6]); rect(g, x + 4, y + 14, w - 22, 2, V[7]);
-          rect(g, x + 4, y + 21, 18, 6, V[4]); rect(g, x + 7, y + 23, 12, 2, V[9]);
-          rect(g, x + 25, y + 21, 14, 6, V[8]); rect(g, x + 28, y + 23, 8, 2, V[5]);
-        } else {
-          var cx = x + Math.round(w / 2) - 6, cy = y + 12;
-          [[0, 6], [1, 7], [2, 8], [3, 9], [4, 8], [5, 7], [6, 6], [7, 5], [8, 4], [9, 3], [10, 2], [11, 1]].forEach(function (p) {
-            rect(g, cx + p[0], cy + p[1], 2, 2, V[4]);
-          });
-        }
-        // The cursor glides to Approve, then clicks.
-        if (s.phase === 1 || s.still) {
-          var k = s.still ? 1 : Math.min(1, (1.6 - s.next) / 1.0);
-          var tx = x + 12, ty = y + 25, px = Math.round(x + w + 4 + (tx - x - w - 4) * k), py = Math.round(s.H - 6 + (ty - s.H + 6) * k);
-          [[0, 0, 1, 8], [1, 1, 1, 6], [2, 2, 1, 5], [3, 3, 1, 3], [4, 4, 1, 2], [5, 5, 1, 1]].forEach(function (r) { rect(g, px + r[0], py + r[1], r[2], r[3], V[0]); });
-          rect(g, px + 1, py + 2, 1, 4, V[9]); rect(g, px + 2, py + 3, 1, 3, V[9]);
-        }
-      },
-      tick: function (s, dt) {
-        s.next -= dt;
-        if (s.next > 0) return;
-        s.phase = (s.phase + 1) % 3;
-        s.next = s.phase === 1 ? 1.6 : 1.8;
-        s.bots[0].state = s.phase === 2 ? "work" : "wait";
-        if (s.phase === 2) s.bots[0].jump = 0.35;
-      },
-      still: function (s) { s.phase = 0; s.bots[0].state = "wait"; },
-      click: function (s) { s.phase = 2; s.next = 1.8; s.bots[0].state = "work"; s.bots[0].jump = 0.35; }
-    }
-  };
-  document.querySelectorAll("[data-card]").forEach(function (el) {
-    var def = cards[el.getAttribute("data-card")];
-    if (!def) return;
-    def.theme = "light";
-    def.scale = function (w) { return Math.max(3, Math.round(w / 120)); };
-    var s = new Scene(el.querySelector("canvas"), def);
-    el.classList.add("live");
-    s.start();
-  });
-
-  // ---- How it works: three steps drive one panel ----
-  var how = document.querySelector("[data-how]");
-  if (how) {
-    var stepBtns = how.querySelectorAll("[data-step]");
-    var panel = how.querySelector("[data-how-panel]");
-    var caption = how.querySelector("[data-how-caption]");
-    var current = 0, timer = 0;
-    var hs = new Scene(panel.querySelector("canvas"), {
-      theme: "light",
-      scale: function (w) { return Math.max(3, Math.round(w / 150)); },
-      layout: function (s) {
-        s.ground = s.H - 12;
-        s.bots = [];
-        var gap = (s.W - 10) / 3;
-        ["visor", "beret", "goggles"].forEach(function (k, i) { s.addBot(k, Math.round(5 + gap * i + gap / 2 - 12), s.ground - 15, "idle"); });
-        show(s, current);
-      },
-      background: function (s, g) { lightFloor(s, g, s.ground + 4); },
-      ambient: function (s, g) {
-        if (current !== 2) return;
-        // Night falls for the routine step: a moon and a few stars.
-        rect(g, s.W - 18, 5, 5, 5, V[5]); rect(g, s.W - 16, 5, 3, 3, V[8]);
-        [[12, 6], [30, 10], [52, 4], [70, 9]].forEach(function (p) { if (p[0] < s.W - 24) rect(g, p[0], p[1], 1, 1, V[5]); });
-      },
-      tick: function (s, dt) {
-        if (current === 1 && !s.fx.length) {
-          s.wait = (s.wait || 0) - dt;
-          if (s.wait <= 0) { var a = s.bots[0], b = s.bots[1]; s.handoff(a, b, 9); a.state = "idle"; s.wait = 2.2; }
-        }
-      },
-      still: function (s) { show(s, current); },
-      click: function () { go((current + 1) % 3, true); }
-    });
-    function show(s, i) {
-      s.fx = [];
-      s.bots.forEach(function (b, k) {
-        b.state = i === 0 ? (k === 0 ? "work" : "idle") : i === 1 ? (k === 1 ? "work" : "idle") : "work";
-        b.jump = 0;
-      });
-      s.wait = 0.4;
-    }
-    function go(i, user) {
-      current = i;
-      stepBtns.forEach(function (b, k) { b.setAttribute("aria-pressed", k === i ? "true" : "false"); });
-      if (caption) caption.textContent = stepBtns[i].getAttribute("data-out");
-      show(hs, i);
-      hs.draw();
-      clearInterval(timer);
-      if (!user && !reduce.matches) timer = setInterval(function () { go((current + 1) % 3); }, 5200);
-    }
-    stepBtns.forEach(function (b, k) { b.addEventListener("click", function () { go(k, true); }); });
-    how.classList.add("live");
-    go(0, reduce.matches);
-    hs.start();
-  }
 })();
