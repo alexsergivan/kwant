@@ -13,6 +13,9 @@ const PAGE: &str = "<!doctype html><title>before</title><body style=margin:0>\
 <button id=b style='position:absolute;left:0;top:0;width:400px;height:300px' \
 onclick=\"document.title='clicked '+innerWidth+'x'+innerHeight\">press</button>";
 
+/// The User-Agent header of the last request the page server got.
+static REQUEST_AGENT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
 /// A one-page HTTP server on 127.0.0.1, so the test needs no network.
 async fn serve_page() -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -21,7 +24,11 @@ async fn serve_page() -> String {
         while let Ok((mut stream, _)) = listener.accept().await {
             tokio::spawn(async move {
                 let mut buf = [0u8; 2048];
-                let _ = stream.read(&mut buf).await;
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                if let Some(line) = request.lines().find(|l| l.to_ascii_lowercase().starts_with("user-agent:")) {
+                    *REQUEST_AGENT.lock().unwrap() = line[11..].trim().to_string();
+                }
                 let reply = format!(
                     "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{PAGE}",
                     PAGE.len()
@@ -66,6 +73,17 @@ async fn local_chrome_runs_windowless_and_can_open_as_a_window() {
     assert!(headless, "local Chrome must start without a window");
     ctrl.navigate(&url).await.unwrap();
     assert!(!ctrl.capture_screenshot().await.unwrap().is_empty());
+    // sites see a normal Chrome: no "Headless" in the request, the page's user agent or its brands
+    let request_agent = REQUEST_AGENT.lock().unwrap().clone();
+    let seen = ctrl.send_cdp_command("Runtime.evaluate", serde_json::json!({
+        "expression": "JSON.stringify([navigator.userAgent, navigator.userAgentData ? navigator.userAgentData.brands : []])",
+        "returnByValue": true,
+    })).await.unwrap();
+    let page_agent = seen["result"]["value"].as_str().unwrap_or_default().to_string();
+    assert!(request_agent.contains(" Chrome/"), "request user agent: {request_agent:?}");
+    assert!(page_agent.contains(" Chrome/"), "page user agent: {page_agent}");
+    assert!(!request_agent.contains("Headless") && !page_agent.contains("Headless"),
+        "windowless Chrome must not say so: {request_agent} / {page_agent}");
     // the same input path the in-app viewer uses
     ctrl.dispatch_input(BrowserInput::Click { x: 100.0, y: 100.0 }).await.unwrap();
     assert_eq!(title_becomes(&ctrl, "clicked 1280x800").await, "clicked 1280x800");

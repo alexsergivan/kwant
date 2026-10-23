@@ -118,8 +118,11 @@ impl BrowserService {
         // at most one kwant Chrome per profile: reuse it, or wait for the one starting
         let (endpoint, running_headless) = computer::ensure_local_chrome(&profile, headless).await
             .map_err(BrowserError::Http)?;
-        if running_headless == headless { return Ok(endpoint); }
-        // the other form is running on this profile: close it first
+        // a windowless Chrome started before kwant set its user agent tells sites it is headless
+        let stale = running_headless && headless && computer::says_headless(&endpoint).await
+            && computer::local_chrome_path().is_some_and(|chrome| computer::chrome_user_agent(&chrome).is_some());
+        if running_headless == headless && !stale { return Ok(endpoint); }
+        // the other form (or that older one) is running on this profile: close it first
         let _ = BrowserController::at_endpoint(&endpoint, None, true)
             .send_cdp_command("Browser.close", json!({})).await;
         computer::wait_local_chrome_gone(&profile).await.map_err(BrowserError::Http)?;

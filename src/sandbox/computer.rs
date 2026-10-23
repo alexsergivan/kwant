@@ -183,8 +183,9 @@ pub const HEADLESS_WINDOW_SIZE: &str = "1280,800";
 
 /// Chrome's command line for local mode: its own profile, never the person's everyday one, and a
 /// debugging port Chrome picks itself (it listens on 127.0.0.1). Without a window (`headless`)
-/// unless the person asked to see one.
-pub fn chrome_args(profile: &Path, headless: bool) -> Vec<String> {
+/// unless the person asked to see one. A windowless Chrome sends `user_agent` (see
+/// [`headed_user_agent`]) instead of its own, which tells every site it is "HeadlessChrome".
+pub fn chrome_args(profile: &Path, headless: bool, user_agent: Option<&str>) -> Vec<String> {
     let mut args = vec![
         format!("--user-data-dir={}", profile.display()),
         "--remote-debugging-port=0".into(),
@@ -195,14 +196,67 @@ pub fn chrome_args(profile: &Path, headless: bool) -> Vec<String> {
     if headless {
         args.push("--headless=new".into());
         args.push(format!("--window-size={HEADLESS_WINDOW_SIZE}"));
+        if let Some(agent) = user_agent {
+            args.push(format!("--user-agent={agent}"));
+        }
     }
     args.push("about:blank".into());
     args
 }
 
-/// Whether a running Chrome is windowless, from its `/json/version` user agent.
+/// The user agent Chrome sends with a window, for the Chrome whose `--version` printed
+/// `version_output` ("Google Chrome 131.0.6778.86", "Chromium 154.0.8037.92 built on ..."). Chrome
+/// fills it from a fixed template with the major version and a frozen platform, so this is the same
+/// string the windowed Chrome on `os` sends. `None` if no version is found.
+pub fn headed_user_agent(version_output: &str, os: &str) -> Option<String> {
+    let version = version_output
+        .split_whitespace()
+        .find(|word| word.split('.').count() >= 2 && word.split('.').all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))?;
+    let major = version.split('.').next()?;
+    let platform = match os {
+        "macos" => "Macintosh; Intel Mac OS X 10_15_7",
+        "windows" => "Windows NT 10.0; Win64; x64",
+        _ => "X11; Linux x86_64",
+    };
+    Some(format!("Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"))
+}
+
+/// [`headed_user_agent`] for the Chrome at `chrome`, from its `--version`. Not on Windows, where
+/// `chrome.exe --version` opens the browser instead of printing.
+pub fn chrome_user_agent(chrome: &Path) -> Option<String> {
+    if cfg!(windows) {
+        return None;
+    }
+    let out = std::process::Command::new(chrome)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    headed_user_agent(&String::from_utf8_lossy(&out.stdout), std::env::consts::OS)
+}
+
+/// A normal Chrome user agent for kwant's plain HTTP requests (`web_fetch`): the local Chrome's,
+/// or, without one, a recent Chrome on this platform. Worked out once per process.
+pub fn browser_user_agent() -> &'static str {
+    static AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        local_chrome_path()
+            .and_then(|chrome| chrome_user_agent(&chrome))
+            .or_else(|| headed_user_agent("Chrome 141.0.0.0", std::env::consts::OS))
+            .unwrap_or_default()
+    })
+}
+
+/// Whether a running Chrome is windowless, from its `/json/version` user agent. Only a fallback
+/// where its command line can't be read: kwant's windowless Chrome no longer says so there.
 pub fn is_headless_user_agent(user_agent: &str) -> bool {
     user_agent.contains("HeadlessChrome")
+}
+
+/// Whether a Chrome command line (arguments joined by spaces) runs it without a window.
+pub fn is_headless_command_line(line: &str) -> bool {
+    line.split(' ').any(|arg| arg == "--headless" || arg.starts_with("--headless="))
 }
 
 fn client() -> reqwest::Client {
@@ -222,12 +276,23 @@ async fn user_agent(endpoint: &str) -> Option<String> {
     Some(version["User-Agent"].as_str().unwrap_or_default().to_string())
 }
 
-/// The kwant Chrome running on `profile`: its CDP endpoint and whether it is windowless.
+/// The kwant Chrome running on `profile`: its CDP endpoint and whether it is windowless. That comes
+/// from the `--headless` flag on its command line, since its user agent reads like a windowed one.
 pub async fn running_local_chrome(profile: &Path) -> Option<(String, bool)> {
     let port = read_devtools_port(profile)?;
     let endpoint = format!("http://127.0.0.1:{port}");
     let agent = user_agent(&endpoint).await?;
-    Some((endpoint, is_headless_user_agent(&agent)))
+    let headless = match profile_owner(profile).and_then(command_line) {
+        Some(line) => is_headless_command_line(&line),
+        None => is_headless_user_agent(&agent),
+    };
+    Some((endpoint, headless))
+}
+
+/// Whether the Chrome at `endpoint` still tells sites it is "HeadlessChrome": one started before
+/// kwant set its user agent, which kwant restarts so sites see a normal Chrome.
+pub async fn says_headless(endpoint: &str) -> bool {
+    user_agent(endpoint).await.is_some_and(|agent| is_headless_user_agent(&agent))
 }
 
 /// The live Chrome holding `profile`, from the `SingletonLock` link Chrome keeps in it
@@ -268,7 +333,7 @@ fn command_line(pid: u32) -> Option<String> {
 
 #[cfg(all(unix, not(target_os = "linux")))]
 fn command_line(pid: u32) -> Option<String> {
-    let out = std::process::Command::new("ps").args(["-o", "command=", "-p", &pid.to_string()]).output().ok()?;
+    let out = std::process::Command::new("ps").args(["-ww", "-o", "command=", "-p", &pid.to_string()]).output().ok()?;
     let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !line.is_empty()).then_some(line)
 }
@@ -471,8 +536,9 @@ fn launch_local_chrome(profile: &Path, headless: bool) -> Result<(), String> {
         }
     }
     std::fs::create_dir_all(profile).map_err(|e| e.to_string())?;
+    let agent = if headless { chrome_user_agent(&chrome) } else { None };
     let mut cmd = std::process::Command::new(&chrome);
-    cmd.args(chrome_args(profile, headless))
+    cmd.args(chrome_args(profile, headless, agent.as_deref()))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -612,7 +678,7 @@ mod tests {
     #[test]
     fn chrome_uses_its_own_profile_and_a_loopback_port() {
         for headless in [true, false] {
-            let args = chrome_args(Path::new("/data/local-chrome"), headless);
+            let args = chrome_args(Path::new("/data/local-chrome"), headless, None);
             assert!(args.contains(&"--user-data-dir=/data/local-chrome".to_string()));
             assert!(args.contains(&"--remote-debugging-port=0".to_string()));
             assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_string()));
@@ -621,14 +687,52 @@ mod tests {
 
     #[test]
     fn chrome_is_windowless_unless_a_window_is_asked_for() {
-        let args = chrome_args(Path::new("/p"), true);
+        let args = chrome_args(Path::new("/p"), true, None);
         assert!(args.contains(&"--headless=new".to_string()));
         assert!(args.contains(&"--window-size=1280,800".to_string()));
-        let args = chrome_args(Path::new("/p"), false);
+        let args = chrome_args(Path::new("/p"), false, None);
         assert!(!args.iter().any(|a| a.starts_with("--headless")));
         assert!(!args.iter().any(|a| a.starts_with("--window-size")));
         assert!(is_headless_user_agent("Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/131.0 Safari/537.36"));
         assert!(!is_headless_user_agent("Mozilla/5.0 (Macintosh) Chrome/131.0 Safari/537.36"));
+    }
+
+    #[test]
+    fn windowless_chrome_sends_the_windowed_user_agent() {
+        assert_eq!(
+            headed_user_agent("Google Chrome 131.0.6778.86 \n", "macos").as_deref(),
+            Some("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        );
+        assert_eq!(
+            headed_user_agent("Chromium 154.0.8037.92 built on Ubuntu 24.04.5 LTS", "linux").as_deref(),
+            Some("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36")
+        );
+        assert!(headed_user_agent("Google Chrome 140.0.1.2", "windows").unwrap().contains("(Windows NT 10.0; Win64; x64)"));
+        // the "24.04.5" in the build line is not taken for Chrome's version
+        assert!(headed_user_agent("Chromium 154.0.8037.92 built on Ubuntu 24.04.5", "linux").unwrap().contains("Chrome/154.0.0.0"));
+        assert_eq!(headed_user_agent("", "linux"), None);
+        assert_eq!(headed_user_agent("Chromium version unknown", "linux"), None);
+
+        let agent = headed_user_agent("Chromium 154.0.8037.92", "linux").unwrap();
+        let args = chrome_args(Path::new("/p"), true, Some(&agent));
+        assert!(args.contains(&format!("--user-agent={agent}")));
+        assert!(!args.iter().any(|a| a.contains("Headless") && a.starts_with("--user-agent")));
+        // a window already sends the normal one
+        assert!(!chrome_args(Path::new("/p"), false, Some(&agent)).iter().any(|a| a.starts_with("--user-agent")));
+        assert!(!browser_user_agent().contains("Headless"));
+        assert!(browser_user_agent().contains(" Chrome/"));
+    }
+
+    #[test]
+    fn windowless_is_read_from_the_command_line() {
+        let headless = chrome_args(Path::new("/p"), true, Some("Mozilla/5.0 (X11; Linux x86_64) Chrome/154.0.0.0"));
+        assert!(is_headless_command_line(&format!("/usr/lib/chromium/chromium {}", headless.join(" "))));
+        let window = chrome_args(Path::new("/p"), false, None);
+        assert!(!is_headless_command_line(&format!("/usr/lib/chromium/chromium {}", window.join(" "))));
+        assert!(is_headless_command_line("chrome --headless --user-data-dir=/p"));
+        // a profile or user agent that merely mentions it is not the flag
+        assert!(!is_headless_command_line("chrome --user-data-dir=/home/me/--headless-notes"));
+        assert!(!is_headless_command_line("chrome --user-agent=Mozilla/5.0 HeadlessChrome/154 --headlessly"));
     }
 
     #[test]
