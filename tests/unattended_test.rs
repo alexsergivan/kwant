@@ -83,3 +83,61 @@ fn ask_user_says_state_the_assumption_for_reversible_choices() {
     assert!(d.contains("can't be undone or reaches outside"), "outward steps still ask: {d}");
     assert_eq!(kwnt::server::questions::tools()[0]["description"], d);
 }
+
+/// Runs routine `id` now and waits until that run has finished ok.
+async fn run_now_and_wait(env: &Env, id: &str) {
+    let (_, before) = call(&env.app, "GET", &format!("/api/routines/{id}/runs"), None).await;
+    let seen = before.as_array().map_or(0, Vec::len);
+    let (s, v) = call(&env.app, "POST", &format!("/api/routines/{id}/run"), None).await;
+    assert!(s.is_success(), "{v}");
+    wait_for("the routine run", || async {
+        let (_, runs) = call(&env.app, "GET", &format!("/api/routines/{id}/runs"), None).await;
+        let runs = runs.as_array().cloned().unwrap_or_default();
+        runs.len() > seen && runs[0]["status"] == "ok"
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_recurring_routine_sees_its_last_output() {
+    let env = setup().await;
+    let (s, r) = call(
+        &env.app,
+        "POST",
+        "/api/routines",
+        Some(json!({"kwant_id": env.a, "name": "Daily tip", "instructions": "Send a tip of the day TIPRUN REPLYTAG:tip1",
+            "schedule": {"type": "daily", "time": "08:00", "tz": "UTC"}})),
+    )
+    .await;
+    assert_eq!(s.as_u16(), 201, "{r}");
+    let id = r["id"].as_str().unwrap().to_string();
+
+    // The first run has nothing before it
+    run_now_and_wait(&env, &id).await;
+    assert_eq!(invocations_with("TIPRUN").len(), 1);
+    assert!(!invocations_with("TIPRUN")[0].contains("This routine last ran"));
+
+    // The next one, with the last reply still in view, is pointed at it
+    run_now_and_wait(&env, &id).await;
+    let second = invocations_with("its reply is above in this chat");
+    assert_eq!(second.len(), 1, "{second:?}");
+
+    // Once that reply has scrolled out of the history, it is quoted
+    for i in 0..25 {
+        let filler = kwnt::db::models::NewMessage {
+            channel_id: None,
+            direct_kwant_id: Some(env.a.clone()),
+            sender_role: "user".into(),
+            sender_id: "user".into(),
+            text: format!("unrelated chat {i}"),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 1,
+        };
+        env.state.db.insert_message(&filler).await.unwrap();
+    }
+    run_now_and_wait(&env, &id).await;
+    let third = invocations_with("Its reply then, for continuity");
+    assert_eq!(third.len(), 1, "{third:?}");
+    assert!(third[0].contains("answer tip1"), "{}", third[0]);
+}

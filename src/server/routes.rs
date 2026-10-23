@@ -1819,6 +1819,7 @@ async fn run_kwant_turn_inner(
         let mut notices: Vec<String> = Vec::new();
         let mut cancelled = false;
         let mut driver_result = None;
+        let mut driver_error: Option<RuntimeEvent> = None;
         let mut gave_up: Option<String> = None;
         // Saved with the gave-up reply, so a client can offer Retry without reading its wording
         let mut gave_up_meta: Option<serde_json::Value> = None;
@@ -2061,23 +2062,20 @@ async fn run_kwant_turn_inner(
                     let _ = state.db.clear_profile_state(&p.id).await;
                 }
             }
-            match &result {
-                Ok(Err(e)) => {
-                    event_broadcast.send(RuntimeEvent::Error {
-                        code: "driver_error".into(),
-                        message: e.to_string(),
-                        kwant_id: Some(target_kwant.id.clone()),
-                    });
-                }
-                Err(_) => {
-                    event_broadcast.send(RuntimeEvent::Error {
-                        code: "driver_crashed".into(),
-                        message: "the model driver stopped unexpectedly".into(),
-                        kwant_id: Some(target_kwant.id.clone()),
-                    });
-                }
-                Ok(Ok(_)) => {}
-            }
+            // Sent once the failure is saved, so the chat it refreshes already shows it
+            driver_error = match &result {
+                Ok(Err(e)) => Some(RuntimeEvent::Error {
+                    code: "driver_error".into(),
+                    message: e.to_string(),
+                    kwant_id: Some(target_kwant.id.clone()),
+                }),
+                Err(_) => Some(RuntimeEvent::Error {
+                    code: "driver_crashed".into(),
+                    message: "the model driver stopped unexpectedly".into(),
+                    kwant_id: Some(target_kwant.id.clone()),
+                }),
+                Ok(Ok(_)) => None,
+            };
             if let Some((tokens, duration_ms)) = held_complete {
                 event_broadcast.send(RuntimeEvent::TurnComplete {
                     tokens,
@@ -2106,6 +2104,9 @@ async fn run_kwant_turn_inner(
             })
         };
         if cancelled {
+            if let Some(e) = driver_error.take() {
+                event_broadcast.send(e);
+            }
             event_broadcast.send(RuntimeEvent::ThinkingDelta("⏹️ Cancelled by user".into()));
             return Err("stopped by the user".into());
         } else if let Some(text) = gave_up {
@@ -2182,11 +2183,21 @@ async fn run_kwant_turn_inner(
             }
             return Ok(output.text);
         }
-        Err(match driver_result {
+        let why = match driver_result {
             Some(Ok(Err(e))) => format!("the {target_model} driver failed: {e}"),
             Some(Err(_)) => format!("the {target_model} driver stopped unexpectedly"),
             _ => format!("the {target_model} turn ended without a reply"),
-        })
+        };
+        // Saved like a reply, so the failure is still there after a reload (the live error event isn't)
+        let msg = NewMessage {
+            reasoning_content: with_notices(opts.label.clone()),
+            ..scope.message("kwant", &target_kwant.name, format!("⚠️ [{}] Couldn't finish this reply: {why}", target_kwant.name))
+        };
+        scope.save(&msg, super::activity::with_activity(Some(json!({"kind": "turn_failed"})), activity)).await;
+        if let Some(e) = driver_error {
+            event_broadcast.send(e);
+        }
+        Err(why)
     }
 }
 

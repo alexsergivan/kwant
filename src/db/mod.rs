@@ -414,6 +414,10 @@ impl Database {
         insert_message_on(&mut conn, input, extra).await
     }
 
+    pub async fn get_message(&self, id: &str) -> Result<Option<Message>, DbError> {
+        Ok(sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?").bind(id).fetch_optional(&self.pool).await?)
+    }
+
     pub async fn list_messages(&self, channel_or_kwant_id: &str, limit: i64) -> Result<Vec<Message>, DbError> {
         let rows = sqlx::query_as::<_, Message>(
             r#"

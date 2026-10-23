@@ -492,7 +492,9 @@ async fn execute(state: &AppState, routine: &RoutineRow) -> Result<Option<String
     if let Some(t) = &routine.thread_id {
         let _ = state.db.touch_thread(t).await;
     }
-    let prompt = routine.instructions.clone() + &follow_up_context(state, routine, &kwant, &saved.id).await;
+    let prompt = routine.instructions.clone()
+        + &follow_up_context(state, routine, &kwant, &saved.id).await
+        + &last_run_context(state, routine, &kwant).await;
     super::routes::run_routine_turn(state, &kwant, routine.channel_id.clone(), routine.thread_id.clone(), prompt).await
 }
 
@@ -506,6 +508,33 @@ const FOLLOW_UP_MESSAGES: i64 = 6;
 const FOLLOW_UP_CHARS_EACH: usize = 600;
 /// What a turn already sees of its chat (see `run_kwant_turn`'s history).
 const TURN_HISTORY_MESSAGES: i64 = 20;
+
+/// Most of a routine's last output its next run quotes.
+const LAST_RUN_CHARS: usize = 1500;
+
+/// For a routine that ran before, its last successful output, so a run builds on it instead of
+/// repeating it. When that reply is still in the history the turn sees, only points at it.
+pub async fn last_run_context(state: &AppState, routine: &RoutineRow, kwant: &crate::db::models::Kwant) -> String {
+    let runs = state.db.list_routine_runs(&routine.id, 10).await.unwrap_or_default();
+    let Some((run, id)) = runs.iter().find_map(|r| Some((r, r.message_id.as_deref().filter(|_| r.status == "ok")?))) else {
+        return String::new();
+    };
+    let Ok(Some(reply)) = state.db.get_message(id).await else {
+        return String::new();
+    };
+    let when = run.started_at.format("%Y-%m-%d %H:%M UTC");
+    let chat = delivery_chat(routine.thread_id.as_deref(), routine.channel_id.as_deref(), &kwant.id);
+    let recent = state.db.list_messages(chat, TURN_HISTORY_MESSAGES).await.unwrap_or_default();
+    if recent.iter().any(|m| m.id == reply.id) {
+        return format!(
+            "\n\n[This routine last ran {when}; its reply is above in this chat. Build on it and don't repeat it word for word.]"
+        );
+    }
+    format!(
+        "\n\n[This routine last ran {when}. Its reply then, for continuity (build on it, don't repeat it word for word):\n{}]",
+        super::routes::truncate_chars(reply.text.trim(), LAST_RUN_CHARS)
+    )
+}
 
 /// For a follow-up routine, the exchange it follows up on (from the same chat only), when it has
 /// scrolled out of the history the turn sees anyway. Empty otherwise.

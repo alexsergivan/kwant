@@ -135,6 +135,14 @@ async fn failed_routine_run_records_the_engine_error() {
     std::fs::write(&crash, "").unwrap();
     let error = run_once(&app, &id).await;
     assert!(error.contains("exited with status 3 and no output"), "{error}");
+
+    // The failure is saved in the chat, so it still shows after a reload (the live error event doesn't)
+    let saved = state.db.list_messages(&kid, 50).await.unwrap();
+    let failed = saved.iter().find(|m| m.text.contains("Couldn't finish this reply")).expect("a saved failure");
+    assert_eq!(failed.sender_role, "kwant");
+    assert!(failed.text.contains("exited with status 3 and no output"), "{}", failed.text);
+    let meta: Value = serde_json::from_str(failed.meta.as_deref().unwrap()).unwrap();
+    assert_eq!(meta["kind"], "turn_failed");
 }
 
 /// Runs the routine now and returns the run's error, which it must have.
