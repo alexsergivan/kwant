@@ -7,6 +7,7 @@ import { SpaceApp, SpaceTarget } from './App';
 import type { SpaceSettingsTab } from './components/SpaceSettings';
 import { ArchivedSpacesModal, NewSpaceModal, SpaceRail } from './components/Spaces';
 import { Toasts, Toast } from './components/Toasts';
+import { InstallHint } from './components/InstallHint';
 import { playSfx } from './audio/chiptune';
 import {
   Space,
@@ -186,7 +187,7 @@ export const App: React.FC = () => {
 
   if (!spaces || !current) {
     return (
-      <div className="h-[100dvh] w-screen flex items-center justify-center bg-zinc-950 text-zinc-400 text-xs">
+      <div className="h-[var(--kwnt-app-height,100dvh)] w-screen flex items-center justify-center bg-zinc-950 text-zinc-400 text-xs">
         {loadError ? (
           <div role="alert" className="flex flex-col items-center gap-3">
             <p className="flex items-center gap-2 text-rose-300">
@@ -208,7 +209,7 @@ export const App: React.FC = () => {
   }
 
   return (
-    <div className="h-[100dvh] w-screen flex bg-zinc-950 text-zinc-100 overflow-hidden font-sans">
+    <div className="h-[var(--kwnt-app-height,100dvh)] w-screen flex bg-zinc-950 text-zinc-100 overflow-hidden font-sans pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       <SpaceRail spaces={spaces} currentId={current.id} onSwitch={switchTo} onCreate={openCreate} onOpenAppSettings={() => setAppSettingsOpen(true)} />
       <SpaceApp
         key={current.id}
@@ -265,6 +266,7 @@ export const App: React.FC = () => {
         <SettingsModal isOpen={appSettingsOpen} onClose={() => setAppSettingsOpen(false)} tokensUsed={tokensUsed} />
       </Suspense>
       <Toasts toasts={toasts} onDismiss={dismissToast} position="top" />
+      <InstallHint />
     </div>
   );
 };

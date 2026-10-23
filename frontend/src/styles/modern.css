@@ -141,3 +141,33 @@
     box-shadow: 0 0 0 2px theme('colors.amber.400 / 70%');
   }
 }
+
+/* Phones: every control is at least 44px to tap, and text fields are 16px so iOS doesn't zoom
+   in on them. Only on touch screens below 768px, so desktop and narrow mouse windows keep the
+   compact look. Toggle switches, checkboxes and links inside text keep their size; anything else
+   that must stay small can opt out with data-compact. */
+@media (max-width: 767px) and (pointer: coarse) {
+  :is(button, [role='button'], [role='tab'], [role='menuitem'], [role='option'], select, summary):not([role='switch'], [data-compact], .prose *) {
+    min-height: 44px;
+  }
+  /* Icon-only buttons get the width too, with the icon centred */
+  button:not([role='switch'], [data-compact], .hidden, :has(> :not(svg, img))):has(> svg, > img) {
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Colour swatches and other empty buttons: a full square */
+  button:empty:not([role='switch'], [data-compact]) {
+    min-width: 44px;
+  }
+  textarea,
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden']) {
+    min-height: 44px;
+  }
+  input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file']),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
