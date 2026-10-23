@@ -381,3 +381,60 @@ async fn attachments_migration_is_idempotent() {
     let db = kwnt::db::Database::init(tmp.path()).await.unwrap();
     assert!(db.get_attachment("nope").await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn a_delegated_task_carries_the_persons_request_and_files() {
+    let env = setup().await;
+    let (_, up) = upload(&env, "brief.md", b"# Brief\nBRIEF_SECRET_LINE\n".to_vec()).await;
+    let id = up["id"].as_str().unwrap().to_string();
+    send_direct(&env, &env.a, "Plan the Berlin launch from my brief REPLYTAG:o1", json!({"attachment_ids": [id]})).await;
+    wait_reply(&env, &env.a, "answer o1").await;
+
+    let marker = call_tool_marker("read_attachment", json!({"id": id}));
+    let task = format!("Write the launch copy. {marker} REPLYTAG:o2");
+    let (s, d) = call(
+        &env.app,
+        "POST",
+        "/api/delegations",
+        Some(json!({"lead_kwant_id": env.a, "specialist_kwant_id": env.b, "task": task, "title": "Launch copy", "kwant_id": env.a, "continue_lead": false})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{d}");
+    let thread = d["thread_id"].as_str().unwrap().to_string();
+
+    // The specialist's brief quotes the person's request and lists the chat's file, which it can read
+    // (The quoted request's own REPLYTAG comes last, so the fake answers "o1"; the file text is what counts)
+    wait_reply(&env, &env.a, "BRIEF_SECRET_LINE").await;
+    let brief = invocations_with("Task: Launch copy").pop().unwrap();
+    assert!(brief.contains("[What the person asked in the chat this task came from]"), "{brief}");
+    assert!(brief.contains("Plan the Berlin launch from my brief") && brief.contains("brief.md (") && brief.contains(&format!("id {id}")), "{brief}");
+
+    // Only from the task's thread: the same bot in its own chat still can't read it
+    env.state.self_tools.lock().await.insert(
+        "tok-task".into(),
+        SelfScope {
+            kwant_id: env.b.clone(),
+            kwant_name: "B".into(),
+            origin: Some(TurnOrigin { thread_id: Some(thread.clone()), ..Default::default() }),
+            ..Default::default()
+        },
+    );
+    let r = self_call(&env, "tok-task", "list_attachments", json!({})).await;
+    assert!(text_of(&r).contains("Files in the chat your task came from") && text_of(&r).contains(&id), "{r}");
+    direct_turn(&env, "tok-b-own", &env.b, None).await;
+    let r = self_call(&env, "tok-b-own", "read_attachment", json!({"id": id})).await;
+    assert_eq!(r["isError"], true);
+
+    // The lead's own scope in that thread doesn't widen anything either: it isn't the specialist
+    env.state.self_tools.lock().await.insert(
+        "tok-lead-thread".into(),
+        SelfScope {
+            kwant_id: env.a.clone(),
+            kwant_name: "A".into(),
+            origin: Some(TurnOrigin { thread_id: Some(thread), ..Default::default() }),
+            ..Default::default()
+        },
+    );
+    let r = self_call(&env, "tok-lead-thread", "list_attachments", json!({})).await;
+    assert!(!text_of(&r).contains("Files in the chat your task came from"), "{r}");
+}

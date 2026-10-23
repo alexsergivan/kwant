@@ -321,9 +321,10 @@ async fn run(
     });
     let prompt = format!(
         "{lead} delegated this task to you. Work on it here; when you finish, your reply is posted back to {lead} \
-        and the chat it came from, so make it a complete, self-contained answer.\n\n{task}{again}",
+        and the chat it came from, so make it a complete, self-contained answer.\n\n{task}{origin}{again}",
         lead = lead.name,
         task = crate::drivers::peer_message(&lead.name, &format!("Task: {}\n\n{}", d.title, d.task)),
+        origin = origin_brief(&state, &d).await,
         again = if after_restart { RESTARTED_NOTE } else { "" },
     );
     let mut opts = TurnOpts::default();
@@ -359,6 +360,78 @@ async fn run(
         }
     }
     finish(&state, &d, &specialist, outcome).await;
+}
+
+/// Most of the person's request, and of the origin chat's instructions, a delegated task quotes.
+const BRIEF_CHARS: usize = 2000;
+/// Most files of the origin chat a delegated task lists.
+const BRIEF_FILES: i64 = 10;
+
+/// The chat a delegation came from, when its specialist may see it: the lead's own direct chat or
+/// thread, or a channel the specialist is a member of (the members a turn there would have).
+async fn visible_origin(state: &AppState, d: &Delegation) -> Option<String> {
+    if let Some(id) = &d.origin_channel_id {
+        let channel = state.db.get_channel(id).await.ok().flatten()?;
+        let space = SpaceId::new(&channel.space_id);
+        let all = state.db.list_kwants(&space).await.ok()?;
+        let team = match channel.name.strip_prefix("team-") {
+            Some(name) => state.db.list_teams(&space).await.ok()?.into_iter().find(|t| t.name.eq_ignore_ascii_case(name)),
+            None => None,
+        };
+        let members = super::routes::channel_member_ids(&channel, team.as_ref(), &all);
+        return members.contains(&d.specialist_kwant_id).then(|| id.clone());
+    }
+    if let Some(id) = &d.origin_thread_id {
+        let thread = state.db.get_thread(id).await.ok().flatten()?;
+        return (thread.kwant_id == d.lead_kwant_id).then(|| id.clone());
+    }
+    d.origin_kwant_id.clone().filter(|k| *k == d.lead_kwant_id)
+}
+
+/// The origin chat of the delegation in `thread_id`, when `kwant_id` is its specialist and may
+/// see that chat: its files are readable from the task's thread.
+pub(super) async fn shared_origin(state: &AppState, kwant_id: &str, thread_id: &str) -> Option<String> {
+    let d = state.db.delegation_for_thread(thread_id).await.ok().flatten()?;
+    if d.specialist_kwant_id != kwant_id {
+        return None;
+    }
+    visible_origin(state, &d).await
+}
+
+/// What the specialist should know of the chat the task came from: the person's last request
+/// before it, that chat's instructions and its files. Empty when the specialist may not see it.
+async fn origin_brief(state: &AppState, d: &Delegation) -> String {
+    let Some(ctx) = visible_origin(state, d).await else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    let recent = state.db.list_messages(&ctx, 20).await.unwrap_or_default();
+    let asked = recent
+        .iter()
+        .rev()
+        .find(|m| m.sender_role == "user" && m.created_at.is_none_or(|t| t <= d.created_at) && !m.text.trim().is_empty());
+    if let Some(m) = asked {
+        parts.push(format!("[What the person asked in the chat this task came from]\n{}", clip(m.text.trim(), BRIEF_CHARS)));
+    }
+    if let Some(id) = &d.origin_channel_id {
+        if let Ok(Some(text)) = state.db.channel_instructions(id).await {
+            if !text.trim().is_empty() {
+                parts.push(format!("[That chat's pinned instructions]\n{}", clip(text.trim(), BRIEF_CHARS)));
+            }
+        }
+    }
+    let files = state.db.list_attachments_in(&ctx, BRIEF_FILES).await.unwrap_or_default();
+    if !files.is_empty() {
+        let lines: Vec<String> = files.iter().map(|a| format!("- {} ({}) id {}", a.name, a.mime, a.id)).collect();
+        parts.push(format!(
+            "[Files in that chat; read one with `read_attachment` and its id]\n{}",
+            lines.join("\n")
+        ));
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!("\n\n{}", parts.join("\n\n"))
 }
 
 /// Added to a delegated task that runs again because kwnt restarted in the middle of it.

@@ -708,12 +708,9 @@ pub(super) async fn scope_for(
         _ => None,
     };
     // Threads are one agent's own conversation: nobody to hand the turn to
-    let member_ids: Vec<String> = match (&thread, &team, &channel) {
-        (Some(_), _, _) => Vec::new(),
-        (None, Some(t), _) => serde_json::from_str(&t.member_kwants).unwrap_or_default(),
-        (None, None, Some(c)) if c.name == "general" => all_kwants.iter().map(|k| k.id.clone()).collect(),
-        (None, None, Some(c)) => serde_json::from_str(&c.member_kwants).unwrap_or_default(),
-        (None, None, None) => Vec::new(),
+    let member_ids: Vec<String> = match (&thread, &channel) {
+        (None, Some(c)) => channel_member_ids(c, team.as_ref(), &all_kwants),
+        _ => Vec::new(),
     };
     let teammates: Vec<Kwant> = member_ids.iter().filter_map(|id| all_kwants.iter().find(|k| &k.id == id).cloned()).collect();
     let workspace_dir = match &team {
@@ -741,6 +738,16 @@ pub(super) async fn scope_for(
         job_id: job.id.clone(),
         delegation_depth,
     })
+}
+
+/// The bots of a channel: its team's members for a `team-` channel, every bot of the space in
+/// "general", else the channel's own member list. `team` is the channel's team, if any.
+pub(super) fn channel_member_ids(channel: &Channel, team: Option<&Team>, all_kwants: &[Kwant]) -> Vec<String> {
+    match team {
+        Some(t) => serde_json::from_str(&t.member_kwants).unwrap_or_default(),
+        None if channel.name == "general" => all_kwants.iter().map(|k| k.id.clone()).collect(),
+        None => serde_json::from_str(&channel.member_kwants).unwrap_or_default(),
+    }
 }
 
 fn team_context(t: &Team) -> crate::drivers::TeamContext {

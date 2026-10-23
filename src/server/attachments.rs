@@ -533,24 +533,42 @@ fn context_of(scope: &SelfScope) -> Option<String> {
     o.channel_id.clone().or_else(|| o.thread_id.clone()).or_else(|| o.direct_kwant_id.clone())
 }
 
-/// The turn may see files of its own chat and files this agent shared anywhere.
+/// The chat a delegated task in this turn's thread came from, when the specialist may see it.
+async fn task_origin(state: &AppState, scope: &SelfScope) -> Option<String> {
+    let thread = scope.origin.as_ref()?.thread_id.as_deref()?;
+    super::delegation::shared_origin(state, &scope.kwant_id, thread).await
+}
+
+/// The turn may see files of its own chat, of the chat its delegated task came from, and files
+/// this agent shared anywhere.
 async fn visible(state: &AppState, scope: &SelfScope, id: &str) -> Option<Attachment> {
     let a = load(state, id).await?;
     let own_chat = a.context_id.is_some() && a.context_id == context_of(scope);
     let own_file = a.source == "agent" && a.kwant_id.as_deref() == Some(scope.kwant_id.as_str());
-    (own_chat || own_file).then_some(a)
+    if own_chat || own_file {
+        return Some(a);
+    }
+    let origin = task_origin(state, scope).await;
+    (origin.is_some() && a.context_id == origin).then_some(a)
 }
 
 pub async fn tool_list(state: &AppState, scope: &SelfScope) -> (String, bool) {
     let Some(ctx) = context_of(scope) else {
         return ("This turn has no chat.".into(), true);
     };
+    let line = |a: &Attachment| format!("- {} ({}, {}, from {}) id {}", a.name, a.mime, kb(a.size), a.source, a.id);
     let list = state.db.list_attachments_in(&ctx, 20).await.unwrap_or_default();
-    if list.is_empty() {
+    let mut lines: Vec<String> = list.iter().map(line).collect();
+    if let Some(origin) = task_origin(state, scope).await {
+        let theirs = state.db.list_attachments_in(&origin, 20).await.unwrap_or_default();
+        if !theirs.is_empty() {
+            lines.push("Files in the chat your task came from:".into());
+            lines.extend(theirs.iter().map(line));
+        }
+    }
+    if lines.is_empty() {
         return ("No files in this chat.".into(), false);
     }
-    let lines: Vec<String> =
-        list.iter().map(|a| format!("- {} ({}, {}, from {}) id {}", a.name, a.mime, kb(a.size), a.source, a.id)).collect();
     (lines.join("\n"), false)
 }
 
