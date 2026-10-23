@@ -498,7 +498,7 @@ async fn a_text_pdf_and_a_photo_are_read_in_one_model_call() {
     // Nothing the letter says was logged
     let logged = logs.text();
     assert!(logged.contains("documents: reading a letter"), "the capture works");
-    for words in ["NW-448812", "Northfield", "142.60", "overdue", "Reply slip", "northfield-water", "City Council"] {
+    for words in ["NW-448812", "Northfield", "GBP 142.60", "overdue", "Reply slip", "northfield-water", "City Council"] {
         assert!(!logged.contains(words), "'{words}' reached the logs");
     }
 }

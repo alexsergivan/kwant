@@ -129,8 +129,9 @@ async fn a_limited_delegation_stays_open_and_its_retry_finishes_it() {
 
     past_reset(&env).await;
     assert_eq!(parked::run_due(&env.state, later()).await, 1);
-    wait_for("the retried delegation to complete", || async { status(&env, id.clone()).await == "completed" }).await;
+    // The delegation is marked completed before its result is posted, so wait for the result
+    wait_reply(&env, &env.a, "answer qddone").await;
+    assert_eq!(status(&env, id.clone()).await, "completed");
     let lead = messages(&env, &env.a).await;
     assert!(lead.iter().any(|m| m.text.contains("retrying “Limited task” once")));
-    assert!(lead.iter().any(|m| m.text.contains("answer qddone")));
 }
