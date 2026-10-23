@@ -1,7 +1,7 @@
 /* kwant site. Soft violet pages, the app's CRT screens, Pixelify Sans headings. Fonts are self-hosted and OFL. */
-@font-face { font-family: "Pixelify Sans"; src: url("../fonts/pixelify-sans.woff2") format("woff2"); font-weight: 400 700; font-display: swap; }
-@font-face { font-family: "Inter"; src: url("../fonts/inter-var.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
-@font-face { font-family: "JetBrains Mono"; src: url("../fonts/jetbrains-mono.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+@font-face { font-family: "Pixelify Sans"; src: url("../fonts/pixelify-sans.woff2?v=66e897e155") format("woff2"); font-weight: 400 700; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("../fonts/inter-var.woff2?v=3100e775e8") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("../fonts/jetbrains-mono.woff2?v=fa21ea9c83") format("woff2"); font-weight: 100 800; font-display: swap; }
 
 :root {
   --v1: #160c3a; --v2: #22125c; --v3: #2f1a80; --v4: #4024a8; --v5: #5c3fd0; --v6: #8a72ec; --v7: #b8a9fb; --v8: #ddd5ff; --v9: #f4f1ff;
@@ -67,7 +67,7 @@ kbd { display: inline-block; padding: 0 5px; font-size: 0.82em; line-height: 1.5
 .crt-small { padding-bottom: 14px; }
 .crt-small .crt-screen { aspect-ratio: 4 / 3; }
 /* The still frame sits behind every canvas, so a screen is never empty, even before or without JavaScript. */
-.scene { position: absolute; inset: 0; background: var(--v3) url("../media/scene-still.png") center bottom / cover no-repeat; image-rendering: pixelated; }
+.scene { position: absolute; inset: 0; background: var(--v3) url("../media/scene-still.png?v=30fa85ef56") center bottom / cover no-repeat; image-rendering: pixelated; }
 .scene canvas { width: 100%; height: 100%; image-rendering: pixelated; image-rendering: crisp-edges; opacity: 0; }
 .scene.live canvas { opacity: 1; }
 .scene-btn { display: block; width: 100%; height: 100%; padding: 0; margin: 0; border: 0; background: none; cursor: pointer; }

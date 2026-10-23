@@ -14,9 +14,13 @@ Shortcodes in the HTML:
   {{install:ID}}                          the install command box with macOS/Linux and Docker tabs
   {{avatar:ROLE}}                         a kwant app avatar (the same CRT-framed creature the app draws)
 
+Every local asset URL in the pages and in site.css gets a `?v=<content hash>` query, so a deploy never pairs new HTML
+with a browser's cached old CSS, JS, fonts or images.
+
 It also writes the favicons (favicon.svg, favicon-32.png, apple-touch-icon.png, favicon.ico) from LOGO_RECTS,
 so the tab icon is always the header logo.
 """
+import hashlib
 import html
 import pathlib
 import re
@@ -57,12 +61,12 @@ LOGO_RECTS = [
     (4, 16, 2, 1, "#ddd5ff"), (10, 16, 2, 1, "#ddd5ff"),
 ]
 LOGO = (
-    '<svg viewBox="0 0 16 17" shape-rendering="crispEdges" aria-hidden="true">'
+    '<svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true">'
     + "".join(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{c}"/>' for x, y, w, h, c in LOGO_RECTS)
     + "</svg>"
 )
 GH_ICON = (
-    '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 '
+    '<svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 '
     '5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52'
     '-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59'
     '.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82'
@@ -124,7 +128,7 @@ def avatar(role):
     parts += [r(x, y, w, h, AV_PANEL) for x, y, w, h in AV_FRAME_FILL]
     parts += [r(3.5, 4.5 + i, 19, 0.25, AV_SCAN) for i in range(16)]
     parts += [r(*a) for a in avatar_rects(role)]
-    return f'<svg class="av" viewBox="0 0 26 26" shape-rendering="crispEdges" aria-hidden="true">{"".join(parts)}</svg>'
+    return f'<svg class="av" viewBox="0 0 26 26" width="34" height="34" shape-rendering="crispEdges" aria-hidden="true">{"".join(parts)}</svg>'
 
 
 def parse(path):
@@ -325,6 +329,39 @@ def page(meta, body, root):
 """
 
 
+# ---- Cache busting ----
+_hashes = {}
+
+
+def file_hash(path):
+    if path not in _hashes:
+        _hashes[path] = hashlib.sha256(path.read_bytes()).hexdigest()[:10]
+    return _hashes[path]
+
+
+def version_css():
+    """Adds ?v=<hash> to every url() in site.css, so a changed font or image gets a new URL. Re-running is a no-op."""
+    css = OUT / "assets/css/site.css"
+    text = css.read_text()
+    new = re.sub(
+        r'url\("(\.\./[^"?#]+)(?:\?v=[0-9a-f]+)?"\)',
+        lambda m: f'url("{m[1]}?v={file_hash((css.parent / m[1]).resolve())}")',
+        text,
+    )
+    if new != text:
+        css.write_text(new)
+
+
+ASSET_URL = re.compile(
+    r'(?<=["\s,])((?:\.\./)*|/)?((?:assets/[\w./-]+\.(?:css|js|woff2|png|webp|jpg|svg|mp4))|favicon\.svg|favicon-32\.png|apple-touch-icon\.png)(?=["\s,])'
+)
+
+
+def version_urls(page_html):
+    """Appends ?v=<hash> to the page's relative asset URLs (src, href, srcset, poster). Absolute URLs such as og:image stay as they are."""
+    return ASSET_URL.sub(lambda m: f"{m[1] or ''}{m[2]}?v={file_hash(OUT / m[2])}", page_html)
+
+
 # ---- Favicons, drawn from LOGO_RECTS ----
 # The logo's pixels span x 2..13 and y 1..16, so a 16x16 box from y=1 holds it exactly: crisp at 16, 32 and 48 px.
 FAV_BG = "#4024a8"
@@ -392,6 +429,8 @@ def write_favicons():
 
 
 def main():
+    write_favicons()
+    version_css()
     written = []
     for src in sorted(SRC.glob("*.html")):
         meta, body = parse(src)
@@ -402,7 +441,7 @@ def main():
         if meta.get("nav"):
             body = docs_shell(root, meta["nav"], body)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(page(meta, body, root))
+        out.write_text(version_urls(page(meta, body, root)))
         written.append(meta["path"])
     urls = [p for p in written if p != "404.html"]
     sitemap = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
@@ -410,7 +449,6 @@ def main():
         sitemap.append(f"  <url><loc>{SITE_URL}/{p.replace('index.html', '').replace('.html', '')}</loc></url>")
     sitemap.append("</urlset>")
     (OUT / "sitemap.xml").write_text("\n".join(sitemap) + "\n")
-    write_favicons()
     (OUT / "robots.txt").write_text(f"User-agent: *\nAllow: /\n\nSitemap: {SITE_URL}/sitemap.xml\n")
     print("wrote", ", ".join(written), file=sys.stderr)
 
