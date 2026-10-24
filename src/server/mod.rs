@@ -35,6 +35,7 @@ pub mod zombie_routes;
 pub mod parallel_routes;
 pub mod document_routes;
 pub mod connections;
+pub mod setup_routes;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -97,6 +98,8 @@ pub struct AppState {
     pub parallel: Arc<crate::parallel::run::Runner>,
     /// Camera-to-Completed: one letter read at a time (and a test's stand-in model).
     pub documents: Arc<crate::documents::extract::Desk>,
+    /// The Setup checklist's install jobs (one at a time).
+    pub setup: Arc<setup_routes::SetupJobs>,
 }
 
 impl AppState {
@@ -142,6 +145,7 @@ impl AppState {
             zombie: Default::default(),
             parallel: Default::default(),
             documents: Default::default(),
+            setup: Default::default(),
         }
     }
 
@@ -227,6 +231,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/passwords/bitwarden/unlock", post(passwords::unlock_bitwarden))
         .route("/api/passwords/bitwarden/lock", post(passwords::lock_bitwarden))
         .route("/api/passwords/migrate", post(passwords::migrate_to_bitwarden))
+        .route("/api/setup/status", get(setup_routes::status))
+        .route("/api/setup/install", post(setup_routes::install))
+        .route("/api/setup/jobs/:id", get(setup_routes::job))
         .route("/api/zombie/cases", get(zombie_routes::list_cases))
         .route("/api/zombie/cases/:id", get(zombie_routes::get_case))
         .route("/api/zombie/cases/:id/snooze", post(zombie_routes::snooze))

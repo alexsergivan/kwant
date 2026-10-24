@@ -203,39 +203,33 @@ async fn ensure_installed(router: &LayaRouter, dir: &Path) -> Result<PathBuf, St
         true,
     );
     let log = dir.join("install.log");
-    let python = venv_bin(&venv, "python");
-
-    let steps: Vec<Vec<String>> = if let Some(uv) = which("uv") {
-        // uv fetches a suitable Python itself, so this works on machines without one.
-        let uv = uv.to_string_lossy().to_string();
-        vec![
-            vec![uv.clone(), "venv".into(), "--python".into(), "3.12".into(), path_str(&venv)],
-            vec![uv, "pip".into(), "install".into(), "--python".into(), path_str(&python), LAYA_PACKAGE.into()],
-        ]
-    } else if let Some(py) = which("python3").or_else(|| which("python")) {
-        vec![
-            vec![path_str(&py), "-m".into(), "venv".into(), path_str(&venv)],
-            vec![path_str(&python), "-m".into(), "pip".into(), "install".into(), "--upgrade".into(), "pip".into()],
-            vec![path_str(&python), "-m".into(), "pip".into(), "install".into(), LAYA_PACKAGE.into()],
-        ]
-    } else {
-        return Err("neither `uv` nor Python 3.10+ was found; install uv from https://docs.astral.sh/uv/".into());
-    };
+    // The data dir is the parent of `<data>/laya`; uv, else a real Python, else uv installed there
+    let data_dir = dir.parent().unwrap_or(dir);
+    let home = dirs::home_dir();
+    let platform = crate::doctor::Platform::detect();
+    let cmds = crate::setup::laya_commands(
+        data_dir,
+        crate::setup::find_uv(data_dir, home.as_deref()).as_deref(),
+        crate::setup::find_python(platform).as_deref(),
+        platform == crate::doctor::Platform::Linux,
+    );
 
     let offset = std::fs::metadata(&log).map(|m| m.len()).unwrap_or(0);
-    for step in steps {
+    for cmd in cmds {
         let out = log_file(&log)?;
         let err = out.try_clone().map_err(|e| e.to_string())?;
-        let status = Command::new(&step[0])
-            .args(&step[1..])
+        let status = Command::new(&cmd.argv[0])
+            .args(&cmd.argv[1..])
+            .envs(cmd.env.iter().map(|(k, v)| (k, v)))
+            .stdin(Stdio::null())
             .stdout(Stdio::from(out))
             .stderr(Stdio::from(err))
             .status()
             .await
-            .map_err(|e| format!("{}: {e}", step[0]))?;
+            .map_err(|e| format!("{}: {e}", cmd.argv[0]))?;
         if !status.success() {
             let _ = std::fs::remove_dir_all(&venv);
-            let reason = last_error_line_from(&log, offset).unwrap_or_else(|| format!("`{}` failed", step.join(" ")));
+            let reason = last_error_line_from(&log, offset).unwrap_or_else(|| format!("`{}` failed", cmd.display()));
             return Err(reason);
         }
     }
@@ -247,7 +241,7 @@ async fn ensure_installed(router: &LayaRouter, dir: &Path) -> Result<PathBuf, St
     }
 }
 
-fn start(bin: &Path, dir: &Path, port: u16, models: &str) -> Result<Child, String> {
+pub(crate) fn start(bin: &Path, dir: &Path, port: u16, models: &str) -> Result<Child, String> {
     let log = log_file(&dir.join("laya.log"))?;
     let err = log.try_clone().map_err(|e| e.to_string())?;
     let default_model = models.split(',').map(str::trim).find(|m| !m.is_empty()).unwrap_or("english");
@@ -323,13 +317,3 @@ fn venv_bin(venv: &Path, name: &str) -> PathBuf {
     }
 }
 
-fn which(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
-}
-
-fn path_str(p: &Path) -> String {
-    p.to_string_lossy().to_string()
-}

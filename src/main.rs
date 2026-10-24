@@ -40,6 +40,27 @@ pub enum Commands {
     /// the command that fixes each missing part on this platform. Exits 1 if a required part is missing
     Doctor,
 
+    /// Install what kwant needs on this Mac or Linux machine: Laya, a browser and an AI CLI
+    /// (Claude Code unless you pick with --clis). Asks before each part; never runs sudo (it
+    /// prints those commands for you). Safe to run again
+    Setup {
+        /// Install without asking
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Only these parts: laya, browser, claude, codex, grok, docker (comma list)
+        #[arg(long)]
+        only: Option<String>,
+        /// AI CLIs to install: claude, codex, grok (comma list; default: claude if none is installed)
+        #[arg(long)]
+        clis: Option<String>,
+        /// Also install Docker, for VM mode (optional; never needed locally)
+        #[arg(long)]
+        docker: bool,
+        /// Show what would be installed; install nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// List kwants stored in the local database
     Agents,
 
@@ -133,6 +154,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if checks.iter().any(|c| c.status == kwnt::doctor::Status::Fail) {
                 std::process::exit(1);
             }
+        }
+        Some(Commands::Setup { yes, only, clis, docker, dry_run }) => {
+            let parse = |v: Option<String>| -> Result<Option<Vec<kwnt::setup::ItemId>>, String> {
+                v.map(|v| kwnt::setup::parse_list(&v)).transpose()
+            };
+            let (only, clis) = match (parse(only), parse(clis)) {
+                (Ok(o), Ok(c)) => (o, c),
+                (Err(e), _) | (_, Err(e)) => {
+                    eprintln!("kwnt setup: {e}");
+                    std::process::exit(2);
+                }
+            };
+            let opts = kwnt::setup::Options { yes, only, clis, docker, dry_run };
+            std::process::exit(kwnt::setup::run_cli(&config, opts).await);
         }
         Some(Commands::Agents) => print_agents(&config).await?,
         Some(Commands::Teams) => print_teams(&config).await?,

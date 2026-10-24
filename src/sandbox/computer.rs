@@ -117,13 +117,47 @@ pub fn find_chrome(
             }
         }
     }
-    let path = path?;
-    std::env::split_paths(path).find_map(|dir| {
-        CHROME_COMMANDS
-            .iter()
-            .map(|name| dir.join(name))
-            .find(|candidate| candidate.is_file())
-    })
+    let on_path = path.and_then(|path| {
+        std::env::split_paths(path).find_map(|dir| {
+            CHROME_COMMANDS
+                .iter()
+                .map(|name| dir.join(name))
+                .find(|candidate| candidate.is_file())
+        })
+    });
+    on_path.or_else(|| playwright_chromium(os, home?))
+}
+
+/// The newest Chromium Playwright downloaded into the person's cache (`kwnt setup` puts one there
+/// when no Chrome is installed): `~/.cache/ms-playwright` on Linux,
+/// `~/Library/Caches/ms-playwright` on a Mac.
+pub fn playwright_chromium(os: &str, home: &Path) -> Option<PathBuf> {
+    let (cache, inner): (PathBuf, &[&str]) = if os == "macos" {
+        (
+            home.join("Library/Caches/ms-playwright"),
+            &[
+                "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+                "chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+            ],
+        )
+    } else {
+        (home.join(".cache/ms-playwright"), &["chrome-linux64/chrome", "chrome-linux-arm64/chrome", "chrome-linux/chrome"])
+    };
+    let mut builds: Vec<(u32, PathBuf)> = std::fs::read_dir(cache)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let rev = name.strip_prefix("chromium-")?.parse().ok()?;
+            Some((rev, e.path()))
+        })
+        .collect();
+    builds.sort_by_key(|b| std::cmp::Reverse(b.0));
+    builds
+        .iter()
+        .flat_map(|(_, dir)| inner.iter().map(move |i| dir.join(i)))
+        .find(|c| c.is_file())
 }
 
 /// Whether a window can be shown: always on macOS and Windows, on Linux only with an X11 or
@@ -160,15 +194,28 @@ pub fn vm_unavailable_reason(docker: bool, browser_url_configured: bool, platfor
     })
 }
 
-/// The local Chrome this process would launch, from the real environment.
+/// The local Chrome this process would launch, from the real environment. A Playwright Chromium
+/// counts only where its sandbox can start (see [`chrome_sandbox_blocked`]).
 pub fn local_chrome_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    find_chrome(
+    let found = find_chrome(
         std::env::var(CHROME_PATH_ENV).ok().as_deref(),
         std::env::consts::OS,
         home.as_deref(),
         std::env::var("PATH").ok().as_deref(),
-    )
+    )?;
+    let playwright = home.is_some_and(|h| found.starts_with(h.join(".cache").join("ms-playwright")));
+    (!(playwright && chrome_sandbox_blocked())).then_some(found)
+}
+
+/// Linux blocks the unprivileged user namespaces Chrome's sandbox needs (Ubuntu 23.10+ AppArmor,
+/// or Debian's `unprivileged_userns_clone=0`). Packaged Chrome and Chromium come with a profile
+/// or setuid helper that allows it; a Playwright Chromium in the home folder aborts on start.
+pub fn chrome_sandbox_blocked() -> bool {
+    let read = |p: &str| std::fs::read_to_string(p).map(|s| s.trim().to_string()).ok();
+    cfg!(target_os = "linux")
+        && (read("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").as_deref() == Some("1")
+            || read("/proc/sys/kernel/unprivileged_userns_clone").as_deref() == Some("0"))
 }
 
 /// [`local_unavailable_reason`] for this process's environment.
@@ -663,6 +710,30 @@ mod tests {
         assert!(serde_json::from_str::<ComputerMode>("\"VM\"").is_err());
         assert_eq!(ComputerMode::parse("Local"), Some(ComputerMode::Local));
         assert_eq!(ComputerMode::parse(""), None);
+    }
+
+    #[test]
+    fn chrome_falls_back_to_the_newest_playwright_chromium() {
+        let home = tempfile::tempdir().unwrap();
+        let put = |rel: &str| {
+            let p = home.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "").unwrap();
+            p
+        };
+        assert_eq!(find_chrome(None, "linux", Some(home.path()), Some("")), None);
+        put(".cache/ms-playwright/chromium-1100/chrome-linux/chrome");
+        let newer = put(".cache/ms-playwright/chromium-1200/chrome-linux-arm64/chrome");
+        put(".cache/ms-playwright/chromium_headless_shell-1300/chrome-linux/headless_shell");
+        assert_eq!(find_chrome(None, "linux", Some(home.path()), Some("")), Some(newer));
+        // a Chrome on PATH wins over the cache
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("google-chrome"), "").unwrap();
+        let path = dir.path().to_string_lossy().to_string();
+        assert_eq!(find_chrome(None, "linux", Some(home.path()), Some(&path)), Some(dir.path().join("google-chrome")));
+
+        let mac = put("Library/Caches/ms-playwright/chromium-1200/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
+        assert_eq!(playwright_chromium("macos", home.path()), Some(mac));
     }
 
     #[test]
