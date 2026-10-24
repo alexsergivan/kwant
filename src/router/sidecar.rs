@@ -67,12 +67,17 @@ async fn supervise(router: LayaRouter, opts: SidecarOptions, shutdown: Cancellat
     let port = match local_port(&router.base_url) {
         Some(port) if opts.managed => port,
         _ => {
+            let platform = crate::doctor::Platform::detect();
             let why = if opts.managed {
-                "Laya URL is not on this machine, so the app cannot start it"
+                let fix = match platform {
+                    crate::doctor::Platform::Docker => crate::doctor::laya_fix(platform, false),
+                    _ => "Start laya-serve at that address, or unset LAYA_URL so kwnt runs Laya here",
+                };
+                format!("Laya URL is not on this machine, so the app cannot start it. {fix}")
             } else {
-                "Laya is not answering and the app is not managing it; using keyword routing"
+                format!("Laya is not answering and the app is not managing it; using keyword routing. {}", crate::doctor::laya_fix(platform, false))
             };
-            router.set_status(LayaState::Offline, why, false);
+            router.set_status(LayaState::Offline, &why, false);
             return monitor_external(router, shutdown).await;
         }
     };
@@ -85,7 +90,8 @@ async fn supervise(router: LayaRouter, opts: SidecarOptions, shutdown: Cancellat
         let bin = match ensure_installed(&router, &dir).await {
             Ok(bin) => bin,
             Err(e) => {
-                router.set_status(LayaState::Failed, &format!("Install failed: {e}"), true);
+                let fix = crate::doctor::laya_fix(crate::doctor::Platform::detect(), true);
+                router.set_status(LayaState::Failed, &format!("Install failed: {e}. {fix}"), true);
                 if wait_or_cancel(&shutdown, Duration::from_secs(300)).await {
                     return;
                 }

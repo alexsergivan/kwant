@@ -1,6 +1,7 @@
 pub mod broker;
 pub mod config;
 pub mod db;
+pub mod doctor;
 pub mod documents;
 pub mod drivers;
 pub mod embedded;

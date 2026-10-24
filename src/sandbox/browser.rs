@@ -15,6 +15,27 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// The DevTools WebSocket request for `url`. Chrome refuses a DevTools connection whose Host is a
+/// name other than localhost (500 on the upgrade), so a plain-ws name such as the compose service
+/// `browser` gets `Host: localhost`, as the `/json` requests do. IPs and wss (a hosted service
+/// that may need its own Host) are left alone.
+pub(crate) fn cdp_ws_request(url: &str) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, BrowserError> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut req = url.into_client_request().map_err(|e| BrowserError::Ws(e.to_string()))?;
+    let named_host = req.uri().scheme_str() == Some("ws")
+        && req.uri().host().is_some_and(|h| h != "localhost" && h.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_err());
+    if named_host {
+        req.headers_mut().insert(reqwest::header::HOST, reqwest::header::HeaderValue::from_static("localhost"));
+    }
+    Ok(req)
+}
+
+/// Opens a DevTools WebSocket (see [`cdp_ws_request`]).
+pub(crate) async fn connect_cdp(url: &str) -> Result<WsStream, BrowserError> {
+    let (ws, _) = connect_async(cdp_ws_request(url)?).await.map_err(|e| BrowserError::Ws(e.to_string()))?;
+    Ok(ws)
+}
+
 /// `function(needle)` evaluated in the page. Collects visible interactive elements (incl. open
 /// shadow roots and same-origin iframes), topmost first. With a needle, picks the best label match
 /// and either returns its viewport center (when nothing covers it) or clicks it directly.
@@ -378,10 +399,7 @@ impl BrowserController {
     ) -> Result<(), BrowserError> {
         if guard.is_none() {
             let ws_url = self.get_ws_url().await?;
-            let (ws, _) = connect_async(&ws_url)
-                .await
-                .map_err(|e| BrowserError::Ws(e.to_string()))?;
-            **guard = Some(ws);
+            **guard = Some(connect_cdp(&ws_url).await?);
         }
         Ok(())
     }
@@ -855,3 +873,22 @@ impl BrowserController {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::cdp_ws_request;
+
+    fn host(url: &str) -> String {
+        cdp_ws_request(url).unwrap().headers()["host"].to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn cdp_ws_host_is_localhost_for_service_names() {
+        // Chrome answers 500 to a DevTools upgrade with Host: browser:9222
+        assert_eq!(host("ws://browser:9222/devtools/browser/x"), "localhost");
+        assert_eq!(host("ws://127.0.0.1:9223/devtools/page/x"), "127.0.0.1:9223");
+        assert_eq!(host("ws://[::1]:9222/devtools/page/x"), "[::1]:9222");
+        assert_eq!(host("ws://localhost:9222/devtools/page/x"), "localhost:9222");
+        assert_eq!(host("wss://cdp.example.com/devtools/browser/x"), "cdp.example.com");
+    }
+}

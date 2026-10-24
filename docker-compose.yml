@@ -1,5 +1,9 @@
-# Kwant + Laya for a VPS:  docker compose up -d --build
-# The UI is bound to localhost; put a TLS reverse proxy in front (see docs/browser-service.md).
+# kwant on a server, everything in one command:  docker compose up -d --build
+#   kwnt     the app, UI on 127.0.0.1:8799 (KWNT_HOST_PORT to change; put HTTPS in front: see README "VPS in 5 minutes")
+#   laya     picks which bot answers (model baked into the image)
+#   browser  the bots' private Chromium, so VM mode works without the Docker socket
+# AI CLIs in the image:  KWNT_CLIS=claude,codex,grok docker compose up -d --build
+# Check what's missing:  docker compose exec kwnt kwnt doctor
 services:
   laya:
     build:
@@ -10,23 +14,48 @@ services:
     image: kwnt-laya:0.4.8
     restart: unless-stopped
 
+  browser:
+    build:
+      context: docker
+      dockerfile: browser.Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,size=512m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1536m
+    pids_limit: 512
+    # CDP is full control of the browser: reachable by kwnt on this network only, never published.
+    expose: ["9222"]
+
   kwnt:
     build:
       context: .
       dockerfile: docker/kwnt.Dockerfile
+      args:
+        KWNT_CLIS: ${KWNT_CLIS:-}
     image: kwnt:latest
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8799:8799"
+      - "127.0.0.1:${KWNT_HOST_PORT:-8799}:8799"
     environment:
       LAYA_URL: http://laya:8000
       KWNT_LAYA_MANAGED: "0"
-      # KWNT_BROWSER_CDP_URL: http://browser:9222
+      KWNT_BROWSER_CDP_URL: http://browser:9222
+      # Your HTTPS address, e.g. https://kwant.example.com (comma list)
+      KWNT_ALLOWED_ORIGINS: ${KWNT_ALLOWED_ORIGINS:-}
     volumes:
       - kwnt-data:/data
+      # CLI sign-ins (~/.claude, ~/.codex, ~/.grok) survive rebuilds
+      - kwnt-home:/home/kwnt
     depends_on:
       laya:
+        condition: service_started
+      browser:
         condition: service_started
 
 volumes:
   kwnt-data:
+  kwnt-home:

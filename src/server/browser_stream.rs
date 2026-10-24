@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::{sync::OwnedRwLockWriteGuard, time::{timeout, Instant}};
-use tokio_tungstenite::{connect_async, tungstenite::Message as CdpMessage};
+use tokio_tungstenite::tungstenite::Message as CdpMessage;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -81,7 +81,7 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
             return Ok(());
         }
     };
-    let (mut cdp, _) = connect_async(ctrl.get_ws_url().await?).await.map_err(|e| BrowserError::Ws(e.to_string()))?;
+    let mut cdp = crate::sandbox::browser::connect_cdp(&ctrl.get_ws_url().await?).await?;
     let mut command_id = 1u64;
     for method in ["Page.enable", "Page.startScreencast"] {
         cdp.send(CdpMessage::Text(json!({"id":command_id,"method":method,"params": if method == "Page.startScreencast" {json!({"format":"jpeg","quality":65,"maxWidth":1280,"maxHeight":800,"everyNthFrame":1})} else {json!({})}}).to_string())).await.map_err(|e| BrowserError::Ws(e.to_string()))?;

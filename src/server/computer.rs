@@ -46,6 +46,7 @@ async fn view(state: &AppState) -> Value {
     let vm = computer::vm_unavailable_reason(
         state.sandbox_manager.is_docker_available().await,
         state.browser_service.has_endpoint(),
+        crate::doctor::Platform::detect(),
     );
     let window = computer::window_reason();
     json!({

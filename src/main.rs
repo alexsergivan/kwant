@@ -36,6 +36,10 @@ pub enum Commands {
     /// Print the resolved config and whether local data files exist
     Status,
 
+    /// Check everything kwant needs here (Laya, browser, AI CLIs, data folder, access) and print
+    /// the command that fixes each missing part on this platform. Exits 1 if a required part is missing
+    Doctor,
+
     /// List kwants stored in the local database
     Agents,
 
@@ -122,6 +126,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| e as Box<dyn std::error::Error>)?;
         }
         Some(Commands::Status) => print_status(&config),
+        Some(Commands::Doctor) => {
+            let platform = kwnt::doctor::Platform::detect();
+            let checks = kwnt::doctor::checks(&kwnt::doctor::gather(&config).await, platform);
+            print!("{}", kwnt::doctor::render(&checks, platform));
+            if checks.iter().any(|c| c.status == kwnt::doctor::Status::Fail) {
+                std::process::exit(1);
+            }
+        }
         Some(Commands::Agents) => print_agents(&config).await?,
         Some(Commands::Teams) => print_teams(&config).await?,
         Some(Commands::Channels) => print_channels(&config).await?,

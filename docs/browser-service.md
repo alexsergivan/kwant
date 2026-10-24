@@ -55,6 +55,9 @@ The managed browser has a shared 1.5 GiB memory limit, rather than a separate Ch
 
 ## Existing/private browser service
 
+The repository's `docker-compose.yml` already does this: its `browser` service builds `docker/browser.Dockerfile` (read-only, all capabilities dropped, 1.5 GiB memory limit, CDP reachable on the compose network only) and kwnt gets `KWNT_BROWSER_CDP_URL=http://browser:9222`. `kwnt doctor` checks that the service answers.
+
+
 Set the server-side CDP HTTP endpoint when an operator manages Chromium separately:
 
 ```bash
