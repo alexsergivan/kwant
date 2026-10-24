@@ -144,3 +144,65 @@ test('empty groups say so instead of leaving a gap', () => {
   for (const t of ['No tool servers yet.', 'No engine accounts yet.', 'No saved website logins.', 'No mail or GitHub sources.']) assert.ok(html.includes(t));
   assert.ok(!html.includes('Optional connectors'));
 });
+
+const apps = [
+  { slug: 'gmail', name: 'Gmail', description: 'Read and send mail.', logo: null, tools_count: 23, no_auth: false },
+  { slug: 'hackernews', name: 'Hacker News', description: '', logo: null, tools_count: 4, no_auth: true },
+];
+
+test('"Find an app" shows only once Composio is added, and the warning stays', () => {
+  const notAdded = ui.composio({ entry: composioEntry({ can_search: true }), onAdd: async () => null });
+  assert.ok(!notAdded.includes('data-composio-search'), 'no search before Composio is added');
+  const noKey = ui.composio({ entry: composioEntry({ added: true, can_search: false }), onAdd: async () => null });
+  assert.ok(noKey.includes('data-composio-search="needs-key"') && noKey.includes('x-api-key'));
+  const ready = ui.composio({ entry: composioEntry({ added: true, can_search: true, can_connect: true }), onAdd: async () => null });
+  assert.ok(ready.includes('Find an app') && ready.includes('role="search"'));
+  for (const html of [noKey, ready]) assert.ok(html.includes('Composio keeps your app sign-ins'), 'the warning stays');
+});
+
+test('found apps offer Connect when the Composio URL names a user, else point to composio.dev', () => {
+  const entry = composioEntry({ added: true, can_search: true, can_connect: true });
+  const html = ui.composio({ entry, onAdd: async () => null, initialApps: apps });
+  assert.ok(html.includes('data-composio-app="gmail"') && html.includes('23 tools'));
+  assert.equal((html.match(/>Connect</g) ?? []).length, 1, 'only apps that need a sign-in get Connect');
+  assert.ok(html.includes('No sign-in needed'));
+  const noUser = ui.composio({ entry: { ...entry, can_connect: false }, onAdd: async () => null, initialApps: apps });
+  assert.ok(!noUser.includes('>Connect<') && noUser.includes('connect apps on composio.dev'));
+});
+
+test('the search and connect calls go to kwnt, never straight to Composio', async () => {
+  const prev = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, init = {}) => {
+    seen.push([String(url), init.method]);
+    return new Response(JSON.stringify(String(url).endsWith('/connect') ? { redirect_url: 'https://connect.composio.dev/x', warning: WARNING } : { apps, can_connect: true, warning: WARNING }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  try {
+    assert.equal((await m.connectionsApi.searchComposioApps('g mail&x')).apps.length, 2);
+    assert.equal((await m.connectionsApi.connectComposioApp('gmail')).redirect_url, 'https://connect.composio.dev/x');
+  } finally {
+    globalThis.fetch = prev;
+  }
+  assert.deepEqual(seen, [
+    ['/api/connections/composio/apps?q=g%20mail%26x', 'GET'],
+    ['/api/connections/composio/apps/gmail/connect', 'POST'],
+  ]);
+});
+
+test('the server catalog lists Gmail as "via Composio" and explains why, with the warning', async () => {
+  const cat = await loadBundled(`
+    import React from 'react';
+    import { renderToStaticMarkup } from 'react-dom/server.browser';
+    import { PresetCatalog } from './src/components/McpServersModal';
+    export const render = (props) => renderToStaticMarkup(React.createElement(PresetCatalog, props));
+  `);
+  const base = { query: 'gmail', onQuery: noop, onPick: noop, onCustom: noop, onOpenConnections: noop };
+  const list = cat.render(base);
+  assert.ok(list.includes('Gmail') && list.includes('via Composio'));
+  const open = cat.render({ ...base, initialComposioApp: 'gmail' });
+  assert.ok(open.includes('data-composio-note="gmail"') && open.includes('Open Connections'));
+  assert.ok(open.includes('not in this app’s vault'));
+});

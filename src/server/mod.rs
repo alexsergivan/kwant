@@ -87,6 +87,8 @@ pub struct AppState {
     pub claude_login: Arc<engine_login::ClaudeLogin>,
     /// The MCP Registry agents search and suggest servers from (`KWNT_MCP_REGISTRY_URL`).
     pub mcp_registry: Arc<crate::mcp::registry::McpRegistry>,
+    /// Composio's app catalogue (`KWNT_COMPOSIO_API_URL`), called only once Composio is added.
+    pub composio_api: Arc<crate::mcp::composio::ComposioApi>,
     /// Saved website passwords, outside every bot's folder (see `sandbox::credentials`).
     pub credentials: Arc<crate::sandbox::vault::PasswordVault>,
     /// Zombie Mission Hunter: one scan at a time, and the last scan's report.
@@ -135,6 +137,7 @@ impl AppState {
             human_steps: Default::default(),
             claude_login: Default::default(),
             mcp_registry: Arc::new(crate::mcp::registry::McpRegistry::from_env()),
+            composio_api: Arc::new(crate::mcp::composio::ComposioApi::from_env()),
             credentials: Arc::new(crate::sandbox::vault::PasswordVault::open(&config_data_dir)),
             zombie: Default::default(),
             parallel: Default::default(),
@@ -256,6 +259,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/parallel/runs/:id", get(parallel_routes::get_run))
         .route("/api/connections", get(connections::list))
         .route("/api/connections/composio", post(connections::add_composio))
+        .route("/api/connections/composio/apps", get(connections::search_composio_apps))
+        .route("/api/connections/composio/apps/:slug/connect", post(connections::connect_composio_app))
         .route("/api/mcp/servers", get(mcp_routes::list_servers).post(mcp_routes::create_server))
         .route(
             "/api/mcp/servers/:id",

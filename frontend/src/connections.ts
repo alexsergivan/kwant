@@ -41,6 +41,21 @@ export interface CatalogEntry {
   logins_stored: string;
   warning: string;
   add: string;
+  /** Composio only: kwant has the person's Composio API key, so "Find an app" works. */
+  can_search?: boolean;
+  /** Composio only: the Composio URL names a user, so kwant can start an app's sign-in. */
+  can_connect?: boolean;
+  search?: string;
+}
+
+/** One app from Composio's catalogue (Composio calls it a toolkit). */
+export interface ComposioApp {
+  slug: string;
+  name: string;
+  description: string;
+  logo: string | null;
+  tools_count: number | null;
+  no_auth: boolean;
 }
 
 export interface VaultSummary {
@@ -94,6 +109,12 @@ const enc = encodeURIComponent;
 export const connectionsApi = {
   list: () => call<ConnectionsList>('/api/connections'),
   addComposio: (body: ComposioBody) => call<{ connection_id: string; warning: string }>('/api/connections/composio', 'POST', body),
+  /** Searches Composio's apps with the person's own Composio key (only once Composio is added). */
+  searchComposioApps: (q: string) =>
+    call<{ apps: ComposioApp[]; can_connect: boolean; warning: string }>(`/api/connections/composio/apps?q=${enc(q)}`),
+  /** Starts signing in to one Composio app; the answer is the address to open. */
+  connectComposioApp: (slug: string) =>
+    call<{ redirect_url: string; warning: string }>(`/api/connections/composio/apps/${enc(slug)}/connect`, 'POST'),
   /** "Check now" for an MCP server: the server records the result as its last check. */
   testMcp: (serverId: string) => call<{ ok?: boolean; error?: string }>(`/api/mcp/servers/${enc(serverId)}/test`, 'POST'),
 };

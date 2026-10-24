@@ -24,6 +24,7 @@ import {
   Users,
   Search,
   ExternalLink,
+  AlertTriangle,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import {
@@ -35,6 +36,9 @@ import {
   SecretRow,
   StoredStatus,
   McpPreset,
+  ComposioOnlyApp,
+  searchComposioOnly,
+  COMPOSIO_ONLY_APPS,
   MCP_PRESETS,
   searchPresets,
   groupPresets,
@@ -59,6 +63,8 @@ interface McpServersModalProps {
   onClose: () => void;
   /** For "Off for: …" on each card. */
   kwants?: Array<{ id: string; name: string }>;
+  /** Opens the Connections page, where Composio is added (for apps that go through it). */
+  onOpenConnections?: () => void;
 }
 
 const inputCls =
@@ -212,14 +218,50 @@ const ToolChips: React.FC<{ tools: Array<{ name: string; description?: string }>
   );
 };
 
-const PresetCatalog: React.FC<{
+/** A Composio-only app picked in the catalog: why it goes through Composio, and where to set it up. */
+const ComposioOnlyNote: React.FC<{ app: ComposioOnlyApp; onOpenConnections?: () => void; onClose: () => void }> = ({ app, onOpenConnections, onClose }) => (
+  <div role="status" className="space-y-2 p-3 rounded-xl border border-amber-500/30 bg-amber-500/5 text-xs text-zinc-300" data-composio-note={app.id}>
+    <p>
+      <span className="font-medium text-zinc-100">{app.label}</span> goes through Composio. {app.why} This app doesn’t offer unofficial servers for it.
+    </p>
+    <p className="flex items-start gap-1.5 text-amber-100">
+      <AlertTriangle size={12} className="mt-px shrink-0 text-amber-300" aria-hidden="true" />
+      <span>Composio keeps your {app.label} sign-in on Composio’s servers, not in this app’s vault.</span>
+    </p>
+    <p className="text-zinc-400">
+      Add Composio under Connections, then use “Find an app” there and search for “{app.toolkit}”.
+    </p>
+    <div className="flex flex-wrap gap-2">
+      {onOpenConnections && (
+        <button type="button" onClick={onOpenConnections} className="px-2.5 py-1 rounded-lg bg-sky-500 text-zinc-950 hover:bg-sky-400 text-xs font-medium">
+          Open Connections
+        </button>
+      )}
+      <a href={app.source} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-sky-300 hover:text-sky-200 hover:underline underline-offset-2">
+        {app.label} on Composio
+        <ExternalLink size={10} aria-hidden="true" />
+        <span className="sr-only">(opens in a new tab)</span>
+      </a>
+      <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-200">
+        Close
+      </button>
+    </div>
+  </div>
+);
+
+export const PresetCatalog: React.FC<{
   query: string;
   onQuery: (q: string) => void;
   onPick: (preset: McpPreset) => void;
   onCustom: () => void;
+  onOpenConnections?: () => void;
   autoFocus?: boolean;
-}> = ({ query, onQuery, onPick, onCustom, autoFocus }) => {
-  const groups = groupPresets(searchPresets(query));
+  /** Tests open a Composio-only note. */
+  initialComposioApp?: string;
+}> = ({ query, onQuery, onPick, onCustom, onOpenConnections, autoFocus, initialComposioApp }) => {
+  const [composioApp, setComposioApp] = useState<string | null>(initialComposioApp ?? null);
+  const groups = groupPresets(searchPresets(query), searchComposioOnly(query));
+  const total = MCP_PRESETS.length + COMPOSIO_ONLY_APPS.length;
   return (
     <div className="space-y-4 text-left">
       <div className="relative">
@@ -230,7 +272,7 @@ const PresetCatalog: React.FC<{
           value={query}
           autoFocus={autoFocus}
           onChange={(e) => onQuery(e.target.value)}
-          placeholder={`Search ${MCP_PRESETS.length} servers, like notion or database`}
+          placeholder={`Search ${total} apps and servers, like gmail or database`}
           className={`${inputCls} pl-8`}
         />
       </div>
@@ -276,6 +318,28 @@ const PresetCatalog: React.FC<{
                 </button>
               </li>
             ))}
+            {g.composio.map((a) => (
+              <li key={a.id} className={composioApp === a.id ? 'sm:col-span-2 space-y-2' : undefined}>
+                <button
+                  type="button"
+                  onClick={() => setComposioApp(composioApp === a.id ? null : a.id)}
+                  aria-expanded={composioApp === a.id}
+                  className="group w-full h-full p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 hover:bg-sky-500/5 focus-visible:border-sky-500/60 focus-visible:outline-none text-left transition-all"
+                >
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-200 group-hover:text-sky-200">
+                    <span className="text-sky-400" aria-hidden="true">
+                      <Plug size={13} />
+                    </span>
+                    {a.label}
+                  </span>
+                  <span className="mt-1 block text-[11px] text-zinc-500 leading-snug">{a.blurb}</span>
+                  <span className="mt-2 flex flex-wrap gap-1">
+                    <span className="px-1.5 py-px rounded border text-[10px] border-amber-500/25 text-amber-300/90">via Composio</span>
+                  </span>
+                </button>
+                {composioApp === a.id && <ComposioOnlyNote app={a} onOpenConnections={onOpenConnections} onClose={() => setComposioApp(null)} />}
+              </li>
+            ))}
           </ul>
         </section>
       ))}
@@ -294,7 +358,7 @@ const PresetCatalog: React.FC<{
   );
 };
 
-export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClose, kwants = [] }) => {
+export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClose, kwants = [], onOpenConnections }) => {
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, StoredStatus>>({});
@@ -591,7 +655,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   const preset = editing === 'new' && presetId ? MCP_PRESETS.find((p) => p.id === presetId) : undefined;
 
   const renderPicker = () => (
-    <PresetCatalog query={query} onQuery={setQuery} onPick={(p) => openForm('new', p)} onCustom={() => openForm('new')} autoFocus />
+    <PresetCatalog query={query} onQuery={setQuery} onPick={(p) => openForm('new', p)} onCustom={() => openForm('new')} onOpenConnections={onOpenConnections} autoFocus />
   );
 
   const renderEmpty = () => (
@@ -607,7 +671,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
           Pick a popular one below and just add your key or sign in.
         </p>
       </div>
-      <PresetCatalog query={query} onQuery={setQuery} onPick={(p) => openForm('new', p)} onCustom={() => openForm('new')} />
+      <PresetCatalog query={query} onQuery={setQuery} onPick={(p) => openForm('new', p)} onCustom={() => openForm('new')} onOpenConnections={onOpenConnections} />
     </div>
   );
 
