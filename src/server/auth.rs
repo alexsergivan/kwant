@@ -299,6 +299,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "parallel", ..] => true,
         // Camera-to-Completed: the person's letters
         ["", "api", "documents", ..] => true,
+        // Setup installs software on this machine and shows what is signed in
+        ["", "api", "setup", ..] => true,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "kwants" | "teams", _] => *method == Method::DELETE,
@@ -618,6 +620,9 @@ mod tests {
         assert!(person_only(&get, "/api/zombie/cases"));
         assert!(person_only(&post, "/api/zombie/sources/s1/test"));
         assert!(person_only(&get, "/api/connections"));
+        assert!(person_only(&get, "/api/setup/status"));
+        assert!(person_only(&post, "/api/setup/install"));
+        assert!(person_only(&get, "/api/setup/jobs/setup-1"));
         assert!(person_only(&post, "/api/connections/composio"));
         assert!(person_only(&get, "/api/parallel/prices"));
         assert!(person_only(&post, "/api/parallel/scenarios"));

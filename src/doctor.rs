@@ -44,8 +44,8 @@ impl Platform {
 /// How to get a Chrome for local mode.
 pub fn chrome_fix(p: Platform) -> &'static str {
     match p {
-        Platform::Mac => "brew install --cask google-chrome   (or set KWNT_CHROME_PATH to a Chrome you have)",
-        Platform::Linux => "sudo apt-get install -y chromium   (Ubuntu: sudo snap install chromium; or set KWNT_CHROME_PATH)",
+        Platform::Mac => "kwnt setup --only browser   (or: brew install --cask google-chrome, or set KWNT_CHROME_PATH to a Chrome you have)",
+        Platform::Linux => "kwnt setup --only browser   (a private Chromium without admin rights, or the sudo command where Linux blocks its sandbox; or: sudo apt-get install -y chromium, Ubuntu: sudo snap install chromium; or set KWNT_CHROME_PATH)",
         Platform::Docker => "Inside Docker, use VM mode with the compose browser service: docker compose up -d browser",
     }
 }
@@ -63,8 +63,7 @@ pub fn vm_fix(p: Platform) -> &'static str {
 pub fn laya_fix(p: Platform, managed: bool) -> &'static str {
     match (p, managed) {
         (Platform::Docker, _) => "Start the Laya service: docker compose up -d laya   (logs: docker compose logs laya; kwnt reads LAYA_URL=http://laya:8000)",
-        (Platform::Mac, true) => "`kwnt serve` installs and starts Laya itself (the first start downloads ~420 MB); it needs Python 3: brew install python   (or uv: brew install uv)",
-        (Platform::Linux, true) => "`kwnt serve` installs and starts Laya itself (the first start downloads ~420 MB); it needs Python 3 with venv: sudo apt-get install -y python3-venv",
+        (Platform::Mac | Platform::Linux, true) => "kwnt setup --only laya   (installs Laya and its model into kwant's data folder, no admin rights; `kwnt serve` also does it on first start)",
         (_, false) => "Let kwnt run Laya: start `kwnt serve` without --no-laya and without KWNT_LAYA_MANAGED=0, or start laya-serve at LAYA_URL yourself",
     }
 }
@@ -73,10 +72,10 @@ pub fn laya_fix(p: Platform, managed: bool) -> &'static str {
 pub fn cli_install_fix(engine: Engine, p: Platform) -> &'static str {
     match (engine, p) {
         (_, Platform::Docker) => "Rebuild the image with the CLIs: KWNT_CLIS=claude,codex,grok docker compose up -d --build",
-        (Engine::Claude, _) => "curl -fsSL https://claude.ai/install.sh | bash",
-        (Engine::Codex, Platform::Mac) => "brew install --cask codex   (or npm install -g @openai/codex)",
-        (Engine::Codex, _) => "npm install -g @openai/codex   (needs Node.js 18+)",
-        (Engine::Grok, _) => "curl -fsSL https://x.ai/cli/install.sh | bash",
+        (Engine::Claude, _) => "kwnt setup --clis claude   (or: curl -fsSL https://claude.ai/install.sh | bash)",
+        (Engine::Codex, Platform::Mac) => "kwnt setup --clis codex   (or: brew install --cask codex, or npm install -g @openai/codex)",
+        (Engine::Codex, _) => "kwnt setup --clis codex   (or: npm install -g @openai/codex; needs Node.js 18+)",
+        (Engine::Grok, _) => "kwnt setup --clis grok   (or: curl -fsSL https://x.ai/cli/install.sh | bash)",
         (Engine::Custom, _) => "Add a Custom API account in the app: Space settings → Accounts",
     }
 }
@@ -124,11 +123,19 @@ pub struct Check {
     pub status: Status,
     pub detail: String,
     pub fix: Option<String>,
+    /// Not needed here (another part covers it, or it's an extra like VM mode): shown, but not
+    /// counted as missing.
+    pub optional: bool,
 }
 
 impl Check {
     fn new(name: &str, status: Status, detail: impl Into<String>, fix: Option<String>) -> Self {
-        Self { name: name.into(), status, detail: detail.into(), fix }
+        Self { name: name.into(), status, detail: detail.into(), fix, optional: false }
+    }
+
+    fn optional_if(mut self, yes: bool) -> Self {
+        self.optional = yes && self.status != Status::Ok;
+        self
     }
 }
 
@@ -140,6 +147,8 @@ pub struct Facts {
     pub laya_url: String,
     pub laya_managed: bool,
     pub laya_up: bool,
+    /// `kwnt serve` runs Laya here and it is installed in the data folder.
+    pub laya_installed: bool,
     pub cdp_url: Option<String>,
     pub cdp_up: bool,
     pub docker: bool,
@@ -169,6 +178,8 @@ pub fn checks(f: &Facts, p: Platform) -> Vec<Check> {
 
     out.push(if f.laya_up {
         Check::new("Laya router", Status::Ok, format!("answers at {}", f.laya_url), None)
+    } else if f.laya_installed && p != Platform::Docker {
+        Check::new("Laya router", Status::Ok, "installed; `kwnt serve` starts it", None)
     } else {
         Check::new(
             "Laya router",
@@ -193,14 +204,21 @@ pub fn checks(f: &Facts, p: Platform) -> Vec<Check> {
     let any_browser = vm.0 == Status::Ok || local.0 == Status::Ok;
     let soften = |s: Status| if s == Status::Fail && any_browser { Status::Warn } else { s };
     let vm_status = soften(vm.0);
-    out.push(Check::new("Browser (VM)", vm_status, vm.1, (vm_status != Status::Ok).then(|| vm_fix(p).into())));
+    let local_ok = local.0 == Status::Ok;
+    out.push(
+        Check::new("Browser (VM)", vm_status, vm.1, (vm_status != Status::Ok).then(|| vm_fix(p).into()))
+            .optional_if(local_ok),
+    );
     let local_status = soften(local.0);
-    out.push(Check::new(
-        "Browser (local)",
-        local_status,
-        local.1,
-        matches!(local_status, Status::Warn | Status::Fail).then(|| chrome_fix(p).into()),
-    ));
+    out.push(
+        Check::new(
+            "Browser (local)",
+            local_status,
+            local.1,
+            matches!(local_status, Status::Warn | Status::Fail).then(|| chrome_fix(p).into()),
+        )
+        .optional_if(vm.0 == Status::Ok),
+    );
 
     out.push(match p {
         Platform::Docker => Check::new(
@@ -215,10 +233,12 @@ pub fn checks(f: &Facts, p: Platform) -> Vec<Check> {
             Status::Warn,
             "no Docker: kwant's execute_shell is off in VM mode (the CLIs' own shell tools still work)",
             Some(vm_fix(p).into()),
-        ),
+        )
+        .optional_if(true),
     });
 
     let mut ready = 0;
+    let any_installed = f.clis.iter().any(|(_, bin, _, key)| bin.is_some() || *key);
     for (engine, bin, signed_in, via_key) in &f.clis {
         let name = engine.as_str();
         let check = match (bin, signed_in, via_key) {
@@ -226,7 +246,8 @@ pub fn checks(f: &Facts, p: Platform) -> Vec<Check> {
                 ready += 1;
                 Check::new(name, Status::Ok, "API key set in the environment", None)
             }
-            (None, _, _) => Check::new(name, Status::Warn, "not installed", Some(cli_install_fix(*engine, p).into())),
+            (None, _, _) => Check::new(name, Status::Warn, "not installed", Some(cli_install_fix(*engine, p).into()))
+                .optional_if(any_installed),
             (Some(path), Some(true), _) => {
                 ready += 1;
                 Check::new(name, Status::Ok, format!("{path}, signed in"), None)
@@ -309,6 +330,10 @@ pub async fn gather(config: &Config) -> Facts {
         clis.push((engine, bin, signed_in, via_key));
     }
 
+    let laya_installed = config.laya_managed
+        && crate::router::sidecar::local_port(&laya_url).is_some()
+        && (crate::setup::laya_serve_bin(&config.data_dir).is_file()
+            || std::env::var("KWNT_LAYA_SERVE_BIN").is_ok_and(|b| !b.is_empty()));
     let https_origin = std::env::var("KWNT_ALLOWED_ORIGINS")
         .ok()
         .and_then(|v| v.split(',').map(str::trim).find(|o| o.starts_with("https://")).map(String::from));
@@ -318,6 +343,7 @@ pub async fn gather(config: &Config) -> Facts {
         laya_url,
         laya_managed: config.laya_managed,
         laya_up,
+        laya_installed,
         cdp_url,
         cdp_up,
         docker,
@@ -342,14 +368,19 @@ fn writable(dir: &Path) -> Result<(), String> {
 pub fn render(checks: &[Check], p: Platform) -> String {
     let mut s = format!("kwant doctor · {}\n\n", p.label());
     for c in checks {
-        s.push_str(&format!("  {}  {:<16} {}\n", c.status.mark(), c.name, c.detail));
+        let mark = if c.optional { "opt " } else { c.status.mark() };
+        s.push_str(&format!("  {}  {:<16} {}\n", mark, c.name, c.detail));
         if let Some(fix) = &c.fix {
             s.push_str(&format!("        fix: {fix}\n"));
         }
     }
     let fails = checks.iter().filter(|c| c.status == Status::Fail).count();
-    let warns = checks.iter().filter(|c| c.status == Status::Warn).count();
+    let warns = checks.iter().filter(|c| c.status == Status::Warn && !c.optional).count();
     s.push('\n');
+    let installable = checks.iter().any(|c| c.fix.as_deref().is_some_and(|f| f.starts_with("kwnt setup")) && !c.optional);
+    if installable {
+        s.push_str("Install the missing parts in one go (asks before each step): kwnt setup\n");
+    }
     s.push_str(&match (fails, warns) {
         (0, 0) => "Everything kwant needs is here.\n".to_string(),
         (0, w) => format!("kwant can run. {w} optional part(s) missing or not set up; see the fixes above.\n"),
@@ -369,6 +400,7 @@ mod tests {
             laya_url: "http://laya:8000".into(),
             laya_managed: false,
             laya_up: true,
+            laya_installed: false,
             cdp_url: Some("http://browser:9222".into()),
             cdp_up: true,
             docker: false,
@@ -452,8 +484,11 @@ mod tests {
         assert_eq!(by_name(&cs, "Data folder").status, Status::Fail);
         assert!(by_name(&cs, "Data folder").fix.as_deref().unwrap().contains("chown -R 10001:10001 /data"));
         f.laya_managed = true;
-        assert!(laya_fix(Platform::Linux, true).contains("python3-venv"));
-        assert!(laya_fix(Platform::Mac, true).contains("brew install python"));
+        assert!(laya_fix(Platform::Linux, true).starts_with("kwnt setup --only laya"));
+        assert!(laya_fix(Platform::Mac, true).starts_with("kwnt setup --only laya"));
+        // installed by kwnt setup, not running because kwnt serve isn't: fine locally
+        f.laya_installed = true;
+        assert_eq!(by_name(&checks(&f, Platform::Linux), "Laya router").status, Status::Ok);
     }
 
     #[test]
@@ -482,5 +517,53 @@ mod tests {
         let out = render(&checks(&healthy(), Platform::Docker), Platform::Docker);
         assert!(out.starts_with("kwant doctor · Docker container"));
         assert!(out.contains("kwant can run."));
+    }
+
+    #[test]
+    fn local_machine_after_kwnt_setup_has_only_sign_in_warnings() {
+        // kwnt setup --yes on a Linux desktop: Laya installed, a Chromium, Claude Code; no Docker
+        let f = Facts {
+            data_dir: "/home/u/.kwnt".into(),
+            data_dir_writable: Ok(()),
+            laya_url: "http://127.0.0.1:8000".into(),
+            laya_managed: true,
+            laya_up: false,
+            laya_installed: true,
+            cdp_url: None,
+            cdp_up: false,
+            docker: false,
+            chrome: Some("/home/u/.cache/ms-playwright/chromium-1200/chrome-linux-arm64/chrome".into()),
+            clis: vec![
+                (Engine::Claude, Some("/home/u/.local/bin/claude".into()), Some(false), false),
+                (Engine::Codex, None, None, false),
+                (Engine::Grok, None, None, false),
+            ],
+            loopback_bind: true,
+            token: false,
+            https_origin: None,
+        };
+        for p in [Platform::Linux, Platform::Mac] {
+            let cs = checks(&f, p);
+            assert!(cs.iter().all(|c| c.status != Status::Fail));
+            let counted: Vec<&str> =
+                cs.iter().filter(|c| c.status == Status::Warn && !c.optional).map(|c| c.name.as_str()).collect();
+            assert_eq!(counted, vec!["claude", "AI account"], "{p:?}");
+            for name in ["Browser (VM)", "kwant shell", "codex", "grok"] {
+                assert!(by_name(&cs, name).optional, "{name}");
+            }
+            let out = render(&cs, p);
+            assert!(out.contains("opt   Browser (VM)"));
+            assert!(!out.contains("Install the missing parts"), "{out}");
+        }
+
+        // a bare machine is pointed at kwnt setup
+        let mut bare = f.clone();
+        bare.laya_installed = false;
+        bare.chrome = None;
+        bare.clis = vec![(Engine::Claude, None, None, false), (Engine::Codex, None, None, false), (Engine::Grok, None, None, false)];
+        let cs = checks(&bare, Platform::Linux);
+        assert_eq!(by_name(&cs, "Browser (local)").status, Status::Fail);
+        assert!(!by_name(&cs, "claude").optional);
+        assert!(render(&cs, Platform::Linux).contains("Install the missing parts in one go (asks before each step): kwnt setup"));
     }
 }

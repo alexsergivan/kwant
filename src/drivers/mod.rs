@@ -8,7 +8,7 @@ pub mod events;
 pub mod grok;
 
 pub use api::ApiDriver;
-pub use cli::{find_cli_binary, CliDriver};
+pub use cli::{find_cli_binary, forget_cli_binaries, CliDriver};
 pub use events::{RoutingCandidate, RuntimeEvent};
 
 use crate::db::models::{Kwant, Message};

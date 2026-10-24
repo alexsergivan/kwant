@@ -118,8 +118,17 @@ docker compose exec kwnt kwnt token --raw             <span class="c"># the toke
 <p>Instead of CLIs you can add an API key in the app under <strong>Space settings → Accounts</strong>. CLI sign-ins persist in the <code>kwnt-home</code> volume and data in <code>kwnt-data</code>. The UI is published on <code>127.0.0.1:8799</code> only: put HTTPS in front (below) and set <code>KWNT_ALLOWED_ORIGINS=https://your.domain</code> in <code>.env</code>. With Caddy that's a two-line <code>Caddyfile</code>: <code>your.domain { reverse_proxy 127.0.0.1:8799 }</code>.</p>
 <p>Requests through Docker's published port count as remote, so sign in with the token (<code>docker compose logs kwnt | grep kwnt_token</code> shows the link). kwant's own <code>execute_shell</code> tool isn't available in this stack, because it would need the host's Docker socket; the CLIs' shell tools work. Upgrading from an older image, where kwnt ran as root? If it says <code>/data isn't writable</code>, run once: <code>docker compose run --rm -u root kwnt chown -R 10001:10001 /data</code>.</p>
 
-<h2 id="deps">Without Docker: one script, then <code>kwnt doctor</code></h2>
-<p>On Debian or Ubuntu, <code>sh scripts/install-linux-deps.sh --clis claude,codex</code> installs Chromium, Python 3 for Laya and the CLIs you name; it prints each command and is safe to run again. On a Mac: <code>brew install --cask google-chrome</code> and <code>brew install python</code>. Then <code>kwnt doctor</code> lists anything still missing, with the exact fix for your machine.</p>
+<h2 id="deps">Without Docker: <code>kwnt setup</code>, then <code>kwnt doctor</code></h2>
+<p><code>kwnt setup</code> installs what kwant needs on this machine: Chromium or Chrome for the bots' browser, Laya (in kwant's data folder, with its own <code>uv</code> if there's no Python) and a CLI (<code>claude</code> unless you name others with <code>--clis</code>). It asks before each step (<code>--yes</code> skips the questions), never runs <code>sudo</code> itself (it prints the command for you), installs into your home folder where it can, skips Docker unless you pass <code>--docker</code>, and is safe to run again. The app has the same checklist under <strong>Setup</strong>.</p>
+<pre><code><span class="c"># Mac app: download the .dmg from GitHub Releases (test builds for now), open it, then</span>
+kwnt doctor
+<span class="c"># Mac or Linux, command line (no prebuilt binary yet: needs Rust and Node)</span>
+git clone https://github.com/alexsergivan/kwant.git &amp;&amp; cd kwant &amp;&amp; make build
+./target/release/kwnt setup &amp;&amp; ./target/release/kwnt doctor
+<span class="c"># Debian or Ubuntu, system packages only</span>
+sh scripts/install-linux-deps.sh --clis claude &amp;&amp; kwnt doctor
+<span class="c"># VPS with Docker: see above, then</span>
+docker compose exec kwnt kwnt doctor</code></pre>
 
 <h2 id="proxy">Behind an HTTPS reverse proxy</h2>
 <p>Only the HTTPS port needs to be reachable from outside. Forward the original <code>Host</code> header, because the live browser stream checks <code>Origin</code> against it, and allow WebSocket upgrades:</p>

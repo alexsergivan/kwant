@@ -60,7 +60,7 @@ Screenshots come from a demo space with sample data.
   - an Anthropic, OpenAI or xAI API key, which you add in the app under **Space settings → Accounts**.
 - Optional: **Docker** for VM mode and the bots' shared browser, and [`uv`](https://docs.astral.sh/uv/) or `python3` for the Laya router.
 
-`kwnt doctor` (`cargo run -- doctor` from a clone) checks all of these and prints the install command for whatever is missing on your machine.
+`kwnt doctor` (`cargo run -- doctor` from a clone) checks all of these and prints the install command for whatever is missing on your machine; `kwnt setup` installs it (see [Without Docker](#without-docker-kwnt-setup)).
 
 ### Run from a fresh clone
 
@@ -161,15 +161,20 @@ echo KWNT_ALLOWED_ORIGINS=https://kwant.example.com >> .env && docker compose up
 - **kwant's own `execute_shell` tool** runs in per-team Docker containers, so it isn't available inside this stack: that would need the host's Docker socket, which is root on the host. The CLIs' own shell tools work inside the kwnt container.
 - **Upgrading from an older image:** kwnt now runs as uid 10001, not root. If it says `/data isn't writable`, run once: `docker compose run --rm -u root kwnt chown -R 10001:10001 /data`.
 
-### Without Docker
+### Without Docker: `kwnt setup`
 
-On Debian or Ubuntu, one script installs Chromium and Python 3 (for Laya), and optionally the CLIs for your user; it prints each command, and running it again changes nothing:
+`kwnt setup` installs what kwant needs on this machine: Chromium or Chrome for the bots' browser, Laya (in kwant's data folder, with its own `uv` if you have no Python), and a CLI (`claude` unless you name others with `--clis`). It asks before each step (`--yes` skips the questions), never runs `sudo` itself (it prints the command for you instead), installs into your home folder where it can, skips Docker unless you pass `--docker`, and running it again changes nothing. `--dry-run` shows the plan. The app has the same checklist under **Setup**.
 
-```bash
-sh scripts/install-linux-deps.sh --clis claude,codex   # then: kwnt serve, and kwnt doctor
-```
+One line per platform, each followed by `kwnt doctor`:
 
-On a Mac: `brew install --cask google-chrome` and `brew install python`; Docker Desktop is only needed for VM mode. `kwnt doctor` lists anything still missing, with the fix for your machine.
+| Platform | Install | Then |
+|---|---|---|
+| Mac app | Download the `.dmg` from [Releases](https://github.com/alexsergivan/kwant/releases) (test builds for now) and open it | Run `kwnt doctor` |
+| Mac, command line | `git clone https://github.com/alexsergivan/kwant.git && cd kwant && make build && ./target/release/kwnt setup` (uses Homebrew when you have it) | Run `kwnt doctor` |
+| Linux desktop or server | The same clone and `make build`, then `kwnt setup`, or `sh scripts/install-linux-deps.sh --clis claude` on Debian/Ubuntu | Run `kwnt doctor` |
+| VPS with Docker | [Docker Compose](#vps-in-5-minutes-docker-compose) | Run `docker compose exec kwnt kwnt doctor` |
+
+There's no prebuilt `kwnt` binary or Homebrew formula yet, so the command line needs a clone and a build (Rust and Node).
 
 ---
 

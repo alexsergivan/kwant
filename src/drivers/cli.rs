@@ -62,6 +62,13 @@ pub fn find_cli_binary(name: &str) -> Option<String> {
     found
 }
 
+/// Drops the cached lookups, so a CLI installed since (e.g. by `kwnt setup`) is found.
+pub fn forget_cli_binaries() {
+    if let Some(Ok(mut c)) = CLI_BINARY_CACHE.get().map(|c| c.lock()) {
+        c.clear();
+    }
+}
+
 fn find_cli_binary_uncached(name: &str) -> Option<String> {
     // 1. Try standard which command
     if let Ok(output) = std::process::Command::new("which").arg(name).output() {
@@ -78,6 +85,14 @@ fn find_cli_binary_uncached(name: &str) -> Option<String> {
         let local_path = format!("{}/.local/bin/{}", home, name);
         if Path::new(&local_path).exists() {
             return Some(local_path);
+        }
+
+        // grok's installer puts it in ~/.grok/bin
+        if name == "grok" {
+            let grok_home = format!("{}/.grok/bin/grok", home);
+            if Path::new(&grok_home).exists() {
+                return Some(grok_home);
+            }
         }
 
         // For grok / nvm node binaries
