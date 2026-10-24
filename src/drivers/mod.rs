@@ -385,7 +385,9 @@ impl TurnInput {
                 and they answer here in the same chat. Only use @ when you actually want that teammate to reply now; \
                 to merely refer to a teammate, write their name without the @. \
                 Never contact anyone else: no other agents, sessions, chats or people through tools, CLIs or APIs. \
-                Never claim you asked or will relay something from a teammate unless you @mentioned them in this reply.",
+                Never claim you asked, handed off to or will relay something from a teammate unless you @mentioned them in this reply, \
+                and give a teammate you hand work to the concrete task in the same sentence. kwnt limits how often one message may hand \
+                work on; a mention past a limit isn't sent and a \"Not sent to …\" notice in the chat says so: then don't say it was.",
                 list = list,
                 first = self.teammates[0].name,
             )

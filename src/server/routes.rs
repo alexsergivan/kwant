@@ -993,11 +993,18 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
 }
 
 const IN_CODE_BLOCK: &str = "the mention was inside code. Write the name as plain text to ask them";
+/// A follow-up that only credited a teammate who just reported ("As @SEO found, …").
+const CREDIT_ONLY: &str = "the mention only credited their result. To hand them more work, @mention them with the task";
 
-/// Says in the chat, and logs, each @mention that handed nothing on: "Growth wasn't asked: <why>".
-/// An empty reason means no teammate has that name; it's worked out here.
+/// Says in the chat, and logs, the @mentions of one reply that handed nothing on, as ONE line
+/// under it: "Not sent to Social, Writer: <why>", or "Not sent to Social: <why>; Writer: <why>"
+/// when the reasons differ. The note is in the chat's history, so the speaker reads it on its next
+/// turn. Reasons don't repeat the name. An empty reason means no teammate has that name; it's
+/// worked out here.
 async fn report_skipped(scope: &TurnScope, skipped: Vec<(String, String)>) {
     let mut said: Vec<String> = Vec::new();
+    // (reason, names), in order of first mention
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for (name, why) in skipped {
         if said.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
             continue;
@@ -1005,14 +1012,25 @@ async fn report_skipped(scope: &TurnScope, skipped: Vec<(String, String)>) {
         said.push(name.clone());
         let why = if why.is_empty() { unknown_mention(scope, &name).await } else { why };
         tracing::info!(context = ?scope.channel_id.as_ref().or(scope.thread_id.as_ref()), mention = %name, "mention handed nothing on: {why}");
-        let note = scope.message("system", "kwnt", format!("{name} wasn't asked: {why}"));
-        if let Some(saved) = scope.save(&note, Some(serde_json::json!({"kind": "handoff_refused", "mention": name}))).await {
-            let _ = scope
-                .state
-                .event_sender
-                .send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or_default() });
+        match groups.iter_mut().find(|(w, _)| *w == why) {
+            Some((_, names)) => names.push(name),
+            None => groups.push((why, vec![name])),
         }
     }
+    let Some(text) = refusal_line(&groups) else { return };
+    let meta = serde_json::json!({"kind": "handoff_refused", "mention": said[0], "mentions": said});
+    if let Some(saved) = scope.save(&scope.message("system", "kwnt", text), Some(meta)).await {
+        let _ = scope
+            .state
+            .event_sender
+            .send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or_default() });
+    }
+}
+
+/// "Not sent to A, B: why" for refused mentions grouped by reason; `None` when there are none.
+pub fn refusal_line(groups: &[(String, Vec<String>)]) -> Option<String> {
+    let parts: Vec<String> = groups.iter().map(|(why, names)| format!("{}: {why}", names.join(", "))).collect();
+    (!parts.is_empty()).then(|| format!("Not sent to {}", parts.join("; ")))
 }
 
 /// Why `@name` matched no one in this chat.
@@ -1023,9 +1041,9 @@ async fn unknown_mention(scope: &TurnScope, name: &str) -> String {
         None => false,
     };
     if in_space {
-        format!("{name} isn't in this chat")
+        "not in this chat".to_string()
     } else {
-        format!("there's no teammate called {name} here")
+        "no teammate has that name here".to_string()
     }
 }
 
@@ -1043,10 +1061,11 @@ async fn is_team_channel_lead(scope: &TurnScope, kwant: &Kwant) -> bool {
 /// A team lead's @mentions in its team channel hand work on as delegations, not handoff turns:
 /// each teammate gets the task in its own thread (Sent-to chip, queue, the same guards as the
 /// delegate tool), and when the last one ends the lead is resumed once with every result to give
-/// the user one answer; that follow-up may hand on again. `just_reported` teammates (whose results
-/// the follow-up is about) aren't sent it again by a mention, and one user message starts at most
+/// the user one answer; that follow-up may hand on again, also to `just_reported` teammates (whose
+/// results it is about): a mention there is a correction or the next step, unless it only credits
+/// them ([`crate::router::only_credited`]). One user message starts at most
 /// [`MAX_DELEGATIONS_PER_REQUEST`], at most [`MAX_MENTION_DELEGATIONS_PER_BOT`] to any one
-/// teammate. Every mention that hands nothing on is said in the channel.
+/// teammate, which is what ends a loop. Every mention that hands nothing on is said in the channel.
 /// Teammates the lead already delegated to from this channel (with the tool) aren't sent it twice.
 async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_prompt: &str, just_reported: &[String]) {
     let Some(cid) = scope.channel_id.clone() else { return };
@@ -1080,14 +1099,14 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
         if k.id == lead.id || targets.iter().any(|t| t.id == k.id) {
             continue;
         }
-        if just_reported.contains(&k.id) {
-            skipped.push((k.name.clone(), format!("{} just reported back on this. For a correction, delegate a concrete task", k.name)));
+        if just_reported.contains(&k.id) && crate::router::only_credited(text, &k.name) {
+            skipped.push((k.name.clone(), CREDIT_ONLY.to_string()));
         } else if open.contains(&k.id.as_str()) {
-            skipped.push((k.name.clone(), format!("{} is still working on an earlier task from this chat", k.name)));
+            skipped.push((k.name.clone(), "still working on an earlier task from this chat".to_string()));
         } else if asked(&k.id) >= MAX_MENTION_DELEGATIONS_PER_BOT {
             skipped.push((
                 k.name.clone(),
-                format!("{} was already asked {MAX_MENTION_DELEGATIONS_PER_BOT} times for this request. Send a new message to go on", k.name),
+                format!("already asked {MAX_MENTION_DELEGATIONS_PER_BOT} times for this request. Send a new message to go on"),
             ));
         } else {
             targets.push(k);
