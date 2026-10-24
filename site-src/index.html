@@ -1,8 +1,8 @@
 title: Self-hosted AI agent team in one binary
-description: Open-source, self-hosted AI agents that share chats, hand off work, run on schedules and wait for your OK. One Rust binary for your laptop or a VPS.
+description: Open-source, self-hosted AI agents that share chats, hand off work and get it done on their own, on a schedule or while you're away. One Rust binary for your laptop or a VPS.
 card_title: Your own team of AI bots
 path: index.html
-card: They share chats, hand work to each other and wait for your OK before anything risky.
+card: They share chats, hand work to each other and get it done on their own.
 card_art: scene
 ---
 <section class="hero" aria-labelledby="hero-title">
@@ -10,7 +10,7 @@ card_art: scene
     <div class="hero-copy">
       <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Open-source, self-hosted AI agents in one binary</p>
       <h1 id="hero-title">Your own team of AI bots</h1>
-      <p class="lede">They share chats, pass work to each other and keep going on a schedule. Anything risky waits for your OK. It runs on your laptop or a VPS.</p>
+      <p class="lede">They share chats, pass work to each other and get it done on their own, on a schedule or while you're away. It runs on your laptop or a VPS.</p>
       <div class="cta">
         <a class="btn btn-violet" href="docs/quickstart.html">Get started <span aria-hidden="true">→</span></a>
         <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">View on GitHub</a>
@@ -26,7 +26,7 @@ card_art: scene
       <figcaption class="crt-bezel">
         <span class="led" aria-hidden="true"></span>
         <span class="bezel-status" data-scene-status><b>5</b><span> bots working</span></span>
-        <button type="button" class="bezel-ok" data-scene-approve hidden>1 needs your OK · approve</button>
+        <button type="button" class="bezel-ok" data-scene-approve hidden>1 risky step · approve</button>
         <span class="bezel-hint">Click the town to hand out a task</span>
       </figcaption>
     </figure>
@@ -52,15 +52,6 @@ card_art: scene
         <p>Bots share chats and hand work to each other with an @mention. You get one answer back.</p>
       </article>
       <article class="moment">
-        <div class="mock mock-approve" aria-hidden="true">
-          <div class="msg">{{avatar:qa}}<div><p class="who">QA <span class="tag tag-wait">needs your OK</span></p><p>I'd like to run this command:</p></div></div>
-          <pre class="mock-cmd">gh pr create --title "Pricing page" --base main</pre>
-          <p class="mock-actions"><span class="mbtn mbtn-main">Allow once</span><span class="mbtn">Always allow</span><span class="mbtn">Deny</span></p>
-        </div>
-        <h3>Nothing risky runs without you</h3>
-        <p>Commands, edits outside a bot's folder and tool calls show you exactly what will happen first.</p>
-      </article>
-      <article class="moment">
         <div class="mock mock-routine" aria-hidden="true">
           <div class="msg">{{avatar:research}}<div><p class="who">Research <span class="tag tag-done">ran 07:00</span></p><p>Every weekday at 07:00</p></div></div>
           <ul class="mock-list">
@@ -72,6 +63,15 @@ card_art: scene
         </div>
         <h3>Keeps going while you sleep</h3>
         <p>Say "every morning" and the bot sets up the routine. You come back to what changed.</p>
+      </article>
+      <article class="moment">
+        <div class="mock mock-approve" aria-hidden="true">
+          <div class="msg">{{avatar:qa}}<div><p class="who">QA <span class="tag tag-wait">asks first</span></p><p>I'd like to run this command:</p></div></div>
+          <pre class="mock-cmd">gh pr create --title "Pricing page" --base main</pre>
+          <p class="mock-actions"><span class="mbtn mbtn-main">Allow once</span><span class="mbtn">Always allow</span><span class="mbtn">Deny</span></p>
+        </div>
+        <h3>Only risky steps ask first</h3>
+        <p>Ordinary work just runs. Something risky, like a push, a network call or a change outside the bot's folder, shows you exactly what will happen first. You can switch that off too.</p>
       </article>
     </div>
   </div>
