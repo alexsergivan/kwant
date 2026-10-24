@@ -742,8 +742,12 @@ fn settles_without_discussion(prompt: &str, pick: &Option<Pick<'_>>, members: &[
 fn is_lookup_nudge(prompt: &str) -> bool {
     const LOOKUP: &[&str] = &["check", "checking", "look", "lookup", "research", "search", "google", "find", "read", "visit"];
     const BACK: &[&str] = &["question", "questions", "yourself", "yourselves", "site", "website", "page", "docs"];
+    // Other asks in the same message ("design it, write the copy, and check the docs", "…and discuss") are real work
+    const WORK: &[&str] = &["discuss", "propose", "design", "write", "create", "build", "draft", "launch", "decide", "summarize"];
     let words = tokens(prompt);
     !is_complex_query(prompt)
+        && words.len() <= 12
+        && !words.iter().any(|w| WORK.contains(&w.as_str()))
         && words.iter().any(|w| LOOKUP.contains(&w.as_str()))
         && words.iter().any(|w| BACK.contains(&w.as_str()))
 }
@@ -1094,6 +1098,20 @@ mod tests {
         // A real planning request still starts a discussion
         let plan = parse_laya_team_answers("Plan the site migration and check the docs", &sure, &team, &members).unwrap();
         assert!(matches!(plan, TeamDecision::Discuss { .. }));
+    }
+
+    #[test]
+    fn a_lookup_word_inside_real_multi_part_work_still_discusses() {
+        let (team, members) = make_test_fixture();
+        let sure = json!({"answers": {"team_decision": {"choice": "discuss", "probabilities": {"discuss": 0.9}}, "lead_kwant": {"choice": "kwant-1"}}});
+        for p in [
+            "Should we use Postgres or SQLite? Check the docs and discuss",
+            "Look at our site and propose a new onboarding flow",
+            "Launch the new pricing page: design it, write the copy, and check the docs",
+        ] {
+            let d = parse_laya_team_answers(p, &sure, &team, &members).unwrap();
+            assert!(matches!(d, TeamDecision::Discuss { .. }), "{p}");
+        }
     }
 
     #[test]
