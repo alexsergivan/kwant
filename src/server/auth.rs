@@ -17,7 +17,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const COOKIE: &str = "kwnt_token";
 const TOKEN_FILE: &str = "api-token";
@@ -66,11 +66,7 @@ impl ApiToken {
             .map(|o| o.trim().trim_end_matches('/').to_string())
             .filter(|o| !o.is_empty())
             .collect();
-        let token = std::env::var("KWNT_API_TOKEN")
-            .ok()
-            .map(|t| t.trim().to_string())
-            .filter(|t| t.len() >= 16)
-            .unwrap_or_else(|| load_or_create(&config.data_dir));
+        let token = env_token().unwrap_or_else(|| load_or_create(&config.data_dir));
         Self {
             token,
             require,
@@ -115,15 +111,53 @@ impl ApiToken {
     }
 }
 
-/// Reads the token file, or writes a new random one. Falls back to an in-memory token.
-pub fn load_or_create(data_dir: &Path) -> String {
-    let path = data_dir.join(TOKEN_FILE);
-    if let Ok(t) = std::fs::read_to_string(&path) {
-        let t = t.trim().to_string();
-        if t.len() >= 16 {
-            return t;
+/// `KWNT_API_TOKEN` when it is set to a usable token (16+ characters).
+pub fn env_token() -> Option<String> {
+    std::env::var("KWNT_API_TOKEN")
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| t.len() >= 16)
+}
+
+/// Why the token file could not be read. `kwnt token` reports these instead of writing a new
+/// token: one made by another user or for another data dir is a token the server rejects.
+#[derive(Debug)]
+pub enum ReadTokenError {
+    Missing(PathBuf),
+    Unreadable(PathBuf, std::io::Error),
+    Invalid(PathBuf),
+}
+
+impl std::fmt::Display for ReadTokenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing(p) => write!(f, "no token file at {}", p.display()),
+            Self::Unreadable(p, e) => write!(f, "can't read {}: {e}", p.display()),
+            Self::Invalid(p) => write!(f, "{} doesn't hold a valid token", p.display()),
         }
     }
+}
+
+impl std::error::Error for ReadTokenError {}
+
+/// Reads `<data_dir>/api-token` without ever creating or changing it.
+pub fn read_existing(data_dir: &Path) -> Result<String, ReadTokenError> {
+    let path = data_dir.join(TOKEN_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(t) if t.trim().len() >= 16 => Ok(t.trim().to_string()),
+        Ok(_) => Err(ReadTokenError::Invalid(path)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(ReadTokenError::Missing(path)),
+        Err(e) => Err(ReadTokenError::Unreadable(path, e)),
+    }
+}
+
+/// Reads the token file, or writes a new random one. Falls back to an in-memory token.
+/// Only the server calls this; `kwnt token` uses [`read_existing`].
+pub fn load_or_create(data_dir: &Path) -> String {
+    if let Ok(t) = read_existing(data_dir) {
+        return t;
+    }
+    let path = data_dir.join(TOKEN_FILE);
     let token = format!(
         "{}{}",
         uuid::Uuid::new_v4().simple(),
@@ -648,6 +682,20 @@ mod tests {
             .flat_map(|h| [Require::Auto, Require::Always].map(|r| startup_notice(h, 8799, r, tok)))
             .flatten()
             .collect()
+    }
+
+    #[test]
+    fn read_existing_never_creates_a_token() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(read_existing(dir.path()), Err(ReadTokenError::Missing(_))));
+        assert!(!dir.path().join(TOKEN_FILE).exists());
+
+        std::fs::write(dir.path().join(TOKEN_FILE), "short\n").unwrap();
+        assert!(matches!(read_existing(dir.path()), Err(ReadTokenError::Invalid(_))));
+        assert_eq!(std::fs::read_to_string(dir.path().join(TOKEN_FILE)).unwrap(), "short\n");
+
+        let made = load_or_create(dir.path());
+        assert_eq!(read_existing(dir.path()).unwrap(), made);
     }
 
     #[test]

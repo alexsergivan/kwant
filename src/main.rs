@@ -45,7 +45,8 @@ pub enum Commands {
     /// List channels stored in the local database
     Channels,
 
-    /// Print the link that signs a browser on another machine in (`--raw`: just the token, for scripts)
+    /// Print the link that signs a browser on another machine in (`--raw`: just the token, for scripts).
+    /// Only reads the existing token; never creates one
     Token {
         /// Print only the token, for `Authorization: Bearer` in scripts
         #[arg(long)]
@@ -125,11 +126,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Teams) => print_teams(&config).await?,
         Some(Commands::Channels) => print_channels(&config).await?,
         Some(Commands::Token { raw }) => {
-            let token = std::env::var("KWNT_API_TOKEN")
-                .ok()
-                .map(|t| t.trim().to_string())
-                .filter(|t| t.len() >= 16)
-                .unwrap_or_else(|| kwnt::server::auth::load_or_create(&config.data_dir));
+            // Read only: a token created here (wrong user, wrong data dir) would be rejected.
+            let token = match kwnt::server::auth::env_token()
+                .map(Ok)
+                .unwrap_or_else(|| kwnt::server::auth::read_existing(&config.data_dir))
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("kwnt token: {e}");
+                    eprintln!("kwnt token only reads the token of a kwant install; it never makes one.");
+                    eprintln!("  - Run it as the user that runs `kwnt serve`, with the same KWNT_DATA_DIR");
+                    eprintln!("    (systemd setup from the README: sudo cat /var/lib/kwnt/api-token).");
+                    eprintln!("  - Docker: docker compose exec kwnt kwnt token");
+                    eprintln!("  - If KWNT_API_TOKEN is set for the server, that value is the token.");
+                    eprintln!("  - Never started yet? `kwnt serve` creates the token on first run.");
+                    std::process::exit(1);
+                }
+            };
             if raw {
                 println!("{token}");
             } else {
