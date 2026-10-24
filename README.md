@@ -96,7 +96,7 @@ scp target/release/kwnt user@your-vps:/usr/local/bin/kwnt
 ssh user@your-vps "kwnt serve --host 0.0.0.0 --port 8799"
 ```
 
-On your own computer there is nothing to sign in to. From another machine, open the link `kwnt serve` prints at startup once (`http://<this-host>:8799/#kwnt_token=...`, with `<this-host>` swapped for the server's address); the browser stays signed in for a year. Lost it? `kwnt token` prints it again. Through `ssh -L 8799:127.0.0.1:8799` no sign-in is needed. The link signs in as you, so anyone who can read the server's output can use it. Put a TLS reverse proxy in front: see [browser service and VPS hosting](docs/browser-service.md).
+On your own computer there is nothing to sign in to. From another machine, open the link `kwnt serve` prints at startup once (`http://<this-host>:8799/#kwnt_token=...`, with `<this-host>` swapped for the server's address); the browser stays signed in for a year. Lost it? On the server, as the user that runs kwnt, `cat ~/.kwnt/api-token` (or `$KWNT_DATA_DIR/api-token`, e.g. `sudo cat /var/lib/kwnt/api-token` with the systemd unit below) prints the token to paste, and `kwnt token` the link (`./target/release/kwnt token` if kwnt isn't on your PATH). Run them as another user and you get that user's token, which the server doesn't accept. Or skip sign-in: `ssh -N -L 8799:127.0.0.1:8799 user@your-vps`, then open http://127.0.0.1:8799 on your computer (not with Docker, where requests always count as remote). The link signs in as you, so anyone who can read the server's output can use it. Put a TLS reverse proxy in front: see [browser service and VPS hosting](docs/browser-service.md).
 
 <details>
 <summary>A systemd unit</summary>
@@ -136,7 +136,7 @@ docker compose up -d --build                  # UI on http://127.0.0.1:8799
 docker compose logs kwnt | grep kwnt_token    # open that link once, with <this-host> as 127.0.0.1
 ```
 
-Data persists in the `kwnt-data` volume. `docker compose exec kwnt kwnt token` prints the sign-in link again.
+Data persists in the `kwnt-data` volume. `docker compose exec kwnt kwnt token` prints the sign-in link again, and `--raw` just the token to paste (`docker exec <container> kwnt token --raw` without Compose).
 
 ---
 

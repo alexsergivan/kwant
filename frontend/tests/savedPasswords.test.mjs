@@ -213,14 +213,16 @@ test('a person-only 401 asks for the token; any other 401 goes to the gate; quie
   }
 });
 
-test('the token dialog says why it is asked on this computer and can be dismissed', () => {
+test('the token dialog says why it is asked from another computer and can be dismissed', () => {
   const html = m.tokenDialog();
   assert.match(html, /role="dialog"/);
   assert.match(html, /aria-modal="true"/);
   const t = text(html);
   assert.match(t, /Confirm it's you/);
-  assert.match(t, /deleting bots or teams need your access token, even on this computer, so a bot can't do them for you/);
-  assert.match(t, /kwnt token/);
+  assert.match(t, /deleting bots or teams need your access token from another computer, so a bot can't do them for you/);
+  assert.ok(!t.includes('even on this computer'), 'this computer never asks');
+  assert.match(t, /Where does kwant bots run\?/);
+  assert.match(t, /kwnt token --raw/);
   assert.ok(buttons(html).includes('Not now'));
   assert.ok(buttons(html).includes('Continue'));
 });

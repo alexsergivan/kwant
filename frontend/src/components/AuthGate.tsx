@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { KeyRound, Loader2, RefreshCw, Terminal, X } from 'lucide-react';
+import { Check, Copy, KeyRound, Loader2, RefreshCw, Terminal, X } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import {
   PERSON_PROMPT_CLOSED_EVENT,
@@ -8,6 +8,7 @@ import {
   UNAUTHORIZED_EVENT,
   consumeTokenLink,
   endSession,
+  extractHashToken,
   fetchAuthStatus,
   installUnauthorizedListener,
   startSession,
@@ -183,6 +184,128 @@ export const PersonTokenDialog: React.FC<{ onClose: () => void; onSignedIn: () =
   );
 };
 
+/** Where kwant runs, as the person sees it: decides which steps get the token. */
+export type TokenPlace = 'server' | 'docker' | 'here';
+
+/** The port kwant listens on, as far as this page can tell (behind a proxy it can't). */
+function kwantPort(loc: Pick<Location, 'port'>): string {
+  return loc.port || '8799';
+}
+
+/** Docker publishes kwant on 127.0.0.1 and still asks for the token there, so a locked loopback page is Docker. */
+export function guessPlace(hostname: string): TokenPlace {
+  const h = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return h === 'localhost' || h === '::1' || h.startsWith('127.') ? 'docker' : 'server';
+}
+
+/** The token from what was pasted: the token itself, or the whole sign-in link. */
+export function tokenFromPaste(value: string): string {
+  const v = value.trim();
+  const hash = v.indexOf('#');
+  if (hash >= 0 && v.includes('kwnt_token=')) return extractHashToken(v.slice(hash)).token ?? '';
+  return v;
+}
+
+const PLACES: { value: TokenPlace; label: string }[] = [
+  { value: 'server', label: 'On a server' },
+  { value: 'docker', label: 'In Docker' },
+  { value: 'here', label: 'On this computer' },
+];
+
+/** One command, selectable in a tap, with a copy button where the browser allows it. */
+const Command: React.FC<{ children: string; note?: string }> = ({ children, note }) => {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      // Plain http on an IP isn't a secure context, so the Clipboard API may be missing
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(children);
+      else {
+        const area = document.createElement('textarea');
+        area.value = children;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand('copy');
+        area.remove();
+        if (!ok) return;
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Nothing to do: the command stays selectable
+    }
+  };
+  return (
+    <div className="space-y-0.5">
+      <div className="flex items-start gap-1.5 bg-zinc-950 border border-zinc-800 rounded-md pl-2 pr-1 py-1">
+        <Terminal size={12} className="shrink-0 mt-[7px] text-zinc-500" aria-hidden="true" />
+        <code className="flex-1 min-w-0 py-1 break-words select-all text-[11px] font-mono text-zinc-200">{children}</code>
+        <button
+          type="button"
+          onClick={copy}
+          aria-label={copied ? 'Copied' : `Copy: ${children}`}
+          className="shrink-0 p-1.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+        >
+          {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+        </button>
+      </div>
+      {note && <p className="text-[11px] text-zinc-500 leading-snug">{note}</p>}
+    </div>
+  );
+};
+
+/** How to get the token, for where kwant runs. Exported for tests. */
+export const TokenSteps: React.FC<{ place: TokenPlace; hostname: string; port: string }> = ({ place, hostname, port }) => {
+  if (place === 'here') {
+    const url = `http://127.0.0.1:${port}`;
+    return (
+      <div className="space-y-2 text-xs text-zinc-400 leading-relaxed">
+        <p>
+          Open kwant bots at{' '}
+          <a href={url} className="font-mono text-sky-400 hover:text-sky-300 underline underline-offset-2">
+            {url}
+          </a>{' '}
+          instead. On the computer it runs on, kwant bots doesn't ask for a token, but only at <span className="font-mono">127.0.0.1</span> or{' '}
+          <span className="font-mono">localhost</span>, not at this computer's network address.
+        </p>
+        <p>
+          Started with Docker? Docker still asks for the token: choose <span className="text-zinc-200">In Docker</span>.
+        </p>
+      </div>
+    );
+  }
+  if (place === 'docker') {
+    return (
+      <div className="space-y-2 text-xs text-zinc-400 leading-relaxed">
+        <p>On the machine that runs Docker (over SSH if it's a server), in the folder with <span className="font-mono">docker-compose.yml</span>:</p>
+        <Command>docker compose exec kwnt kwnt token --raw</Command>
+        <Command note="Started with docker run instead? Use your container's name or ID (docker ps lists it).">
+          {'docker exec <container> kwnt token --raw'}
+        </Command>
+      </div>
+    );
+  }
+  const host = hostname.includes(':') ? `[${hostname}]` : hostname;
+  return (
+    <div className="space-y-2 text-xs text-zinc-400 leading-relaxed">
+      <p>SSH into the server as the user that runs kwant bots, then run:</p>
+      <Command note="Running it as a systemd service with KWNT_DATA_DIR? Read that folder instead, e.g. sudo cat /var/lib/kwnt/api-token.">
+        cat ~/.kwnt/api-token
+      </Command>
+      <p>
+        Or <span className="font-mono">kwnt token --raw</span>. Built from source and not on your PATH? Run it from the source folder:
+      </p>
+      <Command>./target/release/kwnt token --raw</Command>
+      <p className="pt-1">
+        <span className="text-zinc-200">No token at all:</span> on this computer, open an SSH tunnel, then go to{' '}
+        <span className="font-mono">http://127.0.0.1:{port}</span>. kwant bots sees the tunnel as local. Not for Docker.
+      </p>
+      <Command>{`ssh -N -L ${port}:127.0.0.1:${port} user@${host}`}</Command>
+    </div>
+  );
+};
+
 const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; personOnly?: boolean; onCancel?: () => void }> = ({
   notice,
   onSignedIn,
@@ -192,10 +315,13 @@ const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; perso
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hostname = typeof window === 'undefined' ? 'your-server' : window.location.hostname || 'your-server';
+  const port = typeof window === 'undefined' ? '8799' : kwantPort(window.location);
+  const [place, setPlace] = useState<TokenPlace>(() => guessPlace(hostname));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const value = token.trim();
+    const value = tokenFromPaste(token);
     if (!value) return;
     setBusy(true);
     setError(null);
@@ -205,7 +331,7 @@ const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; perso
         onSignedIn();
         return;
       }
-      setError("That token isn't right. Copy it again from the command below.");
+      setError("That token isn't right. Copy it again with the steps above, as the user that runs kwant bots.");
     } catch (err) {
       setError(err instanceof Error && err.message !== 'Failed to fetch' ? err.message : 'Could not reach the server.');
     } finally {
@@ -221,42 +347,60 @@ const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; perso
         </h2>
         <p className="text-xs text-zinc-400 leading-relaxed">
           {personOnly
-            ? 'Saved passwords, answers to approval cards and deleting bots or teams need your access token, even on this computer, so a bot can’t do them for you. You need it once per browser. Get it on the server:'
-            : 'This server is reachable from other machines, so it needs its token once per browser. Get it on the server:'}
+            ? 'Saved passwords, answers to approval cards and deleting bots or teams need your access token from another computer, so a bot can’t do them for you. You need it once per browser.'
+            : 'You’re opening kwant bots from another computer, so this browser needs its access token once.'}
         </p>
-        <div className="space-y-1 text-[11px] font-mono text-zinc-300">
-          <p className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 rounded-md px-2 py-1">
-            <Terminal size={12} className="text-zinc-500" /> kwnt token
-          </p>
-          <p className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 rounded-md px-2 py-1">
-            <Terminal size={12} className="text-zinc-500" /> docker compose exec kwnt kwnt token
-          </p>
+      </div>
+      <fieldset className="space-y-3">
+        <legend className="text-xs font-medium text-zinc-300 mb-2">Where does kwant bots run?</legend>
+        <div className="grid grid-cols-3 gap-1 p-1 bg-zinc-950 border border-zinc-800 rounded-lg">
+          {PLACES.map((p) => (
+            <label
+              key={p.value}
+              className={`relative flex items-center justify-center text-center min-h-[36px] px-1.5 rounded-md text-[11px] font-medium cursor-pointer transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-sky-500 ${
+                place === p.value ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <input
+                type="radio"
+                name="kwnt-token-place"
+                value={p.value}
+                checked={place === p.value}
+                onChange={() => setPlace(p.value)}
+                className="sr-only"
+              />
+              {p.label}
+            </label>
+          ))}
         </div>
-      </div>
+        <TokenSteps place={place} hostname={hostname} port={port} />
+      </fieldset>
       {notice && <p className="text-xs text-amber-300" role="status">{notice}</p>}
-      <div>
-        <label htmlFor="kwnt-token" className="block text-xs font-medium text-zinc-400 mb-1">
-          Token
-        </label>
-        <input
-          id="kwnt-token"
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          autoFocus
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          aria-invalid={!!error}
-          aria-describedby={error ? 'kwnt-token-error' : undefined}
-          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
-          placeholder="Paste the token"
-        />
-        {error && (
-          <p id="kwnt-token-error" className="mt-1.5 text-[11px] text-rose-400" role="alert">
-            {error}
-          </p>
-        )}
-      </div>
+      {place !== 'here' && (
+        <div>
+          <label htmlFor="kwnt-token" className="block text-xs font-medium text-zinc-400 mb-1">
+            Token
+          </label>
+          <input
+            id="kwnt-token"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            autoFocus
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            aria-invalid={!!error}
+            aria-describedby={error ? 'kwnt-token-error' : undefined}
+            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
+            placeholder="Paste the token or the sign-in link"
+          />
+          {error && (
+            <p id="kwnt-token-error" className="mt-1.5 text-[11px] text-rose-400" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
       <div className="flex gap-2">
         {onCancel && (
           <button
@@ -267,13 +411,15 @@ const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; perso
             Not now
           </button>
         )}
-        <button
-          type="submit"
-          disabled={busy || !token.trim()}
-          className="flex-1 w-full flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50"
-        >
-          {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} Continue
-        </button>
+        {place !== 'here' && (
+          <button
+            type="submit"
+            disabled={busy || !token.trim()}
+            className="flex-1 w-full flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50"
+          >
+            {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} Continue
+          </button>
+        )}
       </div>
       <p className="text-[11px] text-zinc-500">The browser keeps you signed in for a year. Anyone with the token controls this server.</p>
     </form>

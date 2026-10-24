@@ -67,7 +67,8 @@
 <h2 id="local">On your own computer</h2>
 <p>Run <code>kwnt serve</code> and open <a href="http://127.0.0.1:8799">http://127.0.0.1:8799</a>. There's nothing to sign in to: requests from this machine need no token, and <code>kwnt serve</code> prints nothing about one.</p>
 <p>"This machine" means a loopback connection with a loopback <code>Host</code> and no proxy headers. A VPS you reach through an SSH tunnel counts too:</p>
-<pre><code>ssh -L 8799:127.0.0.1:8799 user@your-vps</code></pre>
+<pre><code>ssh -N -L 8799:127.0.0.1:8799 user@your-vps   <span class="c"># on your computer, then open http://127.0.0.1:8799</span></code></pre>
+<p>Not with Docker: its published port always counts as remote. And <code>127.0.0.1</code> only: opening kwant at your computer's network address (say <code>192.168.1.20:8799</code>) counts as another machine.</p>
 
 <h2 id="vps">On a VPS</h2>
 <pre><code><span class="c"># 1. Copy the binary to your server</span>
@@ -79,7 +80,8 @@ ssh user@your-vps "kwnt serve --host 0.0.0.0 --port 8799"</code></pre>
 <pre><code>http://&lt;this-host&gt;:8799/#kwnt_token=…</code></pre>
 <p>Swap <code>&lt;this-host&gt;</code> for the server's address and open the link once. The page signs in with an HttpOnly cookie that lasts a year and clears the address bar.</p>
 <ul>
-  <li><strong>Lost the link?</strong> <code>kwnt token</code> prints it again.</li>
+  <li><strong>Lost the link?</strong> On the server, as the user that runs kwnt, <code>kwnt token</code> prints it again, and <code>cat ~/.kwnt/api-token</code> prints the token to paste on the sign-in screen. With the systemd unit below that's <code>sudo cat /var/lib/kwnt/api-token</code>. Built from source and kwnt isn't on your <code>PATH</code>? Use <code>./target/release/kwnt token</code> from the source folder.</li>
+  <li><strong>Same user:</strong> run as another user, <code>kwnt token</code> makes and prints that user's own token, which the server doesn't accept.</li>
   <li><strong>Scripts:</strong> <code>kwnt token --raw</code> prints just the token, to send as <code>Authorization: Bearer &lt;token&gt;</code>.</li>
   <li>The token lives in <code>&lt;data dir&gt;/api-token</code> (mode 0600), or set <code>KWNT_API_TOKEN</code> (16+ characters).</li>
 </ul>
@@ -109,8 +111,9 @@ systemctl enable --now kwnt</code></pre>
 <p><code>docker-compose.yml</code> runs kwant next to a Laya image with the model weights baked in, so the server never downloads them at runtime:</p>
 <pre><code>docker compose up -d --build                  <span class="c"># UI on http://127.0.0.1:8799</span>
 docker compose logs kwnt | grep kwnt_token    <span class="c"># open that link once</span>
-docker compose exec kwnt kwnt token           <span class="c"># print it again later</span></code></pre>
-<p>Requests through Docker's published port arrive from the bridge network, so they count as remote: open the startup link once, using <code>127.0.0.1</code> as the host. Data persists in the <code>kwnt-data</code> volume.</p>
+docker compose exec kwnt kwnt token           <span class="c"># print it again later</span>
+docker compose exec kwnt kwnt token --raw     <span class="c"># just the token, to paste</span></code></pre>
+<p>Requests through Docker's published port arrive from the bridge network, so they count as remote: open the startup link once, using <code>127.0.0.1</code> as the host. An SSH tunnel doesn't skip sign-in here. Without Compose: <code>docker exec &lt;container&gt; kwnt token --raw</code>. Data persists in the <code>kwnt-data</code> volume.</p>
 
 <h2 id="proxy">Behind an HTTPS reverse proxy</h2>
 <p>Only the HTTPS port needs to be reachable from outside. Forward the original <code>Host</code> header, because the live browser stream checks <code>Origin</code> against it, and allow WebSocket upgrades:</p>
