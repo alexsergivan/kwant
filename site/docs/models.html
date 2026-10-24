@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Models &amp; routing · kwant</title>
-<meta name="description" content="The engines kwant runs on, the auto model setting, and the Laya router that picks which bot answers and with which model.">
+<title>Models &amp; routing: Claude, Codex, Grok, Ollama · kwant</title>
+<meta name="description" content="Run bots on the Claude, Codex or Grok CLIs, API keys, local Ollama or any OpenAI-compatible server. The Laya router picks who answers, and which model.">
 <meta name="theme-color" content="#f4f1ff">
 <meta name="color-scheme" content="light">
 <link rel="canonical" href="https://kwant.si/docs/models">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="kwant">
 <meta property="og:locale" content="en_US">
-<meta property="og:title" content="Models &amp; routing · kwant">
-<meta property="og:description" content="The engines kwant runs on, the auto model setting, and the Laya router that picks which bot answers and with which model.">
+<meta property="og:title" content="Models &amp; routing: Claude, Codex, Grok, Ollama · kwant">
+<meta property="og:description" content="Run bots on the Claude, Codex or Grok CLIs, API keys, local Ollama or any OpenAI-compatible server. The Laya router picks who answers, and which model.">
 <meta property="og:url" content="https://kwant.si/docs/models">
 <meta property="og:image" content="https://kwant.si/assets/og/docs-models.png?v=f251eb8e2d">
 <meta property="og:image:type" content="image/png">
@@ -20,10 +20,10 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Models &amp; routing: The engines kwant runs on, and the router that picks the bot and the model.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-10-22">
+<meta property="article:modified_time" content="2026-10-24">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Models &amp; routing · kwant">
-<meta name="twitter:description" content="The engines kwant runs on, the auto model setting, and the Laya router that picks which bot answers and with which model.">
+<meta name="twitter:title" content="Models &amp; routing: Claude, Codex, Grok, Ollama · kwant">
+<meta name="twitter:description" content="Run bots on the Claude, Codex or Grok CLIs, API keys, local Ollama or any OpenAI-compatible server. The Laya router picks who answers, and which model.">
 <meta name="twitter:image" content="https://kwant.si/assets/og/docs-models.png?v=f251eb8e2d">
 <meta name="twitter:image:alt" content="Models &amp; routing: The engines kwant runs on, and the router that picks the bot and the model.">
 <link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
@@ -63,9 +63,14 @@
 <ul>
   <li><strong>Host CLIs:</strong> <code>claude</code>, <code>codex</code> and <code>grok</code>, supervised by kwant, with their own file and shell tools.</li>
   <li><strong>Provider APIs:</strong> Anthropic, OpenAI and xAI keys.</li>
+  <li><strong>Ollama:</strong> models you've pulled into a local <a href="#ollama">Ollama</a> server, with no account or key.</li>
   <li><strong>Custom API:</strong> any server that speaks the OpenAI chat API (OpenRouter, LM Studio and others) or the Anthropic Messages API.</li>
 </ul>
 <p>Each bot has a preferred model. Set it to <strong>auto</strong> and kwant picks the model and effort for every message.</p>
+
+<h2 id="ollama">Ollama (local models)</h2>
+<p>kwant talks to Ollama at <code>http://localhost:11434</code>. To use another address, change <strong>Ollama Base URL</strong> under <strong>Settings → API keys and Ollama</strong>, or set <code>OLLAMA_URL</code>. The engine shows as ready once the server answers and has at least one model pulled, for example with <code>ollama pull llama3.2</code>.</p>
+<p>Pick Ollama in a bot's model setting to use your default model, the one in <code>OLLAMA_MODEL</code> or else the first one pulled, or pick a pulled model by name. Ollama bots can use <a href="mcp.html">MCP tools</a>. When a bot is set to auto and a message asks to keep things on this machine, for example "keep this private" or "offline", the router can keep it on Ollama, if Ollama is ready.</p>
 
 <h2 id="accounts">Accounts</h2>
 <p>Each engine can have several accounts, with a default, a priority order and automatic failover when one runs out of usage. See <a href="accounts.html">Accounts &amp; profiles</a>.</p>
@@ -124,6 +129,6 @@
 </footer>
 <script src="../assets/js/site.js?v=c490c973ba" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/models#article","headline":"Models & routing","description":"The engines kwant runs on, the auto model setting, and the Laya router that picks which bot answers and with which model.","url":"https://kwant.si/docs/models","mainEntityOfPage":"https://kwant.si/docs/models","image":"https://kwant.si/assets/og/docs-models.png?v=f251eb8e2d","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-22","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Models & routing","item":"https://kwant.si/docs/models"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/models#article","headline":"Models & routing: Claude, Codex, Grok, Ollama","description":"Run bots on the Claude, Codex or Grok CLIs, API keys, local Ollama or any OpenAI-compatible server. The Laya router picks who answers, and which model.","url":"https://kwant.si/docs/models","mainEntityOfPage":"https://kwant.si/docs/models","image":"https://kwant.si/assets/og/docs-models.png?v=f251eb8e2d","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-24","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Models & routing","item":"https://kwant.si/docs/models"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 </body>
 </html>

@@ -8,7 +8,9 @@ build_site.py points each page's og:image and twitter:image at its own card, so 
     python3 scripts/build_og.py && python3 scripts/build_site.py
 
 Needs Pillow (`pip install pillow`); everything else (fonts, logo, avatars, the town still) comes from the repo.
-Each card uses two optional header keys in the page source:
+Each card uses three optional header keys in the page source:
+  card_title: the big title (falls back to the page title up to its first colon), so a search-led
+    <title> can change without changing the card
   card: a short line under the title (falls back to the description's first sentence)
   card_art: what sits on the CRT screen: scene (the pixel town), team (every role's avatar) or avatar:ROLE
 """
@@ -33,6 +35,11 @@ def font(name, size, weight):
     f = ImageFont.truetype(str(FONTS / f"{name}.woff2"), size)
     f.set_variation_by_axes([weight])
     return f
+
+
+def card_title(meta):
+    """The card's big title: the page's short name, not its search-led <title>."""
+    return meta.get("card_title") or meta["title"].split(":")[0]
 
 
 def slug(path):
@@ -123,7 +130,7 @@ def card(meta):
         draw.text((left, y), kicker.upper(), font=font("inter-var", 21, 700), fill=VIOLET)
         y += 44
 
-    title = "Your own team of AI bots" if path == "index.html" else meta["title"].split(":")[0]
+    title = card_title(meta)
     sub = meta.get("card") or meta["description"].split(". ")[0].rstrip(".") + "."
     sf = font("inter-var", 29, 400)
     sub_lines = wrap(draw, sub, sf, width - 20)[:3]

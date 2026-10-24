@@ -1,5 +1,5 @@
-title: Models & routing
-description: The engines kwant runs on, the auto model setting, and the Laya router that picks which bot answers and with which model.
+title: Models & routing: Claude, Codex, Grok, Ollama
+description: Run bots on the Claude, Codex or Grok CLIs, API keys, local Ollama or any OpenAI-compatible server. The Laya router picks who answers, and which model.
 path: docs/models.html
 nav: models
 card: The engines kwant runs on, and the router that picks the bot and the model.
@@ -13,9 +13,14 @@ card_art: avatar:research
 <ul>
   <li><strong>Host CLIs:</strong> <code>claude</code>, <code>codex</code> and <code>grok</code>, supervised by kwant, with their own file and shell tools.</li>
   <li><strong>Provider APIs:</strong> Anthropic, OpenAI and xAI keys.</li>
+  <li><strong>Ollama:</strong> models you've pulled into a local <a href="#ollama">Ollama</a> server, with no account or key.</li>
   <li><strong>Custom API:</strong> any server that speaks the OpenAI chat API (OpenRouter, LM Studio and others) or the Anthropic Messages API.</li>
 </ul>
 <p>Each bot has a preferred model. Set it to <strong>auto</strong> and kwant picks the model and effort for every message.</p>
+
+<h2 id="ollama">Ollama (local models)</h2>
+<p>kwant talks to Ollama at <code>http://localhost:11434</code>. To use another address, change <strong>Ollama Base URL</strong> under <strong>Settings → API keys and Ollama</strong>, or set <code>OLLAMA_URL</code>. The engine shows as ready once the server answers and has at least one model pulled, for example with <code>ollama pull llama3.2</code>.</p>
+<p>Pick Ollama in a bot's model setting to use your default model, the one in <code>OLLAMA_MODEL</code> or else the first one pulled, or pick a pulled model by name. Ollama bots can use <a href="mcp.html">MCP tools</a>. When a bot is set to auto and a message asks to keep things on this machine, for example "keep this private" or "offline", the router can keep it on Ollama, if Ollama is ready.</p>
 
 <h2 id="accounts">Accounts</h2>
 <p>Each engine can have several accounts, with a default, a priority order and automatic failover when one runs out of usage. See <a href="accounts.html">Accounts &amp; profiles</a>.</p>

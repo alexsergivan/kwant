@@ -6,7 +6,8 @@ Run `python3 scripts/build_site.py` after editing anything in site-src/.
 
 Each page source starts with a header block of `key: value` lines, then `---`, then HTML.
 Keys: title, description, path (output path under site/), nav (docs nav id, docs pages only),
-active (header link to mark current on non-docs pages).
+active (header link to mark current on non-docs pages), and card, card_title, card_art for the
+social card (see scripts/build_og.py).
 Shortcodes in the HTML:
   {{root}}                                relative path back to site/
   {{shot:NAME|ALT|SIZES}}                 a zoomable responsive screenshot (desktop-* or phone-*)
@@ -381,7 +382,8 @@ def page(meta, body, root, dates):
     robots = '<meta name="robots" content="noindex">\n' if is404 else ""
     url = page_url(meta["path"])
     image = og_image(meta["path"])
-    img_alt = html.escape(f"{title if not is404 else 'kwant'}: {meta.get('card', meta['description'])}", quote=True)
+    card_name = "kwant" if is404 else meta.get("card_title") or title.split(":")[0]
+    img_alt = html.escape(f"{card_name}: {meta.get('card', meta['description'])}", quote=True)
     ftitle = html.escape(full_title, quote=True)
     article = (
         f'<meta property="article:published_time" content="{dates[0]}">\n<meta property="article:modified_time" content="{dates[1]}">\n'
