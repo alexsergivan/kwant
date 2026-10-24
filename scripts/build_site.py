@@ -17,14 +17,21 @@ Shortcodes in the HTML:
 Every local asset URL in the pages and in site.css gets a `?v=<content hash>` query, so a deploy never pairs new HTML
 with a browser's cached old CSS, JS, fonts or images.
 
+Pages also get their social tags (Open Graph, Twitter), JSON-LD structured data and a sitemap with lastmod dates.
+Each page's og:image is its own card from scripts/build_og.py (site/assets/og/), so run that first when titles or cards change.
+lastmod and the docs' dateModified come from the last git commit that changed the page body (today if it's uncommitted).
+
 It also writes the favicons (favicon.svg, favicon-32.png, apple-touch-icon.png, favicon.ico) from LOGO_RECTS,
 so the tab icon is always the header logo.
 """
+import datetime
 import hashlib
 import html
+import json
 import pathlib
 import re
 import struct
+import subprocess
 import sys
 import zlib
 
@@ -285,12 +292,101 @@ def docs_shell(root, current, body):
 </div>"""
 
 
-def page(meta, body, root):
+def git_dates(src):
+    """(first published, last modified) as YYYY-MM-DD from git. Modified is the last commit that changed the page body, so
+    header-only edits (a card line) don't look like new content. Today when the body has uncommitted changes or git isn't there."""
+    today = datetime.date.today().isoformat()
+    git = lambda *a: subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True, check=True).stdout
+    body = lambda text: text.split("\n---\n", 1)[-1]
+    try:
+        log = git("log", "--follow", "--name-only", "--format=@%H %cs", "--", str(src.relative_to(ROOT))).split("@")[1:]
+    except (OSError, subprocess.CalledProcessError):
+        return today, today
+    commits = [(head.split()[0], head.split()[1], head.split()[2]) for head in (entry.strip() for entry in log) if len(head.split()) >= 3]
+    if not commits:
+        return today, today
+    current, modified = body(src.read_text()), today
+    for sha, date, path in commits:
+        if body(git("show", f"{sha}:{path}")) != current:
+            break
+        modified = date
+    return commits[-1][1], modified
+
+
+def page_url(path):
+    return SITE_URL + "/" + path.replace("index.html", "").replace(".html", "")
+
+
+def og_image(path):
+    """The page's own social card, with a content hash so link previews refresh when it changes. 404 uses the home card."""
+    name = "home" if path in ("index.html", "404.html") else path.removesuffix(".html").replace("/", "-")
+    card = OUT / f"assets/og/{name}.png"
+    if not card.exists():
+        return f"{SITE_URL}/assets/og.png"
+    return f"{SITE_URL}/assets/og/{name}.png?v={file_hash(card)}"
+
+
+ORG_ID, SITE_ID, APP_ID = f"{SITE_URL}/#org", f"{SITE_URL}/#website", f"{SITE_URL}/#app"
+LICENSES = [f"{GITHUB}/blob/main/LICENSE-MIT", f"{GITHUB}/blob/main/LICENSE-APACHE"]
+
+
+def structured_data(meta, url, title, image, dates):
+    """JSON-LD for the page: the app, site and project on the home page, an article with breadcrumbs on docs pages."""
+    path = meta["path"]
+    org = {"@type": "Organization", "@id": ORG_ID, "name": "kwant", "url": SITE_URL + "/",
+           "logo": f"{SITE_URL}/apple-touch-icon.png", "sameAs": [GITHUB]}
+    crumbs = lambda items: {"@type": "BreadcrumbList", "itemListElement": [
+        {"@type": "ListItem", "position": i + 1, "name": n, "item": u} for i, (n, u) in enumerate(items)]}
+    if path == "index.html":
+        graph = [
+            org,
+            {"@type": "WebSite", "@id": SITE_ID, "name": "kwant", "url": SITE_URL + "/", "inLanguage": "en", "publisher": {"@id": ORG_ID}},
+            {"@type": "SoftwareApplication", "@id": APP_ID, "name": "kwant", "url": SITE_URL + "/", "description": meta["description"],
+             "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux", "image": image,
+             "screenshot": f"{SITE_URL}/assets/media/desktop-team-discussion-1440.webp",
+             "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+             "license": LICENSES, "isAccessibleForFree": True, "downloadUrl": GITHUB, "sameAs": [GITHUB],
+             "author": {"@id": ORG_ID}, "publisher": {"@id": ORG_ID}},
+            {"@type": "SoftwareSourceCode", "@id": f"{SITE_URL}/#code", "name": "kwant", "codeRepository": GITHUB,
+             "programmingLanguage": ["Rust", "TypeScript"], "license": LICENSES, "targetProduct": {"@id": APP_ID}},
+        ]
+    elif meta.get("nav"):
+        label = dict(DOCS)[meta["nav"]]
+        graph = [
+            {"@type": "TechArticle", "@id": url + "#article", "headline": title, "description": meta["description"], "url": url,
+             "mainEntityOfPage": url, "image": image, "inLanguage": "en", "datePublished": dates[0], "dateModified": dates[1],
+             "author": {"@id": ORG_ID}, "publisher": {"@id": ORG_ID}, "about": {"@id": APP_ID}, "isPartOf": {"@id": SITE_ID}},
+            crumbs([("kwant", SITE_URL + "/"), ("Docs", f"{SITE_URL}/docs/quickstart"), (label, url)]),
+            org,
+        ]
+    elif path == "404.html":
+        return ""
+    else:
+        graph = [
+            {"@type": "WebPage", "@id": url, "name": title, "description": meta["description"], "url": url, "image": image,
+             "inLanguage": "en", "dateModified": dates[1], "about": {"@id": APP_ID}, "isPartOf": {"@id": SITE_ID}},
+            crumbs([("kwant", SITE_URL + "/"), (title.split(":")[0], url)]),
+        ]
+    data = json.dumps({"@context": "https://schema.org", "@graph": graph}, ensure_ascii=False, separators=(",", ":"))
+    # JSON-LD is a data block, not a script, so the CSP's script-src doesn't apply to it. It goes at the end of <body>
+    # so the head and the first screen of text still fit in the first TCP round trip.
+    return f'<script type="application/ld+json">{data.replace("</", "<" + chr(92) + "/")}</script>\n'
+
+
+def page(meta, body, root, dates):
     title = meta["title"]
     full_title = title if title.startswith("kwant") else f"{title} · kwant"
     desc = html.escape(meta["description"], quote=True)
-    robots = '<meta name="robots" content="noindex">\n' if meta["path"] == "404.html" else ""
-    url = SITE_URL + "/" + meta["path"].replace("index.html", "").replace(".html", "")
+    is404 = meta["path"] == "404.html"
+    robots = '<meta name="robots" content="noindex">\n' if is404 else ""
+    url = page_url(meta["path"])
+    image = og_image(meta["path"])
+    img_alt = html.escape(f"{title if not is404 else 'kwant'}: {meta.get('card', meta['description'])}", quote=True)
+    ftitle = html.escape(full_title, quote=True)
+    article = (
+        f'<meta property="article:published_time" content="{dates[0]}">\n<meta property="article:modified_time" content="{dates[1]}">\n'
+        if meta.get("nav") else ""
+    )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -301,16 +397,22 @@ def page(meta, body, root):
 <meta name="theme-color" content="#f4f1ff">
 <meta name="color-scheme" content="light">
 {robots}<link rel="canonical" href="{url}">
-<meta property="og:type" content="website">
+<meta property="og:type" content="{"article" if meta.get("nav") else "website"}">
 <meta property="og:site_name" content="kwant">
-<meta property="og:title" content="{html.escape(full_title, quote=True)}">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="{ftitle}">
 <meta property="og:description" content="{desc}">
 <meta property="og:url" content="{url}">
-<meta property="og:image" content="{SITE_URL}/assets/og.png">
+<meta property="og:image" content="{image}">
+<meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="kwant: your own team of AI bots, with the pixel town of kwant bots on a small violet screen">
-<meta name="twitter:card" content="summary_large_image">
+<meta property="og:image:alt" content="{img_alt}">
+{article}<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{ftitle}">
+<meta name="twitter:description" content="{desc}">
+<meta name="twitter:image" content="{image}">
+<meta name="twitter:image:alt" content="{img_alt}">
 <link rel="icon" href="{root}favicon.svg" type="image/svg+xml">
 <link rel="icon" href="{root}favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="{root}apple-touch-icon.png">
@@ -318,13 +420,13 @@ def page(meta, body, root):
 <link rel="preload" href="{root}assets/fonts/inter-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}assets/css/site.css">
 </head>
-<body class="page-{meta.get("active", "docs" if meta.get("nav") else "home") if meta["path"] != "404.html" else "404"}">
+<body class="page-{meta.get("active", "docs" if meta.get("nav") else "home") if not is404 else "404"}">
 {header(root, "docs" if meta.get("nav") else meta.get("active", "home"))}
 <main id="main">
 {body}
 </main>
 {footer(root)}
-</body>
+{structured_data(meta, url, title, image, dates)}</body>
 </html>
 """
 
@@ -431,9 +533,11 @@ def write_favicons():
 def main():
     write_favicons()
     version_css()
-    written = []
+    written, lastmod = [], {}
     for src in sorted(SRC.glob("*.html")):
         meta, body = parse(src)
+        dates = git_dates(src)
+        lastmod[meta["path"]] = dates[1]
         out = OUT / meta["path"]
         # The 404 page is served for any missing path, so it needs root-absolute links.
         root = "/" if meta["path"] == "404.html" else "../" * meta["path"].count("/")
@@ -441,12 +545,12 @@ def main():
         if meta.get("nav"):
             body = docs_shell(root, meta["nav"], body)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(version_urls(page(meta, body, root)))
+        out.write_text(version_urls(page(meta, body, root, dates)))
         written.append(meta["path"])
     urls = [p for p in written if p != "404.html"]
     sitemap = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
     for p in urls:
-        sitemap.append(f"  <url><loc>{SITE_URL}/{p.replace('index.html', '').replace('.html', '')}</loc></url>")
+        sitemap.append(f"  <url><loc>{page_url(p)}</loc><lastmod>{lastmod[p]}</lastmod></url>")
     sitemap.append("</urlset>")
     (OUT / "sitemap.xml").write_text("\n".join(sitemap) + "\n")
     (OUT / "robots.txt").write_text(f"User-agent: *\nAllow: /\n\nSitemap: {SITE_URL}/sitemap.xml\n")

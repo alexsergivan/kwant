@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://kwant.si/docs/accounts</loc></url>
-  <url><loc>https://kwant.si/docs/approvals</loc></url>
-  <url><loc>https://kwant.si/docs/bots-and-teams</loc></url>
-  <url><loc>https://kwant.si/docs/browser</loc></url>
-  <url><loc>https://kwant.si/docs/install</loc></url>
-  <url><loc>https://kwant.si/docs/loose-ends</loc></url>
-  <url><loc>https://kwant.si/docs/mcp</loc></url>
-  <url><loc>https://kwant.si/docs/memory-skills</loc></url>
-  <url><loc>https://kwant.si/docs/models</loc></url>
-  <url><loc>https://kwant.si/docs/parallel-universe</loc></url>
-  <url><loc>https://kwant.si/docs/quickstart</loc></url>
-  <url><loc>https://kwant.si/docs/routines</loc></url>
-  <url><loc>https://kwant.si/docs/spaces</loc></url>
-  <url><loc>https://kwant.si/features</loc></url>
-  <url><loc>https://kwant.si/</loc></url>
+  <url><loc>https://kwant.si/docs/accounts</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/docs/approvals</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/docs/bots-and-teams</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/docs/browser</loc><lastmod>2026-10-23</lastmod></url>
+  <url><loc>https://kwant.si/docs/install</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/docs/loose-ends</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/docs/mcp</loc><lastmod>2026-10-23</lastmod></url>
+  <url><loc>https://kwant.si/docs/memory-skills</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/docs/models</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/docs/parallel-universe</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/docs/quickstart</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/docs/routines</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/docs/spaces</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/features</loc><lastmod>2026-10-23</lastmod></url>
+  <url><loc>https://kwant.si/</loc><lastmod>2026-10-23</lastmod></url>
 </urlset>
