@@ -17,6 +17,17 @@ pub const CHROME_PATH_ENV: &str = "KWNT_CHROME_PATH";
 /// file and shell tools still run on the host; `cli_agents` joins this list once they move.
 pub const VM_ISOLATES: [&str; 2] = ["browser", "kwnt_shell"];
 
+/// What vm mode isolates on this computer. The built-in shell runs in an executor container that
+/// needs Docker; with only a browser service (the compose stack, no Docker socket) just the
+/// browser is isolated and the built-in shell isn't available.
+pub fn vm_isolates(docker: bool) -> &'static [&'static str] {
+    if docker {
+        &VM_ISOLATES
+    } else {
+        &VM_ISOLATES[..1]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ComputerMode {
@@ -722,6 +733,16 @@ mod tests {
         assert!(vm_unavailable_reason(false, false, Platform::Mac).unwrap().contains("Docker Desktop"));
         let docker = vm_unavailable_reason(false, false, Platform::Docker).unwrap();
         assert!(docker.contains("KWNT_BROWSER_CDP_URL") && docker.contains("docker compose up -d browser"), "{docker}");
+    }
+
+    #[test]
+    fn vm_isolates_the_built_in_shell_only_with_docker() {
+        // Mac/Linux with Docker: the browser and the executor shell both run in containers
+        assert_eq!(vm_isolates(true), ["browser", "kwnt_shell"]);
+        // compose stack (browser service, no Docker socket): only the browser is isolated
+        assert_eq!(vm_isolates(false), ["browser"]);
+        // never the CLI agents, which still run where kwnt runs
+        assert!(!vm_isolates(true).contains(&"cli_agents"));
     }
 
     #[test]

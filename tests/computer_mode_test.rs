@@ -119,8 +119,14 @@ async fn computer_mode_api_and_local_shell_approval() {
         .unwrap()
         .contains("KWNT_CHROME_PATH"));
     assert_eq!(view["reasons"]["vm"], Value::Null);
-    // VM mode is honest about what it contains: not the Claude/Codex/Grok CLIs (yet).
-    assert_eq!(view["isolates"], json!(["browser", "kwnt_shell"]));
+    // VM mode is honest about what it contains: not the Claude/Codex/Grok CLIs (yet), and the
+    // built-in shell only when Docker can run its executor (not in the compose stack).
+    let isolates = if kwnt::sandbox::SandboxManager::new().is_docker_available().await {
+        json!(["browser", "kwnt_shell"])
+    } else {
+        json!(["browser"])
+    };
+    assert_eq!(view["isolates"], isolates);
     assert_eq!(view["window"]["visible"], false);
     if cfg!(target_os = "linux") {
         // no display: Chrome can still run in the app, just not as a window
@@ -153,8 +159,7 @@ async fn computer_mode_api_and_local_shell_approval() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(view["mode"], "vm");
     assert_eq!(
-        view["isolates"],
-        json!(["browser", "kwnt_shell"]),
+        view["isolates"], isolates,
         "PUT returns the same shape"
     );
     assert_eq!(
