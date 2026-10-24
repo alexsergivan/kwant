@@ -5,7 +5,7 @@
 //! - Switching approvals off (space, bot, or a bot set to inherit an off space) answers 409
 //!   `{error, needs_bitwarden: true, local_count}` while the built-in store holds any password,
 //!   in Bitwarden mode too (leftovers open with the built-in key).
-//! - While approvals are off anywhere, saving into the built-in store answers 409 and going back
+//! - While any space or bot is on "Ask only when risky" or "Don't ask", saving into the built-in store answers 409 and going back
 //!   from Bitwarden to the built-in store answers 409 unless it is empty.
 //! - An install already in that state shows `exposed: true` and keeps its approvals.
 
@@ -125,7 +125,10 @@ impl Env {
 fn assert_needs_bitwarden(s: StatusCode, v: &Value, count: Option<u64>) {
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
     assert_eq!(v["needs_bitwarden"], true, "{v}");
-    assert!(v["error"].as_str().is_some_and(|e| !e.is_empty()), "{v}");
+    let e = v["error"].as_str().unwrap_or_default();
+    // Names the mode it means: "approvals are off" read wrong under "Ask only when risky"
+    assert!(e.contains("Ask only when risky"), "{v}");
+    assert!(!e.contains("approvals are off"), "{v}");
     if let Some(n) = count {
         assert_eq!(v["local_count"], n, "{v}");
     }
@@ -195,6 +198,11 @@ async fn with_approvals_off_nothing_new_is_saved_in_the_built_in_store() {
         }
         let (s, v) = e.save("DUMMY-PW-OFF").await;
         assert_needs_bitwarden(s, &v, None);
+        // Why, and both ways out, in the person's words
+        let why = v["error"].as_str().unwrap();
+        for part in ["Ask before running commands", "Don't ask", "Connect Bitwarden", "switch every space and bot"] {
+            assert!(why.contains(part), "{scope}: {part}: {why}");
+        }
         assert_eq!(e.store().await["local_count"], 0, "{scope}: nothing saved");
 
         // A password the browser captured keeps waiting

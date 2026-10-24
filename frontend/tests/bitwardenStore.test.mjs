@@ -174,7 +174,7 @@ test('the store bar: this server, Bitwarden unlocked with Lock, Bitwarden locked
 test('the picker: two choices, said plainly; Bitwarden opens the connect form', () => {
   const html = m.bar(LOCAL, { initialOpen: true });
   assert.match(text(html), /Where passwords are kept, for every bot/);
-  assert.match(text(html), /Saved on this server Encrypted here\. A bot with approvals off can read them, so use Bitwarden then\./);
+  assert.match(text(html), /Saved on this server Encrypted here\. Works only while every space and bot is on “Ask before running commands”; otherwise use Bitwarden\./);
   assert.match(text(html), /Bitwarden In your own Bitwarden account/);
   assert.equal(inputs(html).filter((i) => /type="radio"/.test(i)).length, 2);
   const connecting = m.bar(LOCAL, { initialOpen: true, initialConnecting: true });
@@ -291,7 +291,7 @@ test('approvals off: one plain sentence per store, in the confirm and next to sa
   // Bitwarden: the accepted gap. This server: blocked (audit F-10), so the sentence says so.
   const bwNote = 'While a password is being filled into a page, a bot that can run commands can read it.';
   assert.equal(m.AUTOFILL_GAP_NOTE.bitwarden, bwNote);
-  assert.match(m.AUTOFILL_GAP_NOTE.local, /^With approvals off, any bot that can run commands could read passwords saved on this server, so that's blocked|^With approvals off, any bot that can run commands could read passwords saved on this server, so that’s blocked/);
+  assert.match(m.AUTOFILL_GAP_NOTE.local, /^Unless every space and bot is on “Ask before running commands”, any bot that can run commands could read passwords saved on this server/);
   assert.ok(text(m.offConfirm()).includes(text(m.AUTOFILL_GAP_NOTE.local)), 'unknown store: the stricter sentence');
   assert.ok(text(m.panel({ logins: [login()] }, { approvalsOff: true, store: m.storeState(UNLOCKED) })).includes(bwNote));
   assert.ok(!text(m.panel({ logins: [login()] }, { approvalsOff: false, store: m.storeState(UNLOCKED) })).includes(bwNote));

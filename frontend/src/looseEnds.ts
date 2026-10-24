@@ -196,7 +196,7 @@ export class LooseEndsError extends Error {
   constructor(
     message: string,
     public status: number,
-    /** 409: approvals are off and the login would sit on this server; Bitwarden first. */
+    /** 409: a space or bot isn't on "Ask before running commands" and the login would sit on this server; Bitwarden first. */
     public needsBitwarden = false,
     /** 423: Bitwarden holds the logins and is locked. */
     public locked = false,

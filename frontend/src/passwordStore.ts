@@ -249,11 +249,12 @@ export const storeApi = {
   },
 };
 
-/** One sentence per store for wherever approvals are off. Bitwarden: the accepted gap (2026-10-20).
- * This server: approvals off can't sit next to passwords here (audit F-10), so it's blocked. */
+/** One sentence per store for wherever a space or bot is on "Ask only when risky" or "Don't ask".
+ * Bitwarden: the accepted gap (2026-10-20). This server: either mode can't sit next to passwords
+ * here (audit F-10), so it's blocked. */
 export const AUTOFILL_GAP_NOTE = {
   bitwarden: 'While a password is being filled into a page, a bot that can run commands can read it.',
-  local: 'With approvals off, any bot that can run commands could read passwords saved on this server, so that’s blocked: use Bitwarden.',
+  local: 'Unless every space and bot is on “Ask before running commands”, any bot that can run commands could read passwords saved on this server, so they can’t be saved here: use Bitwarden.',
 } as const;
 
 /** The note for a store; unknown counts as this server, the stricter one. */
@@ -264,12 +265,12 @@ const passwords = (n: number) => `${n} saved ${n === 1 ? 'password' : 'passwords
 
 /** Approvals can't go off while this server holds passwords: what the confirm says instead. */
 export const moveFirstText = (n: number) =>
-  `${capitalise(passwords(n))} ${n === 1 ? 'is' : 'are'} kept on this server. With approvals off, any bot that can run commands could read ${n === 1 ? 'it' : 'them'}, so move ${n === 1 ? 'it' : 'them'} to Bitwarden first.`;
+  `${capitalise(passwords(n))} ${n === 1 ? 'is' : 'are'} kept on this server. Under “Ask only when risky” or “Don’t ask”, any bot that can run commands could read ${n === 1 ? 'it' : 'them'}, so move ${n === 1 ? 'it' : 'them'} to Bitwarden first.`;
 export const moveFirstLabel = (n: number) => `Move ${passwords(n)} to Bitwarden first`;
 
-/** An install already in that state (approvals off before the block). */
+/** An install already in that state (a space or bot stopped asking before the block). */
 export const exposedText = (n: number) =>
-  `Approvals are off and ${passwords(n)} ${n === 1 ? 'is' : 'are'} still on this server, so any bot that can run commands can read ${n === 1 ? 'it' : 'them'}.`;
+  `A space or bot is on “Ask only when risky” or “Don’t ask” and ${passwords(n)} ${n === 1 ? 'is' : 'are'} still on this server, so any bot that can run commands can read ${n === 1 ? 'it' : 'them'}.`;
 
 /** A 409 that says the server wants Bitwarden first: its sentence, and how many passwords are here. */
 export function needsBitwardenFrom(status: number, body: unknown): { message: string; local_count: number | null } | null {

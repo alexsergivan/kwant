@@ -297,7 +297,8 @@ export const LooseCaseCard: React.FC<LooseCaseCardProps> = ({ c, busy, now = Dat
 };
 
 /**
- * A login can't be saved on this server while approvals are off (or Bitwarden is locked): connect
+ * A login can't be saved on this server unless every space and bot asks before running commands
+ * (or Bitwarden is locked): connect
  * or unlock Bitwarden here, move any passwords already on this server, then save again.
  */
 export const NeedsBitwarden: React.FC<{ message: string; locked: boolean; onReady: () => void; onCancel: () => void }> = ({ message, locked, onReady, onCancel }) => {

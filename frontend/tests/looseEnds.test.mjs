@@ -140,7 +140,7 @@ test('a 409 needs_bitwarden becomes a Bitwarden step, a 423 an unlock, and other
   const real = globalThis.fetch;
   const answer = (status, body) => (globalThis.fetch = async () => new Response(JSON.stringify(body), { status }));
   try {
-    answer(409, { needs_bitwarden: true, error: 'approvals are off: connect Bitwarden first' });
+    answer(409, { needs_bitwarden: true, error: 'a space or bot is on "Ask only when risky": connect Bitwarden first' });
     await assert.rejects(m.looseApi.addSource({ kind: 'imap', label: 'x', config: {}, secret: 's' }), (e) => e.needsBitwarden && e.status === 409);
     answer(423, { locked: true, error: 'the vault is locked' });
     await assert.rejects(m.looseApi.addSource({ kind: 'imap', label: 'x', config: {}, secret: 's' }), (e) => e.locked && !e.needsBitwarden);

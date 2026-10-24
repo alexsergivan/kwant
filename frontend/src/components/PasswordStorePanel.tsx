@@ -525,7 +525,7 @@ export const PasswordStoreBar: React.FC<{
               />
               <span>
                 <span className="block text-[11px] text-zinc-200 font-medium">Saved on this server</span>
-                <span className="block text-[10px] text-zinc-500 leading-snug">Encrypted here. A bot with approvals off can read them, so use Bitwarden then.</span>
+                <span className="block text-[10px] text-zinc-500 leading-snug">Encrypted here. Works only while every space and bot is on “Ask before running commands”; otherwise use Bitwarden.</span>
               </span>
             </label>
             <label className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer ${onBitwarden || connecting ? 'border-sky-500/60 bg-sky-500/10' : 'border-zinc-800 hover:border-zinc-700'}`}>
@@ -615,15 +615,15 @@ export const PasswordStoreBar: React.FC<{
   );
 };
 
-/** What approvals off means for saved passwords, said once, plainly, for where they're kept. */
+/** What "Ask only when risky" or "Don't ask" means for saved passwords, said once, plainly, for where they're kept. */
 export const AutofillGapNote: React.FC<{ status?: StoreStatus | null }> = ({ status }) => {
   const kind = status?.store === 'bitwarden' && status.local_count === 0 ? 'bitwarden' : 'local';
   return (
     <p className="flex items-start gap-2 text-[10px] text-zinc-400 leading-snug" data-autofill-gap={kind}>
       <Info size={12} className="text-zinc-500 flex-shrink-0 mt-px" aria-hidden="true" />
       <span>
-        {/* The local sentence already starts with "With approvals off". */}
-        {kind === 'bitwarden' && <span className="text-zinc-300">Approvals are off. </span>}
+        {/* The local sentence already names the modes. */}
+        {kind === 'bitwarden' && <span className="text-zinc-300">Some bots run commands without asking. </span>}
         {autofillGapNote(status)}
       </span>
     </p>

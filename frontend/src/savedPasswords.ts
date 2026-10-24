@@ -147,7 +147,7 @@ async function call(url: string, init?: RequestInit): Promise<unknown> {
   const res = await fetch(url, { cache: 'no-store', ...init });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
-    // Saving here while approvals are off (F-10): the server's own sentence says why and what to do.
+    // Saving here while a space or bot doesn't ask before commands (F-10): the server's own sentence says why and what to do.
     const needs = needsBitwardenFrom(res.status, body);
     if (needs) throw new PasswordsError('error', res.status, needs.message, true);
     const problem = problemFor(res.status, body);

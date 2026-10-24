@@ -26,7 +26,8 @@ secret, its cases and its mutes. A plain-text IMAP connection or a self-signed c
 only accepted for a server on this computer (Proton Bridge, a test server).
 
 Like any saved password (see `saved-passwords.md`), a login is refused with 409
-`{needs_bitwarden: true}` on the built-in store while approvals are off anywhere, before the
+`{needs_bitwarden: true}` on the built-in store while any space or bot is on "Ask only when
+risky" or "Don't ask", before the
 connection test runs. That holds for adding a source and for changing its settings or login
 (`PATCH sources/:id` with `config` or `secret`): a refused save never contacts the server. Existing logins count toward `local_count` and move with "Move to Bitwarden".
 

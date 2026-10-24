@@ -22,6 +22,7 @@ Since 2026-10-20, approvals off and passwords in the built-in store are not allo
 - A space that is off counts even if every bot in it overrides to `ask`, because a new bot there would inherit `off`.
 - `local_count` counts every file in `<data>/kwnt-vault/`, including those of deleted teams, channels and bots (audit F-11). A file that won't open counts as one. Deleting a bot, team or channel now deletes its file. Leftovers from before this change are kept, because they are the person's data. They still count, and `POST /api/passwords/migrate` moves them to Bitwarden too. Spaces are only archived, so their bots' passwords keep counting. Deleting an owner never deletes items in Bitwarden.
 - New spaces, and a fresh install's Default space, start on `smart` (since 2026-10-24). So on a new install, saving into the built-in store answers 409 until every space and bot is on "Ask before running commands", or Bitwarden is set up. A space created while the built-in store holds passwords starts on `ask` instead, and a fresh database next to a leftover `kwnt-vault/` folder starts its Default space on `ask`.
+- The 409 `error` names the modes rather than saying "approvals are off", which read wrong under "Ask only when risky". It says the built-in store needs every space and bot on "Ask before running commands", and that the way out is to connect Bitwarden or switch every space and bot back to that mode.
 - An install that was already in this state keeps its approvals as they are. `GET /api/passwords/store` shows `exposed: true`, and kwnt logs one warning at start (a count, no secrets). Moving the passwords to Bitwarden or turning approvals back on clears it.
 
 With Bitwarden, the API token alone doesn't show a password: that needs the master password. The DevTools gap below still applies in Bitwarden mode.
@@ -83,7 +84,7 @@ Vault:
     - 400 for bad input
     - 502 when Bitwarden is unreachable or refuses
 - `POST /api/passwords/bitwarden/lock` returns the store status.
-- `DELETE /api/passwords/bitwarden {master_password}` goes back to the built-in store. The vault must be unlocked, and the items stay in Bitwarden. While approvals are off anywhere and the built-in store isn't empty, it returns 409 (see above).
+- `DELETE /api/passwords/bitwarden {master_password}` goes back to the built-in store. The vault must be unlocked, and the items stay in Bitwarden. While any space or bot is on "Ask only when risky" or "Don't ask" and the built-in store isn't empty, it returns 409 (see above).
 - `POST /api/passwords/migrate` returns `{moved, failed}`. It runs once, when the person triggers it. Each built-in password is deleted locally only after Bitwarden has it.
 
 ## Tests

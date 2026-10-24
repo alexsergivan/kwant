@@ -397,7 +397,8 @@ pub async fn refuse_approvals_off(state: &AppState) -> Option<Response> {
     )
 }
 
-/// The 409 for saving into the built-in store while approvals are off anywhere. Zombie Hunter's
+/// The 409 for saving into the built-in store while any space or bot is on "Ask only when risky" or
+/// "Don't ask" (both count as off here). Zombie Hunter's
 /// mailbox and GitHub logins go through it too.
 pub(crate) async fn refuse_local_save(state: &AppState) -> Option<Response> {
     if state.credentials.store_name() != "local" || !approvals_off_anywhere(state).await {
@@ -407,7 +408,7 @@ pub(crate) async fn refuse_local_save(state: &AppState) -> Option<Response> {
         (
             StatusCode::CONFLICT,
             Json(json!({
-                "error": "passwords can't be saved on this server while approvals are off: a bot that can run commands could read them. Use Bitwarden, or turn approvals back on.",
+                "error": "this server's built-in password store only takes passwords while every space and bot is on \"Ask before running commands\": under \"Ask only when risky\" or \"Don't ask\", a bot that can run commands could read them. Connect Bitwarden, or switch every space and bot to \"Ask before running commands\".",
                 "needs_bitwarden": true,
             })),
         )
@@ -415,14 +416,14 @@ pub(crate) async fn refuse_local_save(state: &AppState) -> Option<Response> {
     )
 }
 
-/// On start: one warning, without secrets, when approvals are off and the built-in store holds
-/// passwords. Approvals are left as the person set them.
+/// On start: one warning, without secrets, when a space or bot doesn't ask before commands and
+/// the built-in store holds passwords. Approvals are left as the person set them.
 pub async fn warn_if_exposed(state: &AppState) {
     let n = local_count(state).await;
     if n > 0 && approvals_off_anywhere(state).await {
         tracing::warn!(
             local_count = n,
-            "approvals are off while passwords are saved on this server: a bot that can run commands could read them. Move them to Bitwarden or turn approvals back on."
+            "a space or bot is on \"Ask only when risky\" or \"Don't ask\" while passwords are saved in the built-in password store: a bot that can run commands could read them. Move them to Bitwarden, or switch every space and bot to \"Ask before running commands\"."
         );
     }
 }
@@ -489,7 +490,7 @@ pub async fn forget_bitwarden(State(state): State<AppState>, headers: HeaderMap,
         return (
             StatusCode::CONFLICT,
             Json(json!({
-                "error": "approvals are off, so this server can't go back to its built-in password store while it still holds passwords. Turn approvals back on first.",
+                "error": "this server can't go back to its built-in password store while it still holds passwords and a space or bot is on \"Ask only when risky\" or \"Don't ask\": a bot that can run commands could read them. Switch every space and bot to \"Ask before running commands\" first.",
                 "needs_bitwarden": true,
                 "local_count": n,
             })),

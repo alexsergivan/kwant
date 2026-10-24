@@ -39,7 +39,7 @@ const BW = st({ store: 'bitwarden', bitwarden: bw() });
 const BW_LEFTOVER = st({ store: 'bitwarden', bitwarden: bw(), local_count: 2 });
 const BW_LOCKED = st({ store: 'bitwarden', locked: true, bitwarden: bw({ unlocked: false }), local_count: 3 });
 const EXPOSED = st({ local_count: 3, approvals_off: true, exposed: true });
-const LOCAL_NOTE = "With approvals off, any bot that can run commands could read passwords saved on this server, so that's blocked: use Bitwarden.";
+const LOCAL_NOTE = "Unless every space and bot is on “Ask before running commands”, any bot that can run commands could read passwords saved on this server, so they can't be saved here: use Bitwarden.";
 const BW_NOTE = 'While a password is being filled into a page, a bot that can run commands can read it.';
 
 // ---------------------------------------------------------------- the model
@@ -70,10 +70,10 @@ test('move-first and exposed wording, one and many', () => {
   assert.equal(m.moveFirstLabel(3), 'Move 3 saved passwords to Bitwarden first');
   assert.equal(
     text(m.moveFirstText(3)),
-    "3 saved passwords are kept on this server. With approvals off, any bot that can run commands could read them, so move them to Bitwarden first.",
+    "3 saved passwords are kept on this server. Under “Ask only when risky” or “Don't ask”, any bot that can run commands could read them, so move them to Bitwarden first.",
   );
   assert.match(text(m.moveFirstText(1)), /^1 saved password is kept .* read it, so move it to Bitwarden first\.$/);
-  assert.equal(text(m.exposedText(3)), 'Approvals are off and 3 saved passwords are still on this server, so any bot that can run commands can read them.');
+  assert.equal(text(m.exposedText(3)), 'A space or bot is on “Ask only when risky” or “Don\'t ask” and 3 saved passwords are still on this server, so any bot that can run commands can read them.');
   assert.match(text(m.exposedText(1)), /1 saved password is still on this server, .* read it\.$/);
 });
 
@@ -125,13 +125,13 @@ test('approvals PUT refused for passwords here → NeedsBitwardenError with the 
   );
 });
 
-test('saving here while approvals are off: the 409 reason, not a generic error (Add and a caught login)', async () => {
-  const refusal = { error: "passwords can't be saved on this server while approvals are off: a bot that can run commands could read them. Use Bitwarden, or turn approvals back on.", needs_bitwarden: true };
+test('saving here while a space or bot doesn\'t ask before commands: the 409 reason, not a generic error (Add and a caught login)', async () => {
+  const refusal = { error: "this server's built-in password store only takes passwords while every space and bot is on \"Ask before running commands\": under \"Ask only when risky\" or \"Don't ask\", a bot that can run commands could read them. Connect Bitwarden, or switch every space and bot to \"Ask before running commands\".", needs_bitwarden: true };
   await withFetch(
     () => json(refusal, 409),
     async (calls) => {
       for (const p of [m.passwordsApi.add('k1', 'https://example.com', 'alice', 'DUMMY-PW'), m.passwordsApi.savePending('k1')]) {
-        await assert.rejects(p, (e) => e instanceof m.PasswordsError && e.needsBitwarden === true && e.status === 409 && /^Passwords can't be saved on this server while approvals are off/.test(e.message) && /Use Bitwarden, or turn approvals back on\.$/.test(e.message));
+        await assert.rejects(p, (e) => e instanceof m.PasswordsError && e.needsBitwarden === true && e.status === 409 && /^This server's built-in password store only takes passwords while every space and bot is on "Ask before running commands"/.test(e.message) && /Connect Bitwarden, or switch every space and bot to "Ask before running commands"\.$/.test(e.message) && !/approvals are off/i.test(e.message));
       }
       assert.deepEqual(calls.map((c) => `${c.method} ${c.url}`), ['POST /api/sandbox/k1/passwords', 'POST /api/sandbox/k1/passwords/pending']);
     },
@@ -185,7 +185,7 @@ test('confirm with passwords here: "off" isn\'t offered; it says why and offers 
   const html = m.confirm(LOCAL3);
   const t = text(html);
   assert.match(html, /data-off-needs-bitwarden/);
-  assert.match(t, /3 saved passwords are kept on this server\. With approvals off, any bot that can run commands could read them, so move them to Bitwarden first\./);
+  assert.match(t, /3 saved passwords are kept on this server\. Under “Ask only when risky” or “Don't ask”, any bot that can run commands could read them, so move them to Bitwarden first\./);
   assert.deepEqual(buttons(html), ['Move 3 saved passwords to Bitwarden first', 'Keep asking']);
   assert.doesNotMatch(t, /Turn approvals off/);
   // The paragraph says it; the note isn't repeated above it.
@@ -243,7 +243,7 @@ test('exposed: a plain banner with both ways out, next to saved passwords and in
   const html = m.banner(EXPOSED);
   assert.match(html, /data-exposed/);
   assert.match(html, /role="region"/);
-  assert.equal(text(html).split(' Move to Bitwarden')[0], 'Approvals are off and 3 saved passwords are still on this server, so any bot that can run commands can read them.');
+  assert.equal(text(html).split(' Move to Bitwarden')[0], 'A space or bot is on “Ask only when risky” or “Don\'t ask” and 3 saved passwords are still on this server, so any bot that can run commands can read them.');
   assert.deepEqual(buttons(html), ['Move to Bitwarden', 'Turn approvals back on']);
   assert.equal(m.banner({ ...EXPOSED, exposed: false }), '', 'nothing when not exposed');
   assert.equal(m.banner(null), '');
@@ -257,12 +257,12 @@ test('exposed: a plain banner with both ways out, next to saved passwords and in
 });
 
 test('next to saved passwords: the note follows the store, and shows when any bot runs without asking', () => {
-  assert.ok(text(m.panel(st({ store: 'bitwarden', bitwarden: bw(), approvals_off: true }))).includes(BW_NOTE), 'the server says approvals are off somewhere');
+  assert.ok(text(m.panel(st({ store: 'bitwarden', bitwarden: bw(), approvals_off: true }))).includes(BW_NOTE), 'the server says some space or bot doesn\'t ask before every command');
   assert.ok(text(m.panel(st({ approvals_off: true }))).includes(LOCAL_NOTE));
   assert.ok(!text(m.panel(BW)).includes(BW_NOTE));
   assert.match(m.gap(BW), /data-autofill-gap="bitwarden"/);
   assert.match(m.gap(LOCAL0), /data-autofill-gap="local"/);
   for (const s of [BW, LOCAL0]) assert.doesNotMatch(m.gap(s), /rose|red-|amber/, 'no scare styling');
-  assert.equal(text(m.gap(BW)), `Approvals are off. ${BW_NOTE}`);
-  assert.equal(text(m.gap(LOCAL0)), LOCAL_NOTE, 'no "Approvals are off." before "With approvals off"');
+  assert.equal(text(m.gap(BW)), `Some bots run commands without asking. ${BW_NOTE}`);
+  assert.equal(text(m.gap(LOCAL0)), LOCAL_NOTE, 'no prefix before a sentence that already names the modes');
 });
