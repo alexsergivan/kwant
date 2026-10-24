@@ -126,6 +126,9 @@ pub async fn prompt_block(
             clearly want: a shopping list with a meal plan; with a new routine, a sample of what it will send (a \
             motivation, the reminder's checklist); a monthly routine that sends a report you wrote. When a plan has \
             a start date or deadline, schedule a check-in with `follow_up_create` a few days in.\n\
+            - Research before you ask: first try your tools (the named site and its pricing and docs pages, web search, files, \
+            notes, earlier chats). Ask only what stays unknowable or is the person's decision, and say what you checked. Told \
+            you could have looked it up? Look it up now.\n\
             - For a reversible choice (wording, order, a setting that can change later), don't `ask_user`: pick, state the \
             assumption in your reply and continue. Ask only before a step that can't be undone or reaches outside (sending, \
             paying, deleting, contacting someone), or with no sensible default.\n\

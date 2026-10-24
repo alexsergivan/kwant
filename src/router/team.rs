@@ -725,6 +725,9 @@ fn direct(pick: Option<Pick<'_>>, team: &Team) -> TeamDecision {
 /// specialist, and that names no other bot: "need a new workout plan" is FitnessCoach's, and shouldn't
 /// start a discussion that puts TravelPlanner first. "Plan the migration…" still is a discussion.
 fn settles_without_discussion(prompt: &str, pick: &Option<Pick<'_>>, members: &[Kwant]) -> bool {
+    if is_lookup_nudge(prompt) {
+        return true;
+    }
     let Some(p) = pick else { return true };
     if p.basis == "team" || p.reason.contains("was named in your message") || (is_code_request(prompt) && matches!(p.basis, "keywords" | "skills" | "only")) {
         return true;
@@ -732,6 +735,17 @@ fn settles_without_discussion(prompt: &str, pick: &Option<Pick<'_>>, members: &[
     let words = tokens(prompt);
     let named = members.iter().filter(|m| words.iter().any(|w| *w == m.name.trim().to_lowercase())).count();
     matches!(p.basis, "keywords" | "skills") && !p.terms.is_empty() && named <= 1 && !has_strong_discussion_word(prompt)
+}
+
+/// A follow-up telling the team to look its own questions up ("You can answer your questions by
+/// checking the site!") goes to one bot to do the research; a new discussion would only ask again.
+fn is_lookup_nudge(prompt: &str) -> bool {
+    const LOOKUP: &[&str] = &["check", "checking", "look", "lookup", "research", "search", "google", "find", "read", "visit"];
+    const BACK: &[&str] = &["question", "questions", "yourself", "yourselves", "site", "website", "page", "docs"];
+    let words = tokens(prompt);
+    !is_complex_query(prompt)
+        && words.iter().any(|w| LOOKUP.contains(&w.as_str()))
+        && words.iter().any(|w| BACK.contains(&w.as_str()))
 }
 
 pub fn parse_laya_team_answers(
@@ -1061,6 +1075,25 @@ mod tests {
         assert_eq!(parse_laya_kwant_choice(&ok, &members).unwrap().0, "kwant-2");
         let unknown = json!({ "answers": { "lead_kwant": { "choice": "ghost" } } });
         assert!(parse_laya_kwant_choice(&unknown, &members).is_none());
+    }
+
+    #[test]
+    fn a_nudge_to_look_it_up_goes_to_one_bot_not_a_new_discussion() {
+        let (team, members) = make_test_fixture();
+        let sure = json!({
+            "answers": {
+                "team_decision": { "choice": "discuss", "probabilities": { "discuss": 0.9 } },
+                "lead_kwant": { "choice": "kwant-1" }
+            }
+        });
+        for nudge in ["You can answer on your questions by checking site!", "look it up yourself", "read the docs page"] {
+            let decision = parse_laya_team_answers(nudge, &sure, &team, &members).unwrap();
+            assert!(matches!(decision, TeamDecision::Direct { .. }), "{nudge}");
+            assert!(matches!(heuristic_team_decision(nudge, &team, &members), TeamDecision::Direct { .. }), "{nudge}");
+        }
+        // A real planning request still starts a discussion
+        let plan = parse_laya_team_answers("Plan the site migration and check the docs", &sure, &team, &members).unwrap();
+        assert!(matches!(plan, TeamDecision::Discuss { .. }));
     }
 
     #[test]
