@@ -25,6 +25,7 @@
 html { -webkit-text-size-adjust: 100%; scroll-padding-top: 24px; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 400 17px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
 img, video, canvas { display: block; max-width: 100%; }
+img, video { height: auto; }
 a { color: var(--v4); text-underline-offset: 3px; }
 a:hover { color: var(--v5); }
 code, pre, kbd { font-family: var(--mono); }
@@ -170,7 +171,8 @@ section { padding: 104px 0; }
 .phone-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 56px; align-items: center; }
 .phone-grid .row-copy > p:not(.kicker) { max-width: 30em; font-size: 18px; }
 .phones { display: flex; gap: 22px; align-items: flex-start; }
-.phone { width: 230px; overflow: hidden; border: 8px solid var(--panel); border-radius: 30px; background: var(--panel); box-shadow: var(--shadow); }
+.phone { width: 250px; overflow: hidden; border: 8px solid var(--panel); border-radius: 30px; background: var(--panel); box-shadow: var(--shadow); }
+.phone img { width: 100%; }
 .phone + .phone { margin-top: 40px; }
 
 /* Setup steps: static, nothing to load */
