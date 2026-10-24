@@ -12,6 +12,7 @@ import { isMac } from './LayaStatus';
 import { ApprovalsOffBadge } from './ApprovalsSetting';
 import { approvalsOff, spaceOffLine } from '../approvalMode';
 import { teamChannelOf } from '../teamChannel';
+import { InstallAppButton } from './InstallAppButton';
 
 export interface Kwant {
   id: string;
@@ -312,6 +313,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <CalendarClock size={15} className="text-zinc-500" aria-hidden="true" />
             <span className="truncate flex-1">Routines</span>
           </button>
+          <InstallAppButton className={navRow(false)} />
         </div>
         )}
 
