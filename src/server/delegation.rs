@@ -573,9 +573,17 @@ pub async fn resume_after_answer(state: &AppState, d: Delegation, question_id: &
     true
 }
 
+/// Batches whose lead was already resumed, by their sorted ids (see [`finished_batch`]).
+static RESUMED_BATCHES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+
 /// The delegations a lead sent from one chat that ran at the same time as `d`, once all of them
-/// have ended. `None` while one is still open, or when another one of them ended later: the last
-/// to end resumes the lead, once, with every result.
+/// have ended. `None` while one is still open, or when the batch was already claimed: the first
+/// finisher to see every one of them ended resumes the lead, once, with every result.
+///
+/// Not "the one with the latest `ended_at`": that time is taken before the row is written, so
+/// under write contention the latest one could check while a sibling was still open, the
+/// sibling then saw it wasn't the latest, and nobody resumed the lead (1 run in 5 of a 4-bot
+/// team on 2026-10-24: every teammate replied and the lead never answered).
 async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegation>> {
     let siblings: Vec<Delegation> = state
         .db
@@ -607,12 +615,21 @@ async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegati
             batch.push(s);
         }
     }
-    let last = batch.iter().max_by(|a, b| end(a).cmp(&end(b)).then_with(|| a.id.cmp(&b.id)))?;
     // A batch the person stopped entirely stays stopped; anything else (a result, a failure, a
     // restart cutting it short) is the lead's to report
-    if last.id != d.id || batch.iter().all(|b| b.status == "cancelled") {
+    if batch.iter().all(|b| b.status == "cancelled") {
         return None;
     }
+    let mut ids: Vec<&str> = batch.iter().map(|b| b.id.as_str()).collect();
+    ids.sort_unstable();
+    let mut claimed = RESUMED_BATCHES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if claimed.len() > 10_000 {
+        claimed.clear();
+    }
+    if !claimed.insert(ids.join(",")) {
+        return None;
+    }
+    drop(claimed);
     batch.sort_by_key(|b| b.created_at);
     Some(batch)
 }
@@ -680,12 +697,15 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     };
     let prompt = format!(
         "{opening} The results are in the chat above, quoted here:\n\n{results}\
-        Check each result against what the user asked. If something is missing or wrong, delegate a concrete \
-        correction. Otherwise continue with the user's request and give them one answer that uses the results. \
-        If a task failed, was stopped or was cut short, say so plainly. Don't repeat the results in full."
+        Check each result against what the user asked. If something is missing or wrong, hand that teammate a concrete \
+        correction by @mention (below). Otherwise continue with the user's request and give them one answer \
+        that uses the results. If a task failed, was stopped or was cut short, say so plainly. Don't repeat the results in full.\n\n\
+        {rules}",
+        rules = handoff_rules(),
     );
-    // The follow-up may hand on to the next teammate by @mention, like any lead reply. Not back to
-    // the ones that just reported (the result is what it's about), and within the usual limits.
+    // The follow-up may hand on by @mention, like any lead reply: to the next teammate, or back to
+    // one that just reported with a correction (not a mention that only credits it), within the
+    // usual limits.
     if let Ok(reply) = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await {
         let mut spoken = vec![lead.id.clone()];
         spoken.extend(batch.iter().map(|b| b.specialist_kwant_id.clone()));
@@ -701,6 +721,21 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
             .unwrap_or_else(|| d.task.clone());
         super::routes::run_handoffs_boxed(&scope, &spoken, &[(lead.clone(), reply)], &user_prompt).await;
     }
+}
+
+/// How a lead hands work on from its results follow-up, so it never announces a handoff that
+/// doesn't happen (Oleks's screenshot, 2026-10-24: "Handing off now: @Social …" and nothing ran).
+pub fn handoff_rules() -> String {
+    format!(
+    "How handing on works: to give a teammate a correction or the next step, @mention them in this reply with the \
+    concrete task (\"@Writer, draft Pillar 1: …\"); kwnt sends it to them and resumes you with their result. That works for \
+    a teammate who just reported, too. Only say you're handing off, asking or waiting for someone when you @mention them \
+    with a task in this reply; to merely refer to a teammate, write the name without @. Limits for this user message: each \
+    teammate gets at most {per_bot} tasks by mention and all teammates at most {total} in total. Past that the mention is \
+    not sent and a \"Not sent to …\" notice says so; then tell the person what's left instead of claiming a handoff.",
+    per_bot = super::routes::MAX_MENTION_DELEGATIONS_PER_BOT,
+    total = super::routes::MAX_DELEGATIONS_PER_REQUEST,
+    )
 }
 
 /// What the lead should do about a task that ended without a result.

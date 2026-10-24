@@ -193,6 +193,45 @@ pub fn handoff_mentions(text: &str, names: &[&str]) -> HandoffMentions {
     out
 }
 
+/// Words right before an @mention that make it a credit ("as @Writer found", "thanks to @SEO").
+const CREDIT_BEFORE: [&str; 8] = ["as", "per", "by", "from", "via", "thanks", "credit", "kudos"];
+/// Past-tense words right after an @mention that report what the teammate did ("@SEO found …").
+const CREDIT_AFTER: [&str; 14] = [
+    "said", "noted", "found", "reported", "suggested", "wrote", "mentioned", "confirmed", "flagged", "pointed", "drafted",
+    "shared", "delivered", "showed",
+];
+
+/// Whether every @mention of `name` in `text` only credits the teammate for what it did ("As @SEO
+/// found, …", "thanks to @Writer", "@Social suggested …"), so the mention asks nothing new. A
+/// mention without such words counts as an ask: this is deliberately narrow, and the per-teammate
+/// limit stops repeats it misses. `false` when `name` isn't mentioned at all.
+pub fn only_credited(text: &str, name: &str) -> bool {
+    let lower = text.to_lowercase();
+    let tag = format!("@{}", name.to_lowercase());
+    let word = |s: &str| s.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
+    let mut seen = false;
+    let mut from = 0;
+    while let Some(at) = lower[from..].find(&tag).map(|i| i + from) {
+        let end = at + tag.len();
+        from = end;
+        // `@Growthteam` isn't `@Growth`
+        if lower[end..].chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        seen = true;
+        let before: Vec<String> = lower[..at].split_whitespace().rev().take(2).map(word).collect();
+        let after = lower[end..].split_whitespace().next().map(word).unwrap_or_default();
+        let credit = before.first().is_some_and(|w| CREDIT_BEFORE.contains(&w.as_str()))
+            || (before.first().is_some_and(|w| w == "to")
+                && before.get(1).is_some_and(|w| ["thanks", "according", "credit", "kudos"].contains(&w.as_str())))
+            || CREDIT_AFTER.contains(&after.as_str());
+        if !credit {
+            return false;
+        }
+    }
+    seen
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +345,22 @@ mod tests {
         assert!(mentions[0].is_team());
         assert!(mentions[1].is_kwant());
     }
-}
 
+    /// Oleks's screenshot (2026-10-24): "Handing off now: @Social revise …, @Writer draft Pillar 1 …"
+    /// asks; "As @SEO found, …" only credits.
+    #[test]
+    fn credit_only_mentions_ask_nothing_new() {
+        let handoff = "Handing off now: @Social revise the hooks, @Writer draft Pillar 1, @SEO write the brief.";
+        for n in ["Social", "Writer", "SEO"] {
+            assert!(!only_credited(handoff, n), "{n} is asked");
+        }
+        assert!(only_credited("As @SEO found, the keyword is taken. Thanks to @Writer the draft is done.", "SEO"));
+        assert!(only_credited("As @SEO found, the keyword is taken. Thanks to @Writer the draft is done.", "Writer"));
+        assert!(only_credited("@Social suggested three hooks; I picked the second.", "social"));
+        // One real ask among credits is an ask
+        assert!(!only_credited("As @SEO found, the keyword is taken. @SEO, pick another one.", "SEO"));
+        assert!(!only_credited("@Writer, thanks! Now tighten Pillar 2.", "Writer"));
+        assert!(!only_credited("no mention here", "Writer"));
+        assert!(!only_credited("@Writers found it", "Writer"), "another name");
+    }
+}
