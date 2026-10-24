@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use crate::doctor::{self, Platform};
 
 /// Settings row holding the person's explicit choice.
 pub const SETTING_KEY: &str = "computer_mode";
@@ -127,10 +128,11 @@ pub fn has_display(os: &str, display: Option<&str>, wayland: Option<&str>) -> bo
 
 /// Why local mode cannot run here, or `None` if it can. No display is needed: local Chrome runs
 /// without a window and the app shows it.
-pub fn local_unavailable_reason(chrome: Option<&Path>) -> Option<String> {
-    chrome.is_none().then(|| format!(
-        "No Chrome or Chromium was found. Install Google Chrome, or set {CHROME_PATH_ENV} to its path."
-    ))
+pub fn local_unavailable_reason(chrome: Option<&Path>, platform: Platform) -> Option<String> {
+    chrome.is_none().then(|| match platform {
+        Platform::Docker => format!("kwant runs in a Docker container, which has no Chrome. {}", doctor::chrome_fix(platform)),
+        _ => format!("No Chrome or Chromium was found. Install it: {}", doctor::chrome_fix(platform)),
+    })
 }
 
 /// Why local Chrome cannot be opened as a window here, or `None` if it can.
@@ -140,10 +142,10 @@ pub fn window_unavailable_reason(display: bool) -> Option<String> {
 
 /// Why vm mode cannot run here, or `None` if it can. A configured browser service URL is enough
 /// for the browser even without Docker.
-pub fn vm_unavailable_reason(docker: bool, browser_url_configured: bool) -> Option<String> {
-    (!docker && !browser_url_configured).then(|| {
-        "Docker is not installed or not running. Install and start Docker (Docker Desktop on a Mac) to use the VM."
-            .into()
+pub fn vm_unavailable_reason(docker: bool, browser_url_configured: bool, platform: Platform) -> Option<String> {
+    (!docker && !browser_url_configured).then(|| match platform {
+        Platform::Docker => format!("No browser service is set for this container. {}", doctor::vm_fix(platform)),
+        _ => format!("Docker is not installed or not running. {}", doctor::vm_fix(platform)),
     })
 }
 
@@ -160,7 +162,7 @@ pub fn local_chrome_path() -> Option<PathBuf> {
 
 /// [`local_unavailable_reason`] for this process's environment.
 pub fn local_reason() -> Option<String> {
-    local_unavailable_reason(local_chrome_path().as_deref())
+    local_unavailable_reason(local_chrome_path().as_deref(), Platform::detect())
 }
 
 /// [`window_unavailable_reason`] for this process's environment.
@@ -703,18 +705,23 @@ mod tests {
 
         // local Chrome runs without a window, so only a window needs a display
         let chrome = Path::new("/usr/bin/chromium");
-        assert_eq!(local_unavailable_reason(Some(chrome)), None);
-        assert!(local_unavailable_reason(None)
+        assert_eq!(local_unavailable_reason(Some(chrome), Platform::Linux), None);
+        assert!(local_unavailable_reason(None, Platform::Linux)
             .unwrap()
             .contains(CHROME_PATH_ENV));
+        assert!(local_unavailable_reason(None, Platform::Mac).unwrap().contains("brew install --cask google-chrome"));
+        assert!(local_unavailable_reason(None, Platform::Docker).unwrap().contains("compose browser service"));
         assert_eq!(window_unavailable_reason(true), None);
         assert!(window_unavailable_reason(false).unwrap().contains("display"));
 
-        assert_eq!(vm_unavailable_reason(true, false), None);
-        assert_eq!(vm_unavailable_reason(false, true), None);
-        assert!(vm_unavailable_reason(false, false)
-            .unwrap()
-            .contains("Docker"));
+        assert_eq!(vm_unavailable_reason(true, false, Platform::Linux), None);
+        assert_eq!(vm_unavailable_reason(false, true, Platform::Docker), None);
+        // each platform gets its own advice: no "Docker Desktop on a Mac" on a Linux server
+        let linux = vm_unavailable_reason(false, false, Platform::Linux).unwrap();
+        assert!(linux.contains("get.docker.com") && !linux.contains("Docker Desktop"), "{linux}");
+        assert!(vm_unavailable_reason(false, false, Platform::Mac).unwrap().contains("Docker Desktop"));
+        let docker = vm_unavailable_reason(false, false, Platform::Docker).unwrap();
+        assert!(docker.contains("KWNT_BROWSER_CDP_URL") && docker.contains("docker compose up -d browser"), "{docker}");
     }
 
     #[test]

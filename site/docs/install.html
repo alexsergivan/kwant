@@ -108,13 +108,18 @@ WantedBy=multi-user.target</code></pre>
 <pre><code>systemctl daemon-reload
 systemctl enable --now kwnt</code></pre>
 
-<h2 id="docker">With Docker Compose</h2>
-<p><code>docker-compose.yml</code> runs kwant next to a Laya image with the model weights baked in, so the server never downloads them at runtime:</p>
-<pre><code>docker compose up -d --build                  <span class="c"># UI on http://127.0.0.1:8799</span>
-docker compose logs kwnt | grep kwnt_token    <span class="c"># open that link once</span>
-docker compose exec kwnt kwnt token           <span class="c"># print it again later</span>
-docker compose exec kwnt kwnt token --raw     <span class="c"># just the token, to paste</span></code></pre>
-<p>Requests through Docker's published port arrive from the bridge network, so they count as remote: open the startup link once, using <code>127.0.0.1</code> as the host. An SSH tunnel doesn't skip sign-in here. Without Compose: <code>docker exec &lt;container&gt; kwnt token --raw</code>. Data persists in the <code>kwnt-data</code> volume.</p>
+<h2 id="docker">VPS in 5 minutes with Docker Compose</h2>
+<p>One command starts kwnt, Laya (with its model baked in) and a private Chromium for the bots, so VM mode works without mounting the Docker socket. You need Docker with Compose and about 4 GB of free RAM.</p>
+<pre><code>git clone https://github.com/alexsergivan/kwant.git &amp;&amp; cd kwant
+KWNT_CLIS=claude,codex docker compose up -d --build   <span class="c"># any of claude,codex,grok; leave out for none</span>
+docker compose exec kwnt kwnt doctor                  <span class="c"># what works, and the fix for what doesn't</span>
+docker compose exec kwnt claude auth login            <span class="c"># or codex login --device-auth, grok login --device-auth</span>
+docker compose exec kwnt kwnt token --raw             <span class="c"># the token to paste on the sign-in screen</span></code></pre>
+<p>Instead of CLIs you can add an API key in the app under <strong>Space settings → Accounts</strong>. CLI sign-ins persist in the <code>kwnt-home</code> volume and data in <code>kwnt-data</code>. The UI is published on <code>127.0.0.1:8799</code> only: put HTTPS in front (below) and set <code>KWNT_ALLOWED_ORIGINS=https://your.domain</code> in <code>.env</code>. With Caddy that's a two-line <code>Caddyfile</code>: <code>your.domain { reverse_proxy 127.0.0.1:8799 }</code>.</p>
+<p>Requests through Docker's published port count as remote, so sign in with the token (<code>docker compose logs kwnt | grep kwnt_token</code> shows the link). kwant's own <code>execute_shell</code> tool isn't available in this stack, because it would need the host's Docker socket; the CLIs' shell tools work. Upgrading from an older image, where kwnt ran as root? If it says <code>/data isn't writable</code>, run once: <code>docker compose run --rm -u root kwnt chown -R 10001:10001 /data</code>.</p>
+
+<h2 id="deps">Without Docker: one script, then <code>kwnt doctor</code></h2>
+<p>On Debian or Ubuntu, <code>sh scripts/install-linux-deps.sh --clis claude,codex</code> installs Chromium, Python 3 for Laya and the CLIs you name; it prints each command and is safe to run again. On a Mac: <code>brew install --cask google-chrome</code> and <code>brew install python</code>. Then <code>kwnt doctor</code> lists anything still missing, with the exact fix for your machine.</p>
 
 <h2 id="proxy">Behind an HTTPS reverse proxy</h2>
 <p>Only the HTTPS port needs to be reachable from outside. Forward the original <code>Host</code> header, because the live browser stream checks <code>Origin</code> against it, and allow WebSocket upgrades:</p>

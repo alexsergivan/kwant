@@ -60,6 +60,8 @@ Screenshots come from a demo space with sample data.
   - an Anthropic, OpenAI or xAI API key, which you add in the app under **Space settings → Accounts**.
 - Optional: **Docker** for VM mode and the bots' shared browser, and [`uv`](https://docs.astral.sh/uv/) or `python3` for the Laya router.
 
+`kwnt doctor` (`cargo run -- doctor` from a clone) checks all of these and prints the install command for whatever is missing on your machine.
+
 ### Run from a fresh clone
 
 ```bash
@@ -127,16 +129,47 @@ systemctl enable --now kwnt
 
 </details>
 
-### Docker Compose
+### VPS in 5 minutes (Docker Compose)
 
-`docker-compose.yml` runs kwnt with a Laya image that has the model baked in, so the server never downloads it at runtime:
+One command starts everything kwant needs: kwnt, **Laya** (picks which bot answers, model baked in) and a private **Chromium** for the bots (VM mode), with no Docker socket mounted. You need Docker with Compose and about 4 GB of free RAM (Chromium is capped at 1.5 GB).
 
 ```bash
-docker compose up -d --build                  # UI on http://127.0.0.1:8799
-docker compose logs kwnt | grep kwnt_token    # open that link once, with <this-host> as 127.0.0.1
+git clone https://github.com/alexsergivan/kwant.git && cd kwant
+KWNT_CLIS=claude,codex docker compose up -d --build   # any of claude,codex,grok; leave out for none
+docker compose exec kwnt kwnt doctor                  # what works, and the fix for what doesn't
+docker compose exec kwnt claude auth login            # sign a CLI in (codex login --device-auth, grok login --device-auth)
+docker compose exec kwnt kwnt token --raw             # the token to paste on the sign-in screen
 ```
 
-Data persists in the `kwnt-data` volume. `docker compose exec kwnt kwnt token` prints the sign-in link again, and `--raw` just the token to paste (`docker exec <container> kwnt token --raw` without Compose).
+Or skip the CLIs and add an Anthropic, OpenAI or xAI API key in the app under **Space settings → Accounts**. CLI sign-ins live in the `kwnt-home` volume and data in `kwnt-data`, so both survive rebuilds.
+
+**HTTPS:** the UI is published on `127.0.0.1:8799` only. Put a TLS proxy in front, e.g. [Caddy](https://caddyserver.com) with this `Caddyfile`, and tell kwnt its address:
+
+```
+kwant.example.com {
+	reverse_proxy 127.0.0.1:8799
+}
+```
+
+```bash
+echo KWNT_ALLOWED_ORIGINS=https://kwant.example.com >> .env && docker compose up -d
+```
+
+`docker compose logs kwnt | grep kwnt_token` shows the sign-in link (open it once with your domain as the host); `docker compose exec kwnt kwnt token` prints it again.
+
+- **Image sizes** (measured): kwnt alone 0.2 GB; with `KWNT_CLIS=claude,codex,grok` 1.7 GB (the CLIs add about 0.9 GB, so they are off by default). Laya 3.2 GB, the browser 1.2 GB. Idle RAM: Laya about 1.7–2.3 GB, the browser about 0.4 GB, kwnt about 25 MB.
+- **kwant's own `execute_shell` tool** runs in per-team Docker containers, so it isn't available inside this stack: that would need the host's Docker socket, which is root on the host. The CLIs' own shell tools work inside the kwnt container.
+- **Upgrading from an older image:** kwnt now runs as uid 10001, not root. If it says `/data isn't writable`, run once: `docker compose run --rm -u root kwnt chown -R 10001:10001 /data`.
+
+### Without Docker
+
+On Debian or Ubuntu, one script installs Chromium and Python 3 (for Laya), and optionally the CLIs for your user; it prints each command, and running it again changes nothing:
+
+```bash
+sh scripts/install-linux-deps.sh --clis claude,codex   # then: kwnt serve, and kwnt doctor
+```
+
+On a Mac: `brew install --cask google-chrome` and `brew install python`; Docker Desktop is only needed for VM mode. `kwnt doctor` lists anything still missing, with the fix for your machine.
 
 ---
 
