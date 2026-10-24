@@ -210,6 +210,76 @@ test('iPhone and iPad are recognised, including iPadOS calling itself a Mac', ()
   assert.ok(!pwa.isIos({ userAgent: 'Mozilla/5.0 (Linux; Android 15; Pixel 9) Chrome/154', maxTouchPoints: 5 }));
 });
 
+const UA = {
+  macSafari: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Safari/605.1.15',
+  macChrome: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+  macEdge: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0',
+  macFirefox: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0',
+  macApp: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)',
+  winChrome: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+};
+
+test('Safari on a Mac and the Mac app web view are told apart from Chrome, Edge and Firefox', () => {
+  const nav = (userAgent, maxTouchPoints = 0) => ({ userAgent, maxTouchPoints });
+  assert.ok(pwa.isMacSafari(nav(UA.macSafari)));
+  for (const k of ['macChrome', 'macEdge', 'macFirefox', 'macApp', 'winChrome']) assert.ok(!pwa.isMacSafari(nav(UA[k])), k);
+  assert.ok(!pwa.isMacSafari(nav(UA.macSafari, 5)), 'an iPad says it is a Mac');
+  assert.ok(pwa.isEmbeddedWebView(nav(UA.macApp)));
+  for (const k of ['macSafari', 'macChrome', 'macEdge', 'macFirefox', 'winChrome']) assert.ok(!pwa.isEmbeddedWebView(nav(UA[k])), k);
+});
+
+test('the desktop Install app entry: one click, Safari steps, https note or browser menu', () => {
+  const base = { standalone: false, embedded: false, secure: true, canPrompt: false, macSafari: false, ios: false };
+  assert.equal(pwa.desktopInstallKind({ ...base, canPrompt: true }), 'prompt');
+  assert.equal(pwa.desktopInstallKind({ ...base, macSafari: true }), 'safari');
+  assert.equal(pwa.desktopInstallKind({ ...base, ios: true }), 'ios');
+  assert.equal(pwa.desktopInstallKind(base), 'manual', 'Firefox, or Chrome before it offers');
+  assert.equal(pwa.desktopInstallKind({ ...base, secure: false, canPrompt: true }), 'insecure', 'plain http says why');
+  assert.equal(pwa.desktopInstallKind({ ...base, canPrompt: true, standalone: true }), null, 'already installed');
+  assert.equal(pwa.desktopInstallKind({ ...base, embedded: true, macSafari: true }), null, 'the Mac app');
+});
+
+test('the install offer is kept from page load and cleared once used or installed', async () => {
+  const handlers = {};
+  const win = {
+    navigator: {},
+    matchMedia: () => ({ matches: false }),
+    addEventListener: (type, fn) => { handlers[type] = fn; },
+  };
+  pwa.captureInstallPrompt(win);
+  let changes = 0;
+  const off = pwa.subscribeInstallState(() => changes++);
+  assert.deepEqual(pwa.getInstallState(), { prompt: null, installed: false });
+
+  let prevented = false;
+  let shown = 0;
+  const event = {
+    preventDefault: () => { prevented = true; },
+    prompt: async () => { shown++; },
+    userChoice: Promise.resolve({ outcome: 'dismissed' }),
+  };
+  handlers.beforeinstallprompt(event);
+  assert.ok(prevented, "Chrome's own mini bar stays away");
+  assert.equal(pwa.getInstallState().prompt, event);
+
+  await pwa.runInstallPrompt();
+  assert.equal(shown, 1);
+  assert.deepEqual(pwa.getInstallState(), { prompt: null, installed: false }, 'a prompt works once');
+
+  handlers.beforeinstallprompt({ ...event, userChoice: Promise.resolve({ outcome: 'accepted' }) });
+  await pwa.runInstallPrompt();
+  assert.equal(pwa.getInstallState().installed, true);
+
+  handlers.appinstalled();
+  assert.deepEqual(pwa.getInstallState(), { prompt: null, installed: true });
+  assert.ok(changes >= 4);
+  off();
+});
+
+test('the Mac download goes to the newest release', () => {
+  assert.equal(pwa.MAC_DOWNLOAD_URL, 'https://github.com/alexsergivan/kwant/releases/latest');
+});
+
 test('standalone means the installed app, on iOS or Android', () => {
   const win = (standalone, matches) => ({ navigator: { standalone }, matchMedia: () => ({ matches }) });
   assert.ok(pwa.isStandalone(win(true, false)));

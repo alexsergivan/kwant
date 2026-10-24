@@ -198,6 +198,8 @@ section { padding: 104px 0; }
 .outro-copy > p { margin-top: 10px; color: var(--muted); font-size: 18px; }
 .outro .install { margin-top: 24px; }
 .outro .cta { margin-top: 20px; }
+.mac-dl { margin-top: 14px; color: var(--dim); font-size: 14px; }
+.outro-copy > .mac-dl { font-size: 14px; color: var(--dim); }
 .page-features .outro { padding-top: 104px; }
 
 /* Footer */

@@ -1,4 +1,4 @@
-// Installing kwant bots on a phone: the service worker, the install hint and the app height.
+// Installing kwant bots: the service worker, the install hint and button, and the app height.
 
 /** Registers /sw.js (built by vite.config.ts). Only in a build, and only where browsers allow
  * one: HTTPS or localhost. Plain http on a home network still works, just not installed. */
@@ -41,6 +41,91 @@ export function installHintKind(s: {
 }
 
 export const INSTALL_HINT_DISMISSED_KEY = 'kwnt.installHint.dismissed';
+
+/** Where the Mac app is downloaded: the newest release, or the releases list until there is one. */
+export const MAC_DOWNLOAD_URL = 'https://github.com/alexsergivan/kwant/releases/latest';
+
+/** Safari on a Mac, where installing is File, then Add to Dock. Not iPad, not Chrome or Firefox. */
+export function isMacSafari(nav: Pick<Navigator, 'userAgent' | 'maxTouchPoints'>): boolean {
+  const ua = nav.userAgent;
+  return /Macintosh/.test(ua) && !isIos(nav) && /Version\/[\d.]+.*Safari\//.test(ua) && !/Chrome|Chromium|CriOS|FxiOS|Edg\//.test(ua);
+}
+
+/** A web view inside an app (the kwant Mac app's WKWebView): a Mac WebKit page that isn't Safari. */
+export function isEmbeddedWebView(nav: Pick<Navigator, 'userAgent' | 'maxTouchPoints'>): boolean {
+  const ua = nav.userAgent;
+  return /Macintosh/.test(ua) && !isIos(nav) && /AppleWebKit/.test(ua) && !/Safari\//.test(ua);
+}
+
+export type DesktopInstallKind = 'prompt' | 'safari' | 'ios' | 'insecure' | 'manual' | null;
+
+/** What the desktop "Install app" entry offers: the browser's one-click install (Chrome, Edge),
+ * the File > Add to Dock steps (Safari on a Mac), the Share steps (iPad), a note that installing
+ * needs https, or the browser's own menu. None when it's already the installed app or the Mac app. */
+export function desktopInstallKind(s: {
+  standalone: boolean;
+  embedded: boolean;
+  secure: boolean;
+  canPrompt: boolean;
+  macSafari: boolean;
+  ios: boolean;
+}): DesktopInstallKind {
+  if (s.standalone || s.embedded) return null;
+  if (!s.secure) return 'insecure';
+  if (s.canPrompt) return 'prompt';
+  if (s.macSafari) return 'safari';
+  if (s.ios) return 'ios';
+  return 'manual';
+}
+
+/** Chrome's install event: not in the DOM types yet. */
+export interface InstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
+
+/** The browser's install offer, kept from page load, so it's there whenever an install button
+ * mounts. Chrome sends it once, often before the app has rendered. */
+export interface InstallState {
+  prompt: InstallPromptEvent | null;
+  installed: boolean;
+}
+
+let installState: InstallState = { prompt: null, installed: false };
+const installListeners = new Set<() => void>();
+const setInstallState = (next: InstallState) => {
+  installState = next;
+  installListeners.forEach((fn) => fn());
+};
+
+export function captureInstallPrompt(win: Window = window): void {
+  installState = { prompt: null, installed: isStandalone(win) };
+  win.addEventListener('beforeinstallprompt', (e) => {
+    // Keep Chrome's own mini bar away; kwant offers the same install.
+    e.preventDefault();
+    setInstallState({ ...installState, prompt: e as InstallPromptEvent });
+  });
+  win.addEventListener('appinstalled', () => setInstallState({ prompt: null, installed: true }));
+}
+
+export const getInstallState = (): InstallState => installState;
+
+export function subscribeInstallState(fn: () => void): () => void {
+  installListeners.add(fn);
+  return () => {
+    installListeners.delete(fn);
+  };
+}
+
+/** Shows the browser's install dialog. A prompt works once; Chrome sends a new event if it can be
+ * offered again. */
+export async function runInstallPrompt(): Promise<void> {
+  const { prompt } = installState;
+  if (!prompt) return;
+  await prompt.prompt();
+  const { outcome } = await prompt.userChoice.catch(() => ({ outcome: 'dismissed' as const }));
+  setInstallState({ prompt: null, installed: installState.installed || outcome === 'accepted' });
+}
 
 /** Keeps --kwnt-app-height at the visible height, so the iOS keyboard doesn't cover the message
  * box (Android resizes the page itself: interactive-widget=resizes-content in index.html). */

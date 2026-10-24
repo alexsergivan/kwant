@@ -1,12 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Download, Share, SquarePlus, X } from 'lucide-react';
-import { INSTALL_HINT_DISMISSED_KEY, installHintKind, isIos, isStandalone } from '../pwa';
-
-/** Chrome's install event: not in the DOM types yet. */
-interface InstallPromptEvent extends Event {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
-}
+import { INSTALL_HINT_DISMISSED_KEY, installHintKind, isIos, isStandalone, runInstallPrompt } from '../pwa';
+import { useInstall } from '../useInstall';
 
 const PHONE_QUERY = '(max-width: 767px)';
 
@@ -21,32 +16,21 @@ const readDismissed = () => {
 /** "Install on your phone": the browser's install button on Android, the Share steps on iPhone.
  *  Sits above the phone tab bar until it's installed or dismissed. */
 export const InstallHint: React.FC = () => {
-  const [prompt, setPrompt] = useState<InstallPromptEvent | null>(null);
+  const { prompt, installed } = useInstall();
   const [dismissed, setDismissed] = useState(readDismissed);
-  const [installed, setInstalled] = useState(() => isStandalone(window));
   const [phone, setPhone] = useState(() => !!window.matchMedia?.(PHONE_QUERY).matches);
 
   useEffect(() => {
-    const onPrompt = (e: Event) => {
-      // Keep Chrome's own mini bar away; the hint offers the same install.
-      e.preventDefault();
-      setPrompt(e as InstallPromptEvent);
-    };
-    const onInstalled = () => setInstalled(true);
     const mq = window.matchMedia?.(PHONE_QUERY);
     const onMq = () => setPhone(!!mq?.matches);
-    window.addEventListener('beforeinstallprompt', onPrompt);
-    window.addEventListener('appinstalled', onInstalled);
     mq?.addEventListener('change', onMq);
     return () => {
-      window.removeEventListener('beforeinstallprompt', onPrompt);
-      window.removeEventListener('appinstalled', onInstalled);
       mq?.removeEventListener('change', onMq);
     };
   }, []);
 
   const kind = installHintKind({
-    standalone: installed,
+    standalone: installed || isStandalone(window),
     dismissed,
     phone,
     secure: window.isSecureContext,
@@ -64,15 +48,6 @@ export const InstallHint: React.FC = () => {
     }
   };
 
-  const install = async () => {
-    if (!prompt) return;
-    await prompt.prompt();
-    const { outcome } = await prompt.userChoice.catch(() => ({ outcome: 'dismissed' as const }));
-    // A prompt works once; Chrome sends a new event if it can be offered again.
-    setPrompt(null);
-    if (outcome === 'accepted') setInstalled(true);
-  };
-
   return (
     <aside
       aria-label="Install on your phone"
@@ -87,7 +62,7 @@ export const InstallHint: React.FC = () => {
             <p className="mt-0.5 text-zinc-400">It opens full screen from your home screen, like an app.</p>
             <button
               type="button"
-              onClick={install}
+              onClick={runInstallPrompt}
               className="mt-2 inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-sky-600 px-4 font-medium text-white hover:bg-sky-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
             >
               <Download size={14} aria-hidden="true" /> Install

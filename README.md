@@ -12,7 +12,7 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 
 ![A kwant channel: Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen.](docs/media/handoff.webp)
 
-**Website and docs: [kwant.si](https://kwant.si)**
+**Website and docs: [kwant.si](https://kwant.si)** · **[Download for Mac](https://github.com/alexsergivan/kwant/releases/latest)**
 
 ---
 
@@ -82,6 +82,16 @@ The binary embeds `frontend/dist`, so on a fresh clone `cargo build`, `cargo tes
 make build                 # web app + cargo build --release
 ./target/release/kwnt serve
 ```
+
+### On a Mac: the app
+
+[Download the Mac app](https://github.com/alexsergivan/kwant/releases/latest) (a universal `.dmg` for Apple silicon and Intel) and drag kwant to Applications. It runs its own kwant on your Mac, with the same `~/.kwnt` data folder as `kwnt serve`, and stays in the menu bar when you close the window. Build it yourself from [`apps/mac`](apps/mac/README.md).
+
+The app is signed ad hoc, not notarized by Apple, so macOS stops it the first time. Click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. On macOS 14 or earlier, right-click the app and choose **Open** instead.
+
+### Install the web app
+
+In Chrome or Edge, click **Install app** in the sidebar; in Safari on a Mac, **File → Add to Dock**; on a phone, kwant shows how. Browsers only install pages served over https or from `127.0.0.1`.
 
 More in the [quickstart](https://kwant.si/docs/quickstart) and [install](https://kwant.si/docs/install) docs.
 
