@@ -21,6 +21,12 @@ const NEGATIONS: &[&str] = &["don't", "dont", "do not", "not", "no", "never", "w
 /// After a negation, these turn it back into a request: "don't ignore security warnings" wants them looked at.
 const UNDO_NEGATION: &[&str] = &["ignore", "skip", "forget", "overlook", "neglect", "miss", "underestimate"];
 
+/// How far back a negation reaches: "don't worry about the refactor" is four words.
+const NEGATION_WINDOW: usize = 4;
+
+/// After a negation, these say the person is confused, not declining: "I don't understand the architecture".
+const NOT_A_REFUSAL: &[&str] = &["know", "understand", "get", "see", "sure"];
+
 /// Lower-case words of `text`. Apostrophes stay inside a word ("don't") but a possessive "'s" is
 /// dropped ("Rust's" is "rust"). Hyphens split a word ("code-review" is "code review"), and keyword
 /// phrases are split the same way, so "trade-off" still matches "trade-off" and "trade off".
@@ -64,22 +70,38 @@ fn has_any(words: &[String], phrases: &[&str]) -> bool {
     phrases.iter().any(|p| has_phrase(words, p))
 }
 
-/// A deep signal that isn't part of an everyday phrase and isn't negated just before it.
+/// The clauses of `text`, as [`words`]. A clause ends at punctuation or at "but"/"just", so a
+/// negation in one ("don't refactor it, just…") doesn't reach into the next.
+fn clauses(text: &str) -> Vec<Vec<String>> {
+    text.split([',', '.', ';', ':', '!', '?', '\n'])
+        .flat_map(|c| words(c).split(|w| w == "but" || w == "just").map(<[String]>::to_vec).collect::<Vec<_>>())
+        .filter(|c| !c.is_empty())
+        .collect()
+}
+
+/// A deep signal that isn't part of an everyday phrase and isn't negated earlier in its clause.
 fn has_deep_signal(text: &str) -> bool {
-    let mut ws = words(text);
-    for idiom in NOT_DEEP {
-        let len = idiom.split([' ', '-']).count();
-        for i in phrase_at(&ws, idiom) {
-            for w in &mut ws[i..i + len] {
-                w.clear();
+    clauses(text).into_iter().any(|mut ws| {
+        for idiom in NOT_DEEP {
+            let len = idiom.split([' ', '-']).count();
+            for i in phrase_at(&ws, idiom) {
+                for w in &mut ws[i..i + len] {
+                    w.clear();
+                }
             }
         }
-    }
-    let negated = |i: usize| {
-        let before = &ws[i.saturating_sub(2)..i];
-        NEGATIONS.iter().any(|n| has_phrase(before, n)) && !has_any(before, UNDO_NEGATION)
-    };
-    DEEP_SIGNALS.iter().any(|s| phrase_at(&ws, s).into_iter().any(|i| !negated(i)))
+        let negated = |i: usize| {
+            let before = &ws[i.saturating_sub(NEGATION_WINDOW)..i];
+            let refusal = NEGATIONS.iter().any(|n| {
+                phrase_at(before, n).into_iter().any(|j| {
+                    let next = before.get(j + n.split(' ').count()).map(String::as_str).unwrap_or("");
+                    !NOT_A_REFUSAL.contains(&next)
+                })
+            });
+            refusal && !has_any(before, UNDO_NEGATION)
+        };
+        DEEP_SIGNALS.iter().any(|s| phrase_at(&ws, s).into_iter().any(|i| !negated(i)))
+    })
 }
 
 /// Chinese, Japanese and Korean text has no spaces between words.
@@ -145,7 +167,10 @@ pub fn blend_effort(prompt: &str, laya_effort: &str) -> String {
 const PRIVATE: &[&str] = &[
     "confidential", "sensitive", "offline", "ollama", "local model", "local llm", "locally", "on-device",
     "on my machine", "private data", "private files", "private documents", "private info",
-    "private information", "my private", "keep it private", "keep this private",
+    "private information", "keep it private", "keep this private",
+    // "my private" only before the person's own records: "my private repo" and "my private method" are code
+    "my private file", "my private document", "my private note", "my private diary", "my private record",
+    "my private health", "my private medical",
 ];
 
 /// Needs long reasoning or writing.

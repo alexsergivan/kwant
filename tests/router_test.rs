@@ -819,3 +819,40 @@ fn roles_come_from_titles_in_any_spelling_not_from_names() {
     let p = kwnt::router::team::pick_member("Plan our SEO keyword strategy for Q4", "dev", &members, None, "channel lead").unwrap();
     assert_eq!(p.kwant.name, "Mia", "hb05");
 }
+
+#[test]
+fn my_private_code_is_not_a_request_for_the_local_model() {
+    assert_ne!(offline_model("My private method throws a NullPointerException when the list is empty"), "local_ollama");
+    assert_ne!(offline_model("My private repo on GitHub fails to clone over SSH"), "local_ollama");
+    // The person's own records still stay here
+    assert_eq!(offline_model("Summarize my private medical lab results: total cholesterol 240, LDL 160, HDL 38"), "local_ollama", "m14");
+    assert_eq!(offline_model("Go through my private notes and list the open todos"), "local_ollama");
+    assert_eq!(offline_model("Read my private diary entries from June and summarize my mood"), "local_ollama");
+    assert_eq!(offline_model("Sort my private health records by date"), "local_ollama");
+}
+
+#[test]
+fn a_bot_named_art_doesnt_get_design_work_by_its_name() {
+    // No designer here, so nobody's role matches and the lead decides
+    let members = [agent("art", "Art", "Software Engineer"), agent("lee", "Lee", "Tech Lead")];
+    let pick = kwnt::router::team::pick_member("Sketch a logo for the landing page", "lee", &members, None, "channel lead").unwrap();
+    assert_ne!(pick.kwant.name, "Art", "{}", pick.reason);
+}
+
+#[test]
+fn a_negation_reaches_to_the_end_of_its_clause() {
+    use kwnt::router::fallback::{blend_effort, heuristic_effort};
+    let prompt = "Don't worry about the refactor, just rename this variable";
+    assert_ne!(heuristic_effort(prompt, "chat"), "high");
+    assert_eq!(blend_effort(prompt, "medium"), "medium");
+    // Still high: the negation is undone, or it sits in another clause
+    assert_eq!(heuristic_effort("Don't ignore security warnings from npm audit", "chat"), "high");
+    assert_eq!(heuristic_effort("Don't forget about the security review before release", "chat"), "high");
+    assert_eq!(heuristic_effort("Don't rename anything, but investigate the root cause of the crash", "chat"), "high");
+    assert_eq!(heuristic_effort("No rush. Investigate why the cache misses", "chat"), "high");
+    // Confusion isn't a refusal
+    assert_eq!(heuristic_effort("I don't understand the architecture of this service", "chat"), "high");
+    // Still not high
+    assert_ne!(heuristic_effort("Don't refactor the module yet, just rename it", "chat"), "high");
+    assert_eq!(heuristic_effort("Please don't refactor anything, just tell me what time zone Paris is in", "chat"), "low", "a01");
+}
