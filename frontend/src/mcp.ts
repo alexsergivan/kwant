@@ -75,7 +75,7 @@ export const emptyMcpForm = (transport: McpTransport = 'stdio'): McpFormState =>
   timeout_secs: 30,
 });
 
-export type McpPresetCategory = 'files' | 'web' | 'data' | 'productivity' | 'devtools';
+export type McpPresetCategory = 'files' | 'web' | 'data' | 'productivity' | 'business' | 'creative' | 'devtools';
 
 /** Catalog groups, in display order. */
 export const MCP_PRESET_CATEGORIES: Array<{ id: McpPresetCategory; label: string }> = [
@@ -83,7 +83,9 @@ export const MCP_PRESET_CATEGORIES: Array<{ id: McpPresetCategory; label: string
   { id: 'web', label: 'Web' },
   { id: 'data', label: 'Data' },
   { id: 'productivity', label: 'Productivity' },
-  { id: 'devtools', label: 'Dev tools' },
+  { id: 'business', label: 'Payments & customers' },
+  { id: 'creative', label: 'Design & media' },
+  { id: 'devtools', label: 'Dev tools & hosting' },
 ];
 
 /** What a preset needs before it works, shown as small tags on its card. */
@@ -280,22 +282,207 @@ export const MCP_PRESETS: McpPreset[] = [
     source: 'https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking',
     form: stdioPreset('sequential-thinking', 'npx -y @modelcontextprotocol/server-sequential-thinking'),
   },
+  {
+    // Cloudflare's hosted server: the whole Cloudflare API (Workers, DNS, R2, D1…) with sign-in.
+    // Checked 2026-10-24: automatic client registration at mcp.cloudflare.com/register.
+    id: 'cloudflare',
+    label: 'Cloudflare',
+    blurb: 'Workers, DNS, R2, D1 and the rest of your Cloudflare account. Sign in after adding.',
+    category: 'devtools',
+    needs: ['Sign-in'],
+    source: 'https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/',
+    form: httpPreset('cloudflare', 'https://mcp.cloudflare.com/mcp'),
+  },
+  {
+    // Vercel's hosted server with sign-in. Checked 2026-10-24: registration at api.vercel.com.
+    id: 'vercel',
+    label: 'Vercel',
+    blurb: 'Projects, deployments and build logs. Sign in after adding.',
+    category: 'devtools',
+    needs: ['Sign-in'],
+    source: 'https://vercel.com/docs/mcp/vercel-mcp',
+    form: httpPreset('vercel', 'https://mcp.vercel.com'),
+  },
+  {
+    // Neon's hosted server with sign-in. Checked 2026-10-24: registration at mcp.neon.tech/api/register.
+    id: 'neon',
+    label: 'Neon Postgres',
+    blurb: 'Neon projects, branches and SQL. Sign in after adding.',
+    category: 'data',
+    needs: ['Sign-in'],
+    source: 'https://neon.com/docs/ai/neon-mcp-server',
+    form: httpPreset('neon', 'https://mcp.neon.tech/mcp'),
+  },
+  {
+    // Airtable's hosted server with sign-in. Checked 2026-10-24: registration at airtable.com/oauth2/v1/register.
+    id: 'airtable',
+    label: 'Airtable',
+    blurb: 'Read and update bases, tables and records. Sign in after adding.',
+    category: 'data',
+    needs: ['Sign-in'],
+    source: 'https://airtable.com/developers/agents/mcp/getting-started',
+    form: httpPreset('airtable', 'https://mcp.airtable.com/mcp'),
+  },
+  {
+    // PostHog's hosted server with sign-in. Checked 2026-10-24: registration at oauth.posthog.com.
+    id: 'posthog',
+    label: 'PostHog',
+    blurb: 'Product analytics, feature flags and errors. Sign in after adding.',
+    category: 'data',
+    needs: ['Sign-in'],
+    source: 'https://posthog.com/docs/model-context-protocol',
+    form: httpPreset('posthog', 'https://mcp.posthog.com/mcp'),
+  },
+  {
+    // monday.com's hosted server with sign-in. Checked 2026-10-24: registration at auth.monday.com.
+    id: 'monday',
+    label: 'monday.com',
+    blurb: 'Boards, items and updates. Sign in after adding.',
+    category: 'productivity',
+    needs: ['Sign-in'],
+    source: 'https://github.com/mondaycom/mcp',
+    form: httpPreset('monday', 'https://mcp.monday.com/mcp'),
+  },
+  {
+    // Zapier's hosted server with sign-in; the actions it offers are the ones chosen at mcp.zapier.com.
+    // Checked 2026-10-24: registration at mcp.zapier.com/api/v1/oauth/register.
+    id: 'zapier',
+    label: 'Zapier',
+    blurb: 'Thousands of apps through the Zapier actions you pick. Sign in after adding.',
+    category: 'productivity',
+    needs: ['Sign-in'],
+    source: 'https://docs.zapier.com/mcp/get-started/connect/other',
+    form: httpPreset('zapier', 'https://mcp.zapier.com/api/v1/connect'),
+  },
+  {
+    // Stripe's hosted server with sign-in. Checked 2026-10-24: registration at access.stripe.com.
+    id: 'stripe',
+    label: 'Stripe',
+    blurb: 'Customers, payments, invoices and Stripe docs. Sign in after adding.',
+    category: 'business',
+    needs: ['Sign-in'],
+    source: 'https://docs.stripe.com/mcp',
+    form: httpPreset('stripe', 'https://mcp.stripe.com'),
+  },
+  {
+    // Intercom's hosted server with sign-in. Checked 2026-10-24: registration at mcp.intercom.com/register.
+    id: 'intercom',
+    label: 'Intercom',
+    blurb: 'Search conversations and contacts. Sign in after adding.',
+    category: 'business',
+    needs: ['Sign-in'],
+    source: 'https://developers.intercom.com/docs/guides/mcp',
+    form: httpPreset('intercom', 'https://mcp.intercom.com/mcp'),
+  },
+  {
+    // Picsart's hosted Gen AI server; it takes no API keys, only sign-in. Generations use Picsart credits.
+    // Checked 2026-10-24: registration at auth.picsart.com/api/oauth2/register.
+    id: 'picsart',
+    label: 'Picsart',
+    blurb: 'Generate and edit images and video, remove backgrounds. Sign in after adding.',
+    category: 'creative',
+    needs: ['Sign-in'],
+    source: 'https://picsart.github.io/picsart-mcp-cli-docs/guide/mcp-quickstart',
+    form: httpPreset('picsart', 'https://api.picsart.com/gen-ai/mcp'),
+  },
 ];
+
+/**
+ * Popular apps without a vendor MCP server kwnt can sign in to on its own, offered through the
+ * optional Composio connector instead of an unofficial third-party server. Checked 2026-10-24:
+ * Google's Gmail server is a Developer Preview that needs your own Google Cloud OAuth client;
+ * Slack's server needs a registered Slack app; Figma's only accepts clients on its own list.
+ */
+export interface ComposioOnlyApp {
+  id: string;
+  label: string;
+  blurb: string;
+  category: McpPresetCategory;
+  /** The app's Composio toolkit slug, for "Find an app" on Connections. */
+  toolkit: string;
+  /** Why there's no direct preset, in one sentence. */
+  why: string;
+  /** Composio's page for the toolkit. */
+  source: string;
+}
+
+export const COMPOSIO_ONLY_APPS: ComposioOnlyApp[] = [
+  {
+    id: 'gmail',
+    label: 'Gmail',
+    blurb: 'Read, search, draft and send email.',
+    category: 'productivity',
+    toolkit: 'gmail',
+    why: 'Google’s own Gmail server is a preview that needs your own Google Cloud sign-in app.',
+    source: 'https://docs.composio.dev/toolkits/gmail',
+  },
+  {
+    id: 'google-calendar',
+    label: 'Google Calendar',
+    blurb: 'See, create and move events.',
+    category: 'productivity',
+    toolkit: 'googlecalendar',
+    why: 'Google has no Calendar server that apps can sign in to on their own.',
+    source: 'https://docs.composio.dev/toolkits/googlecalendar',
+  },
+  {
+    id: 'google-drive',
+    label: 'Google Drive',
+    blurb: 'Find, read and upload files.',
+    category: 'productivity',
+    toolkit: 'googledrive',
+    why: 'Google has no Drive server that apps can sign in to on their own.',
+    source: 'https://docs.composio.dev/toolkits/googledrive',
+  },
+  {
+    id: 'slack',
+    label: 'Slack',
+    blurb: 'Read channels and send messages.',
+    category: 'productivity',
+    toolkit: 'slack',
+    why: 'Slack’s own server only works with a Slack app you register first.',
+    source: 'https://docs.composio.dev/toolkits/slack',
+  },
+  {
+    id: 'figma',
+    label: 'Figma',
+    blurb: 'Read files, frames and comments.',
+    category: 'creative',
+    toolkit: 'figma',
+    why: 'Figma’s own server only accepts the apps on Figma’s list.',
+    source: 'https://docs.composio.dev/toolkits/figma',
+  },
+];
+
+const presetText = (p: { id: string; label: string; blurb: string; category: McpPresetCategory }, extra: string[]) => {
+  const label = MCP_PRESET_CATEGORIES.find((x) => x.id === p.category)?.label ?? p.category;
+  return [p.id, p.label, p.blurb, label, ...extra].join(' ').toLowerCase();
+};
+
+const matches = (query: string) => {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return (text: string) => words.every((w) => text.includes(w));
+};
 
 /** Presets matching a search, by name, blurb, group or what they need. A blank query keeps all. */
 export const searchPresets = (query: string, presets: McpPreset[] = MCP_PRESETS): McpPreset[] => {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return presets;
-  const label = (c: McpPresetCategory) => MCP_PRESET_CATEGORIES.find((x) => x.id === c)?.label ?? c;
-  return presets.filter((p) => {
-    const text = [p.id, p.label, p.blurb, label(p.category), ...p.needs].join(' ').toLowerCase();
-    return words.every((w) => text.includes(w));
-  });
+  const hit = matches(query);
+  return presets.filter((p) => hit(presetText(p, p.needs)));
+};
+
+/** Composio-only apps matching a search, the same way. A blank query keeps all. */
+export const searchComposioOnly = (query: string, apps: ComposioOnlyApp[] = COMPOSIO_ONLY_APPS): ComposioOnlyApp[] => {
+  const hit = matches(query);
+  return apps.filter((a) => hit(presetText(a, ['composio', a.toolkit])));
 };
 
 /** Presets grouped for display, in category order, leaving out empty groups. */
-export const groupPresets = (presets: McpPreset[]) =>
-  MCP_PRESET_CATEGORIES.map((c) => ({ ...c, presets: presets.filter((p) => p.category === c.id) })).filter((g) => g.presets.length > 0);
+export const groupPresets = (presets: McpPreset[], composio: ComposioOnlyApp[] = []) =>
+  MCP_PRESET_CATEGORIES.map((c) => ({
+    ...c,
+    presets: presets.filter((p) => p.category === c.id),
+    composio: composio.filter((a) => a.category === c.id),
+  })).filter((g) => g.presets.length + g.composio.length > 0);
 
 /** Splits a command line into words, honouring '…' and "…" quotes and backslash escapes. */
 export const splitCommandLine = (line: string): string[] => {

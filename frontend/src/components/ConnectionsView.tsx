@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, Bot, ChevronLeft, Github, KeyRound, Loader2, Lock, Mail, Plug, Plus, RefreshCw, Server, UserRound } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronLeft, ExternalLink, Github, KeyRound, Loader2, Lock, Mail, Plug, Plus, RefreshCw, Search, Server, UserRound } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { relativeTime } from '../away';
 import { UnlockDialog, usePasswordStore } from './PasswordStorePanel';
 import {
   CatalogEntry,
+  ComposioApp,
   Connection,
   ConnectionsError,
   ConnectionsList,
@@ -125,16 +126,150 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
   );
 };
 
+export interface ComposioSearchApi {
+  search: (q: string) => Promise<{ apps: ComposioApp[]; can_connect: boolean }>;
+  connect: (slug: string) => Promise<{ redirect_url: string }>;
+}
+
+const errorText = (e: unknown) => (e instanceof ConnectionsError || e instanceof Error ? e.message : 'Something went wrong.');
+
+/** "Find an app": searches Composio's catalogue through kwnt, with the person's own Composio key. */
+export const ComposioAppSearch: React.FC<{
+  entry: CatalogEntry;
+  api?: ComposioSearchApi;
+  /** Tests show results without searching. */
+  initialApps?: ComposioApp[];
+}> = ({ entry, api = { search: connectionsApi.searchComposioApps, connect: connectionsApi.connectComposioApp }, initialApps }) => {
+  const id = useId();
+  const [q, setQ] = useState('');
+  const [apps, setApps] = useState<ComposioApp[] | null>(initialApps ?? null);
+  const [busy, setBusy] = useState(false);
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [opened, setOpened] = useState<string | null>(null);
+  const canConnect = entry.can_connect === true;
+
+  if (!entry.can_search) {
+    return (
+      <p className="text-[11px] text-zinc-400" data-composio-search="needs-key">
+        To find apps from here, add your Composio API key as the <code className="text-zinc-300">x-api-key</code> header of the Composio server in Tools.
+      </p>
+    );
+  }
+
+  const search = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const query = q.trim();
+    if (!query) return setError('Type an app name, like gmail.');
+    setBusy(true);
+    setError(null);
+    setOpened(null);
+    try {
+      setApps((await api.search(query)).apps);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const connect = async (app: ComposioApp) => {
+    // open the tab now, while the click still counts as the person's, then point it at Composio
+    const tab = typeof window !== 'undefined' ? window.open('', '_blank') : null;
+    if (tab) tab.opener = null;
+    setConnecting(app.slug);
+    setError(null);
+    try {
+      const { redirect_url } = await api.connect(app.slug);
+      if (tab) tab.location.href = redirect_url;
+      else window.open(redirect_url, '_blank', 'noopener,noreferrer');
+      setOpened(app.name);
+    } catch (err) {
+      tab?.close();
+      setError(errorText(err));
+    } finally {
+      setConnecting(null);
+    }
+  };
+
+  return (
+    <div className="space-y-2" data-composio-search>
+      <form onSubmit={search} role="search" aria-label="Find an app on Composio" className="flex gap-2">
+        <label htmlFor={`${id}-q`} className="sr-only">
+          Find an app
+        </label>
+        <input
+          id={`${id}-q`}
+          className={field}
+          type="search"
+          autoComplete="off"
+          spellCheck={false}
+          maxLength={60}
+          placeholder="Find an app, like gmail or figma"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <button type="submit" disabled={busy} className={quietBtn}>
+          {busy ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Search size={12} aria-hidden="true" />}
+          Find
+        </button>
+      </form>
+      {!canConnect && (
+        <p className="text-[11px] text-zinc-400">
+          Your Composio URL has no <code className="text-zinc-300">user_id</code>, so connect apps on composio.dev. If your Composio server lists fixed apps, add the app to it there too.
+        </p>
+      )}
+      <div role="status" aria-live="polite">
+        {error && <p className="px-3 py-2 rounded-lg border border-rose-500/20 bg-rose-500/5 text-xs text-rose-300">{error}</p>}
+        {opened && (
+          <p className="text-xs text-emerald-200">
+            Opened {opened}’s sign-in on Composio in a new tab. Its tools reach your bots through the Composio server once you finish there.
+          </p>
+        )}
+        {apps && apps.length === 0 && <p className="text-xs text-zinc-400">No Composio apps match.</p>}
+      </div>
+      {apps && apps.length > 0 && (
+        <ul className="divide-y divide-zinc-800 rounded-lg border border-zinc-800" aria-label="Composio apps">
+          {apps.map((a) => (
+            <li key={a.slug} className="flex flex-wrap items-center gap-2 px-3 py-2" data-composio-app={a.slug}>
+              <div className="min-w-0 flex-1 basis-48">
+                <p className="text-xs font-medium text-zinc-100">
+                  {a.name}
+                  <span className="ml-1.5 font-normal text-zinc-500">{a.slug}</span>
+                </p>
+                {a.description && <p className="text-[11px] text-zinc-400 line-clamp-2">{a.description}</p>}
+                <p className="text-[11px] text-zinc-500">
+                  {a.tools_count != null && `${a.tools_count} tools · `}
+                  {a.no_auth ? 'No sign-in needed' : 'Sign-in kept on Composio'}
+                </p>
+              </div>
+              {canConnect && !a.no_auth && (
+                <button type="button" className={quietBtn} disabled={connecting !== null} onClick={() => connect(a)}>
+                  {connecting === a.slug ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ExternalLink size={12} aria-hidden="true" />}
+                  Connect<span className="sr-only"> {a.name} on Composio (opens in a new tab)</span>
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
 export interface ComposioCardProps {
   entry: CatalogEntry;
   /** Tests open the form. */
   initialOpen?: boolean;
   onAdd: (url: string, apiKey: string, enabled: boolean) => Promise<string | null>;
   onOpenTools?: () => void;
+  /** Tests: the search box's API and starting results. */
+  searchApi?: ComposioSearchApi;
+  initialApps?: ComposioApp[];
 }
 
 /** The optional Composio connector: what it is, where it keeps sign-ins, and the add form. */
-export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen = false, onAdd, onOpenTools }) => {
+export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen = false, onAdd, onOpenTools, searchApi, initialApps }) => {
   const id = useId();
   const [open, setOpen] = useState(initialOpen);
   const [url, setUrl] = useState('');
@@ -186,6 +321,8 @@ export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen =
         <AlertTriangle size={14} className="mt-px shrink-0 text-amber-300" aria-hidden="true" />
         <span>{entry.warning}</span>
       </p>
+
+      {entry.added && <ComposioAppSearch entry={entry} api={searchApi} initialApps={initialApps} />}
 
       {open && !entry.added && (
         <form onSubmit={submit} className="space-y-3" aria-label={`Add ${entry.name}`} noValidate>

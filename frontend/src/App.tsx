@@ -2908,7 +2908,20 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
       {/* MCP tool servers (opened last so it sits above the bot form) */}
       <Suspense fallback={null}>
-        <McpServersModal isOpen={isMcpOpen} onClose={() => setIsMcpOpen(false)} kwants={kwants} />
+        <McpServersModal
+          isOpen={isMcpOpen}
+          onClose={() => setIsMcpOpen(false)}
+          kwants={kwants}
+          onOpenConnections={() => {
+            setIsMcpOpen(false);
+            setShowConnections(true);
+            setShowLoose(false);
+            setShowParallel(false);
+            setShowAway(false);
+            setPhoneView('chat');
+            playSfx('click');
+          }}
+        />
         {isSearchOpen && <SearchModal isOpen onClose={() => setIsSearchOpen(false)} kwants={kwants} onJump={handleJump} />}
         {isRoutinesOpen && <RoutinesModal isOpen onClose={() => setIsRoutinesOpen(false)} kwants={kwants} channels={channels} />}
       </Suspense>

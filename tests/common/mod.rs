@@ -162,6 +162,12 @@ pub struct Env {
 
 /// A server listening on a loopback port (the CLI reaches its tools there).
 pub async fn setup() -> Env {
+    setup_with(|_| {}).await
+}
+
+/// [`setup`], with a chance to change the state (say, point it at a fake service) before the
+/// router is built.
+pub async fn setup_with(change: impl FnOnce(&mut AppState)) -> Env {
     prompts_dir();
     let tmp = tempfile::tempdir().unwrap();
     let data = tmp.path().join("data");
@@ -176,13 +182,14 @@ pub async fn setup() -> Env {
         browser_cdp_url: Some("http://127.0.0.1:9".into()),
         ..Config::default()
     };
-    let state = AppState::new(
+    let mut state = AppState::new(
         config.clone(),
         db,
         ToolRunner::new(data.join("workspace")),
         PermissionBroker::new(),
         LayaRouter::new(config.laya_url.clone()),
     );
+    change(&mut state);
     let app = create_router(state.clone());
     let served = app.clone().into_make_service_with_connect_info::<std::net::SocketAddr>();
     tokio::spawn(async move {
