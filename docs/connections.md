@@ -148,12 +148,16 @@ empty again after a restart. Call the test route to refresh it ("Check now").
   "enabled": false,
   "logins_stored": "composio",
   "warning": "Composio keeps your app sign-ins on Composio's servers, not in kwant's vault, and your bots' tool calls through it pass through Composio.",
-  "add": "/api/connections/composio"
+  "add": "/api/connections/composio",
+  "can_search": false,
+  "can_connect": false,
+  "search": "/api/connections/composio/apps"
 }
 ```
 
 Show `warning` next to the add button and on the connection once it is added. Once added,
-`connection_id` points at the MCP connection.
+`connection_id` points at the MCP connection. `can_search` is true once Composio is added with an
+API key (`x-api-key` header); `can_connect` also needs a `user_id` in its URL.
 
 ## `POST /api/connections/composio?space=`
 
@@ -180,6 +184,39 @@ Errors:
 
 Composio appears as an ordinary MCP server in `/api/mcp/servers`, so switching it on or off, the
 per-bot opt-outs, testing and removing all use those routes.
+
+## Find an app on Composio
+
+Both routes are person-only, refuse bot tokens, and use the person's own Composio key from the
+connector's `x-api-key` header. Until Composio is added with a key they answer `409` **without
+contacting Composio**; nothing else in kwant calls Composio's API. The key is never echoed.
+`KWNT_COMPOSIO_API_URL` points them at another API address (tests).
+
+### `GET /api/connections/composio/apps?q=&space=`
+
+`q` is 1–60 characters. kwant calls Composio's `GET /api/v3.1/toolkits?search=…&sort_by=usage&limit=20`.
+
+```json
+{ "apps": [{ "slug": "gmail", "name": "Gmail", "description": "…", "logo": "https://…", "tools_count": 23, "no_auth": false }],
+  "can_connect": true, "warning": "…" }
+```
+
+Apps without a plain slug are left out; `logo` is kept only when it is `https`.
+
+### `POST /api/connections/composio/apps/:slug/connect?space=`
+
+Creates a Composio session for the `user_id` in the connector's URL
+(`POST /api/v3.1/tool_router/session`), then a sign-in link for the app
+(`POST /api/v3.1/tool_router/session/:id/link`). Result: `{ "redirect_url": "https://…", "warning": "…" }`.
+The person finishes signing in on Composio's site. A Composio MCP server set up with a fixed list
+of apps may need the new app added to it on composio.dev before its tools reach bots.
+
+| status | when |
+|---|---|
+| `400` | `q` is empty or too long, or `slug` isn't `[a-z0-9_-]` |
+| `409` | Composio isn't added, has no API key, Composio refused the key, or (connect) the URL has no `user_id` |
+| `502` | Composio couldn't be reached or answered with an error |
+| `403` / `401` | not the person |
 
 ## Known limits
 

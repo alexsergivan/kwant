@@ -13,6 +13,8 @@ const {
   MCP_PRESET_CATEGORIES,
   searchPresets,
   groupPresets,
+  COMPOSIO_ONLY_APPS,
+  searchComposioOnly,
   SECRET_MASK,
   emptyMcpForm,
   formToPayload,
@@ -176,6 +178,40 @@ test('groups presets in category order and drops empty groups', () => {
   assert.equal(groups.reduce((n, g) => n + g.presets.length, 0), MCP_PRESETS.length);
   assert.deepEqual(groupPresets(searchPresets('notion')).map((g) => g.id), ['productivity']);
   assert.deepEqual(groupPresets([]), []);
+  assert.ok(groups.every((g) => Array.isArray(g.composio) && g.composio.length === 0));
+});
+
+test('apps without a usable official server point to Composio instead of an invented preset', () => {
+  const presetIds = new Set(MCP_PRESETS.map((p) => p.id));
+  const ids = COMPOSIO_ONLY_APPS.map((a) => a.id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const a of COMPOSIO_ONLY_APPS) {
+    assert.ok(!presetIds.has(a.id), `${a.id} is both a preset and Composio-only`);
+    assert.match(a.toolkit, /^[a-z0-9_-]+$/, a.id);
+    assert.match(a.source, /^https:\/\/docs\.composio\.dev\/toolkits\//, a.id);
+    assert.ok(a.why.length > 10 && a.blurb.length <= 100, a.id);
+    assert.ok(MCP_PRESET_CATEGORIES.some((c) => c.id === a.category), a.id);
+  }
+  assert.ok(ids.includes('gmail'));
+});
+
+test('the asked-for apps are offered: Cloudflare and Picsart as presets, Gmail via Composio', () => {
+  for (const id of ['cloudflare', 'picsart']) {
+    const p = MCP_PRESETS.find((x) => x.id === id);
+    assert.ok(p && p.needs.includes('Sign-in') && p.form.transport === 'http', id);
+    assert.match(p.source, /^https:\/\//, id);
+  }
+  assert.deepEqual(searchComposioOnly('gmail').map((a) => a.id), ['gmail']);
+  assert.deepEqual(searchPresets('gmail'), []);
+});
+
+test('search finds Composio-only apps, and groups put them with their category', () => {
+  assert.deepEqual(searchComposioOnly('').length, COMPOSIO_ONLY_APPS.length);
+  assert.ok(searchComposioOnly('composio').length === COMPOSIO_ONLY_APPS.length);
+  assert.deepEqual(searchComposioOnly('googledrive').map((a) => a.id), ['google-drive']);
+  assert.deepEqual(searchComposioOnly('zzz-nothing'), []);
+  const groups = groupPresets(searchPresets('figma'), searchComposioOnly('figma'));
+  assert.deepEqual(groups.map((g) => [g.id, g.composio.map((a) => a.id)]), [['creative', ['figma']]]);
 });
 
 test('reads MCP tool names and recorded tool calls', () => {

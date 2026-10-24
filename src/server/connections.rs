@@ -12,7 +12,7 @@ use super::spaces::Scope;
 use super::AppState;
 use crate::db::models::{Kwant, McpServer};
 use crate::db::spaces::SpaceId;
-use crate::mcp::{self, McpServerInput};
+use crate::mcp::{self, composio, McpServerInput};
 use crate::profiles::Engine;
 use crate::sandbox::credentials::{CredentialStore, StoreError};
 use axum::{
@@ -329,6 +329,16 @@ async fn source_connections(state: &AppState, space: &SpaceId) -> Vec<Connection
         .collect()
 }
 
+/// The Composio API key saved with the connector (its `x-api-key` header), if any.
+fn composio_key(server: &McpServer) -> Option<&str> {
+    server
+        .headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-api-key"))
+        .map(|(_, v)| v.trim())
+        .filter(|v| !v.is_empty())
+}
+
 /// The optional connectors kwnt offers, with whether each is added.
 fn catalog(servers: &[McpServer]) -> Value {
     let added = servers.iter().find(|s| is_composio(s));
@@ -344,6 +354,10 @@ fn catalog(servers: &[McpServer]) -> Value {
         "logins_stored": "composio",
         "warning": COMPOSIO_WARNING,
         "add": "/api/connections/composio",
+        // Finding apps needs the connector's API key; connecting one also needs the URL's user_id.
+        "can_search": added.is_some_and(|s| composio_key(s).is_some()),
+        "can_connect": added.is_some_and(|s| composio_key(s).is_some() && s.url.as_deref().and_then(composio::user_id_of).is_some()),
+        "search": "/api/connections/composio/apps",
     }])
 }
 
@@ -449,6 +463,95 @@ pub async fn add_composio(
             tracing::warn!(error = %e, "connections: could not add Composio");
             error(StatusCode::INTERNAL_SERVER_ERROR, "could not add Composio")
         }
+    }
+}
+
+/// The space's Composio connector and its API key, or the reply that explains what's missing.
+/// Nothing here calls Composio.
+#[allow(clippy::result_large_err)]
+async fn composio_with_key(state: &AppState, space: &SpaceId) -> Result<(McpServer, String), Response> {
+    let servers = state.db.list_mcp_servers(space).await.unwrap_or_default();
+    let Some(server) = servers.into_iter().find(is_composio) else {
+        return Err(error(StatusCode::CONFLICT, "Add the Composio connector first; kwant never contacts Composio before that"));
+    };
+    let Some(key) = composio_key(&server).map(str::to_string) else {
+        return Err(error(StatusCode::CONFLICT, "Finding apps needs your Composio API key: add it as the x-api-key header of the Composio MCP server"));
+    };
+    Ok((server, key))
+}
+
+fn composio_failed(e: composio::ComposioError) -> Response {
+    let status = match e {
+        composio::ComposioError::KeyRefused => StatusCode::CONFLICT,
+        _ => StatusCode::BAD_GATEWAY,
+    };
+    error(status, &e.message())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppSearch {
+    #[serde(default)]
+    pub q: String,
+}
+
+/// `GET /api/connections/composio/apps?space=&q=`: apps in Composio's catalogue matching `q`,
+/// searched with the person's own Composio key. 409 when Composio isn't added or has no key.
+pub async fn search_composio_apps(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Scope(space): Scope,
+    axum::extract::Query(query): axum::extract::Query<AppSearch>,
+) -> Response {
+    if let Err(r) = refuse_agent_tokens(&state, &headers, REFUSAL).await {
+        return r;
+    }
+    let q = query.q.trim();
+    if q.is_empty() || q.chars().count() > composio::MAX_QUERY_CHARS {
+        return error(StatusCode::BAD_REQUEST, "type an app name, up to 60 characters");
+    }
+    let (server, key) = match composio_with_key(&state, &space).await {
+        Ok(found) => found,
+        Err(r) => return r,
+    };
+    match state.composio_api.search(&key, q).await {
+        Ok(apps) => Json(json!({
+            "apps": apps,
+            "can_connect": server.url.as_deref().and_then(composio::user_id_of).is_some(),
+            "warning": COMPOSIO_WARNING,
+        }))
+        .into_response(),
+        Err(e) => composio_failed(e),
+    }
+}
+
+/// `POST /api/connections/composio/apps/:slug/connect?space=`: starts signing in to one app on
+/// Composio for the user in the connector's URL (`user_id`), and returns the address the person
+/// opens. The sign-in itself happens on Composio's site.
+pub async fn connect_composio_app(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Scope(space): Scope,
+    axum::extract::Path(slug): axum::extract::Path<String>,
+) -> Response {
+    if let Err(r) = refuse_agent_tokens(&state, &headers, REFUSAL).await {
+        return r;
+    }
+    if !composio::valid_slug(&slug) {
+        return error(StatusCode::BAD_REQUEST, "not a Composio app name");
+    }
+    let (server, key) = match composio_with_key(&state, &space).await {
+        Ok(found) => found,
+        Err(r) => return r,
+    };
+    let Some(user_id) = server.url.as_deref().and_then(composio::user_id_of) else {
+        return error(
+            StatusCode::CONFLICT,
+            "Your Composio URL has no user_id, so kwant can't tell which Composio user to connect the app to. Connect it on composio.dev instead",
+        );
+    };
+    match state.composio_api.connect_link(&key, &user_id, &slug).await {
+        Ok(redirect_url) => Json(json!({"redirect_url": redirect_url, "warning": COMPOSIO_WARNING})).into_response(),
+        Err(e) => composio_failed(e),
     }
 }
 
