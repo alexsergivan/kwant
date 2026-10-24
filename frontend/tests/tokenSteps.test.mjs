@@ -6,8 +6,8 @@ import { loadBundled } from './bundle.mjs';
 const m = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
-  import { TokenForm, TokenSteps, WRONG_TOKEN, guessPlace, tokenFromPaste } from './src/components/AuthGate';
-  export { WRONG_TOKEN, guessPlace, tokenFromPaste };
+  import { TokenForm, TokenSteps, WRONG_TOKEN, guessPlace, selectForRetry, tokenFromPaste } from './src/components/AuthGate';
+  export { WRONG_TOKEN, guessPlace, selectForRetry, tokenFromPaste };
   export const form = () => renderToStaticMarkup(React.createElement(TokenForm, { notice: null, onSignedIn: () => {} }));
   export const steps = (place, hostname = 'vps.example.com', port = '8799') =>
     renderToStaticMarkup(React.createElement(TokenSteps, { place, hostname, port }));
@@ -60,4 +60,11 @@ test('a token from another computer: the screen and the error say where it has t
   const html = m.form();
   assert.match(text(html), /a token copied from another computer won't work here/);
   assert.match(html, /aria-describedby="kwnt-token-hint"/);
+});
+
+test('after a wrong token the box is focused and selected, so the next paste replaces it', () => {
+  const calls = [];
+  m.selectForRetry({ focus: () => calls.push('focus'), select: () => calls.push('select') });
+  assert.deepEqual(calls, ['focus', 'select']);
+  assert.doesNotThrow(() => m.selectForRetry(null));
 });

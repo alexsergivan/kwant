@@ -307,6 +307,13 @@ export const TokenSteps: React.FC<{ place: TokenPlace; hostname: string; port: s
 };
 
 /** Shown when the server rejects a pasted token. Exported for tests. */
+/** After a rejected token, focus and select the box so the next paste replaces it. Exported for tests. */
+export const selectForRetry = (el: Pick<HTMLInputElement, 'focus' | 'select'> | null) => {
+  if (!el) return;
+  el.focus();
+  el.select();
+};
+
 export const WRONG_TOKEN = "That token isn't right. It has to come from the machine running kwant bots, as the user running it.";
 
 export const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; personOnly?: boolean; onCancel?: () => void }> = ({
@@ -321,6 +328,11 @@ export const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void
   const hostname = typeof window === 'undefined' ? 'your-server' : window.location.hostname || 'your-server';
   const port = typeof window === 'undefined' ? '8799' : kwantPort(window.location);
   const [place, setPlace] = useState<TokenPlace>(() => guessPlace(hostname));
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (error && !busy) selectForRetry(inputRef.current);
+  }, [error, busy]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -389,6 +401,7 @@ export const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void
           </p>
           <input
             id="kwnt-token"
+            ref={inputRef}
             type="password"
             autoComplete="off"
             spellCheck={false}
