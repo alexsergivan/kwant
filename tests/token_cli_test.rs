@@ -21,6 +21,7 @@ fn token_fails_without_a_token_file_and_creates_nothing() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("no token file at"), "{err}");
     assert!(err.contains("as the user that runs `kwnt serve`"), "{err}");
+    assert!(err.contains("docker compose exec kwnt kwnt token --raw"), "{err}");
     assert!(!dir.path().join("api-token").exists());
 }
 
