@@ -104,7 +104,15 @@ test('VM copy follows what the server says it isolates', () => {
   const now = m.vmCopy(['browser', 'kwnt_shell']);
   assert.equal(now.label, 'VM (browser and built-in shell isolated)');
   assert.match(now.note, /Claude, Codex and Grok still run on this computer/);
-  assert.equal(m.vmCopy(['browser']).label, 'VM (browser isolated)');
+  // compose stack: only the browser is isolated, and the card says the built-in shell isn't there
+  const browserOnly = m.vmCopy(['browser']);
+  assert.equal(browserOnly.label, 'VM (browser isolated)');
+  assert.equal(browserOnly.hint, 'The browser runs in a Docker container, away from your files.');
+  assert.match(browserOnly.note, /built-in shell isn't available in this setup/);
+  assert.doesNotMatch(`${browserOnly.label} ${browserOnly.hint}`, /built-in shell/);
+  const bo = render(m.ComputerModeControl, ready(settings('vm', false, true, {}, {}, ['browser'])));
+  assert.match(bo, /VM \(browser isolated\)/);
+  assert.doesNotMatch(bo, /browser and built-in shell/);
   const full = m.vmCopy(['browser', 'kwnt_shell', 'cli_agents']);
   assert.equal(full.label, 'VM (isolated)');
   assert.equal(full.note, null);

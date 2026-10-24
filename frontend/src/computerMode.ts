@@ -31,9 +31,17 @@ export function vmCopy(isolates: string[]): { label: string; hint: string; note:
     return { label: 'VM (isolated)', hint: 'Runs bots in Docker containers, away from your files.', note: null };
   }
   const parts = Object.keys(ISOLATED_PARTS).filter((k) => isolates.includes(k)).map((k) => ISOLATED_PARTS[k]);
+  // Without Docker (the compose stack's browser service) there is no executor container.
+  if (!isolates.includes('kwnt_shell')) {
+    return {
+      label: parts.length ? `VM (${parts.join(' and ')} isolated)` : 'VM',
+      hint: parts.length === 1 ? `The ${parts[0]} runs in a Docker container, away from your files.` : 'Uses Docker containers.',
+      note: "The built-in shell isn't available in this setup. Claude, Codex and Grok use their own shell tools.",
+    };
+  }
   return {
-    label: parts.length ? `VM (${parts.join(' and ')} isolated)` : 'VM',
-    hint: parts.length ? `The ${parts.join(' and ')} run in Docker containers, away from your files.` : 'Uses Docker containers.',
+    label: `VM (${parts.join(' and ')} isolated)`,
+    hint: `The ${parts.join(' and ')} run in Docker containers, away from your files.`,
     note: 'Claude, Codex and Grok still run on this computer, with their own file and shell tools.',
   };
 }

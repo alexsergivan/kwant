@@ -43,8 +43,9 @@ pub async fn apply_mode(state: &AppState) -> ComputerMode {
 async fn view(state: &AppState) -> Value {
     let mode = current_mode(state).await;
     let local = computer::local_reason();
+    let docker = state.sandbox_manager.is_docker_available().await;
     let vm = computer::vm_unavailable_reason(
-        state.sandbox_manager.is_docker_available().await,
+        docker,
         state.browser_service.has_endpoint(),
         crate::doctor::Platform::detect(),
     );
@@ -53,7 +54,7 @@ async fn view(state: &AppState) -> Value {
         "mode": mode,
         "available": {"local": local.is_none(), "vm": vm.is_none()},
         "reasons": {"local": local, "vm": vm},
-        "isolates": computer::VM_ISOLATES,
+        "isolates": computer::vm_isolates(docker),
         "window": {
             "visible": mode == ComputerMode::Local && state.browser_service.local_window(),
             "available": window.is_none(),
