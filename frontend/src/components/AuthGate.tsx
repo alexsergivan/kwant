@@ -306,7 +306,10 @@ export const TokenSteps: React.FC<{ place: TokenPlace; hostname: string; port: s
   );
 };
 
-const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; personOnly?: boolean; onCancel?: () => void }> = ({
+/** Shown when the server rejects a pasted token. Exported for tests. */
+export const WRONG_TOKEN = "That token isn't right. It has to come from the machine running kwant bots, as the user running it.";
+
+export const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; personOnly?: boolean; onCancel?: () => void }> = ({
   notice,
   onSignedIn,
   personOnly = false,
@@ -331,7 +334,7 @@ const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; perso
         onSignedIn();
         return;
       }
-      setError("That token isn't right. Copy it again with the steps above, as the user that runs kwant bots.");
+      setError(WRONG_TOKEN);
     } catch (err) {
       setError(err instanceof Error && err.message !== 'Failed to fetch' ? err.message : 'Could not reach the server.');
     } finally {
@@ -381,6 +384,9 @@ const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; perso
           <label htmlFor="kwnt-token" className="block text-xs font-medium text-zinc-400 mb-1">
             Token
           </label>
+          <p id="kwnt-token-hint" className="text-[11px] text-zinc-500 leading-snug mb-1.5">
+            Each install has its own token, so a token copied from another computer won't work here.
+          </p>
           <input
             id="kwnt-token"
             type="password"
@@ -390,7 +396,7 @@ const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; perso
             value={token}
             onChange={(e) => setToken(e.target.value)}
             aria-invalid={!!error}
-            aria-describedby={error ? 'kwnt-token-error' : undefined}
+            aria-describedby={error ? ['kwnt-token-hint', 'kwnt-token-error'].join(' ') : 'kwnt-token-hint'}
             className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
             placeholder="Paste the token or the sign-in link"
           />

@@ -78,7 +78,8 @@ with Docker) can use it.
 `kwnt token --raw` just the token, for scripts, which send `Authorization: Bearer <token>`. The token
 lives in `<data_dir>/api-token` (mode 0600), or set `KWNT_API_TOKEN` (16+ characters). Run `kwnt token` as the
 user that runs `kwnt serve` (`./target/release/kwnt` from a source build without kwnt on the `PATH`):
-as any other user it creates and prints that user's own token, which the server doesn't accept. The
+as any other user it creates and prints that user's own token, which the server doesn't accept. Each
+install has its own token, so a token from another computer won't work either. The
 sign-in screen asks where kwant runs (a server, Docker, or this computer) and shows the matching steps.
 
 Person-only routes (saved passwords and the vault, answering approval cards, the approvals switch,

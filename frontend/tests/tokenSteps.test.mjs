@@ -6,8 +6,9 @@ import { loadBundled } from './bundle.mjs';
 const m = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
-  import { TokenSteps, guessPlace, tokenFromPaste } from './src/components/AuthGate';
-  export { guessPlace, tokenFromPaste };
+  import { TokenForm, TokenSteps, WRONG_TOKEN, guessPlace, tokenFromPaste } from './src/components/AuthGate';
+  export { WRONG_TOKEN, guessPlace, tokenFromPaste };
+  export const form = () => renderToStaticMarkup(React.createElement(TokenForm, { notice: null, onSignedIn: () => {} }));
   export const steps = (place, hostname = 'vps.example.com', port = '8799') =>
     renderToStaticMarkup(React.createElement(TokenSteps, { place, hostname, port }));
 `);
@@ -52,4 +53,11 @@ test('pasting the whole sign-in link works as well as the token', () => {
   assert.equal(m.tokenFromPaste('  abc123def456abc123  '), 'abc123def456abc123');
   assert.equal(m.tokenFromPaste('http://1.2.3.4:8799/#kwnt_token=abc123def456abc123'), 'abc123def456abc123');
   assert.equal(m.tokenFromPaste('http://<this-host>:8799/#kwnt_token=tok'), 'tok');
+});
+
+test('a token from another computer: the screen and the error say where it has to come from', () => {
+  assert.match(m.WRONG_TOKEN, /machine running kwant bots, as the user running it/);
+  const html = m.form();
+  assert.match(text(html), /a token copied from another computer won't work here/);
+  assert.match(html, /aria-describedby="kwnt-token-hint"/);
 });
