@@ -367,6 +367,7 @@ async fn test_system_select_folder_endpoint() {
 async fn test_sandbox_password_vault_api() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
+    db.set_space_approvals(&kwnt::db::spaces::SpaceId::default_space(), "ask").await.unwrap();
     let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let tools = ToolRunner::new(tmp.path().join("workspace"));
     let broker = PermissionBroker::new();

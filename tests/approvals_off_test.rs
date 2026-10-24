@@ -1,4 +1,4 @@
-//! The person's approvals switch: `ask` (the default) shows an approval card before a bot's tool
+//! The person's approvals switch: `ask` shows an approval card before a bot's tool
 //! runs; `off` runs it and records it as `auto_allowed`. Set per space, overridden per bot, and
 //! never changed by a bot.
 
@@ -44,6 +44,8 @@ struct Env {
 async fn setup() -> Env {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
+    // Start from an asking install (a fresh one asks only when risky)
+    db.set_space_approvals(&kwnt::db::spaces::SpaceId::default_space(), "ask").await.unwrap();
     let config = Config { data_dir: tmp.path().to_path_buf(), ..Config::default() };
     let state = AppState::new(
         config.clone(),
@@ -171,7 +173,7 @@ fn bot_in<'a>(list: &'a Value, id: &str) -> &'a Value {
 }
 
 #[tokio::test]
-async fn approvals_ask_by_default() {
+async fn bots_follow_an_asking_space_by_default() {
     let e = setup().await;
     let space = get(&e, "/api/spaces/spc_default/approvals").await;
     assert_eq!(space["approvals"], "ask");

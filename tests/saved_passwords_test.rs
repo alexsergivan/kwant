@@ -44,6 +44,8 @@ async fn setup() -> Env {
     let tmp = tempdir().unwrap();
     let data = tmp.path().join("data");
     let db = Database::init(&data).await.unwrap();
+    // Start from an asking install (a fresh one asks only when risky)
+    db.set_space_approvals(&kwnt::db::spaces::SpaceId::default_space(), "ask").await.unwrap();
     let config = Config { data_dir: data.clone(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let state = AppState::new(
         config.clone(),
@@ -285,6 +287,7 @@ async fn f1_f7_passwords_leave_bot_folders_encrypted_and_private() {
 async fn f4_other_spaces_and_names_are_not_found() {
     let e = setup().await;
     let lab = e.state.db.create_space(&NewSpace { name: "Lab".into(), icon: "🧪".into(), color: None, this_machine_enabled: true }).await.unwrap();
+    e.state.db.set_space_approvals(&SpaceId::new(&lab.id), "ask").await.unwrap();
     let lab_bot = e
         .state
         .db

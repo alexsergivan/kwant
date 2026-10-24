@@ -44,6 +44,8 @@ async fn setup() -> Env {
     let tmp = tempdir().unwrap();
     let data = tmp.path().join("data");
     let db = Database::init(&data).await.unwrap();
+    // Start from an asking install (a fresh one asks only when risky)
+    db.set_space_approvals(&kwnt::db::spaces::SpaceId::default_space(), "ask").await.unwrap();
     let config = Config { data_dir: data.clone(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
     let state = AppState::new(
         config.clone(),
@@ -212,6 +214,7 @@ async fn an_archived_space_keeps_counting() {
     let (s, v) = e.person("POST", "/api/spaces", Some(json!({"name": "Side"}))).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     let space = SpaceId::new(v["id"].as_str().unwrap());
+    e.state.db.set_space_approvals(&space, "ask").await.unwrap();
     let new_bot = NewKwant {
         name: "Sidey".into(),
         title: "t".into(),

@@ -8,6 +8,7 @@
 #![allow(clippy::result_large_err)]
 
 use super::AppState;
+use crate::db::approval_modes::{ASK, NEW_SPACE};
 use crate::db::spaces::{NewSpace, Space, SpaceId, SpaceUpdate};
 use crate::db::DbError;
 use axum::{
@@ -316,7 +317,8 @@ fn unique_violation(e: &DbError) -> bool {
 }
 
 /// `POST /api/spaces`: a new, empty space with its own This machine accounts and work folder.
-/// Its #general appears with its first bot (a channel needs a lead).
+/// Its #general appears with its first bot (a channel needs a lead). Its approvals start on
+/// `smart`, or `ask` while the built-in password store holds passwords.
 pub async fn create(State(state): State<AppState>, Json(body): Json<CreateBody>) -> Response {
     let name = match check_name(&body.name) {
         Ok(n) => n,
@@ -335,7 +337,9 @@ pub async fn create(State(state): State<AppState>, Json(body): Json<CreateBody>)
         color: body.color.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()),
         this_machine_enabled: body.this_machine_enabled.unwrap_or(true),
     };
-    let space = match state.db.create_space(&input).await {
+    // Ask only when risky, unless passwords in the built-in store would then be readable
+    let approvals = if super::passwords::local_count(&state).await > 0 { ASK } else { NEW_SPACE };
+    let space = match state.db.create_space_with_approvals(&input, approvals).await {
         Ok(s) => s,
         Err(e) if unique_violation(&e) => return error(StatusCode::CONFLICT, "another space already has that name"),
         Err(_) => return internal(),

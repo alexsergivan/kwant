@@ -28,11 +28,12 @@ card_art: avatar:qa
 <div class="table-wrap"><table>
   <thead><tr><th>Mode</th><th>In the app</th><th>What happens</th></tr></thead>
   <tbody>
-    <tr><td><code>ask</code> (default)</td><td>Ask before running commands</td><td>Every tool call outside the bot's folder shows a card.</td></tr>
-    <tr><td><code>smart</code></td><td>Ask only when risky</td><td>Ordinary work runs without a card. Anything risky or unclear shows the card, with the reason.</td></tr>
+    <tr><td><code>ask</code></td><td>Ask before running commands</td><td>Every tool call outside the bot's folder shows a card.</td></tr>
+    <tr><td><code>smart</code> (default)</td><td>Ask only when risky</td><td>Ordinary work runs without a card. Anything risky or unclear shows the card, with the reason.</td></tr>
     <tr><td><code>off</code></td><td>Don't ask</td><td>Everything runs.</td></tr>
   </tbody>
 </table></div>
+<p>New spaces start on <code>smart</code>, and so does the Default space of a new install. Spaces from before this default keep asking after an update, so updating kwant never loosens your setup; switch them in Settings when you're ready. While passwords are saved in the built-in store, a new space starts on <code>ask</code> instead (see <a href="#passwords">Saved passwords</a>).</p>
 <p>In every mode, a call that names kwant's own secret files (the vault, its key, the API token) is refused and recorded as denied. Calls that run without a card are recorded too, and under <code>smart</code> each record says why it was judged safe.</p>
 
 <h3 id="smart">What "Ask only when risky" lets through</h3>

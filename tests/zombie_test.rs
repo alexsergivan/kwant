@@ -382,6 +382,8 @@ async fn setup() -> Env {
     let tmp = tempdir().unwrap();
     let data = tmp.path().join("data");
     let db = Database::init(&data).await.unwrap();
+    // Start from an asking install (a fresh one asks only when risky)
+    db.set_space_approvals(&kwnt::db::spaces::SpaceId::default_space(), "ask").await.unwrap();
     // No owner-bot turns here: they would reach a real model (see loose_ends_test for those)
     no_owner_turns(&db).await;
     let config = Config { data_dir: data.clone(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };

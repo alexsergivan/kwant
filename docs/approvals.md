@@ -7,9 +7,14 @@ refuse it.
 
 | Mode | UI label | What happens |
 |---|---|---|
-| `ask` (default) | Ask before running commands | Every tool call outside the bot's folder shows an approval card. |
-| `smart` | Ask only when risky | Ordinary work runs without a card; anything risky or unclear shows the card, with the reason. |
+| `ask` | Ask before running commands | Every tool call outside the bot's folder shows an approval card. |
+| `smart` (default for new spaces) | Ask only when risky | Ordinary work runs without a card; anything risky or unclear shows the card, with the reason. |
 | `off` | Don’t ask | Everything runs. |
+
+A new space, and a fresh install's Default space, start on `smart`. A space made before that
+default (it has no approvals row) keeps asking after an upgrade, so updating kwnt never loosens
+an install; switch it in Settings when you're ready. While the built-in password store holds
+passwords, a new space starts on `ask` instead (see below). An unknown bot always asks.
 
 Whatever the mode, a call that names kwnt's own secret files (the vault, its key, the API token)
 is refused and recorded as `denied`. Calls that run without a card are recorded as

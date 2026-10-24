@@ -447,8 +447,15 @@ impl Database {
     }
 
     /// A new, empty space with its own This machine row per engine (the space's default for
-    /// each engine). Its #general and bots come with S2's create flow.
+    /// each engine), and approvals set to [`super::approval_modes::NEW_SPACE`]. Its #general and
+    /// bots come with S2's create flow.
     pub async fn create_space(&self, input: &NewSpace) -> Result<Space, DbError> {
+        self.create_space_with_approvals(input, super::approval_modes::NEW_SPACE).await
+    }
+
+    /// [`Self::create_space`] with its approvals row set to `approvals` (`ask`, `smart` or
+    /// `off`), written in the same transaction, so the space never exists without one.
+    pub async fn create_space_with_approvals(&self, input: &NewSpace, approvals: &str) -> Result<Space, DbError> {
         let id = SpaceId::new(format!("spc_{}", uuid::Uuid::new_v4().simple()));
         let mut tx = self.pool.begin().await?;
         sqlx::query("INSERT INTO spaces (id, name, icon, color, sort) VALUES (?, ?, ?, ?, (SELECT IFNULL(MAX(sort), 0) + 1 FROM spaces))")
@@ -470,6 +477,12 @@ impl Database {
             .execute(&mut *tx)
             .await?;
         }
+        sqlx::query("INSERT INTO approval_modes (scope, id, mode, updated_at) VALUES ('space', ?, ?, ?)")
+            .bind(id.as_str())
+            .bind(approvals)
+            .bind(chrono::Utc::now())
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         self.get_space(&id).await?.ok_or(DbError::Sqlx(sqlx::Error::RowNotFound))
     }

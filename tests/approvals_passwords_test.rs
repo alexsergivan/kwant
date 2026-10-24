@@ -44,6 +44,8 @@ async fn setup(bitwarden: bool) -> Env {
     let tmp = tempdir().unwrap();
     let data = tmp.path().join("data");
     let db = Database::init(&data).await.unwrap();
+    // Start from an asking install (a fresh one asks only when risky)
+    db.set_space_approvals(&kwnt::db::spaces::SpaceId::default_space(), "ask").await.unwrap();
     if bitwarden {
         let dir = data.join(VAULT_DIR);
         std::fs::create_dir_all(&dir).unwrap();

@@ -3,15 +3,22 @@
 //! `smart` ("Ask only when risky") runs ordinary work in the bot's folder without a card and asks
 //! for anything risky (see `mcp::shell_risk`).
 //! Kept in its own table, outside exports, so an imported bundle can't switch approvals off.
+//!
+//! A space made from now on gets an explicit [`NEW_SPACE`] row (`smart`) when it is created, and
+//! a fresh install's Default space gets one too. A space with no row is one that existed before
+//! that default changed, so it still asks: upgrading never loosens an install.
 
 use super::{spaces::SpaceId, Database, DbError};
 use chrono::Utc;
 
-/// The default for a space with no row, and for a bot with no override.
+/// What a space with no row resolves to (one made before [`NEW_SPACE`]), and an unknown bot.
 pub const ASK: &str = "ask";
 pub const OFF: &str = "off";
 /// Ask only when risky.
 pub const SMART: &str = "smart";
+/// What a new space starts with, and a fresh install's Default space: ask only when risky. Not
+/// while the built-in password store holds passwords (`smart` would expose them), then `ask`.
+pub const NEW_SPACE: &str = SMART;
 
 /// A bot's setting as the person chose it: `inherit` follows its space.
 pub const INHERIT: &str = "inherit";
@@ -40,6 +47,15 @@ impl ApprovalMode {
     }
 }
 
+/// Whether the built-in password store has any file in `data_dir` (a database deleted next to a
+/// vault it left behind). Read errors count as yes, so the Default space then asks.
+fn holds_local_passwords(data_dir: &std::path::Path) -> bool {
+    match std::fs::read_dir(data_dir.join(crate::sandbox::credentials::VAULT_DIR)) {
+        Ok(mut entries) => entries.next().is_some(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
 /// `ask`, `smart` or `off`; anything else is not a mode.
 pub fn valid_mode(mode: &str) -> bool {
     matches!(mode, ASK | SMART | OFF)
@@ -54,7 +70,9 @@ const CREATE_APPROVAL_MODES: &str = "CREATE TABLE IF NOT EXISTS approval_modes (
 )";
 
 impl Database {
-    pub(super) async fn migrate_approval_modes(&self) -> Result<(), DbError> {
+    /// `fresh`: the database was just made, so its Default space is new and starts with
+    /// [`NEW_SPACE`], unless `data_dir` already holds built-in saved passwords.
+    pub(super) async fn migrate_approval_modes(&self, fresh: bool, data_dir: &std::path::Path) -> Result<(), DbError> {
         sqlx::query(CREATE_APPROVAL_MODES).execute(&self.pool).await?;
         // Tables made before `smart` existed only allow 'ask' and 'off': rebuild them once
         let sql: Option<(String,)> = sqlx::query_as("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'approval_modes'")
@@ -70,6 +88,15 @@ impl Database {
             sqlx::query("DROP TABLE approval_modes_old").execute(&mut *tx).await?;
             tx.commit().await?;
         }
+        if fresh {
+            let mode = if holds_local_passwords(data_dir) { ASK } else { NEW_SPACE };
+            sqlx::query("INSERT OR IGNORE INTO approval_modes (scope, id, mode, updated_at) VALUES ('space', ?, ?, ?)")
+                .bind(super::spaces::DEFAULT_SPACE_ID)
+                .bind(mode)
+                .bind(Utc::now())
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
     }
 
@@ -82,7 +109,8 @@ impl Database {
         Ok(row.map(|r| r.0))
     }
 
-    /// The space's approvals: `ask` (the default), `smart` or `off`.
+    /// The space's approvals: `ask`, `smart` or `off`. No row (a space older than [`NEW_SPACE`])
+    /// is `ask`.
     pub async fn space_approvals(&self, space: &SpaceId) -> Result<String, DbError> {
         Ok(self.approval_mode_row("space", space.as_str()).await?.unwrap_or_else(|| ASK.into()))
     }

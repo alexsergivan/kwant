@@ -162,7 +162,7 @@ impl Database {
             db.migrate_hires().await?;
             db.migrate_imports().await?;
             db.repair_team_channels().await?;
-            db.migrate_approval_modes().await?;
+            db.migrate_approval_modes(fresh, data_dir).await?;
         }
         db.pool.close().await;
 

@@ -26,6 +26,8 @@ use tower::ServiceExt;
 async fn setup() -> (Router, AppState, TempDir) {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
+    // Start from an asking install (a fresh one asks only when risky)
+    db.set_space_approvals(&kwnt::db::spaces::SpaceId::default_space(), "ask").await.unwrap();
     let config = Config { data_dir: tmp.path().to_path_buf(), ..Config::default() };
     let state = AppState::new(
         config.clone(),
