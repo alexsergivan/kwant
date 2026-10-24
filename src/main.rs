@@ -137,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("kwnt token only reads the token of a kwant install; it never makes one.");
                     eprintln!("  - Run it as the user that runs `kwnt serve`, with the same KWNT_DATA_DIR");
                     eprintln!("    (systemd setup from the README: sudo cat /var/lib/kwnt/api-token).");
-                    eprintln!("  - Docker: docker compose exec kwnt kwnt token");
+                    eprintln!("  - Docker: docker compose exec kwnt kwnt token --raw");
                     eprintln!("  - If KWNT_API_TOKEN is set for the server, that value is the token.");
                     eprintln!("  - Never started yet? `kwnt serve` creates the token on first run.");
                     std::process::exit(1);
