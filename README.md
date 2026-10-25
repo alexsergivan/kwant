@@ -3,7 +3,7 @@
 **Your own team of AI bots, in one self-hosted binary.**
 
 [![CI](https://github.com/alexsergivan/kwant/actions/workflows/ci.yml/badge.svg)](https://github.com/alexsergivan/kwant/actions/workflows/ci.yml)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](#license)
 [![Docs](https://img.shields.io/badge/docs-kwant.si-orange.svg)](https://kwant.si/docs/quickstart)
 
 kwant gives you a team of bots that share chats, hand work to each other with an @mention and get it done on their own, on a schedule or while you're away. Keep separate spaces for work and home, each with its own bots and accounts. Run it on your laptop or a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.
@@ -236,11 +236,12 @@ kwant runs commands and holds API keys and passwords, so please report vulnerabi
 
 ## License
 
-Licensed under either of
+kwant is open source under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
+- **Free for everyone:** use it, change it and run it for yourself, your team or your company, at any size.
+- **Share your changes if you serve them:** if you change kwant and let others use it over a network, for example as a hosted service, you must publish your changed source code under the AGPL too.
+- **Commercial license:** if you want to sell kwant, host it or build it into your product without publishing your changes, you can buy a commercial license instead. See [COMMERCIAL.md](COMMERCIAL.md).
 
-at your option.
+Code published before the switch, including the mac-v0.1.0 release, stays under MIT OR Apache-2.0.
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in kwant by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+Contributions are accepted under the terms in [CONTRIBUTING.md](CONTRIBUTING.md#license).

@@ -76,4 +76,4 @@ A maintainer will review it. Small follow-up commits are fine; we squash or reba
 
 ## License
 
-kwant is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE). Unless you say otherwise, any contribution you submit for inclusion in kwant is dual-licensed the same way, without any additional terms or conditions.
+kwant is licensed under the [GNU Affero General Public License v3.0](LICENSE) and is also offered under commercial licenses. By submitting a contribution, you license it to the kwant maintainer under the Apache License 2.0, and you agree that it may be distributed as part of kwant under the AGPL-3.0 and under commercial licenses. You confirm that you have the right to do so.
