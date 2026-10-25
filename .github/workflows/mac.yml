@@ -158,7 +158,8 @@ jobs:
           test -f "$vol/.background/background.tiff"
           "$RUNNER_TEMP/dsvenv/bin/python" - "$vol" <<'PY' | tee "$shots/ds_store.txt"
           import sys
-          from ds_store import DSStore
+          from ds_store import DSStore, store
+          store.codecs.pop(b"pBBk", None)  # the background bookmark; mac_alias can't parse newer ones
           vol = sys.argv[1]
           with DSStore.open(vol + "/.DS_Store", "r") as d:
               entries = {(e.filename, e.code): e.value for e in d}
