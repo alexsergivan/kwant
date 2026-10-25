@@ -73,9 +73,13 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
         "⚡ kwant bots: your team of super-intelligent bots, listening at http://{}",
         addr
     );
-    // stdout only: the link carries the token
-    for line in crate::server::auth::startup_notice(&config.host, config.port, api_token.require, api_token.reveal()) {
-        println!("{line}");
+    // stdout only: a one-time link, never the API token
+    if crate::server::auth::startup_link_needed(&config.host, api_token.require) {
+        let code = api_token.signin.create_link(crate::server::signin::LINK_TTL);
+        let link = crate::server::auth::one_time_link(&config.host, config.port, api_token.public_base(), &code);
+        for line in crate::server::auth::one_time_notice(&link, true) {
+            println!("{line}");
+        }
     }
 
     let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();

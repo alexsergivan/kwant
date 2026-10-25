@@ -90,10 +90,16 @@ pub fn normalize_origin(input: &str) -> Result<String, StoreError> {
     Ok(url.origin().ascii_serialization())
 }
 
-/// Whether a tool call's text names kwnt's own secret files (the vault, its key, the API token).
+/// Whether a tool call's text names kwnt's own secret files (the vault, its key, the API token)
+/// or the ways to mint a sign-in (`kwnt signin-link`, `/api/signin`).
 pub fn mentions_kwnt_secrets(text: &str) -> bool {
     let t = text.to_ascii_lowercase();
-    t.contains(VAULT_DIR) || t.contains("api-token") || t.contains(LEGACY_FILE) || t.contains("kwnt token")
+    t.contains(VAULT_DIR)
+        || t.contains("api-token")
+        || t.contains(LEGACY_FILE)
+        || t.contains("kwnt token")
+        || t.contains("signin-link")
+        || t.contains("/api/signin")
 }
 
 /// Whether a tool call's arguments name kwnt's own secret files: in any text, or through a path

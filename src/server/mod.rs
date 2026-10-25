@@ -10,6 +10,7 @@ pub mod profile_turn;
 pub mod engine_routes;
 pub mod engine_login;
 pub mod auth;
+pub mod signin;
 pub mod continuity;
 pub mod model_usage;
 pub mod scheduler;
@@ -163,6 +164,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/spaces", get(spaces::list).post(spaces::create))
         .route("/api/spaces/:id", get(spaces::get).patch(spaces::update))
         .route("/api/auth/session", post(auth::create_session).delete(auth::delete_session))
+        .route("/api/signin/links", post(auth::create_link))
         .route("/api/profiles", get(profile_routes::list).post(profile_routes::create))
         .route("/api/profiles/:id", axum::routing::patch(profile_routes::update).delete(profile_routes::remove))
         .route("/api/profiles/:id/key", put(profile_routes::set_key).delete(profile_routes::delete_key))

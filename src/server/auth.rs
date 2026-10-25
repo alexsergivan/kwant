@@ -1,10 +1,12 @@
 //! Who may call the API. Browsers may only call it from kwnt's own page (Origin allowlist), and
-//! requests that don't come from this machine need the API token, as a bearer header or the
-//! `kwnt_token` cookie the UI gets by posting the token to `/api/auth/session`.
+//! requests that don't come from this machine need the API token as a bearer header, or a session
+//! in the `kwnt_token` cookie, which the UI gets by posting the token or a one-time sign-in link
+//! code to `/api/auth/session` (see `signin`).
 //!
 //! "From this machine" means a loopback peer, a loopback `Host` and no proxy forwarding headers.
 //! The `Host` check is what keeps a DNS-rebinding page (same peer, foreign host) out.
 
+use super::signin::{self, Redeem, Via};
 use super::AppState;
 use crate::config::Config;
 use axum::{
@@ -38,6 +40,8 @@ pub struct ApiToken {
     /// Extra browser origins allowed besides kwnt's own (`KWNT_ALLOWED_ORIGINS`).
     extra_origins: Vec<String>,
     port: u16,
+    /// Sessions and one-time sign-in links.
+    pub signin: signin::SignIn,
 }
 
 impl std::fmt::Debug for ApiToken {
@@ -72,6 +76,7 @@ impl ApiToken {
             require,
             extra_origins,
             port: config.port,
+            signin: signin::SignIn::load(&config.data_dir),
         }
     }
 
@@ -81,7 +86,14 @@ impl ApiToken {
             require,
             extra_origins: Vec::new(),
             port,
+            signin: signin::SignIn::in_memory(),
         }
+    }
+
+    /// kwnt's public address: the first `KWNT_ALLOWED_ORIGINS` entry (the HTTPS address in front
+    /// of it), for sign-in links that open as they are.
+    pub fn public_base(&self) -> Option<&str> {
+        self.extra_origins.first().map(String::as_str)
     }
 
     /// The token, for `kwnt token` and the startup URL only.
@@ -179,8 +191,9 @@ pub fn is_loopback_bind(host: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
-/// The link that signs a browser in once: `http://<host>:<port>/#kwnt_token=<token>`. The UI
-/// posts the token to `/api/auth/session` and clears it from the address bar.
+/// The link that signs a browser in: `http://<host>:<port>/#kwnt_token=<token or code>`. The UI
+/// posts what follows `#kwnt_token=` to `/api/auth/session` and clears it from the address bar;
+/// a fragment never reaches access logs or a `Referer`.
 pub fn sign_in_link(host: &str, port: u16, token: &str) -> String {
     let bare = host.trim_matches(['[', ']']);
     let host = match bare.parse::<IpAddr>() {
@@ -190,32 +203,44 @@ pub fn sign_in_link(host: &str, port: u16, token: &str) -> String {
     format!("http://{host}:{port}/#kwnt_token={token}")
 }
 
-/// What `kwnt serve` says about signing in, for stdout only: the link carries the token, so it
-/// must never go through tracing into log files. On a loopback bind nobody needs the token,
-/// unless `KWNT_REQUIRE_TOKEN=always`.
-pub fn startup_notice(host: &str, port: u16, require: Require, token: &str) -> Vec<String> {
-    match require {
-        Require::Never => Vec::new(),
-        Require::Auto if is_loopback_bind(host) => Vec::new(),
-        Require::Always if is_loopback_bind(host) => vec![format!(
-            "🔒 Open this link once to sign in (it signs in as you, keep it private): {}",
-            sign_in_link(host, port, token)
-        )],
-        _ if is_any_bind(host) => {
-            // No "localhost needs no sign-in" here: in Docker the published port arrives from the bridge
-            vec![
-                format!(
-                    "🔒 To sign in from another computer, open this link once (it signs in as you, keep it private): {}",
-                    sign_in_link(THIS_HOST, port, token)
-                ),
-                format!("   Replace {THIS_HOST} with this server's address."),
-            ]
-        }
-        _ => vec![format!(
-            "🔒 To sign in from another computer, open this link once (it signs in as you, keep it private): {}",
-            sign_in_link(host, port, token)
-        )],
+/// A one-time link: on `base` (kwnt's public address) when known, else on the bound host
+/// (`<this-host>` when kwnt listens on every address).
+pub fn one_time_link(host: &str, port: u16, base: Option<&str>, code: &str) -> String {
+    match base {
+        Some(b) => format!("{}/#kwnt_token={code}", b.trim_end_matches('/')),
+        None => token_command_link(host, port, code),
     }
+}
+
+/// Whether `kwnt serve` should print a sign-in link: not when nobody needs one (loopback, unless
+/// `KWNT_REQUIRE_TOKEN=always`, or `never`).
+pub fn startup_link_needed(host: &str, require: Require) -> bool {
+    match require {
+        Require::Never => false,
+        Require::Auto => !is_loopback_bind(host),
+        Require::Always => true,
+    }
+}
+
+/// What `kwnt serve` and `kwnt signin-link` say about a one-time link, for stdout only (never
+/// through tracing into log files): the link, a QR code for a phone when the address is real, and
+/// how to get another.
+pub fn one_time_notice(link: &str, qr: bool) -> Vec<String> {
+    let minutes = signin::LINK_TTL.as_secs() / 60;
+    let mut lines = vec![format!(
+        "🔒 To sign in from another device, open this link. It works once, for {minutes} minutes (keep it private): {link}"
+    )];
+    if link.contains(THIS_HOST) {
+        lines.push(format!("   Replace {THIS_HOST} with this server's address. Set KWNT_ALLOWED_ORIGINS to your HTTPS address for a ready link and a QR code."));
+    } else if qr {
+        let code = signin::qr_lines(link);
+        if !code.is_empty() {
+            lines.push("   Or scan it with your phone:".into());
+            lines.extend(code);
+        }
+    }
+    lines.push("   Used or expired? `kwnt signin-link` makes a new one (Docker: docker compose exec kwnt kwnt signin-link).".into());
+    lines
 }
 
 /// Stands in for the server's address when kwnt listens on every address.
@@ -235,7 +260,7 @@ pub fn token_command_link(host: &str, port: u16, token: &str) -> String {
     sign_in_link(if is_any_bind(host) { THIS_HOST } else { host }, port, token)
 }
 
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
@@ -301,6 +326,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "documents", ..] => true,
         // Setup installs software on this machine and shows what is signed in
         ["", "api", "setup", ..] => true,
+        // Sign-in links, device approvals and sessions: who else may sign in as the person
+        ["", "api", "signin", ..] => true,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "kwants" | "teams", _] => *method == Method::DELETE,
@@ -348,9 +375,11 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .map(str::trim)
 }
 
+/// The API token as a bearer, or a cookie holding a live session (or the API token itself, as
+/// browsers signed in before sessions still have).
 fn presented_token_ok(api: &ApiToken, headers: &HeaderMap) -> bool {
     bearer(headers).is_some_and(|t| api.matches(t))
-        || cookie_token(headers).is_some_and(|t| api.matches(t))
+        || cookie_token(headers).is_some_and(|t| api.matches(t) || api.signin.session_ok(t))
 }
 
 fn needs_token(api: &ApiToken, headers: &HeaderMap, peer: Option<IpAddr>) -> bool {
@@ -501,36 +530,85 @@ fn is_https(headers: &HeaderMap) -> bool {
     header_str(headers, "x-forwarded-proto").is_some_and(|p| p.eq_ignore_ascii_case("https"))
 }
 
-/// `POST /api/auth/session {token}`: checks the token and sets the `kwnt_token` cookie
-/// (HttpOnly, SameSite=Strict), which EventSource and the browser WebSocket then send.
-pub async fn create_session(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<SessionBody>,
-) -> Response {
-    let token = body.token.trim();
-    if !state.api_token.matches(token) {
-        // A wrong guess costs a little time
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        return deny(StatusCode::UNAUTHORIZED, "wrong token");
-    }
-    let mut resp = StatusCode::NO_CONTENT.into_response();
+fn peer_ip(peer: &Option<ConnectInfo<SocketAddr>>) -> Option<IpAddr> {
+    peer.as_ref().map(|c| c.0.ip())
+}
+
+/// A response that signs this browser in with a new session's cookie (HttpOnly, SameSite=Strict),
+/// which EventSource and the browser WebSocket then send.
+pub(super) fn with_session_cookie(mut resp: Response, secret: &str, headers: &HeaderMap) -> Response {
     resp.headers_mut().insert(
         header::SET_COOKIE,
-        session_cookie(token, 31_536_000, is_https(&headers)),
+        session_cookie(secret, signin::SESSION_SECS, is_https(headers)),
     );
     resp.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
 }
 
-/// `DELETE /api/auth/session`: clears the cookie.
-pub async fn delete_session(headers: HeaderMap) -> Response {
+/// `POST /api/auth/session {token}`: `token` is the API token or a one-time sign-in link code.
+/// Either starts a new session for this browser (the cookie never holds the API token). 401
+/// `{error, reason}`: `wrong_token`, or `link_used_or_expired` for a link that worked once.
+pub async fn create_session(
+    State(state): State<AppState>,
+    peer: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(body): Json<SessionBody>,
+) -> Response {
+    let token = body.token.trim();
+    let client = signin::client(&headers, peer_ip(&peer));
+    let secret = if state.api_token.matches(token) {
+        state.api_token.signin.create_session(Via::Token, &client)
+    } else {
+        match state.api_token.signin.redeem_link(token, &client) {
+            Redeem::Ok(secret) => secret,
+            refused => {
+                // A wrong guess costs a little time
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                let (msg, reason) = if refused == Redeem::Spent {
+                    ("this sign-in link was already used or has expired", "link_used_or_expired")
+                } else {
+                    ("wrong token", "wrong_token")
+                };
+                return (StatusCode::UNAUTHORIZED, Json(json!({ "error": msg, "reason": reason }))).into_response();
+            }
+        }
+    };
+    with_session_cookie(StatusCode::NO_CONTENT.into_response(), &secret, &headers)
+}
+
+/// `DELETE /api/auth/session`: ends this browser's session and clears the cookie.
+pub async fn delete_session(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Some(secret) = cookie_token(&headers) {
+        state.api_token.signin.revoke_secret(secret);
+    }
     let mut resp = StatusCode::NO_CONTENT.into_response();
     resp.headers_mut().insert(
         header::SET_COOKIE,
         session_cookie("", 0, is_https(&headers)),
     );
+    resp
+}
+
+/// `POST /api/signin/links` (person only): a one-time sign-in link for another device, live for
+/// 15 minutes: `{code, url, expires_at, expires_in}`. `url` is null when kwnt doesn't know its
+/// public address (no `KWNT_ALLOWED_ORIGINS`); the page then builds it from its own address.
+pub async fn create_link(State(state): State<AppState>) -> Response {
+    let code = state.api_token.signin.create_link(signin::LINK_TTL);
+    let ttl = signin::LINK_TTL.as_secs();
+    let url = state
+        .api_token
+        .public_base()
+        .map(|b| one_time_link("", 0, Some(b), &code));
+    let mut resp = Json(json!({
+        "code": code,
+        "url": url,
+        "expires_in": ttl,
+        "expires_at": chrono::Utc::now() + chrono::TimeDelta::seconds(ttl as i64),
+    }))
+    .into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
 }
 
@@ -645,48 +723,53 @@ mod tests {
     }
 
     #[test]
-    fn loopback_start_prints_no_token_line_unless_always() {
-        let tok = "abcdefghijklmnopqrstuvwxyz012345";
+    fn startup_link_only_where_someone_needs_it() {
         for host in ["127.0.0.1", "localhost", "::1", "[::1]"] {
-            assert!(startup_notice(host, 8899, Require::Auto, tok).is_empty(), "{host}");
-            assert!(startup_notice(host, 8899, Require::Never, tok).is_empty(), "{host}");
+            assert!(!startup_link_needed(host, Require::Auto), "{host}");
+            assert!(!startup_link_needed(host, Require::Never), "{host}");
+            assert!(startup_link_needed(host, Require::Always), "{host}");
         }
-        let always = startup_notice("127.0.0.1", 8899, Require::Always, tok).join("\n");
-        assert!(always.contains("http://127.0.0.1:8899/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345"), "{always}");
-        assert!(!always.contains("kwnt token`"), "{always}");
-        let v6 = startup_notice("::1", 8899, Require::Always, tok).join("\n");
-        assert!(v6.contains("http://[::1]:8899/#kwnt_token="), "{v6}");
+        for host in ["0.0.0.0", "::", "203.0.113.9", "kwnt.example.com"] {
+            assert!(startup_link_needed(host, Require::Auto), "{host}");
+            assert!(!startup_link_needed(host, Require::Never), "{host}");
+        }
     }
 
     #[test]
-    fn remote_start_prints_one_ready_to_open_link() {
-        let tok = "abcdefghijklmnopqrstuvwxyz012345";
-        let specific = startup_notice("203.0.113.9", 8799, Require::Auto, tok);
-        assert_eq!(specific.len(), 1);
-        assert!(specific[0].ends_with("http://203.0.113.9:8799/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345"), "{specific:?}");
-        let named = startup_notice("kwnt.example.com", 8799, Require::Auto, tok).join("\n");
-        assert!(named.contains("http://kwnt.example.com:8799/#kwnt_token="), "{named}");
-        for any in ["0.0.0.0", "::", "[::]"] {
-            let lines = startup_notice(any, 8799, Require::Auto, tok);
-            assert_eq!(lines.len(), 2, "{any}");
-            assert!(lines[0].ends_with("http://<this-host>:8799/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345"), "{lines:?}");
-            assert_eq!(lines[1].trim(), "Replace <this-host> with this server's address.");
-        }
-        assert_eq!(startup_notice("0.0.0.0", 8799, Require::Always, tok).len(), 2);
-        assert!(startup_notice("0.0.0.0", 8799, Require::Never, tok).is_empty());
-        // Nothing sends the person off to run a command any more
-        assert!(!specific.iter().chain(&lines_for_all(tok)).any(|l| l.contains("kwnt token")));
-        assert_eq!(token_command_link("0.0.0.0", 8799, tok), "http://<this-host>:8799/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345");
-        assert_eq!(token_command_link("127.0.0.1", 8899, tok), "http://127.0.0.1:8899/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345");
-        assert_eq!(token_command_link("::1", 8899, tok), "http://[::1]:8899/#kwnt_token=abcdefghijklmnopqrstuvwxyz012345");
+    fn one_time_links_and_notice() {
+        let code = "kl1.abc";
+        assert_eq!(one_time_link("0.0.0.0", 8799, None, code), "http://<this-host>:8799/#kwnt_token=kl1.abc");
+        assert_eq!(one_time_link("::1", 8899, None, code), "http://[::1]:8899/#kwnt_token=kl1.abc");
+        assert_eq!(
+            one_time_link("0.0.0.0", 8799, Some("https://kwant.example.com/"), code),
+            "https://kwant.example.com/#kwnt_token=kl1.abc"
+        );
+        // A placeholder host: no QR code (it couldn't open), and how to get a real one
+        let placeholder = one_time_notice(&one_time_link("0.0.0.0", 8799, None, code), true);
+        assert!(placeholder[0].ends_with("http://<this-host>:8799/#kwnt_token=kl1.abc"), "{placeholder:?}");
+        assert!(placeholder[0].contains("works once, for 15 minutes"), "{placeholder:?}");
+        assert!(placeholder.iter().any(|l| l.contains("KWNT_ALLOWED_ORIGINS")));
+        assert!(!placeholder.iter().any(|l| l.contains('█')));
+        let real = one_time_notice("https://kwant.example.com/#kwnt_token=kl1.abc", true);
+        assert!(real.iter().any(|l| l.contains('█')), "QR code");
+        assert!(real.last().unwrap().contains("kwnt signin-link"));
+        assert!(!one_time_notice("https://kwant.example.com/#kwnt_token=kl1.abc", false).iter().any(|l| l.contains('█')));
+        // The API token itself is never printed at startup any more
+        assert!(!real.iter().chain(&placeholder).any(|l| l.contains("kwnt token")));
+        assert_eq!(token_command_link("0.0.0.0", 8799, "tok"), "http://<this-host>:8799/#kwnt_token=tok");
+        assert_eq!(token_command_link("127.0.0.1", 8899, "tok"), "http://127.0.0.1:8899/#kwnt_token=tok");
     }
 
-    fn lines_for_all(tok: &str) -> Vec<String> {
-        ["127.0.0.1", "0.0.0.0", "203.0.113.9"]
-            .iter()
-            .flat_map(|h| [Require::Auto, Require::Always].map(|r| startup_notice(h, 8799, r, tok)))
-            .flatten()
-            .collect()
+    #[test]
+    fn a_session_cookie_counts_as_the_token() {
+        let api = ApiToken::for_tests("abcdefghijklmnopqrstuvwxyz012345", Require::Auto, 3000);
+        let secret = api.signin.create_session(Via::Link, &signin::Client::default());
+        assert!(presented_token_ok(&api, &headers(&[("cookie", &format!("kwnt_token={secret}"))])));
+        // Only as a cookie: a bearer that isn't the API token is an agent's
+        assert!(!presented_token_ok(&api, &headers(&[("authorization", &format!("Bearer {secret}"))])));
+        let id = api.signin.session_id(&secret).unwrap();
+        api.signin.revoke(&id);
+        assert!(!presented_token_ok(&api, &headers(&[("cookie", &format!("kwnt_token={secret}"))])));
     }
 
     #[test]

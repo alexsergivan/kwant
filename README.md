@@ -109,7 +109,7 @@ scp target/release/kwnt user@your-vps:/usr/local/bin/kwnt
 ssh user@your-vps "kwnt serve --host 0.0.0.0 --port 8799"
 ```
 
-On your own computer there is nothing to sign in to. From another machine, open the link `kwnt serve` prints at startup once (`http://<this-host>:8799/#kwnt_token=...`, with `<this-host>` swapped for the server's address); the browser stays signed in for a year. Lost it? On the server, as the user that runs kwnt, `cat ~/.kwnt/api-token` (or `$KWNT_DATA_DIR/api-token`, e.g. `sudo cat /var/lib/kwnt/api-token` with the systemd unit below) prints the token to paste, and `kwnt token` the link (`./target/release/kwnt token` if kwnt isn't on your PATH). Run them as the same user: as another user they fail, because that user can't read the token file (for the systemd unit use `sudo cat` as above). Each install has its own token, so one copied from your laptop won't open kwnt on the server. Or skip sign-in: `ssh -N -L 8799:127.0.0.1:8799 user@your-vps`, then open http://127.0.0.1:8799 on your computer (not with Docker, where requests always count as remote). The link signs in as you, so anyone who can read the server's output can use it. Put a TLS reverse proxy in front: see [browser service and VPS hosting](docs/browser-service.md).
+On your own computer there is nothing to sign in to. From another machine, open the one-time link `kwnt serve` prints at startup (it works once, for 15 minutes; with `KWNT_ALLOWED_ORIGINS` set it is ready to open and comes with a QR code), or make a new one with `kwnt signin-link`. The browser stays signed in for a year. Prefer the token? On the server, as the user that runs kwnt, `cat ~/.kwnt/api-token` (or `$KWNT_DATA_DIR/api-token`, e.g. `sudo cat /var/lib/kwnt/api-token` with the systemd unit below) prints the token to paste, and `kwnt token` the link (`./target/release/kwnt token` if kwnt isn't on your PATH). Run them as the same user: as another user they fail, because that user can't read the token file (for the systemd unit use `sudo cat` as above). Each install has its own token, so one copied from your laptop won't open kwnt on the server. Or skip sign-in: `ssh -N -L 8799:127.0.0.1:8799 user@your-vps`, then open http://127.0.0.1:8799 on your computer (not with Docker, where requests always count as remote). A one-time link signs in as you, so keep it private until you've used it; the token never appears in the server's output. Put a TLS reverse proxy in front: see [browser service and VPS hosting](docs/browser-service.md).
 
 <details>
 <summary>A systemd unit</summary>
@@ -149,7 +149,7 @@ git clone https://github.com/alexsergivan/kwant.git && cd kwant
 KWNT_CLIS=claude,codex docker compose up -d --build   # any of claude,codex,grok; leave out for none
 docker compose exec kwnt kwnt doctor                  # what works, and the fix for what doesn't
 docker compose exec kwnt claude auth login            # sign a CLI in (codex login --device-auth, grok login --device-auth)
-docker compose exec kwnt kwnt token --raw             # the token to paste on the sign-in screen
+docker compose exec kwnt kwnt signin-link            # a one-time sign-in link and QR code (15 minutes)
 ```
 
 Or skip the CLIs and add an Anthropic, OpenAI or xAI API key in the app under **Space settings → Accounts**. CLI sign-ins live in the `kwnt-home` volume and data in `kwnt-data`, so both survive rebuilds.
@@ -166,7 +166,7 @@ kwant.example.com {
 echo KWNT_ALLOWED_ORIGINS=https://kwant.example.com >> .env && docker compose up -d
 ```
 
-`docker compose logs kwnt | grep kwnt_token` shows the sign-in link (open it once with your domain as the host); `docker compose exec kwnt kwnt token` prints it again.
+`docker compose exec kwnt kwnt signin-link` prints a one-time sign-in link for your domain and a QR code to scan with your phone. It works once, for 15 minutes; run it again for the next device. `docker compose exec kwnt kwnt token --raw` still prints the API token, as a fallback.
 
 - **Image sizes** (measured): kwnt alone 0.2 GB; with `KWNT_CLIS=claude,codex,grok` 1.7 GB (the CLIs add about 0.9 GB, so they are off by default). Laya 3.2 GB, the browser 1.2 GB. Idle RAM: Laya about 1.7–2.3 GB, the browser about 0.4 GB, kwnt about 25 MB.
 - **kwant's own `execute_shell` tool** runs in per-team Docker containers, so it isn't available inside this stack: that would need the host's Docker socket, which is root on the host. The CLIs' own shell tools work inside the kwnt container.

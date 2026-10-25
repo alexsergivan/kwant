@@ -67,14 +67,19 @@ peer, a loopback `Host` and no proxy headers (`X-Forwarded-*`, `Forwarded`, `X-R
 - A VPS reached directly or through a reverse proxy, and Docker (the published port arrives from
   the bridge network): open the link printed at startup once.
 
-On a bind other than loopback, `kwnt serve` prints a ready-to-open link on stdout (never through the
-log): `http://<host>:<port>/#kwnt_token=<token>`, with the bound host, or `<this-host>` and a note to
-swap in the server's address when it listens on `0.0.0.0`/`::`. The UI posts the token to
-`/api/auth/session`, which sets an HttpOnly, SameSite=Strict cookie for a year, and clears the
-address bar. The link signs in as you: anyone who can read the server's output (`docker compose logs`
-with Docker) can use it.
+On a bind other than loopback, `kwnt serve` prints a one-time sign-in link on stdout (never through
+the log): `<address>/#kwnt_token=kl1.<code>`. The address is the first `KWNT_ALLOWED_ORIGINS` entry
+(then a QR code follows for a phone), else the bound host, or `<this-host>` with a note to swap in the
+server's address when it listens on `0.0.0.0`/`::`. The link works once, for 15 minutes; `kwnt
+signin-link` (Docker: `docker compose exec kwnt kwnt signin-link`) asks the running server for a new
+one, and a signed-in browser can make one with `POST /api/signin/links`. The code sits in the URL
+fragment, so it never reaches access logs or a `Referer`. The UI posts it to `/api/auth/session`,
+which starts a session: a random secret in an HttpOnly, SameSite=Strict cookie for a year, stored on
+the server only as a SHA-256 hash in `<data_dir>/sessions.json` (0600). Signing out
+(`DELETE /api/auth/session`) ends that session on the server. The cookie never holds the API token;
+browsers that signed in before sessions keep working with the token cookie they have.
 
-`kwnt token` prints the same link again (Docker: `docker compose exec kwnt kwnt token`), and
+`kwnt token` prints a link that carries the API token itself (reusable, so keep it to yourself), and
 `kwnt token --raw` just the token, for scripts, which send `Authorization: Bearer <token>`. The token
 lives in `<data_dir>/api-token` (mode 0600), or set `KWNT_API_TOKEN` (16+ characters). Run `kwnt token` as the
 user that runs `kwnt serve` (`./target/release/kwnt` from a source build without kwnt on the `PATH`):
@@ -83,7 +88,7 @@ systemd unit, `sudo cat /var/lib/kwnt/api-token`). Each
 install has its own token, so a token from another computer won't work either. The
 sign-in screen asks where kwant runs (a server, Docker, or this computer) and shows the matching steps.
 
-Person-only routes (saved passwords and the vault, answering approval cards, the approvals switch,
+Person-only routes (sign-in links, saved passwords and the vault, answering approval cards, the approvals switch,
 deleting a bot or team, undo, Loose ends, Parallel Universe, letters) refuse a bot's turn token, or
 any bearer that isn't the API token, with 403 from anywhere. From another machine they need the API
 token (401 `{person_only:true}`); from this machine they don't, so the person on it is never asked.

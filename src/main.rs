@@ -78,6 +78,19 @@ pub enum Commands {
         raw: bool,
     },
 
+    /// Print a new one-time sign-in link and QR code for another device (works once, for 15
+    /// minutes). Asks the running server, so run it where `kwnt serve` runs (Docker:
+    /// `docker compose exec kwnt kwnt signin-link`)
+    SigninLink {
+        /// kwnt's address as browsers open it (e.g. https://kwant.example.com); defaults to the
+        /// first KWNT_ALLOWED_ORIGINS entry
+        #[arg(long)]
+        url: Option<String>,
+        /// Leave out the QR code
+        #[arg(long)]
+        no_qr: bool,
+    },
+
     /// Run a tiny MCP test server on stdin/stdout (for tests and smoke checks)
     #[command(hide = true)]
     McpEchoServer,
@@ -194,6 +207,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{token}");
             } else {
                 println!("{}", kwnt::server::auth::token_command_link(&config.host, config.port, &token));
+            }
+        }
+        Some(Commands::SigninLink { url, no_qr }) => {
+            if let Err(e) = kwnt::server::signin::cli_link(&config, url.as_deref(), !no_qr).await {
+                eprintln!("kwnt signin-link: {e}");
+                std::process::exit(1);
             }
         }
         Some(Commands::McpEchoServer) => unreachable!("handled before config loading"),
