@@ -43,6 +43,7 @@ test('the Laya pill follows the routing rule, not the channel name', () => {
   assert.equal(c.layaRoutes({ ...two, routing_mode: 'lead' }, 3), false);
   assert.equal(c.layaRoutes({ name: 'general', lead_kwant_id: 'a', member_kwants: '[]', routing_mode: 'auto' }, 2), true);
   assert.equal(c.layaRoutes({ name: 'general', lead_kwant_id: 'a', member_kwants: '[]', routing_mode: 'auto' }, 1), false);
+  assert.equal(c.layaRoutes({ name: 'general', lead_kwant_id: 'a', member_kwants: '[]', routing_mode: 'lead' }, 3), false, '#general set to lead: no Laya pill');
 });
 
 test('the picker explains what one bot versus several means', () => {
