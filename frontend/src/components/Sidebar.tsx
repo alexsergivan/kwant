@@ -12,6 +12,7 @@ import { isMac } from './LayaStatus';
 import { ApprovalsOffBadge } from './ApprovalsSetting';
 import { approvalsOff, spaceOffLine } from '../approvalMode';
 import { teamChannelOf } from '../teamChannel';
+import { layaRoutes } from '../channels';
 import { InstallAppButton } from './InstallAppButton';
 
 export interface Kwant {
@@ -90,6 +91,8 @@ export interface SidebarProps {
   /** Opens the new-bot form; with a team, the new bot joins it. */
   onSummonKwant: (team?: Team) => void;
   onCreateTeam: () => void;
+  /** Opens the new-channel form. */
+  onCreateChannel?: () => void;
   /** "While you were away": unseen count for the badge, whether it's open, and how to open it. */
   awayCount?: number;
   awayActive?: boolean;
@@ -149,6 +152,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onEditKwant,
   onSummonKwant,
   onCreateTeam,
+  onCreateChannel,
   awayCount = 0,
   awayActive = false,
   looseActive = false,
@@ -320,8 +324,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Channels Section */}
         {showChats && (
         <div>
-          <div className="px-2 py-1 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
-            Channels
+          <div className="px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+            <span>Channels</span>
+            {onCreateChannel && kwants.length > 0 && (
+              <button
+                type="button"
+                onClick={onCreateChannel}
+                className="flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20 transition-all normal-case tracking-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+                title={`New channel in ${space.name}`}
+              >
+                <Plus size={11} />
+                <span>New channel</span>
+              </button>
+            )}
           </div>
           <div className="mt-1 space-y-0.5">
             {displayChannels.map((c) => {
@@ -338,7 +353,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 >
                   <Hash size={15} className={active ? 'text-sky-400' : 'text-zinc-500'} />
                   <span className="truncate flex-1">{c.name}</span>
-                  {c.name === 'general' && (
+                  {layaRoutes(c, kwants.length) && (
                     <span className="shrink-0 text-[10px] px-1.5 py-px rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-200" title="Laya picks who answers here">
                       Laya
                     </span>

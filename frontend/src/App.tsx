@@ -33,6 +33,8 @@ import { AlertTriangle, Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loa
 import { ChatApproval, OpenChat, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
+import { NewChannelModal } from './components/NewChannelModal';
+import type { NewChannelBody } from './channels';
 import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
 import { Toasts, Toast } from './components/Toasts';
@@ -506,6 +508,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Team that a newly created bot should join (set by a team's "Add member")
   const [newAgentTeam, setNewAgentTeam] = useState<Team | null>(null);
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
+  const [isNewChannelOpen, setIsNewChannelOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [editingKwant, setEditingKwant] = useState<Kwant | null>(null);
   const [deletingKwant, setDeletingKwant] = useState<Kwant | null>(null);
@@ -1897,6 +1900,31 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
 
+  /** Creates a channel and opens it; resolves to what went wrong, or null. */
+  const handleCreateChannel = async (body: NewChannelBody): Promise<string | null> => {
+    try {
+      const res = await fetch('/api/channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        return typeof data?.error === 'string' ? data.error : `Could not create the channel (HTTP ${res.status}).`;
+      }
+      const created: Channel = await res.json();
+      setChannels((prev) => (prev.some((c) => c.id === created.id) ? prev : [...prev, created]));
+      messagesCacheRef.current[created.id] = [];
+      setIsNewChannelOpen(false);
+      handleSelectChannel(created);
+      playSfx('fanfare');
+      onSpacesChanged();
+      return null;
+    } catch {
+      return 'Could not reach the server.';
+    }
+  };
+
   const handleCreateTeam = async (teamData: {
     name: string;
     description?: string;
@@ -2557,6 +2585,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setIsNewTeamOpen(true);
         playSfx('click');
       }}
+      onCreateChannel={() => {
+        setIsNewChannelOpen(true);
+        playSfx('click');
+      }}
       awayCount={awayCount}
       awayActive={showAway}
       looseActive={showLoose}
@@ -2846,6 +2878,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           />
         )}
       </Suspense>
+
+      <NewChannelModal
+        isOpen={isNewChannelOpen}
+        onClose={() => setIsNewChannelOpen(false)}
+        kwants={kwants}
+        channels={channels}
+        onCreate={handleCreateChannel}
+      />
 
       {/* New Team Modal */}
       <NewTeamModal
