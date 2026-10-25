@@ -162,3 +162,49 @@ test('a member or bot with a missing name or title is skipped, not a crash', () 
   assert.deepEqual(suggestedPrompts({ kind: 'team', members: [{ title: 'Chef' }] }), []);
   assert.deepEqual(suggestedPrompts({ kind: 'bot', bot: {} }), ['What can you help me with?']);
 });
+
+test('"engineer", "architect" and "test" only mean software when nothing else or a software word qualifies them', () => {
+  const first = (title) => suggestedPrompts({ kind: 'bot', bot: { name: 'X', title } })[0];
+  // Rigel's second review: these got prototype, architecture and test-plan prompts.
+  assert.equal(first('Sound Engineer'), 'Pick background music for a story');
+  assert.equal(first('Landscape Architect'), 'Plan a small vegetable garden');
+  assert.equal(first('Interior Architect'), 'Suggest a layout for my living room');
+  for (const title of ['Test Pilot', 'Civil Engineer', 'Naval Architect', 'Flight Test Engineer', 'Taste Tester', 'Property Developer']) {
+    assert.equal(first(title), 'What can you help me with?', title);
+  }
+  // Software still reads as software, bare or qualified, in any case.
+  assert.equal(first('Software Architect'), 'Sketch the architecture for a new feature');
+  assert.equal(first('Cloud Architect'), 'Sketch the architecture for a new feature');
+  for (const title of ['Engineer', 'Senior Engineer', 'Web Developer', 'Full-Stack Developer', 'software engineer', 'iOS Developer']) {
+    assert.equal(first(title), 'Build a quick prototype', title);
+  }
+  for (const title of ['QA Engineer', 'Test Engineer', 'Software Tester', 'SDET']) {
+    assert.equal(first(title), 'Write a test plan for the next release', title);
+  }
+  assert.equal(first('Penetration Tester'), "Check my server's security");
+  // A persona is read the same way.
+  assert.equal(suggestedPrompts({ kind: 'bot', bot: { name: 'X', persona_prompt: 'A civil engineer who reviews bridges.' } })[0], 'What can you help me with?');
+  assert.equal(suggestedPrompts({ kind: 'bot', bot: { name: 'X', persona_prompt: 'You are an experienced software engineer.' } })[0], 'Build a quick prototype');
+});
+
+test('a storytelling team with a sound engineer gets no developer prompt, and an unmatched team gets the neutral opener', () => {
+  const story = suggestedPrompts({
+    kind: 'team',
+    lead: 'Tale',
+    purpose: 'Platform for Kids Storytelling',
+    members: [
+      { name: 'Tale', title: "Children's Book Author" },
+      { name: 'Audio', title: 'Sound Engineer' },
+    ],
+  });
+  assert.deepEqual(story, ['@Tale outline a blog post', '@Audio pick background music for a story', 'What can each of you help me with?']);
+  const civil = suggestedPrompts({
+    kind: 'team',
+    lead: 'Bridge',
+    members: [
+      { name: 'Bridge', title: 'Civil Engineer' },
+      { name: 'Pilot', title: 'Test Pilot' },
+    ],
+  });
+  assert.deepEqual(civil, ['@Bridge what should we tackle first?', 'What can each of you help me with?']);
+});

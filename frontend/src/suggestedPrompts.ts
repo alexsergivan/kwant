@@ -45,11 +45,11 @@ const ROLES: Role[] = [
   },
   { match: /\b(life|career|executive|mindset) coach\b|\bcoach\b|\bmentor\b/i, asks: ['help me set goals for this month', "talk through a decision I'm stuck on"] },
   {
-    match: /\bdevops\b|\bsre\b|\b(cyber)?security (engineer|analyst|lead|specialist)\b|\bcybersecurity\b|\binfosec\b|\binfra(structure)?\b|\bsysadmin\b|\bplatform engineer(ing)?\b/i,
+    match: /\bdevops\b|\bsre\b|\bsite reliability\b|\bpenetration tester\b|\bpentester\b|\bethical hacker\b|\b(cyber)?security (engineer|analyst|lead|specialist)\b|\bcybersecurity\b|\binfosec\b|\binfra(structure)?\b|\bsysadmin\b|\bplatform engineer(ing)?\b/i,
     asks: ["check my server's security", 'set up backups for my server'],
   },
   {
-    match: /\bqa\b|\btest(er|ing)?\b|\bquality assurance\b|\brelease (engineer|manager)\b/i,
+    match: /\bqa\b|\bsdet\b|\bquality assurance\b|\btest (automation|engineer|lead|manager)\b|\btest(ers?|ing)\b|\brelease (engineer|manager)\b/i,
     asks: ['write a test plan for the next release', 'find the riskiest part of this change'],
   },
   {
@@ -66,6 +66,14 @@ const ROLES: Role[] = [
     match: /\bengineer\b|\bdeveloper\b|\bdev\b|\bprogrammer\b|\bcoder\b|\bprototyp/i,
     asks: ['build a quick prototype', 'review my latest changes'],
     generic: true,
+  },
+  {
+    match: /\b(sound|audio) (engineer|designer|technician|editor|producer)\b|\baudio\b|\bmusic(ian| producer)?\b|\bcomposer\b|\bdj\b|\bpodcast(er)?\b/i,
+    asks: ['pick background music for a story', 'suggest sound effects for a scene'],
+  },
+  {
+    match: /\blandscape (architect|designer|gardener)\b|\blandscap(er|ing)\b|\bgarden(er|ing)?\b|\bhorticultur/i,
+    asks: ['plan a small vegetable garden', 'suggest plants for a shady corner'],
   },
   { match: /\bseo\b|\bkeywords?\b/i, asks: ['find keywords I could rank for', 'audit my homepage for SEO'] },
   { match: /\bmarketing\b|\bmarketer\b|\bgrowth\b|\bcampaigns?\b|\bsocial media\b|\bbrand\b/i, asks: ['draft a launch post', 'plan a two-week campaign'] },
@@ -94,6 +102,39 @@ const ROLES: Role[] = [
   { match: /\bphotograph|\billustrat|\bartist\b|\bgraphic design(er)?\b|\bcover design(er)?\b/i, asks: ['describe a cover image idea', 'critique this image'] },
 ];
 
+// Catch-all job words that say "software" only on their own ("Engineer", "Senior Developer") or
+// after a software word ("Web Developer", "Cloud Architect"). After any other word they name a
+// different trade: a Sound Engineer, a Landscape Architect, a Test Pilot's "test", a Taste Tester.
+const CATCH_ALL = /^(engineers?|developers?|devs?|architects?|testers?|testing|test (automation|engineer|lead|manager))$/i;
+const SOFTWARE_QUALIFIERS = new Set(
+  (
+    // seniority, and the words a persona puts before a job ("you are an engineer")
+    'senior sr junior jr lead staff principal chief head founding associate intern freelance expert experienced skilled ' +
+    'a an the as our your ' +
+    // software fields
+    'software web mobile app apps ios android frontend front backend back end fullstack full stack cloud system systems ' +
+    'solution solutions data ml ai learning platform devops game games embedded firmware api prompt qa manual beta ' +
+    // languages and frameworks
+    'python javascript js typescript ts node react rust go golang java kotlin swift ruby rails php sql c c++ c# .net net'
+  ).split(' '),
+);
+
+/** False for a catch-all job word with a non-software word in front of it. */
+function qualifiedAsSoftware(text: string, start: number, matched: string): boolean {
+  if (!CATCH_ALL.test(matched)) return true;
+  const before = /([A-Za-z0-9+#.]+)[\s/-]+$/.exec(text.slice(0, start));
+  return !before || SOFTWARE_QUALIFIERS.has(before[1].toLowerCase());
+}
+
+/** The first match of a role's pattern that isn't a catch-all word in another trade. */
+function matchRole(role: Role, text: string): { start: number; end: number } | null {
+  const all = new RegExp(role.match.source, 'gi');
+  for (const m of text.matchAll(all)) {
+    if (qualifiedAsSoftware(text, m.index, m[0])) return { start: m.index, end: m.index + m[0].length };
+  }
+  return null;
+}
+
 /**
  * The role a piece of text names. A title is a noun phrase whose last word is the job
  * ("Product Photographer" is a photographer), so the match ending latest wins, a longer phrase
@@ -104,9 +145,9 @@ function findRole(text: string | undefined, kind: 'title' | 'prose'): Role | nul
   if (typeof text !== 'string' || !text.trim()) return null;
   let best: { role: Role; start: number; end: number } | null = null;
   for (const role of ROLES) {
-    const m = role.match.exec(text);
+    const m = matchRole(role, text);
     if (!m) continue;
-    const hit = { role, start: m.index, end: m.index + m[0].length };
+    const hit = { role, ...m };
     if (!best) {
       best = hit;
       continue;
