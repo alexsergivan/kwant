@@ -38,6 +38,7 @@ import { playSfx } from './audio/chiptune';
 import { Toasts, Toast } from './components/Toasts';
 import { clearAllTurns, resetTurns, turnEnded, turnStarted } from './kwantActivity';
 import {
+  ChatLoads,
   Delegation,
   DelegationMeta,
   Thread,
@@ -49,6 +50,7 @@ import {
   messageContextId,
   parseDelegationMeta,
   queuePosition,
+  reloadOnTurnEnd,
   shouldRenderDelta,
   streamTarget,
   threadBadge,
@@ -416,9 +418,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   const kwantName = (id: unknown) => (typeof id === 'string' ? kwantsRef.current.find((k) => k.id === id)?.name : undefined);
 
+  const chatLoadsRef = useRef(new ChatLoads());
   /** Loads a chat's latest messages into the cache, and on screen if it's open. */
   const refreshContext = async (ctx: string | null | undefined): Promise<void> => {
     if (!ctx) return;
+    const n = chatLoadsRef.current.start(ctx);
     try {
       let data: ChatMessage[];
       if (knownThreadsRef.current.has(ctx)) {
@@ -428,13 +432,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         data = await res.json();
       }
+      // A newer load of this chat started meanwhile: it has the newer messages
+      if (!chatLoadsRef.current.isLatest(ctx, n)) return;
       messagesCacheRef.current[ctx] = data;
       if (openCtxRef.current === ctx) {
         setMessages(data);
         setMessagesError(null);
       }
     } catch {
-      if (openCtxRef.current === ctx) setMessagesError('Could not load this chat.');
+      if (openCtxRef.current === ctx && chatLoadsRef.current.isLatest(ctx, n)) setMessagesError('Could not load this chat.');
     }
   };
 
@@ -632,7 +638,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   useEffect(() => {
     const sse = new EventSource(eventsUrl(space.id));
     let dropped = false;
-    /** TurnComplete already refreshed these turns' chats; their turn_ended needn't again. */
+    /** Turns whose TurnComplete came: their live steps can go once the reply is on screen. */
     const completed = new Set<string>();
 
     /** After a reply: drop the chat's stream once nothing else runs or waits there. */
@@ -711,8 +717,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const key = d.turn_id ?? d.context_id;
             if (event.type === 'turn_ended' || event.type === 'TurnEnded') {
               turnEnded(d.kwant_id, key);
-              if (d.turn_id && completed.delete(d.turn_id)) settle(ctx);
-              else refreshContext(ctx).then(() => settle(ctx));
+              if (d.turn_id) completed.delete(d.turn_id);
+              // The reply is saved by now; TurnComplete's load may have come back without it
+              if (reloadOnTurnEnd(d.turn_id)) refreshContext(ctx).then(() => settle(ctx));
+              else settle(ctx);
             } else {
               if (event.type === 'turn_started' || event.type === 'TurnStarted') turnStarted(d.kwant_id, key);
               if (!discussionInProgressRef.current || ctx !== streamingContextIdRef.current) markLive(ctx, kwantName(d.kwant_id));
