@@ -150,7 +150,7 @@ def card(meta):
 
     # The brand chip, bottom left
     cf = font("inter-var", 22, 600)
-    chip = "Open source · self-hosted · one binary"
+    chip = "Source-available · self-hosted · one binary"
     cw = draw.textlength(chip, font=cf)
     draw.rounded_rectangle((left, 540, left + cw + 80, 590), radius=25, fill="#ffffff", outline=LINE, width=2)
     draw.rectangle((left + 22, 558, left + 34, 570), fill="#3ccf6e")

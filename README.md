@@ -3,7 +3,7 @@
 **Your own team of AI bots, in one self-hosted binary.**
 
 [![CI](https://github.com/alexsergivan/kwant/actions/workflows/ci.yml/badge.svg)](https://github.com/alexsergivan/kwant/actions/workflows/ci.yml)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![License: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue.svg)](#license)
 [![Docs](https://img.shields.io/badge/docs-kwant.si-orange.svg)](https://kwant.si/docs/quickstart)
 
 kwant gives you a team of bots that share chats, hand work to each other with an @mention and get it done on their own, on a schedule or while you're away. Keep separate spaces for work and home, each with its own bots and accounts. Run it on your laptop or a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.
@@ -236,11 +236,12 @@ kwant runs commands and holds API keys and passwords, so please report vulnerabi
 
 ## License
 
-Licensed under either of
+kwant is source-available under the [Business Source License 1.1](LICENSE) (BUSL-1.1).
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
+- **Free:** personal use, non-profit, education and research, and companies with under €1M a year in revenue using kwant for their own work, including work for their clients.
+- **Needs a commercial license:** selling kwant or a fork, offering it as a hosted or managed service, or using it at a company with €1M or more a year in revenue. See [COMMERCIAL.md](COMMERCIAL.md).
+- **Becomes open source:** each version turns into Apache-2.0 four years after it's published.
 
-at your option.
+Code published before the switch, including the mac-v0.1.0 release, stays under MIT OR Apache-2.0.
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in kwant by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+Contributions are accepted under the terms in [CONTRIBUTING.md](CONTRIBUTING.md#license).

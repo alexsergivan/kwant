@@ -3,7 +3,7 @@ name = "kwant"
 version = "0.1.0"
 edition = "2021"
 description = "kwant for Mac: the kwant server and its UI in one app, with a menu-bar icon"
-license = "MIT OR Apache-2.0"
+license = "BUSL-1.1"
 repository = "https://github.com/alexsergivan/kwant"
 publish = false
 

@@ -18,7 +18,7 @@
     "targets": ["app", "dmg"],
     "category": "DeveloperTool",
     "shortDescription": "Your team of AI bots",
-    "copyright": "MIT OR Apache-2.0",
+    "copyright": "© 2026 the kwant maintainer. BUSL-1.1",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

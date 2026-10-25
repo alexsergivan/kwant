@@ -250,7 +250,7 @@ def footer(root):
   <div class="wrap">
     <div class="foot-brand">
       <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
-      <p>A self-hosted team of AI bots in one binary. Free and open source, MIT or Apache-2.0.</p>
+      <p>A self-hosted team of AI bots in one binary. Source-available, free for personal use and small teams.</p>
     </div>
     <nav aria-label="Product">
       <h2>Product</h2>
@@ -351,7 +351,7 @@ def og_image(path):
 
 
 ORG_ID, SITE_ID, APP_ID = f"{SITE_URL}/#org", f"{SITE_URL}/#website", f"{SITE_URL}/#app"
-LICENSES = [f"{GITHUB}/blob/main/LICENSE-MIT", f"{GITHUB}/blob/main/LICENSE-APACHE"]
+LICENSES = [f"{GITHUB}/blob/main/LICENSE"]
 
 
 def structured_data(meta, url, title, image, dates):
