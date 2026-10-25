@@ -171,3 +171,23 @@
     font-size: 16px;
   }
 }
+
+/* Phone-width chat: swipeable chip rows without a scrollbar, fading at the right edge, and the
+   header's action buttons as plain icons so they don't crowd the title. */
+@media (max-width: 639px) {
+  .kw-scroll-row {
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+  .kw-scroll-row::-webkit-scrollbar {
+    display: none;
+  }
+  .kw-head-btn:not([aria-pressed='true']) {
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+}

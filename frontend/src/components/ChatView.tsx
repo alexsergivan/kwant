@@ -120,6 +120,8 @@ export interface ChatViewProps {
   onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
+  /** Prompts offered above an empty chat, made from who is in it; none hides the bar. */
+  suggestions?: string[];
   discussionState?: DiscussionState;
   routingState?: RoutingState | null;
   onCancelDiscussion?: () => void;
@@ -203,6 +205,36 @@ export const renderFormattedText = (text: string): React.ReactNode => {
     }
     return part;
   });
+};
+
+/** "24.2k" for a token count, so it fits on a phone's line. */
+export const compactTokens = (n: number): string =>
+  n >= 1000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1).replace(/\.0$/, '')}k` : String(n);
+
+/** Why Laya picked this bot. Phones show one line and open the rest on a tap. */
+const RoutingLine: React.FC<{ text: string; fallback: boolean }> = ({ text, fallback }) => {
+  const [open, setOpen] = useState(false);
+  const tone = fallback ? 'text-amber-300/80' : 'text-violet-300/80';
+  const icon = <Sparkles size={10} className="inline -mt-0.5 mr-1" aria-hidden="true" />;
+  return (
+    <>
+      <p className={`hidden sm:block -mt-1 mb-1.5 text-[11px] ${tone} break-words`} data-routing-line>
+        {icon}
+        {text}
+      </p>
+      <button
+        type="button"
+        data-compact
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title={open ? undefined : text}
+        className={`sm:hidden -mt-3.5 -mb-1.5 py-3.5 max-w-full text-left text-[11px] ${tone} ${open ? 'break-words' : 'truncate'} rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500`}
+      >
+        {icon}
+        {text}
+      </button>
+    </>
+  );
 };
 
 const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> = ({ routing, spaceName }) => {
@@ -296,6 +328,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onResolveApproval,
   kwants: kwantsProp,
   teams: teamsProp,
+  suggestions = [],
   discussionState,
   routingState,
   onCancelDiscussion,
@@ -735,33 +768,36 @@ export const ChatView: React.FC<ChatViewProps> = ({
           flashId === msg.id ? 'kw-flash' : ''
         }`}
       >
-        <ModernAvatar
-          role={isUser ? 'user' : title}
-          name={displayName}
-          size={34}
-        />
+        {/* Phones show the avatar inside the name line instead, so the bubble gets the full width */}
+        <span className="hidden sm:contents">
+          <ModernAvatar
+            role={isUser ? 'user' : title}
+            name={displayName}
+            size={34}
+          />
+        </span>
 
-        <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
-          {/* Header info */}
-          <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
-            <span className="text-zinc-200">{displayName}</span>
+        <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-[85%] sm:max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
+          {/* Header info: one line on phones; the account and token count move under the reply there */}
+          <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap">
+            {!isUser && (
+              <span className="sm:hidden shrink-0 inline-flex">
+                <ModernAvatar role={title} name={displayName} size={20} />
+              </span>
+            )}
+            <span className="text-zinc-200 shrink-0">{displayName}</span>
             {ranOn && (
-              <span className="text-zinc-500 font-mono text-[10px]" title={`Answered with ${ranOn}`}>
+              <span className="text-zinc-500 font-mono text-[10px] truncate min-w-0" title={`Answered with ${ranOn}`}>
                 {ranOn}
               </span>
             )}
-            {account && <span className="text-zinc-500 text-[10px] truncate max-w-[12rem]">ran on {account}</span>}
+            {account && <span className="hidden sm:inline text-zinc-500 text-[10px] truncate max-w-[12rem]">ran on {account}</span>}
             {msg.tokens_used ? (
-              <span className="text-zinc-500 font-mono text-[10px]">({msg.tokens_used} tokens)</span>
+              <span className="hidden sm:inline text-zinc-500 font-mono text-[10px]">({msg.tokens_used} tokens)</span>
             ) : null}
           </div>
 
-          {routed && (
-            <p className={`-mt-1 mb-1.5 text-[11px] ${routed.fallback ? 'text-amber-300/80' : 'text-violet-300/80'} break-words`} data-routing-line>
-              <Sparkles size={10} className="inline -mt-0.5 mr-1" aria-hidden="true" />
-              {routingLine(routed, spaceName ?? 'this space')}
-            </p>
-          )}
+          {routed && <RoutingLine text={routingLine(routed, spaceName ?? 'this space')} fallback={!!routed.fallback} />}
 
           {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
           {savedActivity && (
@@ -800,7 +836,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {/* Message Body Bubble */}
           {!filesOnly && (msg.text.trim() || !files.length) && (
           <div
-            className={`p-4 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
+            className={`px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
               isUser
                 ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl'
                 : 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80'
@@ -819,7 +855,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {/* Copy action */}
           {!isUser && !filesOnly && (
-            <div className="mt-1.5 flex items-center gap-2 text-zinc-500 text-xs">
+            <div className="mt-1.5 flex items-center gap-2 text-zinc-500 text-xs max-w-full min-w-0">
               <button
                 type="button"
                 onClick={() => handleCopy(msg.text, msg.id)}
@@ -834,10 +870,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 ) : (
                   <>
                     <Copy size={12} />
-                    <span>Copy markdown</span>
+                    <span className="sm:hidden">Copy</span>
+                    <span className="hidden sm:inline">Copy markdown</span>
                   </>
                 )}
               </button>
+              {(account || msg.tokens_used) && (
+                <span className="sm:hidden min-w-0 truncate text-[10px]">
+                  {[account && `ran on ${account}`, msg.tokens_used && `${compactTokens(msg.tokens_used)} tokens`].filter(Boolean).join(' · ')}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -867,7 +909,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <p className="text-[11px] text-zinc-400 truncate max-w-lg mt-0.5">{subtitle}</p>
         </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+        <div className="flex items-center gap-0.5 sm:gap-3 shrink-0">
           {/* Active Team Workspace Badge */}
           {(workspacePath || repoUrl) && (
             <div
@@ -888,7 +930,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
 
           {teamMembers && teamMembers.length > 0 && (
-            <div className="flex items-center gap-2 sm:pl-3 sm:border-l border-zinc-800">
+            <div className="flex items-center gap-0.5 sm:gap-2 sm:pl-3 sm:border-l border-zinc-800">
               <div className="hidden sm:flex -space-x-2 items-center px-1 py-1 -my-0.5">
                 {teamMembers.map((member) => (
                   <div
@@ -904,7 +946,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <button
                   type="button"
                   onClick={onManageTeam}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
+                  className="kw-head-btn flex items-center justify-center gap-1.5 max-sm:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
                   title="Team members and settings"
                   aria-label="Manage team"
                 >
@@ -919,7 +961,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="button"
               onClick={onEditInstructions}
-              className="flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
+              className="kw-head-btn flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
               title="Pin instructions every bot reads in this channel"
               aria-label="Pin instructions"
             >
@@ -932,7 +974,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="button"
               onClick={onEditKwant}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
+              className="kw-head-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
               title={`Edit ${title}'s name, avatar, model and persona`}
               aria-label={`Edit ${title}`}
             >
@@ -959,7 +1001,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               playSfx('click');
               toggleVm();
             }}
-            className={`flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border shadow-sm cursor-pointer ${
+            className={`kw-head-btn flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border shadow-sm cursor-pointer ${
               vmOpen
                 ? 'text-sky-300 bg-sky-500/20 border-sky-500/40'
                 : 'text-zinc-300 bg-zinc-900 hover:bg-zinc-800 border-zinc-700/60 hover:text-zinc-100'
@@ -980,11 +1022,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
       {/* Discussion In-Flight Banner */}
       {discussionState?.inProgress && (
-        <div className="px-6 pt-3 select-none flex-shrink-0">
-          <div className="flex items-center justify-between px-4 py-2 bg-sky-950/40 border border-sky-800/40 rounded-xl mb-3 text-xs">
-            <div className="flex items-center gap-2 text-sky-200">
-              <Users size={14} className="text-sky-400 animate-pulse" />
-              <span>
+        <div className="px-3 sm:px-6 pt-3 select-none flex-shrink-0">
+          <div className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 bg-sky-950/40 border border-sky-800/40 rounded-xl mb-3 text-xs">
+            <div className="flex items-center gap-2 text-sky-200 min-w-0">
+              <Users size={14} className="text-sky-400 animate-pulse shrink-0" />
+              <span className="min-w-0">
                 {discussionState.kind === 'handoff' ? (
                   <>
                     Handoff: <strong>{discussionState.currentSpeaker || 'Teammate'}</strong> is replying
@@ -1012,10 +1054,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={onCancelDiscussion}
-                className="flex items-center gap-1 px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded border border-red-500/30 transition-colors cursor-pointer"
+                className="shrink-0 flex items-center gap-1 px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded border border-red-500/30 transition-colors cursor-pointer"
               >
                 <Square size={11} fill="currentColor" />
-                <span>Stop Discussion</span>
+                <span>Stop<span className="hidden sm:inline"> Discussion</span></span>
               </button>
             )}
           </div>
@@ -1029,7 +1071,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <div
             ref={scrollRef}
             onScroll={onScroll}
-            className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6"
+            className="flex-1 overflow-y-auto px-3 py-4 sm:p-6 space-y-5 sm:space-y-6"
             role="log"
             aria-label={`Messages in ${title}`}
             aria-busy={isStreaming}
@@ -1043,7 +1085,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={() => toggleThought(threadKey)}
-                className="ml-[48px] flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer"
+                className="sm:ml-[48px] max-w-full flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer"
               >
                 {isThreadOpen ? <ChevronDown size={13} className="text-zinc-500" /> : <ChevronRight size={13} className="text-zinc-500" />}
                 <span className="flex -space-x-1.5">
@@ -1051,12 +1093,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     <ModernAvatar key={name} role={name} name={name} size={18} />
                   ))}
                 </span>
-                <span>
+                <span className="min-w-0 truncate">
                   Team discussed • {item.turns.length} {item.turns.length === 1 ? 'turn' : 'turns'} • {item.speakers.join(', ')}
                 </span>
               </button>
               {isThreadOpen && (
-                <div className="mt-4 ml-[30px] pl-4 border-l border-zinc-800 space-y-6">
+                <div className="mt-4 ml-2 pl-3 sm:ml-[30px] sm:pl-4 border-l border-zinc-800 space-y-6">
                   {item.turns.map(renderMessage)}
                 </div>
               )}
@@ -1157,19 +1199,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
         ))}
       </div>
 
-      {/* Suggestion Prompts Pill Bar */}
-      {messages.length <= 1 && (
-        <div className="px-6 py-2 flex flex-wrap items-center gap-2 select-none">
-          <span className="text-[11px] font-medium text-zinc-500">Suggested:</span>
-          {[
-            "Analyze system architecture tradeoffs",
-            "Write a fast Python script for data processing",
-            "Review git status and security policies",
-          ].map((prompt, idx) => (
+      {/* Suggested prompts for who is in this chat: one swipeable row on phones */}
+      {messages.length <= 1 && suggestions.length > 0 && (
+        <div
+          className="kw-scroll-row px-3 sm:px-6 py-2 flex flex-nowrap sm:flex-wrap items-center gap-2 overflow-x-auto sm:overflow-visible select-none"
+          role="group"
+          aria-label="Suggested prompts"
+        >
+          <span className="shrink-0 text-[11px] font-medium text-zinc-500">Suggested:</span>
+          {suggestions.map((prompt) => (
             <button
-              key={idx}
+              key={prompt}
+              type="button"
               onClick={() => handlePromptSuggestion(prompt)}
-              className="px-2.5 py-1 rounded-full text-xs text-zinc-400 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:text-zinc-200 transition-all shadow-sm"
+              className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-xs text-zinc-400 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:text-zinc-200 transition-all shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
             >
               {prompt}
             </button>
@@ -1178,16 +1221,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
       )}
 
       {/* Modern Composer Input Bar */}
-      <div className="p-4 border-t border-zinc-800/80 bg-zinc-900/30">
+      <div className="px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4 border-t border-zinc-800/80 bg-zinc-900/30">
         {teamMembers && teamMembers.length > 0 && (
-          <div className="max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none">
-            <span className="text-[11px] font-medium text-zinc-500 whitespace-nowrap">Ask:</span>
+          <div className="kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none" role="group" aria-label="Ask a member">
+            <span className="shrink-0 text-[11px] font-medium text-zinc-500 whitespace-nowrap">Ask:</span>
             {teamMembers.map((m) => (
               <button
                 key={m.id}
                 type="button"
                 onClick={() => handleInsertTag(`@${m.name}`)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
+                className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
                 title={`Ask ${m.name}`}
               >
                 <ModernAvatar role={m.avatar_sprite} name={m.name} size={14} kwantId={m.id} />
@@ -1198,7 +1241,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleInsertTag(`@${teamName}`)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
+                className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
                 title={`Ask whole team @${teamName}`}
               >
                 <Users size={12} className="text-sky-400" />

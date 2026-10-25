@@ -92,6 +92,7 @@ import { useEngines } from './useEngines';
 import { claudeNeedsSignIn } from './claudeLogin';
 import { personFetch } from './auth';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
+import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -2146,6 +2147,40 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       ? `Laya picks who answers, from the ${kwants.length} ${kwants.length === 1 ? 'bot' : 'bots'} in ${space.name}`
       : currentTeam?.description || currentChannel?.description || `A team in ${space.name}`;
 
+  // "Suggested:" prompts from who is in this chat, so a kitchen team isn't offered developer prompts
+  const idsOf = (v: string[] | string | undefined): string[] => {
+    if (Array.isArray(v)) return v;
+    try {
+      const parsed = JSON.parse(v || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+  const channelMembers = currentChannel
+    ? kwants.filter((k) => k.id === currentChannel.lead_kwant_id || idsOf(currentChannel.member_kwants).includes(k.id))
+    : [];
+  const promptContext: PromptContext | null = currentKwant
+    ? { kind: 'bot', bot: currentKwant }
+    : isGeneral
+      ? { kind: 'general', bots: kwants }
+      : currentTeam
+        ? {
+            kind: 'team',
+            members: currentTeamMembers,
+            lead: kwants.find((k) => k.id === currentTeam.lead_kwant_id)?.name,
+            purpose: currentTeam.description,
+          }
+        : currentChannel
+          ? {
+              kind: 'team',
+              members: channelMembers,
+              lead: kwants.find((k) => k.id === currentChannel.lead_kwant_id)?.name,
+              purpose: currentChannel.description,
+            }
+          : null;
+  const chatSuggestions = promptContext ? suggestedPrompts(promptContext) : [];
+
   // A different team or bot: forget the last one's page
   useEffect(() => {
     setScreenshotBase64(null);
@@ -2670,6 +2705,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onResolveApproval={handleResolveApproval}
           kwants={kwants}
           teams={teams}
+          suggestions={chatSuggestions}
           discussionState={isDiscussionActiveHere ? discussionState : { inProgress: false }}
           routingState={isCurrentContextStreaming ? routingState : null}
           onCancelDiscussion={handleCancelDiscussion}
