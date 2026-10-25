@@ -4,6 +4,7 @@ import { App } from './Shell';
 import { SandboxViewer } from './components/SandboxViewer';
 import { AuthGate } from './components/AuthGate';
 import { captureInstallPrompt, registerServiceWorker, trackAppHeight } from './pwa';
+import './styles/fonts.css';
 import './styles/modern.css';
 
 registerServiceWorker();
