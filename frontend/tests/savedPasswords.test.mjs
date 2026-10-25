@@ -219,9 +219,9 @@ test('the token dialog says why it is asked from another computer and can be dis
   assert.match(html, /aria-modal="true"/);
   const t = text(html);
   assert.match(t, /Confirm it's you/);
-  assert.match(t, /deleting bots or teams need your access token from another computer, so a bot can't do them for you/);
+  assert.match(t, /deleting bots or teams need you signed in from another computer, so a bot can't do them for you/);
   assert.ok(!t.includes('even on this computer'), 'this computer never asks');
-  assert.match(t, /Find it on the machine running kwant bots:/);
+  assert.match(t, /Open the one-time sign-in link/);
   assert.match(t, /Other setups/);
   assert.match(t, /kwnt token --raw/);
   assert.ok(buttons(html).includes('Not now'));

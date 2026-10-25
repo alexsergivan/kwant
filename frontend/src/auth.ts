@@ -124,16 +124,37 @@ export async function fetchAuthStatus(): Promise<AuthStatus> {
   return res.json();
 }
 
-/** Exchanges the token for the session cookie; resolves to false when the token is wrong. */
-export async function startSession(token: string): Promise<boolean> {
+/** What the server said to a token or one-time link code. */
+export type SessionResult = 'ok' | 'wrong_token' | 'link_used_or_expired';
+
+/** One-time sign-in link codes start with this; the API token never does. */
+export const LINK_CODE_PREFIX = 'kl1.';
+
+/** Whether a pasted or linked value is a one-time sign-in link code rather than the API token. */
+export function isLinkCode(value: string): boolean {
+  return value.trim().startsWith(LINK_CODE_PREFIX);
+}
+
+/** Exchanges the token, or a one-time link code, for a session cookie. */
+export async function redeemSignIn(token: string): Promise<SessionResult> {
   const res = await fetch('/api/auth/session', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token }),
   });
-  if (res.status === 401) return false;
+  if (res.status === 401) {
+    const body = await res.json().catch(() => null);
+    // A link this server forgot (it restarted) reads as a wrong token; for a link it's the same story
+    if (body?.reason === 'link_used_or_expired' || isLinkCode(token)) return 'link_used_or_expired';
+    return 'wrong_token';
+  }
   if (!res.ok) throw new Error(`The server answered ${res.status}.`);
-  return true;
+  return 'ok';
+}
+
+/** Exchanges the token for the session cookie; resolves to false when the token is wrong. */
+export async function startSession(token: string): Promise<boolean> {
+  return (await redeemSignIn(token)) === 'ok';
 }
 
 export async function endSession(): Promise<void> {
@@ -142,19 +163,28 @@ export async function endSession(): Promise<void> {
 
 let linkSession: Promise<string | null> | null = null;
 
+/** What the sign-in screen says when a one-time link was opened a second time or too late. */
+export const LINK_SPENT =
+  'This sign-in link was already used or has expired. Each link works once, for 15 minutes. Sign in another way below.';
+
 /**
- * Signs in with a `#kwnt_token=` link and removes the token from the address bar (and history)
- * before any network call, so React's second effect run finds no token and shares the first one's
- * result. Resolves to an error message when the token was refused.
+ * Signs in with a `#kwnt_token=` link (a one-time code or the API token) and removes it from the
+ * address bar (and history) before any network call, so React's second effect run finds no token
+ * and shares the first one's result. Resolves to an error message when it was refused.
  */
 export function consumeTokenLink(): Promise<string | null> {
   const { token, rest } = extractHashToken(window.location.hash);
   if (token === null) return linkSession ?? Promise.resolve(null);
   window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${rest}`);
   linkSession = !token
-    ? Promise.resolve('The link has an empty token.')
-    : startSession(token).then(
-        (ok) => (ok ? null : "The link's token wasn't accepted. It may have been changed; paste the current one."),
+    ? Promise.resolve('The link is incomplete. Copy the whole link, or sign in another way below.')
+    : redeemSignIn(token).then(
+        (result) =>
+          result === 'ok'
+            ? null
+            : result === 'link_used_or_expired'
+              ? LINK_SPENT
+              : "The link's token wasn't accepted. It may have been changed; sign in another way below.",
         (e: unknown) => (e instanceof Error ? e.message : 'Could not reach the server.'),
       );
   return linkSession;

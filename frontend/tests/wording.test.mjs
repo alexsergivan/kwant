@@ -19,7 +19,7 @@ const files = (dir) =>
 const BAD = /\b(kwants?|kwnt|agents?)\b/i;
 // The product term (headings, tagline), the CLI commands and token file shown on the sign-in screen, and
 // Agent Maestro, the VS Code extension's own name (a Custom API preset).
-const ALLOWED = /\bkwant bots?\b|\b(?:exec kwnt )?kwnt token\b|~\/\.kwnt\/api-token/gi;
+const ALLOWED = /\bkwant bots?\b|\b(?:exec kwnt )?kwnt (?:token|signin-link)\b|~\/\.kwnt\/api-token/gi;
 const MAESTRO = /\bAgent Maestro\b/g;
 
 /** Whether a literal reads like text a person sees (a sentence, or a capitalised word). */
