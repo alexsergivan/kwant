@@ -123,9 +123,10 @@ jobs:
           echo "dmg=$PWD/$dmg" >> "$GITHUB_OUTPUT"
           echo "name=$(basename "$dmg")" >> "$GITHUB_OUTPUT"
       # The app icon must carry every size Finder and the Dock ask for (16-512, each with @2x).
-      # Quick Look then renders the bundled app's icon the way Finder draws it, kept as an artifact.
+      # The expanded iconset and Finder's render of the bundled app's icon are kept as an artifact.
       - name: App icon sizes
         working-directory: apps/mac/target/universal-apple-darwin/release/bundle
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           res="macos/kwant.app/Contents/Resources"
@@ -140,7 +141,19 @@ jobs:
               echo "ok ${f%%:*} ${f##*:}px"
             done
           done
-          qlmanage -t -s 512 -o "$out" macos/kwant.app > /dev/null
+          # NSWorkspace gives the icon Finder shows for the app. Best effort, capped at a minute:
+          # qlmanage hung on the headless runner.
+          cat > "$RUNNER_TEMP/icon.js" <<'JS'
+          ObjC.import('AppKit');
+          function run(argv) {
+            const img = $.NSWorkspace.sharedWorkspace.iconForFile(argv[0]);
+            img.size = $.NSMakeSize(512, 512);
+            const rep = $.NSBitmapImageRep.imageRepWithData(img.TIFFRepresentation);
+            rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({})).writeToFileAtomically(argv[1], true);
+          }
+          JS
+          perl -e 'alarm 60; exec @ARGV' osascript -l JavaScript "$RUNNER_TEMP/icon.js" "$PWD/macos/kwant.app" "$out/finder-icon.png" \
+            || echo "Finder icon render skipped"
           ls -l "$out"
       - uses: actions/upload-artifact@v4
         with:
