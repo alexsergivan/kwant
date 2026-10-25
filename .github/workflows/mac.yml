@@ -84,8 +84,17 @@ jobs:
       - name: Unit tests (PATH merge, port choice)
         working-directory: apps/mac
         run: cargo test --locked
+      # one multi-resolution TIFF so Finder draws the background sharp on Retina screens
+      - name: Install-window background
+        working-directory: apps/mac/dmg
+        run: tiffutil -cathidpicheck background.png background@2x.png -out background.tiff
       - name: Build the universal app and .dmg
         working-directory: apps/mac
+        timeout-minutes: 30
+        env:
+          # Tauri skips the Finder AppleScript that lays out the install window (background,
+          # icon positions, hidden files moved out of view) when CI=true; run it anyway
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
         run: npx --yes @tauri-apps/cli@2 build --ci --target universal-apple-darwin --bundles app,dmg -- --locked
       - name: Inspect the bundle
         id: bundle
@@ -132,6 +141,68 @@ jobs:
           cat "$KWNT_DATA_DIR/mac-app.log" || true
           test -n "$ok"
           echo "$body" | grep -q '"app":"kwnt"'
+      # Opens the .dmg in Finder the way a person would, with hidden files shown, and screenshots
+      # the window in light and dark mode. The layout check fails the job; the screenshots don't.
+      - name: Install window layout and screenshots
+        env:
+          DMG: ${{ steps.bundle.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          shots="$RUNNER_TEMP/dmg-window"
+          mkdir -p "$shots"
+          python3 -m venv "$RUNNER_TEMP/dsvenv"
+          "$RUNNER_TEMP/dsvenv/bin/pip" install --quiet ds_store mac_alias
+          hdiutil attach -readonly "$DMG" | tee "$shots/attach.txt"
+          vol=$(grep -o '/Volumes/.*' "$shots/attach.txt" | head -1)
+          ls -la "$vol" | tee "$shots/ls.txt"
+          test -f "$vol/.background/background.tiff"
+          "$RUNNER_TEMP/dsvenv/bin/python" - "$vol" <<'PY' | tee "$shots/ds_store.txt"
+          import sys
+          from ds_store import DSStore
+          vol = sys.argv[1]
+          with DSStore.open(vol + "/.DS_Store", "r") as d:
+              entries = {(e.filename, e.code): e.value for e in d}
+          for (name, code), value in sorted(entries.items()):
+              print(name, code, value if code != b"icvp" else {k: v for k, v in value.items() if k != "backgroundImageAlias"})
+          icvp = entries[(".", b"icvp")]
+          assert icvp["iconSize"] == 128, icvp["iconSize"]
+          assert icvp["backgroundType"] == 2 and "backgroundImageAlias" in icvp, "no background picture"
+          bounds = entries[(".", b"bwsp")]["WindowBounds"]
+          print("window", bounds)
+          assert entries[("kwant.app", b"Iloc")] == (180, 170)
+          assert entries[("Applications", b"Iloc")] == (480, 170)
+          for name, code in entries:
+              if code == b"Iloc" and name.startswith("."):
+                  x, _ = entries[(name, code)]
+                  assert x > 660, f"{name} is inside the window at x={x}"
+          print("layout OK")
+          PY
+          hdiutil detach "$vol" || hdiutil detach -force "$vol"
+          (
+            set +e
+            defaults write com.apple.finder AppleShowAllFiles -bool true
+            killall Finder; sleep 3
+            for mode in light dark; do
+              if [ "$mode" = dark ]; then v=true; else v=false; fi
+              osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $v"
+              hdiutil attach -readonly "$DMG" > /dev/null
+              open "$vol"; sleep 6
+              osascript -e 'tell application "Finder" to get bounds of front window' > "$shots/bounds-$mode.txt"
+              screencapture -x "$shots/screen-$mode.png"
+              osascript -e 'tell application "Finder" to close every window'
+              hdiutil detach "$vol" || hdiutil detach -force "$vol"
+              sleep 2
+            done
+            ls -l "$shots"
+            true
+          )
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dmg-window
+          path: ${{ runner.temp }}/dmg-window
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.bundle.outputs.name }}

@@ -21,8 +21,17 @@ of the `kwnt` crate.
 ```sh
 (cd ../../frontend && npm ci && npm run build)   # kwnt embeds frontend/dist
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
+tiffutil -cathidpicheck dmg/background.png dmg/background@2x.png -out dmg/background.tiff
 npx @tauri-apps/cli@2 build --target universal-apple-darwin --bundles app,dmg
 ```
 
 The `.dmg` lands in `target/universal-apple-darwin/release/bundle/dmg/`. It is ad-hoc signed, so
 the first launch needs right-click → Open. `.github/workflows/mac.yml` builds the same on CI.
+
+The install window's layout (background, 660x400 window, 128px icons, kwant on the left and
+Applications on the right) comes from `bundle.macOS.dmg` in `tauri.conf.json`. Finder writes it
+into the image's `.DS_Store` through AppleScript, which Tauri skips when `CI=true` unless
+`TAURI_BUNDLER_DMG_IGNORE_CI=true` is set, as the workflow does. The same script moves hidden
+files (`.VolumeIcon.icns`, `.background`, …) outside the window, so they stay out of view even
+with hidden files shown. The art is drawn by `dmg/make-background.py`; `background.tiff` is built
+from the two PNGs and not committed.
