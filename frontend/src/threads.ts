@@ -100,6 +100,36 @@ export function hydrateTurns(list: ActiveTurn[] | undefined): TurnMap {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Bringing a finished reply onto the screen
+
+/**
+ * Whether `turn_ended` loads its chat again. Always: the model driver sends TurnComplete before
+ * kwnt saves the reply, so the load TurnComplete starts can come back without it. `turn_ended`
+ * is sent once the reply is saved, so its load is the one that is sure to show it.
+ */
+export function reloadOnTurnEnd(_turnId: string | null | undefined): boolean {
+  return true;
+}
+
+/**
+ * Loads of one chat can finish out of order (a slow first load landing after a later one). Each
+ * load takes a number when it starts; only the newest started load for a chat may replace what's
+ * on screen, so an older answer never hides a reply a newer one already showed.
+ */
+export class ChatLoads {
+  private seq: Record<string, number> = {};
+
+  start(ctx: string): number {
+    this.seq[ctx] = (this.seq[ctx] ?? 0) + 1;
+    return this.seq[ctx];
+  }
+
+  isLatest(ctx: string, n: number): boolean {
+    return this.seq[ctx] === n;
+  }
+}
+
 /** Applies one SSE event; returns the same map when the event isn't about turns. */
 export function applyTurnEvent(turns: TurnMap, ev: { type?: string; data?: any }): TurnMap {
   const d = ev.data ?? {};
