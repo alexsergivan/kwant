@@ -160,7 +160,7 @@ jobs:
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           set -euo pipefail
-          dmg=$(find dist -name '*.dmg' | head -1)
+          dmg=$(find dist -type f -name '*.dmg' | head -1)
           test -n "$dmg"
           cp "$dmg" kwant_universal.dmg
           sha256sum kwant_universal.dmg > kwant_universal.dmg.sha256

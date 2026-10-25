@@ -136,6 +136,15 @@ pub fn http_get(port: u16, path: &str, timeout: Duration) -> Option<(u16, String
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    // The port tests run in parallel: a port free_port() just released can be handed to
+    // another test's listener before choose_port() looks at it. Run them one at a time.
+    static PORTS: Mutex<()> = Mutex::new(());
+
+    fn ports() -> std::sync::MutexGuard<'static, ()> {
+        PORTS.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     #[test]
     fn login_path_comes_first_then_current_then_extras_without_repeats() {
@@ -204,12 +213,14 @@ mod tests {
 
     #[test]
     fn kwant_on_the_port_is_attached_to() {
+        let _ports = ports();
         let port = serve_once(r#"{"status":"ok","app":"kwnt","version":"0.1.0"}"#);
         assert_eq!(choose_port(port).unwrap(), PortChoice::Attach(port));
     }
 
     #[test]
     fn something_else_on_the_port_moves_kwant_to_a_free_one() {
+        let _ports = ports();
         let port = serve_once(r#"{"status":"ok","app":"other"}"#);
         match choose_port(port).unwrap() {
             PortChoice::Serve(p) => assert_ne!(p, port),
@@ -219,6 +230,7 @@ mod tests {
 
     #[test]
     fn a_free_port_is_used_as_it_is() {
+        let _ports = ports();
         let port = free_port().unwrap();
         assert_eq!(choose_port(port).unwrap(), PortChoice::Serve(port));
     }
