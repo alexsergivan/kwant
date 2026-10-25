@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split, Hand, Plug } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split, Hand, Plug, MoreHorizontal, UserMinus, MessageSquare } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
@@ -183,6 +183,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  /** Phones: the member whose actions sheet is open, and whether "Remove" is waiting for a confirm. */
+  const [memberMenu, setMemberMenu] = useState<{ team: Team; kwant: Kwant; confirmRemove?: boolean } | null>(null);
   const closeSwitcher = useCallback(() => setSwitcherOpen(false), []);
   const showChats = section !== 'bots';
   const showBots = section !== 'chats';
@@ -219,6 +221,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const offLine = spaceOffLine(space.approvals, kwants);
+  // Phones: section titles stay pinned while their list scrolls, so they are never cut off
+  const sectionHead = `px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-zinc-500 uppercase tracking-wider${
+    phone ? ' kw-sticky-head sticky top-0 z-10' : ''
+  }`;
+  // Phones: "New …" is a plain + icon (44px to tap) instead of a boxed button
+  const phoneAdd = (label: string, onClick: () => void) => (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="-mr-1 rounded-full text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 active:bg-sky-500/15 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+    >
+      <Plus size={18} aria-hidden="true" />
+    </button>
+  );
 
   return (
     <aside
@@ -324,9 +342,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Channels Section */}
         {showChats && (
         <div>
-          <div className="px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+          <div className={sectionHead}>
             <span>Channels</span>
-            {onCreateChannel && kwants.length > 0 && (
+            {onCreateChannel && kwants.length > 0 && (phone ? phoneAdd(`New channel in ${space.name}`, onCreateChannel) :
               <button
                 type="button"
                 onClick={onCreateChannel}
@@ -371,7 +389,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Teams Section */}
         {showChats && (
         <div>
-          <div className="px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+          <div className={sectionHead}>
             <button
               type="button"
               onClick={() => setTeamsOpen(!teamsOpen)}
@@ -383,6 +401,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
               <span>Teams ({teams.length})</span>
             </button>
+            {phone ? phoneAdd(`New team in ${space.name}`, onCreateTeam) : (
             <button
               type="button"
               onClick={onCreateTeam}
@@ -392,6 +411,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <Plus size={11} />
               <span>New team</span>
             </button>
+            )}
           </div>
 
           {teamsOpen && (
@@ -472,7 +492,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               tabIndex={0}
                               onClick={() => onSelectKwant(k)}
                               onKeyDown={(e) => e.key === 'Enter' && onSelectKwant(k)}
-                              className={`group/member flex items-center gap-2 px-1.5 py-1 rounded-md cursor-pointer text-[11px] transition-colors ${
+                              className={`group/member flex items-center gap-2 px-1.5 ${phone ? 'py-0' : 'py-1'} rounded-md cursor-pointer text-[11px] transition-colors ${
                                 memberActive ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
                               }`}
                               title={busyKwants[k.id] ? `Chat with ${k.name} · ${busyKwants[k.id]}` : `Chat with ${k.name}`}
@@ -490,6 +510,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               {busyKwants[k.id] && (
                                 <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-sky-400 animate-pulse motion-reduce:animate-none" aria-hidden="true" />
                               )}
+                              {phone ? (
+                                <>
+                                  {isLead && (
+                                    <span className="shrink-0 flex items-center gap-0.5 text-[9px] uppercase tracking-wide text-amber-300/90" title="Team lead">
+                                      <Crown size={10} aria-hidden="true" />
+                                      lead
+                                    </span>
+                                  )}
+                                  {(onEditKwant || (onUpdateTeamMembers && !isLead)) && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        playSfx('click');
+                                        setMemberMenu({ team: t, kwant: k });
+                                      }}
+                                      aria-haspopup="dialog"
+                                      aria-label={`More for ${k.name}`}
+                                      className="-mr-1 shrink-0 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 active:bg-zinc-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+                                    >
+                                      <MoreHorizontal size={16} />
+                                    </button>
+                                  )}
+                                </>
+                              ) : (
+                                <>
                               {onEditKwant && (
                                 <button
                                   type="button"
@@ -523,6 +569,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                     <X size={11} />
                                   </button>
                                 )
+                              )}
+                                </>
                               )}
                             </div>
                           );
@@ -607,8 +655,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Every bot in this space */}
         {showBots && (
         <div>
-          <div className="px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+          <div className={sectionHead}>
             <h2>Kwant bots ({kwants.length})</h2>
+            {phone ? phoneAdd(`New bot in ${space.name}`, () => onSummonKwant()) : (
             <button
               type="button"
               onClick={() => onSummonKwant()}
@@ -618,6 +667,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <Plus size={11} />
               <span>New bot</span>
             </button>
+            )}
           </div>
           <div className="mt-1 space-y-1">
             {kwants.length === 0 && (
@@ -660,7 +710,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         </span>
                       )}
                       {approvalsOff(k) && <ApprovalsOffBadge compact title={`${k.name} runs commands, file writes and tools without asking.`} />}
-                      {onEditKwant && (
+                      {onEditKwant && !phone && (
                         <button
                           type="button"
                           onClick={(e) => {
@@ -690,6 +740,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <p className="text-[11px] text-zinc-400 truncate mt-0.5">{k.title}</p>
                     )}
                   </div>
+                  {/* Phones: the edit button sits at the row's end so it doesn't stretch the name line */}
+                  {onEditKwant && phone && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onEditKwant(k);
+                      }}
+                      className="shrink-0 -my-1 rounded-lg text-zinc-400 hover:text-sky-300 hover:bg-sky-500/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+                      title={`Edit or delete ${k.name}`}
+                      aria-label={`Edit or delete ${k.name}`}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -729,6 +794,121 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
       ) : null}
+      {memberMenu && (
+        <MemberSheet
+          team={memberMenu.team}
+          kwant={memberMenu.kwant}
+          isLead={memberMenu.kwant.id === memberMenu.team.lead_kwant_id}
+          confirmRemove={!!memberMenu.confirmRemove}
+          onClose={() => setMemberMenu(null)}
+          onChat={() => {
+            setMemberMenu(null);
+            onSelectKwant(memberMenu.kwant);
+          }}
+          onEdit={
+            onEditKwant &&
+            (() => {
+              setMemberMenu(null);
+              onEditKwant(memberMenu.kwant);
+            })
+          }
+          onAskRemove={onUpdateTeamMembers && (() => setMemberMenu({ ...memberMenu, confirmRemove: true }))}
+          onRemove={
+            onUpdateTeamMembers &&
+            (() => {
+              const { team, kwant } = memberMenu;
+              setMemberMenu(null);
+              onUpdateTeamMembers(team, memberIdsOf(team).filter((id) => id !== kwant.id));
+            })
+          }
+        />
+      )}
     </aside>
+  );
+};
+
+/** Phones: a team member's actions as a bottom sheet. Removing asks once more, away from the
+ * other buttons, so a stray tap can't take a bot out of its team. */
+const MemberSheet: React.FC<{
+  team: Team;
+  kwant: Kwant;
+  isLead: boolean;
+  confirmRemove: boolean;
+  onClose: () => void;
+  onChat: () => void;
+  onEdit?: () => void;
+  onAskRemove?: () => void;
+  onRemove?: () => void;
+}> = ({ team, kwant, isLead, confirmRemove, onClose, onChat, onEdit, onAskRemove, onRemove }) => {
+  const ref = React.useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  useEffect(() => {
+    ref.current?.querySelector<HTMLElement>('button')?.focus();
+  }, [confirmRemove]);
+  const item = 'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400';
+  const titleId = `member-sheet-${kwant.id}`;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-end" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="kw-sheet w-full max-h-[80vh] overflow-y-auto rounded-t-2xl bg-zinc-900 border-t border-zinc-800 p-3 shadow-2xl"
+      >
+        <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-zinc-700" aria-hidden="true" />
+        <div className="flex items-center gap-3 px-3 pb-3">
+          <ModernAvatar role={kwant.avatar_sprite} name={kwant.name} size={32} kwantId={kwant.id} />
+          <div className="min-w-0">
+            <p id={titleId} className="text-sm font-semibold text-zinc-100 truncate">{kwant.name}</p>
+            <p className="text-xs text-zinc-500 truncate">
+              {isLead ? `Leads @${team.name}` : `In @${team.name}`}
+              {kwant.title ? ` · ${kwant.title}` : ''}
+            </p>
+          </div>
+        </div>
+        {confirmRemove && onRemove ? (
+          <div className="px-3 pb-1 space-y-3">
+            <p className="text-sm text-zinc-300">
+              Remove {kwant.name} from @{team.name}? The bot stays in this space and keeps its chats.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={onClose} className="rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-800">
+                Cancel
+              </button>
+              <button type="button" onClick={onRemove} className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-medium text-white hover:bg-rose-500">
+                Remove
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-0.5">
+            <button type="button" onClick={onChat} className={`${item} text-zinc-200 hover:bg-zinc-800`}>
+              <MessageSquare size={16} className="text-zinc-400" aria-hidden="true" /> Chat with {kwant.name}
+            </button>
+            {onEdit && (
+              <button type="button" onClick={onEdit} className={`${item} text-zinc-200 hover:bg-zinc-800`}>
+                <Pencil size={16} className="text-zinc-400" aria-hidden="true" /> Edit or delete {kwant.name}
+              </button>
+            )}
+            {onAskRemove && !isLead && (
+              <>
+                <div className="my-1 border-t border-zinc-800" />
+                <button type="button" onClick={onAskRemove} className={`${item} text-rose-300 hover:bg-rose-500/10`}>
+                  <UserMinus size={16} aria-hidden="true" /> Remove from @{team.name}
+                </button>
+              </>
+            )}
+            {isLead && (
+              <p className="px-3 pt-1 text-xs text-zinc-500">The lead can&apos;t be removed. Pick another lead in team settings first.</p>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 };

@@ -86,14 +86,14 @@ export const DeleteBotDialog: React.FC<DeleteBotDialogProps> = ({ kwant, busy, o
     'inline-flex items-center justify-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2';
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onKeyDown={onKeyDown}>
+    <div className="kw-dialog kw-dialog-bottom fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onKeyDown={onKeyDown}>
       <div
         ref={boxRef}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="delete-bot-title"
         aria-describedby="delete-bot-desc"
-        className="bg-zinc-900 border border-rose-500/30 rounded-2xl max-w-md w-full max-h-[92vh] overflow-y-auto p-4 sm:p-5 text-zinc-100 shadow-2xl space-y-4"
+        className="kw-dialog-panel bg-zinc-900 border border-rose-500/30 rounded-2xl max-w-md w-full max-h-[92vh] overflow-y-auto p-4 sm:p-5 text-zinc-100 shadow-2xl space-y-4"
       >
         <div className="flex items-start gap-2.5">
           <div className="w-8 h-8 shrink-0 rounded-lg bg-rose-500/10 border border-rose-500/25 flex items-center justify-center text-rose-300">

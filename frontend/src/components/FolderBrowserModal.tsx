@@ -87,8 +87,8 @@ export const FolderBrowserModal: React.FC<FolderBrowserModalProps> = ({
   const pathParts = currentPath.split('/').filter(Boolean);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-xl w-full p-5 text-zinc-100 shadow-2xl flex flex-col max-h-[85vh]">
+    <div className="kw-dialog fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150">
+      <div className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-xl w-full p-5 text-zinc-100 shadow-2xl flex flex-col max-h-[85vh]">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3 mb-3">
           <div className="flex items-center gap-2">

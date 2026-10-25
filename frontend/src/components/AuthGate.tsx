@@ -178,12 +178,12 @@ export const PersonTokenDialog: React.FC<{ onClose: () => void; onSignedIn: () =
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 font-sans" onClick={onClose}>
+    <div className="kw-dialog kw-dialog-bottom fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 font-sans" onClick={onClose}>
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="kwnt-person-token-title"
-        className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl text-zinc-100"
+        className="kw-dialog-panel relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl text-zinc-100"
         onClick={(e) => e.stopPropagation()}
       >
         <button

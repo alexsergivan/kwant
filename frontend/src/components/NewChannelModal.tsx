@@ -72,12 +72,12 @@ export const NewChannelModal: React.FC<NewChannelModalProps> = ({ isOpen, onClos
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && !submitting && onClose()}>
+    <div className="kw-dialog fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && !submitting && onClose()}>
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full max-h-[calc(100dvh-2rem)] overflow-y-auto p-5 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
+        className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full max-h-[calc(100dvh-2rem)] overflow-y-auto p-5 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
       >
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-2">
@@ -159,7 +159,7 @@ export const NewChannelModal: React.FC<NewChannelModalProps> = ({ isOpen, onClos
               </label>
             </div>
 
-            <fieldset aria-describedby={hintId}>
+            <fieldset aria-describedby={hintId} className="min-w-0">
               <div className="flex items-center justify-between mb-1.5">
                 <legend className="text-xs font-medium text-zinc-400">Bots in this channel</legend>
                 <span className="text-[11px] font-mono text-zinc-500">{members.length} picked</span>
@@ -181,7 +181,7 @@ export const NewChannelModal: React.FC<NewChannelModalProps> = ({ isOpen, onClos
                         className="rounded border-zinc-700 bg-zinc-900 text-sky-500 focus:ring-0 focus:ring-offset-0"
                       />
                       <ModernAvatar role={k.avatar_sprite} name={k.name} size={24} />
-                      <span className="truncate">
+                      <span className="truncate min-w-0">
                         <span className="font-semibold text-zinc-200">{k.name}</span>
                         <span className="text-[10px] text-zinc-400 ml-1.5">{k.title}</span>
                       </span>

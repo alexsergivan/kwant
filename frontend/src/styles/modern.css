@@ -151,7 +151,7 @@
     min-height: 44px;
   }
   /* Icon-only buttons get the width too, with the icon centred */
-  button:not([role='switch'], [data-compact], .hidden, :has(> :not(svg, img))):has(> svg, > img) {
+  button:not([role='switch'], [role='menuitem'], [data-compact], .hidden, .w-full, :has(> :not(svg, img, .sr-only, .hidden))):has(> svg, > img) {
     min-width: 44px;
     display: inline-flex;
     align-items: center;
@@ -168,7 +168,8 @@
   input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file']),
   textarea,
   select {
-    font-size: 16px;
+    /* !important: text-sm / text-xs utilities would otherwise win and iOS zooms on focus */
+    font-size: 16px !important;
   }
 }
 
@@ -193,5 +194,47 @@
     background-color: transparent;
     border-color: transparent;
     box-shadow: none;
+  }
+}
+
+/* Pinned sidebar section titles on phones: the sidebar's own colour, so rows scroll under them */
+.kw-sticky-head {
+  background: linear-gradient(theme('colors.zinc.900 / 40%'), theme('colors.zinc.900 / 40%')), theme('colors.zinc.950');
+}
+
+/* Bottom sheets clear the home indicator */
+.kw-sheet {
+  padding-bottom: max(1.5rem, calc(env(safe-area-inset-bottom) + 0.75rem));
+}
+
+/* Phone-width dialogs: forms open as full-height pages that clear the notch and home indicator,
+   and short confirms as bottom sheets. Desktop and tablets keep the centred card. */
+@media (max-width: 639px) {
+  .kw-dialog.kw-dialog {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+  }
+  .kw-dialog > .kw-dialog-panel {
+    width: 100%;
+    max-width: none;
+    height: var(--kwnt-app-height, 100dvh);
+    max-height: none;
+    border-width: 0;
+    border-radius: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-top: calc(env(safe-area-inset-top) + 1rem);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 1rem);
+  }
+  .kw-dialog.kw-dialog-bottom {
+    align-items: flex-end;
+  }
+  .kw-dialog-bottom > .kw-dialog-panel {
+    height: auto;
+    max-height: 90dvh;
+    border-top-width: 1px;
+    border-radius: 1rem 1rem 0 0;
+    padding-top: 1rem;
   }
 }

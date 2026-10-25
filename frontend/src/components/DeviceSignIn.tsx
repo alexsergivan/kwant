@@ -199,13 +199,13 @@ export const DeviceRequestCard: React.FC<{
   const [matches, setMatches] = useState(false);
   useEffect(() => setMatches(false), [request.user_code]);
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4 font-sans">
+    <div className="kw-dialog kw-dialog-bottom fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4 font-sans">
       <div
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="kwnt-device-request-title"
         aria-describedby="kwnt-device-request-warning"
-        className="relative w-full max-w-sm bg-zinc-900 border border-zinc-800 rounded-2xl p-5 shadow-2xl text-zinc-100 space-y-4"
+        className="kw-dialog-panel relative w-full max-w-sm bg-zinc-900 border border-zinc-800 rounded-2xl p-5 shadow-2xl text-zinc-100 space-y-4"
       >
         <button
           type="button"

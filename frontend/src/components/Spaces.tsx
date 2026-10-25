@@ -207,12 +207,12 @@ const Dialog: React.FC<{ title: string; subtitle?: string; labelId: string; onCl
     return () => window.removeEventListener('keydown', onKey);
   }, []);
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="kw-dialog kw-dialog-bottom fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby={labelId}
-        className={`bg-zinc-900 border border-zinc-800 rounded-t-2xl sm:rounded-2xl w-full ${wide ? 'sm:max-w-xl' : 'sm:max-w-md'} max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5`}
+        className={`kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-t-2xl sm:rounded-2xl w-full ${wide ? 'sm:max-w-xl' : 'sm:max-w-md'} max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5`}
       >
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -306,7 +306,7 @@ export const NewSpaceModal: React.FC<NewSpaceProps> = ({ spaces, onClose, onCrea
                 aria-pressed={icon === i}
                 aria-label={`Icon ${i}`}
                 onClick={() => setIcon(i)}
-                className={`w-9 h-9 rounded-lg text-lg flex items-center justify-center border transition-colors ${
+                className={`w-11 h-11 sm:w-9 sm:h-9 rounded-lg text-lg flex items-center justify-center border transition-colors ${
                   icon === i ? 'border-sky-400 bg-sky-500/10' : 'border-zinc-800 hover:border-zinc-600'
                 }`}
               >

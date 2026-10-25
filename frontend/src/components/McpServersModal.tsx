@@ -1122,12 +1122,12 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   );
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+    <div className="kw-dialog fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="mcp-title"
-        className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-2xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
+        className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-2xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
       >
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-4">
           <div className="flex items-center gap-2.5 min-w-0">

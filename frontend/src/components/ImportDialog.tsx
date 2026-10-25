@@ -533,14 +533,14 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex sm:items-center justify-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="kw-dialog fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex sm:items-center justify-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={dialogRef}
         onKeyDown={onTrapKey}
         role="dialog"
         aria-modal="true"
         aria-labelledby="import-title"
-        className="bg-zinc-900 sm:border border-zinc-800 sm:rounded-2xl w-full sm:max-w-xl h-full sm:h-auto sm:max-h-[90vh] flex flex-col text-zinc-100 shadow-2xl"
+        className="kw-dialog-panel bg-zinc-900 sm:border border-zinc-800 sm:rounded-2xl w-full sm:max-w-xl h-full sm:h-auto sm:max-h-[90vh] flex flex-col text-zinc-100 shadow-2xl"
       >
         <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3">
           {step.kind !== 'choose' && step.kind !== 'done' && (

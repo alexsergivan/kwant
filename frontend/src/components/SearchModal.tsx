@@ -105,13 +105,13 @@ export const SearchModal: React.FC<{
 
   let index = -1;
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start justify-center p-2 sm:p-4 sm:pt-[12vh]" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="kw-dialog fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start justify-center p-2 sm:p-4 sm:pt-[12vh]" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Search chats"
         onKeyDown={onKeyDown}
-        className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-xl w-full max-h-[86vh] flex flex-col text-zinc-100 shadow-2xl overflow-hidden"
+        className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-xl w-full max-h-[86vh] flex flex-col text-zinc-100 shadow-2xl overflow-hidden"
       >
         <div className="flex items-center gap-2 px-3 sm:px-4 border-b border-zinc-800">
           {loading ? (

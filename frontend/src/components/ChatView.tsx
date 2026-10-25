@@ -341,6 +341,20 @@ const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> =
   );
 };
 
+/** True below Tailwind's sm breakpoint, kept in sync with resizes. */
+const useNarrow = () => {
+  const query = '(max-width: 639px)';
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia?.(query);
+    if (!mq) return;
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  return narrow;
+};
+
 export const ChatView: React.FC<ChatViewProps> = ({
   title,
   subtitle,
@@ -401,6 +415,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   renderHumanStep,
   contextKey,
 }) => {
+  const narrow = useNarrow();
   const [internalIsVmPaneOpen, setInternalIsVmPaneOpen] = useState(false);
   const vmOpen = isVmPaneOpen !== undefined ? isVmPaneOpen : internalIsVmPaneOpen;
   const toggleVm = onToggleVmPane || (() => setInternalIsVmPaneOpen((prev) => !prev));
@@ -1362,7 +1377,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 checkMention(inputVal, (e.target as HTMLTextAreaElement).selectionStart);
               }
             }}
-            placeholder={spaceName ? `Message ${title} in ${spaceName}` : `Message ${title}`}
+            // Phones drop the space name so the 16px placeholder fits on one line
+            placeholder={spaceName && !narrow ? `Message ${title} in ${spaceName}` : `Message ${title}`}
             title="Enter to send, Shift+Enter for a new line, @ to mention"
 
             className="flex-1 min-w-0 bg-transparent px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-40 leading-relaxed font-sans"

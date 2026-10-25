@@ -320,8 +320,8 @@ export const UnlockDialog: React.FC<{ status: StoreStatus | null; onClose: () =>
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-labelledby={`${id}-h`} className="relative w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-2xl" data-unlock-dialog>
+    <div className="kw-dialog kw-dialog-bottom fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div role="dialog" aria-modal="true" aria-labelledby={`${id}-h`} className="kw-dialog-panel relative w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-2xl" data-unlock-dialog>
         <h2 id={`${id}-h`} className="sr-only">
           Unlock Bitwarden
         </h2>

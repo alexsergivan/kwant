@@ -352,14 +352,14 @@ export const ClaudeSignOut: React.FC<{ onSignedOut: (engines: EngineInfo[]) => v
         <LogOut size={10} aria-hidden="true" /> Sign out
       </button>
       {open && (
-        <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+        <div className="kw-dialog kw-dialog-bottom fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && close()}>
           <div
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="claude-signout-title"
             aria-describedby="claude-signout-desc"
             onKeyDown={onKeyDown}
-            className="w-full max-w-sm bg-zinc-900 border border-zinc-700 rounded-xl p-4 shadow-2xl space-y-3 text-zinc-100"
+            className="kw-dialog-panel w-full max-w-sm bg-zinc-900 border border-zinc-700 rounded-xl p-4 shadow-2xl space-y-3 text-zinc-100"
           >
             <h4 id="claude-signout-title" className="text-sm font-semibold">
               Sign out of Claude?
