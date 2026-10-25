@@ -865,16 +865,66 @@ pub async fn get_channel(State(state): State<AppState>, Path(id): Path<String>) 
     }
 }
 
-/// `PATCH /api/channels/:id {instructions}`; `""` clears.
-pub async fn patch_channel(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(p): Json<InstructionsPayload>,
-) -> Response {
+/// `PATCH /api/channels/:id`: any of these; the rest stay as they are.
+#[derive(Debug, Default, Deserialize)]
+pub struct ChannelPatch {
+    /// `""` clears.
+    pub instructions: Option<String>,
+    /// Replaces the members; the lead always stays one.
+    pub member_kwants: Option<Vec<String>>,
+    pub lead_kwant_id: Option<String>,
+    /// `auto` (Laya picks) or `lead`.
+    pub routing_mode: Option<String>,
+}
+
+/// `PATCH /api/channels/:id {instructions?, member_kwants?, lead_kwant_id?, routing_mode?}`.
+/// #general always has every bot and a team's chat follows the team, so neither takes members.
+pub async fn patch_channel(State(state): State<AppState>, Path(id): Path<String>, Json(p): Json<ChannelPatch>) -> Response {
     if let Some(text) = &p.instructions {
         if let Err(r) = check_instructions(text) {
             return r;
         }
+    }
+    if p.member_kwants.is_some() || p.lead_kwant_id.is_some() || p.routing_mode.is_some() {
+        let channel = match state.db.get_channel(&id).await {
+            Ok(Some(c)) => c,
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(_) => return internal(),
+        };
+        let mode = p.routing_mode.clone().unwrap_or_else(|| channel.routing_mode.clone());
+        if !crate::db::models::ROUTING_MODES.contains(&mode.as_str()) {
+            return error(StatusCode::BAD_REQUEST, "routing_mode must be \"auto\" or \"lead\"");
+        }
+        let regroups = p.member_kwants.is_some() || p.lead_kwant_id.is_some();
+        if regroups && channel.name == "general" {
+            return error(StatusCode::BAD_REQUEST, "#general always includes every bot in the space");
+        }
+        if regroups {
+            let space = crate::db::spaces::SpaceId::new(channel.space_id.clone());
+            let teams = match state.db.list_teams(&space).await {
+                Ok(t) => t,
+                Err(_) => return internal(),
+            };
+            for team in teams {
+                if state.db.team_channel(&space, &team.name).await.ok().flatten().as_deref() == Some(channel.id.as_str()) {
+                    return error(
+                        StatusCode::BAD_REQUEST,
+                        format!("#{} is team {}'s chat: change the team's members instead", channel.name, team.name),
+                    );
+                }
+            }
+        }
+        let lead = p.lead_kwant_id.clone().unwrap_or_else(|| channel.lead_kwant_id.clone());
+        let current: Vec<String> = serde_json::from_str(&channel.member_kwants).unwrap_or_default();
+        let members = crate::db::models::members_with_lead(&lead, p.member_kwants.as_deref().unwrap_or(&current));
+        match state.db.set_channel_routing(&id, &lead, &members, &mode).await {
+            Ok(true) => {}
+            Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+            Err(crate::db::DbError::OtherSpace(m)) => return error(StatusCode::BAD_REQUEST, m),
+            Err(_) => return internal(),
+        }
+    }
+    if let Some(text) = &p.instructions {
         match state.db.set_channel_instructions(&id, text).await {
             Ok(true) => {}
             Ok(false) => return StatusCode::NOT_FOUND.into_response(),

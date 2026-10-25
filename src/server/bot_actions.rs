@@ -237,7 +237,8 @@ pub fn tools() -> Vec<Value> {
         json!({"name": "channel_list", "description": "The channels in your space.", "inputSchema": {"type": "object", "properties": {}}}),
         json!({
             "name": "channel_create",
-            "description": "Create a channel in your space. Members are bots of your space; you lead it unless `lead` says otherwise.",
+            "description": "Create a channel in your space. Members are bots of your space; you lead it unless `lead` says otherwise. \
+                With two or more bots in it, Laya picks who answers each message; with only the lead, the lead answers everything.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -251,11 +252,16 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "channel_update",
-            "description": "Set a channel's pinned instructions, which every bot there follows; \"\" clears them.",
+            "description": "Change a channel: its pinned instructions, which every bot there follows (\"\" clears them), and/or its \
+                members (the full new list; the lead stays in). Not for #general or a team's chat.",
             "inputSchema": {
                 "type": "object",
-                "properties": {"channel": {"type": "string", "description": "Its id or name"}, "instructions": {"type": "string"}},
-                "required": ["channel", "instructions"],
+                "properties": {
+                    "channel": {"type": "string", "description": "Its id or name"},
+                    "instructions": {"type": "string"},
+                    "members": {"type": "array", "items": {"type": "string"}, "description": "Bots' ids or names"},
+                },
+                "required": ["channel"],
             },
         }),
         json!({
@@ -1461,7 +1467,13 @@ impl Ctx<'_> {
         };
         let id = created["id"].as_str().unwrap_or("").to_string();
         let after = json!({"channel_id": id, "name": created["name"], "lead_kwant_id": lead.id, "member_kwants": created["member_kwants"]});
-        let reply = format!("Created #{} [{id}], led by {}.", created["name"].as_str().unwrap_or(name), lead.name);
+        let mut reply = format!("Created #{} [{id}], led by {}.", created["name"].as_str().unwrap_or(name), lead.name);
+        if created["member_kwants"].as_str().and_then(|m| serde_json::from_str::<Vec<String>>(m).ok()).map_or(0, |m| m.len()) < 2 {
+            reply.push_str(&format!(
+                " Only {} is in it, so Laya has no one to choose between: add members with channel_update for Laya to pick who answers.",
+                lead.name
+            ));
+        }
         self.applied("channel_create", "channel", Some(id), format!("created channel #{name}"), None, after, reply).await
     }
 
@@ -1473,17 +1485,56 @@ impl Ctx<'_> {
             Ok(c) => c,
             Err(e) => return e,
         };
-        let Some(text) = args["instructions"].as_str() else {
-            return fail("instructions is required (\"\" clears them)");
+        let text = args["instructions"].as_str();
+        let mut members = None;
+        if let Some(list) = args["members"].as_array() {
+            let mut ids = vec![channel.lead_kwant_id.clone()];
+            for m in list {
+                match self.bot(m.as_str()).await {
+                    Ok(k) if !ids.contains(&k.id) => ids.push(k.id),
+                    Ok(_) => {}
+                    Err(e) => return e,
+                }
+            }
+            members = Some(ids);
+        }
+        let members_given = members.is_some();
+        if text.is_none() && !members_given {
+            return fail("give instructions (\"\" clears them) and/or members");
+        }
+        // Only what this call changes, so Undo puts back just that
+        let snapshot = |instructions: Option<String>, members: String| {
+            let mut v = json!({"channel_id": channel.id, "name": channel.name});
+            if text.is_some() {
+                v["instructions"] = json!(instructions);
+            }
+            if members_given {
+                v["member_kwants"] = json!(members);
+            }
+            v
         };
-        let before = json!({"channel_id": channel.id, "name": channel.name, "instructions": self.db().channel_instructions(&channel.id).await.ok().flatten()});
-        let payload = super::continuity::InstructionsPayload { instructions: Some(text.to_string()) };
+        let before = snapshot(self.db().channel_instructions(&channel.id).await.ok().flatten(), channel.member_kwants.clone());
+        let payload = super::continuity::ChannelPatch {
+            instructions: text.map(str::to_string),
+            member_kwants: members.clone(),
+            ..Default::default()
+        };
         if let Err(e) = read(super::continuity::patch_channel(State(self.state.clone()), Path(channel.id.clone()), Json(payload)).await).await {
             return fail(format!("The channel was not changed: {e}"));
         }
-        let after = json!({"channel_id": channel.id, "name": channel.name, "instructions": self.db().channel_instructions(&channel.id).await.ok().flatten()});
-        let verb = if text.trim().is_empty() { "cleared" } else { "set" };
-        let summary = format!("{verb} the instructions of #{}", channel.name);
+        let now = self.db().get_channel(&channel.id).await.ok().flatten();
+        let after = snapshot(
+            self.db().channel_instructions(&channel.id).await.ok().flatten(),
+            now.map(|c| c.member_kwants).unwrap_or_default(),
+        );
+        let mut parts = vec![];
+        if let Some(t) = text {
+            parts.push(format!("{} the instructions", if t.trim().is_empty() { "cleared" } else { "set" }));
+        }
+        if let Some(m) = &members {
+            parts.push(format!("set the members ({} bots)", m.len()));
+        }
+        let summary = format!("{} of #{}", parts.join(" and "), channel.name);
         self.applied("channel_update", "channel", Some(channel.id), summary.clone(), Some(before), after, format!("{}.", capitalize(&summary)))
             .await
     }
@@ -1809,11 +1860,23 @@ async fn undo_action(state: &AppState, a: &BotAction) -> Result<Option<String>, 
             Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
         },
         "channel_update" => {
-            let text = before["instructions"].as_str().unwrap_or("").to_string();
-            match state.db.set_channel_instructions(&target, &text).await {
-                Ok(true) => {}
-                Ok(false) => return Err(error(StatusCode::CONFLICT, "the channel no longer exists")),
-                Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+            if before.get("instructions").is_some() {
+                let text = before["instructions"].as_str().unwrap_or("").to_string();
+                match state.db.set_channel_instructions(&target, &text).await {
+                    Ok(true) => {}
+                    Ok(false) => return Err(error(StatusCode::CONFLICT, "the channel no longer exists")),
+                    Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+                }
+            }
+            if let Some(members) = before["member_kwants"].as_str().and_then(|m| serde_json::from_str::<Vec<String>>(m).ok()) {
+                let channel = match state.db.get_channel(&target).await {
+                    Ok(Some(c)) => c,
+                    Ok(None) => return Err(error(StatusCode::CONFLICT, "the channel no longer exists")),
+                    Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+                };
+                if let Err(e) = state.db.set_channel_routing(&target, &channel.lead_kwant_id, &members, &channel.routing_mode).await {
+                    return Err(error(StatusCode::CONFLICT, format!("the members can't be put back: {e}")));
+                }
             }
         }
         _ => return Err(error(StatusCode::CONFLICT, "this change can't be undone")),

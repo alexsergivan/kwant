@@ -534,3 +534,36 @@ async fn switching_bots_tools_off_is_refused_directly() {
     }
     assert!(actions(&e).await.is_empty());
 }
+
+#[tokio::test]
+async fn a_bot_adds_members_to_its_channel_so_laya_routes_it_and_the_person_can_undo() {
+    let e = setup().await;
+    let token = turn(&e, "t-members").await;
+    let space = SpaceId::default_space();
+    let chan = |name: &'static str| {
+        let db = e.state.db.clone();
+        let space = space.clone();
+        async move { db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == name).unwrap() }
+    };
+    let ids = |c: &kwnt::db::models::Channel| serde_json::from_str::<Vec<String>>(&c.member_kwants).unwrap();
+
+    let text = ok(&e, &token, "channel_create", json!({"name": "solo"})).await;
+    assert!(text.contains("add members with channel_update"), "a one-bot channel says Laya has no one to pick: {text}");
+    ok(&e, &token, "channel_update", json!({"channel": "solo", "instructions": "Be brief."})).await;
+
+    let text = ok(&e, &token, "channel_update", json!({"channel": "solo", "members": [e.other.name]})).await;
+    assert!(text.contains("Set the members (2 bots)"), "{text}");
+    assert_eq!(ids(&chan("solo").await), vec![e.bot.id.clone(), e.other.id.clone()], "the lead stays in");
+
+    // Not for #general, which always has every bot
+    refused(&e, &token, "channel_update", json!({"channel": "general", "members": [e.other.name]})).await;
+    refused(&e, &token, "channel_update", json!({"channel": "solo"})).await;
+
+    // Undo puts the members back and leaves the instructions alone
+    let update = last_action(&e).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", update["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let solo = chan("solo").await;
+    assert_eq!(ids(&solo), vec![e.bot.id.clone()]);
+    assert_eq!(e.state.db.channel_instructions(&solo.id).await.unwrap().as_deref(), Some("Be brief."));
+}
