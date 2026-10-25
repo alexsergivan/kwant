@@ -72,6 +72,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
+      # apps/mac has its own Cargo.lock; mac.yml only runs on PRs touching apps/mac,
+      # so catch a root dependency that never made it into that lockfile here
+      - name: Mac lockfile in sync
+        run: cargo metadata --locked --format-version 1 --manifest-path apps/mac/Cargo.toml > /dev/null
       - name: Tests
         run: cargo test --locked --no-fail-fast
       - name: Disk usage
