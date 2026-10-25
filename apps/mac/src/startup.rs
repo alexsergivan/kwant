@@ -120,7 +120,10 @@ pub fn http_get(port: u16, path: &str, timeout: Duration) -> Option<(u16, String
     let mut stream = TcpStream::connect_timeout(&addr, timeout).ok()?;
     stream.set_read_timeout(Some(timeout)).ok()?;
     stream.set_write_timeout(Some(timeout)).ok()?;
-    write!(stream, "GET {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json\r\n\r\n").ok()?;
+    // One write: `write!` on a bare TcpStream sends each piece separately, and a server that answers after the first
+    // piece and closes makes macOS reset the connection, losing the answer.
+    let request = format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json\r\n\r\n");
+    stream.write_all(request.as_bytes()).ok()?;
     let mut raw = Vec::new();
     stream.take(4 * 1024 * 1024).read_to_end(&mut raw).ok()?;
     let text = String::from_utf8_lossy(&raw);
@@ -183,9 +186,17 @@ mod tests {
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 let mut stream = stream;
+                // read the whole request first, so closing doesn't reset the connection under the client
+                let mut request = Vec::new();
                 let mut buf = [0u8; 1024];
-                let _ = stream.read(&mut buf);
-                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{body}");
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{body}");
+                let _ = stream.write_all(response.as_bytes());
             }
         });
         port
