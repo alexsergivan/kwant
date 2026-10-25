@@ -88,6 +88,14 @@ jobs:
       - name: Install-window background
         working-directory: apps/mac/dmg
         run: tiffutil -cathidpicheck background.png background@2x.png -out background.tiff
+      # Finder's "every item" skips invisible files, so with hidden files off the layout script
+      # leaves .VolumeIcon.icns and .background unplaced and Finder may drop them into the window
+      # for anyone who shows hidden files. With them visible, the script moves them out of view.
+      - name: Show hidden files in Finder while the .dmg is laid out
+        run: |
+          defaults write com.apple.finder AppleShowAllFiles -bool true
+          killall Finder || true
+          sleep 3
       - name: Build the universal app and .dmg
         working-directory: apps/mac
         timeout-minutes: 30
@@ -172,17 +180,17 @@ jobs:
           print("window", bounds)
           assert entries[("kwant.app", b"Iloc")] == (180, 170)
           assert entries[("Applications", b"Iloc")] == (480, 170)
-          for name, code in entries:
-              if code == b"Iloc" and name.startswith("."):
-                  x, _ = entries[(name, code)]
-                  assert x > 660, f"{name} is inside the window at x={x}"
+          for name in (".VolumeIcon.icns", ".background"):
+              x, y = entries[(name, b"Iloc")]
+              assert x > 660 or y > 400, f"{name} is inside the window at {x},{y}"
+          for (name, code), (x, y) in [(k, v) for k, v in entries.items() if k[1] == b"Iloc"]:
+              if name.startswith("."):
+                  assert x > 660 or y > 400, f"{name} is inside the window at {x},{y}"
           print("layout OK")
           PY
           hdiutil detach "$vol" || hdiutil detach -force "$vol"
           (
             set +e
-            defaults write com.apple.finder AppleShowAllFiles -bool true
-            killall Finder; sleep 3
             for mode in light dark; do
               if [ "$mode" = dark ]; then v=true; else v=false; fi
               osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $v"

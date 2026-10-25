@@ -13,9 +13,11 @@ W, H = 660, 400
 APP_X, APPS_X, ICON_Y = 180, 480, 170
 SS = 4  # supersampling for the 2x image
 
-TOP = (24, 22, 34)
-BOTTOM = (14, 15, 21)
-ARROW = (150, 154, 180, 255)
+# Light on purpose: over a background picture Finder draws icon labels black in light and dark
+# mode alike, so a dark background makes "kwant" and "Applications" unreadable.
+TOP = (246, 244, 251)
+BOTTOM = (231, 228, 240)
+ARROW = (112, 104, 150, 255)
 
 
 def draw(scale):
@@ -29,11 +31,11 @@ def draw(scale):
     img = grad.resize((w, h)).convert("RGBA")
 
     # soft glow behind each icon slot
-    glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    glow = Image.new("RGBA", (w, h), (255, 255, 255, 0))
     g = ImageDraw.Draw(glow)
     r = 92 * s
     for cx in (APP_X, APPS_X):
-        g.ellipse((cx * s - r, ICON_Y * s - r, cx * s + r, ICON_Y * s + r), fill=(120, 110, 200, 34))
+        g.ellipse((cx * s - r, ICON_Y * s - r, cx * s + r, ICON_Y * s + r), fill=(255, 255, 255, 150))
     glow = glow.filter(ImageFilter.GaussianBlur(40 * s))
     img = Image.alpha_composite(img, glow)
 
