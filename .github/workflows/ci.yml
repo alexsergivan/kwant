@@ -45,7 +45,7 @@ jobs:
           path: frontend/dist
           retention-days: 1
 
-  # The built website in site/: headings, meta, links, sitemap, and no unfilled {{PLACEHOLDER}} (operator details on the
+  # The built website in site/: headings, meta, links, sitemap, and no unfilled {{PLACEHOLDER}} (the contact address on the
   # legal pages), so a half-filled page can't reach kwant.si unnoticed.
   site:
     name: site
