@@ -3,6 +3,10 @@
 //! secret in the `kwnt_token` cookie. The server keeps only its SHA-256 hash, in
 //! `<data_dir>/sessions.json` (0600), so a signed-in browser never holds the API token and can be
 //! listed and signed out on its own. The API token itself still works everywhere, as the fallback.
+//!
+//! A new browser can also ask to be let in (`POST /api/auth/device`): it keeps a secret
+//! `device_code` and shows a short `user_code`; the person approves that code from a device that
+//! is already signed in, and the new browser's next poll gets its session.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -26,6 +30,18 @@ const LAST_SEEN_PERSIST: chrono::TimeDelta = chrono::TimeDelta::hours(1);
 pub const LINK_PREFIX: &str = "kl1.";
 const SESSION_PREFIX: &str = "ks1.";
 const SESSIONS_FILE: &str = "sessions.json";
+/// How long a device request waits for approval.
+pub const DEVICE_TTL: Duration = Duration::from_secs(10 * 60);
+/// How often the waiting browser should poll.
+pub const DEVICE_INTERVAL_SECS: u64 = 2;
+/// Device requests waiting at once, from everyone.
+const MAX_PENDING: usize = 10;
+/// New device requests per minute from one address, and from everyone.
+const PER_IP_PER_MIN: usize = 5;
+const ALL_PER_MIN: usize = 30;
+const DEVICE_PREFIX: &str = "kd1.";
+/// User codes: no vowels (no words), no 0/O/1/I; 28^8, about 38 bits.
+const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ23456789";
 
 /// How a session was made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,10 +99,56 @@ enum LinkState {
     Spent(Instant),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeviceState {
+    Pending,
+    Approved,
+    Denied,
+}
+
+struct DeviceRequest {
+    device_hash: String,
+    /// Eight characters, no dash.
+    user_code: String,
+    client: Client,
+    created_at: DateTime<Utc>,
+    expires: Instant,
+    state: DeviceState,
+}
+
+/// A device request the person can approve.
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingDevice {
+    pub user_code: String,
+    pub browser: String,
+    pub ip: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// What a waiting browser's poll finds.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Poll {
+    Pending,
+    /// Approved: the new session's cookie secret. The request is gone now.
+    Approved(String),
+    Denied,
+    /// Ran out, already collected, or never made.
+    Expired,
+}
+
+#[derive(Default)]
+struct Starts {
+    by_ip: HashMap<String, Vec<Instant>>,
+    all: Vec<Instant>,
+}
+
 pub struct SignIn {
     path: Option<PathBuf>,
     sessions: Mutex<Vec<Session>>,
     links: Mutex<HashMap<String, LinkState>>,
+    devices: Mutex<Vec<DeviceRequest>>,
+    starts: Mutex<Starts>,
 }
 
 impl std::fmt::Debug for SignIn {
@@ -130,6 +192,8 @@ impl SignIn {
             path: Some(path),
             sessions: Mutex::new(sessions),
             links: Mutex::new(HashMap::new()),
+            devices: Mutex::new(Vec::new()),
+            starts: Mutex::new(Starts::default()),
         }
     }
 
@@ -139,6 +203,8 @@ impl SignIn {
             path: None,
             sessions: Mutex::new(Vec::new()),
             links: Mutex::new(HashMap::new()),
+            devices: Mutex::new(Vec::new()),
+            starts: Mutex::new(Starts::default()),
         }
     }
 
@@ -272,6 +338,144 @@ impl SignIn {
         }
         Redeem::Ok(self.create_session(Via::Link, client))
     }
+}
+
+impl SignIn {
+    /// A new browser asks to be let in: `(device_code, user_code)`, or the seconds to wait when
+    /// this address (or everyone) asked too often, or too many requests are already waiting.
+    pub fn start_device(&self, client: &Client) -> Result<(String, String), u64> {
+        self.start_device_for(client, DEVICE_TTL)
+    }
+
+    /// [`Self::start_device`] with another wait (tests).
+    pub fn start_device_for(&self, client: &Client, ttl: Duration) -> Result<(String, String), u64> {
+        let now = Instant::now();
+        {
+            let mut starts = self.starts.lock().unwrap_or_else(|e| e.into_inner());
+            let minute = Duration::from_secs(60);
+            starts.all.retain(|t| now.duration_since(*t) < minute);
+            starts.by_ip.retain(|_, v| {
+                v.retain(|t| now.duration_since(*t) < minute);
+                !v.is_empty()
+            });
+            let mine = starts.by_ip.get(&client.ip).map_or(0, Vec::len);
+            if mine >= PER_IP_PER_MIN || starts.all.len() >= ALL_PER_MIN {
+                let oldest = starts.by_ip.get(&client.ip).and_then(|v| v.first()).copied().unwrap_or(now);
+                return Err(60u64.saturating_sub(now.duration_since(oldest).as_secs()).max(1));
+            }
+            starts.all.push(now);
+            starts.by_ip.entry(client.ip.clone()).or_default().push(now);
+        }
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        devices.retain(|d| d.expires > now);
+        if devices.iter().filter(|d| d.state == DeviceState::Pending).count() >= MAX_PENDING {
+            return Err(30);
+        }
+        let device_code = format!("{DEVICE_PREFIX}{}", random_secret());
+        let user_code = loop {
+            let c = random_user_code();
+            if !devices.iter().any(|d| d.user_code == c) {
+                break c;
+            }
+        };
+        devices.push(DeviceRequest {
+            device_hash: hash(&device_code),
+            user_code: user_code.clone(),
+            client: client.clone(),
+            created_at: Utc::now(),
+            expires: now + ttl,
+            state: DeviceState::Pending,
+        });
+        Ok((device_code, format_user_code(&user_code)))
+    }
+
+    /// The waiting browser's poll. An approved or denied answer is given once.
+    pub fn poll_device(&self, device_code: &str) -> Poll {
+        if !device_code.starts_with(DEVICE_PREFIX) {
+            return Poll::Expired;
+        }
+        let h = hash(device_code);
+        let now = Instant::now();
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        devices.retain(|d| d.expires > now);
+        let Some(i) = devices.iter().position(|d| d.device_hash == h) else {
+            return Poll::Expired;
+        };
+        match devices[i].state {
+            DeviceState::Pending => Poll::Pending,
+            DeviceState::Denied => {
+                devices.remove(i);
+                Poll::Denied
+            }
+            DeviceState::Approved => {
+                let d = devices.remove(i);
+                drop(devices);
+                Poll::Approved(self.create_session(Via::Device, &d.client))
+            }
+        }
+    }
+
+    /// Requests waiting for the person, oldest first.
+    pub fn pending_devices(&self) -> Vec<PendingDevice> {
+        let now = Instant::now();
+        let wall = Utc::now();
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        devices.retain(|d| d.expires > now);
+        devices
+            .iter()
+            .filter(|d| d.state == DeviceState::Pending)
+            .map(|d| PendingDevice {
+                user_code: format_user_code(&d.user_code),
+                browser: d.client.browser.clone(),
+                ip: d.client.ip.clone(),
+                created_at: d.created_at,
+                expires_at: wall + chrono::TimeDelta::from_std(d.expires - now).unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// Approves (or denies) the waiting request with this user code; false when there is none.
+    pub fn decide_device(&self, user_code: &str, approve: bool) -> bool {
+        let code = normalize_user_code(user_code);
+        let now = Instant::now();
+        let mut devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        devices.retain(|d| d.expires > now);
+        match devices
+            .iter_mut()
+            .find(|d| d.state == DeviceState::Pending && !code.is_empty() && d.user_code == code)
+        {
+            Some(d) => {
+                d.state = if approve { DeviceState::Approved } else { DeviceState::Denied };
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+fn random_user_code() -> String {
+    let mut n = uuid::Uuid::new_v4().as_u128();
+    let base = USER_CODE_ALPHABET.len() as u128;
+    (0..8)
+        .map(|_| {
+            let c = USER_CODE_ALPHABET[(n % base) as usize] as char;
+            n /= base;
+            c
+        })
+        .collect()
+}
+
+/// `BCDF2345` → `BCDF-2345`.
+fn format_user_code(code: &str) -> String {
+    format!("{}-{}", &code[..4], &code[4..])
+}
+
+/// What the person typed or tapped, as stored: upper case, without dashes or spaces.
+fn normalize_user_code(code: &str) -> String {
+    code.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
 }
 
 /// Expired live links become spent; spent ones are forgotten after an hour.
@@ -515,6 +719,99 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(SESSIONS_FILE), "{not json").unwrap();
         assert!(SignIn::load(dir.path()).sessions().is_empty());
+    }
+
+    #[test]
+    fn a_device_is_let_in_once_after_approval() {
+        let s = SignIn::in_memory();
+        let (device, user) = s.start_device(&me()).unwrap();
+        assert!(device.starts_with(DEVICE_PREFIX));
+        assert_eq!(user.len(), 9);
+        assert_eq!(&user[4..5], "-");
+        assert_eq!(s.poll_device(&device), Poll::Pending);
+        let pending = s.pending_devices();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].user_code, user);
+        assert_eq!(pending[0].browser, "Chrome on Android");
+        // Typed in lower case without the dash still matches
+        assert!(s.decide_device(&user.replace('-', "").to_lowercase(), true));
+        assert!(s.pending_devices().is_empty());
+        let Poll::Approved(secret) = s.poll_device(&device) else { panic!("approved") };
+        assert!(s.session_ok(&secret));
+        assert_eq!(s.sessions()[0].via, Via::Device);
+        // Single use: the device code and the user code are spent
+        assert_eq!(s.poll_device(&device), Poll::Expired);
+        assert!(!s.decide_device(&user, true));
+        assert_eq!(s.sessions().len(), 1);
+    }
+
+    #[test]
+    fn a_denied_device_gets_nothing() {
+        let s = SignIn::in_memory();
+        let (device, user) = s.start_device(&me()).unwrap();
+        assert!(s.decide_device(&user, false));
+        assert!(!s.decide_device(&user, true), "a decision is final");
+        assert_eq!(s.poll_device(&device), Poll::Denied);
+        assert_eq!(s.poll_device(&device), Poll::Expired);
+        assert!(s.sessions().is_empty());
+    }
+
+    #[test]
+    fn an_expired_device_request_cannot_be_approved() {
+        let s = SignIn::in_memory();
+        let (device, user) = s.start_device_for(&me(), Duration::from_millis(1)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(s.pending_devices().is_empty());
+        assert!(!s.decide_device(&user, true));
+        assert_eq!(s.poll_device(&device), Poll::Expired);
+        assert!(s.sessions().is_empty());
+    }
+
+    #[test]
+    fn unknown_codes_match_nothing() {
+        let s = SignIn::in_memory();
+        let (device, _) = s.start_device(&me()).unwrap();
+        assert!(!s.decide_device("BCDF-2345", true));
+        assert!(!s.decide_device("", true));
+        assert!(!s.decide_device("----", true));
+        assert_eq!(s.poll_device("kd1.nope"), Poll::Expired);
+        assert_eq!(s.poll_device(&format!("{device}x")), Poll::Expired);
+        assert_eq!(s.poll_device(&device), Poll::Pending);
+    }
+
+    #[test]
+    fn device_requests_are_rate_limited_and_capped() {
+        let s = SignIn::in_memory();
+        for _ in 0..PER_IP_PER_MIN {
+            s.start_device(&me()).unwrap();
+        }
+        let wait = s.start_device(&me()).unwrap_err();
+        assert!((1..=60).contains(&wait), "{wait}");
+        // Another address still may, until MAX_PENDING are waiting
+        let mut n = PER_IP_PER_MIN;
+        let mut ip = 0;
+        while n < MAX_PENDING {
+            ip += 1;
+            let c = Client { browser: "x".into(), ip: format!("198.51.100.{ip}") };
+            if s.start_device(&c).is_ok() {
+                n += 1;
+            }
+        }
+        let other = Client { browser: "x".into(), ip: "192.0.2.1".into() };
+        assert!(s.start_device(&other).is_err(), "cap on waiting requests");
+        // Deciding one frees a slot
+        let code = s.pending_devices()[0].user_code.clone();
+        assert!(s.decide_device(&code, false));
+        assert!(s.start_device(&other).is_ok());
+    }
+
+    #[test]
+    fn user_codes_avoid_lookalikes() {
+        for _ in 0..200 {
+            let c = random_user_code();
+            assert_eq!(c.len(), 8);
+            assert!(c.bytes().all(|b| USER_CODE_ALPHABET.contains(&b)), "{c}");
+        }
     }
 
     #[test]

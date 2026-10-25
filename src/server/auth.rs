@@ -6,7 +6,7 @@
 //! "From this machine" means a loopback peer, a loopback `Host` and no proxy forwarding headers.
 //! The `Host` check is what keeps a DNS-rebinding page (same peer, foreign host) out.
 
-use super::signin::{self, Redeem, Via};
+use super::signin::{self, Poll, Redeem, Via};
 use super::AppState;
 use crate::config::Config;
 use axum::{
@@ -356,7 +356,7 @@ pub fn is_local(headers: &HeaderMap, peer: Option<IpAddr>) -> bool {
         && host_ok
 }
 
-fn cookie_token(headers: &HeaderMap) -> Option<&str> {
+pub(super) fn cookie_token(headers: &HeaderMap) -> Option<&str> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -508,6 +508,8 @@ pub async fn status(State(state): State<AppState>, req: Request) -> Response {
         "authenticated": authenticated,
         "person_auth_required": person_required,
         "person_authenticated": !person_required || has_token,
+        // This server can let a new browser in from a signed-in device (`/api/auth/device`)
+        "device_login": true,
     }))
     .into_response()
 }
@@ -610,6 +612,125 @@ pub async fn create_link(State(state): State<AppState>) -> Response {
     resp.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
+}
+
+/// `POST /api/auth/device {}` (open to anyone): a new browser asks to be let in.
+/// `{device_code, user_code, expires_in, interval}`; the browser keeps `device_code` to itself,
+/// shows `user_code`, and polls. 429 `{error, retry_after}` (and `Retry-After`) when this address
+/// asked too often or too many requests are waiting.
+pub async fn device_start(
+    State(state): State<AppState>,
+    peer: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+) -> Response {
+    let client = signin::client(&headers, peer_ip(&peer));
+    match state.api_token.signin.start_device(&client) {
+        Ok((device_code, user_code)) => {
+            let mut resp = Json(json!({
+                "device_code": device_code,
+                "user_code": user_code,
+                "expires_in": signin::DEVICE_TTL.as_secs(),
+                "interval": signin::DEVICE_INTERVAL_SECS,
+            }))
+            .into_response();
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            resp
+        }
+        Err(wait) => {
+            let mut resp = (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({ "error": "too many sign-in requests; try again shortly", "retry_after": wait })),
+            )
+                .into_response();
+            if let Ok(v) = HeaderValue::from_str(&wait.to_string()) {
+                resp.headers_mut().insert(header::RETRY_AFTER, v);
+            }
+            resp
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DevicePollBody {
+    device_code: String,
+}
+
+/// `POST /api/auth/device/poll {device_code}`: 200 `{status: "pending"}`; 200
+/// `{status: "approved"}` with the session cookie (once); 403 `{status: "denied"}` (once); 410
+/// `{status: "expired"}` for one that ran out, was collected, or never existed.
+pub async fn device_poll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<DevicePollBody>,
+) -> Response {
+    match state.api_token.signin.poll_device(body.device_code.trim()) {
+        Poll::Pending => Json(json!({ "status": "pending" })).into_response(),
+        Poll::Approved(secret) => with_session_cookie(Json(json!({ "status": "approved" })).into_response(), &secret, &headers),
+        Poll::Denied => (StatusCode::FORBIDDEN, Json(json!({ "status": "denied" }))).into_response(),
+        Poll::Expired => (StatusCode::GONE, Json(json!({ "status": "expired" }))).into_response(),
+    }
+}
+
+/// `GET /api/signin/requests` (person only): devices waiting to be let in, oldest first.
+pub async fn device_requests(State(state): State<AppState>) -> Response {
+    Json(state.api_token.signin.pending_devices()).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct UserCodeBody {
+    user_code: String,
+}
+
+async fn decide(state: &AppState, body: UserCodeBody, approve: bool) -> Response {
+    if state.api_token.signin.decide_device(&body.user_code, approve) {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        deny(StatusCode::NOT_FOUND, "no waiting sign-in request with that code (it may have expired)")
+    }
+}
+
+/// `POST /api/signin/requests/approve {user_code}` (person only): lets that device in. 404 when no
+/// request with that code is waiting.
+pub async fn device_approve(State(state): State<AppState>, Json(body): Json<UserCodeBody>) -> Response {
+    decide(&state, body, true).await
+}
+
+/// `POST /api/signin/requests/deny {user_code}` (person only).
+pub async fn device_deny(State(state): State<AppState>, Json(body): Json<UserCodeBody>) -> Response {
+    decide(&state, body, false).await
+}
+
+/// `GET /api/signin/sessions` (person only): signed-in browsers, newest first, `current` for this one.
+pub async fn sessions(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let current = cookie_token(&headers).and_then(|c| state.api_token.signin.session_id(c));
+    let list: Vec<_> = state
+        .api_token
+        .signin
+        .sessions()
+        .into_iter()
+        .map(|s| {
+            json!({
+                "id": s.id,
+                "browser": s.browser,
+                "ip": s.ip,
+                "via": s.via,
+                "created_at": s.created_at,
+                "last_seen": s.last_seen,
+                "current": current.as_deref() == Some(s.id.as_str()),
+            })
+        })
+        .collect();
+    Json(list).into_response()
+}
+
+/// `DELETE /api/signin/sessions/:id` (person only): signs that browser out. 404 when unknown.
+pub async fn revoke_session(State(state): State<AppState>, axum::extract::Path(id): axum::extract::Path<String>) -> Response {
+    if state.api_token.signin.revoke(&id) {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        deny(StatusCode::NOT_FOUND, "no such session")
+    }
 }
 
 #[cfg(test)]

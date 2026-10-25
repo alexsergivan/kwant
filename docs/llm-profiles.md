@@ -79,6 +79,17 @@ the server only as a SHA-256 hash in `<data_dir>/sessions.json` (0600). Signing 
 (`DELETE /api/auth/session`) ends that session on the server. The cookie never holds the API token;
 browsers that signed in before sessions keep working with the token cookie they have.
 
+A new browser can also be let in from one that is already signed in, with nothing to copy: it
+calls `POST /api/auth/device` and gets a secret `device_code` (kept by that browser) and a short
+`user_code` such as `BCDF-2345`, which it shows. A signed-in device lists waiting requests
+(`GET /api/signin/requests`: code, browser, address, time) and approves or denies one by its code
+(`POST /api/signin/requests/approve` or `/deny` with `{user_code}`). The new browser polls
+`POST /api/auth/device/poll {device_code}` and gets its session cookie once approved. Requests last
+10 minutes and every code works once. One address may ask 5 times a minute (30 a minute from
+everyone, at most 10 waiting); more get `429`. Only approve a code you see on the device you are
+signing in: someone else can make a request show up too. `GET /api/signin/sessions` lists signed-in
+browsers and `DELETE /api/signin/sessions/<id>` signs one out.
+
 `kwnt token` prints a new one-time link, like `kwnt signin-link`, and says where the token is for
 typing by hand; it never prints the token. `kwnt token --raw` prints just the token, for scripts, which send `Authorization: Bearer <token>`. The token
 lives in `<data_dir>/api-token` (mode 0600), or set `KWNT_API_TOKEN` (16+ characters). Run `kwnt token` as the
