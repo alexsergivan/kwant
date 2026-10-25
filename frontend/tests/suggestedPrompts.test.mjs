@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { loadBundled } from './bundle.mjs';
 
-const { suggestedPrompts, roleOf, MAX_PROMPTS } = await loadBundled(`export * from './src/suggestedPrompts';`);
+const { suggestedPrompts, roleOf, MAX_PROMPTS, MAX_TEAM_PROMPTS } = await loadBundled(`export * from './src/suggestedPrompts';`);
 
 const DEV_PROMPTS = ['Analyze system architecture tradeoffs', 'Write a fast Python script for data processing', 'Review git status and security policies'];
 const kitchen = [
@@ -14,10 +14,15 @@ const kitchen = [
   { name: 'Grocer', title: 'Grocery Planner' },
 ];
 
-test("a kitchen team gets the lead's and a teammate's cooking asks, never developer prompts", () => {
+test("a kitchen team gets the lead's and two teammates' cooking asks, never developer prompts", () => {
   // What Oleks saw: a freshly hired Kitchen team offered "Analyze system architecture tradeoffs".
   const out = suggestedPrompts({ kind: 'team', members: kitchen, lead: 'HeadChef', purpose: 'Hired together: a team of 5.' });
-  assert.deepEqual(out, ["@HeadChef plan this week's dinners", "@Nutritionist check this week's meals are balanced", 'What can each of you help me with?']);
+  assert.deepEqual(out, [
+    "@HeadChef plan this week's dinners",
+    "@Nutritionist check this week's meals are balanced",
+    '@Sous write a prep list for tonight',
+    'What can each of you help me with?',
+  ]);
   for (const p of DEV_PROMPTS) assert.ok(!out.includes(p));
 });
 
@@ -40,17 +45,22 @@ test('an engineering team still gets engineering asks', () => {
     ],
     lead: 'Architect',
   });
-  assert.deepEqual(out, ['@Architect sketch the architecture for a new feature', '@TechLead build a quick prototype', 'What can each of you help me with?']);
+  assert.deepEqual(out, [
+    '@Architect sketch the architecture for a new feature',
+    '@TechLead build a quick prototype',
+    "@DevOps check my server's security",
+    'What can each of you help me with?',
+  ]);
 });
 
-test("unknown titles fall back to the team's purpose for the lead, else just the open question", () => {
+test("unknown titles fall back to the team's purpose for the lead, else a neutral opener", () => {
   const members = [{ name: 'Ann', title: 'Wizard' }, { name: 'Bo', title: 'Sidekick' }];
   assert.deepEqual(suggestedPrompts({ kind: 'team', members, lead: 'Ann', purpose: 'Plans our weekly menu' }), [
     "@Ann plan this week's dinners",
     'What can each of you help me with?',
   ]);
-  assert.deepEqual(suggestedPrompts({ kind: 'team', members, lead: 'Ann' }), ['What can each of you help me with?']);
-  assert.deepEqual(suggestedPrompts({ kind: 'team', members: [members[0]] }), ['What can you help me with?']);
+  assert.deepEqual(suggestedPrompts({ kind: 'team', members, lead: 'Bo' }), ['@Bo what should we tackle first?', 'What can each of you help me with?']);
+  assert.deepEqual(suggestedPrompts({ kind: 'team', members: [members[0]] }), ['@Ann what should we tackle first?', 'What can you help me with?']);
   assert.deepEqual(suggestedPrompts({ kind: 'team', members: [] }), []);
 });
 
@@ -76,11 +86,11 @@ test("#general draws on the space's bots without naming them, and is empty with 
   assert.deepEqual(suggestedPrompts({ kind: 'general', bots: [] }), []);
 });
 
-test('never more than three, each short enough for a phone chip', () => {
+test('never more than three (four in a team), each short enough for a phone chip', () => {
   const many = Array.from({ length: 30 }, (_, i) => ({ name: `B${i}`, title: ['Chef', 'Writer', 'Lawyer', 'Tutor', 'SEO lead'][i % 5] }));
   for (const ctx of [{ kind: 'team', members: many }, { kind: 'general', bots: many }, { kind: 'bot', bot: many[0] }]) {
     const out = suggestedPrompts(ctx);
-    assert.ok(out.length <= MAX_PROMPTS, JSON.stringify(out));
+    assert.ok(out.length <= (ctx.kind === 'team' ? MAX_TEAM_PROMPTS : MAX_PROMPTS), JSON.stringify(out));
     assert.ok(out.every((p) => p.length <= 50), JSON.stringify(out));
   }
 });
@@ -98,4 +108,57 @@ test('the chat no longer hardcodes developer prompts', () => {
   for (const p of DEV_PROMPTS) assert.ok(!src.includes(p), p);
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   assert.match(app, /suggestedPrompts\(/);
+});
+
+// Rigel's review of #61: one qualifier word used to pick the field, so these got another trade's prompts.
+const askOf = (title) => roleOf({ name: 'a', title })?.asks[0] ?? null;
+
+test('a qualifier word does not pick the field: the job at the end of the title does', () => {
+  assert.equal(askOf('Product Photographer'), 'describe a cover image idea');
+  assert.equal(askOf('Interior Designer'), 'suggest a layout for my living room');
+  assert.equal(askOf('Press Release Writer'), 'outline a blog post');
+  assert.equal(askOf('Life Coach'), 'help me set goals for this month');
+  // ...while the phrases that do name those fields still work.
+  assert.equal(askOf('Product Manager'), 'turn this idea into a short spec');
+  assert.equal(askOf('UI/UX Designer'), 'review the sign-up screen');
+  assert.equal(askOf('Release Engineer'), 'write a test plan for the next release');
+  assert.equal(askOf('Fitness Coach'), 'plan my workouts for the week');
+  assert.equal(askOf('Platform Engineer'), "check my server's security");
+});
+
+test("a storytelling platform's purpose gets story prompts, not server security", () => {
+  const out = suggestedPrompts({ kind: 'team', members: [{ name: 'Ann', title: 'Wizard' }, { name: 'Bo', title: 'Sidekick' }], lead: 'Ann', purpose: 'Platform for Kids Storytelling' });
+  assert.deepEqual(out, ['@Ann write a bedtime story', 'What can each of you help me with?']);
+  assert.equal(askOf('Platform for Kids Storytelling'), 'write a bedtime story');
+});
+
+test('the five titles from the review, as one team, each get their own field', () => {
+  const out = suggestedPrompts({
+    kind: 'team',
+    members: [
+      { name: 'Snap', title: 'Product Photographer' },
+      { name: 'Deco', title: 'Interior Designer' },
+      { name: 'Press', title: 'Press Release Writer' },
+      { name: 'Guide', title: 'Life Coach' },
+    ],
+    lead: 'Snap',
+  });
+  assert.deepEqual(out, [
+    '@Snap describe a cover image idea',
+    '@Deco suggest a layout for my living room',
+    '@Press outline a blog post',
+    'What can each of you help me with?',
+  ]);
+  for (const p of out) assert.doesNotMatch(p, /spec|sign-up|test plan|workout|server/);
+});
+
+test('a member or bot with a missing name or title is skipped, not a crash', () => {
+  const members = [{ name: undefined, title: 'Chef' }, { name: '  ', title: 'Chef' }, null, { name: 'Sous', title: undefined, persona_prompt: 42 }, { name: 'Nut', title: 'Nutritionist' }];
+  assert.deepEqual(suggestedPrompts({ kind: 'team', members, lead: 'Nut' }), ["@Nut check this week's meals are balanced", 'What can each of you help me with?']);
+  assert.deepEqual(suggestedPrompts({ kind: 'general', bots: [{ title: 'Chef' }, { name: 'Nut', title: 'Nutritionist' }] }), [
+    "Check this week's meals are balanced",
+    'Who here can help me with what?',
+  ]);
+  assert.deepEqual(suggestedPrompts({ kind: 'team', members: [{ title: 'Chef' }] }), []);
+  assert.deepEqual(suggestedPrompts({ kind: 'bot', bot: {} }), ['What can you help me with?']);
 });

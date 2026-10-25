@@ -39,6 +39,34 @@ import { routeReasonText } from '../routeReason';
 import { InterruptedNotice, SystemNotice } from './SystemNotice';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
 
+/** A swipeable chip row whose right fade edge (phones only, see .kw-scroll-row) goes away once
+ *  it is scrolled to the end, or when everything already fits. */
+function ScrollRow({ children, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
+  const ref = useRef<HTMLDivElement>(null);
+  const update = () => {
+    const el = ref.current;
+    if (el) el.dataset.atEnd = String(el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
+  };
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.addEventListener('scroll', update, { passive: true });
+    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    resize?.observe(el);
+    return () => {
+      el.removeEventListener('scroll', update);
+      resize?.disconnect();
+    };
+  }, []);
+  // The chips themselves can change without the row resizing.
+  useEffect(update);
+  return (
+    <div ref={ref} {...rest}>
+      {children}
+    </div>
+  );
+}
+
 export interface ChatMessage {
   id: string;
   sender_role: 'user' | 'kwant' | 'system';
@@ -1201,7 +1229,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
       {/* Suggested prompts for who is in this chat: one swipeable row on phones */}
       {messages.length <= 1 && suggestions.length > 0 && (
-        <div
+        <ScrollRow
           className="kw-scroll-row px-3 sm:px-6 py-2 flex flex-nowrap sm:flex-wrap items-center gap-2 overflow-x-auto sm:overflow-visible select-none"
           role="group"
           aria-label="Suggested prompts"
@@ -1217,13 +1245,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
               {prompt}
             </button>
           ))}
-        </div>
+        </ScrollRow>
       )}
 
       {/* Modern Composer Input Bar */}
       <div className="px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4 border-t border-zinc-800/80 bg-zinc-900/30">
         {teamMembers && teamMembers.length > 0 && (
-          <div className="kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none" role="group" aria-label="Ask a member">
+          <ScrollRow className="kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none" role="group" aria-label="Ask a member">
             <span className="shrink-0 text-[11px] font-medium text-zinc-500 whitespace-nowrap">Ask:</span>
             {teamMembers.map((m) => (
               <button
@@ -1248,7 +1276,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <span>@{teamName} (Team)</span>
               </button>
             )}
-          </div>
+          </ScrollRow>
         )}
 
         {viewingHistory && (

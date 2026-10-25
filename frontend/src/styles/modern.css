@@ -185,6 +185,10 @@
   .kw-scroll-row::-webkit-scrollbar {
     display: none;
   }
+  .kw-scroll-row[data-at-end='true'] {
+    mask-image: none;
+    -webkit-mask-image: none;
+  }
   .kw-head-btn:not([aria-pressed='true']) {
     background-color: transparent;
     border-color: transparent;
