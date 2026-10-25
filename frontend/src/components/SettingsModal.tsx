@@ -13,6 +13,7 @@ import {
 import { isSfxMuted, playSfx, toggleSfxMute } from '../audio/chiptune';
 import { useAuth } from './AuthGate';
 import { SignedInDevices } from './DeviceSignIn';
+import { signedInDevicesVisible } from '../deviceSignIn';
 import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
 import { useEngines } from '../useEngines';
 import { LayaStatusRow } from './LayaStatus';
@@ -501,7 +502,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </div>
           </fieldset>
 
-          {authRequired && deviceLogin && <SignedInDevices />}
+          {signedInDevicesVisible(authRequired, deviceLogin) && <SignedInDevices />}
 
           {saveError && (
             <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 px-3 py-2 rounded-lg text-xs flex items-center gap-2" role="alert">

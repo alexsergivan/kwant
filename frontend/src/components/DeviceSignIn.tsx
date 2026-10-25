@@ -1,15 +1,19 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Loader2, MonitorSmartphone, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, Check, Copy, Loader2, MonitorSmartphone, QrCode, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import {
   type DeviceRequest,
+  type MintedLink,
   type PendingDevice,
   type SignedInSession,
   ago,
   countdown,
+  createSigninLink,
   decideDeviceRequest,
   listDeviceRequests,
   listSessions,
+  newLinkSession,
   pollDeviceRequest,
+  qrPath,
   revokeSession,
   startDeviceRequest,
   viaLabel,
@@ -393,6 +397,242 @@ export const SessionsList: React.FC<{
   );
 };
 
+// ---------------------------------------------------------------- Settings: add a phone or browser
+
+export type AddState =
+  | { kind: 'idle' }
+  | { kind: 'minting' }
+  | { kind: 'showing'; link: MintedLink }
+  | { kind: 'expired' }
+  | { kind: 'signed_in'; browser: string }
+  | { kind: 'error'; message: string };
+
+/** The QR code, drawn here: the sign-in code never goes to a QR service. */
+export const QrImage: React.FC<{ text: string }> = ({ text }) => {
+  const { size, d } = qrPath(text);
+  return (
+    <svg
+      viewBox={`0 0 ${size} ${size}`}
+      role="img"
+      aria-label="QR code for the one-time sign-in link"
+      shapeRendering="crispEdges"
+      className="block w-full h-auto rounded-lg bg-white"
+    >
+      <path d={d} fill="#000" />
+    </svg>
+  );
+};
+
+/** What "Add a phone or browser" shows in each state. Exported for tests. */
+export const AddDeviceView: React.FC<{
+  state: AddState;
+  now?: number;
+  copied?: 'yes' | 'failed' | null;
+  onShow: () => void;
+  onHide: () => void;
+  onCopy: () => void;
+}> = ({ state, now = Date.now(), copied = null, onShow, onHide, onCopy }) => {
+  if (state.kind === 'idle' || state.kind === 'minting' || state.kind === 'error')
+    return (
+      <div className="space-y-2">
+        <button type="button" onClick={onShow} disabled={state.kind === 'minting'} className={`${secondary} w-full sm:w-auto disabled:opacity-50`}>
+          {state.kind === 'minting' ? (
+            <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          ) : (
+            <QrCode size={14} aria-hidden="true" />
+          )}
+          Add a phone or browser
+        </button>
+        {state.kind === 'error' && (
+          <p className="flex items-center gap-1.5 text-[11px] text-rose-300" role="alert">
+            <AlertTriangle size={12} aria-hidden="true" /> Couldn’t make a sign-in code: {state.message}
+          </p>
+        )}
+      </div>
+    );
+
+  if (state.kind === 'signed_in')
+    return (
+      <div className="space-y-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4" role="status" aria-live="polite">
+        <p className="flex items-center gap-2 text-xs font-medium text-emerald-200">
+          <Check size={14} aria-hidden="true" /> Signed in ✓
+        </p>
+        <p className="text-[11px] text-zinc-400 leading-relaxed">
+          {state.browser || 'A new browser'} signed in with the code. It’s used up now. If that wasn’t you, sign it out below.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={onShow} className={secondary}>
+            Add another
+          </button>
+          <button type="button" onClick={onHide} className={secondary}>
+            Done
+          </button>
+        </div>
+      </div>
+    );
+
+  if (state.kind === 'expired')
+    return (
+      <div className="space-y-3 rounded-xl border border-zinc-700 bg-zinc-900/60 p-4" role="status" aria-live="polite">
+        <p className="text-xs text-zinc-300">The code expired, so it was hidden. Make a new one if you still need it.</p>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={onShow} className={secondary}>
+            <RefreshCw size={14} aria-hidden="true" /> New code
+          </button>
+          <button type="button" onClick={onHide} className={secondary}>
+            Hide
+          </button>
+        </div>
+      </div>
+    );
+
+  const { link } = state;
+  return (
+    <div className="space-y-3 rounded-xl border border-sky-500/30 bg-sky-500/5 p-4">
+      <p className="text-xs text-zinc-300 leading-relaxed">
+        Scan this with the phone’s camera, or open the link in the other browser. It signs that device in once.
+      </p>
+      <div className="mx-auto w-full max-w-[220px]">
+        <QrImage text={link.url} />
+      </div>
+      <p className="flex items-start gap-1.5 text-[11px] text-amber-200/90 leading-relaxed">
+        <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
+        Anyone who scans this can sign in once. Don’t share or screenshot it.
+      </p>
+      <div className="flex gap-2">
+        <label className="sr-only" htmlFor="add-device-link">
+          One-time sign-in link
+        </label>
+        <input
+          id="add-device-link"
+          readOnly
+          value={link.url}
+          onFocus={(e) => e.currentTarget.select()}
+          className="flex-1 min-w-0 rounded-lg bg-zinc-950 border border-zinc-700 px-2.5 text-[11px] font-mono text-zinc-300"
+        />
+        <button type="button" onClick={onCopy} className={`${secondary} shrink-0`}>
+          {copied === 'yes' ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+          {copied === 'yes' ? 'Copied' : 'Copy link'}
+        </button>
+      </div>
+      {copied === 'failed' && <p className="text-[11px] text-rose-300">Couldn’t copy. Select the link and copy it yourself.</p>}
+      <p className="text-[11px] text-zinc-400" role="timer" aria-live="off">
+        Works once · {countdown(link.expiresAt, now)} left
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={onShow} className={secondary}>
+          <RefreshCw size={14} aria-hidden="true" /> New code
+        </button>
+        <button type="button" onClick={onHide} className={secondary}>
+          <X size={14} aria-hidden="true" /> Hide
+        </button>
+      </div>
+    </div>
+  );
+};
+
+/** "Add a phone or browser": mints a one-time link, shows it as a QR code with a countdown, hides it
+ *  when it expires or the page is left, and says "Signed in ✓" once a new browser used it. */
+export const AddDevice: React.FC<{ onSignedIn: () => void }> = ({ onSignedIn }) => {
+  const [state, setState] = useState<AddState>({ kind: 'idle' });
+  const [now, setNow] = useState(() => Date.now());
+  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null);
+  // Sessions that existed when the code was made; null when the list couldn't be read
+  const known = useRef<Set<string> | null>(null);
+  const run = useRef(0);
+
+  const show = async () => {
+    const mine = ++run.current;
+    setState({ kind: 'minting' });
+    setCopied(null);
+    try {
+      known.current = await listSessions()
+        .then((list) => new Set(list.map((s) => s.id)))
+        .catch(() => null);
+      const link = await createSigninLink(window.location.origin);
+      if (mine !== run.current) return;
+      setNow(Date.now());
+      setState({ kind: 'showing', link });
+    } catch (e) {
+      if (mine !== run.current) return;
+      setState({ kind: 'error', message: e instanceof Error && e.message !== 'Failed to fetch' ? e.message : 'Could not reach the server.' });
+    }
+  };
+  const hide = useCallback(() => {
+    run.current++;
+    known.current = null;
+    setCopied(null);
+    setState({ kind: 'idle' });
+  }, []);
+
+  const showing = state.kind === 'showing' ? state.link : null;
+
+  // The countdown; at zero the code is dropped from the page
+  useEffect(() => {
+    if (!showing) return;
+    const tick = () => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= showing.expiresAt) {
+        setCopied(null);
+        setState({ kind: 'expired' });
+      }
+    };
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [showing]);
+
+  // Leaving the page (another tab, the app in the background) hides the code
+  useEffect(() => {
+    if (!showing) return;
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') hide();
+    };
+    document.addEventListener('visibilitychange', onHidden);
+    window.addEventListener('pagehide', hide);
+    return () => {
+      document.removeEventListener('visibilitychange', onHidden);
+      window.removeEventListener('pagehide', hide);
+    };
+  }, [showing, hide]);
+
+  // Watch the sessions list for the browser that used this code
+  useEffect(() => {
+    if (!showing || !known.current) return;
+    let stop = false;
+    const check = async () => {
+      const ids = known.current;
+      if (!ids) return;
+      const list = await listSessions().catch(() => null);
+      if (stop || !list) return;
+      const fresh = newLinkSession(list, ids);
+      if (fresh) {
+        run.current++;
+        setCopied(null);
+        setState({ kind: 'signed_in', browser: fresh.browser });
+        onSignedIn();
+      }
+    };
+    const id = window.setInterval(check, 3000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [showing, onSignedIn]);
+
+  const copy = async () => {
+    if (!showing) return;
+    try {
+      await navigator.clipboard.writeText(showing.url);
+      setCopied('yes');
+    } catch {
+      setCopied('failed');
+    }
+  };
+
+  return <AddDeviceView state={state} now={now} copied={copied} onShow={show} onHide={hide} onCopy={copy} />;
+};
+
 /** Settings section: who is signed in, with Sign out for each other browser. */
 export const SignedInDevices: React.FC = () => {
   const [state, setState] = useState<SessionsState>({ kind: 'loading' });
@@ -415,6 +655,7 @@ export const SignedInDevices: React.FC = () => {
       <p className="text-[11px] text-zinc-500 leading-relaxed">
         Browsers that can use kwant bots as you. Sign out any you don’t recognise; signing out here doesn’t change the access token.
       </p>
+      <AddDevice onSignedIn={load} />
       <SessionsList
         state={state}
         revoking={revoking}

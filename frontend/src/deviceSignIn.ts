@@ -1,6 +1,9 @@
 // Signing a new browser in from a signed-in device: the new browser shows a short code and waits;
 // a signed-in device sees "New device wants access" and approves or denies it. Also the list of
-// signed-in browsers in Settings, with Sign out for each.
+// signed-in browsers in Settings, with Sign out for each, and "Add a phone or browser": a one-time
+// sign-in link and its QR code, drawn here in the browser so the code never leaves it.
+
+import { encode } from 'uqr';
 
 /** What `POST /api/auth/device` started: the secret stays in this browser, the user code is shown. */
 export interface DeviceRequest {
@@ -116,4 +119,52 @@ export function ago(iso: string, now: number = Date.now()): string {
 export function countdown(expiresAt: number, now: number = Date.now()): string {
   const s = Math.max(0, Math.ceil((expiresAt - now) / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+// ---------------------------------------------------------------- "Add a phone or browser"
+
+/** Signed-in devices (and adding one) only exist where the server asks for sign-in and knows
+ *  device login; never on the person's own computer in local/no-token mode. */
+export function signedInDevicesVisible(authRequired: boolean, deviceLogin: boolean): boolean {
+  return authRequired && deviceLogin;
+}
+
+/** A one-time sign-in link minted on a signed-in device: works once, for `expires_in` seconds. */
+export interface MintedLink {
+  url: string;
+  expiresAt: number;
+}
+
+/** Asks for a one-time link (`POST /api/signin/links`). When kwnt doesn't know its public
+ *  address it answers `url: null`, and the link is built from this page's own address. */
+export async function createSigninLink(
+  origin: string,
+  now: number = Date.now(),
+  send: typeof fetch = (...a) => fetch(...a),
+): Promise<MintedLink> {
+  const res = await send('/api/signin/links', { method: 'POST', headers: json, body: '{}', cache: 'no-store' });
+  if (!res.ok) throw new Error(`The server answered ${res.status}.`);
+  const body = await res.json().catch(() => null);
+  if (!body || typeof body.code !== 'string' || !body.code) throw new Error('The server sent no sign-in code.');
+  const url = typeof body.url === 'string' && body.url ? body.url : `${origin}/#kwnt_token=${encodeURIComponent(body.code)}`;
+  const ttl = Number(body.expires_in) > 0 ? Number(body.expires_in) : 900;
+  return { url, expiresAt: now + ttl * 1000 };
+}
+
+/** The browser that signed in with a link since the QR was shown: a `via: "link"` session that
+ *  wasn't in the list when the code was minted. Ids rather than times, so clock skew can't fool it. */
+export function newLinkSession(sessions: SignedInSession[], knownIds: ReadonlySet<string>): SignedInSession | null {
+  return sessions.find((s) => s.via === 'link' && !s.current && !knownIds.has(s.id)) ?? null;
+}
+
+/** The QR code for `text` as one SVG path (dark modules) inside a `size` x `size` box, quiet zone included. */
+export function qrPath(text: string): { size: number; d: string } {
+  const qr = encode(text, { ecc: 'M', border: 4 });
+  let d = '';
+  qr.data.forEach((row, y) =>
+    row.forEach((dark, x) => {
+      if (dark) d += `M${x} ${y}h1v1h-1z`;
+    }),
+  );
+  return { size: qr.size, d };
 }
