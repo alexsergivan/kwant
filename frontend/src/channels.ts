@@ -63,8 +63,9 @@ export function channelBotIds(c: ChannelLike): string[] {
 /** Whether Laya picks who answers in `c`: #general once the space has 2+ bots, any other channel
  * on auto routing with 2+ bots of its own. */
 export function layaRoutes(c: ChannelLike, botsInSpace: number): boolean {
+  if ((c.routing_mode ?? 'auto') !== 'auto') return false;
   if (c.name === 'general') return botsInSpace >= 2;
-  return (c.routing_mode ?? 'auto') === 'auto' && channelBotIds(c).length >= 2;
+  return channelBotIds(c).length >= 2;
 }
 
 /** The line under the bot picker, for `picked` bots. */
