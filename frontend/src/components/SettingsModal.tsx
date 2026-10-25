@@ -12,6 +12,7 @@ import {
 } from '../continuity';
 import { isSfxMuted, playSfx, toggleSfxMute } from '../audio/chiptune';
 import { useAuth } from './AuthGate';
+import { SignedInDevices } from './DeviceSignIn';
 import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
 import { useEngines } from '../useEngines';
 import { LayaStatusRow } from './LayaStatus';
@@ -53,7 +54,7 @@ interface SettingsModalProps {
 /** App settings: shared by every space (keys, Laya, limits, notifications, sounds). Accounts,
  * bots and tools are per space, in Space settings. */
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0 }) => {
-  const { authRequired, signOut } = useAuth();
+  const { authRequired, deviceLogin, signOut } = useAuth();
   const computer = useComputerMode(isOpen);
   const engines = useEngines(isOpen);
   const [sfxMuted, setSfxMuted] = useState(isSfxMuted);
@@ -499,6 +500,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               ))}
             </div>
           </fieldset>
+
+          {authRequired && deviceLogin && <SignedInDevices />}
 
           {saveError && (
             <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 px-3 py-2 rounded-lg text-xs flex items-center gap-2" role="alert">

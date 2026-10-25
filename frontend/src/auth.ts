@@ -59,6 +59,8 @@ export interface AuthStatus {
   /** Person-only actions need the token even where the rest of the API doesn't (newer servers). */
   person_auth_required?: boolean;
   person_authenticated?: boolean;
+  /** This server can let a new browser in from a signed-in device (newer servers). */
+  device_login?: boolean;
 }
 
 /** Asks for the token for a person-only action, as if one had answered 401. */

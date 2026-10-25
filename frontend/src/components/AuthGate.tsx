@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Check, ChevronRight, Copy, KeyRound, Loader2, RefreshCw, Terminal, X } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
+import { DeviceRequestPrompt, DeviceWait } from './DeviceSignIn';
 import {
   PERSON_PROMPT_CLOSED_EVENT,
   PERSON_SIGNED_IN_EVENT,
@@ -18,17 +19,19 @@ import {
 interface AuthContextValue {
   /** True when this browser needs the API token (Docker, a VPS reached directly). */
   authRequired: boolean;
+  /** This server lets new browsers in from a signed-in one, and lists signed-in browsers. */
+  deviceLogin: boolean;
   signOut: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextValue>({ authRequired: false, signOut: async () => undefined });
+const AuthContext = createContext<AuthContextValue>({ authRequired: false, deviceLogin: false, signOut: async () => undefined });
 
 export const useAuth = () => useContext(AuthContext);
 
 type GateState =
   | { kind: 'checking' }
-  | { kind: 'ready'; authRequired: boolean }
-  | { kind: 'locked'; notice: string | null }
+  | { kind: 'ready'; authRequired: boolean; deviceLogin: boolean }
+  | { kind: 'locked'; notice: string | null; deviceLogin: boolean }
   | { kind: 'offline'; message: string };
 
 installUnauthorizedListener();
@@ -58,7 +61,12 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
     checking.current = true;
     try {
       const s = await fetchAuthStatus();
-      setState(s.auth_required && !s.authenticated ? { kind: 'locked', notice } : { kind: 'ready', authRequired: s.auth_required });
+      const deviceLogin = s.device_login === true;
+      setState(
+        s.auth_required && !s.authenticated
+          ? { kind: 'locked', notice, deviceLogin }
+          : { kind: 'ready', authRequired: s.auth_required, deviceLogin },
+      );
     } catch (e) {
       setState({ kind: 'offline', message: offlineMessage(e, navigator.onLine) });
     } finally {
@@ -93,16 +101,19 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
     try {
       await endSession();
     } finally {
-      setState({ kind: 'locked', notice: 'Signed out.' });
+      setState((prev) => ({ kind: 'locked', notice: 'Signed out.', deviceLogin: prev.kind === 'ready' && prev.deviceLogin }));
     }
   }, []);
 
   if (state.kind === 'ready') {
     return (
-      <AuthContext.Provider value={{ authRequired: state.authRequired, signOut }}>
+      <AuthContext.Provider value={{ authRequired: state.authRequired, deviceLogin: state.deviceLogin, signOut }}>
         {children}
+        {/* Only where browsers sign in: a Mac in local mode has no other devices to let in */}
+        {state.authRequired && state.deviceLogin && <DeviceRequestPrompt />}
         {personPrompt && (
           <PersonTokenDialog
+            deviceLogin={state.deviceLogin}
             onClose={() => {
               setPersonPrompt(false);
               window.dispatchEvent(new Event(PERSON_PROMPT_CLOSED_EVENT));
@@ -147,14 +158,18 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
             </button>
           </div>
         )}
-        {state.kind === 'locked' && <TokenForm notice={state.notice} onSignedIn={() => check()} />}
+        {state.kind === 'locked' && <TokenForm notice={state.notice} deviceLogin={state.deviceLogin} onSignedIn={() => check()} />}
       </div>
     </div>
   );
 };
 
 /** The token screen as a dialog, for an action only the person may take. The app stays open under it. */
-export const PersonTokenDialog: React.FC<{ onClose: () => void; onSignedIn: () => void }> = ({ onClose, onSignedIn }) => {
+export const PersonTokenDialog: React.FC<{ onClose: () => void; onSignedIn: () => void; deviceLogin?: boolean }> = ({
+  onClose,
+  onSignedIn,
+  deviceLogin = false,
+}) => {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -179,7 +194,7 @@ export const PersonTokenDialog: React.FC<{ onClose: () => void; onSignedIn: () =
         >
           <X size={14} />
         </button>
-        <TokenForm notice={null} onSignedIn={onSignedIn} personOnly onCancel={onClose} />
+        <TokenForm notice={null} onSignedIn={onSignedIn} personOnly onCancel={onClose} deviceLogin={deviceLogin} />
       </div>
     </div>
   );
@@ -309,12 +324,14 @@ export const WRONG_TOKEN = "That token isn't right. It has to come from the mach
 /** Only shown with the wrong-token error, not up front. */
 export const OWN_TOKEN_HINT = "Each install has its own token, so one copied from another computer won't work here.";
 
-export const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void; personOnly?: boolean; onCancel?: () => void }> = ({
-  notice,
-  onSignedIn,
-  personOnly = false,
-  onCancel,
-}) => {
+export const TokenForm: React.FC<{
+  notice: string | null;
+  onSignedIn: () => void;
+  personOnly?: boolean;
+  onCancel?: () => void;
+  /** The server can let this browser in from a signed-in device: that comes first. */
+  deviceLogin?: boolean;
+}> = ({ notice, onSignedIn, personOnly = false, onCancel, deviceLogin = false }) => {
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -369,10 +386,11 @@ export const TokenForm: React.FC<{ notice: string | null; onSignedIn: () => void
           {notice}
         </p>
       )}
+      {deviceLogin && <DeviceWait onSignedIn={onSignedIn} />}
       <div className="space-y-1.5">
         <p className="text-xs text-zinc-400 leading-relaxed">
-          Open the one-time sign-in link kwant bots printed when it started, or scan its QR code with your phone. Used or lost it? Make a new one on the
-          machine running kwant bots:
+          {deviceLogin ? 'Or open' : 'Open'} the one-time sign-in link kwant bots printed when it started, or scan its QR code with your phone. Used or lost
+          it? Make a new one on the machine running kwant bots:
         </p>
         <Command>{docker ? DOCKER_LINK_COMMAND : LINK_COMMAND}</Command>
       </div>
