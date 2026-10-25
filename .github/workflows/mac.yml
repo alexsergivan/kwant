@@ -122,6 +122,32 @@ jobs:
           du -sh "$app"
           echo "dmg=$PWD/$dmg" >> "$GITHUB_OUTPUT"
           echo "name=$(basename "$dmg")" >> "$GITHUB_OUTPUT"
+      # The app icon must carry every size Finder and the Dock ask for (16-512, each with @2x).
+      # Quick Look then renders the bundled app's icon the way Finder draws it, kept as an artifact.
+      - name: App icon sizes
+        working-directory: apps/mac/target/universal-apple-darwin/release/bundle
+        run: |
+          set -euo pipefail
+          res="macos/kwant.app/Contents/Resources"
+          icon=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" macos/kwant.app/Contents/Info.plist)
+          out="$RUNNER_TEMP/app-icon"
+          mkdir -p "$out"
+          iconutil --convert iconset "$res/${icon%.icns}.icns" --output "$out/icon.iconset"
+          for s in 16 32 128 256 512; do
+            for f in "icon_${s}x${s}.png:$s" "icon_${s}x${s}@2x.png:$((s * 2))"; do
+              file="$out/icon.iconset/${f%%:*}"
+              test "$(sips -g pixelWidth "$file" | awk '/pixelWidth/ {print $2}')" = "${f##*:}"
+              echo "ok ${f%%:*} ${f##*:}px"
+            done
+          done
+          qlmanage -t -s 512 -o "$out" macos/kwant.app > /dev/null
+          ls -l "$out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-icon
+          path: ${{ runner.temp }}/app-icon
+          if-no-files-found: error
+          retention-days: 14
       - name: Smoke test, headless (kwant --check)
         working-directory: apps/mac/target/universal-apple-darwin/release/bundle
         run: |
