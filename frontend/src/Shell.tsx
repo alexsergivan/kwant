@@ -23,6 +23,7 @@ import {
   spacesApi,
 } from './spaces';
 import { NotifyEvent, TOAST_KINDS, browserNotifyEnabled, notificationPermission, shouldShowOsNotification } from './continuity';
+import { isNotificationOpen, resyncPushOnLoad, showDeviceNotification, targetFromQuery } from './push';
 
 const SettingsModal = lazy(() => import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal })));
 
@@ -77,7 +78,9 @@ export const App: React.FC = () => {
   useEffect(() => {
     reload().then((list) => {
       if (!list) return;
-      const route = parseSpacePath(window.location.pathname);
+      // A notification's `/?space=…&channel=…` link counts as the chat's own address.
+      const q = targetFromQuery(window.location.search);
+      const route = q ? { spaceId: q.spaceId, channelId: q.channelId ?? undefined, botId: q.botId ?? undefined } : parseSpacePath(window.location.pathname);
       const s = pickSpace(list, route.spaceId, lastSpace());
       if (!s) return;
       const fromUrl = route.spaceId === s.id && (route.channelId || route.botId) ? { channelId: route.channelId, botId: route.botId } : null;
@@ -157,22 +160,34 @@ export const App: React.FC = () => {
           return;
         }
         if (!shouldShowOsNotification({ enabled: browserNotifyEnabled(), permission: notificationPermission(), hidden: document.hidden, kind: n.kind })) return;
-        try {
-          const note = new Notification(n.title, { body: n.body, tag: `kwnt-${sid}-${n.kind}-${n.channel_id ?? n.kwant_id}` });
-          note.onclick = () => {
-            window.focus();
-            go();
-            note.close();
-          };
-        } catch {
-          // Some mobile browsers only allow notifications from a service worker.
-        }
+        showDeviceNotification({ ...n, space_id: sid }, go).catch(() => undefined);
       } catch {
         // not an event we know
       }
     };
     return () => sse.close();
   }, [activeCount, switchTo, reload]);
+
+  // A tap on a notification from another space (sw.js posts it): switch there. The open space's
+  // own are SpaceApp's, which can also open a question or browser step.
+  useEffect(() => {
+    const sw = 'serviceWorker' in navigator ? navigator.serviceWorker : null;
+    if (!sw) return;
+    const onMessage = (e: MessageEvent) => {
+      const m = e.data;
+      if (!isNotificationOpen(m) || !m.space_id || m.space_id === currentRef.current) return;
+      if (!spaces?.some((s) => s.id === m.space_id)) return;
+      switchTo(m.space_id, m.channel_id ? { channelId: m.channel_id } : m.kwant_id ? { botId: m.kwant_id } : null);
+    };
+    sw.addEventListener('message', onMessage);
+    return () => sw.removeEventListener('message', onMessage);
+  }, [spaces, switchTo]);
+
+  // Re-tell the server about this device's push subscription (it drops one the push service
+  // rejected, or on sign-out), once per load.
+  useEffect(() => {
+    resyncPushOnLoad().catch(() => undefined);
+  }, []);
 
   const openCreate = useCallback(() => {
     playSfx('click');

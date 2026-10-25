@@ -10,6 +10,9 @@ import {
   notificationPermission,
   webhookUrlError,
 } from '../continuity';
+import { deviceNotifyHint, deviceNotifySupport, isAndroid, notifyEnv as browserNotifyEnv, subscribePush, swRegistration, unsubscribePush } from '../push';
+
+const readNotifyEnv = () => ({ ...browserNotifyEnv(), android: isAndroid(navigator) });
 import { isSfxMuted, playSfx, toggleSfxMute } from '../audio/chiptune';
 import { useAuth } from './AuthGate';
 import { SignedInDevices } from './DeviceSignIn';
@@ -74,6 +77,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [notifyOn, setNotifyOn] = useState<NotifyKind[]>(NOTIFY_KINDS.map((k) => k.id));
   const [browserNotify, setBrowserNotify] = useState(browserNotifyEnabled);
   const [permission, setPermission] = useState(notificationPermission);
+  const [notifyEnv] = useState(() => readNotifyEnv());
+  const support = deviceNotifySupport(notifyEnv);
+  const [notifyBusy, setNotifyBusy] = useState(false);
+  const [notifyError, setNotifyError] = useState<string | null>(null);
   const webhookError = webhookUrlError(webhookUrl);
   // Kept as typed text so a half-typed value can be shown with its error; null until loaded.
   const [limits, setLimits] = useState<Record<TurnLimitKey, string> | null>(null);
@@ -99,6 +106,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
       setSaveError(null);
       setPermission(notificationPermission());
       setBrowserNotify(browserNotifyEnabled());
+      setNotifyError(null);
       fetch('/api/settings')
         .then((r) => r.json())
         .then((data: SettingsData) => {
@@ -126,22 +134,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
   if (!isOpen) return null;
 
-  // Permission is only ever asked from this click, never on load.
+  // Permission is only ever asked from this click, never on load. On: this page's notifications
+  // and, where the browser has push, a subscription so they come with kwant closed. Off: both go.
   const toggleBrowserNotify = async () => {
+    if (notifyBusy) return;
     playSfx('click');
+    setNotifyError(null);
     if (browserNotify) {
       localStorage.setItem(BROWSER_NOTIFY_KEY, 'off');
       setBrowserNotify(false);
+      if (support === 'push') {
+        setNotifyBusy(true);
+        const reg = await swRegistration();
+        if (reg) await unsubscribePush(reg).catch(() => undefined);
+        setNotifyBusy(false);
+      }
       return;
     }
     let p = notificationPermission();
     if (p === 'default') p = await Notification.requestPermission();
     setPermission(p);
-    if (p === 'granted') {
-      localStorage.setItem(BROWSER_NOTIFY_KEY, 'on');
-      setBrowserNotify(true);
+    if (p !== 'granted') return;
+    localStorage.setItem(BROWSER_NOTIFY_KEY, 'on');
+    setBrowserNotify(true);
+    if (support !== 'push') return;
+    setNotifyBusy(true);
+    try {
+      const reg = await swRegistration();
+      if (!reg) throw new Error('The app isn’t set up in this browser yet. Reload the page and try again.');
+      await subscribePush(reg);
+    } catch (err) {
+      const why = (err instanceof Error ? err.message : 'unknown error').replace(/[.!?]?$/, (m) => m || '.');
+      setNotifyError(`Couldn’t set up notifications for when the app is closed: ${why} You’ll still get them while it’s open.`);
+    } finally {
+      setNotifyBusy(false);
     }
   };
+  const notifyHint = deviceNotifyHint({ support, permission, on: browserNotify, android: notifyEnv.android, standalone: notifyEnv.standalone });
+  const notifyBlocked = support === 'insecure' || support === 'ios-install' || support === 'unsupported';
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -419,29 +449,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               <span>Notifications</span>
             </legend>
 
-            <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
-              <div className="flex-1">
-                <p id="browser-notify-label" className="text-xs font-medium text-zinc-200">Notify me on this computer</p>
-                <p className="text-[11px] text-zinc-500">
-                  Only while this tab is in the background. Each notification names its space.
-                  {permission === 'denied' && <span className="text-amber-300"> Blocked by your browser; allow notifications for this site in its settings.</span>}
-                  {permission === 'unsupported' && <span className="text-amber-300"> This browser can't show notifications.</span>}
+            <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800" data-testid="device-notify">
+              <div className="flex-1 min-w-0">
+                <p id="browser-notify-label" className="text-xs font-medium text-zinc-200">Notify me on this device</p>
+                <p id="browser-notify-hint" className={`text-[11px] ${notifyHint.warn ? 'text-amber-300' : 'text-zinc-500'}`}>
+                  {notifyHint.text}
                 </p>
+                {notifyError && (
+                  <p className="mt-1 text-[11px] text-rose-400" role="alert">
+                    {notifyError}
+                  </p>
+                )}
               </div>
+              {/* The track stays 36×20; the button around it is a 44×44 tap target. */}
               <button
                 type="button"
                 role="switch"
                 aria-checked={browserNotify}
                 aria-labelledby="browser-notify-label"
-                disabled={permission === 'unsupported' || (permission === 'denied' && !browserNotify)}
+                aria-describedby="browser-notify-hint"
+                aria-busy={notifyBusy}
+                disabled={notifyBusy || (!browserNotify && (notifyBlocked || permission === 'denied'))}
                 onClick={toggleBrowserNotify}
-                className={`relative shrink-0 w-9 h-5 rounded-full transition-colors disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-                  browserNotify ? 'bg-sky-600' : 'bg-zinc-700'
-                }`}
+                className="group shrink-0 -m-3 p-3 rounded-full disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
               >
-                <span
-                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${browserNotify ? 'translate-x-4' : ''}`}
-                />
+                <span className={`relative block w-9 h-5 rounded-full transition-colors ${browserNotify ? 'bg-sky-600' : 'bg-zinc-700'}`}>
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${browserNotify ? 'translate-x-4' : ''}`}
+                  />
+                </span>
               </button>
             </div>
 

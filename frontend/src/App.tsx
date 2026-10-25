@@ -63,6 +63,7 @@ import {
 import { Profile, describeProfileSwitch, profilesApi } from './profiles';
 import {
   NotifyEvent,
+  NotifyKind,
   SearchHit,
   TOAST_KINDS,
   browserNotifyEnabled,
@@ -93,6 +94,7 @@ import { claudeNeedsSignIn } from './claudeLogin';
 import { personFetch } from './auth';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
+import { isNotificationOpen, showDeviceNotification } from './push';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -337,19 +339,31 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       return;
     }
     if (!shouldShowOsNotification({ enabled: browserNotifyEnabled(), permission: notificationPermission(), hidden: document.hidden, kind: n.kind })) return;
-    try {
-      const note = new Notification(n.title, { body: n.body, tag: `kwnt-${n.kind}-${n.channel_id ?? n.kwant_id}` });
-      note.onclick = () => {
-        window.focus();
-        if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
-        else if (n.kind === 'human_step' && openHumanStepRef.current(n.kwant_id)) setIsVmPaneOpen(true);
-        else if (!(n.kind === 'question_asked' && openQuestionRef.current(n.kwant_id))) openTargetRef.current(target);
-        note.close();
-      };
-    } catch {
-      // Some mobile browsers only allow notifications from a service worker.
-    }
+    showDeviceNotification({ ...n, space_id: n.space_id ?? space.id }, () => openNotifiedRef.current(n)).catch(() => undefined);
   };
+  // A tap on a notification: the bot's skill, question or browser step, else its chat.
+  const openNotified = (n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id'>) => {
+    const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
+    if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
+    else if (n.kind === 'human_step' && openHumanStepRef.current(n.kwant_id)) setIsVmPaneOpen(true);
+    else if (!(n.kind === 'question_asked' && openQuestionRef.current(n.kwant_id))) openTargetRef.current(target);
+  };
+  const openNotifiedRef = useRef(openNotified);
+  openNotifiedRef.current = openNotified;
+  // Taps on notifications shown through the service worker (pushes and this page's own) arrive
+  // here; another space's are the shell's.
+  useEffect(() => {
+    const sw = 'serviceWorker' in navigator ? navigator.serviceWorker : null;
+    if (!sw) return;
+    const onMessage = (e: MessageEvent) => {
+      const m = e.data;
+      if (!isNotificationOpen(m) || !m.kwant_id) return;
+      if (m.space_id && m.space_id !== space.id) return;
+      openNotifiedRef.current({ kind: m.kind as NotifyKind, kwant_id: m.kwant_id, channel_id: m.channel_id });
+    };
+    sw.addEventListener('message', onMessage);
+    return () => sw.removeEventListener('message', onMessage);
+  }, [space.id]);
   const showNotificationRef = useRef(showNotification);
   showNotificationRef.current = showNotification;
   const refreshProfiles = useCallback(() => {
