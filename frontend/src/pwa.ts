@@ -42,8 +42,8 @@ export function installHintKind(s: {
 
 export const INSTALL_HINT_DISMISSED_KEY = 'kwnt.installHint.dismissed';
 
-/** Where the Mac app is downloaded: the newest release, or the releases list until there is one. */
-export const MAC_DOWNLOAD_URL = 'https://github.com/alexsergivan/kwant/releases/latest';
+/** The Mac app's .dmg in the newest release (published by the mac workflow on a mac-v* tag). */
+export const MAC_DOWNLOAD_URL = 'https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg';
 
 /** Safari on a Mac, where installing is File, then Add to Dock. Not iPad, not Chrome or Firefox. */
 export function isMacSafari(nav: Pick<Navigator, 'userAgent' | 'maxTouchPoints'>): boolean {
