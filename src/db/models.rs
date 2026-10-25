@@ -70,10 +70,35 @@ pub struct Channel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewChannel {
     pub name: String,
+    #[serde(default)]
     pub description: Option<String>,
+    /// `""` from the API: the first member leads.
+    #[serde(default)]
     pub lead_kwant_id: String,
+    #[serde(default)]
     pub member_kwants: Vec<String>,
+    /// One of [`ROUTING_MODES`]; the API defaults it to `auto`.
+    #[serde(default = "default_routing_mode")]
     pub routing_mode: String,
+}
+
+/// `auto`: Laya picks who answers each message (once the channel has two or more bots).
+/// `lead`: the lead answers everything.
+pub const ROUTING_MODES: [&str; 2] = ["auto", "lead"];
+
+pub fn default_routing_mode() -> String {
+    "auto".into()
+}
+
+/// The lead first, then the other members, each once.
+pub fn members_with_lead(lead: &str, members: &[String]) -> Vec<String> {
+    let mut out = vec![lead.to_string()];
+    for m in members {
+        if !out.contains(m) {
+            out.push(m.clone());
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

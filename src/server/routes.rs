@@ -383,6 +383,17 @@ pub async fn create_channel(
     if payload.name.is_empty() {
         return Err(api_error(StatusCode::BAD_REQUEST, "a channel needs a name"));
     }
+    if !crate::db::models::ROUTING_MODES.contains(&payload.routing_mode.as_str()) {
+        return Err(api_error(StatusCode::BAD_REQUEST, "routing_mode must be \"auto\" or \"lead\""));
+    }
+    if payload.lead_kwant_id.is_empty() {
+        match payload.member_kwants.first() {
+            Some(first) => payload.lead_kwant_id = first.clone(),
+            None => return Err(api_error(StatusCode::BAD_REQUEST, "a channel needs at least one bot")),
+        }
+    }
+    // The lead is always one of the bots Laya picks from
+    payload.member_kwants = crate::db::models::members_with_lead(&payload.lead_kwant_id, &payload.member_kwants);
     let clash = format!("a channel called #{} already exists in this space", payload.name);
     let channels = state.db.list_channels(&space).await.map_err(|e| db_error(&e, ""))?;
     if channels.iter().any(|c| c.name.eq_ignore_ascii_case(&payload.name)) {
@@ -2635,7 +2646,8 @@ async fn send_chat_inner(
                 } else {
                     let member_ids: Vec<String> =
                         serde_json::from_str(&channel.member_kwants).unwrap_or_default();
-                    member_ids
+                    // Channels made before the lead was always a member still count the lead
+                    crate::db::models::members_with_lead(&channel.lead_kwant_id, &member_ids)
                         .iter()
                         .filter_map(|mid| all_kwants.iter().find(|k| &k.id == mid).cloned())
                         .collect()

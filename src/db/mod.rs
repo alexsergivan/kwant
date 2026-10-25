@@ -367,6 +367,23 @@ impl Database {
             .ok_or_else(|| DbError::Sqlx(sqlx::Error::RowNotFound))
     }
 
+    /// Sets who is in a channel and how it routes. `members` must already hold the lead.
+    /// `Ok(false)` when there is no such channel.
+    pub async fn set_channel_routing(&self, id: &str, lead: &str, members: &[String], routing_mode: &str) -> Result<bool, DbError> {
+        let Some(channel) = self.get_channel(id).await? else {
+            return Ok(false);
+        };
+        self.check_members(&SpaceId::new(channel.space_id), lead, members).await?;
+        let done = sqlx::query("UPDATE channels SET lead_kwant_id = ?, member_kwants = ?, routing_mode = ? WHERE id = ?")
+            .bind(lead)
+            .bind(serde_json::to_string(members)?)
+            .bind(routing_mode)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(done.rows_affected() == 1)
+    }
+
     pub async fn list_channels(&self, space: &SpaceId) -> Result<Vec<Channel>, DbError> {
         let rows = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE space_id = ? ORDER BY created_at ASC")
             .bind(space.as_str())
