@@ -66,12 +66,11 @@
 <h2 id="software">The kwant software</h2>
 <p>You install kwant on your own computer or server and you are in charge of it. Your bots, chats, files, memory, accounts and passwords are stored there, in kwant's data folder (<code>~/.kwnt</code> by default). We don't operate any kwant service, and nothing you do in kwant reaches us. If you run kwant for other people, you are the controller for their data.</p>
 <h3>What kwant connects to on its own</h3>
-<p>Without any setup, kwant makes only these connections:</p>
+<p>Without any setup, kwant makes only this connection:</p>
 <ul>
   <li><strong>Routing model (Laya).</strong> On first start, kwant installs its local routing model: Python packages from <a href="https://pypi.org" rel="noopener">PyPI</a> and the PyTorch download server, a Python installer (uv, from Astral via GitHub) if your computer has no Python, and the model files (about 420 MB) from <a href="https://huggingface.co/privacy" rel="noopener">Hugging Face</a>. These servers see your IP address. After that the model runs on your machine. Start kwant with <code>--no-laya</code> or set <code>KWNT_LAYA_MANAGED=0</code> to skip it.</li>
-  <li><strong>Fonts in the web app.</strong> kwant's web interface and the Mac app load the Inter and JetBrains Mono fonts from Google Fonts, so Google sees your IP address when you open it (<a href="https://developers.google.com/fonts/faq/privacy" rel="noopener">Google Fonts privacy</a>).</li>
 </ul>
-<p>There is no update check, crash reporting or usage statistics.</p>
+<p>The web interface and the Mac app use fonts that ship with kwant and load nothing from other servers. There is no update check, crash reporting or usage statistics.</p>
 <h3>What kwant connects to when you set it up</h3>
 <p>Everything else happens only after you add an account, a connection or a tool, and sends what you or your bots give it to that service, under that service's terms:</p>
 <ul>
