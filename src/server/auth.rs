@@ -255,7 +255,7 @@ fn is_any_bind(host: &str) -> bool {
             .is_ok_and(|ip| ip.is_unspecified())
 }
 
-/// The link `kwnt token` prints for the configured bind.
+/// A sign-in link on the configured bind (`<this-host>` when kwnt listens on every address).
 pub fn token_command_link(host: &str, port: u16, token: &str) -> String {
     sign_in_link(if is_any_bind(host) { THIS_HOST } else { host }, port, token)
 }

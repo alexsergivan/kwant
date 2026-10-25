@@ -70,8 +70,8 @@ pub enum Commands {
     /// List channels stored in the local database
     Channels,
 
-    /// Print the link that signs a browser on another machine in (`--raw`: just the token, for scripts).
-    /// Only reads the existing token; never creates one
+    /// Print a new one-time sign-in link for another device, like `kwnt signin-link` (`--raw`: just
+    /// the API token, for scripts). Only reads the existing token; never creates one
     Token {
         /// Print only the token, for `Authorization: Bearer` in scripts
         #[arg(long)]
@@ -206,7 +206,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if raw {
                 println!("{token}");
             } else {
-                println!("{}", kwnt::server::auth::token_command_link(&config.host, config.port, &token));
+                // A one-time link, never the token itself: the token would make a link that works
+                // forever for whoever sees this output.
+                let where_token = if kwnt::server::auth::env_token().is_some() {
+                    "the KWNT_API_TOKEN value".to_string()
+                } else {
+                    config.data_dir.join("api-token").display().to_string()
+                };
+                if let Err(e) = kwnt::server::signin::cli_link(&config, None, true).await {
+                    eprintln!("kwnt token: {e}");
+                    eprintln!("The API token still works on the sign-in screen: it's {where_token} (`kwnt token --raw` prints it).");
+                    std::process::exit(1);
+                }
+                println!("   Prefer typing the token? It's {where_token} (`kwnt token --raw` prints it).");
             }
         }
         Some(Commands::SigninLink { url, no_qr }) => {

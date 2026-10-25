@@ -79,8 +79,8 @@ the server only as a SHA-256 hash in `<data_dir>/sessions.json` (0600). Signing 
 (`DELETE /api/auth/session`) ends that session on the server. The cookie never holds the API token;
 browsers that signed in before sessions keep working with the token cookie they have.
 
-`kwnt token` prints a link that carries the API token itself (reusable, so keep it to yourself), and
-`kwnt token --raw` just the token, for scripts, which send `Authorization: Bearer <token>`. The token
+`kwnt token` prints a new one-time link, like `kwnt signin-link`, and says where the token is for
+typing by hand; it never prints the token. `kwnt token --raw` prints just the token, for scripts, which send `Authorization: Bearer <token>`. The token
 lives in `<data_dir>/api-token` (mode 0600), or set `KWNT_API_TOKEN` (16+ characters). Run `kwnt token` as the
 user that runs `kwnt serve` (`./target/release/kwnt` from a source build without kwnt on the `PATH`):
 as any other user it fails with an error, because it can't find or read the token file (with the
