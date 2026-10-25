@@ -1234,7 +1234,7 @@ pub struct Notification {
     pub body: String,
 }
 
-/// Sends `n` to the UI and the webhook, if the user wants this kind. The body never holds chat
+/// Sends `n` to the UI, the webhook and push subscriptions, if the user wants this kind. The body never holds chat
 /// text, tool arguments or settings, so nothing secret reaches the phone service.
 pub async fn notify(state: &AppState, n: Notification) {
     if !notify_on(state).await.iter().any(|k| k == n.kind) {
@@ -1251,6 +1251,11 @@ pub async fn notify(state: &AppState, n: Notification) {
         Some((id, name, _)) => (Some(id), Some(name)),
         None => (None, None),
     };
+    if !state.push.subscriptions().is_empty() {
+        let payload = super::push::Payload::new(n.kind, &title, &body, space_id.clone(), n.channel_id.clone(), n.kwant_id.clone());
+        let push = state.push.clone();
+        tokio::spawn(async move { push.send_all(&payload).await });
+    }
     let _ = state.event_sender.send(RuntimeEvent::Notify {
         kind: n.kind.into(),
         kwant_id: n.kwant_id,

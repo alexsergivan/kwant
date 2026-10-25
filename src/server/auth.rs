@@ -328,6 +328,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "setup", ..] => true,
         // Sign-in links, device approvals and sessions: who else may sign in as the person
         ["", "api", "signin", ..] => true,
+        // Web Push: where the person's notifications go
+        ["", "api", "push", ..] => true,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "kwants" | "teams", _] => *method == Method::DELETE,
@@ -582,6 +584,9 @@ pub async fn create_session(
 /// `DELETE /api/auth/session`: ends this browser's session and clears the cookie.
 pub async fn delete_session(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(secret) = cookie_token(&headers) {
+        if let Some(id) = state.api_token.signin.session_id(secret) {
+            state.push.drop_session(&id);
+        }
         state.api_token.signin.revoke_secret(secret);
     }
     let mut resp = StatusCode::NO_CONTENT.into_response();
@@ -726,6 +731,8 @@ pub async fn sessions(State(state): State<AppState>, headers: HeaderMap) -> Resp
 
 /// `DELETE /api/signin/sessions/:id` (person only): signs that browser out. 404 when unknown.
 pub async fn revoke_session(State(state): State<AppState>, axum::extract::Path(id): axum::extract::Path<String>) -> Response {
+    // A signed-out phone stops getting notifications too
+    state.push.drop_session(&id);
     if state.api_token.signin.revoke(&id) {
         StatusCode::NO_CONTENT.into_response()
     } else {
@@ -822,6 +829,9 @@ mod tests {
         assert!(person_only(&get, "/api/setup/status"));
         assert!(person_only(&post, "/api/setup/install"));
         assert!(person_only(&get, "/api/setup/jobs/setup-1"));
+        assert!(person_only(&get, "/api/push/key"));
+        assert!(person_only(&post, "/api/push/subscribe"));
+        assert!(person_only(&post, "/api/push/unsubscribe"));
         assert!(person_only(&post, "/api/connections/composio"));
         assert!(person_only(&get, "/api/parallel/prices"));
         assert!(person_only(&post, "/api/parallel/scenarios"));

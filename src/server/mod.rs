@@ -37,6 +37,7 @@ pub mod parallel_routes;
 pub mod document_routes;
 pub mod connections;
 pub mod setup_routes;
+pub mod push;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -101,6 +102,8 @@ pub struct AppState {
     pub documents: Arc<crate::documents::extract::Desk>,
     /// The Setup checklist's install jobs (one at a time).
     pub setup: Arc<setup_routes::SetupJobs>,
+    /// Web Push to the person's installed app: the VAPID key and subscriptions.
+    pub push: Arc<push::Push>,
 }
 
 impl AppState {
@@ -147,6 +150,7 @@ impl AppState {
             parallel: Default::default(),
             documents: Default::default(),
             setup: Default::default(),
+            push: Arc::new(push::Push::load(&config_data_dir)),
         }
     }
 
@@ -172,6 +176,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/signin/requests/deny", post(auth::device_deny))
         .route("/api/signin/sessions", get(auth::sessions))
         .route("/api/signin/sessions/:id", delete(auth::revoke_session))
+        .route("/api/push/key", get(push::key))
+        .route("/api/push/subscribe", post(push::subscribe))
+        .route("/api/push/unsubscribe", post(push::unsubscribe))
         .route("/api/profiles", get(profile_routes::list).post(profile_routes::create))
         .route("/api/profiles/:id", axum::routing::patch(profile_routes::update).delete(profile_routes::remove))
         .route("/api/profiles/:id/key", put(profile_routes::set_key).delete(profile_routes::delete_key))
