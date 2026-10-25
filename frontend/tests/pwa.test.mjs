@@ -277,7 +277,7 @@ test('the install offer is kept from page load and cleared once used or installe
 });
 
 test('the Mac download goes to the newest release', () => {
-  assert.equal(pwa.MAC_DOWNLOAD_URL, 'https://github.com/alexsergivan/kwant/releases/latest');
+  assert.equal(pwa.MAC_DOWNLOAD_URL, 'https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg');
 });
 
 test('standalone means the installed app, on iOS or Android', () => {

@@ -1,28 +1,67 @@
 name: mac
 
-# Builds kwant for Mac: a universal (Apple silicon + Intel), ad-hoc-signed .dmg as a workflow
-# artifact. No release and no tag: this only proves the app builds and starts.
+# Builds kwant for Mac: a universal (Apple silicon + Intel), ad-hoc-signed .dmg.
+# On pull requests and manual runs it is only a workflow artifact, proving the app builds and starts.
+# Pushing a mac-v* tag (mac-v0.1.0, or mac-v0.2.0-rc.1 for a prerelease) also publishes a GitHub
+# release with the .dmg as kwant_universal.dmg, which the site's "Download for Mac" links to via
+# releases/latest/download/kwant_universal.dmg. The tag must match apps/mac's version.
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - "apps/mac/**"
       - ".github/workflows/mac.yml"
+  push:
+    tags:
+      - "mac-v*"
 
 permissions:
   contents: read
 
 concurrency:
   group: mac-${{ github.ref }}
-  cancel-in-progress: true
+  # never cancel a release half-way
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # A tag that doesn't match the app's version fails here, before the 20-minute Mac build.
+  version:
+    name: version
+    if: startsWith(github.ref, 'refs/tags/mac-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches apps/mac version
+        id: check
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#mac-v}"
+          base="${version%%-*}"
+          cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' apps/mac/Cargo.toml | head -1)
+          tauri=$(python3 -c 'import json;print(json.load(open("apps/mac/tauri.conf.json"))["version"])')
+          echo "tag $TAG -> $version (base $base); Cargo.toml $cargo; tauri.conf.json $tauri"
+          if [ "$base" != "$cargo" ] || [ "$base" != "$tauri" ]; then
+            echo "::error::tag $TAG doesn't match apps/mac version $cargo (tauri.conf.json $tauri)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$version" != "$base" ]; then echo "prerelease=true"; else echo "prerelease=false"; fi >> "$GITHUB_OUTPUT"
+
   dmg:
     name: dmg
+    needs: version
+    # runs on PRs and manual runs (version skipped), and on tags only after the version check passed
+    if: ${{ !failure() && !cancelled() }}
     runs-on: macos-14
     timeout-minutes: 60
     steps:
@@ -99,3 +138,49 @@ jobs:
           path: ${{ steps.bundle.outputs.dmg }}
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: release
+    needs: [version, dmg]
+    if: startsWith(github.ref, 'refs/tags/mac-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # the only job that can write: it creates the release and uploads the .dmg
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          dmg=$(find dist -name '*.dmg' | head -1)
+          test -n "$dmg"
+          cp "$dmg" kwant_universal.dmg
+          sha256sum kwant_universal.dmg > kwant_universal.dmg.sha256
+          cat > notes.md <<NOTES
+          kwant for Mac $VERSION: one universal app for Apple silicon and Intel Macs (macOS 11 or later).
+
+          **Install:** open \`kwant_universal.dmg\` and drag kwant to Applications.
+
+          **First open:** the app is not notarized by Apple yet, so macOS blocks it the first time.
+          1. Open kwant from Applications. macOS says it can't check it for malicious software. Click **Done** (or **OK**).
+          2. Open **System Settings → Privacy & Security**, scroll down to the message about kwant and click **Open Anyway**.
+          3. Confirm with **Open Anyway** and your password. From then on it opens normally.
+
+          The app runs kwant on your Mac with the same data folder as \`kwnt serve\` (\`~/.kwnt\`) and stays in the menu bar when you close the window.
+
+          SHA-256: \`$(cut -d' ' -f1 kwant_universal.dmg.sha256)\`
+          NOTES
+          sed -i 's/^          //' notes.md
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); else flags+=(--latest); fi
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag \
+            --title "kwant for Mac $VERSION" --notes-file notes.md "${flags[@]}" \
+            kwant_universal.dmg kwant_universal.dmg.sha256
