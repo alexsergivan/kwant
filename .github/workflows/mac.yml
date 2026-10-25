@@ -174,6 +174,8 @@ jobs:
           2. Open **System Settings → Privacy & Security**, scroll down to the message about kwant and click **Open Anyway**.
           3. Confirm with **Open Anyway** and your password. From then on it opens normally.
 
+          On macOS 14 or earlier you can instead right-click kwant in Applications and choose **Open**.
+
           The app runs kwant on your Mac with the same data folder as \`kwnt serve\` (\`~/.kwnt\`) and stays in the menu bar when you close the window.
 
           SHA-256: \`$(cut -d' ' -f1 kwant_universal.dmg.sha256)\`
