@@ -45,6 +45,16 @@ jobs:
           path: frontend/dist
           retention-days: 1
 
+  # The built website in site/: headings, meta, links, sitemap, and no unfilled {{PLACEHOLDER}} (operator details on the
+  # legal pages), so a half-filled page can't reach kwant.si unnoticed.
+  site:
+    name: site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check_site.py
+        run: python3 scripts/check_site.py
+
   rust:
     name: rust
     runs-on: ubuntu-latest

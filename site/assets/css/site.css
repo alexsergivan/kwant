@@ -204,7 +204,8 @@ section { padding: 104px 0; }
 
 /* Footer */
 .site-footer { background: var(--panel); color: var(--v8); padding: 56px 0 64px; }
-.site-footer .wrap { display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr)); gap: 32px; }
+.site-footer .wrap { display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(4, minmax(0, 1fr)); gap: 32px; }
+.foot-legal { grid-column: 1 / -1; padding-top: 24px; border-top: 1px solid rgba(255, 255, 255, .12); font-size: 13px; color: var(--v7); }
 .site-footer .brand { color: #fff; }
 .foot-brand p { margin-top: 16px; max-width: 340px; font-size: 15px; color: var(--v7); }
 .site-footer h2 { font: 600 13px var(--sans); color: var(--v7); margin-bottom: 12px; }
@@ -295,6 +296,9 @@ dialog.lightbox button { min-height: 40px; padding: 0 16px; border: 0; border-ra
 .prose li::marker { color: var(--v5); }
 .prose strong { color: var(--ink); font-weight: 600; }
 .prose figure { margin: 30px 0; }
+.legal .prose { padding-left: 0; }
+.prose .updated { margin-top: 10px; color: var(--dim); font-size: 14px; }
+.prose .placeholder { background: #fff3c4; color: #5c3d00; padding: 0 4px; border-radius: 3px; }
 .prose figcaption { margin-top: 10px; color: var(--dim); font-size: 14px; }
 pre { position: relative; margin: 20px 0 0; padding: 18px 20px; overflow-x: auto; background: var(--panel); color: #f1edff; border-radius: 12px; font-size: 14px; line-height: 1.6; }
 pre code { font-size: 14px; }
@@ -331,7 +335,7 @@ td code { white-space: nowrap; }
   .steps { grid-template-columns: minmax(0, 1fr); max-width: 560px; }
   .runs-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .outro-panel .crt { max-width: 480px; }
-  .site-footer .wrap { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .site-footer .wrap { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .foot-brand { grid-column: 1 / -1; }
   .flist { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

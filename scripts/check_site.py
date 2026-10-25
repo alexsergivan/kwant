@@ -113,6 +113,8 @@ def main():
         p = Page()
         p.feed(path.read_text())
         err = lambda msg: errors.append(f"{rel}: {msg}")
+        for name in sorted(set(re.findall(r"\{\{([A-Za-z_:]+)", path.read_text()))):
+            err(f"unfilled placeholder {{{{{name}}}}} (set it in OPERATOR in scripts/build_site.py)")
         if p.headings.count(1) != 1:
             err(f"{p.headings.count(1)} h1 elements")
         for prev, cur in zip(p.headings, p.headings[1:]):

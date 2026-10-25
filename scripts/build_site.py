@@ -13,6 +13,7 @@ Shortcodes in the HTML:
   {{shot:NAME|ALT|SIZES}}                 a zoomable responsive screenshot (desktop-* or phone-*)
   {{video:NAME|LABEL}}                    a muted looping demo clip with its poster
   {{install:ID}}                          the install command box with macOS/Linux and Docker tabs
+  {{OPERATOR_NAME}} {{CONTACT_EMAIL}} {{POSTAL_ADDRESS}}   the site operator, from OPERATOR below (marked placeholder while empty)
   {{avatar:ROLE}}                         a kwant app avatar (the same CRT-framed creature the app draws)
 
 Every local asset URL in the pages and in site.css gets a `?v=<content hash>` query, so a deploy never pairs new HTML
@@ -41,6 +42,13 @@ SRC = ROOT / "site-src"
 OUT = ROOT / "site"
 SITE_URL = "https://kwant.si"
 GITHUB = "https://github.com/alexsergivan/kwant"
+# Who runs kwant.si, for the privacy policy and legal notice ({{OPERATOR_NAME}} etc. in the page sources).
+# An empty value leaves the marked placeholder in the page, and check_site.py fails until it is filled in.
+OPERATOR = {
+    "OPERATOR_NAME": "",
+    "CONTACT_EMAIL": "",
+    "POSTAL_ADDRESS": "",  # one line, commas between parts
+}
 
 DOC_GROUPS = [
     ("Get started", [("quickstart", "Quickstart"), ("install", "Install & run")]),
@@ -199,8 +207,18 @@ def install(uid):
     )
 
 
+def operator(key):
+    value = OPERATOR[key].strip()
+    if not value:
+        return f'<span class="placeholder">{{{{{key}}}}}</span>'
+    if key == "CONTACT_EMAIL":
+        return f'<a href="mailto:{html.escape(value, quote=True)}">{html.escape(value)}</a>'
+    return html.escape(value)
+
+
 def expand(body, root):
     body = body.replace("{{root}}", root)
+    body = re.sub(r"\{\{(" + "|".join(OPERATOR) + r")\}\}", lambda m: operator(m[1]), body)
     body = re.sub(r"\{\{install:([a-z0-9-]+)\}\}", lambda m: install(m[1]), body)
     body = re.sub(r"\{\{avatar:([a-z_]+)\}\}", lambda m: avatar(m[1]), body)
     body = re.sub(r"\{\{shot:([^|}]+)\|([^|}]+)(?:\|([^}]*))?\}\}", lambda m: shot(root, m[1], m[2], m[3]), body)
@@ -256,6 +274,14 @@ def footer(root):
       <a href="{GITHUB}/issues" rel="noopener">Issues</a>
       <a href="{GITHUB}/blob/main/SECURITY.md" rel="noopener">Security</a>
     </nav>
+    <nav aria-label="Legal">
+      <h2>Legal</h2>
+      <a href="{root}privacy.html">Privacy</a>
+      <a href="{root}terms.html">Terms of use</a>
+      <a href="{root}legal.html">Legal notice</a>
+      <a href="{root}terms.html#license">License</a>
+    </nav>
+    <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
   </div>
 </footer>
 <script src="{root}assets/js/site.js" defer></script>
