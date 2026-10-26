@@ -94,6 +94,8 @@ fn card_meta(q: &Question) -> Value {
         "choices": q.choice_list(),
         "status": q.status,
         "answer": q.answer,
+        "why_you": q.why_you,
+        "checked": q.checked,
     })
 }
 
@@ -140,6 +142,9 @@ async fn close(state: &AppState, id: &str, status: &str, answer: Option<&str>) -
     let _ = state.db.close_waiting_for_question(id).await;
     let q = state.db.get_question(id).await.ok().flatten()?;
     changed(state, &q).await;
+    if status == "answered" {
+        super::decide::note_answer(state, &q).await;
+    }
     Some(q)
 }
 
@@ -152,7 +157,28 @@ pub const ASK_USER_DESCRIPTION: &str = "Ask the user one short question, only wh
     with no sensible default. For a reversible choice (wording, order, which of two fine options, a setting that can be \
     changed later) don't ask: pick the sensible option, state the assumption in your reply and continue. \
     Give 2 to 5 short choices; the user can also type their own answer. Your turn waits for the answer \
-    (a few minutes at most) and the tool returns it. Don't ask what you can find out or decide yourself.";
+    (a few minutes at most) and the tool returns it. Don't ask what you can find out or decide yourself. \
+    Say why only the user can answer (why_you) and what you already checked (checked).";
+
+/// Why only the person can answer: the values `ask_user`'s `why_you` takes.
+pub const WHY_YOU: [&str; 6] = ["irreversible", "outside", "money", "secret_or_signin", "taste_no_signal", "missing_after_research"];
+
+/// Longest `checked` kept, in characters.
+pub const MAX_CHECKED_CHARS: usize = 500;
+
+/// Person decision notes after which "no signal on their taste" stops being a reason to ask.
+pub const TASTE_NOTES: usize = 3;
+
+/// The tool's answer to an `ask_user` call without a reason.
+pub const DECIDE_YOURSELF: &str = "Not asked: decide it yourself. Pick the option you think is best, apply it, and say in \
+    your reply what you chose, why, and that the user can change it. If only the user can answer (it can't be undone, \
+    reaches outside, costs money, needs a secret or sign-in, or research found nothing), call ask_user again with why_you \
+    and checked (what you already looked at).";
+
+/// The tool's answer to "no signal on their taste" once there are notes on how the person decides.
+pub const PREDICT_TASTE: &str = "Not asked: there are notes on how the user usually decides (see [How the person usually \
+    decides]). Predict their pick from those, apply it, and say it was predicted from their earlier choices and how to \
+    change it.";
 
 pub fn tools() -> Vec<Value> {
     vec![json!({
@@ -169,8 +195,15 @@ pub fn tools() -> Vec<Value> {
                     "maxItems": 5,
                     "description": "2 to 5 short answers to pick from (max 80 characters each)",
                 },
+                "why_you": {
+                    "type": "string",
+                    "enum": WHY_YOU,
+                    "description": "Why only the user can answer: irreversible, outside (contacts someone), money, \
+                        secret_or_signin, taste_no_signal (a taste choice with nothing to go on), or missing_after_research",
+                },
+                "checked": {"type": "string", "description": "What you already checked or tried before asking (max 500 characters)"},
             },
-            "required": ["question", "choices"],
+            "required": ["question", "choices", "why_you", "checked"],
         },
     })]
 }
@@ -187,6 +220,25 @@ pub async fn tool_ask(state: &AppState, scope: &SelfScope, args: &Value) -> (Str
         Ok(v) => v,
         Err(e) => return (e.to_string(), true),
     };
+    let why_you = args["why_you"].as_str().map(str::trim).filter(|w| WHY_YOU.contains(w)).map(str::to_string);
+    let checked: Option<String> =
+        args["checked"].as_str().map(str::trim).filter(|c| !c.is_empty()).map(|c| c.chars().take(MAX_CHECKED_CHARS).collect());
+    // With decide-first on, a question needs a reason only the person can answer it
+    if super::decide::enabled(state).await {
+        if why_you.is_none() || checked.is_none() {
+            return (DECIDE_YOURSELF.into(), true);
+        }
+        if why_you.as_deref() == Some("taste_no_signal") {
+            let space = state.db.space_of_kwant(&scope.kwant_id).await.ok().flatten();
+            let notes = match &space {
+                Some(s) => state.db.list_decision_notes(s, &["answered", "changed"], TASTE_NOTES as i64).await.unwrap_or_default().len(),
+                None => 0,
+            };
+            if notes >= TASTE_NOTES {
+                return (PREDICT_TASTE.into(), true);
+            }
+        }
+    }
     let place = QuestionPlace {
         kwant_id: scope.kwant_id.clone(),
         channel_id: origin.channel_id.clone(),
@@ -205,10 +257,11 @@ pub async fn tool_ask(state: &AppState, scope: &SelfScope, args: &Value) -> (Str
             waiter = Some((q.id.clone(), hub.register(&q.id)));
             let text = format!("{}\n\nChoices: {}", q.question, choices.join(" · "));
             let (msg, extra) = place_message(q, "kwant", &scope.kwant_id, text);
-            Some((msg, MessageExtra { meta: Some(card_meta(q)), ..extra }))
+            let shown = Question { why_you: why_you.clone(), checked: checked.clone(), ..q.clone() };
+            Some((msg, MessageExtra { meta: Some(card_meta(&shown)), ..extra }))
         })
         .await;
-    let (q, card) = match created {
+    let (mut q, card) = match created {
         Ok(v) => v,
         Err(e) => {
             if let Some((id, _)) = waiter {
@@ -224,6 +277,11 @@ pub async fn tool_ask(state: &AppState, scope: &SelfScope, args: &Value) -> (Str
         return ("Could not save the question.".into(), true);
     };
     let _guard = WaiterGuard { hub, id: q.id.clone() };
+    if why_you.is_some() || checked.is_some() {
+        let _ = state.db.set_question_reason(&q.id, why_you.as_deref(), checked.as_deref()).await;
+        q.why_you = why_you;
+        q.checked = checked;
+    }
     if let Some(card) = card {
         if let Some(t) = &q.thread_id {
             let _ = state.db.touch_thread(t).await;

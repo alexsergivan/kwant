@@ -45,7 +45,7 @@ fn since_last_user(recent: &[Message]) -> Option<(&[Message], chrono::DateTime<c
 
 /// Whether a reply's last line hands on to a teammate ("@Writer, can you…?"): that question is
 /// for the teammate, not the person.
-fn hands_on(text: &str, names: &[&str]) -> bool {
+pub(super) fn hands_on(text: &str, names: &[&str]) -> bool {
     let last = text.trim_end().lines().last().unwrap_or("").to_lowercase();
     names.iter().any(|n| last.contains(&format!("@{}", n.to_lowercase())))
 }

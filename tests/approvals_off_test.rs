@@ -112,6 +112,7 @@ async fn turn_with(e: &Env, bot: &Kwant, always_ask: bool) -> (String, String, T
         thread_id: None,
         state: "running".into(),
         since: Utc::now(),
+        purpose: None,
     });
     (turn_id, token, folder)
 }

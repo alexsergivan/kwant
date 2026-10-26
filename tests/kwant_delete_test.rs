@@ -102,6 +102,7 @@ async fn the_person_deletes_any_bot_with_its_history() {
         thread_id: None,
         state: "running".into(),
         since: chrono::Utc::now(),
+        purpose: None,
     });
     let (s, v) = call_as(&app, "DELETE", &format!("/api/kwants/{}", bot.id), Some(state.api_token.reveal()), None).await;
     assert_eq!(s, StatusCode::CONFLICT);

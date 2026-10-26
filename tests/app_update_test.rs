@@ -258,12 +258,12 @@ fn kinds(list: &[&str]) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn app_update_is_on_for_lists_saved_before_it_existed() {
+async fn app_update_and_work_ahead_are_on_for_lists_saved_before_they_existed() {
     let e = setup(Some(Arc::new(FakeUpdater::default()))).await;
     // What a person who saved their notification settings before #78 has stored
     e.state.db.set_setting("notify_on", r#"["turn_finished","approval_needed"]"#).await.unwrap();
     let on = continuity::notify_on(&e.state).await;
-    assert_eq!(on, kinds(&["turn_finished", "approval_needed", "app_update"]));
+    assert_eq!(on, kinds(&["turn_finished", "approval_needed", "app_update", "work_ahead"]));
     assert!(update_notification_delivered(&e, "0.1.2").await);
     let (_, s) = call(&e.app, "GET", "/api/settings", None).await;
     assert!(s["notify_on"].as_array().unwrap().contains(&json!("app_update")), "the switch shows on: {s}");

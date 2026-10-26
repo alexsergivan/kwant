@@ -193,6 +193,7 @@ async fn turn_in_thread(state: &AppState, bot: &kwnt::db::models::Kwant, turn_id
         thread_id: Some(thread.into()),
         state: "running".into(),
         since: chrono::Utc::now(),
+        purpose: None,
     });
     let scope = SelfScope { kwant_id: bot.id.clone(), kwant_name: bot.name.clone(), ..Default::default() };
     mcp_runtime::prepare_turn_with_self(state, bot, Some(turn_id.into()), None, Some(scope)).await.unwrap().1

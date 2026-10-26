@@ -190,6 +190,19 @@ pub enum RuntimeEvent {
         context_id: Option<String>,
         candidates: Vec<RoutingCandidate>,
     },
+    /// A reply with open choices is held while its bot decides them (see `crate::server::decide`):
+    /// `state` is "deciding", then "done" with `outcome` "decided", "posted_original" or "cancelled".
+    #[serde(rename = "decide_updated", alias = "DecideUpdated")]
+    DecideUpdated {
+        kwant_id: String,
+        context_id: Option<String>,
+        thread_id: Option<String>,
+        state: String,
+        held_turn_id: String,
+        consulted: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
+    },
     #[serde(rename = "routing_decided", alias = "RoutingDecided")]
     RoutingDecided {
         context_id: Option<String>,

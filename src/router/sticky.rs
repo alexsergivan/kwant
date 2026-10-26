@@ -116,7 +116,7 @@ const CLOSERS: &[&str] = &[
     "else can i do",
 ];
 
-fn is_closer(question: &str) -> bool {
+pub fn is_closer(question: &str) -> bool {
     let q: String = question
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '\'' || c == '’' { c.to_ascii_lowercase() } else { ' ' })
@@ -218,6 +218,8 @@ mod tests {
             message_id: None,
             created_at: t(at),
             answered_at: None,
+            why_you: None,
+            checked: None,
         }
     }
 

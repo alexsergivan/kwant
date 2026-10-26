@@ -34,7 +34,7 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 10] = [
+pub const NOTIFY_KINDS: [&str; 11] = [
     "turn_finished",
     "approval_needed",
     "routine_failed",
@@ -45,6 +45,7 @@ pub const NOTIFY_KINDS: [&str; 10] = [
     "loose_ends",
     "human_step",
     "app_update",
+    "work_ahead",
 ];
 const MASK: &str = "••••••••";
 
@@ -137,10 +138,14 @@ pub async fn prompt_block(
             list or tips in your reply (\"I also added a shopping list and tips.\"). Only app changes get a card with Undo; saved notes don't. \
             Stay within 10 changes per turn. Never add one that costs money, contacts anyone or uses an outside service; offer \
             it instead. Never redo what the person undid or declined (\"Undone:\" means the person reversed it; your \
-            claim wasn't wrong): do the work yourself and offer to redo it."
+            claim wasn't wrong): do the work yourself and offer to redo it.\n\n\
+            [Choices you made]\n\
+            When you chose between options for the person, end your reply with one line per choice in a block the person \
+            sees as chips with Change: [DECISIONS] then `question: … | options: A; B; C | picked: B | why: …` then [/DECISIONS]."
         ));
         out.push_str(&super::hires::prompt_block(state, &crate::db::spaces::SpaceId::new(&kwant.space_id)).await);
     }
+    out.push_str(&super::decide::prompt_block(state, &crate::db::spaces::SpaceId::new(&kwant.space_id)).await);
     out
 }
 
@@ -1145,7 +1150,7 @@ pub async fn notify_settings_view(state: &AppState) -> (String, Vec<String>) {
 pub const NOTIFY_KNOWN_SETTING: &str = "notify_known";
 /// Kinds added after `notify_on` lists were first saved but before `notify_known` existed: a list
 /// saved without `notify_known` was chosen from every kind but these.
-const KINDS_SINCE_FIRST_LIST: [&str; 1] = ["app_update"];
+const KINDS_SINCE_FIRST_LIST: [&str; 2] = ["app_update", "work_ahead"];
 
 /// Kinds the user wants to hear about; all of them unless set. A kind added after the list was
 /// saved is on, so a new event isn't silently off for everyone who ever saved the settings.

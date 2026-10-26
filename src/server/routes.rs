@@ -1470,6 +1470,17 @@ pub(super) struct TurnOpts {
     /// Every call that could change something asks the person, even with approvals off (an
     /// owner turn kwnt starts on its own; see [`super::loose_ends_owner`]).
     pub(super) always_ask: bool,
+    /// Shared with the save step: holds a reply with open choices, and gets the saved message
+    /// (see [`super::decide`]).
+    pub(super) hook: Option<super::decide::HookSlot>,
+    /// Merged into the saved reply's meta.
+    pub(super) extra_meta: Option<serde_json::Value>,
+    /// The reply isn't saved (a teammate's view for the decide-first round).
+    pub(super) unsaved: bool,
+    /// A failed turn saves no `turn_failed` note (the caller posts something else).
+    pub(super) quiet_failure: bool,
+    /// Shown as the turn's `purpose` in `GET /api/turns` (`turns[]`).
+    pub(super) purpose: Option<String>,
 }
 
 impl TurnOpts {
@@ -1502,7 +1513,34 @@ const MAX_FAILURE_CHARS: usize = 500;
 
 /// [`run_kwant_turn`], but a failed turn says why: the driver's error or the provider's refusal.
 /// The turn first waits for a slot under the per-agent and server-wide caps (see [`super::turns`]).
+/// A reply that ends by asking the person to choose may be held and decided first (see
+/// [`super::decide`]); then the decided reply's text comes back.
 pub(super) async fn try_kwant_turn(
+    scope: &TurnScope,
+    target_kwant: &Kwant,
+    prompt: String,
+    mut opts: TurnOpts,
+) -> Result<String, String> {
+    let system = super::decide::system_turn(&opts);
+    if !super::decide::eligible(scope, target_kwant, system).await {
+        return turn_once(scope, target_kwant, prompt, opts).await;
+    }
+    let hook = std::sync::Arc::new(std::sync::Mutex::new(super::decide::Hook {
+        hold_choices: true,
+        teammates: scope.teammates.iter().map(|k| k.name.clone()).collect(),
+        ..Default::default()
+    }));
+    opts.hook = Some(hook.clone());
+    let reply = turn_once(scope, target_kwant, prompt, opts).await;
+    let held = hook.lock().ok().and_then(|mut h| h.held.take());
+    match (reply, held) {
+        (Ok(_), Some(held)) => Ok(super::decide::decide(scope, target_kwant, held).await),
+        (reply, _) => reply,
+    }
+}
+
+/// One turn, without the decide-first gate.
+pub(super) async fn turn_once(
     scope: &TurnScope,
     target_kwant: &Kwant,
     prompt: String,
@@ -1534,6 +1572,7 @@ pub(super) async fn try_kwant_turn(
         thread_id: tag.thread_id.clone(),
         state: "running".into(),
         since: chrono::Utc::now(),
+        purpose: opts.purpose.clone(),
     });
     // Kept until the turn ends, so a restart mid-reply is said in the chat (see interrupt_running_turns)
     let running = crate::db::continuity::RunningTurn {
@@ -1562,9 +1601,11 @@ pub(super) async fn try_kwant_turn(
     if let Some(started) = opts.on_started.take() {
         started.await;
     }
-    // A discussion round's reply isn't saved as is, so it isn't followed up
-    let follow_up = opts.discussion.is_none();
+    // A discussion round's reply isn't saved as is, so it isn't followed up; nor is a held one
+    let follow_up = opts.discussion.is_none() && !opts.unsaved;
+    let hook = opts.hook.clone();
     let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts, &tag).await;
+    let follow_up = follow_up && !hook.is_some_and(|h| h.lock().is_ok_and(|h| h.held.is_some()));
     if scope.cancel_token.is_cancelled() {
         super::questions::cancel_for_turn(&scope.state, &tag.turn_id).await;
         super::human_steps::cancel_for_turn(&scope.state, &tag.turn_id).await;
@@ -2339,11 +2380,13 @@ async fn run_kwant_turn_inner(
             event_broadcast.send(RuntimeEvent::ThinkingDelta("⏹️ Cancelled by user".into()));
             return Err("stopped by the user".into());
         } else if let Some(text) = gave_up {
-            let msg = NewMessage {
-                reasoning_content: with_notices(opts.label.clone()),
-                ..scope.message("kwant", &target_kwant.name, text.clone())
-            };
-            scope.save(&msg, super::activity::with_activity(gave_up_meta, activity)).await;
+            if !opts.quiet_failure {
+                let msg = NewMessage {
+                    reasoning_content: with_notices(opts.label.clone()),
+                    ..scope.message("kwant", &target_kwant.name, text.clone())
+                };
+                scope.save(&msg, super::activity::with_activity(gave_up_meta, activity)).await;
+            }
             return Err(text);
         } else if let Some(Ok(Ok(output))) = driver_result {
             // This chat got through: a turn parked behind a usage limit would only repeat it
@@ -2379,7 +2422,9 @@ async fn run_kwant_turn_inner(
             let fresh = output.usage.map_or(output.tokens_used as u64, |u| u.fresh());
             state.turns.add_job_tokens(&scope.job_id, fresh);
 
+            let mut reply_text = output.text.clone();
             let saved = match &opts.discussion {
+                _ if opts.unsaved => None,
                 None => Some((
                     output.text.clone(),
                     with_notices(opts.label.clone().or(output.reasoning)),
@@ -2394,6 +2439,14 @@ async fn run_kwant_turn_inner(
                 },
             };
             if let Some((text, reasoning_content)) = saved {
+                // A reply's own choices come off its text into meta.decisions
+                let (text, decisions) = match opts.discussion {
+                    None => super::decide::take_decisions(&text),
+                    Some(_) => (text, Vec::new()),
+                };
+                if opts.discussion.is_none() {
+                    reply_text = text.clone();
+                }
                 let asst_msg = NewMessage {
                     reasoning_content,
                     tool_calls: mcp_records.map(serde_json::Value::Array),
@@ -2414,10 +2467,40 @@ async fn run_kwant_turn_inner(
                 if let Some(routing) = &opts.routing {
                     meta.get_or_insert_with(|| serde_json::json!({}))["routing"] = routing.clone();
                 }
+                if let Some(serde_json::Value::Object(extra)) = &opts.extra_meta {
+                    let m = meta.get_or_insert_with(|| serde_json::json!({}));
+                    for (k, v) in extra {
+                        m[k] = v.clone();
+                    }
+                }
+                let meta = super::decide::with_decisions(meta, &decisions);
                 let meta = super::activity::with_activity(meta, activity);
-                scope.save(&asst_msg, meta).await;
+                let hold = opts.hook.as_ref().is_some_and(|h| {
+                    h.lock().is_ok_and(|h| {
+                        let names: Vec<&str> = h.teammates.iter().map(String::as_str).collect();
+                        h.hold_choices && !super::asks::hands_on(&asst_msg.text, &names)
+                    })
+                }) && super::decide::gate(&asst_msg.text).is_some();
+                if hold {
+                    if let Some(h) = &opts.hook {
+                        if let Ok(mut h) = h.lock() {
+                            let text = asst_msg.text.clone();
+                            h.held = Some(super::decide::Held { turn_id: tag.turn_id.clone(), text, msg: asst_msg, meta });
+                        }
+                    }
+                } else {
+                    let saved = scope.save(&asst_msg, meta).await;
+                    if let (Some(m), false) = (&saved, decisions.is_empty()) {
+                        super::decide::note_bot_decisions(state, target_kwant, m).await;
+                    }
+                    if let Some(h) = &opts.hook {
+                        if let Ok(mut h) = h.lock() {
+                            h.saved = saved;
+                        }
+                    }
+                }
             }
-            return Ok(output.text);
+            return Ok(reply_text);
         }
         let why = match driver_result {
             Some(Ok(Err(e))) => format!("the {target_model} driver failed: {e}"),
@@ -2425,11 +2508,13 @@ async fn run_kwant_turn_inner(
             _ => format!("the {target_model} turn ended without a reply"),
         };
         // Saved like a reply, so the failure is still there after a reload (the live error event isn't)
-        let msg = NewMessage {
-            reasoning_content: with_notices(opts.label.clone()),
-            ..scope.message("kwant", &target_kwant.name, turn_failed_text(&target_kwant.name, &why, &event_broadcast.activity))
-        };
-        scope.save(&msg, super::activity::with_activity(Some(json!({"kind": "turn_failed"})), activity)).await;
+        if !opts.quiet_failure {
+            let msg = NewMessage {
+                reasoning_content: with_notices(opts.label.clone()),
+                ..scope.message("kwant", &target_kwant.name, turn_failed_text(&target_kwant.name, &why, &event_broadcast.activity))
+            };
+            scope.save(&msg, super::activity::with_activity(Some(json!({"kind": "turn_failed"})), activity)).await;
+        }
         if let Some(e) = driver_error {
             event_broadcast.send(e);
         }
@@ -3159,6 +3244,12 @@ pub struct SettingsResponse {
     pub waiting_follow_up_hours: i64,
     /// Fresh tokens one chain may use before hand-offs pause (see `super::budget`); 0 = off.
     pub chain_token_budget: u64,
+    /// Bots decide reversible choices themselves (see `super::decide`).
+    pub decide_first: bool,
+    /// Bots work ahead in quiet chats.
+    pub work_ahead: bool,
+    /// Work-ahead runs per space per day (1–10).
+    pub work_ahead_daily_cap: u64,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3188,6 +3279,9 @@ pub struct SaveSettingsPayload {
     pub captcha_timeout_minutes: Option<u64>,
     pub waiting_follow_up_hours: Option<i64>,
     pub chain_token_budget: Option<u64>,
+    pub decide_first: Option<bool>,
+    pub work_ahead: Option<bool>,
+    pub work_ahead_daily_cap: Option<u64>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3226,6 +3320,9 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
             .unwrap_or(super::human_steps::DEFAULT_CAPTCHA_TIMEOUT_MINUTES),
         waiting_follow_up_hours: super::waiting::follow_up_hours(&state).await,
         chain_token_budget: super::budget::limit(&state).await,
+        decide_first: super::decide::enabled(&state).await,
+        work_ahead: super::decide::work_ahead_enabled(&state).await,
+        work_ahead_daily_cap: super::decide::work_ahead_cap(&state).await,
     }))
 }
 
@@ -3268,6 +3365,9 @@ pub async fn save_settings(
     let max_hours = super::waiting::MAX_HOURS;
     if payload.waiting_follow_up_hours.is_some_and(|h| !(0..=max_hours).contains(&h)) {
         return bad(format!("waiting_follow_up_hours must be 0–{max_hours}"));
+    }
+    if payload.work_ahead_daily_cap.is_some_and(|n| !(1..=super::decide::MAX_WORK_AHEAD_CAP).contains(&n)) {
+        return bad(format!("work_ahead_daily_cap must be 1–{}", super::decide::MAX_WORK_AHEAD_CAP));
     }
     if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
         return bad(format!("chain_token_budget must be 0–{}", super::budget::MAX));
@@ -3348,6 +3448,15 @@ pub async fn save_settings(
     if let Some(h) = payload.waiting_follow_up_hours {
         let _ = state.db.set_setting(super::waiting::HOURS_SETTING, &h.to_string()).await;
         state.scheduler_wake.notify_one();
+    }
+    if let Some(on) = payload.decide_first {
+        let _ = state.db.set_setting(super::decide::SETTING, if on { "true" } else { "false" }).await;
+    }
+    if let Some(on) = payload.work_ahead {
+        let _ = state.db.set_setting(super::decide::WORK_AHEAD_SETTING, if on { "true" } else { "false" }).await;
+    }
+    if let Some(n) = payload.work_ahead_daily_cap {
+        let _ = state.db.set_setting(super::decide::WORK_AHEAD_CAP_SETTING, &n.to_string()).await;
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;

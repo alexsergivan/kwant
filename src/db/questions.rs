@@ -38,6 +38,13 @@ pub struct Question {
     pub message_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub answered_at: Option<DateTime<Utc>>,
+    /// Why the bot couldn't decide this itself (see `crate::server::questions::WHY_YOU`); `None` on
+    /// older questions.
+    #[sqlx(default)]
+    pub why_you: Option<String>,
+    /// What the bot checked before asking.
+    #[sqlx(default)]
+    pub checked: Option<String>,
 }
 
 fn as_json<S: serde::Serializer>(raw: &str, s: S) -> Result<S::Ok, S::Error> {
@@ -143,6 +150,21 @@ impl Database {
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        // Added later; fails harmlessly once the columns exist
+        for col in ["why_you", "checked"] {
+            let _ = sqlx::query(&format!("ALTER TABLE questions ADD COLUMN {col} TEXT")).execute(&self.pool).await;
+        }
+        Ok(())
+    }
+
+    /// Saves why the bot asked and what it checked first.
+    pub async fn set_question_reason(&self, id: &str, why_you: Option<&str>, checked: Option<&str>) -> Result<(), DbError> {
+        sqlx::query("UPDATE questions SET why_you = ?, checked = ? WHERE id = ?")
+            .bind(why_you)
+            .bind(checked)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 

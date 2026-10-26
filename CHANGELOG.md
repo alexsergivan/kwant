@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Bots decide instead of asking you to pick.** When a reply ends by asking you to choose between
+  options that can be undone (a design direction, wording, an approach), the bot first finishes the
+  job: it runs the checks it said were still open, hears up to two teammates, picks, applies it, and
+  tells you what it chose, why, and how to change it. Each choice shows as a chip with **Change**.
+  Bots still ask before anything that can't be undone, reaches someone outside, costs money or needs a
+  password or sign-in, and when you say you want to pick yourself. App settings has a switch for it.
+- **Bots learn how you decide.** Your answers to question cards and your changes to the bots' choices
+  are kept per space, and bots use them to predict your next pick instead of asking.
+- **Questions say why only you can answer.** A bot's question card now says why it needs you and what
+  it checked first; a question without a reason goes back to the bot to decide itself.
+
 ## [Mac 0.1.2] - 2026-10-26
 
 ### Added

@@ -104,6 +104,7 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         E::DiscussionTurnStarted { speaker_id, .. } => contexts([&Some(speaker_id.clone())]),
         E::DiscussionCompleted { context_id, .. } | E::RoutingStarted { context_id, .. } => contexts([context_id]),
         E::RoutingDecided { context_id, kwant_id, .. } => contexts([context_id, &Some(kwant_id.clone())]),
+        E::DecideUpdated { kwant_id, context_id, thread_id, .. } => contexts([context_id, thread_id, &Some(kwant_id.clone())]),
         E::Error { kwant_id, .. } => contexts([kwant_id]),
         E::RoutineRun { routine_id, .. } => vec![Owner::Routine(routine_id.clone())],
         E::Notify { space_id, kwant_id, channel_id, .. } => {
@@ -267,6 +268,15 @@ mod tests {
                 matched_terms: vec![],
                 basis: None,
             },
+            E::DecideUpdated {
+                kwant_id: s("k"),
+                context_id: Some(s("c")),
+                thread_id: None,
+                state: s("deciding"),
+                held_turn_id: s("x"),
+                consulted: vec![],
+                outcome: None,
+            },
             E::Error { code: s("x"), message: s("x"), kwant_id: Some(s("k")) },
             E::MemoryChanged { kwant_id: s("k") },
             E::RoutineRun { routine_id: s("r"), run_id: s("x"), status: s("ok") },
@@ -314,6 +324,7 @@ mod tests {
                 | E::SandboxStatusChanged { .. }
                 | E::RoutingStarted { .. }
                 | E::RoutingDecided { .. }
+                | E::DecideUpdated { .. }
                 | E::Error { .. }
                 | E::MemoryChanged { .. }
                 | E::RoutineRun { .. }

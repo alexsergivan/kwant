@@ -29,6 +29,8 @@ struct Job {
     token: CancellationToken,
     /// Fresh tokens (see [`crate::drivers::TurnUsage::fresh`]) its turns used so far.
     fresh_tokens: u64,
+    /// A reply in it already went through the decide-first gate (see [`super::decide`]).
+    decided: bool,
 }
 
 /// A turn the UI can show: running, or waiting for a slot.
@@ -41,6 +43,9 @@ pub struct ActiveTurn {
     /// "queued" or "running".
     pub state: String,
     pub since: chrono::DateTime<chrono::Utc>,
+    /// "decide" for the hidden decide-first round's turns (see [`super::decide`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
 }
 
 #[derive(Default)]
@@ -90,7 +95,7 @@ impl TurnRegistry {
         let token = CancellationToken::new();
         let mut keys: Vec<String> = keys.into_iter().map(Into::into).filter(|k: &String| !k.is_empty()).collect();
         keys.push(id.clone());
-        self.lock().jobs.insert(id.clone(), Job { keys, token: token.clone(), fresh_tokens: 0 });
+        self.lock().jobs.insert(id.clone(), Job { keys, token: token.clone(), fresh_tokens: 0, decided: false });
         JobGuard { registry: self.clone(), id, token }
     }
 
@@ -109,6 +114,18 @@ impl TurnRegistry {
                 job.fresh_tokens
             }
             None => 0,
+        }
+    }
+
+    /// Whether a reply in the job already went through the decide-first gate.
+    pub fn job_decided(&self, job_id: &str) -> bool {
+        self.lock().jobs.get(job_id).is_some_and(|j| j.decided)
+    }
+
+    /// Marks the job as through the decide-first gate.
+    pub fn mark_decided(&self, job_id: &str) {
+        if let Some(job) = self.lock().jobs.get_mut(job_id) {
+            job.decided = true;
         }
     }
 
@@ -176,6 +193,7 @@ impl TurnRegistry {
             thread_id: tag.thread_id.clone(),
             state: "queued".into(),
             since: chrono::Utc::now(),
+            purpose: None,
         });
         let _ = events.send(RuntimeEvent::TurnQueued {
             turn_id: tag.turn_id.clone(),

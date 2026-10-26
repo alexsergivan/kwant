@@ -12,7 +12,10 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 fn ask_marker(question: &str, choices: &[&str]) -> String {
-    call_tool_marker("ask_user", json!({"question": question, "choices": choices}))
+    call_tool_marker(
+        "ask_user",
+        json!({"question": question, "choices": choices, "why_you": "irreversible", "checked": "Read the release notes."}),
+    )
 }
 
 /// Waits until `ctx` has an open question, and returns it.
@@ -51,6 +54,8 @@ async fn ask_pauses_the_turn_and_a_choice_resumes_it() {
     assert_eq!(meta["kind"], "ask_user");
     assert_eq!(meta["question_id"], id.as_str());
     assert_eq!(meta["status"], "open");
+    assert_eq!((meta["why_you"].as_str(), meta["checked"].as_str()), (Some("irreversible"), Some("Read the release notes.")));
+    assert_eq!(q["why_you"], "irreversible");
 
     let (s, v) = call(&env.app, "POST", &format!("/api/questions/{id}/answer"), Some(json!({"choice": 1}))).await;
     assert_eq!(s, StatusCode::OK, "{v}");
@@ -218,12 +223,29 @@ async fn answers_and_tool_input_are_validated() {
         ("v3", json!({"question": "Six?", "choices": ["a", "b", "c", "d", "e", "f"]})),
         ("v4", json!({"question": "", "choices": ["a", "b"]})),
     ] {
+        let args = json!({"why_you": "irreversible", "checked": "x", "question": args["question"], "choices": args["choices"]});
         send_direct(&env, &env.b, &format!("{} REPLYTAG:{tag}", call_tool_marker("ask_user", args)), json!({})).await;
         let r = wait_reply(&env, &env.b, &format!("answer {tag}")).await;
         assert!(r.text.contains("TOOLERROR"), "{}", r.text);
     }
+    // Without a reason only the person can answer, the bot is told to decide itself
+    for (tag, args) in [
+        ("v5", json!({"question": "Which colour?", "choices": ["red", "blue"]})),
+        ("v6", json!({"question": "Which colour?", "choices": ["red", "blue"], "why_you": "because", "checked": "x"})),
+        ("v7", json!({"question": "Which colour?", "choices": ["red", "blue"], "why_you": "irreversible", "checked": "  "})),
+    ] {
+        send_direct(&env, &env.b, &format!("{} REPLYTAG:{tag}", call_tool_marker("ask_user", args)), json!({})).await;
+        let r = wait_reply(&env, &env.b, &format!("answer {tag}")).await;
+        assert!(r.text.contains("TOOLERROR") && r.text.contains("decide it yourself"), "{}", r.text);
+    }
     let (_, open) = call(&env.app, "GET", &format!("/api/questions?context_id={}", env.b), None).await;
     assert!(open.as_array().unwrap().is_empty());
+
+    // With decide-first off, a question needs no reason
+    call(&env.app, "POST", "/api/settings", Some(json!({"decide_first": false}))).await;
+    send_direct(&env, &env.b, &format!("{} REPLYTAG:v8", call_tool_marker("ask_user", json!({"question": "Red?", "choices": ["yes", "no"]}))), json!({})).await;
+    let q = open_question(&env, &env.b).await;
+    assert_eq!(q["why_you"], Value::Null);
 
     // Outside a live chat turn the tool isn't offered
     env.state

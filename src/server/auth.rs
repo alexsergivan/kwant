@@ -338,6 +338,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "settings", ..] => *method != Method::GET && *method != Method::HEAD,
         // Carrying on a chain that went over its token budget is the person's call
         ["", "api", "chains", _, "continue"] => *method == Method::POST,
+        // Changing a choice a bot made is the person's call
+        ["", "api", "messages", _, "decisions", ..] => *method != Method::GET && *method != Method::HEAD,
         // The Mac app's update: check and install (which swaps and relaunches the app) are the
         // person's; the status stays readable
         ["", "api", "app", "update", ..] => *method != Method::GET && *method != Method::HEAD,
@@ -831,6 +833,7 @@ mod tests {
         assert!(person_only(&post, "/api/sandbox/t1/passwords/c1/reveal"));
         assert!(person_only(&del, "/api/sandbox/t1/passwords/c1"));
         assert!(person_only(&get, "/api/passwords/store"));
+        assert!(person_only(&post, "/api/messages/m1/decisions/0/change"));
         assert!(person_only(&post, "/api/passwords/bitwarden/unlock"));
         assert!(person_only(&del, "/api/passwords/bitwarden"));
         assert!(person_only(&post, "/api/passwords/migrate"));
