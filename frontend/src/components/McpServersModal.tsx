@@ -319,12 +319,13 @@ export const PresetCatalog: React.FC<{
               </li>
             ))}
             {g.composio.map((a) => (
-              <li key={a.id} className={composioApp === a.id ? 'sm:col-span-2 space-y-2' : undefined}>
+              <li key={a.id} className={composioApp === a.id ? 'sm:col-span-2 flex flex-col gap-2' : 'flex flex-col'}>
+                {/* flex-1, not h-full: h-full made the card as tall as the whole item and pushed the note over the next section. */}
                 <button
                   type="button"
                   onClick={() => setComposioApp(composioApp === a.id ? null : a.id)}
                   aria-expanded={composioApp === a.id}
-                  className="group w-full h-full p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 hover:bg-sky-500/5 focus-visible:border-sky-500/60 focus-visible:outline-none text-left transition-all"
+                  className="group w-full flex-1 p-3 rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-sky-500/40 hover:bg-sky-500/5 focus-visible:border-sky-500/60 focus-visible:outline-none text-left transition-all"
                 >
                   <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-200 group-hover:text-sky-200">
                     <span className="text-sky-400" aria-hidden="true">

@@ -30,6 +30,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   half-written reply, and work done while you were away arrives as a quiet, folded message. App
   settings has a **Bots on their own** section with both switches and a daily limit.
 
+### Fixed
+- **The Gmail and Figma notes in Add a server no longer cover the next section.** Opening a "via
+  Composio" app stretched its card and laid the explanation over the apps below it.
+
 ## [Mac 0.1.2] - 2026-10-26
 
 ### Added

@@ -205,4 +205,7 @@ test('the server catalog lists Gmail as "via Composio" and explains why, with th
   const open = cat.render({ ...base, initialComposioApp: 'gmail' });
   assert.ok(open.includes('data-composio-note="gmail"') && open.includes('Open Connections'));
   assert.ok(open.includes('not in this app’s vault'));
+  // The open card must not stretch to the item's full height, or the note spills over the next section.
+  const card = open.slice(open.lastIndexOf('<button', open.indexOf('aria-expanded="true"')), open.indexOf('data-composio-note="gmail"'));
+  assert.ok(!/class="[^"]*\bh-full\b/.test(card.slice(0, card.indexOf('>'))), 'open Composio card is not h-full');
 });
