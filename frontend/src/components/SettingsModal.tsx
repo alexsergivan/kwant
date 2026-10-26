@@ -26,6 +26,7 @@ import { signedInDevicesVisible } from '../deviceSignIn';
 import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
 import { useEngines } from '../useEngines';
 import { LayaStatusRow } from './LayaStatus';
+import { AppUpdateAbout } from './AppUpdateBanner';
 
 interface SettingsData {
   anthropic_api_key: string;
@@ -330,6 +331,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             <span className="font-mono text-xs text-zinc-300">{tokensUsed} tk</span>
           </div>
         </div>
+
+        <AppUpdateAbout />
 
         {computer.state.settings && (
           <div className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3">
