@@ -334,6 +334,10 @@ pub async fn raise(
         turn_id: scope.turn_id.clone(),
         sandbox_target: scope.sandbox_target.clone(),
     };
+    // The browser is the person's before anyone can see the step: a bot action that lands between
+    // the two would otherwise run on a page the person was just asked to use (and a test reading
+    // the open step could find the browser not yet held, as CI did once on 3bfe50e)
+    hold_browser(state, place.sandbox_target.as_deref()).await;
     // Like ask_user, the step, its card and the waiter appear together
     let hub = &state.human_steps;
     let target_json = target.and_then(|t| serde_json::to_string(t).ok());
@@ -361,6 +365,8 @@ pub async fn raise(
             if let Some((id, _)) = waiter {
                 hub.take(&id);
             }
+            // No step after all: hand the browser back unless another step still holds it
+            release_browser(state, place.sandbox_target.as_deref()).await;
             return Err(match e {
                 HumanStepError::Db => "Could not save the step.".into(),
                 e => e.to_string(),
@@ -383,6 +389,8 @@ pub async fn raise(
         wait = wait.min(left + hub.probe_interval() * 2);
     }
     if is_new {
+        // Again, in case another step in this browser closed (and handed it back) just before
+        // this one was saved; a no-op when it is still held
         hold_browser(state, step.sandbox_target.as_deref()).await;
         if step.kind == "captcha" && step.sandbox_target.is_some() {
             // a CAPTCHA kwnt saw is on the page already; one the bot named must show up first

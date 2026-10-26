@@ -205,9 +205,11 @@ pub struct PersonPlace {
 pub const MAX_LOCATION_CHARS: usize = 100;
 
 /// The person's city as one plain line: no control characters or newlines, so it can't open a
-/// new prompt section, and at most [`MAX_LOCATION_CHARS`].
+/// new prompt section, no invisible format characters (zero-width, bidi overrides, tag
+/// characters) that could hide text from the person, and at most [`MAX_LOCATION_CHARS`].
 pub fn clean_location(raw: &str) -> String {
-    let one_line: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let one_line: String =
+        raw.chars().filter(|c| !is_format_char(*c)).map(|c| if c.is_control() { ' ' } else { c }).collect();
     one_line.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_LOCATION_CHARS).collect()
 }
 
@@ -252,6 +254,12 @@ fn non_metric_zone(tz: &str) -> bool {
         || ["America/Indiana/", "America/Kentucky/", "America/North_Dakota/", "US/"].iter().any(|p| tz.starts_with(p))
 }
 
+/// Zones of the UK and its Crown dependencies, which are metric except that roads are signed in
+/// miles and mph.
+fn uk_zone(tz: &str) -> bool {
+    matches!(tz, "Europe/London" | "Europe/Belfast" | "Europe/Guernsey" | "Europe/Jersey" | "Europe/Isle_of_Man")
+}
+
 /// One line asking for the person's local units and sources, once their zone or city is known. A
 /// Munich briefing came from the UK Met Office with gusts in mph (live kwant, 2026-10-25). A zone
 /// like "UTC" says nothing about a place, so it gets no line on its own.
@@ -269,6 +277,7 @@ pub fn local_units_line(person: &PersonPlace) -> Option<String> {
     };
     let units = match zone {
         Some(tz) if non_metric_zone(tz) => "US customary units (°F, mph, miles)".to_string(),
+        Some(tz) if uk_zone(tz) => "metric units (°C, km), but miles and mph for road distances and speeds".to_string(),
         Some(_) => "metric units (°C, km/h, km)".to_string(),
         None => format!("the units people use in {place}"),
     };

@@ -638,3 +638,62 @@ async fn city_is_saved_as_typed_on_one_line_and_bots_can_set_it() {
     let (_, s) = call(&e.app, "GET", "/api/settings", None, None).await;
     assert_eq!((s["location"].as_str(), s["timezone"].as_str()), (Some("Ljubljana, Slovenia"), Some("")), "undo puts both back");
 }
+
+/// Rigel's #69 review: `/api/settings` took a bot's turn token, so a bot's shell could change any
+/// setting (even `notify_webhook_url`) past the `settings_update` allow-list. Writes are now
+/// person-only; bots keep `settings_update`, and the browser's sign-in `timezone_default` fill
+/// still works with the person's token or cookie.
+#[tokio::test]
+async fn settings_writes_are_person_only_but_bots_keep_settings_update() {
+    let e = setup().await;
+    let token = turn(&e, "t-settings-route").await;
+    let (_, before) = call(&e.app, "GET", "/api/settings", None, None).await;
+    for body in [
+        json!({"notify_webhook_url": "https://evil.test/hook"}),
+        json!({"timezone_default": "Asia/Tokyo"}),
+        json!({"location": "Nowhere"}),
+    ] {
+        let (status, v) = call(&e.app, "POST", "/api/settings", Some(&token), Some(body.clone())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body} with a bot's turn token: {v}");
+    }
+    let (status, _) = call(&e.app, "POST", "/api/settings", Some("not-the-token"), Some(json!({"location": "X"}))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a wrong bearer");
+    let (_, after) = call(&e.app, "GET", "/api/settings", None, None).await;
+    assert_eq!(before, after, "nothing changed");
+    // Reading stays open to a bot
+    let (status, _) = call(&e.app, "GET", "/api/settings", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // From another machine with no token: 401, the person is asked to sign in
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/settings")
+        .header("content-type", "application/json")
+        .header("host", "kwnt.example.com")
+        .body(Body::from(json!({"timezone_default": "Asia/Tokyo"}).to_string()))
+        .unwrap();
+    assert_eq!(e.app.clone().oneshot(req).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+
+    // The person's browser from another machine (token cookie): the sign-in fill goes through
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/settings")
+        .header("content-type", "application/json")
+        .header("host", "kwnt.example.com")
+        .header("cookie", format!("kwnt_token={}", e.state.api_token.reveal()))
+        .body(Body::from(json!({"timezone_default": "Europe/Berlin"}).to_string()))
+        .unwrap();
+    let resp = e.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let (_, s) = call(&e.app, "GET", "/api/settings", None, None).await;
+    assert_eq!(s["timezone"], "Europe/Berlin");
+    // And with the API token as a bearer
+    let (status, v) = call(&e.app, "POST", "/api/settings", Some(e.state.api_token.reveal()), Some(json!({"location": "Munich"}))).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+
+    // The bot still changes allowed settings through its action
+    let text = ok(&e, &token, "settings_update", json!({"settings": {"location": "Berlin"}})).await;
+    assert!(text.contains("Berlin"), "{text}");
+    let (_, s) = call(&e.app, "GET", "/api/settings", None, None).await;
+    assert_eq!(s["location"], "Berlin");
+}

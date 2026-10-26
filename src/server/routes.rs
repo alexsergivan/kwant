@@ -2348,16 +2348,38 @@ async fn send_chat_inner(
     // A reply with no @mention to a bot that just asked the person something goes back to that bot
     let mut awaiting: Option<(Kwant, Option<String>)> = None;
     let mut last_speaker: Option<String> = None;
+    // The channel route worked out while deciding that, reused below instead of asking Laya twice
+    let mut pre_route: Option<crate::router::team::ChannelRoute> = None;
     if let (None, None, None, None, Some(cid)) =
         (kwant_mention, team_mention, payload.kwant_id.as_ref(), payload.team_id.as_ref(), payload.channel_id.as_ref())
     {
         let recent = state.db.list_messages(cid, 30).await.unwrap_or_default();
         let open = state.db.list_questions(Some("open"), Some(cid), None).await.unwrap_or_default();
         let open: Vec<_> = open.into_iter().filter(|q| q.channel_id.as_deref() == Some(cid.as_str())).collect();
-        if let Some(a) = crate::router::sticky::awaiting_answer(&recent, &open, &all_kwants) {
-            awaiting = Some((a.kwant.clone(), a.question_id));
-        }
         last_speaker = recent.iter().rev().find(|m| m.sender_role == "kwant").map(|m| m.sender_id.clone());
+        if let Some(a) = crate::router::sticky::awaiting_answer(&recent, &open, &all_kwants) {
+            let mut sticks = true;
+            // A plain "…?" reply gives way when the message clearly belongs to another bot
+            if !a.card {
+                if let Ok(Some(channel)) = state.db.get_channel(cid).await {
+                    let members = channel_members(&channel, &all_kwants);
+                    if channel.routing_mode == "auto" && members.len() > 1 {
+                        let route = state
+                            .router
+                            .route_channel_query_after(&payload.prompt, &channel.name, &channel.lead_kwant_id, &members, last_speaker.as_deref())
+                            .await;
+                        sticks = !crate::router::sticky::yields_to_route(&a, &route);
+                        if !sticks {
+                            tracing::info!(asker = %a.kwant.id, kwant_id = %route.kwant_id, basis = %route.basis, "a plain question gave way to a clear match");
+                        }
+                        pre_route = Some(route);
+                    }
+                }
+            }
+            if sticks {
+                awaiting = Some((a.kwant.clone(), a.question_id));
+            }
+        }
     }
 
     // Detect if a team is targeted
@@ -2688,18 +2710,7 @@ async fn send_chat_inner(
                     .find(|k| k.id == channel.lead_kwant_id)
                     .or_else(|| all_kwants.first())
                     .cloned();
-                // #general is the hub for every agent, including ones created after it was seeded
-                let members: Vec<Kwant> = if channel.name == "general" {
-                    all_kwants.clone()
-                } else {
-                    let member_ids: Vec<String> =
-                        serde_json::from_str(&channel.member_kwants).unwrap_or_default();
-                    // Channels made before the lead was always a member still count the lead
-                    crate::db::models::members_with_lead(&channel.lead_kwant_id, &member_ids)
-                        .iter()
-                        .filter_map(|mid| all_kwants.iter().find(|k| &k.id == mid).cloned())
-                        .collect()
-                };
+                let members = channel_members(&channel, &all_kwants);
 
                 if channel.routing_mode == "auto" && members.len() > 1 {
                     let context_id = payload.channel_id.clone();
@@ -2707,16 +2718,21 @@ async fn send_chat_inner(
                         context_id: context_id.clone(),
                         candidates: routing_candidates(&members),
                     });
-                    let route = state
-                        .router
-                        .route_channel_query_after(
-                            &payload.prompt,
-                            &channel.name,
-                            &channel.lead_kwant_id,
-                            &members,
-                            last_speaker.as_deref(),
-                        )
-                        .await;
+                    let route = match pre_route.take() {
+                        Some(route) => route,
+                        None => {
+                            state
+                                .router
+                                .route_channel_query_after(
+                                    &payload.prompt,
+                                    &channel.name,
+                                    &channel.lead_kwant_id,
+                                    &members,
+                                    last_speaker.as_deref(),
+                                )
+                                .await
+                        }
+                    };
                     let chosen = members.iter().find(|k| k.id == route.kwant_id).cloned().or(lead);
                     if let Some(ref k) = chosen {
                         routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms, &route.basis));
@@ -2764,6 +2780,20 @@ async fn send_chat_inner(
             "kwant": target_kwant.name
         })))
     }
+}
+
+/// The bots a channel message can be routed to. #general is the hub for every agent, including
+/// ones created after it was seeded; channels made before the lead was always a member still
+/// count the lead.
+fn channel_members(channel: &crate::db::models::Channel, all_kwants: &[Kwant]) -> Vec<Kwant> {
+    if channel.name == "general" {
+        return all_kwants.to_vec();
+    }
+    let member_ids: Vec<String> = serde_json::from_str(&channel.member_kwants).unwrap_or_default();
+    crate::db::models::members_with_lead(&channel.lead_kwant_id, &member_ids)
+        .iter()
+        .filter_map(|mid| all_kwants.iter().find(|k| &k.id == mid).cloned())
+        .collect()
 }
 
 /// A reply's `meta.routing`: who Laya picked for a channel or team message and why.

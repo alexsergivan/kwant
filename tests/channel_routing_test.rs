@@ -259,3 +259,44 @@ async fn an_answer_goes_back_to_the_bot_that_asked_it() {
     .await
     .expect("Ann's turn ended");
 }
+
+/// Rigel's #70 review: a closer like "Anything else?" isn't a question waiting for an answer, and a
+/// plain "…?" gives way when the next message clearly belongs to another bot. Live HTTP path.
+#[tokio::test]
+async fn closers_and_clear_matches_dont_stick_to_the_asker() {
+    let (app, state, _tmp) = setup().await;
+    let ann = ok(&app, "POST", "/api/kwants", Some(bot("Ann"))).await["id"].as_str().unwrap().to_string();
+    let bob = ok(&app, "POST", "/api/kwants", Some(bot("Bob"))).await["id"].as_str().unwrap().to_string();
+    let c = ok(&app, "POST", "/api/channels", Some(json!({"name": "desk2", "lead_kwant_id": ann, "member_kwants": [ann, bob]}))).await;
+    let cid = c["id"].as_str().unwrap().to_string();
+    let say = |role: &'static str, who: String, text: &'static str| {
+        let (db, cid) = (state.db.clone(), cid.clone());
+        async move {
+            db.insert_message(&NewMessage {
+                channel_id: Some(cid),
+                direct_kwant_id: None,
+                sender_role: role.into(),
+                sender_id: who,
+                text: text.into(),
+                reasoning_content: None,
+                tool_calls: None,
+                tokens_used: 0,
+            })
+            .await
+            .unwrap();
+        }
+    };
+    say("user", "user".into(), "Summarise this week").await;
+    say("kwant", bob.clone(), "Here's the summary.\n\nAnything else?").await;
+    let (_, basis) = routed_to(&app, &state, &cid, "Plan my trip to Rome").await;
+    assert_ne!(basis.as_deref(), Some("asked"), "a closer isn't a question");
+
+    // A real plain question, but the next message names Ann: Ann takes it
+    say("kwant", bob.clone(), "Which city are you in?").await;
+    let (to, basis) = routed_to(&app, &state, &cid, "Ann, plan my trip to Rome").await;
+    assert_eq!((to.as_str(), basis.as_deref()), (ann.as_str(), Some("keywords")));
+
+    // A plain answer to it still goes back to Bob
+    say("kwant", bob.clone(), "Which city are you in?").await;
+    assert_eq!(routed_to(&app, &state, &cid, "Munich").await, (bob.clone(), Some("asked".into())));
+}

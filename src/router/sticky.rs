@@ -15,11 +15,14 @@ use crate::db::questions::Question;
 pub struct Awaiting<'a> {
     pub kwant: &'a Kwant,
     pub question_id: Option<String>,
+    /// It asked with an `ask_user` question or card. A plain reply ending in "?" is weaker: a
+    /// confident router pick of another bot wins over it ([`yields_to_route`]).
+    pub card: bool,
 }
 
 impl PartialEq for Awaiting<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.kwant.id == other.kwant.id && self.question_id == other.question_id
+        self.kwant.id == other.kwant.id && self.question_id == other.question_id && self.card == other.card
     }
 }
 
@@ -41,7 +44,7 @@ pub fn awaiting_answer<'a>(recent: &[Message], open: &[Question], members: &'a [
         .filter_map(|q| member(&q.kwant_id).map(|k| (q.created_at, k, q)))
         .max_by_key(|(at, _, _)| *at);
     if let Some((_, kwant, q)) = asked {
-        return Some(Awaiting { kwant, question_id: Some(q.id.clone()) });
+        return Some(Awaiting { kwant, question_id: Some(q.id.clone()), card: true });
     }
 
     let last_bot = tail.iter().rev().find(|m| m.sender_role == "kwant")?;
@@ -52,8 +55,65 @@ pub fn awaiting_answer<'a>(recent: &[Message], open: &[Question], members: &'a [
         .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
         .is_some_and(|m| m["kind"] == "ask_user" && m["status"] == "open");
     let hands_on = |text: &str| members.iter().any(|m| crate::router::handoff_targets(text, &[m.name.as_str()]).contains(&0));
-    (card || (ends_with_question(&last_bot.text) && !hands_on(last_line(&last_bot.text))))
-        .then_some(Awaiting { kwant: k, question_id: None })
+    (card || (asks_the_person(&last_bot.text) && !hands_on(last_line(&last_bot.text))))
+        .then_some(Awaiting { kwant: k, question_id: None, card })
+}
+
+/// Whether a plain-text ask should give way to the router's pick: the router named another bot
+/// on a clear match (a role's words, a bot's name, or Laya's confident pick). A greeting, a
+/// small reply or no match ("lead", "last", "several") stays with the bot that asked.
+pub fn yields_to_route(awaiting: &Awaiting<'_>, route: &crate::router::team::ChannelRoute) -> bool {
+    !awaiting.card && route.kwant_id != awaiting.kwant.id && matches!(route.basis.as_str(), "skills" | "keywords")
+}
+
+/// Whether the last line of `text` asks the person something real: a question on it that isn't
+/// only a polite closer ("Anything else?", "Want me to also add a chart?").
+pub fn asks_the_person(text: &str) -> bool {
+    questions(last_line(text)).iter().any(|q| !is_closer(q))
+}
+
+/// Closing offers that end a finished answer rather than wait for one. Matched on the question
+/// sentence alone, so "Which city are you in? Anything else?" still asks.
+const CLOSERS: &[&str] = &[
+    "anything else",
+    "anything more",
+    "help with anything",
+    "help you with anything",
+    "want me to also",
+    "would you like me to also",
+    "shall i also",
+    "should i also",
+    "should i continue",
+    "shall i continue",
+    "should i keep going",
+    "let me know",
+];
+
+fn is_closer(question: &str) -> bool {
+    let q: String = question
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '\'' || c == '’' { c.to_ascii_lowercase() } else { ' ' })
+        .collect();
+    let q = q.split_whitespace().collect::<Vec<_>>().join(" ");
+    CLOSERS.iter().any(|c| q.contains(c))
+}
+
+/// The question sentences on one line: each runs from the last sentence end to a "?" that ends a
+/// sentence (see [`ends_with_question`]).
+fn questions(line: &str) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (i, &c) in chars.iter().enumerate() {
+        let ends = chars.get(i + 1).is_none_or(|n| n.is_whitespace() || "*_)\"'”’`".contains(*n));
+        if ends && "?.!".contains(c) {
+            if c == '?' {
+                out.push(chars[start..=i].iter().collect());
+            }
+            start = i + 1;
+        }
+    }
+    out
 }
 
 /// The last non-empty line of `text`.
@@ -147,6 +207,80 @@ mod tests {
             msg(10, "kwant", "Community", "Happy to set that up. **Which city are you in?**"),
         ];
         assert_eq!(awaiting_answer(&chat, &[], &m).map(|a| a.kwant.id.as_str()), Some("Community"));
+    }
+
+    fn after(reply: &str) -> Option<String> {
+        let m = members();
+        let chat = [msg(0, "user", "user", "chart last week's signups"), msg(10, "kwant", "Analyst", reply)];
+        awaiting_answer(&chat, &[], &m).map(|a| a.kwant.id.clone())
+    }
+
+    /// Rigel's #70 review: a finished answer ending in a polite closer trapped the person's next,
+    /// unrelated request on the same bot.
+    #[test]
+    fn closing_questions_dont_stick() {
+        for closer in [
+            "Here's the chart.\n\nAnything else?",
+            "Here's the chart.\n\nWant me to also add a chart?",
+            "Done for now. Should I continue?",
+            "Here's the chart.\n\nIs there anything else I can help with?",
+            "Here's the chart.\n\n**Anything more?**",
+            "Here's the chart. Let me know if you need anything else?",
+            "Is there anything else I can help you with today?",
+            "Would you like me to also send it to the team?",
+            "Shall I continue?",
+        ] {
+            assert_eq!(after(closer), None, "{closer:?}");
+        }
+    }
+
+    #[test]
+    fn a_real_question_still_sticks() {
+        for ask in [
+            "Happy to.\n\nWhich city are you in?",
+            "Which city are you in? Anything else?",
+            "Done. Which week should I compare it with?",
+            "Should I use DWD or the Met Office?",
+        ] {
+            assert_eq!(after(ask).as_deref(), Some("Analyst"), "{ask:?}");
+        }
+        assert!(asks_the_person("Want the metric version? (I can switch.)"));
+        assert!(!asks_the_person("Anything else? Let me know."));
+    }
+
+    fn route(kwant: &str, basis: &str) -> crate::router::team::ChannelRoute {
+        crate::router::team::ChannelRoute {
+            kwant_id: kwant.into(),
+            reason: String::new(),
+            fallback: false,
+            matched_terms: vec![],
+            basis: basis.into(),
+        }
+    }
+
+    /// A plain "…?" gives way to a clear match for another bot; a card or open question never does,
+    /// and a greeting, a tie or no match stays with the asker.
+    #[test]
+    fn a_clear_match_for_another_bot_wins_over_a_plain_question() {
+        let m = members();
+        let chat = [msg(0, "user", "user", "set up my mornings"), msg(10, "kwant", "Community", "Which city are you in?")];
+        let a = awaiting_answer(&chat, &[], &m).unwrap();
+        assert!(!a.card);
+        assert!(yields_to_route(&a, &route("Analyst", "keywords")));
+        assert!(yields_to_route(&a, &route("Analyst", "skills")));
+        for basis in ["lead", "last", "several", "team", "only"] {
+            assert!(!yields_to_route(&a, &route("Analyst", basis)), "{basis}");
+        }
+        assert!(!yields_to_route(&a, &route("Community", "keywords")), "the router agrees with the asker");
+
+        let open = [question(10, "Community", "open")];
+        let a = awaiting_answer(&chat, &open, &m).unwrap();
+        assert!(a.card && !yields_to_route(&a, &route("Analyst", "keywords")), "an open question always sticks");
+        let mut card = msg(10, "kwant", "Community", "Pick a source");
+        card.meta = Some(r#"{"kind":"ask_user","status":"open"}"#.into());
+        let chat = [msg(0, "user", "user", "weather"), card];
+        let a = awaiting_answer(&chat, &[], &m).unwrap();
+        assert!(a.card && !yields_to_route(&a, &route("Analyst", "skills")), "an open card always sticks");
     }
 
     #[test]

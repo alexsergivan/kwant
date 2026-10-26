@@ -305,6 +305,7 @@ async fn a_bot_landing_on_a_slider_gets_a_step_with_its_box_that_closes_once_sol
     let meta: Value = serde_json::from_str(card.meta.as_deref().unwrap()).unwrap();
     assert_eq!(meta["target"]["kind"], "tiktok");
     let ctrl = state.browser_controllers.lock().await.get(step.sandbox_target.as_deref().unwrap()).cloned().unwrap();
+    // raise() holds the browser before the step is saved, so this can't see the step first
     assert!(ctrl.is_held_for_person());
     assert!(!task.is_finished(), "the turn waits for the person");
 
