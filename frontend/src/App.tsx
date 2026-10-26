@@ -1026,7 +1026,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const ctx = streamTarget(event, streamingContextIdRef.current);
             if (ctx === openCtxRef.current) {
               playSfx('coin');
-              messageHaptic();
+              // Live events only (the stream has no replay; history loads via refreshContext).
+              messageHaptic({ id: typeof event.turn_id === 'string' ? event.turn_id : undefined });
               setTokensUsed((prev) => prev + (event.data?.tokens || 0));
             }
             if (typeof event.turn_id === 'string') completed.add(event.turn_id);

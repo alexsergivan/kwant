@@ -103,17 +103,47 @@ test('no vibrate call before the first tap on the page', () => {
   assert.deepEqual(p.calls, []);
 });
 
-test('reply buzz: only on screen, one per burst', () => {
+test('reply buzz: hidden tab skips (the push notification vibrates instead)', () => {
   h.resetMessageHaptic();
   const hidden = phone({ visible: false });
-  assert.equal(h.messageHaptic(hidden.env, 1000), false, 'background: the push notification vibrates instead');
+  assert.equal(h.messageHaptic({ id: 't1' }, hidden.env, 1000), false);
+  assert.deepEqual(hidden.calls, []);
+});
+
+test('reply buzz: once per message', () => {
+  h.resetMessageHaptic();
   const p = phone();
-  assert.equal(h.messageHaptic(p.env, 1000), true);
-  assert.equal(h.messageHaptic(p.env, 1000 + h.MESSAGE_GAP_MS - 1), false, 'several bots at once give one buzz');
-  assert.equal(h.messageHaptic(p.env, 1000 + h.MESSAGE_GAP_MS), true);
+  assert.equal(h.messageHaptic({ id: 't1' }, p.env, 1000), true);
+  assert.equal(h.messageHaptic({ id: 't1' }, p.env, 1000 + 10 * h.MESSAGE_GAP_MS), false, 'same reply again');
+  assert.equal(h.messageHaptic({ id: 't2' }, p.env, 1000 + 10 * h.MESSAGE_GAP_MS), true);
   assert.deepEqual(p.calls, [h.HAPTIC_PATTERNS.message, h.HAPTIC_PATTERNS.message]);
+});
+
+test('reply buzz: own messages and history backfill skip', () => {
+  h.resetMessageHaptic();
+  const p = phone();
+  assert.equal(h.messageHaptic({ id: 'mine', fromPerson: true }, p.env, 1000), false);
+  assert.equal(h.messageHaptic({ id: 'old', backfill: true }, p.env, 2000), false);
+  assert.deepEqual(p.calls, []);
+});
+
+test('reply buzz: throttled, a burst from several bots gives one buzz', () => {
+  h.resetMessageHaptic();
+  assert.ok(h.MESSAGE_GAP_MS >= 3000);
+  const p = phone();
+  assert.equal(h.messageHaptic({ id: 'a' }, p.env, 1000), true);
+  assert.equal(h.messageHaptic({ id: 'b' }, p.env, 1200), false);
+  assert.equal(h.messageHaptic({ id: 'c' }, p.env, 1000 + h.MESSAGE_GAP_MS - 1), false);
+  assert.equal(h.messageHaptic({ id: 'd' }, p.env, 1000 + h.MESSAGE_GAP_MS), true);
+  assert.equal(p.calls.length, 2);
+});
+
+test('reply buzz: Vibration switch off silences it', () => {
+  h.resetMessageHaptic();
+  const p = phone();
   h.setHapticsEnabled(false, p.env);
-  assert.equal(h.messageHaptic(p.env, 99999), false);
+  assert.equal(h.messageHaptic({ id: 't1' }, p.env, 1000), false);
+  assert.deepEqual(p.calls, []);
 });
 
 test('wiring: meaningful actions buzz, typing and scrolling do not', () => {
@@ -131,7 +161,15 @@ test('wiring: meaningful actions buzz, typing and scrolling do not', () => {
   assert.match(body('answerHumanStep'), /if \(which === 'done'\) haptic\('success'\)/);
   assert.match(app, /if \(solve\) \{\s*setSolveRequest\(\(v\) => v \+ 1\);\s*haptic\('tap'\);/, 'Solve it taps');
   // Replies: on TurnComplete for the open chat and when a discussion ends.
-  assert.equal(app.match(/messageHaptic\(\)/g)?.length, 2);
+  // Settled replies only: never on streamed chunks, and the turn id dedupes repeats.
+  assert.equal(app.match(/messageHaptic\(/g)?.length, 2);
+  assert.match(app, /messageHaptic\(\{ id: typeof event\.turn_id === 'string' \? event\.turn_id : undefined \}\)/);
+  for (const chunk of ['TextDelta', 'ThinkingDelta']) {
+    const at = app.indexOf(`case '${chunk}'`);
+    if (at >= 0) assert.doesNotMatch(app.slice(at, app.indexOf('break;', at)), /messageHaptic/, chunk);
+  }
+  // History arrives through refreshContext/hydrateFromServer, which never buzz.
+  assert.doesNotMatch(app.slice(app.indexOf('sse.onopen'), app.indexOf('sse.onmessage')), /messageHaptic/);
   assert.doesNotMatch(app, /onScroll[^\n]*haptic|onChange[^\n]*haptic|onInput[^\n]*haptic/);
 
   const overlay = src('components/BrowserControlOverlay.tsx');

@@ -15,8 +15,8 @@ export const HAPTIC_PATTERNS: Record<HapticKind, number | number[]> = {
 
 export const HAPTICS_KEY = 'kwnt_haptics';
 
-/** Several replies landing together give one buzz. */
-export const MESSAGE_GAP_MS = 1500;
+/** Several replies landing together (one bot or many) give one buzz. */
+export const MESSAGE_GAP_MS = 3000;
 
 /** What the helpers read; the browser's globals by default, fakes in tests. */
 export interface HapticsEnv {
@@ -89,18 +89,43 @@ export function haptic(kind: HapticKind, env: HapticsEnv = browserEnv()): boolea
 }
 
 let lastMessageAt = -Infinity;
+const buzzedIds = new Set<string>();
 
-/** A bot's reply arrived: buzz only while the app is on screen, at most once per MESSAGE_GAP_MS. */
-export function messageHaptic(env: HapticsEnv = browserEnv(), now: number = Date.now()): boolean {
+/** What arrived. A finished bot reply is the only thing that buzzes. */
+export interface ArrivedMessage {
+  /** Turn or message id: the same reply never buzzes twice. */
+  id?: string;
+  /** The person's own message coming back: no buzz. */
+  fromPerson?: boolean;
+  /** History loaded on open or after a reconnect, not a new arrival: no buzz. */
+  backfill?: boolean;
+}
+
+/**
+ * A bot's reply finished arriving: buzz once, only while the app is on screen, at most once per
+ * MESSAGE_GAP_MS. Call it on the settled reply, not on streamed chunks.
+ */
+export function messageHaptic(
+  msg: ArrivedMessage = {},
+  env: HapticsEnv = browserEnv(),
+  now: number = Date.now(),
+): boolean {
+  if (msg.fromPerson || msg.backfill) return false;
+  if (msg.id && buzzedIds.has(msg.id)) return false;
   // In the background the push notification already vibrates.
   if (env.document && env.document.visibilityState !== 'visible') return false;
   if (now - lastMessageAt < MESSAGE_GAP_MS) return false;
   if (!haptic('message', env)) return false;
   lastMessageAt = now;
+  if (msg.id) {
+    buzzedIds.add(msg.id);
+    if (buzzedIds.size > 200) buzzedIds.delete(buzzedIds.values().next().value as string);
+  }
   return true;
 }
 
 /** Tests only. */
 export function resetMessageHaptic(): void {
   lastMessageAt = -Infinity;
+  buzzedIds.clear();
 }
