@@ -39,6 +39,7 @@ pub mod document_routes;
 pub mod connections;
 pub mod setup_routes;
 pub mod push;
+pub mod waiting;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -336,6 +337,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/attachments", get(attachments::list).post(attachments::upload))
         .route("/api/attachments/:id", get(attachments::get))
         .route("/api/attachments/:id/content", get(attachments::content))
+        .route("/api/waiting", get(waiting::list))
         .route("/api/questions", get(questions::list))
         .route("/api/questions/:id", get(questions::get))
         .route("/api/questions/:id/answer", post(questions::answer))

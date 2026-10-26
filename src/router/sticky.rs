@@ -83,6 +83,11 @@ pub fn asks_the_person(text: &str) -> bool {
     questions(last_line(text)).iter().any(|q| !is_closer(q))
 }
 
+/// The question the last line of `text` asks the person, if it asks one (see [`asks_the_person`]).
+pub fn person_question(text: &str) -> Option<String> {
+    questions(last_line(text)).into_iter().rev().find(|q| !is_closer(q)).map(|q| q.trim().to_string())
+}
+
 /// Closing offers that end a finished answer rather than wait for one. Matched on the question
 /// sentence alone, so "Which city are you in? Anything else?" still asks.
 const CLOSERS: &[&str] = &[
@@ -250,6 +255,13 @@ mod tests {
         // Without the list, the newest open card wins as before
         let a = awaiting_answer(&chat[..3], &open, &m).expect("someone waits");
         assert_eq!(a.kwant.id, "Analyst");
+    }
+
+    #[test]
+    fn the_question_asked_is_the_last_real_one() {
+        assert_eq!(person_question("Done.\nWhich city are you in? Anything else?").as_deref(), Some("Which city are you in?"));
+        assert_eq!(person_question("Done. Anything else?"), None);
+        assert_eq!(person_question("Which week?\nI'll start once you say."), None);
     }
 
     fn after(reply: &str) -> Option<String> {

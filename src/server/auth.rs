@@ -307,7 +307,7 @@ fn exempt(path: &str) -> bool {
         || path == "/api/mcp/self"
 }
 
-/// Routes only the person may call: saved passwords and the password vault (Bitwarden), changing app-wide settings, answering an approval card, Loose ends, Connections and Parallel Universe, the
+/// Routes only the person may call: saved passwords and the password vault (Bitwarden), changing app-wide settings, what bots wait on the person for, answering an approval card, Loose ends, Connections and Parallel Universe, the
 /// approvals switch, and deleting a bot or team or undoing a bot action or import (those delete saved passwords too). A bot's turn token (or any
 /// bearer that isn't the API token) is refused with 403 everywhere. From another machine they need the API token (401);
 /// from this machine they don't, unless `KWNT_REQUIRE_TOKEN=always` (`person_token_needed`).
@@ -330,6 +330,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "signin", ..] => true,
         // Web Push: where the person's notifications go
         ["", "api", "push", ..] => true,
+        // What the bots wait on the person for: their questions, across every chat
+        ["", "api", "waiting", ..] => true,
         // App-wide settings, including where notifications go (`notify_webhook_url`), and the
         // sub-routes such as `/computer` (which machine the bots run on) and `/computer/window`:
         // bots change the allowed ones through their `settings_update` action, never these routes
@@ -836,6 +838,8 @@ mod tests {
         assert!(person_only(&get, "/api/push/key"));
         assert!(person_only(&post, "/api/push/subscribe"));
         assert!(person_only(&post, "/api/push/unsubscribe"));
+        assert!(person_only(&get, "/api/waiting"));
+        assert!(person_only(&get, "/api/waiting/"));
         assert!(person_only(&post, "/api/connections/composio"));
         assert!(person_only(&get, "/api/parallel/prices"));
         assert!(person_only(&post, "/api/parallel/scenarios"));

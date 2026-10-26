@@ -21,6 +21,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **One list of questions.** When two or more bots ask you something after one message, the team
   lead (or the bot that started) posts one numbered list of everything they need. Your answer goes
   to the lead, which passes each part on; bots waiting on a question card continue directly.
+- **Reminders when a bot waits on you.** When a bot's reply ends by asking you something, or it asks
+  with a question card (also Claude's own question tool, which now shows as a card you can answer),
+  it reminds you once in the same chat after 24 hours and sends a notification. Writing in that chat
+  or answering the question cancels the reminder. Set the delay with `waiting_follow_up_hours` in
+  settings (0 turns reminders off). `GET /api/waiting` (you only, never a bot) lists everything bots
+  are waiting on you for.
 
 ### Changed
 - A bot reply that ends with a closing line such as "Anything else?", "Should I continue?" or

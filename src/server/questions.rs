@@ -136,6 +136,8 @@ async fn close(state: &AppState, id: &str, status: &str, answer: Option<&str>) -
     if !state.db.close_question(id, status, answer).await.ok()? {
         return None;
     }
+    // Nothing waits on the person for it any more, and its reminder (if not sent yet) never goes out
+    let _ = state.db.close_waiting_for_question(id).await;
     let q = state.db.get_question(id).await.ok().flatten()?;
     changed(state, &q).await;
     Some(q)
@@ -446,4 +448,150 @@ pub async fn cancel(State(state): State<AppState>, Path(id): Path<String>) -> Re
         let _ = tx.send(Reply::Dismissed);
     }
     Json(q).into_response()
+}
+
+// The claude CLI's own question tool
+
+/// The claude CLI's built-in question tool. Under `-p` nobody can answer it inside the turn, so
+/// its questions are saved as open questions with cards: the person sees them, can answer later
+/// (a new turn gets the answer) and they count as waiting on the person.
+pub const NATIVE_ASK_TOOL: &str = "AskUserQuestion";
+
+/// The questions in an `AskUserQuestion` call, `{"questions": [{"question", "options": [{"label"}]}]}`,
+/// cleaned: each question clipped to the usual length, at most 5 distinct choices (it may have
+/// fewer than 2, the person can always type an answer). Inputs too long to pass whole arrive as
+/// a clipped JSON string; their question texts are still read, without choices.
+pub fn native_questions(args: &Value) -> Vec<(String, Vec<String>)> {
+    let clip = |s: &str, n: usize| -> String { s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(n).collect() };
+    let parsed;
+    let args = match args {
+        Value::String(raw) => match serde_json::from_str::<Value>(raw) {
+            Ok(v) => {
+                parsed = v;
+                &parsed
+            }
+            Err(_) => {
+                return strings_after(raw, "\"question\"")
+                    .iter()
+                    .map(|q| clip(q, crate::db::questions::MAX_QUESTION_CHARS))
+                    .filter(|q| !q.is_empty())
+                    .map(|q| (q, Vec::new()))
+                    .collect()
+            }
+        },
+        v => v,
+    };
+    let mut out = Vec::new();
+    for item in args["questions"].as_array().map(Vec::as_slice).unwrap_or_default() {
+        let q = clip(item["question"].as_str().unwrap_or(""), crate::db::questions::MAX_QUESTION_CHARS);
+        if q.is_empty() {
+            continue;
+        }
+        let mut choices: Vec<String> = Vec::new();
+        for o in item["options"].as_array().map(Vec::as_slice).unwrap_or_default() {
+            let label = o["label"].as_str().or_else(|| o.as_str()).unwrap_or("");
+            let c = clip(label, crate::db::questions::MAX_CHOICE_CHARS);
+            if !c.is_empty() && !choices.iter().any(|x| x.eq_ignore_ascii_case(&c)) && choices.len() < crate::db::questions::MAX_CHOICES {
+                choices.push(c);
+            }
+        }
+        out.push((q, choices));
+    }
+    out
+}
+
+/// The JSON string values after each `key:` in clipped JSON text; a string cut off at the end is
+/// skipped.
+fn strings_after(raw: &str, key: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = raw;
+    while let Some(i) = rest.find(key) {
+        rest = &rest[i + key.len()..];
+        let Some(open) = rest.trim_start().strip_prefix(':').map(str::trim_start).and_then(|r| r.strip_prefix('"')) else {
+            continue;
+        };
+        let mut escaped = false;
+        let end = open.char_indices().find(|&(_, c)| {
+            let close = c == '"' && !escaped;
+            escaped = c == '\\' && !escaped;
+            close
+        });
+        if let Some((end, _)) = end {
+            if let Ok(s) = serde_json::from_str::<String>(&format!("\"{}\"", &open[..end])) {
+                out.push(s);
+            }
+        }
+    }
+    out
+}
+
+/// Saves the questions of a claude `AskUserQuestion` call as open questions with cards in the
+/// turn's chat, and tells the person. Returns how many were saved.
+pub async fn record_native(state: &AppState, place: &QuestionPlace, kwant_name: &str, args: &Value) -> usize {
+    let mut saved = 0;
+    for (question, choices) in native_questions(args) {
+        let created = state
+            .db
+            .create_question_with_card(place, &question, &choices, |q| {
+                let text = match choices.is_empty() {
+                    true => q.question.clone(),
+                    false => format!("{}\n\nChoices: {}", q.question, choices.join(" · ")),
+                };
+                let (msg, extra) = place_message(q, "kwant", &place.kwant_id, text);
+                Some((msg, MessageExtra { meta: Some(card_meta(q)), ..extra }))
+            })
+            .await;
+        let (q, card) = match created {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, kwant_id = %place.kwant_id, "could not save a claude AskUserQuestion");
+                break;
+            }
+        };
+        if let Some(card) = card {
+            if let Some(t) = &q.thread_id {
+                let _ = state.db.touch_thread(t).await;
+            }
+            let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&card).unwrap_or(Value::Null) });
+        }
+        changed(state, &q).await;
+        notify(
+            state,
+            Notification {
+                kind: "question_asked",
+                kwant_id: place.kwant_id.clone(),
+                kwant_name: kwant_name.to_string(),
+                channel_id: q.channel_id.clone(),
+                title: format!("{kwant_name} has a question"),
+                body: "Open the chat to answer.".into(),
+            },
+        )
+        .await;
+        tracing::info!(question_id = %q.id, kwant_id = %place.kwant_id, "saved a claude AskUserQuestion");
+        saved += 1;
+    }
+    saved
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_questions_are_read() {
+        let args = json!({"questions": [
+            {"question": "Which  plan?", "header": "Plan", "multiSelect": false,
+             "options": [{"label": "Pro", "description": "x"}, {"label": "pro"}, {"label": "Max"}]},
+            {"question": "  ", "options": []},
+            {"question": "Anything to add?"},
+        ]});
+        assert_eq!(
+            native_questions(&args),
+            vec![("Which plan?".to_string(), vec!["Pro".to_string(), "Max".to_string()]), ("Anything to add?".to_string(), vec![])]
+        );
+        let long = format!("{{\"questions\":[{{\"question\":\"Ship \\\"it\\\" now?\",\"options\":[{{\"label\":\"{}", "y".repeat(3000));
+        let clipped = Value::String(long.chars().take(2000).collect());
+        assert_eq!(native_questions(&clipped), vec![("Ship \"it\" now?".to_string(), vec![])]);
+        assert!(native_questions(&json!({"todos": []})).is_empty());
+    }
 }

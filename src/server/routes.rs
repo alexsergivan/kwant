@@ -1551,10 +1551,14 @@ pub(super) async fn try_kwant_turn(
     if let Some(started) = opts.on_started.take() {
         started.await;
     }
+    // A discussion round's reply isn't saved as is, so it isn't followed up
+    let follow_up = opts.discussion.is_none();
     let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts, &tag).await;
     if scope.cancel_token.is_cancelled() {
         super::questions::cancel_for_turn(&scope.state, &tag.turn_id).await;
         super::human_steps::cancel_for_turn(&scope.state, &tag.turn_id).await;
+    } else if let (Ok(text), true) = (&reply, follow_up) {
+        super::waiting::turn_ended(scope, target_kwant, &tag.turn_id, text).await;
     }
     ended.outcome = match (&reply, scope.cancel_token.is_cancelled()) {
         (Ok(_), _) => "completed",
@@ -2155,6 +2159,18 @@ async fn run_kwant_turn_inner(
                             // Only resets the stall clock (above)
                             Some(RuntimeEvent::Progress) => {}
                             Some(event) => {
+                                if let RuntimeEvent::ToolCallPending { name, args, .. } = &event {
+                                    if name == super::questions::NATIVE_ASK_TOOL {
+                                        let place = crate::db::questions::QuestionPlace {
+                                            kwant_id: target_kwant.id.clone(),
+                                            channel_id: scope.channel_id.clone(),
+                                            direct_kwant_id: scope.kwant_id.clone(),
+                                            thread_id: scope.thread_id.clone(),
+                                            turn_id: Some(tag.turn_id.clone()),
+                                        };
+                                        super::questions::record_native(state, &place, &target_kwant.name, args).await;
+                                    }
+                                }
                                 let visible = match &event {
                                     RuntimeEvent::TextDelta(t) => !t.trim().is_empty(),
                                     RuntimeEvent::ToolCallPending { .. } | RuntimeEvent::ApprovalRequired { .. } => true,
@@ -2658,6 +2674,8 @@ async fn send_chat_inner(
         .insert_message_with(&user_msg, &user_extra)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // The person wrote here: the bots waiting on them in this chat don't need to remind them
+    super::waiting::person_wrote(&state, payload.channel_id.as_deref(), payload.kwant_id.as_deref(), None).await;
     let note = super::attachments::attach_to_message(
         &state,
         &uploads,
@@ -3007,6 +3025,7 @@ async fn send_to_thread(
     let extra = MessageExtra { thread_id: Some(thread.id.clone()), meta };
     let saved = state.db.insert_message_with(&user_msg, &extra).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let _ = state.db.touch_thread(&thread.id).await;
+    super::waiting::person_wrote(&state, None, None, Some(&thread.id)).await;
     let note = super::attachments::attach_to_message(&state, &uploads, &saved.id, None, None, Some(&thread.id)).await;
 
     let job = state.turns.start_job([saved.id.clone(), thread.id.clone()]);
@@ -3101,6 +3120,8 @@ pub struct SettingsResponse {
     pub location: String,
     /// How long a CAPTCHA step waits for the person before the bot moves on (1–60).
     pub captcha_timeout_minutes: u64,
+    /// Hours before a bot waiting on the person reminds them once; 0 = never.
+    pub waiting_follow_up_hours: i64,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3128,6 +3149,7 @@ pub struct SaveSettingsPayload {
     /// The person's city, plain text ("Ljubljana"); "" clears it. Never looked up anywhere.
     pub location: Option<String>,
     pub captcha_timeout_minutes: Option<u64>,
+    pub waiting_follow_up_hours: Option<i64>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3164,6 +3186,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|m| (1..=super::human_steps::MAX_CAPTCHA_TIMEOUT_MINUTES).contains(m))
             .unwrap_or(super::human_steps::DEFAULT_CAPTCHA_TIMEOUT_MINUTES),
+        waiting_follow_up_hours: super::waiting::follow_up_hours(&state).await,
     }))
 }
 
@@ -3202,6 +3225,10 @@ pub async fn save_settings(
     let max_captcha = super::human_steps::MAX_CAPTCHA_TIMEOUT_MINUTES;
     if payload.captcha_timeout_minutes.is_some_and(|m| !(1..=max_captcha).contains(&m)) {
         return bad(format!("captcha_timeout_minutes must be 1–{max_captcha}"));
+    }
+    let max_hours = super::waiting::MAX_HOURS;
+    if payload.waiting_follow_up_hours.is_some_and(|h| !(0..=max_hours).contains(&h)) {
+        return bad(format!("waiting_follow_up_hours must be 0–{max_hours}"));
     }
     let timezone = payload.timezone.as_deref().map(crate::routines::canonical_tz);
     if let Some(tz) = timezone.as_deref().filter(|t| !t.is_empty()) {
@@ -3272,6 +3299,10 @@ pub async fn save_settings(
     }
     if let Some(m) = payload.delegation_follow_up_minutes {
         let _ = state.db.set_setting(super::delegation::FOLLOW_UP_SETTING, &m.to_string()).await;
+    }
+    if let Some(h) = payload.waiting_follow_up_hours {
+        let _ = state.db.set_setting(super::waiting::HOURS_SETTING, &h.to_string()).await;
+        state.scheduler_wake.notify_one();
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;

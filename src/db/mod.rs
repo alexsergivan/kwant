@@ -19,6 +19,7 @@ pub mod hires;
 pub mod imports;
 pub mod approval_modes;
 pub mod parked;
+pub mod waiting;
 pub mod api_context;
 pub mod usage;
 
@@ -148,6 +149,7 @@ impl Database {
         db.migrate_parallel().await?;
         db.migrate_documents().await?;
         db.migrate_parked().await?;
+        db.migrate_waiting().await?;
         db.migrate_api_context().await?;
         db.migrate_usage().await?;
         if spaces {

@@ -649,11 +649,15 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
             tick(&state, Utc::now()).await;
             super::delegation::follow_ups(&state, Utc::now()).await;
             super::parked::run_due(&state, Utc::now()).await;
-            let next_parked = state.db.next_parked_due().await.ok().flatten();
-            let next = match (state.db.next_routine_due().await.ok().flatten(), next_parked) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            };
+            super::waiting::run_due(&state, Utc::now()).await;
+            let next = [
+                state.db.next_routine_due().await.ok().flatten(),
+                state.db.next_parked_due().await.ok().flatten(),
+                state.db.next_waiting_due().await.ok().flatten(),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
             let sleep = match next {
                 Some(at) => (at - Utc::now())
                     .to_std()
