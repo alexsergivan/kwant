@@ -42,6 +42,7 @@ pub mod setup_routes;
 pub mod push;
 pub mod waiting;
 pub mod decide;
+pub mod work_ahead;
 pub mod app_update_routes;
 
 use crate::broker::PermissionBroker;
@@ -353,6 +354,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/questions/:id", get(questions::get))
         .route("/api/questions/:id/answer", post(questions::answer))
         .route("/api/messages/:message_id/decisions/:index/change", post(decide::change))
+        .route("/api/work-ahead/run", post(work_ahead::run_now))
         .route("/api/questions/:id/cancel", post(questions::cancel))
         .route("/api/human-steps", get(human_steps::list))
         .route("/api/human-steps/:id", get(human_steps::get))

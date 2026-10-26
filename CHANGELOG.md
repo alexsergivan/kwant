@@ -17,6 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   password or sign-in, and when you say you want to pick yourself. App settings has a switch for it.
 - **Bots learn how you decide.** Your answers to question cards and your changes to the bots' choices
   are kept per space, and bots use them to predict your next pick instead of asking.
+- **Bots work ahead in quiet chats.** When a chat has gone quiet for a couple of hours with open
+  items, its lead bot does the next safe, undoable step on its own (a check, a draft, a summary) and
+  leaves one "While you were away" message with what it did and what it expects you'll want next. It
+  never sends, posts, pays or signs in, stays silent when nothing is worth doing, works each chat at
+  most once until you write again, and is capped per space per day. App settings has a switch for it.
 - **Questions say why only you can answer.** A bot's question card now says why it needs you and what
   it checked first; a question without a reason goes back to the bot to decide itself.
 

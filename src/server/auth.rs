@@ -332,6 +332,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "push", ..] => true,
         // What the bots wait on the person for: their questions, across every chat
         ["", "api", "waiting", ..] => true,
+        // Starting work-ahead runs now spends the person's tokens
+        ["", "api", "work-ahead", ..] => true,
         // App-wide settings, including where notifications go (`notify_webhook_url`), and the
         // sub-routes such as `/computer` (which machine the bots run on) and `/computer/window`:
         // bots change the allowed ones through their `settings_update` action, never these routes
@@ -834,6 +836,7 @@ mod tests {
         assert!(person_only(&del, "/api/sandbox/t1/passwords/c1"));
         assert!(person_only(&get, "/api/passwords/store"));
         assert!(person_only(&post, "/api/messages/m1/decisions/0/change"));
+        assert!(person_only(&post, "/api/work-ahead/run"));
         assert!(person_only(&post, "/api/passwords/bitwarden/unlock"));
         assert!(person_only(&del, "/api/passwords/bitwarden"));
         assert!(person_only(&post, "/api/passwords/migrate"));
