@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin } from 'lucide-react';
+import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import {
   BROWSER_NOTIFY_KEY,
@@ -17,6 +17,7 @@ import { deviceNotifyHint, deviceNotifySupport, isAndroid, notifyEnv as browserN
 
 const readNotifyEnv = () => ({ ...browserNotifyEnv(), android: isAndroid(navigator) });
 import { isSfxMuted, playSfx, toggleSfxMute } from '../audio/chiptune';
+import { haptic, hapticsAvailable, hapticsEnabled, setHapticsEnabled } from '../haptics';
 import { useAuth } from './AuthGate';
 import { SignedInDevices } from './DeviceSignIn';
 import { signedInDevicesVisible } from '../deviceSignIn';
@@ -69,6 +70,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const computer = useComputerMode(isOpen);
   const engines = useEngines(isOpen);
   const [sfxMuted, setSfxMuted] = useState(isSfxMuted);
+  const [vibration, setVibration] = useState(hapticsEnabled);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [anthropicKey, setAnthropicKey] = useState('');
   const [xaiKey, setXaiKey] = useState('');
@@ -285,6 +287,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${!sfxMuted ? 'translate-x-4' : ''}`} />
             </button>
           </div>
+          {hapticsAvailable() && (
+            <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
+              <span className="flex-1 text-xs font-medium text-zinc-200 flex items-center gap-2">
+                {vibration ? <Vibrate size={15} className="text-sky-400" aria-hidden="true" /> : <VibrateOff size={15} className="text-zinc-500" aria-hidden="true" />}
+                <span id="vibration-label">Vibration</span>
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={vibration}
+                aria-labelledby="vibration-label"
+                aria-describedby="vibration-hint"
+                onClick={() => {
+                  setHapticsEnabled(!vibration);
+                  setVibration(!vibration);
+                  if (!vibration) haptic('tap');
+                }}
+                className={`relative shrink-0 w-9 h-5 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                  vibration ? 'bg-sky-600' : 'bg-zinc-700'
+                }`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${vibration ? 'translate-x-4' : ''}`} />
+              </button>
+              <span id="vibration-hint" className="sr-only">
+                A short buzz when you send, answer or solve a puzzle, and when a reply arrives while the app is open.
+              </span>
+            </div>
+          )}
           <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
             <Gauge size={15} className="text-zinc-500" aria-hidden="true" />
             <span className="flex-1 text-xs font-medium text-zinc-200">Token usage, open chat</span>

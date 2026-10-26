@@ -38,6 +38,7 @@ import { NewChannelModal } from './components/NewChannelModal';
 import type { NewChannelBody } from './channels';
 import { ManageTeamModal } from './components/ManageTeamModal';
 import { playSfx } from './audio/chiptune';
+import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
 import { clearAllTurns, resetTurns, turnEnded, turnStarted } from './kwantActivity';
 import {
@@ -1017,6 +1018,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const targetId = streamingContextIdRef.current || selectedIdRef.current;
             streamingContextIdRef.current = null;
             playSfx('coin');
+            messageHaptic();
             refreshContext(targetId).then(() => settle(targetId));
             break;
           }
@@ -1024,6 +1026,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const ctx = streamTarget(event, streamingContextIdRef.current);
             if (ctx === openCtxRef.current) {
               playSfx('coin');
+              messageHaptic();
               setTokensUsed((prev) => prev + (event.data?.tokens || 0));
             }
             if (typeof event.turn_id === 'string') completed.add(event.turn_id);
@@ -1175,6 +1178,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
   const handleSendMessage = async (text: string, attachments: AttachmentRef[] = []): Promise<boolean> => {
+    haptic('tap');
     setHistoryWindow(null);
     const targetId = openCtx;
     const threadId = openThreadId;
@@ -1242,6 +1246,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       return true;
     } catch (err) {
       console.error('Failed sending chat:', err);
+      haptic('warning');
       const rest = (messagesCacheRef.current[targetId] || []).filter((m) => m.id !== tempId);
       messagesCacheRef.current[targetId] = rest;
       if (openCtxRef.current === targetId) setMessages(rest);
@@ -1259,6 +1264,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     ticketId: string,
     decision: 'allow_once' | 'always_allow' | 'deny'
   ) => {
+    haptic('tap');
     try {
       const res = await fetch(`/api/approvals/${ticketId}/resolve`, {
         method: 'POST',
@@ -1280,10 +1286,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         // Person-only: the token dialog is open; the card stays so the person can answer again.
         pushToast('Enter your access token', 'Answering approval cards needs your token. Then answer the card again.');
       } else {
+        haptic('warning');
         pushToast("Couldn't send your answer", `Request failed (HTTP ${res.status}). Try again.`);
       }
     } catch (err) {
       console.error('Failed resolving approval:', err);
+      haptic('warning');
       pushToast("Couldn't send your answer", 'Check the connection and try again.');
     }
   };
@@ -1505,6 +1513,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
   const handleAnswerQuestion = async (id: string, answer: { choice: number } | { text: string }): Promise<string | void> => {
+    haptic('tap');
     try {
       const { question } = await questionsApi.answer(id, answer);
       setQuestions((prev) => applyQuestion(prev, question));
@@ -1518,6 +1527,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       } catch {
         // keep the first error
       }
+      haptic('warning');
       return `Couldn't send your answer: ${errText(err)}`;
     }
   };
@@ -1550,9 +1560,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   /** Done or Skip on a browser step. A 409 means it was answered elsewhere: show how it ended. */
   const answerHumanStep = async (id: string, which: 'done' | 'decline'): Promise<string | void> => {
+    haptic('tap');
     try {
       const { step } = await (which === 'done' ? humanStepsApi.done(id) : humanStepsApi.decline(id));
       setHumanSteps((prev) => applyHumanStep(prev, step));
+      if (which === 'done') haptic('success');
     } catch (err) {
       try {
         const { step } = await humanStepsApi.get(id);
@@ -1563,6 +1575,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       } catch {
         // keep the first error
       }
+      haptic('warning');
       return `Couldn't send that: ${errText(err)}`;
     }
   };
@@ -1580,7 +1593,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         waiting={!!turnId && !!turns[turnId]}
         onOpenBrowser={(_target, solve) => {
           setIsVmPaneOpen(true);
-          if (solve) setSolveRequest((v) => v + 1);
+          if (solve) {
+            setSolveRequest((v) => v + 1);
+            haptic('tap');
+          }
           playSfx('click');
         }}
         onDone={(id) => answerHumanStep(id, 'done')}

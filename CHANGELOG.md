@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Vibration on Android phones.** The web app gives a short buzz when you send a message, answer a
+  question or approval card, press **Solve it**, **Done**, **Skip** or **Hand back**, and when a puzzle
+  is solved, with a different buzz for errors. A bot reply arriving while the app is on screen gives a
+  light double buzz, at most one per burst. A **Vibration** switch in App settings turns it off; it
+  starts off when the phone asks for reduced motion. iPhones and desktops have no web vibration.
+
 ### Changed
 - A bot reply that ends with a closing line such as "Anything else?", "Should I continue?" or
   "Want me to also…?" no longer pulls the person's next message back to that bot. Real questions

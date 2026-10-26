@@ -17,6 +17,7 @@ import {
   zoomToBox,
 } from '../browserGestures';
 import { domainOf } from '../humanSteps';
+import { haptic } from '../haptics';
 
 /** Sends one gesture to the page: presses, releases, taps and text wait for an ack, moves don't. */
 export function sendPageInput(send: (payload: Record<string, unknown>, input?: boolean) => void, input: PageInput) {
@@ -238,6 +239,11 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
     else keys.current?.blur();
   }, [tapFocus, openKeyboard]);
 
+  // The puzzle closing as solved is felt as well as shown
+  useEffect(() => {
+    if (solved) haptic('success');
+  }, [solved]);
+
   // The page behind can't scroll or zoom while this is up
   useEffect(() => {
     const html = document.documentElement;
@@ -277,7 +283,10 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
           </button>
           <button
             type="button"
-            onClick={onHandBack}
+            onClick={() => {
+              haptic('tap');
+              onHandBack();
+            }}
             className="shrink-0 inline-flex items-center gap-1.5 h-10 px-3 rounded-lg bg-cyan-500 text-zinc-950 text-sm font-semibold"
           >
             <Hand size={15} aria-hidden="true" /> Hand back
