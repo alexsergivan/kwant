@@ -1578,7 +1578,7 @@ async fn webhook_setting_is_https_only_and_masked() {
     let (_, s) = req(&app, "GET", "/api/settings", None).await;
     assert_eq!(s["notify_webhook_url"], "••••••••");
     assert!(!s.to_string().contains("secret-topic"));
-    assert_eq!(s["notify_on"], json!(["routine_failed"]));
+    assert_eq!(s["notify_on"], json!(["routine_failed", "app_update"]), "off the Mac app a save keeps app_update as it was");
 
     // Sending the mask back keeps it
     req(

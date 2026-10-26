@@ -15,7 +15,7 @@ use kwnt::{
     router::LayaRouter,
     server::{
         app_update_routes,
-        continuity::{SelfScope, TurnOrigin},
+        continuity::{self, SelfScope, TurnOrigin},
         create_router, mcp_runtime, AppState,
     },
     tools::ToolRunner,
@@ -239,4 +239,74 @@ async fn notifies_once_per_version() {
         e.state.db.get_setting(app_update_routes::NOTIFIED_SETTING).await.unwrap().as_deref(),
         Some("0.1.3")
     );
+}
+
+/// Whether `notify_once` for a fresh version reaches the UI.
+async fn update_notification_delivered(e: &Env, version: &str) -> bool {
+    let mut events = e.state.event_sender.subscribe();
+    assert!(app_update_routes::notify_once(&e.state, version).await);
+    while let Ok(ev) = events.try_recv() {
+        if matches!(ev, RuntimeEvent::Notify { ref kind, .. } if kind == "app_update") {
+            return true;
+        }
+    }
+    false
+}
+
+fn kinds(list: &[&str]) -> Vec<String> {
+    list.iter().map(|k| k.to_string()).collect()
+}
+
+#[tokio::test]
+async fn app_update_is_on_for_lists_saved_before_it_existed() {
+    let e = setup(Some(Arc::new(FakeUpdater::default()))).await;
+    // What a person who saved their notification settings before #78 has stored
+    e.state.db.set_setting("notify_on", r#"["turn_finished","approval_needed"]"#).await.unwrap();
+    let on = continuity::notify_on(&e.state).await;
+    assert_eq!(on, kinds(&["turn_finished", "approval_needed", "app_update"]));
+    assert!(update_notification_delivered(&e, "0.1.2").await);
+    let (_, s) = call(&e.app, "GET", "/api/settings", None).await;
+    assert!(s["notify_on"].as_array().unwrap().contains(&json!("app_update")), "the switch shows on: {s}");
+}
+
+#[tokio::test]
+async fn an_explicit_untick_sticks_and_new_kinds_stay_on() {
+    let e = setup(Some(Arc::new(FakeUpdater::default()))).await;
+    e.state.db.set_setting("notify_on", r#"["turn_finished"]"#).await.unwrap();
+    // The Mac app's settings page offers app_update; the person unticks it
+    continuity::save_notify_settings(&e.state, None, Some(kinds(&["turn_finished", "question_asked"]))).await.unwrap();
+    assert_eq!(continuity::notify_on(&e.state).await, kinds(&["turn_finished", "question_asked"]));
+    assert!(!update_notification_delivered(&e, "0.1.2").await);
+    // A later save that doesn't touch notify_on keeps it off
+    continuity::save_notify_settings(&e.state, Some(String::new()), None).await.unwrap();
+    assert!(!update_notification_delivered(&e, "0.1.3").await);
+    // Kinds this list was chosen from are remembered, so only kinds added later default on
+    let known: Vec<String> =
+        serde_json::from_str(&e.state.db.get_setting(continuity::NOTIFY_KNOWN_SETTING).await.unwrap().unwrap()).unwrap();
+    assert!(known.contains(&"app_update".to_string()));
+    let all_but_update: Vec<String> =
+        continuity::NOTIFY_KINDS.iter().filter(|k| **k != "app_update").map(|k| k.to_string()).collect();
+    assert_eq!(
+        continuity::effective_kinds(&kinds(&["turn_finished"]), &kinds(&["turn_finished", "app_update"])),
+        all_but_update
+    );
+}
+
+#[tokio::test]
+async fn saving_off_the_mac_app_keeps_the_app_update_choice() {
+    // Off the Mac app the settings page leaves app_update out of the save (#79)
+    let e = setup(None).await;
+    continuity::save_notify_settings(&e.state, None, Some(kinds(&["turn_finished"]))).await.unwrap();
+    assert_eq!(continuity::notify_on(&e.state).await, kinds(&["turn_finished", "app_update"]), "default on survives");
+
+    // Turned off in the Mac app, then saved from the VPS: still off
+    e.state.db.set_setting("notify_on", r#"["turn_finished"]"#).await.unwrap();
+    let all = serde_json::to_string(&continuity::NOTIFY_KINDS).unwrap();
+    e.state.db.set_setting(continuity::NOTIFY_KNOWN_SETTING, &all).await.unwrap();
+    assert_eq!(continuity::notify_on(&e.state).await, kinds(&["turn_finished"]));
+    continuity::save_notify_settings(&e.state, None, Some(kinds(&["turn_finished", "approval_needed"]))).await.unwrap();
+    assert_eq!(continuity::notify_on(&e.state).await, kinds(&["turn_finished", "approval_needed"]));
+    // and a client there can't switch it on either
+    continuity::save_notify_settings(&e.state, None, Some(kinds(&["turn_finished", "app_update"]))).await.unwrap();
+    assert_eq!(continuity::notify_on(&e.state).await, kinds(&["turn_finished"]));
 }

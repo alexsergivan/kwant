@@ -36,6 +36,15 @@ def changelog_section(changelog: str, version: str) -> str:
     raise ValueError(f"CHANGELOG.md has no '## [Mac {version}]' section")
 
 
+def release_notes(changelog: str, version: str) -> str:
+    """The update notes for a full release: its CHANGELOG section, which must say something
+    besides `### ` headings."""
+    notes = changelog_section(changelog, version)
+    if not any(line.strip() and not line.startswith("#") for line in notes.splitlines()):
+        raise ValueError(f"the CHANGELOG section for {version} is empty")
+    return notes
+
+
 def latest_json(version: str, signature: str, url: str, notes: str, pub_date: str) -> dict:
     if not VERSION.match(version):
         raise ValueError(f"'{version}' is not a release version (x.y.z); prereleases get no latest.json")
@@ -58,15 +67,21 @@ def latest_json(version: str, signature: str, url: str, notes: str, pub_date: st
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--version", required=True)
-    ap.add_argument("--signature", required=True, help="the .sig file the Tauri build wrote")
-    ap.add_argument("--url", required=True, help="where the release serves the .app.tar.gz")
+    ap.add_argument("--check-notes", action="store_true",
+                    help="only check that the CHANGELOG section exists and isn't empty")
+    ap.add_argument("--signature", help="the .sig file the Tauri build wrote")
+    ap.add_argument("--url", help="where the release serves the .app.tar.gz")
     ap.add_argument("--changelog", default="CHANGELOG.md")
     ap.add_argument("--pub-date", help="RFC 3339; default now (UTC)")
     args = ap.parse_args(argv)
+    if not args.check_notes and not (args.signature and args.url):
+        ap.error("--signature and --url are required unless --check-notes")
     pub_date = args.pub_date or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         with open(args.changelog, encoding="utf-8") as f:
-            notes = changelog_section(f.read(), args.version)
+            notes = release_notes(f.read(), args.version)
+        if args.check_notes:
+            return 0
         with open(args.signature, encoding="utf-8") as f:
             signature = f.read()
         doc = latest_json(args.version, signature, args.url, notes, pub_date)

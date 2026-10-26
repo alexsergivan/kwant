@@ -1140,16 +1140,58 @@ pub async fn notify_settings_view(state: &AppState) -> (String, Vec<String>) {
     )
 }
 
-/// Kinds the user wants to hear about; all of them unless set.
+/// The kinds the saved `notify_on` list was chosen from. Kinds missing here came later and
+/// count as on until the person unticks them.
+pub const NOTIFY_KNOWN_SETTING: &str = "notify_known";
+/// Kinds added after `notify_on` lists were first saved but before `notify_known` existed: a list
+/// saved without `notify_known` was chosen from every kind but these.
+const KINDS_SINCE_FIRST_LIST: [&str; 1] = ["app_update"];
+
+/// Kinds the user wants to hear about; all of them unless set. A kind added after the list was
+/// saved is on, so a new event isn't silently off for everyone who ever saved the settings.
 pub async fn notify_on(state: &AppState) -> Vec<String> {
-    state
-        .db
-        .get_setting("notify_on")
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
-        .unwrap_or_else(|| NOTIFY_KINDS.iter().map(|k| k.to_string()).collect())
+    let db = &state.db;
+    let read = |key: &'static str| async move {
+        db.get_setting(key)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| serde_json::from_str::<Vec<String>>(&v).ok())
+    };
+    let Some(saved) = read("notify_on").await else {
+        return NOTIFY_KINDS.iter().map(|k| k.to_string()).collect();
+    };
+    let known = read(NOTIFY_KNOWN_SETTING).await.unwrap_or_else(|| {
+        NOTIFY_KINDS
+            .iter()
+            .filter(|k| !KINDS_SINCE_FIRST_LIST.contains(k))
+            .map(|k| k.to_string())
+            .collect()
+    });
+    effective_kinds(&saved, &known)
+}
+
+/// `saved` plus every kind that isn't in `known`, in `NOTIFY_KINDS` order.
+pub fn effective_kinds(saved: &[String], known: &[String]) -> Vec<String> {
+    NOTIFY_KINDS
+        .iter()
+        .filter(|k| saved.iter().any(|s| s == *k) || !known.iter().any(|s| s == *k))
+        .map(|k| k.to_string())
+        .collect()
+}
+
+/// Kinds this server can't raise, so its settings page doesn't offer them: the web app leaves
+/// them out of a save, which must not read as the person turning them off.
+fn unavailable_kinds(state: &AppState) -> Vec<&'static str> {
+    if state.app_update.status().supported {
+        Vec::new()
+    } else {
+        vec!["app_update"]
+    }
+}
+
+fn all_kinds() -> Vec<String> {
+    NOTIFY_KINDS.iter().map(|k| k.to_string()).collect()
 }
 
 /// Checks a webhook URL: https with a host, no credentials in it.
@@ -1190,9 +1232,22 @@ pub async fn save_notify_settings(
             .await
             .map_err(|_| "could not save settings".to_string())?;
     }
-    if let Some(list) = on {
+    if let Some(mut list) = on {
+        // Kinds this server doesn't offer keep the person's earlier choice
+        let current = notify_on(state).await;
+        list.retain(|k| !unavailable_kinds(state).contains(&k.as_str()));
+        for k in unavailable_kinds(state) {
+            if current.iter().any(|c| c == k) {
+                list.push(k.to_string());
+            }
+        }
+        let list = effective_kinds(&list, &all_kinds());
         let value = serde_json::to_string(&list).unwrap_or_else(|_| "[]".into());
         db.set_setting("notify_on", &value)
+            .await
+            .map_err(|_| "could not save settings".to_string())?;
+        let known = serde_json::to_string(&all_kinds()).unwrap_or_else(|_| "[]".into());
+        db.set_setting(NOTIFY_KNOWN_SETTING, &known)
             .await
             .map_err(|_| "could not save settings".to_string())?;
     }

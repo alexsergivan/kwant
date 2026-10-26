@@ -51,6 +51,29 @@ class ChangelogSection(unittest.TestCase):
         self.assertEqual(m.changelog_section(CHANGELOG, "0.1.1"), "### Added\n- Older things.")
         self.assertEqual(m.changelog_section(CHANGELOG, "0.1.10"), "- Not 0.1.1.")
 
+    def test_empty_notes_are_refused(self):
+        changelog = "## Unreleased\n\n## [Mac 0.2.0] - 2026-11-01\n\n### Added\n\n## [Mac 0.1.2]\n- Old.\n"
+        with self.assertRaises(ValueError):
+            m.release_notes(changelog, "0.2.0")
+        with self.assertRaises(ValueError):
+            m.release_notes("## [Mac 0.2.0]\n\n## [Mac 0.1.2]\n- Old.\n", "0.2.0")
+        self.assertEqual(m.release_notes(changelog, "0.1.2"), "- Old.")
+
+    def test_check_notes_cli(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "CHANGELOG.md")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("## [Mac 0.2.0]\n### Fixed\n\n## [Mac 0.1.2]\n- Old.\n")
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(m.main(["--check-notes", "--version", "0.2.0", "--changelog", path]), 1)
+            self.assertIn("empty", err.getvalue())
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(m.main(["--check-notes", "--version", "0.3.0", "--changelog", path]), 1)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(m.main(["--check-notes", "--version", "0.1.2", "--changelog", path]), 0)
+            self.assertEqual(out.getvalue(), "", "a check writes no feed")
+
     def test_missing_section_fails(self):
         with self.assertRaises(ValueError):
             m.changelog_section(CHANGELOG, "0.1.3")
