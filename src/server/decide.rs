@@ -32,7 +32,8 @@ use std::sync::{Arc, Mutex};
 pub const SETTING: &str = "decide_first";
 /// Fresh tokens the hidden round needs to be left in the chain's budget.
 pub const RESERVE_TOKENS: u64 = 30_000;
-/// Teammates asked for their view at most.
+/// Teammates asked for their view at most: the one most relevant to the open choices, or two when
+/// the reply's choices or undone checks name both (see [`consultees`]).
 pub const MAX_CONSULTS: usize = 2;
 /// The `purpose` of the hidden round's turns in `GET /api/turns` (`turns[]`).
 pub const PURPOSE: &str = "decide";
@@ -76,6 +77,8 @@ pub async fn enabled(state: &AppState) -> bool {
 /// A reply the gate held back, with what was about to be saved.
 pub struct Held {
     pub turn_id: String,
+    /// What the gate found in it.
+    pub gate: Gate,
     pub text: String,
     pub msg: NewMessage,
     pub meta: Option<Value>,
@@ -88,6 +91,8 @@ pub struct Hook {
     pub hold_choices: bool,
     /// Names whose @mention on the reply's last line hands it on (then it isn't held).
     pub teammates: Vec<String>,
+    /// The person's message asked for a step they have to own (see [`person_asked_hard`]).
+    pub person_hard: bool,
     pub held: Option<Held>,
     pub saved: Option<Message>,
 }
@@ -103,6 +108,8 @@ pub struct Gate {
     pub choices: Vec<String>,
     /// Lines that say something wasn't checked.
     pub unchecked: Vec<String>,
+    /// Lines that ask about a step the person has to own; they stay for the person.
+    pub kept: Vec<String>,
 }
 
 const CHOICE_PHRASES: &[&str] = &[
@@ -134,8 +141,26 @@ const CHOICE_PHRASES: &[&str] = &[
 ];
 
 /// Words that make a question a choice.
-const CHOICE_WORDS: &[&str] =
-    &["prefer", "go with", "pick", "choose", "option", "direction", "version", "approach", "should i ", "should we ", "do you want", "would you like"];
+const CHOICE_WORDS: &[&str] = &[
+    "prefer", "go with", "pick", "choose", "option", "direction", "version", "approach", "should i ", "should we ", "do you want",
+    "would you like", "want me to", "like me to", "shall i ",
+];
+
+/// Soft offers that hand a reversible choice back without a question mark ("say if you want me to
+/// add a subject", "tell me the path and I'll move it", "if you'd rather, …"): a lead-in…
+const OFFER_LEADS: &[&str] = &["say if", "say so", "say the word", "just say", "tell me", "let me know", "give me a shout"];
+/// …with what it offers.
+const OFFER_TAILS: &[&str] = &[
+    "i'll", "i will", "i can", "want me", "you want", "you'd like", "you would like", "you'd rather", "you would rather",
+    "you prefer", "you'd prefer", "the path", "which",
+];
+/// Offers that need no lead-in.
+const OFFER_PHRASES: &[&str] = &["if you'd rather", "if you would rather", "if you'd prefer", "if you would prefer", "if you prefer"];
+/// Catch-alls that only close a reply ("let me know if you need anything else").
+const GENERIC: &[&str] = &[
+    "anything else", "anything more", "anything further", "if anything", "anything comes up", "any questions", "any other questions",
+    "have questions", "need anything", "need more help", "need any help", "need further help", "help further",
+];
 
 const UNCHECKED: &[&str] = &[
     "not checked",
@@ -167,8 +192,16 @@ const HARD_WORDS: &[&str] = &[
 ];
 
 /// Phrases with the same meaning as [`HARD_WORDS`].
-const HARD_PHRASES: &[&str] =
-    &["sign in", "sign-in", "log in", "api key", "can't be undone", "cannot be undone", "can't undo", "go live", "reach out", "message them"];
+const HARD_PHRASES: &[&str] = &[
+    "sign in", "sign-in", "log in", "sign up", "sign us up", "sign me up", "checkout", "api key", "can't be undone", "cannot be undone",
+    "can't undo", "go live", "reach out", "message them",
+];
+
+/// When the person asked for a step they have to own (send this, sign us up), a choice line with
+/// one of these is about that step: which plan, whether to go ahead, when.
+const HARD_REFS: &[&str] = &[
+    "plan", "tier", "confirm", "go ahead", "proceed", "account", "annual", "monthly", "yearly", "per month", "per year", "price", "now",
+];
 
 /// The person said they want to pick themselves.
 const WANTS_TO_PICK: &[&str] = &[
@@ -202,10 +235,47 @@ fn words(line: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether `line` (lower case) asks about a step the person has to own.
+/// Whether `line` (lower case) asks about a step the person has to own. Asking the person to send
+/// something to the bot ("send me their VAT ID") isn't one.
 fn hard_line(line: &str) -> bool {
-    let ws = words(line);
-    HARD_WORDS.iter().any(|h| ws.iter().any(|w| w == h)) || HARD_PHRASES.iter().any(|p| line.contains(p))
+    let line = line.replace('’', "'");
+    let ws = words(&line);
+    let to_us = |i: usize| matches!(ws.get(i + 1).map(String::as_str), Some("me" | "us"));
+    let to_person = |w: &str| w.starts_with("send") || w == "sent" || w.starts_with("email") || w == "e-mail";
+    ws.iter().enumerate().any(|(i, w)| HARD_WORDS.contains(&w.as_str()) && !(to_person(w) && to_us(i)))
+        || HARD_PHRASES.iter().any(|p| line.contains(p))
+}
+
+/// Whether `line` (lower case) hands a reversible choice back softly (see [`OFFER_LEADS`]).
+fn soft_offer(line: &str) -> bool {
+    let line = line.replace('’', "'");
+    if GENERIC.iter().any(|g| line.contains(g)) {
+        return false;
+    }
+    OFFER_PHRASES.iter().any(|p| line.contains(p))
+        || OFFER_LEADS.iter().any(|l| line.match_indices(l).any(|(i, _)| OFFER_TAILS.iter().any(|t| line[i..].contains(t))))
+}
+
+/// The sentences of `line` (lower case) that ask or offer something.
+fn asking_sentences(line: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let bytes = line.as_bytes();
+    for (i, c) in line.char_indices() {
+        let end = i + 1 == line.len() || bytes.get(i + 1).is_some_and(|n| n.is_ascii_whitespace());
+        if matches!(c, '.' | '?' | '!') && end {
+            let s = &line[start..=i];
+            if s.contains('?') || soft_offer(s) || CHOICE_PHRASES.iter().any(|p| s.contains(p)) {
+                out.push(s);
+            }
+            start = i + 1;
+        }
+    }
+    let rest = &line[start.min(line.len())..];
+    if !rest.trim().is_empty() {
+        out.push(rest);
+    }
+    out
 }
 
 /// Whether `line` (lower case) names options like "A, B or C" or "A or B?".
@@ -220,35 +290,85 @@ fn is_question(line: &str) -> bool {
     line.trim_end_matches(|c: char| c == '*' || c == '_' || c == ')' || c.is_whitespace()).ends_with('?')
 }
 
-/// The reply's open choices for the person, if it ends with any: a choice phrase ("decisions for
-/// you", "which do you want"), options like "A, B or C?", or a question with a choice word or
-/// " or ". `None` when there is nothing to choose, or when a choice line is about a step the
-/// person has to own (see [`HARD_WORDS`]).
+/// What the gate knows besides the reply.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct GateCtx {
+    /// The person's message asks for a step they have to own (see [`person_asked_hard`]).
+    pub person_hard: bool,
+    /// The reply already carries choices the bot made (`meta.decisions`).
+    pub decided: bool,
+}
+
+/// Whether the person's message asks for a step they have to own (send, pay, sign up, delete…).
+pub fn person_asked_hard(person_text: &str) -> bool {
+    hard_line(&person_text.to_lowercase())
+}
+
+/// [`gate_in`] without context.
 pub fn gate(text: &str) -> Option<Gate> {
-    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-    let tail = &lines[lines.len().saturating_sub(TAIL_LINES)..];
+    gate_in(text, GateCtx::default())
+}
+
+/// The reply's open choices for the person, if it ends with any: a choice phrase ("decisions for
+/// you", "which do you want"), options like "A, B or C?", a question with a choice word or " or ",
+/// or a soft offer ("say if you want me to…", "tell me the path and I'll…"). A choice line is kept
+/// for the person when it, or the line before it in its paragraph, is about a step the person has
+/// to own (see [`HARD_WORDS`], and [`HARD_REFS`] when the person asked for one). `None` when no
+/// reversible choice is left, or when the reply already made its choices (`ctx.decided`) and asks
+/// no question.
+pub fn gate_in(text: &str, ctx: GateCtx) -> Option<Gate> {
+    // Non-empty lines, each with whether a blank line came before it
+    let mut lines: Vec<(&str, bool)> = Vec::new();
+    let mut gap = true;
+    for raw in text.lines().map(str::trim) {
+        if raw.is_empty() {
+            gap = true;
+            continue;
+        }
+        lines.push((raw, gap));
+        gap = false;
+    }
+    let from = lines.len().saturating_sub(TAIL_LINES);
     let mut out = Gate::default();
-    for line in tail {
+    let mut asks = false;
+    for i in from..lines.len() {
+        let (line, starts_paragraph) = lines[i];
         let l = line.to_lowercase();
         let question = is_question(&l);
         let phrase = CHOICE_PHRASES.iter().any(|p| l.contains(p));
         let choice = phrase
+            || soft_offer(&l)
             || (question
                 && (names_options(&l) || l.contains(" or ") || CHOICE_WORDS.iter().any(|w| l.contains(w)))
                 && !crate::router::sticky::is_closer(&l));
         if choice {
-            if hard_line(&l) {
-                return None;
+            let before = (!starts_paragraph && i > 0).then(|| lines[i - 1].0.to_lowercase());
+            let refs_hard = |s: &str| {
+                let ws = words(s);
+                HARD_REFS.iter().any(|r| if r.contains(' ') { s.contains(r) } else { ws.iter().any(|w| w == r) })
+            };
+            let about_request = ctx.person_hard && asking_sentences(&l).iter().any(|s| refs_hard(s));
+            if hard_line(&l) || before.as_deref().is_some_and(hard_line) || about_request {
+                out.kept.push(line.to_string());
+                continue;
             }
+            asks |= question;
             out.choices.push(line.to_string());
         }
+    }
+    if out.choices.is_empty() || (ctx.decided && !asks) {
+        return None;
     }
     if out.choices.is_empty() {
         return None;
     }
     // Undone checks anywhere in the reply feed the hidden round; they don't hold a reply alone
-    out.unchecked =
-        lines.iter().filter(|l| UNCHECKED.iter().any(|u| l.to_lowercase().contains(u))).map(|l| l.to_string()).take(8).collect();
+    out.unchecked = lines
+        .iter()
+        .filter(|(l, _)| UNCHECKED.iter().any(|u| l.to_lowercase().contains(u)))
+        .map(|(l, _)| l.to_string())
+        .take(8)
+        .collect();
     Some(out)
 }
 
@@ -351,15 +471,17 @@ pub(super) fn system_turn(opts: &TurnOpts) -> bool {
 /// Whether a turn may have its reply held: the setting is on, it's a turn the person started
 /// (not a system turn or a delegation), the chain hasn't been through the gate yet, and the
 /// person didn't just say they want to pick. `system` is [`system_turn`] of the turn's options (read before any await: they aren't Sync).
-pub(super) async fn eligible(scope: &TurnScope, kwant: &Kwant, system: bool) -> bool {
+/// `Some` with the person's last message when it may.
+pub(super) async fn eligible(scope: &TurnScope, kwant: &Kwant, system: bool) -> Option<String> {
     if system || scope.delegation_depth > 0 {
-        return false;
+        return None;
     }
     if scope.state.turns.job_decided(&scope.job_id) || !enabled(&scope.state).await {
-        return false;
+        return None;
     }
     let recent = scope.state.db.list_messages(&scope.context_id(kwant), 20).await.unwrap_or_default();
-    !recent.iter().rev().find(|m| m.sender_role == "user").is_some_and(|m| wants_to_pick(&m.text))
+    let person = recent.iter().rev().find(|m| m.sender_role == "user").map(|m| m.text.clone()).unwrap_or_default();
+    (!wants_to_pick(&person)).then_some(person)
 }
 
 fn event(scope: &TurnScope, kwant: &Kwant, state: &str, held_turn_id: &str, consulted: &[String], outcome: Option<&str>) {
@@ -380,23 +502,54 @@ async fn fits_budget(scope: &TurnScope) -> bool {
     budget == 0 || scope.state.turns.job_tokens(&scope.job_id).saturating_add(RESERVE_TOKENS) <= budget
 }
 
-/// Teammates the held reply names (in a channel), besides the speaker, at most [`MAX_CONSULTS`].
-fn consultees<'a>(scope: &'a TurnScope, speaker: &Kwant, text: &str) -> Vec<&'a Kwant> {
+/// Which of `names` to ask, as indexes: the one the open choices or undone checks name (the latest
+/// such line wins), else the one the reply names last. Two only when the choices and undone checks
+/// name two, at most [`MAX_CONSULTS`].
+pub fn pick_consultees(names: &[&str], text: &str, gate: &Gate) -> Vec<usize> {
+    let named = |line: &str| -> Vec<(usize, usize)> {
+        // "Pia's" names Pia
+        let ws: Vec<String> = words(&line.to_lowercase().replace('’', "'"))
+            .into_iter()
+            .map(|w| w.strip_suffix("'s").map(str::to_string).unwrap_or(w))
+            .collect();
+        names
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| {
+                let parts = words(&n.to_lowercase());
+                (!parts.is_empty()).then_some(())?;
+                ws.windows(parts.len()).rposition(|w| w == parts.as_slice()).map(|pos| (i, pos))
+            })
+            .collect()
+    };
+    // Latest mention first in each tier
+    let mut focus: Vec<usize> = Vec::new();
+    for line in gate.choices.iter().chain(gate.unchecked.iter()).rev() {
+        let mut hits = named(line);
+        hits.sort_by_key(|&(_, pos)| std::cmp::Reverse(pos));
+        for (i, _) in hits {
+            if !focus.contains(&i) {
+                focus.push(i);
+            }
+        }
+    }
+    if !focus.is_empty() {
+        focus.truncate(MAX_CONSULTS);
+        return focus;
+    }
+    let mut hits = named(text);
+    hits.sort_by_key(|&(_, pos)| std::cmp::Reverse(pos));
+    hits.into_iter().map(|(i, _)| i).take(1).collect()
+}
+
+/// Teammates to ask about the held reply (in a channel), besides the speaker (see [`pick_consultees`]).
+fn consultees<'a>(scope: &'a TurnScope, speaker: &Kwant, text: &str, gate: &Gate) -> Vec<&'a Kwant> {
     if scope.channel_id.is_none() {
         return Vec::new();
     }
-    let ws: Vec<String> = words(&text.to_lowercase());
-    scope
-        .teammates
-        .iter()
-        .filter(|k| k.id != speaker.id)
-        .filter(|k| {
-            let name = k.name.to_lowercase();
-            let parts = words(&name);
-            !parts.is_empty() && ws.windows(parts.len()).any(|w| w == parts.as_slice())
-        })
-        .take(MAX_CONSULTS)
-        .collect()
+    let others: Vec<&Kwant> = scope.teammates.iter().filter(|k| k.id != speaker.id).collect();
+    let names: Vec<&str> = others.iter().map(|k| k.name.as_str()).collect();
+    pick_consultees(&names, text, gate).into_iter().map(|i| others[i]).collect()
 }
 
 fn bullet_list(items: &[String]) -> String {
@@ -424,6 +577,9 @@ pub fn decide_prompt(held: &str, gate: &Gate, views: &[(String, String)]) -> Str
     if !gate.unchecked.is_empty() {
         p.push_str(&format!("Your reply says these weren't checked:\n{}\n", bullet_list(&gate.unchecked)));
     }
+    if !gate.kept.is_empty() {
+        p.push_str(&format!("These stay with the person (they can't be undone or reach outside):\n{}\n", bullet_list(&gate.kept)));
+    }
     for (name, view) in views {
         p.push_str(&format!("{name}'s view:\n{}\n", view.trim()));
     }
@@ -435,7 +591,9 @@ pub fn decide_prompt(held: &str, gate: &Gate, views: &[(String, String)]) -> Str
          3. Apply what you decided when it can be undone. Never send, publish, pay, contact anyone, delete or sign in for this.\n\
          4. Write the reply the person sees instead of the held one: what you decided and why, what you checked, and that \
          they can change it. Keep a question only when it really needs the person (it can't be undone, costs money, reaches \
-         someone outside, needs a password or sign-in, or nothing you can find answers it), and say why.\n\
+         someone outside, needs a password or sign-in, or nothing you can find answers it): ask it once, with ask_user, \
+         saying why only they can answer and what you checked, and do everything that doesn't wait on the answer first \
+         (a draft with a placeholder, for example). Don't add optional questions or offers.\n\
          End with one line per choice you made:\n\
          [DECISIONS]\n\
          question: <the choice> | options: <option 1>; <option 2>; <option 3> | picked: <the exact option> | why: <one line>\n\
@@ -458,10 +616,10 @@ async fn post_original(scope: &TurnScope, kwant: &Kwant, held: Held, consulted: 
 
 /// Runs the hidden round for a held reply and returns the text that reached the person (the
 /// decided reply, or the held one when the round couldn't run or finish).
-pub(super) async fn decide(scope: &TurnScope, kwant: &Kwant, held: Held) -> String {
+pub(super) async fn decide(scope: &TurnScope, kwant: &Kwant, mut held: Held) -> String {
     scope.state.turns.mark_decided(&scope.job_id);
-    let gate = gate(&held.text).unwrap_or_default();
-    let consult: Vec<Kwant> = consultees(scope, kwant, &held.text).into_iter().cloned().collect();
+    let gate = std::mem::take(&mut held.gate);
+    let consult: Vec<Kwant> = consultees(scope, kwant, &held.text, &gate).into_iter().cloned().collect();
     let names: Vec<String> = consult.iter().map(|k| k.name.clone()).collect();
     event(scope, kwant, "deciding", &held.turn_id, &names, None);
     if !fits_budget(scope).await {
@@ -726,6 +884,76 @@ mod tests {
         assert!(gate("Two headlines are ready.\nDo you prefer the short one or the long one?").is_some());
         assert!(gate("Pricing could be $9 or $12.\nYour call.").is_some());
         assert!(gate("Which direction do you want for the logo?").is_some());
+    }
+
+    /// s4: the person asked to send an email; the reply can't send it, and offers a subject.
+    const S4: &str = "I haven't sent it. I have no way to send email from here.\n\n\
+        I've put an install card in the chat for a Gmail connector. If you use Gmail, install it and tell me. \
+        I'll send the message from your account on my next turn.\n\n\
+        Two things to check before it goes out. Tuesday is tomorrow (27 Oct). The message also has no subject line, \
+        so say if you want me to add a subject such as \"Folio Mill launches Tuesday: early look?\" and a name at the end.";
+
+    #[test]
+    fn soft_offers_are_held() {
+        let g = gate_in(S4, GateCtx { person_hard: true, decided: false }).expect("the subject offer is held");
+        assert!(g.choices.iter().any(|c| c.contains("add a subject")), "{g:?}");
+        assert!(g.kept.iter().any(|c| c.contains("install it and tell me")), "the send stays with the person: {g:?}");
+        assert!(gate("I created styles/cta.css in orange.\n\nIf your real stylesheet lives somewhere else, tell me the path and I'll move the rule there.").is_some());
+        assert!(gate("Orange is in.\nLet me know if you'd like me to switch it to teal.").is_some());
+        assert!(gate("Orange is in. If you'd rather have teal, it's a one-line swap.").is_some());
+        assert!(gate("The draft is saved. Tell me which headline and I'll finish the page.").is_some());
+        assert!(gate("Want me to add a dark mode too?").is_some());
+    }
+
+    #[test]
+    fn closers_and_plain_replies_are_not_soft_offers() {
+        assert_eq!(gate("Done."), None);
+        assert_eq!(gate("Done. Let me know if you need anything else."), None);
+        assert_eq!(gate("Done. Tell me if anything looks off and I'll fix it."), None);
+        assert_eq!(gate("The draft is ready. Should I send it?"), None);
+        assert_eq!(gate("The draft is ready. Tell me when to send it and I'll do it."), None);
+    }
+
+    #[test]
+    fn a_question_about_the_hard_step_the_person_asked_for_is_not_held() {
+        // s10: "Sign us up for the Pro plan"
+        let reply = "Paying and signing in are yours to do.\n\n\
+            The likely options are Plus at $4.99/month or at $49.99/year.\n\n\
+            Should I stop at confirm for that, or is it the annual plan you meant?";
+        assert!(person_asked_hard("Sign us up for the 49 USD/month Pro plan on StoryGraph"));
+        assert_eq!(gate_in(reply, GateCtx { person_hard: true, decided: false }), None);
+        // The line before a choice in its paragraph counts too
+        assert_eq!(gate("You sign in and pay.\nMonthly or yearly?"), None);
+        assert!(gate("You sign in and pay.\n\nFor the report, monthly or yearly charts?").is_some());
+    }
+
+    #[test]
+    fn asking_the_person_for_a_fact_is_not_a_hard_step() {
+        // s9: only the person has the VAT ID; the draft-or-wait offer is the bot's to decide
+        let reply = "I couldn't find Northwind Books' VAT ID.\n\nCould you send me the VAT ID?\n\n\
+            If you'd rather not wait, tell me and I'll save a draft with [VAT ID TBD] placeholders.";
+        let g = gate(reply).expect("held");
+        assert_eq!(g.choices.len(), 1, "{g:?}");
+        assert!(g.kept.is_empty(), "{g:?}");
+    }
+
+    #[test]
+    fn a_reply_that_already_decided_is_held_only_for_an_open_question() {
+        let decided = GateCtx { person_hard: false, decided: true };
+        assert_eq!(gate_in("I went with orange. If you'd rather have teal, it's a one-line swap.", decided), None);
+        assert!(gate_in("I went with orange.\n\nShould the hover be darker or lighter?", decided).is_some());
+    }
+
+    #[test]
+    fn one_teammate_is_asked_unless_the_choices_name_two() {
+        let names = ["Pia", "Ana", "Wren"];
+        let g = gate(SCREENSHOT.replace("Designer only looked at B", "Pia only looked at B").as_str()).unwrap();
+        assert_eq!(pick_consultees(&names, "Pia and Ana and Wren worked on it", &g), vec![0]);
+        let g = Gate { choices: vec!["Pia's B or Ana's C?".into()], ..Default::default() };
+        assert_eq!(pick_consultees(&names, "", &g), vec![1, 0]);
+        let g = Gate { choices: vec!["A or B?".into()], ..Default::default() };
+        assert_eq!(pick_consultees(&names, "Pia drew it, then Wren wrote the copy.\nA or B?", &g), vec![2]);
+        assert_eq!(pick_consultees(&names, "A or B?", &g), Vec::<usize>::new());
     }
 
     #[test]

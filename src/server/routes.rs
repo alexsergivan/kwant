@@ -1522,12 +1522,13 @@ pub(super) async fn try_kwant_turn(
     mut opts: TurnOpts,
 ) -> Result<String, String> {
     let system = super::decide::system_turn(&opts);
-    if !super::decide::eligible(scope, target_kwant, system).await {
+    let Some(person) = super::decide::eligible(scope, target_kwant, system).await else {
         return turn_once(scope, target_kwant, prompt, opts).await;
-    }
+    };
     let hook = std::sync::Arc::new(std::sync::Mutex::new(super::decide::Hook {
         hold_choices: true,
         teammates: scope.teammates.iter().map(|k| k.name.clone()).collect(),
+        person_hard: super::decide::person_asked_hard(&person),
         ..Default::default()
     }));
     opts.hook = Some(hook.clone());
@@ -2475,17 +2476,20 @@ async fn run_kwant_turn_inner(
                 }
                 let meta = super::decide::with_decisions(meta, &decisions);
                 let meta = super::activity::with_activity(meta, activity);
-                let hold = opts.hook.as_ref().is_some_and(|h| {
-                    h.lock().is_ok_and(|h| {
-                        let names: Vec<&str> = h.teammates.iter().map(String::as_str).collect();
-                        h.hold_choices && !super::asks::hands_on(&asst_msg.text, &names)
-                    })
-                }) && super::decide::gate(&asst_msg.text).is_some();
-                if hold {
+                let hold = opts.hook.as_ref().and_then(|h| {
+                    let h = h.lock().ok()?;
+                    let names: Vec<&str> = h.teammates.iter().map(String::as_str).collect();
+                    if !h.hold_choices || super::asks::hands_on(&asst_msg.text, &names) {
+                        return None;
+                    }
+                    let ctx = super::decide::GateCtx { person_hard: h.person_hard, decided: !decisions.is_empty() };
+                    super::decide::gate_in(&asst_msg.text, ctx)
+                });
+                if let Some(gate) = hold {
                     if let Some(h) = &opts.hook {
                         if let Ok(mut h) = h.lock() {
                             let text = asst_msg.text.clone();
-                            h.held = Some(super::decide::Held { turn_id: tag.turn_id.clone(), text, msg: asst_msg, meta });
+                            h.held = Some(super::decide::Held { turn_id: tag.turn_id.clone(), gate, text, msg: asst_msg, meta });
                         }
                     }
                 } else {
