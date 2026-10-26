@@ -9,6 +9,8 @@ import {
   MAX_LOCATION_CHARS,
   NOTIFY_KINDS,
   NotifyKind,
+  notifyKindsFor,
+  notifyOnToSave,
   browserNotifyEnabled,
   defaultTimeZone,
   notificationPermission,
@@ -26,7 +28,7 @@ import { signedInDevicesVisible } from '../deviceSignIn';
 import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
 import { useEngines } from '../useEngines';
 import { LayaStatusRow } from './LayaStatus';
-import { AppUpdateAbout } from './AppUpdateBanner';
+import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
 
 interface SettingsData {
   anthropic_api_key: string;
@@ -91,6 +93,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [place, setPlace] = useState<{ timezone: string; location: string } | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [notifyOn, setNotifyOn] = useState<NotifyKind[]>(NOTIFY_KINDS.map((k) => k.id));
+  // The Mac app's update API answered: only then is there an App updates notification to switch
+  const appUpdates = useAppUpdate().model.status !== null;
   const [browserNotify, setBrowserNotify] = useState(browserNotifyEnabled);
   const [permission, setPermission] = useState(notificationPermission);
   const [notifyEnv] = useState(() => readNotifyEnv());
@@ -215,7 +219,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           openai_api_key: openaiKey,
           ollama_url: ollamaUrl,
           notify_webhook_url: webhookUrl.trim(),
-          notify_on: notifyOn,
+          notify_on: notifyOnToSave(notifyOn, appUpdates),
           ...(limits
             ? {
                 max_turns_per_agent: Number(limits.max_turns_per_agent),
@@ -666,7 +670,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
             <div className="space-y-1.5" role="group" aria-labelledby="notify-kinds-label">
               <p id="notify-kinds-label" className="text-xs font-medium text-zinc-400">Tell me when</p>
-              {NOTIFY_KINDS.map((k) => (
+              {notifyKindsFor(appUpdates).map((k) => (
                 <label key={k.id} className="flex items-center gap-2 text-[11px] text-zinc-300">
                   <input
                     type="checkbox"

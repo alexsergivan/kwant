@@ -335,3 +335,29 @@ test('wired once: the banner in the shell, the About row in App settings, hidden
   assert.match(src('components/SettingsModal.tsx'), /<AppUpdateAbout \/>/);
   assert.match(src('components/AppUpdateBanner.tsx'), /if \(!view \|\| phone\) return null;/);
 });
+
+const notify = await loadBundled(`export * from './src/continuity';`);
+
+test('App updates switch is listed only in the Mac app, after the other kinds', () => {
+  const ids = (on) => notify.notifyKindsFor(on).map((k) => k.id);
+  assert.ok(!ids(false).includes('app_update'));
+  assert.deepEqual(ids(false), notify.NOTIFY_KINDS.map((k) => k.id));
+  assert.equal(ids(true).at(-1), 'app_update');
+  assert.equal(notify.notifyKindsFor(true).at(-1).label, 'App updates');
+});
+
+test('app_update is saved in the Mac app and never sent to a server without it', () => {
+  const on = ['turn_finished', 'app_update'];
+  assert.deepEqual(notify.notifyOnToSave(on, true), on);
+  assert.deepEqual(notify.notifyOnToSave(on, false), ['turn_finished']);
+  // Switched off in the Mac app: stays off
+  assert.deepEqual(notify.notifyOnToSave(['turn_finished'], true), ['turn_finished']);
+});
+
+test('App settings shows the switch only when the update API is supported', () => {
+  const s = src('components/SettingsModal.tsx');
+  assert.match(s, /const appUpdates = useAppUpdate\(\)\.model\.status !== null;/);
+  assert.match(s, /notifyKindsFor\(appUpdates\)\.map/);
+  assert.match(s, /notify_on: notifyOnToSave\(notifyOn, appUpdates\)/);
+  assert.doesNotMatch(s, /\{NOTIFY_KINDS\.map/);
+});
