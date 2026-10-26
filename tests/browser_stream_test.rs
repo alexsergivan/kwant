@@ -133,7 +133,10 @@ async fn stream_input_control_lease_and_origin_protection() {
     for (i,payload) in [json!({"action":"click","x":50,"y":60}),json!({"action":"type","text":"abc"}),json!({"action":"key","key":"Enter","code":"Enter"})].into_iter().enumerate() {
         let mut payload=payload; payload["id"]=json!(i);
         ws.send(WsMessage::Text(payload.to_string())).await.unwrap();
-        assert_eq!(receive(&mut ws,"ack").await["id"],i);
+        let ack=receive(&mut ws,"ack").await;
+        assert_eq!(ack["id"],i);
+        // a tap reports whether it focused a text field (the mock page has none); typing doesn't
+        if i==0 { assert_eq!(ack["editable"],false); } else { assert!(ack.get("editable").is_none()); }
     }
     let commands=mock.commands.lock().await.clone();
     assert!(!commands.iter().any(|c|c["method"]=="Page.captureScreenshot"),"input must not wait for screenshots");
@@ -277,7 +280,10 @@ async fn live_chromium_stream_and_isolated_sessions() {
     for (index, mut input) in inputs.into_iter().enumerate() {
         input["id"] = json!(index);
         ws.send(WsMessage::Text(input.to_string())).await.unwrap();
-        assert_eq!(receive(&mut ws, "ack").await["id"], index);
+        let ack = receive(&mut ws, "ack").await;
+        assert_eq!(ack["id"], index);
+        // the first tap lands in the text field, the last on a button
+        match index { 0 => assert_eq!(ack["editable"], true), 2 => assert_eq!(ack["editable"], false), _ => {} }
     }
     let elapsed = start.elapsed();
     let result = ctrl.send_cdp_command("Runtime.evaluate", json!({"expression":"({value:document.querySelector('#field').value,title:document.title})","returnByValue":true})).await.unwrap();

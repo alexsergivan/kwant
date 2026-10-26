@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Clock, Globe, Hand, Loader2, MinusCircle, MonitorPlay } from 'lucide-react';
+import { CheckCircle2, Clock, Globe, Hand, Loader2, MinusCircle, MonitorPlay, Puzzle } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { HumanStep, HumanStepMeta, KIND_TEXT, domainOf, humanStepView } from '../humanSteps';
 
@@ -12,8 +12,8 @@ export interface HumanStepCardProps {
   live?: HumanStep | null;
   /** A turn is paused on this step right now (else Done starts a new reply). */
   waiting: boolean;
-  /** Shows the bot's browser panel. */
-  onOpenBrowser?: (sandboxTarget: string | null) => void;
+  /** Shows the bot's browser panel; `solve` takes control and, on a phone, opens it full screen. */
+  onOpenBrowser?: (sandboxTarget: string | null, solve?: boolean) => void;
   /** Resolve to an error message on failure. */
   onDone: (id: string) => Promise<string | void>;
   onSkip: (id: string) => Promise<string | void>;
@@ -36,6 +36,7 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
   const text = KIND_TEXT[view.step_kind];
   const domain = domainOf(view.url);
   const headingId = `hs-${messageId}`;
+  const captcha = view.step_kind === 'captcha';
 
   const answer = async (which: 'done' | 'skip') => {
     if (!open || busy) return;
@@ -48,7 +49,15 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
   };
 
   const line =
-    status === 'done' ? (
+    status === 'resolved_auto' ? (
+      <span className="inline-flex items-center gap-1.5 text-emerald-300">
+        <CheckCircle2 size={13} aria-hidden="true" /> Solved. {kwantName} continues.
+      </span>
+    ) : status === 'timed_out' ? (
+      <span className="inline-flex items-center gap-1.5 text-zinc-400">
+        <Clock size={13} aria-hidden="true" /> Nobody solved it in time. {kwantName} moved on without it.
+      </span>
+    ) : status === 'done' ? (
       <span className="inline-flex items-center gap-1.5 text-emerald-300">
         <CheckCircle2 size={13} aria-hidden="true" /> Done. {kwantName} is carrying on{view.status === 'open' ? '…' : '.'}
       </span>
@@ -100,7 +109,16 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
 
         {open && (
           <div className="px-4 pb-2 flex flex-col sm:flex-row sm:flex-wrap gap-2">
-            {onOpenBrowser && (
+            {onOpenBrowser && captcha && (
+              <button
+                type="button"
+                onClick={() => onOpenBrowser(view.sandbox_target, true)}
+                className={`inline-flex items-center justify-center gap-2 min-h-[48px] sm:min-h-[38px] px-4 py-2 rounded-xl text-base sm:text-sm font-semibold bg-amber-400 text-zinc-950 hover:bg-amber-300 ${focusRing}`}
+              >
+                <Puzzle size={16} aria-hidden="true" /> Solve it
+              </button>
+            )}
+            {onOpenBrowser && !captcha && (
               <button
                 type="button"
                 onClick={() => onOpenBrowser(view.sandbox_target)}
@@ -113,7 +131,11 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
               type="button"
               onClick={() => answer('done')}
               disabled={busy !== null}
-              className={`inline-flex items-center justify-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-sm font-semibold bg-amber-400 text-zinc-950 hover:bg-amber-300 disabled:opacity-60 ${focusRing}`}
+              className={`inline-flex items-center justify-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-sm disabled:opacity-60 ${focusRing} ${
+                captcha && onOpenBrowser
+                  ? 'border bg-zinc-800/80 border-zinc-700 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600'
+                  : 'font-semibold bg-amber-400 text-zinc-950 hover:bg-amber-300'
+              }`}
             >
               {busy === 'done' ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
               {text.done}
@@ -133,7 +155,10 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
           <p role="status" aria-live="polite" className="min-w-0">
             {line}
           </p>
-          {open && <p className="basis-full text-zinc-400">Do it in the browser panel, then press Done. What you type into fields there isn’t passed to {kwantName}.</p>}
+          {open && captcha && (
+            <p className="basis-full text-zinc-400">Solve the puzzle and {kwantName} continues by itself. Nothing you do there is passed to {kwantName}.</p>
+          )}
+          {open && !captcha && <p className="basis-full text-zinc-400">Do it in the browser panel, then press Done. What you type into fields there isn’t passed to {kwantName}.</p>}
           {error && (
             <span role="alert" className="basis-full text-rose-300">
               {error}

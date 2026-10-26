@@ -213,8 +213,16 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
                                 Err(_) => Err(BrowserError::Protocol("Invalid browser input".into())),
                             }
                         };
+                        // After a tap, say whether it landed in a text field so a phone can open its keyboard
+                        let editable = match (&result, value["action"].as_str().unwrap_or("")) {
+                            (Ok(()), "click" | "pointer_up") => Some(ctrl.focused_editable().await),
+                            _ => None,
+                        };
                         send(&mut socket, match result {
-                            Ok(()) => json!({"type":"ack","id":value["id"]}),
+                            Ok(()) => match editable {
+                                Some(editable) => json!({"type":"ack","id":value["id"],"editable":editable}),
+                                None => json!({"type":"ack","id":value["id"]}),
+                            },
                             Err(error) => json!({"type":"error","id":value["id"],"error":error.to_string()}),
                         }).await?;
                     }

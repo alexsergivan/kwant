@@ -77,3 +77,42 @@ test('closed and stale cards', () => {
   assert.match(ui.render(props({ waiting: false })), /stopped waiting/);
   assert.match(ui.render(props({ meta: h.parseHumanStepMeta(meta({ source: 'auto' })) })), /spotted automatically/);
 });
+
+test('captcha target: finite box only, kind defaults to puzzle', () => {
+  assert.deepEqual(h.parseCaptchaTarget({ x: 460, y: 180, width: 360, height: 380 }), { kind: 'puzzle', x: 460, y: 180, width: 360, height: 380 });
+  assert.equal(h.parseCaptchaTarget({ x: 1, y: 1, width: 0, height: 5 }), null);
+  assert.equal(h.parseCaptchaTarget({ x: 'a', y: 1, width: 5, height: 5 }), null);
+  assert.equal(h.parseCaptchaTarget(null), null);
+  const m = h.parseHumanStepMeta(meta({ step_kind: 'captcha', target: { kind: 'slider', x: 1, y: 2, width: 3, height: 4 } }));
+  assert.equal(m.target.kind, 'slider');
+  assert.equal(h.parseHumanStepMeta(meta({ status: 'resolved_auto' })).status, 'resolved_auto');
+  assert.equal(h.parseHumanStepMeta(meta({ status: 'timed_out' })).status, 'timed_out');
+});
+
+test('captcha step for a sandbox: open first, a just-closed one lingers a minute', () => {
+  const now = Date.parse('2026-10-22T12:00:00Z');
+  const box = { kind: 'puzzle', x: 1, y: 2, width: 30, height: 40 };
+  let map = h.applyHumanStep({}, rec({ id: 'c1', kind: 'captcha', sandbox_target: 'pixel', target: box }));
+  map = h.applyHumanStep(map, rec({ id: 's1', kind: 'sign_in', sandbox_target: 'pixel', created_at: '2026-10-22T11:59:00Z' }));
+  assert.equal(h.captchaStepFor(map, 'pixel', now).id, 'c1');
+  assert.equal(h.captchaStepFor(map, 'other', now), null);
+  // The box moves while the step stays open
+  map = h.applyHumanStep(map, rec({ id: 'c1', kind: 'captcha', sandbox_target: 'pixel', target: { ...box, x: 9 } }));
+  assert.equal(map.c1.target.x, 9);
+  map = h.applyHumanStep(map, rec({ id: 'c1', kind: 'captcha', sandbox_target: 'pixel', status: 'resolved_auto', closed_at: '2026-10-22T11:59:40Z' }));
+  assert.equal(h.captchaStepFor(map, 'pixel', now).status, 'resolved_auto');
+  assert.equal(h.captchaStepFor(map, 'pixel', now + 60_000), null);
+});
+
+test('captcha card: Solve it is the main button and opens solve mode; auto outcomes', () => {
+  const calls = [];
+  const cm = h.parseHumanStepMeta(meta({ step_kind: 'captcha' }));
+  const html = ui.render(props({ meta: cm, onOpenBrowser: (...a) => calls.push(a) }));
+  assert.match(html, /Solve it/);
+  assert.doesNotMatch(html, /Open browser/);
+  assert.match(html, /continues by itself/);
+  assert.equal((html.match(/<button/g) || []).length, 3);
+  assert.match(ui.render(props({ meta: cm, live: rec({ kind: 'captcha', status: 'resolved_auto' }) })), /Solved\. Pixel continues\./);
+  assert.match(ui.render(props({ meta: cm, live: rec({ kind: 'captcha', status: 'timed_out' }) })), /moved on without it/);
+  assert.doesNotMatch(ui.render(props({ meta: cm, live: rec({ kind: 'captcha', status: 'timed_out' }) })), /<button/);
+});

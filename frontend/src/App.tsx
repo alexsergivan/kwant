@@ -14,6 +14,7 @@ import {
   HumanStep,
   HumanStepMeta,
   applyHumanStep,
+  captchaStepFor,
   humanStepsApi,
   latestOpenStep,
   openStepsByKwant,
@@ -345,7 +346,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const openNotified = (n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id'>) => {
     const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
     if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
-    else if (n.kind === 'human_step' && openHumanStepRef.current(n.kwant_id)) setIsVmPaneOpen(true);
+    else if (n.kind === 'human_step' && openHumanStepRef.current(n.kwant_id)) {
+      setIsVmPaneOpen(true);
+      // A CAPTCHA lands straight in the solve view
+      if (latestOpenStep(humanStepsRef.current, n.kwant_id)?.kind === 'captcha') setSolveRequest((v) => v + 1);
+    }
     else if (!(n.kind === 'question_asked' && openQuestionRef.current(n.kwant_id))) openTargetRef.current(target);
   };
   const openNotifiedRef = useRef(openNotified);
@@ -554,6 +559,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   // Virtual Machine & Live Browser state
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
+  const [solveRequest, setSolveRequest] = useState(0);
   const [activeUrl, setActiveUrl] = useState('');
   const [pageTitle, setPageTitle] = useState('');
   const [screenshotBase64, setScreenshotBase64] = useState<string | null>(null);
@@ -1572,8 +1578,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         kwantId={st?.kwant_id}
         live={st}
         waiting={!!turnId && !!turns[turnId]}
-        onOpenBrowser={() => {
+        onOpenBrowser={(_target, solve) => {
           setIsVmPaneOpen(true);
+          if (solve) setSolveRequest((v) => v + 1);
           playSfx('click');
         }}
         onDone={(id) => answerHumanStep(id, 'done')}
@@ -2755,6 +2762,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onRestartVm={handleRestartVm}
           onNavigateVm={handleNavigateVm}
           vmApprovalsOff={space.approvals === 'off' || kwants.some(approvalsOff)}
+          vmCaptchaStep={captchaStepFor(humanSteps, activeSandboxId)}
+          vmSolveRequest={solveRequest}
           pinned={pinned}
           onEditInstructions={
             isChannel && currentChannel

@@ -11,7 +11,7 @@ import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThr
 import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
 import { QuestionMeta, parseQuestionMeta } from '../questions';
-import { HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
+import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { SuggestionMeta, parseSuggestionMeta } from '../mcpSuggestions';
@@ -174,6 +174,9 @@ export interface ChatViewProps {
   onNavigateVm?: (url: string) => void;
   /** Some bot in the space runs without asking (the saved-passwords note). */
   vmApprovalsOff?: boolean;
+  /** The CAPTCHA the open bot's browser waits on, and a counter that opens it to solve. */
+  vmCaptchaStep?: HumanStep | null;
+  vmSolveRequest?: number;
   /** Pinned team/channel instructions, shown collapsed above the messages. */
   pinned?: PinnedItem[];
   /** Opens the channel's instructions editor; only for channels. */
@@ -393,6 +396,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onRestartVm,
   onNavigateVm,
   vmApprovalsOff,
+  vmCaptchaStep,
+  vmSolveRequest,
   pinned = [],
   onEditInstructions,
   highlightMessageId,
@@ -1458,6 +1463,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       onRestartVm={onRestartVm}
       onNavigate={onNavigateVm}
       approvalsOff={vmApprovalsOff}
+      captchaStep={vmCaptchaStep}
+      solveRequest={vmSolveRequest}
     />
   </div>
 </div>

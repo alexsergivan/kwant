@@ -160,6 +160,24 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+const FOCUSED_EDITABLE_JS: &str = r#"(() => {
+  let el = document.activeElement;
+  for (let i = 0; el && i < 8; i++) {
+    if (el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; }
+    if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
+      try { const inner = el.contentDocument && el.contentDocument.activeElement; if (inner) { el = inner; continue; } } catch (e) {}
+      return false;
+    }
+    break;
+  }
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  if (el.tagName === 'TEXTAREA') return !el.readOnly && !el.disabled;
+  if (el.tagName !== 'INPUT') return false;
+  const t = (el.type || 'text').toLowerCase();
+  return !el.readOnly && !el.disabled && ['text','search','email','url','tel','password','number','date','datetime-local','month','time','week'].includes(t);
+})()"#;
+
 /// Finds a visible CAPTCHA widget in the page (document, open shadow roots and same-origin
 /// frames) and returns `{kind, x, y, width, height}` in viewport pixels, or null. Never scrolls:
 /// a widget below the fold comes back with `offscreen: true` and no usable box.
@@ -960,6 +978,15 @@ impl BrowserController {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let _ = self.capture_screenshot().await;
         Ok(())
+    }
+
+    /// Whether the page's focused element takes typing (a text field or editable area), followed
+    /// into open shadow roots and same-origin frames. The live view opens the phone keyboard on it.
+    pub async fn focused_editable(&self) -> bool {
+        let Ok(res) = self.send_cdp_command("Runtime.evaluate", json!({
+            "expression": FOCUSED_EDITABLE_JS, "returnByValue": true
+        })).await else { return false };
+        res["result"]["value"].as_bool().unwrap_or(false)
     }
 
     /// A visible CAPTCHA widget on the page, if any. `Err` when the page couldn't be read

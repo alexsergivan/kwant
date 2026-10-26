@@ -11,6 +11,8 @@ import {
   Keyboard,
   Loader2,
   Laptop,
+  Puzzle,
+  CheckCircle2,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import { mapBrowserPoint } from '../browserViewport';
@@ -20,6 +22,24 @@ import { browserFooterLabel, isBlankPage, showsLocalWindow } from '../computerMo
 import { loginMatchesPage } from '../savedPasswords';
 import { PendingLoginPrompt, SavedPasswordsPanel, useSavedPasswords } from './SavedPasswordsPanel';
 import { usePasswordStore } from './PasswordStorePanel';
+import { BrowserControlOverlay, sendPageInput } from './BrowserControlOverlay';
+import { PAGE_H, PAGE_W, PageInput, Pt, createGestureTracker, stageToPage, stageToPageClamped } from '../browserGestures';
+import { HumanStep } from '../humanSteps';
+
+const PHONE_QUERY = '(max-width: 639px)';
+
+/** Below 640px taking control opens the page full screen. */
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(PHONE_QUERY).matches);
+  useEffect(() => {
+    const mq = window.matchMedia?.(PHONE_QUERY);
+    if (!mq) return;
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  return narrow;
+}
 
 export interface TerminalLogEntry {
   command: string;
@@ -43,6 +63,10 @@ export interface VirtualMachinePaneProps {
   onNavigate?: (url: string) => void;
   /** Some bot in the space runs without asking (shown next to saved passwords). */
   approvalsOff?: boolean;
+  /** The CAPTCHA this bot's browser is stuck on (open, or closed a moment ago). */
+  captchaStep?: HumanStep | null;
+  /** Goes up each time the person asks to solve it: take control and, on a phone, go full screen. */
+  solveRequest?: number;
 }
 
 type PaneTab = 'browser' | 'terminal' | 'vault';
@@ -55,6 +79,9 @@ const chosenTabs = new Map<string, PaneTab>();
 export function chosenPaneTab(teamId: string | undefined): PaneTab {
   return (teamId && chosenTabs.get(teamId)) || 'browser';
 }
+
+// A notification tap switches chats, which mounts a new pane: the request it carries is still new to that one.
+let handledSolve = 0;
 
 export function rememberPaneTab(teamId: string | undefined, tab: PaneTab): void {
   if (teamId) chosenTabs.set(teamId, tab);
@@ -75,6 +102,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   onRestartVm,
   onNavigate,
   approvalsOff = false,
+  captchaStep = null,
+  solveRequest = 0,
 }) => {
   const [activeTab, setActiveTab] = useState<PaneTab>(() => chosenPaneTab(teamId));
   useEffect(() => rememberPaneTab(teamId, activeTab), [teamId, activeTab]);
@@ -100,6 +129,12 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const lastWheelTimeRef = useRef<number>(0);
   const imageRef = useRef<HTMLImageElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const narrow = useNarrow();
+  const [fullScreen, setFullScreen] = useState(false);
+  const showFullScreen = fullScreen && narrow && activeTab === 'browser' && !isWindow;
+  const captchaOpen = captchaStep?.status === 'open';
+  // Shown for a moment after the CAPTCHA closes by itself, before control goes back to the bot
+  const [solvedNote, setSolvedNote] = useState(false);
 
   // Once the stream reports where the tab is, trust it; before that, the last URL the app heard of.
   const pageUrl = stream.location ? stream.location.url : activeUrl;
@@ -121,6 +156,93 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     setInputUrl(activeUrl);
   }, [activeUrl]);
 
+  // "Solve it" on the card or a CAPTCHA notification: take control once the stream is up
+  const [wantsControl, setWantsControl] = useState(false);
+  useEffect(() => {
+    if (solveRequest <= handledSolve) return;
+    handledSolve = solveRequest;
+    setActiveTab('browser');
+    setSolvedNote(false);
+    setWantsControl(true);
+    setFullScreen(true);
+  }, [solveRequest]);
+  const { connected, controlling, send } = stream;
+  useEffect(() => {
+    if (!wantsControl || !connected) return;
+    setWantsControl(false);
+    if (!controlling) send({ action: 'take_control' });
+  }, [wantsControl, connected, controlling, send]);
+
+  // The CAPTCHA went away: by itself it says so, then hands the browser back; any other way just closes
+  const captchaStatus = captchaStep?.status;
+  const lastCaptcha = useRef<{ id?: string; status?: string }>({ id: captchaStep?.id, status: captchaStatus });
+  useEffect(() => {
+    const was = lastCaptcha.current;
+    lastCaptcha.current = { id: captchaStep?.id, status: captchaStatus };
+    if (was.status !== 'open' || was.id !== captchaStep?.id || captchaStatus === 'open') return;
+    const finish = () => {
+      setFullScreen(false);
+      setSolvedNote(false);
+      if (stream.controlling) send({ action: 'release_control' });
+    };
+    if (captchaStatus === 'resolved_auto') {
+      setSolvedNote(true);
+      playSfx('coin');
+      const t = setTimeout(finish, 1500);
+      return () => clearTimeout(t);
+    }
+    finish();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [captchaStep?.id, captchaStatus]);
+
+  const handBack = () => {
+    playSfx('click');
+    setFullScreen(false);
+    if (isControlMode) send({ action: 'release_control' });
+  };
+
+  // Mouse or finger in the side panel: a click clicks, a drag presses, moves and releases (sliders)
+  const lastDownRef = useRef<{ x: number; y: number } | null>(null);
+  const pageFromClient = useCallback((p: Pt, clamp: boolean) => {
+    const img = imageRef.current;
+    if (!img) return clamp ? { x: 0, y: 0 } : null;
+    const rect = img.getBoundingClientRect();
+    const page = { width: img.naturalWidth || PAGE_W, height: img.naturalHeight || PAGE_H };
+    const scale = Math.min(rect.width / page.width, rect.height / page.height);
+    const view = { scale, tx: (rect.width - page.width * scale) / 2, ty: (rect.height - page.height * scale) / 2 };
+    const x = p.x - rect.left;
+    const y = p.y - rect.top;
+    return clamp ? stageToPageClamped(x, y, view, page) : stageToPage(x, y, view, page);
+  }, []);
+  const sendRef = useRef(stream.send);
+  sendRef.current = stream.send;
+  const tracker = useMemo(
+    () =>
+      createGestureTracker({
+        toPage: (p) => pageFromClient(p, false),
+        toPageClamped: (p) => pageFromClient(p, true) as Pt,
+        send: (input: PageInput) => {
+          if (input.action === 'click') {
+            playSfx('click');
+            const frame = viewportRef.current?.getBoundingClientRect();
+            const at = lastDownRef.current;
+            if (frame && at) {
+              const rippleId = Date.now();
+              setClickRipples((prev) => [...prev, { id: rippleId, x: at.x - frame.left, y: at.y - frame.top }]);
+              setTimeout(() => setClickRipples((prev) => prev.filter((r) => r.id !== rippleId)), 600);
+            }
+          }
+          sendPageInput(sendRef.current, input);
+        },
+        now: () => performance.now(),
+        later: (fn, ms) => {
+          const t = window.setTimeout(fn, ms);
+          return () => window.clearTimeout(t);
+        },
+      }),
+    [pageFromClient]
+  );
+
   const loginsOnThisPage = useMemo(() => passwords.logins.filter((l) => loginMatchesPage(l, pageUrl)).length, [passwords.logins, pageUrl]);
 
   // Dispatch interactive action to backend
@@ -139,26 +261,6 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     },
     [stream.send]
   );
-
-  // Viewport Click Handler
-  const handleViewportClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isControlMode || !imageRef.current) return;
-    const img = imageRef.current;
-    const rect = img.getBoundingClientRect();
-    const point = mapBrowserPoint(e.clientX, e.clientY, rect, img.naturalWidth, img.naturalHeight);
-    if (!point) return;
-    viewportRef.current?.focus({ preventScroll: true });
-    const frame = e.currentTarget.getBoundingClientRect();
-
-    playSfx('click');
-    const rippleId = Date.now();
-    setClickRipples((prev) => [...prev, { id: rippleId, x: e.clientX - frame.left, y: e.clientY - frame.top }]);
-    setTimeout(() => {
-      setClickRipples((prev) => prev.filter((r) => r.id !== rippleId));
-    }, 600);
-
-    sendInteraction({ action: 'click', ...point });
-  };
 
   // Viewport Wheel / Scroll Handler
   const handleViewportWheel = (e: React.WheelEvent<HTMLDivElement>) => {
@@ -227,6 +329,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 playSfx('click');
                 stream.send({ action: isControlMode ? 'release_control' : 'take_control' });
                 if (!isControlMode) setActiveTab('browser');
+                setFullScreen(!isControlMode);
               }}
               disabled={!stream.connected}
               title={isControlMode ? 'Exit Control Mode' : 'Take Control of Bot Browser'}
@@ -436,7 +539,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
             {isControlMode && (
               <form
                 onSubmit={handleQuickTypeSubmit}
-                className="flex items-center gap-1.5 p-1 bg-zinc-900 border border-cyan-500/40 rounded-lg text-xs"
+                className="hidden sm:flex items-center gap-1.5 p-1 bg-zinc-900 border border-cyan-500/40 rounded-lg text-xs"
               >
                 <Keyboard size={12} className="text-cyan-400 flex-shrink-0 ml-1" />
                 <input
@@ -456,6 +559,32 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
               </form>
             )}
 
+            {(captchaOpen || solvedNote) && (
+              <div
+                role="status"
+                aria-live="polite"
+                className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] ${
+                  solvedNote ? 'border-emerald-500/30 bg-emerald-950/40 text-emerald-300' : 'border-amber-500/30 bg-amber-950/40 text-amber-200'
+                }`}
+              >
+                {solvedNote ? <CheckCircle2 size={13} aria-hidden="true" /> : <Puzzle size={13} aria-hidden="true" />}
+                <span className="flex-1">{solvedNote ? `Solved, ${teamName} continues` : `Solve the puzzle, ${teamName} continues by itself`}</span>
+                {!solvedNote && (!isControlMode || narrow) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      playSfx('click');
+                      setWantsControl(true);
+                      setFullScreen(true);
+                    }}
+                    className="px-2 py-1 rounded-md bg-amber-400 text-zinc-950 font-semibold"
+                  >
+                    Solve it
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Viewport Frame */}
             {controlError && (
               <div role="alert" className="px-2.5 py-2 rounded-lg border border-red-500/30 bg-red-950/40 text-xs text-red-300">
@@ -466,8 +595,22 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
               ref={viewportRef}
               tabIndex={0}
               onKeyDown={handleViewportKeyDown}
-              onClick={handleViewportClick}
+              onPointerDown={(e) => {
+                if (!isControlMode || (e.pointerType === 'mouse' && e.button !== 0)) return;
+                viewportRef.current?.focus({ preventScroll: true });
+                e.currentTarget.setPointerCapture?.(e.pointerId);
+                lastDownRef.current = { x: e.clientX, y: e.clientY };
+                tracker.down(e.pointerId, { x: e.clientX, y: e.clientY }, e.isPrimary);
+              }}
+              onPointerMove={(e) => {
+                if (isControlMode) tracker.move(e.pointerId, { x: e.clientX, y: e.clientY });
+              }}
+              onPointerUp={(e) => {
+                if (isControlMode) tracker.up(e.pointerId, { x: e.clientX, y: e.clientY });
+              }}
+              onPointerCancel={(e) => tracker.cancel(e.pointerId)}
               onWheel={handleViewportWheel}
+              style={isControlMode ? { touchAction: 'none' } : undefined}
               className={`flex-1 border rounded-xl bg-zinc-950 overflow-hidden flex items-center justify-center relative shadow-inner focus:outline-none ${
                 isControlMode
                   ? 'border-cyan-500/60 ring-2 ring-cyan-500/20 cursor-crosshair'
@@ -491,7 +634,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 />
               ))}
 
-              {currentScreenshot ? (
+              {showFullScreen ? (
+                <p className="text-center p-6 text-zinc-500 text-xs">Showing full screen</p>
+              ) : currentScreenshot ? (
                 <img
                   key={stream.frame?.id}
                   ref={imageRef}
@@ -563,6 +708,24 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           )
         )}
       </div>
+
+      {showFullScreen && (
+        <BrowserControlOverlay
+          botName={teamName}
+          pageUrl={pageUrl}
+          image={currentScreenshot ? (currentScreenshot.startsWith('data:') ? currentScreenshot : `data:image/jpeg;base64,${currentScreenshot}`) : null}
+          onFrameDone={() => {
+            if (stream.frame) stream.acknowledgeFrame(stream.frame.id);
+          }}
+          send={stream.send}
+          busy={isInteracting}
+          error={controlError ?? null}
+          tapFocus={stream.tapFocus}
+          captcha={captchaOpen ? { target: captchaStep?.target ?? null } : null}
+          solved={solvedNote}
+          onHandBack={handBack}
+        />
+      )}
 
       {/* Footer Status */}
       <div className="p-2.5 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] text-zinc-400">
