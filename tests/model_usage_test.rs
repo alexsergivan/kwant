@@ -20,6 +20,7 @@ fn call_row(kwant: &str, purpose: &'static str, fresh: i64) -> NewUsage {
         tools_chars: 900,
         system_chars: 5000,
         messages_chars: 700,
+        cost_usd: None,
     }
 }
 

@@ -856,3 +856,19 @@ fn a_negation_reaches_to_the_end_of_its_clause() {
     assert_ne!(heuristic_effort("Don't refactor the module yet, just rename it", "chat"), "high");
     assert_eq!(heuristic_effort("Please don't refactor anything, just tell me what time zone Paris is in", "chat"), "low", "a01");
 }
+
+#[test]
+fn short_follow_up_with_attachment_does_not_get_the_deep_tier() {
+    use kwnt::router::fallback::cap_effort_for_attachment as cap;
+    let files = "\n\n[Attached files]\nThe user attached these files.\n- report.pdf (2 MB)";
+    // A one-line question about a file: "high" comes down to "medium".
+    assert_eq!(cap(&format!("what's the total on this?{files}"), "high"), Some("medium"));
+    assert_eq!(cap(&format!("Thoughts?{files}"), "High"), Some("medium"));
+    // Lower efforts and messages without files are left alone.
+    assert_eq!(cap(&format!("what's the total on this?{files}"), "medium"), None);
+    assert_eq!(cap("what's the total on this?", "high"), None);
+    // Asking for depth, or a long message, keeps "high".
+    assert_eq!(cap(&format!("do a deep dive on this{files}"), "high"), None);
+    let long = "please go through every line of this and compare it with last month and tell me where we are off ".repeat(2);
+    assert_eq!(cap(&format!("{long}{files}"), "high"), None);
+}

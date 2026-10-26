@@ -757,6 +757,8 @@ struct ChatRequest<'a> {
     stream: bool,
     /// Where each call is recorded; `None` records nothing.
     record: Option<UsageSink<'a>>,
+    /// The turn's calls added up, for the reply's fresh/cached split; `None` until one reports.
+    turn_usage: std::sync::Mutex<Option<super::TurnUsage>>,
 }
 
 /// The bot and conversation a turn's calls are recorded for (see `crate::db::usage`).
@@ -782,6 +784,17 @@ fn prompt_chars(body: &Value) -> (usize, usize, usize) {
 
 /// Records one model call, if the request has somewhere to record it. Never fails the turn.
 async fn record_call(request: &ChatRequest<'_>, purpose: &'static str, usage: Option<Usage>, body: &Value) {
+    if let Some(u) = usage {
+        let call = super::TurnUsage {
+            fresh_input: u.input,
+            cache_read: u.cache_read,
+            cache_write: u.cache_creation,
+            output: u.output,
+            cost_usd: None,
+        };
+        let mut sum = request.turn_usage.lock().unwrap_or_else(|e| e.into_inner());
+        sum.get_or_insert_with(Default::default).add(&call);
+    }
     let Some(sink) = request.record else {
         return;
     };
@@ -800,6 +813,7 @@ async fn record_call(request: &ChatRequest<'_>, purpose: &'static str, usage: Op
         tools_chars: tools as i64,
         system_chars: system as i64,
         messages_chars: messages as i64,
+        cost_usd: None,
     };
     if let Err(e) = sink.db.record_usage(&row).await {
         tracing::warn!(error = %e, "could not record model usage");
@@ -1261,6 +1275,7 @@ impl Driver for ApiDriver {
                     kwant_id: &input.kwant.id,
                     context_id: &input.thread_id,
                 }),
+                turn_usage: Default::default(),
             };
             let caller = Caller {
                 kwant_id: input.kwant.id.clone(),
@@ -1360,10 +1375,12 @@ impl Driver for ApiDriver {
                         profile_id: None,
                     })
                     .await;
+                let usage = *request.turn_usage.lock().unwrap_or_else(|e| e.into_inner());
                 return Ok(TurnOutput {
                     text,
                     reasoning: Some(format!("Model: {} [Effort: {}]", model, effort)),
                     tokens_used: tokens,
+                    usage,
                     model: Some(model.clone()),
                     ..Default::default()
                 });
@@ -1454,6 +1471,7 @@ mod tests {
             max_calls: 1,
             stream: false,
             record: None,
+            turn_usage: Default::default(),
         }
     }
 

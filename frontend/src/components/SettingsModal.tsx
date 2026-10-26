@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
+import { budgetError, budgetValue } from '../chainBudget';
+import { DailyUsagePanel } from './DailyUsage';
 import {
   BROWSER_NOTIFY_KEY,
   MASK,
@@ -48,6 +50,8 @@ interface SettingsData {
   timezone?: string;
   /** The person's city as they typed it, "" when not set. */
   location?: string;
+  /** Fresh tokens per request before hand-offs pause; 0 = off. Missing on older servers. */
+  chain_token_budget?: number;
 }
 
 const LIMIT_FIELDS: { key: TurnLimitKey; label: string; hint: string }[] = [
@@ -95,6 +99,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const webhookError = webhookUrlError(webhookUrl);
   // Kept as typed text so a half-typed value can be shown with its error; null until loaded.
   const [limits, setLimits] = useState<Record<TurnLimitKey, string> | null>(null);
+  // Fresh tokens one request's chain may use before hand-offs pause; null on a server without it.
+  const [chainBudget, setChainBudget] = useState<string | null>(null);
+  const chainBudgetError = chainBudget === null ? null : budgetError(chainBudget);
   const limitErrors = Object.fromEntries(
     LIMIT_FIELDS.map(({ key }) => [key, limits ? limitError(key, limits[key]) : null]),
   ) as Record<TurnLimitKey, string | null>;
@@ -137,6 +144,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                 }
               : null,
           );
+          setChainBudget(typeof data.chain_token_budget === 'number' ? String(data.chain_token_budget) : null);
           setAgentTools(typeof data.agent_tools === 'boolean' ? data.agent_tools : null);
           setPlace(
             typeof data.timezone === 'string'
@@ -191,7 +199,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (webhookError || limitsInvalid) return;
+    if (webhookError || limitsInvalid || chainBudgetError) return;
     setSaveError(null);
     setSaving(true);
     playSfx('click');
@@ -214,6 +222,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                 delegation_follow_up_minutes: Number(limits.delegation_follow_up_minutes),
               }
             : {}),
+          ...(chainBudget !== null ? { chain_token_budget: budgetValue(chainBudget) } : {}),
           ...(agentTools !== null ? { agent_tools: agentTools } : {}),
           ...(place ? { timezone: place.timezone.trim(), location: place.location.trim() } : {}),
         }),
@@ -511,6 +520,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               )}
             </fieldset>
           )}
+
+          <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
+            <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
+              <Gauge size={14} className="text-sky-300" aria-hidden="true" />
+              <span>Usage</span>
+            </legend>
+            {chainBudget !== null && (
+              <div className="space-y-1">
+                <label htmlFor="chain-token-budget" className="block text-[11px] font-medium text-zinc-300">
+                  Token budget per request (fresh tokens)
+                </label>
+                <input
+                  id="chain-token-budget"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={chainBudget}
+                  onChange={(e) => setChainBudget(e.target.value)}
+                  aria-invalid={!!chainBudgetError}
+                  aria-describedby="chain-token-budget-hint"
+                  className={`w-full sm:w-48 bg-zinc-950 border rounded-lg px-3 py-2 text-xs font-mono text-zinc-100 focus:outline-none transition-colors ${
+                    chainBudgetError ? 'border-rose-500/60 focus:border-rose-400' : 'border-zinc-800 focus:border-sky-500'
+                  }`}
+                />
+                <p id="chain-token-budget-hint" className={`text-[11px] ${chainBudgetError ? 'text-rose-300' : 'text-zinc-500'}`}>
+                  {chainBudgetError ??
+                    'When bots handing work to each other go over this for one of your messages, they pause and ask you before going on. 0 turns it off.'}
+                </p>
+              </div>
+            )}
+            <DailyUsagePanel open={isOpen} />
+          </fieldset>
 
           {agentTools !== null && (
             <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">

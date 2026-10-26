@@ -27,6 +27,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   or answering the question cancels the reminder. Set the delay with `waiting_follow_up_hours` in
   settings (0 turns reminders off). `GET /api/waiting` (you only, never a bot) lists everything bots
   are waiting on you for.
+- **See what a reply really cost.** Each reply now shows its fresh tokens (new input, cache writes
+  and output) instead of a total padded with cheap cache reads; hover for the full split and the cost
+  when the engine reports one. Claude sign-in bots now appear in a bot's **Usage** tab too, and
+  **App settings → Usage** lists fresh and cached tokens and cost per day and bot.
+- **Token budget per request.** When bots handing work to each other go over it (200k fresh tokens
+  by default, 0 turns it off) for one of your messages, they pause with one notice in the chat;
+  press **Continue** or say "continue" to let them go on.
 
 ### Changed
 - A bot reply that ends with a closing line such as "Anything else?", "Should I continue?" or
@@ -35,6 +42,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ("Which city are you in?") still do, unless the next message clearly fits another bot better.
 - UK places (London, Belfast, Jersey, Guernsey, Isle of Man) get metric units with road distances
   and speeds in miles and mph.
+- A short message with an attachment ("what's the total on this?" plus a PDF) no longer gets the
+  deepest, slowest model tier on its own; asking for depth ("do a deep dive") still does.
 
 ### Fixed
 - Invisible characters (zero-width, bidi overrides, Unicode tags) are stripped from the city setting.

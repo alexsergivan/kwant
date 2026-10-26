@@ -894,6 +894,11 @@ struct ClaudeResult {
     result: String,
     #[serde(default)]
     usage: Option<serde_json::Value>,
+    #[serde(default)]
+    total_cost_usd: Option<f64>,
+    /// Per model: `{"claude-opus-5-5": {"outputTokens": …, "costUSD": …}, …}`.
+    #[serde(default, rename = "modelUsage")]
+    model_usage: Option<serde_json::Value>,
 }
 
 impl ClaudeResult {
@@ -922,6 +927,54 @@ impl ClaudeResult {
         .filter_map(|k| u[*k].as_u64())
         .sum::<u64>();
         (sum > 0).then_some(sum as usize)
+    }
+
+    /// The turn's tokens split into fresh input, cache reads, cache writes and output, plus its
+    /// cost when claude reported one. `None` when the result line had no usage.
+    fn split(&self) -> Option<super::TurnUsage> {
+        let u = self.usage.as_ref().filter(|u| u.is_object())?;
+        let n = |k: &str| u[k].as_u64().unwrap_or(0);
+        let split = super::TurnUsage {
+            fresh_input: n("input_tokens"),
+            cache_read: n("cache_read_input_tokens"),
+            cache_write: n("cache_creation_input_tokens"),
+            output: n("output_tokens"),
+            cost_usd: self.total_cost_usd.filter(|c| c.is_finite() && *c >= 0.0),
+        };
+        (split != super::TurnUsage::default()).then_some(split)
+    }
+
+    /// The model that did most of the turn's work (claude also calls a small model for chores).
+    fn main_model(&self) -> Option<String> {
+        let models = self.model_usage.as_ref()?.as_object()?;
+        models
+            .iter()
+            .max_by_key(|(_, m)| m["outputTokens"].as_u64().unwrap_or(0))
+            .map(|(name, _)| name.clone())
+    }
+}
+
+/// Saves a CLI turn's usage as one `model_usage` row, so the bot's Usage tab and the daily
+/// totals see CLI bots too. Never fails the turn.
+async fn record_cli_usage(input: &TurnInput, model: Option<String>, usage: &super::TurnUsage) {
+    let Some(db) = input.store.as_ref().filter(|_| !input.thread_id.is_empty()) else {
+        return;
+    };
+    let row = crate::db::usage::NewUsage {
+        kwant_id: input.kwant.id.clone(),
+        context_id: input.thread_id.clone(),
+        purpose: crate::db::usage::PURPOSE_REPLY,
+        model: model.or_else(|| input.model.clone()).unwrap_or_else(|| "claude".into()),
+        fresh_input: usage.fresh_input as i64,
+        cache_read: usage.cache_read as i64,
+        cache_write: usage.cache_write as i64,
+        output: usage.output as i64,
+        reported: true,
+        cost_usd: usage.cost_usd,
+        ..Default::default()
+    };
+    if let Err(e) = db.record_usage(&row).await {
+        tracing::warn!(error = %e, "could not record CLI usage");
     }
 }
 
@@ -1250,6 +1303,7 @@ impl Driver for CliDriver {
                 group.disarm();
 
                 let mut tokens = None;
+                let mut usage = None;
                 let output_str = if let Some(ref out_file) = codex_out_file {
                     let content = tokio::fs::read_to_string(out_file)
                         .await
@@ -1274,6 +1328,10 @@ impl Driver for CliDriver {
                                 }
                             }
                             tokens = result.tokens();
+                            usage = result.split();
+                            if let Some(u) = &usage {
+                                record_cli_usage(&input, result.main_model(), u).await;
+                            }
                             result.result
                         }
                         // A failed run with no output is an error, not an empty reply
@@ -1306,6 +1364,7 @@ impl Driver for CliDriver {
                     text: output_str,
                     reasoning: Some(self.executed_via(effort)),
                     tokens_used: tokens,
+                    usage,
                     ..Default::default()
                 })
             }
@@ -1340,6 +1399,23 @@ impl Driver for CliDriver {
 mod tests {
     use super::*;
     use crate::db::models::{Kwant, Message};
+
+    #[test]
+    fn claude_result_usage_is_split_into_fresh_and_cached() {
+        let stdout = include_str!("../../tests/fixtures/claude/result_with_usage.jsonl");
+        let result = ClaudeResult::parse(stdout).expect("result line");
+        let split = result.split().expect("usage");
+        assert_eq!(
+            split,
+            super::super::TurnUsage { fresh_input: 12, cache_read: 83_544, cache_write: 8_211, output: 487, cost_usd: Some(0.4189) }
+        );
+        // Cache reads are not fresh: only new input, cache writes and output count.
+        assert_eq!(split.fresh(), 12 + 8_211 + 487);
+        // The model that wrote the answer, not the helper model claude called on the side.
+        assert_eq!(result.main_model().as_deref(), Some("claude-opus-5-5"));
+        // Without usage there is no split, rather than an all-zero one.
+        assert_eq!(ClaudeResult::parse(r#"{"type":"result","result":"hi"}"#).and_then(|r| r.split()), None);
+    }
 
     fn kinds(events: &[RuntimeEvent]) -> Vec<String> {
         events

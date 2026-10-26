@@ -336,6 +336,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // sub-routes such as `/computer` (which machine the bots run on) and `/computer/window`:
         // bots change the allowed ones through their `settings_update` action, never these routes
         ["", "api", "settings", ..] => *method != Method::GET && *method != Method::HEAD,
+        // Carrying on a chain that went over its token budget is the person's call
+        ["", "api", "chains", _, "continue"] => *method == Method::POST,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "kwants" | "teams", _] => *method == Method::DELETE,
@@ -850,6 +852,7 @@ mod tests {
         assert!(person_only(&put, "/api/kwants/k1/approvals"));
         assert!(!person_only(&get, "/api/kwants/k1/approvals"));
         assert!(person_only(&post, "/api/settings"));
+        assert!(person_only(&post, "/api/chains/m1/continue"));
         assert!(person_only(&put, "/api/settings/"));
         assert!(!person_only(&get, "/api/settings"));
         assert!(person_only(&put, "/api/settings/computer"));

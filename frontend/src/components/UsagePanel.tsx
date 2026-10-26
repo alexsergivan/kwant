@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { formatWhen } from '../continuity';
-import { ModelUsage, UsageSums, cacheShare, compactTokens, modelUsageApi, purposeLabel } from '../modelUsage';
+import { ModelUsage, UsageSums, cacheShare, compactTokens, formatCost, modelUsageApi, purposeLabel } from '../modelUsage';
 
 const quietBtn =
   'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 border-zinc-700/70 bg-zinc-800/70 text-zinc-200 hover:bg-zinc-700';
 
-const KINDS: Array<{ key: keyof UsageSums; label: string; hint: string }> = [
+type TokenKey = 'fresh_input_tokens' | 'cache_read_tokens' | 'cache_write_tokens' | 'output_tokens';
+
+const KINDS: Array<{ key: TokenKey; label: string; hint: string }> = [
   { key: 'fresh_input_tokens', label: 'Fresh input', hint: 'Input tokens read at full price' },
   { key: 'cache_read_tokens', label: 'Cache read', hint: 'Input tokens served from the cache' },
   { key: 'cache_write_tokens', label: 'Cache write', hint: 'Input tokens written to the cache' },
@@ -45,8 +47,8 @@ export const UsageView: React.FC<{
   if (t.calls === 0)
     return (
       <p className="text-xs text-zinc-500 border border-dashed border-zinc-800 rounded-lg p-4 text-center" data-usage-empty>
-        No model calls recorded for {kwantName} yet. Calls are counted here for bots on an API key or a custom API; Claude, Codex and Grok
-        sign-ins report their usage to their own accounts.
+        No model calls recorded for {kwantName} yet. Calls are counted here for bots on an API key, a custom API or a Claude sign-in;
+        Codex and Grok sign-ins report their usage to their own accounts.
       </p>
     );
   const share = cacheShare(t);
@@ -56,6 +58,7 @@ export const UsageView: React.FC<{
         <p className="text-xs text-zinc-400">
           {t.calls} {t.calls === 1 ? 'call' : 'calls'}
           {share !== null && `, ${share}% of input from the cache`}
+          {formatCost(t.cost_usd) && `, ${formatCost(t.cost_usd)}`}
         </p>
         <button type="button" onClick={onReload} className={quietBtn} aria-label="Refresh usage">
           <RefreshCw size={12} /> Refresh
@@ -103,7 +106,7 @@ export const UsageView: React.FC<{
                   <span className="text-zinc-500 break-all">{c.model}</span>
                   <span className="ml-auto text-[10px] text-zinc-500">{formatWhen(c.created_at)}</span>
                 </div>
-                <div className="text-zinc-500 tabular-nums">{c.reported ? tokenLine(c) : 'The provider sent no token counts for this call.'}</div>
+                <div className="text-zinc-500 tabular-nums">{c.reported ? tokenLine(c) + (formatCost(c.cost_usd) ? ` · ${formatCost(c.cost_usd)}` : '') : 'The provider sent no token counts for this call.'}</div>
               </li>
             ))}
           </ul>

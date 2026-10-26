@@ -1,5 +1,7 @@
 import React, { useRef, useState } from 'react';
-import { AlertTriangle, Check, Info, Loader2, RotateCcw } from 'lucide-react';
+import { AlertTriangle, Check, Gauge, Info, Loader2, Play, RotateCcw } from 'lucide-react';
+import { BudgetPausedMeta } from '../chainBudget';
+import { compactTokens } from '../modelUsage';
 import { Interruption, RetryState, RetryTarget, interruptionText, runRetryOnce } from '../interruptions';
 
 /** A note kwnt itself wrote (e.g. "Growth wasn't asked: …"): a quiet line, not a bot's reply. */
@@ -75,6 +77,81 @@ export const InterruptedNotice: React.FC<InterruptedNoticeProps> = ({ messageId,
           </button>
         )}
       </div>
+    </section>
+  );
+};
+
+export interface BudgetPausedNoticeProps {
+  messageId: string;
+  text: string;
+  meta: BudgetPausedMeta;
+  /** Carries the chain on; without it (a read-only view) there's no button. */
+  onContinue?: (noticeId: string) => Promise<unknown>;
+  flash?: boolean;
+}
+
+/** A chain that went over its token budget: who was waiting, and Continue to let them go on. */
+export const BudgetPausedNotice: React.FC<BudgetPausedNoticeProps> = ({ messageId, text, meta, onContinue, flash }) => {
+  const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error'>(meta.resumed ? 'sent' : 'idle');
+  const [error, setError] = useState<string | null>(null);
+  const lock = useRef(false);
+  const headingId = `budget-${messageId}`;
+  const run = async () => {
+    if (!onContinue || lock.current) return;
+    lock.current = true;
+    setState('sending');
+    setError(null);
+    try {
+      await onContinue(messageId);
+      setState('sent');
+    } catch (e) {
+      lock.current = false;
+      setState('error');
+      setError(e instanceof Error ? e.message : 'Could not continue.');
+    }
+  };
+  const done = state === 'sent';
+  return (
+    <section
+      data-message-id={messageId}
+      data-budget-paused
+      aria-labelledby={headingId}
+      className={`w-full max-w-5xl rounded-xl border border-amber-500/30 bg-amber-950/20 px-3.5 py-2.5 sm:px-4 ${flash ? 'kw-flash' : ''}`}
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="min-w-0 flex-1 basis-56">
+          <p id={headingId} className="flex items-start gap-2 text-sm text-amber-200 break-words">
+            <Gauge size={15} className="mt-0.5 shrink-0 text-amber-400" aria-hidden="true" />
+            <span className="min-w-0">{text}</span>
+          </p>
+          <p className="mt-1 pl-[23px] text-[11px] text-amber-200/60 font-mono">
+            {compactTokens(meta.used)} of {compactTokens(meta.budget)} fresh tokens
+          </p>
+        </div>
+        {onContinue && (
+          <button
+            type="button"
+            onClick={run}
+            disabled={state === 'sending' || done}
+            aria-describedby={headingId}
+            className="shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer disabled:cursor-default text-amber-100 bg-amber-500/15 border-amber-500/40 hover:bg-amber-500/25 disabled:opacity-70 disabled:hover:bg-amber-500/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400"
+          >
+            {state === 'sending' ? (
+              <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            ) : done ? (
+              <Check size={13} aria-hidden="true" />
+            ) : (
+              <Play size={13} aria-hidden="true" />
+            )}
+            <span>{state === 'sending' ? 'Continuing…' : done ? 'Continued' : 'Continue'}</span>
+          </button>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="mt-2 pl-[23px] text-[11px] text-rose-300">
+          {error}
+        </p>
+      )}
     </section>
   );
 };

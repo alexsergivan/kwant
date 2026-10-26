@@ -27,6 +27,8 @@ pub const GLOBAL_SETTING: &str = "max_turns_global";
 struct Job {
     keys: Vec<String>,
     token: CancellationToken,
+    /// Fresh tokens (see [`crate::drivers::TurnUsage::fresh`]) its turns used so far.
+    fresh_tokens: u64,
 }
 
 /// A turn the UI can show: running, or waiting for a slot.
@@ -88,7 +90,7 @@ impl TurnRegistry {
         let token = CancellationToken::new();
         let mut keys: Vec<String> = keys.into_iter().map(Into::into).filter(|k: &String| !k.is_empty()).collect();
         keys.push(id.clone());
-        self.lock().jobs.insert(id.clone(), Job { keys, token: token.clone() });
+        self.lock().jobs.insert(id.clone(), Job { keys, token: token.clone(), fresh_tokens: 0 });
         JobGuard { registry: self.clone(), id, token }
     }
 
@@ -97,6 +99,22 @@ impl TurnRegistry {
         if let Some(job) = self.lock().jobs.get_mut(job_id) {
             job.keys.extend(keys.iter().cloned());
         }
+    }
+
+    /// Adds a finished turn's fresh tokens to its job; returns the job's new total.
+    pub fn add_job_tokens(&self, job_id: &str, fresh: u64) -> u64 {
+        match self.lock().jobs.get_mut(job_id) {
+            Some(job) => {
+                job.fresh_tokens = job.fresh_tokens.saturating_add(fresh);
+                job.fresh_tokens
+            }
+            None => 0,
+        }
+    }
+
+    /// Fresh tokens a job's turns used so far (0 for a finished job).
+    pub fn job_tokens(&self, job_id: &str) -> u64 {
+        self.lock().jobs.get(job_id).map_or(0, |j| j.fresh_tokens)
     }
 
     fn finish_job(&self, id: &str) {

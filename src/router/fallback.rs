@@ -121,6 +121,17 @@ fn word_count(prompt: &str) -> usize {
         .sum()
 }
 
+/// Words of the person's own message below which an attachment alone doesn't earn the deep tier.
+const SHORT_WITH_ATTACHMENT: usize = 30;
+
+/// A short message whose weight is an attached file ("what's on this?" plus a PDF) gets at most
+/// "medium" effort: reading the file is work for the tools, not a reason for the deepest model.
+/// Asking for depth in so many words ("analyze this thoroughly") still keeps "high".
+pub fn cap_effort_for_attachment(prompt: &str, effort: &str) -> Option<&'static str> {
+    let (own, _files) = prompt.split_once("\n\n[Attached files]")?;
+    (effort.eq_ignore_ascii_case("high") && word_count(own) <= SHORT_WITH_ATTACHMENT && !has_deep_signal(own)).then_some("medium")
+}
+
 /// Asks for a one-line answer ("in one line", "just tell me…").
 const BRIEF: &[&str] = &["in one line", "one-liner", "in one word", "just tell me", "quick question"];
 

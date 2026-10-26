@@ -46,3 +46,20 @@ pub async fn get_usage(
         _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
+
+#[derive(Debug, Deserialize)]
+pub struct DailyQuery {
+    /// How many days back, today included (default 14, at most 90).
+    pub days: Option<i64>,
+}
+
+/// `GET /api/usage/daily`: every bot's tokens and cost per UTC day, newest first, for
+/// Settings → Usage. Covers CLI and API-key bots alike.
+pub async fn get_daily(State(state): State<AppState>, Query(q): Query<DailyQuery>) -> Response {
+    let days = q.days.unwrap_or(14).clamp(1, 90);
+    let since = (Utc::now() - chrono::Duration::days(days - 1)).date_naive().and_hms_opt(0, 0, 0).map(|t| t.and_utc());
+    match state.db.daily_usage(since.unwrap_or(DateTime::<Utc>::MIN_UTC)).await {
+        Ok(rows) => Json(json!({ "days": days, "rows": rows })).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}

@@ -920,6 +920,10 @@ pub(super) fn run_handoffs_boxed<'a>(
 }
 
 async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(Kwant, String)], user_prompt: &str) {
+    let named: Vec<(String, String)> = replies.iter().map(|(k, t)| (k.name.clone(), t.clone())).collect();
+    if super::budget::pause_if_over(scope, already_spoken, &named, user_prompt).await {
+        return;
+    }
     if let [(from, text)] = replies {
         if is_team_channel_lead(scope, from).await {
             return delegate_mentions(scope, from, text, user_prompt, already_spoken).await;
@@ -989,6 +993,13 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
     while let Some((kwant, from, from_text, after)) = queue.pop_front() {
         if done >= MAX_HANDOFFS || scope.cancel_token.is_cancelled() {
             queue.push_front((kwant, from, from_text, after));
+            break;
+        }
+        // Over the chain's token budget: one notice, and the rest wait for the person's "continue"
+        let waiting: Vec<(String, String)> =
+            std::iter::once((from.clone(), from_text.clone())).chain(queue.iter().map(|(_, f, t, _)| (f.clone(), t.clone()))).collect();
+        if super::budget::pause_if_over(scope, &spoken, &waiting, user_prompt).await {
+            queue.clear();
             break;
         }
         let waited_for = match after.as_ref().map(|p| (names_of(p), outcomes.get(p))) {
@@ -1800,6 +1811,13 @@ async fn run_kwant_turn_inner(
                 reasoning: "Fallback routing".into(),
             },
         };
+        let mut route = route;
+        if opts.routed.is_none() {
+            if let Some(capped) = crate::router::fallback::cap_effort_for_attachment(&prompt, &route.effort_level) {
+                route.reasoning = format!("{} · effort capped at {capped}: a short message with an attachment", route.reasoning);
+                route.effort_level = capped.into();
+            }
+        }
         let route = crate::router::apply_preferred_model(route, &target_kwant.preferred_model);
 
         let target_model = route.selected_model.clone();
@@ -2357,6 +2375,10 @@ async fn run_kwant_turn_inner(
                 }
             }
 
+            // Counts toward the chain's token budget (see `super::budget`)
+            let fresh = output.usage.map_or(output.tokens_used as u64, |u| u.fresh());
+            state.turns.add_job_tokens(&scope.job_id, fresh);
+
             let saved = match &opts.discussion {
                 None => Some((
                     output.text.clone(),
@@ -2386,6 +2408,9 @@ async fn run_kwant_turn_inner(
                 let mut meta = ran_on
                     .as_ref()
                     .map(|r| serde_json::json!({ "ran_on": r.to_json(output.model.as_deref(), pick, &effort_level) }));
+                if let Some(usage) = &output.usage {
+                    meta.get_or_insert_with(|| serde_json::json!({}))["usage"] = serde_json::json!(usage);
+                }
                 if let Some(routing) = &opts.routing {
                     meta.get_or_insert_with(|| serde_json::json!({}))["routing"] = routing.clone();
                 }
@@ -2436,6 +2461,7 @@ async fn chat_space(state: &AppState, payload: &SendChatPayload) -> Result<Space
 
 pub async fn send_chat(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::RawQuery(query): axum::extract::RawQuery,
     Json(payload): Json<SendChatPayload>,
 ) -> axum::response::Response {
@@ -2452,7 +2478,8 @@ pub async fn send_chat(
     if let Err(r) = super::spaces::ids_guard(&state, query.as_deref(), &rows).await {
         return r;
     }
-    match send_chat_inner(state, payload).await {
+    let from_person = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "").await.is_ok();
+    match send_chat_inner(state, payload, from_person).await {
         Ok(json) => json.into_response(),
         Err(status) => status.into_response(),
     }
@@ -2461,6 +2488,7 @@ pub async fn send_chat(
 async fn send_chat_inner(
     state: AppState,
     mut payload: SendChatPayload,
+    from_person: bool,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let uploads = super::attachments::check_uploads(&state, &payload.attachment_ids).await?;
     if let Some(thread_id) = payload.thread_id.clone() {
@@ -2692,6 +2720,13 @@ async fn send_chat_inner(
     if let Some(link) = &gathered {
         let note = super::asks::deliver_answer(&state, link, &payload.prompt, &all_kwants).await;
         payload.prompt.push_str(&note);
+    }
+
+    // "continue" after a chain paused at its token budget carries that chain on
+    if let Some(cid) = payload.channel_id.as_deref() {
+        if let Some(notice) = super::budget::resume_if_continue(&state, cid, &payload.prompt, from_person).await {
+            return Ok(Json(json!({ "status": "continued", "user_message_id": saved_user_msg.id, "notice_id": notice })));
+        }
     }
 
     // Typed instead of tapped: the answer closes the bot's open question, and a turn still waiting
@@ -3122,6 +3157,8 @@ pub struct SettingsResponse {
     pub captcha_timeout_minutes: u64,
     /// Hours before a bot waiting on the person reminds them once; 0 = never.
     pub waiting_follow_up_hours: i64,
+    /// Fresh tokens one chain may use before hand-offs pause (see `super::budget`); 0 = off.
+    pub chain_token_budget: u64,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3150,6 +3187,7 @@ pub struct SaveSettingsPayload {
     pub location: Option<String>,
     pub captcha_timeout_minutes: Option<u64>,
     pub waiting_follow_up_hours: Option<i64>,
+    pub chain_token_budget: Option<u64>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3187,6 +3225,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
             .filter(|m| (1..=super::human_steps::MAX_CAPTCHA_TIMEOUT_MINUTES).contains(m))
             .unwrap_or(super::human_steps::DEFAULT_CAPTCHA_TIMEOUT_MINUTES),
         waiting_follow_up_hours: super::waiting::follow_up_hours(&state).await,
+        chain_token_budget: super::budget::limit(&state).await,
     }))
 }
 
@@ -3229,6 +3268,9 @@ pub async fn save_settings(
     let max_hours = super::waiting::MAX_HOURS;
     if payload.waiting_follow_up_hours.is_some_and(|h| !(0..=max_hours).contains(&h)) {
         return bad(format!("waiting_follow_up_hours must be 0–{max_hours}"));
+    }
+    if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
+        return bad(format!("chain_token_budget must be 0–{}", super::budget::MAX));
     }
     let timezone = payload.timezone.as_deref().map(crate::routines::canonical_tz);
     if let Some(tz) = timezone.as_deref().filter(|t| !t.is_empty()) {
@@ -3296,6 +3338,9 @@ pub async fn save_settings(
         let _ = state.db.set_setting(PER_AGENT_SETTING, &per_agent.to_string()).await;
         let _ = state.db.set_setting(GLOBAL_SETTING, &global.to_string()).await;
         state.turns.limiter.set_limits(per_agent, global);
+    }
+    if let Some(n) = payload.chain_token_budget {
+        let _ = state.db.set_setting(super::budget::SETTING, &n.to_string()).await;
     }
     if let Some(m) = payload.delegation_follow_up_minutes {
         let _ = state.db.set_setting(super::delegation::FOLLOW_UP_SETTING, &m.to_string()).await;

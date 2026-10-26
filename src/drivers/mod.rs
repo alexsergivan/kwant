@@ -636,11 +636,48 @@ pub async fn detect_available_models(
     available
 }
 
+/// What one turn used, split the way providers bill it. `tokens_used` stays the old
+/// cache-inclusive count; this is what the person pays for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct TurnUsage {
+    /// Input tokens neither read from nor written to the cache.
+    pub fresh_input: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub output: u64,
+    /// What the provider says the turn cost, when it says (the Claude CLI does).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+}
+
+impl TurnUsage {
+    /// Tokens the model really processed this turn: everything but cache reads. Cache writes
+    /// count, because they are new input (billed above plain input).
+    pub fn fresh(&self) -> u64 {
+        self.fresh_input + self.cache_write + self.output
+    }
+
+    pub fn add(&mut self, other: &TurnUsage) {
+        self.fresh_input += other.fresh_input;
+        self.cache_read += other.cache_read;
+        self.cache_write += other.cache_write;
+        self.output += other.output;
+        self.cost_usd = match (self.cost_usd, other.cost_usd) {
+            (Some(a), Some(b)) => Some(a + b),
+            (a, b) => a.or(b),
+        };
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TurnOutput {
     pub text: String,
     pub reasoning: Option<String>,
+    /// Every token the turn touched, cache reads included (see [`TurnUsage`] for the split).
     pub tokens_used: usize,
+    /// The split, when the engine reported one.
+    #[serde(skip)]
+    pub usage: Option<TurnUsage>,
     /// The model id the provider was asked for, when the driver resolved it itself (the API
     /// driver with no model picked for the turn).
     #[serde(skip)]

@@ -33,10 +33,12 @@ import {
 } from '../attachments';
 import { FileTiles, UploadChip } from './Attachments';
 import { ranOnLabel } from '../engines';
+import { replyTokens } from '../modelUsage';
 import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
 import { routeReasonText } from '../routeReason';
-import { InterruptedNotice, SystemNotice } from './SystemNotice';
+import { BudgetPausedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
+import { chainBudgetApi, parseBudgetPaused } from '../chainBudget';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
 
 /** A swipeable chip row whose right fade edge (phones only, see .kw-scroll-row) goes away once
@@ -237,10 +239,6 @@ export const renderFormattedText = (text: string): React.ReactNode => {
     return part;
   });
 };
-
-/** "24.2k" for a token count, so it fits on a phone's line. */
-export const compactTokens = (n: number): string =>
-  n >= 1000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1).replace(/\.0$/, '')}k` : String(n);
 
 /** Why Laya picked this bot. Phones show one line and open the rest on a tap. */
 const RoutingLine: React.FC<{ text: string; fallback: boolean }> = ({ text, fallback }) => {
@@ -794,6 +792,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
           />
         </div>
       );
+    const paused = parseBudgetPaused(msg.meta);
+    if (paused)
+      return (
+        <BudgetPausedNotice
+          key={msg.id}
+          messageId={msg.id}
+          text={msg.text}
+          meta={paused}
+          onContinue={canRun === false ? undefined : chainBudgetApi.continue}
+          flash={flashId === msg.id}
+        />
+      );
     if (isSystemNotice(msg) && !parseAttachments(msg.meta).length)
       return <SystemNotice key={msg.id} messageId={msg.id} text={msg.text} flash={flashId === msg.id} />;
     const isUser = msg.sender_role === 'user';
@@ -804,6 +814,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const savedActivity = !isUser && msg.meta ? parseActivityMeta(msg.meta) : null;
     const ranOn = isUser ? null : ranOnLabel(msg.meta);
     const account = isUser ? null : ranOnAccount(msg.meta);
+    const tokens = isUser ? null : replyTokens(msg.tokens_used, msg.meta);
     // Any auto-routed channel, not only #general: the server attaches `routing` wherever it picked the bot.
     const routed = isUser ? null : parseRoutingMeta(msg.meta);
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
@@ -840,9 +851,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
               </span>
             )}
             {account && <span className="hidden sm:inline text-zinc-500 text-[10px] truncate max-w-[12rem]">ran on {account}</span>}
-            {msg.tokens_used ? (
-              <span className="hidden sm:inline text-zinc-500 font-mono text-[10px]">({msg.tokens_used} tokens)</span>
-            ) : null}
+            {tokens && (
+              <span className="hidden sm:inline text-zinc-500 font-mono text-[10px] cursor-help" title={tokens.detail}>
+                ({tokens.label})<span className="sr-only">: {tokens.detail}</span>
+              </span>
+            )}
           </div>
 
           {routed && <RoutingLine text={routingLine(routed, spaceName ?? 'this space')} fallback={!!routed.fallback} />}
@@ -923,9 +936,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   </>
                 )}
               </button>
-              {(account || msg.tokens_used) && (
-                <span className="sm:hidden min-w-0 truncate text-[10px]">
-                  {[account && `ran on ${account}`, msg.tokens_used && `${compactTokens(msg.tokens_used)} tokens`].filter(Boolean).join(' · ')}
+              {(account || tokens) && (
+                <span className="sm:hidden min-w-0 truncate text-[10px]" title={tokens?.detail}>
+                  {[account && `ran on ${account}`, tokens?.label].filter(Boolean).join(' · ')}
                 </span>
               )}
             </div>
