@@ -8,6 +8,7 @@ import type { SpaceSettingsTab } from './components/SpaceSettings';
 import { ArchivedSpacesModal, NewSpaceModal, SpaceRail } from './components/Spaces';
 import { Toasts, Toast } from './components/Toasts';
 import { InstallHint } from './components/InstallHint';
+import { AppUpdateBanner } from './components/AppUpdateBanner';
 import { playSfx } from './audio/chiptune';
 import {
   Space,
@@ -224,34 +225,37 @@ export const App: React.FC = () => {
   }
 
   return (
-    <div className="h-[var(--kwnt-app-height,100dvh)] w-screen flex bg-zinc-950 text-zinc-100 overflow-hidden font-sans pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
-      <SpaceRail spaces={spaces} currentId={current.id} onSwitch={switchTo} onCreate={openCreate} onOpenAppSettings={() => setAppSettingsOpen(true)} />
-      <SpaceApp
-        key={current.id}
-        space={current}
-        spaces={spaces}
-        initialTarget={target}
-        initialSettingsTab={startTab}
-        onSwitchSpace={switchTo}
-        onCreateSpace={openCreate}
-        onOpenArchived={() => setShowArchived(true)}
-        onOpenAppSettings={() => setAppSettingsOpen(true)}
-        onSpacesChanged={reload}
-        onSpaceArchived={(s) => {
-          reload().then((list) => {
-            const next = list?.find((x) => x.is_default) ?? list?.[0];
-            if (next) open(next.id);
-          });
-          const id = ++toastIdRef.current;
-          setToasts((prev) => [...prev, { id, title: `${s.name} is archived`, detail: 'Its routines are paused. Restore it from Archived spaces.' }]);
-        }}
-        onChatChange={(t) => {
-          rememberChat(current.id, t);
-          const path = spacePath(current.id, t);
-          if (window.location.pathname !== path) window.history.replaceState(null, '', path);
-        }}
-        onTokensUsed={setTokensUsed}
-      />
+    <div className="h-[var(--kwnt-app-height,100dvh)] w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden font-sans pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
+      <AppUpdateBanner />
+      <div className="flex-1 min-h-0 flex">
+        <SpaceRail spaces={spaces} currentId={current.id} onSwitch={switchTo} onCreate={openCreate} onOpenAppSettings={() => setAppSettingsOpen(true)} />
+        <SpaceApp
+          key={current.id}
+          space={current}
+          spaces={spaces}
+          initialTarget={target}
+          initialSettingsTab={startTab}
+          onSwitchSpace={switchTo}
+          onCreateSpace={openCreate}
+          onOpenArchived={() => setShowArchived(true)}
+          onOpenAppSettings={() => setAppSettingsOpen(true)}
+          onSpacesChanged={reload}
+          onSpaceArchived={(s) => {
+            reload().then((list) => {
+              const next = list?.find((x) => x.is_default) ?? list?.[0];
+              if (next) open(next.id);
+            });
+            const id = ++toastIdRef.current;
+            setToasts((prev) => [...prev, { id, title: `${s.name} is archived`, detail: 'Its routines are paused. Restore it from Archived spaces.' }]);
+          }}
+          onChatChange={(t) => {
+            rememberChat(current.id, t);
+            const path = spacePath(current.id, t);
+            if (window.location.pathname !== path) window.history.replaceState(null, '', path);
+          }}
+          onTokensUsed={setTokensUsed}
+        />
+      </div>
 
       {creating && (
         <NewSpaceModal
