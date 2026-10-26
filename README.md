@@ -208,6 +208,7 @@ The first start needs `huggingface.co`. Behind a proxy that blocks it, start kwa
 
 ## Documentation
 
+- What changed in each release: [CHANGELOG.md](CHANGELOG.md)
 - Website docs: [kwant.si/docs](https://kwant.si/docs/quickstart): quickstart, spaces, accounts, routines, approvals, loose ends, Parallel Universe, memory and skills, MCP.
 - In this repo:
   - [Approvals](docs/approvals.md)

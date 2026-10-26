@@ -70,7 +70,8 @@ CI runs the same commands on every pull request: see [.github/workflows/ci.yml](
 2. Keep the change focused: one fix or feature per pull request.
 3. Make sure `cargo test`, `npm test` and `npm run build` pass.
 4. Update the docs (`README.md` or `docs/`) if the change is visible to users.
-5. Open the pull request and fill in the template. Add screenshots for interface changes, at desktop and phone width.
+5. Add a line under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) for anything people will notice.
+6. Open the pull request and fill in the template. Add screenshots for interface changes, at desktop and phone width.
 
 A maintainer will review it. Small follow-up commits are fine; we squash or rebase when merging.
 
