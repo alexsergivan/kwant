@@ -24,6 +24,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   most once until you write again, and is capped per space per day. App settings has a switch for it.
 - **Questions say why only you can answer.** A bot's question card now says why it needs you and what
   it checked first; a question without a reason goes back to the bot to decide itself.
+- **See and change what bots decided.** A bot's choice shows as a chip, for example "Decided: B: Wax
+  seal", with the reason and who it asked first; **Change** lists the other options and the bot redoes
+  what depended on it. While the team is deciding, the chat shows "Team is deciding…" instead of a
+  half-written reply, and work done while you were away arrives as a quiet, folded message. App
+  settings has a **Bots on their own** section with both switches and a daily limit.
 
 ## [Mac 0.1.2] - 2026-10-26
 

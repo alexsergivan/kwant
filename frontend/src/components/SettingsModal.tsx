@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff } from 'lucide-react';
+import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import { budgetError, budgetValue } from '../chainBudget';
 import { DailyUsagePanel } from './DailyUsage';
@@ -29,6 +29,41 @@ import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
 import { useEngines } from '../useEngines';
 import { LayaStatusRow } from './LayaStatus';
 import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
+import { ProactiveSettings, WORK_AHEAD_CAP_MAX, WORK_AHEAD_CAP_MIN, parseProactiveSettings } from '../decideFirst';
+
+/** One labelled switch row, like the others in this dialog. */
+const SwitchRow: React.FC<{ id: string; label: string; hint: string; checked: boolean; onToggle: () => void; children?: React.ReactNode }> = ({
+  id,
+  label,
+  hint,
+  checked,
+  onToggle,
+  children,
+}) => (
+  <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
+    <div className="flex-1 min-w-0">
+      <p id={`${id}-label`} className="text-xs font-medium text-zinc-200">{label}</p>
+      <p id={`${id}-hint`} className="text-[11px] text-zinc-500">{hint}</p>
+      {children}
+    </div>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-labelledby={`${id}-label`}
+      aria-describedby={`${id}-hint`}
+      onClick={() => {
+        playSfx('click');
+        onToggle();
+      }}
+      className="group shrink-0 -m-3 p-3 rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+    >
+      <span className={`relative block w-9 h-5 rounded-full transition-colors ${checked ? 'bg-sky-600' : 'bg-zinc-700'}`}>
+        <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${checked ? 'translate-x-4' : ''}`} />
+      </span>
+    </button>
+  </div>
+);
 
 interface SettingsData {
   anthropic_api_key: string;
@@ -55,6 +90,10 @@ interface SettingsData {
   location?: string;
   /** Fresh tokens per request before hand-offs pause; 0 = off. Missing on older servers. */
   chain_token_budget?: number;
+  /** Proactive bots; missing on older servers. */
+  decide_first?: boolean;
+  work_ahead?: boolean;
+  work_ahead_daily_cap?: number;
 }
 
 const LIMIT_FIELDS: { key: TurnLimitKey; label: string; hint: string }[] = [
@@ -89,6 +128,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [saveError, setSaveError] = useState<string | null>(null);
   // null until loaded (or from a server without the setting), and then left out of the save
   const [agentTools, setAgentTools] = useState<boolean | null>(null);
+  // Deciding and working ahead on their own; null on a server without these settings
+  const [proactive, setProactive] = useState<ProactiveSettings | null>(null);
   // null until loaded, and on a server without these settings
   const [place, setPlace] = useState<{ timezone: string; location: string } | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -151,6 +192,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           );
           setChainBudget(typeof data.chain_token_budget === 'number' ? String(data.chain_token_budget) : null);
           setAgentTools(typeof data.agent_tools === 'boolean' ? data.agent_tools : null);
+          setProactive(parseProactiveSettings(data));
           setPlace(
             typeof data.timezone === 'string'
               ? { timezone: data.timezone || defaultTimeZone(), location: typeof data.location === 'string' ? data.location : '' }
@@ -219,7 +261,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           openai_api_key: openaiKey,
           ollama_url: ollamaUrl,
           notify_webhook_url: webhookUrl.trim(),
-          notify_on: notifyOnToSave(notifyOn, appUpdates),
+          notify_on: notifyOnToSave(notifyOn, appUpdates, !!proactive),
           ...(limits
             ? {
                 max_turns_per_agent: Number(limits.max_turns_per_agent),
@@ -229,6 +271,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             : {}),
           ...(chainBudget !== null ? { chain_token_budget: budgetValue(chainBudget) } : {}),
           ...(agentTools !== null ? { agent_tools: agentTools } : {}),
+          ...(proactive ?? {}),
           ...(place ? { timezone: place.timezone.trim(), location: place.location.trim() } : {}),
         }),
       });
@@ -589,6 +632,51 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </div>
           )}
 
+          {proactive && (
+            <fieldset className="space-y-3 pt-2 border-t border-zinc-800" data-testid="proactive-settings">
+              <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
+                <Sparkles size={14} className="text-violet-300" aria-hidden="true" />
+                <span>Bots on their own</span>
+              </legend>
+              <SwitchRow
+                id="decide-first"
+                label="Bots decide reversible choices themselves"
+                hint="Instead of asking you to pick, they run their own checks, ask a teammate, choose, and show it with a Change button. They still ask you before sending, paying, deleting or signing in."
+                checked={proactive.decide_first}
+                onToggle={() => setProactive((p) => (p ? { ...p, decide_first: !p.decide_first } : p))}
+              />
+              <SwitchRow
+                id="work-ahead"
+                label="Bots work ahead while I’m away"
+                hint="When a chat has been quiet for 2 hours, its lead finishes open checks and gets the next step ready. You get one “While you were away” message per chat a day at most. They never send, pay or contact anyone."
+                checked={proactive.work_ahead}
+                onToggle={() => setProactive((p) => (p ? { ...p, work_ahead: !p.work_ahead } : p))}
+              >
+                <div className="mt-2 flex items-center gap-2">
+                  <label htmlFor="work-ahead-cap" className={`text-[11px] ${proactive.work_ahead ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                    At most
+                  </label>
+                  <select
+                    id="work-ahead-cap"
+                    value={proactive.work_ahead_daily_cap}
+                    disabled={!proactive.work_ahead}
+                    onChange={(e) => setProactive((p) => (p ? { ...p, work_ahead_daily_cap: Number(e.target.value) } : p))}
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none disabled:opacity-50"
+                  >
+                    {Array.from({ length: WORK_AHEAD_CAP_MAX - WORK_AHEAD_CAP_MIN + 1 }, (_, i) => i + WORK_AHEAD_CAP_MIN).map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                  <span className={`text-[11px] ${proactive.work_ahead ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                    {proactive.work_ahead_daily_cap === 1 ? 'time' : 'times'} a day in each space
+                  </span>
+                </div>
+              </SwitchRow>
+            </fieldset>
+          )}
+
           <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
             <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
               <Bell size={14} className="text-amber-300" />
@@ -670,7 +758,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
             <div className="space-y-1.5" role="group" aria-labelledby="notify-kinds-label">
               <p id="notify-kinds-label" className="text-xs font-medium text-zinc-400">Tell me when</p>
-              {notifyKindsFor(appUpdates).map((k) => (
+              {notifyKindsFor(appUpdates, !!proactive).map((k) => (
                 <label key={k.id} className="flex items-center gap-2 text-[11px] text-zinc-300">
                   <input
                     type="checkbox"

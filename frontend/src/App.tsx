@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { SpaceTile } from './components/Spaces';
@@ -204,6 +205,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Chat the last send or discussion started in; untagged events (team discussions) go here.
   const streamingContextIdRef = useRef<string | null>(null);
   const [turns, setTurns] = useState<TurnMap>({});
+  // Chats where a held reply is being decided ("Team is deciding…"), from decide_updated.
+  const [deciding, setDeciding] = useState<DecidingMap>({});
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
   const [threadsByKwant, setThreadsByKwant] = useState<Record<string, Thread[] | undefined>>({});
@@ -513,6 +516,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const { turns: list } = await threadsApi.turns();
       const map = hydrateTurns(list);
+      setDeciding(hydrateDeciding(list));
       for (const t of Object.values(map)) if (t.thread_id) knownThreadsRef.current.add(t.thread_id);
       turnsRef.current = map;
       setTurns(map);
@@ -787,7 +791,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               if (ctx === openCtxRef.current) refreshContext(ctx);
               break;
             }
-            if (list.some((x) => x.id === m.id)) break;
+            // The same message again is an update (e.g. a decision the person changed): replace it.
+            if (list.some((x) => x.id === m.id)) {
+              const replaced = list.map((x) => (x.id === m.id ? m : x));
+              messagesCacheRef.current[ctx] = replaced;
+              if (ctx === openCtxRef.current) setMessages(replaced);
+              break;
+            }
             // The person's own message replaces its optimistic copy.
             let base = list;
             if (m.sender_role === 'user') {
@@ -797,6 +807,24 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const updated = [...base, m];
             messagesCacheRef.current[ctx] = updated;
             if (ctx === openCtxRef.current) setMessages(updated);
+            break;
+          }
+          case 'decide_updated':
+          case 'DecideUpdated': {
+            const d = event.data ?? {};
+            const ctx: string | null = d.context_id ?? d.thread_id ?? d.kwant_id ?? null;
+            setDeciding((prev) => applyDecideEvent(prev, event));
+            if (!ctx) break;
+            // The held draft is never saved: drop it, the line stands in for it.
+            if (d.state === 'deciding') {
+              if (streamsRef.current[ctx]) streamsRef.current[ctx] = { text: '', thinking: '' };
+              if (ctx === openCtxRef.current) {
+                setStreamingText('');
+                setStreamingThinking('');
+              }
+            } else {
+              refreshContext(ctx);
+            }
             break;
           }
           case 'profile_switched':
@@ -1259,6 +1287,29 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }
       return false;
     }
+  };
+
+  /** Change on a decision chip: record the new pick, show it, then ask the bot to redo it in this chat. */
+  const handleChangeDecision = async (msg: ChatMessage, index: number, picked: string): Promise<string | void> => {
+    haptic('tap');
+    let prompt: string;
+    try {
+      const res = await decisionsApi.change<ChatMessage>(msg.id, index, picked);
+      prompt = res.prompt;
+      const ctx = messageContextId(res.message ?? msg);
+      if (ctx && res.message?.id) {
+        const list = messagesCacheRef.current[ctx];
+        if (list) {
+          const replaced = list.map((x) => (x.id === res.message.id ? res.message : x));
+          messagesCacheRef.current[ctx] = replaced;
+          if (ctx === openCtxRef.current) setMessages(replaced);
+        }
+      }
+    } catch (err) {
+      haptic('warning');
+      return err instanceof Error ? err.message : 'Couldn’t change it.';
+    }
+    if (prompt && !(await handleSendMessage(prompt))) return 'Your choice is saved, but the bot wasn’t told. Ask it in this chat to redo it with your choice.';
   };
 
   const handleResolveApproval = async (
@@ -2362,6 +2413,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   }, [loaded, selectedId, isChannel]);
 
   const isCurrentContextStreaming = openCtx in live;
+  const decidingHere = deciding[openCtx] ?? null;
   const openTurns = turnsIn(turns, openCtx);
   // Turns paused on a question wait for the person; they don't make the bot "busy".
   const browserTurns = turnsAwaitingStep(humanSteps);
@@ -2824,6 +2876,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           liveActivity={isCurrentContextStreaming ? activityHere : null}
           renderHumanStep={renderHumanStep}
           contextKey={openCtx}
+          deciding={decidingHere ? { botName: kwantName(decidingHere.kwantId) ?? chatTitle, consulted: decidingHere.consulted } : null}
+          onChangeDecision={handleChangeDecision}
         />
   );
   const mainPane = needsSetup ? setupChecklist : showParallel ? parallel : showConnections ? connectionsPage : showLoose ? loose : showAway ? away : !loaded ? (

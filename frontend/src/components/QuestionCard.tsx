@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { ArrowUp, Check, CheckCircle2, Clock, HelpCircle, Loader2, MinusCircle } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ANSWER_MAX, Question, QuestionMeta, answerTextError, questionView } from '../questions';
+import { whyYouText } from '../decideFirst';
 
 export interface QuestionCardProps {
   meta: QuestionMeta;
@@ -34,6 +35,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
   const open = view.status === 'open' && sent === null;
   const answer = view.answer ?? sent;
   const headingId = `q-${messageId}`;
+  const whyYou = whyYouText(view.why_you);
 
   const submit = async (a: { choice: number } | { text: string }) => {
     if (!open || busy !== null) return;
@@ -111,6 +113,8 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
           <h3 id={headingId} className="text-sm font-semibold text-zinc-100 whitespace-pre-wrap break-words leading-snug">
             {view.question}
           </h3>
+          {whyYou && <p className="text-[11px] text-zinc-400 break-words">Only you can answer: {whyYou}</p>}
+          {view.checked && <p className="text-[11px] text-zinc-500 break-words">Already tried: {view.checked}</p>}
         </div>
 
         <div role="group" aria-label="Choices" className="px-4 pb-2 flex flex-col sm:flex-row sm:flex-wrap gap-2">

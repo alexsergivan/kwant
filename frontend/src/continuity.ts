@@ -113,7 +113,8 @@ export type NotifyKind =
   | 'skill_proposed'
   | 'question_asked'
   | 'human_step'
-  | 'app_update';
+  | 'app_update'
+  | 'work_ahead';
 export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'turn_finished', label: 'A bot finished replying' },
   { id: 'approval_needed', label: 'A bot needs your approval' },
@@ -128,12 +129,19 @@ export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
 /** Only the Mac app sends it (and only its server accepts it), so it is listed there alone. */
 export const APP_UPDATE_KIND: { id: NotifyKind; label: string } = { id: 'app_update', label: 'App updates' };
 
-/** The checkboxes under "Tell me when": App updates only in the Mac app. */
-export const notifyKindsFor = (appUpdates: boolean) => (appUpdates ? [...NOTIFY_KINDS, APP_UPDATE_KIND] : NOTIFY_KINDS);
+/** Sent by servers with the proactive-bots settings (`work_ahead` in GET /api/settings). */
+export const WORK_AHEAD_KIND: { id: NotifyKind; label: string } = { id: 'work_ahead', label: 'A bot worked ahead while you were away' };
 
-/** What to save: never app_update off the Mac app, whose server would refuse the unknown kind. */
-export const notifyOnToSave = (on: NotifyKind[], appUpdates: boolean) =>
-  appUpdates ? on : on.filter((k) => k !== APP_UPDATE_KIND.id);
+/** The checkboxes under "Tell me when": App updates only in the Mac app, work ahead only where the server has it. */
+export const notifyKindsFor = (appUpdates: boolean, workAhead = false) => [
+  ...NOTIFY_KINDS,
+  ...(workAhead ? [WORK_AHEAD_KIND] : []),
+  ...(appUpdates ? [APP_UPDATE_KIND] : []),
+];
+
+/** What to save: never a kind the server doesn't know (it would refuse the whole list). */
+export const notifyOnToSave = (on: NotifyKind[], appUpdates: boolean, workAhead = false) =>
+  on.filter((k) => (k !== APP_UPDATE_KIND.id || appUpdates) && (k !== WORK_AHEAD_KIND.id || workAhead));
 
 /** Kinds also shown as an in-app toast while kwnt is visible (the others only matter in the background). */
 export const TOAST_KINDS: NotifyKind[] = ['routine_failed', 'delegation_finished', 'delegation_stalled', 'skill_proposed', 'question_asked', 'human_step'];
@@ -485,7 +493,7 @@ export function shouldShowOsNotification(opts: {
   hidden: boolean;
   kind: string;
 }): boolean {
-  return opts.enabled && opts.permission === 'granted' && opts.hidden && NOTIFY_KINDS.some((k) => k.id === opts.kind);
+  return opts.enabled && opts.permission === 'granted' && opts.hidden && (NOTIFY_KINDS.some((k) => k.id === opts.kind) || opts.kind === WORK_AHEAD_KIND.id);
 }
 
 /** Whether this browser has OS notifications switched on for kwnt (stored per browser). */

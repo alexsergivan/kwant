@@ -29,6 +29,8 @@ export interface ActiveTurn {
   thread_id: string | null;
   state: 'queued' | 'running';
   since?: string;
+  /** "decide": a consult or decide turn of the decide-first gate. */
+  purpose?: string;
 }
 
 export interface Thread {

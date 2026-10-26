@@ -40,6 +40,8 @@ import { routeReasonText } from '../routeReason';
 import { BudgetPausedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
 import { chainBudgetApi, parseBudgetPaused } from '../chainBudget';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
+import { consultedNames, parseDecisions, parseWorkAhead } from '../decideFirst';
+import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 
 /** A swipeable chip row whose right fade edge (phones only, see .kw-scroll-row) goes away once
  *  it is scrolled to the end, or when everything already fits. */
@@ -220,6 +222,10 @@ export interface ChatViewProps {
   renderHumanStep?: (msg: ChatMessage, meta: HumanStepMeta, flash: boolean) => React.ReactNode;
   /** Changes when another chat opens, so the view jumps to its bottom. */
   contextKey?: string;
+  /** Set while a held reply in this chat is being decided ("Team is deciding…"). */
+  deciding?: { botName: string; consulted: string[] } | null;
+  /** Change on a decision chip; resolves to an error message on failure. */
+  onChangeDecision?: (msg: ChatMessage, index: number, picked: string) => Promise<string | void>;
 }
 
 export const renderFormattedText = (text: string): React.ReactNode => {
@@ -417,6 +423,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   liveActivity,
   renderHumanStep,
   contextKey,
+  deciding,
+  onChangeDecision,
 }) => {
   const narrow = useNarrow();
   const [internalIsVmPaneOpen, setInternalIsVmPaneOpen] = useState(false);
@@ -817,6 +825,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const tokens = isUser ? null : replyTokens(msg.tokens_used, msg.meta);
     // Any auto-routed channel, not only #general: the server attaches `routing` wherever it picked the bot.
     const routed = isUser ? null : parseRoutingMeta(msg.meta);
+    const decisions = isUser ? [] : parseDecisions(msg.meta);
+    const workAhead = isUser ? null : parseWorkAhead(msg.meta);
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
 
     return (
@@ -900,17 +910,31 @@ export const ChatView: React.FC<ChatViewProps> = ({
             className={`px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
               isUser
                 ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl'
-                : 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80'
+                : workAhead
+                  ? 'bg-indigo-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-indigo-400/25'
+                  : 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80'
             }`}
+            data-work-ahead={workAhead ? '' : undefined}
           >
             {isUser ? (
               <div className="whitespace-pre-wrap break-words">{renderFormattedText(msg.text)}</div>
+            ) : workAhead ? (
+              <WorkAheadBody messageId={msg.id} text={msg.text} />
             ) : (
               <MarkdownRenderer content={msg.text} />
             )}
           </div>
           )}
           {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} />}
+
+          {decisions.length > 0 && (
+            <DecisionChips
+              messageId={msg.id}
+              decisions={decisions}
+              consulted={consultedNames(msg.meta)}
+              onChange={onChangeDecision ? (index, picked) => onChangeDecision(msg, index, picked) : undefined}
+            />
+          )}
 
           {!isUser && msg.tool_calls && !savedActivity && <ToolCallsList raw={msg.tool_calls} />}
 
@@ -1172,8 +1196,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <LayaRoutingCard routing={routingState} spaceName={spaceName} />
         )}
 
+        {/* A held reply is being decided: the line stands in for the streamed draft and the consults */}
+        {deciding && <DecidingLine botName={deciding.botName} consulted={deciding.consulted} />}
+
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
-        {isStreaming && routingState?.phase !== 'deciding' && (
+        {isStreaming && !deciding && routingState?.phase !== 'deciding' && (
           <div className="flex items-start gap-3.5 w-full max-w-5xl">
             <ModernAvatar
               role={

@@ -28,6 +28,10 @@ export interface QuestionMeta {
   choices: string[];
   status: QuestionStatus;
   answer: string | null;
+  /** Why only the person can answer (decide-first); null on older cards. */
+  why_you?: string | null;
+  /** What the bot already tried; null on older cards. */
+  checked?: string | null;
 }
 
 export const ANSWER_MAX = 2000;
@@ -50,7 +54,16 @@ export function parseQuestionMeta(raw: unknown): QuestionMeta | null {
   if (!m || m.kind !== 'ask_user' || typeof m.question_id !== 'string' || typeof m.question !== 'string') return null;
   const choices = Array.isArray(m.choices) ? m.choices.filter((c): c is string => typeof c === 'string') : [];
   const status: QuestionStatus = m.status === 'answered' || m.status === 'cancelled' ? m.status : 'open';
-  return { kind: 'ask_user', question_id: m.question_id, question: m.question, choices, status, answer: typeof m.answer === 'string' ? m.answer : null };
+  return {
+    kind: 'ask_user',
+    question_id: m.question_id,
+    question: m.question,
+    choices,
+    status,
+    answer: typeof m.answer === 'string' ? m.answer : null,
+    why_you: typeof m.why_you === 'string' ? m.why_you : null,
+    checked: typeof m.checked === 'string' && m.checked.trim() ? m.checked.trim() : null,
+  };
 }
 
 /** The chat a question lives in: the thread, else the channel, else the agent's direct chat. */
