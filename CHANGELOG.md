@@ -17,7 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - A bot reply that ends with a closing line such as "Anything else?", "Should I continue?" or
-  "Want me to also…?" no longer pulls the person's next message back to that bot. Real questions
+  "Want me to also…?" (and now also "Happy to help further?", "Any other questions?", "What else can
+  I do for you?") no longer pulls the person's next message back to that bot. Real questions
   ("Which city are you in?") still do, unless the next message clearly fits another bot better.
 - UK places (London, Belfast, Jersey, Guernsey, Isle of Man) get metric units with road distances
   and speeds in miles and mph.
@@ -27,6 +28,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A CAPTCHA step now holds the browser before the step appears, so a bot can't act on the page in between.
 
 ### Security
+- Only the person can switch which computer the bots run on (Settings → Computer) or open their
+  browser as a window: `PUT /api/settings/computer` and `/api/settings/computer/window` now refuse
+  a bot's turn token, like `POST /api/settings`.
 - Changing app-wide settings (`POST /api/settings`) is person-only. Bots change the settings they
   are allowed to through their `settings_update` action.
 

@@ -87,6 +87,17 @@ const CLOSERS: &[&str] = &[
     "shall i continue",
     "should i keep going",
     "let me know",
+    "help further",
+    "help you further",
+    "anything further",
+    "need more help",
+    "need any more help",
+    "need further help",
+    "any other questions",
+    "else i can help",
+    "else i can do",
+    "else can i help",
+    "else can i do",
 ];
 
 fn is_closer(question: &str) -> bool {
@@ -229,6 +240,13 @@ mod tests {
             "Is there anything else I can help you with today?",
             "Would you like me to also send it to the team?",
             "Shall I continue?",
+            "Happy to help further?",
+            "Here's the chart.\n\nNeed anything else?",
+            "Can I help you further with this?",
+            "Need any more help with the chart?",
+            "Any other questions?",
+            "Is there something else I can help with?",
+            "What else can I do for you?",
         ] {
             assert_eq!(after(closer), None, "{closer:?}");
         }

@@ -697,3 +697,55 @@ async fn settings_writes_are_person_only_but_bots_keep_settings_update() {
     let (_, s) = call(&e.app, "GET", "/api/settings", None, None).await;
     assert_eq!(s["location"], "Berlin");
 }
+
+/// Lin's #71 follow-up: `PUT /api/settings/computer` (and `/computer/window`) took a bot's turn
+/// token, so a bot's shell could move every bot between this computer and the VM. Bots never had
+/// a legitimate way to do that (`settings_update` refuses `computer_mode`); now the routes are
+/// person-only too, and reading the choice stays open.
+#[tokio::test]
+async fn computer_choice_is_person_only() {
+    let e = setup().await;
+    let token = turn(&e, "t-computer-route").await;
+    let (status, view) = call(&e.app, "GET", "/api/settings/computer", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "a bot still reads the choice: {view}");
+    let before = e.state.db.get_setting("computer_mode").await.unwrap();
+
+    for (uri, body) in [
+        ("/api/settings/computer", json!({"mode": "vm"})),
+        ("/api/settings/computer", json!({"mode": "local"})),
+        ("/api/settings/computer/window", json!({"visible": true})),
+    ] {
+        let (status, v) = call(&e.app, "PUT", uri, Some(&token), Some(body.clone())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri} {body} with a bot's turn token: {v}");
+    }
+    assert_eq!(e.state.db.get_setting("computer_mode").await.unwrap(), before, "nothing changed");
+    refused(&e, &token, "settings_update", json!({"settings": {"computer_mode": "local"}})).await;
+
+    // From another machine with no token: 401
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings/computer")
+        .header("content-type", "application/json")
+        .header("host", "kwnt.example.com")
+        .body(Body::from(json!({"mode": "vm"}).to_string()))
+        .unwrap();
+    assert_eq!(e.app.clone().oneshot(req).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+
+    // The person's token gets past the guard to the handler (a bad mode is the handler's 400;
+    // saving a real mode is covered in computer_mode_test.rs, which switches the browser)
+    let person = e.state.api_token.reveal();
+    let (status, v) = call(&e.app, "PUT", "/api/settings/computer", Some(person), Some(json!({"mode": "mars"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    let (status, v) = call(&e.app, "PUT", "/api/settings/computer/window", Some(person), Some(json!({"visible": "yes"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    // And the person's cookie from another machine
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings/computer")
+        .header("content-type", "application/json")
+        .header("host", "kwnt.example.com")
+        .header("cookie", format!("kwnt_token={person}"))
+        .body(Body::from(json!({"mode": "mars"}).to_string()))
+        .unwrap();
+    assert_eq!(e.app.clone().oneshot(req).await.unwrap().status(), StatusCode::BAD_REQUEST, "past the guard, into the handler");
+}

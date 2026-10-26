@@ -330,9 +330,10 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "signin", ..] => true,
         // Web Push: where the person's notifications go
         ["", "api", "push", ..] => true,
-        // App-wide settings, including where notifications go (`notify_webhook_url`): bots change
-        // the allowed ones through their `settings_update` action, never this route
-        ["", "api", "settings"] => *method != Method::GET && *method != Method::HEAD,
+        // App-wide settings, including where notifications go (`notify_webhook_url`), and the
+        // sub-routes such as `/computer` (which machine the bots run on) and `/computer/window`:
+        // bots change the allowed ones through their `settings_update` action, never these routes
+        ["", "api", "settings", ..] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "kwants" | "teams", _] => *method == Method::DELETE,
@@ -847,6 +848,10 @@ mod tests {
         assert!(person_only(&post, "/api/settings"));
         assert!(person_only(&put, "/api/settings/"));
         assert!(!person_only(&get, "/api/settings"));
+        assert!(person_only(&put, "/api/settings/computer"));
+        assert!(person_only(&put, "/api/settings/computer/"));
+        assert!(person_only(&put, "/api/settings/computer/window"));
+        assert!(!person_only(&get, "/api/settings/computer"));
         assert!(!person_only(&get, "/api/approvals"));
         assert!(!person_only(&get, "/api/sandbox/t1/status"));
         assert!(!person_only(&get, "/api/kwants"));
