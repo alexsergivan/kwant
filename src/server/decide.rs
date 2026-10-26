@@ -185,7 +185,7 @@ const UNCHECKED: &[&str] = &[
 
 /// Whole words that mark a step the person has to own: it can't be undone or reaches outside.
 const HARD_WORDS: &[&str] = &[
-    "send", "sending", "sent", "email", "emails", "emailing", "e-mail", "post", "posting", "publish", "publishing", "tweet",
+    "send", "sending", "sent", "signup", "email", "emails", "emailing", "e-mail", "post", "posting", "publish", "publishing", "tweet",
     "pay", "paying", "payment", "buy", "buying", "purchase", "subscribe", "subscription", "charge", "refund", "delete",
     "deleting", "wipe", "password", "passwords", "credential", "credentials", "token", "contact", "contacting", "invite",
     "transfer", "irreversible", "permanent", "permanently", "bitwarden", "login",
@@ -297,6 +297,18 @@ pub struct GateCtx {
     pub person_hard: bool,
     /// The reply already carries choices the bot made (`meta.decisions`).
     pub decided: bool,
+}
+
+/// Whether a reply's last line hands on to a teammate: it speaks to them ("@Pia, can you…",
+/// "@Pia: …", or starts with "@Pia"). "I can have @Pia check it. Do you want that?" speaks to the
+/// person, so it doesn't.
+pub fn hands_on(text: &str, names: &[&str]) -> bool {
+    let last = text.trim_end().lines().last().unwrap_or("").to_lowercase();
+    let line = last.trim_start_matches(|c: char| c.is_whitespace() || "-*•>_".contains(c));
+    names.iter().any(|n| {
+        let at = format!("@{}", n.to_lowercase());
+        line.starts_with(&at) || [",", ":", " please", " can you", " could you"].iter().any(|t| line.contains(&format!("{at}{t}")))
+    })
 }
 
 /// Whether the person's message asks for a step they have to own (send, pay, sign up, delete…).
@@ -619,6 +631,12 @@ async fn post_original(scope: &TurnScope, kwant: &Kwant, held: Held, consulted: 
 pub(super) async fn decide(scope: &TurnScope, kwant: &Kwant, mut held: Held) -> String {
     scope.state.turns.mark_decided(&scope.job_id);
     let gate = std::mem::take(&mut held.gate);
+    // The bot already asked with a card in this turn: that ask is the person's, not the round's
+    let context = scope.context_id(kwant);
+    let asked = scope.state.db.list_questions(None, Some(&context), None).await.unwrap_or_default();
+    if asked.iter().any(|q| q.turn_id.as_deref() == Some(held.turn_id.as_str())) {
+        return post_original(scope, kwant, held, &[], "posted_original").await;
+    }
     let consult: Vec<Kwant> = consultees(scope, kwant, &held.text, &gate).into_iter().cloned().collect();
     let names: Vec<String> = consult.iter().map(|k| k.name.clone()).collect();
     event(scope, kwant, "deciding", &held.turn_id, &names, None);
@@ -954,6 +972,15 @@ mod tests {
         let g = Gate { choices: vec!["A or B?".into()], ..Default::default() };
         assert_eq!(pick_consultees(&names, "Pia drew it, then Wren wrote the copy.\nA or B?", &g), vec![2]);
         assert_eq!(pick_consultees(&names, "A or B?", &g), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn an_offer_naming_a_teammate_is_not_a_hand_on() {
+        let names = ["Pia", "Ana"];
+        assert!(!hands_on("A, B or C?\n\nI can have @Pia screenshot A and C before you decide. Do you want that?", &names));
+        assert!(hands_on("Done on my side.\n@Pia, can you screenshot A and C?", &names));
+        assert!(hands_on("Done on my side.\n- @Ana: run the contrast check", &names));
+        assert!(hands_on("@Pia please screenshot A and C.", &names));
     }
 
     #[test]

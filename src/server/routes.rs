@@ -2479,7 +2479,7 @@ async fn run_kwant_turn_inner(
                 let hold = opts.hook.as_ref().and_then(|h| {
                     let h = h.lock().ok()?;
                     let names: Vec<&str> = h.teammates.iter().map(String::as_str).collect();
-                    if !h.hold_choices || super::asks::hands_on(&asst_msg.text, &names) {
+                    if !h.hold_choices || super::decide::hands_on(&asst_msg.text, &names) {
                         return None;
                     }
                     let ctx = super::decide::GateCtx { person_hard: h.person_hard, decided: !decisions.is_empty() };
