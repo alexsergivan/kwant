@@ -506,6 +506,22 @@ impl Database {
         Ok(row.map(|r| r.0))
     }
 
+    /// Saves `value` only when `key` is missing or blank, in one statement so two tabs saving at
+    /// once can't overwrite each other. `true` when it was saved.
+    pub async fn set_setting_if_blank(&self, key: &str, value: &str) -> Result<bool, DbError> {
+        let done = sqlx::query(
+            r#"
+            INSERT INTO settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE trim(settings.value) = ''
+            "#,
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() > 0)
+    }
+
     pub async fn set_setting(&self, key: &str, value: &str) -> Result<(), DbError> {
         sqlx::query(
             r#"

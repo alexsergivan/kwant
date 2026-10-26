@@ -19,7 +19,7 @@ to the turn's bot and its space. Code: `src/server/bot_actions.rs`, `src/db/bot_
 | `bot_create` | `name`, `title`, `instructions`, `soul?`, `model?`, `profile_id?`, `avatar?` | Applied, undo deletes it if it has no history yet |
 | `bot_update` | `bot`, `name?`, `title?`, `instructions?`, `soul?`, `model?`, `profile_id?`, `avatar?`, `mcp_servers?` | Applied, undo restores fields, account and tool servers |
 | `bot_delete` | `bot`, `reason?` | **Pending** until the person confirms; only bots with no history |
-| `settings_get` | – | `timezone`, `max_turns_per_agent`, `max_turns_global`, `delegation_follow_up_minutes`, `notify_on` |
+| `settings_get` | – | `timezone`, `location`, `max_turns_per_agent`, `max_turns_global`, `delegation_follow_up_minutes`, `notify_on` |
 | `settings_update` | `settings: {…}` (those keys only) | Applied, undo restores |
 | `space_get` / `space_list` | – | |
 | `space_create` | `name`, `icon?`, `color?` | Applied, undo archives it |
@@ -47,6 +47,8 @@ to the turn's bot and its space. Code: `src/server/bot_actions.rs`, `src/db/bot_
 - `GET /api/routines` items also carry `schedule_text` (for example "monthly on the 1st and last day at 09:00 Europe/Berlin"), `thread_id` and `context_message_id`.
 
 New setting: `GET/POST /api/settings` has `timezone` (IANA name; `""` means not set and clears it). Legacy names are canonicalised (Europe/Kiev → Europe/Kyiv).
+
+`POST /api/settings` also takes `timezone_default`: saved as `timezone` only while that is blank (the app sends the browser's zone on load, so it never overwrites a chosen zone; an unknown zone is skipped without an error; ignored when `timezone` is sent too). `location` is the person's city as typed (one line, at most 100 characters, `""` clears it); kwant never geolocates or geocodes it. Every turn's `[Current date]` block uses the person's zone when set (else the computer's clock, UTC in Docker) and adds `The person is in <city> (<zone>).`
 
 ## Limits and scope
 

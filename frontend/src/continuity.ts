@@ -261,6 +261,40 @@ export function defaultTimeZone(): string {
   }
 }
 
+/** What {@link fillTimeZone} did: saved the browser's zone, kept the one already set, or skipped. */
+export type FillTimeZoneResult = 'saved' | 'kept' | 'skipped';
+
+/**
+ * Saves this browser's time zone as the person's when none is set yet, so bots see their clock
+ * without asking. The server also refuses to overwrite a set zone (`timezone_default`), so two
+ * devices opening at once can't fight over it. Never throws: a failure just leaves it unset.
+ */
+export async function fillTimeZone(
+  fetchFn: (url: string, init?: RequestInit) => Promise<Response>,
+  tz: string = defaultTimeZone(),
+): Promise<FillTimeZoneResult> {
+  try {
+    const res = await fetchFn('/api/settings');
+    if (!res.ok) return 'skipped';
+    const data = (await res.json()) as { timezone?: unknown };
+    // An older server has no such field: nothing to fill
+    if (typeof data.timezone !== 'string') return 'skipped';
+    if (data.timezone.trim() !== '') return 'kept';
+    if (!tz) return 'skipped';
+    const saved = await fetchFn('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timezone_default: tz }),
+    });
+    return saved.ok ? 'saved' : 'skipped';
+  } catch {
+    return 'skipped';
+  }
+}
+
+/** The longest city the server accepts. */
+export const MAX_LOCATION_CHARS = 100;
+
 const pad = (n: number) => String(n).padStart(2, '0');
 
 /** A `datetime-local` value for a Date, in local time. */

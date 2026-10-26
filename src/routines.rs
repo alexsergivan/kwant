@@ -207,6 +207,16 @@ fn parse_tz(tz: &str) -> Result<Zone, String> {
         .ok_or_else(unknown)
 }
 
+/// `now` on the wall clock of `tz`, with the offset in force then. `Err` for an unknown zone.
+pub fn now_in(tz: &str, now: DateTime<Utc>) -> Result<DateTime<chrono::FixedOffset>, String> {
+    let zone = parse_tz(tz)?;
+    let offset = zone
+        .offset_at(now.timestamp())
+        .and_then(|o| chrono::FixedOffset::east_opt(i32::try_from(o).ok()?))
+        .ok_or_else(|| format!("time zone '{tz}' has no offset for now"))?;
+    Ok(now.with_timezone(&offset))
+}
+
 /// `date` at wall-clock `time` in `tz` (see [`resolve_local`] for DST gaps), for reminders that
 /// are not routines. `Err` for an unknown zone.
 pub fn local_instant(tz: &str, date: NaiveDate, time: NaiveTime) -> Result<Option<DateTime<Utc>>, String> {

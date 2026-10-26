@@ -29,9 +29,11 @@ use serde_json::{json, Map, Value};
 
 /// The setting that holds the person's time zone (IANA); routines default to it.
 pub const TIMEZONE_SETTING: &str = "timezone";
+/// The person's city as they typed it ("Ljubljana"); bots see it in "[Current date]".
+pub const LOCATION_SETTING: &str = "location";
 
 /// Settings agents may read and change; everything else in Settings is the person's.
-const SETTINGS: [&str; 5] = ["timezone", "max_turns_per_agent", "max_turns_global", "delegation_follow_up_minutes", "notify_on"];
+const SETTINGS: [&str; 6] = ["timezone", "location", "max_turns_per_agent", "max_turns_global", "delegation_follow_up_minutes", "notify_on"];
 
 const AVATARS: [&str; 22] = [
     "default", "architect", "tech_lead", "devops", "security", "fast", "designer", "data", "qa", "product", "writer", "research",
@@ -204,7 +206,7 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "settings_get",
-            "description": "Read the app settings you may change (time zone, parallel work limits, delegation follow-ups, which events notify the person).",
+            "description": "Read the app settings you may change (time zone, the person's city, parallel work limits, delegation follow-ups, which events notify the person).",
             "inputSchema": {"type": "object", "properties": {}},
         }),
         json!({
@@ -213,7 +215,7 @@ pub fn tools() -> Vec<Value> {
                 the computer and tool servers stay with the person.", SETTINGS.join(", ")),
             "inputSchema": {
                 "type": "object",
-                "properties": {"settings": {"type": "object", "description": "e.g. {\"timezone\": \"Europe/Berlin\"}"}},
+                "properties": {"settings": {"type": "object", "description": "e.g. {\"timezone\": \"Europe/Berlin\", \"location\": \"Berlin\"}"}},
                 "required": ["settings"],
             },
         }),
@@ -288,6 +290,14 @@ const MCP: &str = "Tool servers are installed by the person. Use mcp_suggest to 
     Their keys and headers are entered by the person in Space settings → Tools.";
 
 /// Why an agent may not change setting `key`, with where the person does it; `None` when it may.
+/// The person's zone and city from the settings, for each turn's "[Current date]" block.
+pub async fn person_place(db: &crate::db::Database) -> crate::drivers::PersonPlace {
+    let get = |key: &'static str| async move {
+        db.get_setting(key).await.ok().flatten().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    };
+    crate::drivers::PersonPlace { timezone: get(TIMEZONE_SETTING).await, location: get(LOCATION_SETTING).await }
+}
+
 fn refused_setting(key: &str) -> Option<String> {
     let k = key.trim().to_ascii_lowercase();
     if SETTINGS.contains(&k.as_str()) {
@@ -1270,7 +1280,7 @@ impl Ctx<'_> {
         match self.settings_values().await {
             Ok(v) => (
                 format!(
-                    "{}\nThey apply to every space. timezone \"\" means not set; notify_on lists events that notify the person.",
+                    "{}\nThey apply to every space. timezone and location \"\" mean not set; notify_on lists events that notify the person.",
                     Value::Object(v)
                 ),
                 false,

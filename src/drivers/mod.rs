@@ -68,6 +68,9 @@ pub struct TurnInput {
     /// can change every turn. Prompts show it right after `continuity`.
     #[serde(default)]
     pub skills: String,
+    /// The person's time zone and city, for the "[Current date]" block.
+    #[serde(default)]
+    pub person: PersonPlace,
     /// Where an API turn keeps per-conversation state between turns (its cached prompt prefix);
     /// `None` runs without it, as tests and one-off calls do.
     #[serde(skip)]
@@ -188,9 +191,55 @@ fn is_format_char(c: char) -> bool {
 }
 
 pub fn current_date_block(now: chrono::DateTime<chrono::FixedOffset>) -> String {
+    date_block(now, None)
+}
+
+/// Where the person is, from the `timezone` and `location` settings. Both are `None` when unset.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersonPlace {
+    pub timezone: Option<String>,
+    pub location: Option<String>,
+}
+
+/// The longest city kwant puts in a prompt; the setting itself is capped at the same length.
+pub const MAX_LOCATION_CHARS: usize = 100;
+
+/// The person's city as one plain line: no control characters or newlines, so it can't open a
+/// new prompt section, and at most [`MAX_LOCATION_CHARS`].
+pub fn clean_location(raw: &str) -> String {
+    let one_line: String = raw.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    one_line.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_LOCATION_CHARS).collect()
+}
+
+/// "[Current date]" on the person's clock when their zone is known (else this computer's, which
+/// is UTC in Docker), plus where they are, so a bot can say "good morning" and look up the
+/// weather without asking.
+pub fn person_date_block(now: chrono::DateTime<chrono::Utc>, person: &PersonPlace) -> String {
+    let zone = person
+        .timezone
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .and_then(|tz| crate::routines::now_in(tz, now).ok().map(|t| (tz, t)));
+    let mut block = match &zone {
+        Some((tz, t)) => date_block(*t, Some(tz)),
+        None => date_block(now.with_timezone(&chrono::Local).fixed_offset(), None),
+    };
+    let city = person.location.as_deref().map(clean_location).filter(|c| !c.is_empty());
+    match (city, zone) {
+        (Some(city), Some((tz, _))) => block.push_str(&format!("\nThe person is in {city} ({tz}).")),
+        (Some(city), None) => block.push_str(&format!("\nThe person is in {city}.")),
+        (None, Some((tz, _))) => block.push_str(&format!("\nThe person is in the {tz} time zone.")),
+        (None, None) => {}
+    }
+    block
+}
+
+fn date_block(now: chrono::DateTime<chrono::FixedOffset>, zone: Option<&str>) -> String {
+    let zone = zone.map(|z| format!("{z}, ")).unwrap_or_default();
     format!(
         "\n\n[Current date]\n\
-        Right now it is {} (UTC{}). Your training data is older than this: trust this date over your own sense of what year it is.\n\
+        Right now it is {} ({zone}UTC{}). Your training data is older than this: trust this date over your own sense of what year it is.\n\
         Before saying an event, offer, deadline or opening is happening now or soon, check its dates against today. \
         Websites often keep featuring events that are already over, so read the dates on the page; if they are missing, say you could not confirm them.",
         now.format("%A, %-d %B %Y, %H:%M"),
@@ -297,7 +346,7 @@ impl TurnInput {
                 soul
             ));
         }
-        let date = current_date_block(chrono::Local::now().fixed_offset());
+        let date = person_date_block(chrono::Utc::now(), &self.person);
         let team_block = if let Some(ref team) = self.team_context {
             let desc = team.description.as_deref().unwrap_or("General team objectives");
             let mut ws_info = String::new();
@@ -685,6 +734,7 @@ mod tests {
             teammates: vec![],
             continuity: String::new(),
             skills: String::new(),
+            person: Default::default(),
             store: None,
             mcp: None,
         }

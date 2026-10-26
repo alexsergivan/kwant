@@ -15,6 +15,7 @@ import {
   installUnauthorizedListener,
   redeemSignIn,
 } from '../auth';
+import { fillTimeZone } from '../continuity';
 
 interface AuthContextValue {
   /** True when this browser needs the API token (Docker, a VPS reached directly). */
@@ -42,6 +43,8 @@ export function offlineMessage(e: unknown, online: boolean): string {
   if (e instanceof Error && e.message !== 'Failed to fetch' && e.message !== 'Load failed') return e.message;
   return "Can't reach the kwant bots server. Check that it's running and that this device can reach it.";
 }
+
+let zoneFilled = false;
 
 /** Shows its children once the API answers, and the token screen while it needs a token. */
 export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -96,6 +99,14 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
       window.removeEventListener('online', onOnline);
     };
   }, [check]);
+
+  // Once per page load, after sign-in: the person's time zone from this browser, if none is set
+  const ready = state.kind === 'ready';
+  useEffect(() => {
+    if (!ready || zoneFilled) return;
+    zoneFilled = true;
+    void fillTimeZone((url, init) => fetch(url, init));
+  }, [ready]);
 
   const signOut = useCallback(async () => {
     try {

@@ -567,3 +567,70 @@ async fn a_bot_adds_members_to_its_channel_so_laya_routes_it_and_the_person_can_
     assert_eq!(ids(&solo), vec![e.bot.id.clone()]);
     assert_eq!(e.state.db.channel_instructions(&solo.id).await.unwrap().as_deref(), Some("Be brief."));
 }
+
+#[tokio::test]
+async fn browser_time_zone_fills_an_empty_setting_but_never_overwrites_one() {
+    let e = setup().await;
+    let save = |body: Value| call(&e.app, "POST", "/api/settings", None, Some(body));
+    let zone = || async { call(&e.app, "GET", "/api/settings", None, None).await.1["timezone"].as_str().unwrap().to_string() };
+
+    // Nothing set: the browser's zone is saved, under its current name
+    let (status, v) = save(json!({"timezone_default": "Europe/Kiev"})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(zone().await, "Europe/Kyiv");
+
+    // Set: another device's zone leaves it alone
+    save(json!({"timezone_default": "America/New_York"})).await;
+    assert_eq!(zone().await, "Europe/Kyiv");
+
+    // The person or a bot choosing a zone still changes it; a later default doesn't undo that
+    save(json!({"timezone": "Europe/Ljubljana"})).await;
+    save(json!({"timezone_default": "Asia/Tokyo"})).await;
+    assert_eq!(zone().await, "Europe/Ljubljana");
+    // Sent together, the explicit zone wins
+    save(json!({"timezone": "Europe/Paris", "timezone_default": "Asia/Tokyo"})).await;
+    assert_eq!(zone().await, "Europe/Paris");
+
+    // Cleared ("" or blanks) counts as not set again
+    save(json!({"timezone": ""})).await;
+    e.state.db.set_setting("timezone", "  ").await.unwrap();
+    save(json!({"timezone_default": "Asia/Tokyo"})).await;
+    assert_eq!(zone().await, "Asia/Tokyo");
+
+    // A zone this server can't read is skipped quietly, not saved and not an error
+    save(json!({"timezone": ""})).await;
+    let (status, v) = save(json!({"timezone_default": "Mars/Olympus_Mons"})).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(zone().await, "");
+    // A bot can't use the fill-in route: it isn't one of the settings it may change
+    let token = turn(&e, "t-tz-default").await;
+    refused(&e, &token, "settings_update", json!({"settings": {"timezone_default": "Asia/Tokyo"}})).await;
+    assert_eq!(zone().await, "");
+}
+
+#[tokio::test]
+async fn city_is_saved_as_typed_on_one_line_and_bots_can_set_it() {
+    let e = setup().await;
+    let (status, v) = call(&e.app, "POST", "/api/settings", None, Some(json!({"location": "  Ljubljana,\n Slovenia\t"}))).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let (_, s) = call(&e.app, "GET", "/api/settings", None, None).await;
+    assert_eq!(s["location"], "Ljubljana, Slovenia");
+
+    let long = "x".repeat(101);
+    let (status, v) = call(&e.app, "POST", "/api/settings", None, Some(json!({"location": long, "timezone": "Europe/Paris"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    let (_, s) = call(&e.app, "GET", "/api/settings", None, None).await;
+    assert_eq!((s["location"].as_str(), s["timezone"].as_str()), (Some("Ljubljana, Slovenia"), Some("")), "a bad value saves nothing");
+
+    let token = turn(&e, "t-city").await;
+    let text = ok(&e, &token, "settings_update", json!({"settings": {"location": "Berlin", "timezone": "Europe/Berlin"}})).await;
+    assert!(text.contains("Berlin"), "{text}");
+    let place = kwnt::server::bot_actions::person_place(&e.state.db).await;
+    assert_eq!((place.timezone.as_deref(), place.location.as_deref()), (Some("Europe/Berlin"), Some("Berlin")));
+
+    let a = last_action(&e).await;
+    let (status, v) = call(&e.app, "POST", &format!("/api/bot-actions/{}/undo", a["id"].as_str().unwrap()), Some(e.state.api_token.reveal()), None).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let (_, s) = call(&e.app, "GET", "/api/settings", None, None).await;
+    assert_eq!((s["location"].as_str(), s["timezone"].as_str()), (Some("Ljubljana, Slovenia"), Some("")), "undo puts both back");
+}

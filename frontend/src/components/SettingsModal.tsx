@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge } from 'lucide-react';
+import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import {
   BROWSER_NOTIFY_KEY,
   MASK,
+  MAX_LOCATION_CHARS,
   NOTIFY_KINDS,
   NotifyKind,
   browserNotifyEnabled,
+  defaultTimeZone,
   notificationPermission,
+  timeZoneOptions,
   webhookUrlError,
 } from '../continuity';
 import { deviceNotifyHint, deviceNotifySupport, isAndroid, notifyEnv as browserNotifyEnv, subscribePush, swRegistration, unsubscribePush } from '../push';
@@ -40,6 +43,10 @@ interface SettingsData {
   delegation_follow_up_minutes?: number;
   /** Agents' own kwnt tools (delegate, ask_user, share_file, skills, history, memory); false when the `agent_tools` setting is "off". */
   agent_tools?: boolean;
+  /** The person's IANA zone, "" when not set. */
+  timezone?: string;
+  /** The person's city as they typed it, "" when not set. */
+  location?: string;
 }
 
 const LIMIT_FIELDS: { key: TurnLimitKey; label: string; hint: string }[] = [
@@ -73,6 +80,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [saveError, setSaveError] = useState<string | null>(null);
   // null until loaded (or from a server without the setting), and then left out of the save
   const [agentTools, setAgentTools] = useState<boolean | null>(null);
+  // null until loaded, and on a server without these settings
+  const [place, setPlace] = useState<{ timezone: string; location: string } | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [notifyOn, setNotifyOn] = useState<NotifyKind[]>(NOTIFY_KINDS.map((k) => k.id));
   const [browserNotify, setBrowserNotify] = useState(browserNotifyEnabled);
@@ -127,6 +136,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               : null,
           );
           setAgentTools(typeof data.agent_tools === 'boolean' ? data.agent_tools : null);
+          setPlace(
+            typeof data.timezone === 'string'
+              ? { timezone: data.timezone || defaultTimeZone(), location: typeof data.location === 'string' ? data.location : '' }
+              : null,
+          );
         })
         .catch((err) => console.error('Failed to load settings:', err));
     }
@@ -199,6 +213,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               }
             : {}),
           ...(agentTools !== null ? { agent_tools: agentTools } : {}),
+          ...(place ? { timezone: place.timezone.trim(), location: place.location.trim() } : {}),
         }),
       });
 
@@ -368,6 +383,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </div>
           </div>
           </div>
+
+          {place && (
+            <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
+              <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
+                <MapPin size={14} className="text-sky-300" aria-hidden="true" />
+                <span>Where you are</span>
+              </legend>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label htmlFor="settings-timezone" className="block text-[11px] font-medium text-zinc-300">
+                    Time zone
+                  </label>
+                  <input
+                    id="settings-timezone"
+                    list="settings-timezones"
+                    value={place.timezone}
+                    onChange={(e) => setPlace((p) => (p ? { ...p, timezone: e.target.value } : p))}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoComplete="off"
+                    aria-describedby="settings-timezone-hint"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none transition-colors"
+                  />
+                  <datalist id="settings-timezones">
+                    {timeZoneOptions(place.timezone).map((z) => (
+                      <option key={z} value={z} />
+                    ))}
+                  </datalist>
+                  <p id="settings-timezone-hint" className="text-[11px] text-zinc-500">
+                    Bots tell the time and schedule routines in this zone. This device says {defaultTimeZone()}.
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="settings-location" className="block text-[11px] font-medium text-zinc-300">
+                    City <span className="font-normal text-zinc-500">(optional)</span>
+                  </label>
+                  <input
+                    id="settings-location"
+                    value={place.location}
+                    maxLength={MAX_LOCATION_CHARS}
+                    onChange={(e) => setPlace((p) => (p ? { ...p, location: e.target.value } : p))}
+                    placeholder="e.g. Ljubljana"
+                    autoComplete="address-level2"
+                    aria-describedby="settings-location-hint"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
+                  />
+                  <p id="settings-location-hint" className="text-[11px] text-zinc-500">
+                    For weather and local tips. Bots only get what you type here, never your GPS location.
+                  </p>
+                </div>
+              </div>
+            </fieldset>
+          )}
 
           {limits && (
             <fieldset className="space-y-3 pt-2 border-t border-zinc-800">

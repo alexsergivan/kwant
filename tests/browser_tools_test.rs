@@ -162,6 +162,7 @@ async fn claude_turn_gets_browser_tools_that_drive_its_own_panel() {
         teammates: vec![],
         continuity: String::new(),
         skills: String::new(),
+        person: Default::default(),
         store: None,
         mcp: Some(ctx.clone()),
     };

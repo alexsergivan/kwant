@@ -1742,6 +1742,7 @@ mod tests {
         TurnInput {
             continuity: "[Pinned]\nnotes for this turn".into(),
             skills: String::new(),
+            person: Default::default(),
             store: None,
             browser_api_url: None,
             thread_id: "t1".into(),

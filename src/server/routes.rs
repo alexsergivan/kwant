@@ -1852,6 +1852,7 @@ async fn run_kwant_turn_inner(
             mcp: mcp_ctx.clone(),
             continuity,
             skills,
+            person: super::bot_actions::person_place(&state.db).await,
             store: Some(state.db.clone()),
         };
 
@@ -2848,6 +2849,8 @@ pub struct SettingsResponse {
     pub agent_tools: bool,
     /// The person's IANA time zone, "" when not set; routines agents create default to it.
     pub timezone: String,
+    /// The person's city as they typed it, "" when not set.
+    pub location: String,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -2869,6 +2872,11 @@ pub struct SaveSettingsPayload {
     pub agent_tools: Option<bool>,
     /// An IANA name such as "Europe/Berlin"; "" clears it.
     pub timezone: Option<String>,
+    /// Saved as `timezone` only while none is set: the app sends the browser's zone on load, and
+    /// this never overwrites one the person or a bot chose. Ignored when `timezone` is also sent.
+    pub timezone_default: Option<String>,
+    /// The person's city, plain text ("Ljubljana"); "" clears it. Never looked up anywhere.
+    pub location: Option<String>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -2900,6 +2908,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         delegation_follow_up_minutes: super::delegation::follow_up_minutes(&state).await,
         agent_tools: super::continuity::agent_tools_enabled(&state).await,
         timezone: state.db.get_setting(super::bot_actions::TIMEZONE_SETTING).await.ok().flatten().unwrap_or_default(),
+        location: state.db.get_setting(super::bot_actions::LOCATION_SETTING).await.ok().flatten().unwrap_or_default(),
     }))
 }
 
@@ -2934,13 +2943,26 @@ pub async fn save_settings(
     if payload.delegation_follow_up_minutes.is_some_and(|m| !(0..=max_minutes).contains(&m)) {
         return bad(format!("delegation_follow_up_minutes must be 0–{max_minutes}"));
     }
+    let check_tz = |tz: &str| crate::routines::Schedule::Daily { time: "09:00".into(), tz: tz.to_string() }.validate();
     let timezone = payload.timezone.as_deref().map(crate::routines::canonical_tz);
     if let Some(tz) = timezone.as_deref().filter(|t| !t.is_empty()) {
-        let probe = crate::routines::Schedule::Daily { time: "09:00".into(), tz: tz.to_string() };
-        if let Err(e) = probe.validate() {
+        if let Err(e) = check_tz(tz) {
             return bad(e);
         }
     }
+    // A browser's zone this server doesn't know is skipped, not an error: nothing the person can fix
+    let timezone_default = payload
+        .timezone_default
+        .as_deref()
+        .map(crate::routines::canonical_tz)
+        .filter(|tz| !tz.is_empty() && timezone.is_none() && check_tz(tz).is_ok());
+    let location = match payload.location.as_deref() {
+        Some(raw) if raw.chars().count() > crate::drivers::MAX_LOCATION_CHARS => {
+            return bad(format!("location must be at most {} characters", crate::drivers::MAX_LOCATION_CHARS))
+        }
+        Some(raw) => Some(crate::drivers::clean_location(raw)),
+        None => None,
+    };
     if let Err(e) =
         super::continuity::save_notify_settings(&state, payload.notify_webhook_url, payload.notify_on).await
     {
@@ -2994,6 +3016,12 @@ pub async fn save_settings(
     }
     if let Some(tz) = timezone {
         let _ = state.db.set_setting(super::bot_actions::TIMEZONE_SETTING, &tz).await;
+    }
+    if let Some(tz) = timezone_default {
+        let _ = state.db.set_setting_if_blank(super::bot_actions::TIMEZONE_SETTING, &tz).await;
+    }
+    if let Some(city) = location {
+        let _ = state.db.set_setting(super::bot_actions::LOCATION_SETTING, &city).await;
     }
 
     Ok(Json(json!({ "status": "saved" })))
