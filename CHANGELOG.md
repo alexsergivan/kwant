@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.1.3] - 2026-10-26
+
 ### Added
 - **Bots decide instead of asking you to pick.** When a reply ends by asking you to choose between
   options that can be undone (a design direction, wording, an approach), the bot first finishes the
@@ -142,6 +144,7 @@ First public release of kwant for Mac: one universal app for Apple silicon and I
 later) that runs the kwant server and its interface, with a menu-bar icon. It uses the same data folder
 as `kwnt serve` (`~/.kwnt`).
 
+[Mac 0.1.3]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.3
 [Mac 0.1.2]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.2
 [Mac 0.1.1]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.1
 [Mac 0.1.0]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.0
