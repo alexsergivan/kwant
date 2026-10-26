@@ -16,6 +16,11 @@ pub enum BrowserInput {
     Key { key: String, code: Option<String> },
     Scroll { x: f64, y: f64, delta_x: f64, delta_y: f64 },
     Navigate { url: String },
+    /// Left button down, for drags such as slider CAPTCHAs. Held until `pointer_up`, control
+    /// release or disconnect.
+    PointerDown { x: f64, y: f64 },
+    PointerMove { x: f64, y: f64 },
+    PointerUp { x: f64, y: f64 },
 }
 
 impl BrowserController {
@@ -51,6 +56,26 @@ impl BrowserController {
                 if !delta_x.is_finite() || !delta_y.is_finite() { return Err(BrowserError::Protocol("Invalid scroll".into())); }
                 self.send_cdp_command("Input.dispatchMouseEvent", json!({"type":"mouseWheel","x":x,"y":y,"deltaX":delta_x,"deltaY":delta_y})).await?;
             }
+            BrowserInput::PointerDown { x, y } => {
+                point(x, y)?;
+                // A second press without a release (lost pointerup) lets go of the first one
+                self.release_pointer().await;
+                self.send_cdp_command("Input.dispatchMouseEvent", json!({"type":"mousePressed","x":x,"y":y,"button":"left","buttons":1,"clickCount":1})).await?;
+                self.set_pointer_held(Some((x, y)));
+            }
+            BrowserInput::PointerMove { x, y } => {
+                point(x, y)?;
+                let held = self.pointer_held().is_some();
+                self.send_cdp_command("Input.dispatchMouseEvent", json!({"type":"mouseMoved","x":x,"y":y,"button": if held {"left"} else {"none"},"buttons": if held {1} else {0}})).await?;
+                if held { self.set_pointer_held(Some((x, y))); }
+            }
+            BrowserInput::PointerUp { x, y } => {
+                point(x, y)?;
+                if self.pointer_held().is_some() {
+                    self.set_pointer_held(None);
+                    self.send_cdp_command("Input.dispatchMouseEvent", json!({"type":"mouseReleased","x":x,"y":y,"button":"left","buttons":0,"clickCount":1})).await?;
+                }
+            }
             BrowserInput::Navigate { url } => {
                 let parsed = reqwest::Url::parse(&url).map_err(|e| BrowserError::Protocol(e.to_string()))?;
                 if !matches!(parsed.scheme(), "http"|"https") { return Err(BrowserError::Protocol("Use an HTTP or HTTPS URL".into())); }
@@ -58,6 +83,23 @@ impl BrowserController {
             }
         }
         Ok(())
+    }
+
+    pub fn pointer_held(&self) -> Option<(f64, f64)> {
+        *self.pointer_held_slot().lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn set_pointer_held(&self, at: Option<(f64, f64)>) {
+        *self.pointer_held_slot().lock().unwrap_or_else(|e| e.into_inner()) = at;
+    }
+
+    /// Lets go of a held left button where it was last seen, so a dropped socket or released
+    /// control never leaves the page mid-drag.
+    pub async fn release_pointer(&self) {
+        let held = self.pointer_held_slot().lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some((x, y)) = held {
+            let _ = self.send_cdp_command("Input.dispatchMouseEvent", json!({"type":"mouseReleased","x":x,"y":y,"button":"left","buttons":0,"clickCount":1})).await;
+        }
     }
 }
 
@@ -160,6 +202,7 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
                         send(&mut socket, json!({"type":"control","active":true})).await?;
                     }
                     "release_control" => {
+                        ctrl.release_pointer().await;
                         lease = None;
                         send(&mut socket, json!({"type":"control","active":false})).await?;
                     }
@@ -179,7 +222,9 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
             }
         }
     }
-    // Dropping the lease releases bot actions even on disconnect or timeout.
+    // Let go of a drag in progress, then drop the lease so bot actions resume even on
+    // disconnect or timeout.
+    ctrl.release_pointer().await;
     drop(lease);
     let _ = cdp.close(None).await;
     Ok(())

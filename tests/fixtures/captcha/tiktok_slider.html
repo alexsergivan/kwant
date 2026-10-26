@@ -1,0 +1,30 @@
+<!doctype html><title>TikTok - Make Your Day</title>
+<style>
+  body{margin:0;font:16px sans-serif} main{height:2000px;padding:20px}
+  #captcha-verify-container-main-page{position:fixed;left:460px;top:180px;width:360px;height:380px;background:#fff;
+    border-radius:8px;box-shadow:0 0 0 9999px rgba(0,0,0,.5)}
+  #track{position:absolute;left:20px;top:300px;width:320px;height:40px;background:#eee;border-radius:20px}
+  #knob{position:absolute;left:0;top:0;width:60px;height:40px;background:#fe2c55;border-radius:20px;cursor:grab}
+</style>
+<main><h1>For You</h1><p>Video feed</p></main>
+<div id="captcha-verify-container-main-page" class="TUXModal captcha-verify-container">
+  <div class="captcha_verify_bar">Drag the puzzle piece into place</div>
+  <div id="track"><div id="knob"></div></div>
+</div>
+<script>
+  // Solved when the knob is dragged at least 200px with the button held, like TikTok's slider
+  const knob = document.getElementById('knob'), modal = document.getElementById('captcha-verify-container-main-page');
+  let start = null; window.dragLog = [];
+  knob.addEventListener('mousedown', e => { start = e.clientX; dragLog.push('down:' + e.buttons); });
+  document.addEventListener('mousemove', e => {
+    if (start === null) return;
+    dragLog.push('move:' + e.buttons);
+    knob.style.left = Math.max(0, Math.min(260, e.clientX - start)) + 'px';
+  });
+  document.addEventListener('mouseup', e => {
+    if (start === null) return;
+    dragLog.push('up:' + e.buttons);
+    const moved = e.clientX - start; start = null;
+    if (moved >= 200) { modal.remove(); document.title = 'TikTok - solved'; } else { knob.style.left = '0px'; }
+  });
+</script>

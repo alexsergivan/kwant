@@ -1,0 +1,6 @@
+<!doctype html><title>Shadow host</title><body style="margin:0">
+<div id="host"></div>
+<script>
+  const root = document.getElementById('host').attachShadow({mode: 'open'});
+  root.innerHTML = '<div class="captcha-verify-container" style="position:fixed;left:100px;top:100px;width:360px;height:300px;background:#eee">Verify</div>';
+</script></body>

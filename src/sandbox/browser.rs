@@ -142,6 +142,215 @@ pub fn detect_bot_wall(url: &str, title: &str, text: &str) -> Option<&'static st
     None
 }
 
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
+    let tmp = path.with_extension("tmp");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+    let mut file = options.open(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    std::fs::rename(&tmp, path)
+}
+
+/// Finds a visible CAPTCHA widget in the page (document, open shadow roots and same-origin
+/// frames) and returns `{kind, x, y, width, height}` in viewport pixels, or null. Scrolls an
+/// off-screen widget into view first so the person sees it in the live view.
+pub const CAPTCHA_PROBE_JS: &str = r##"(function () {
+  var VENDORS = [
+    ['recaptcha', /(^|\.)google\.com\/recaptcha\/|recaptcha\.net\/recaptcha\//i],
+    ['hcaptcha', /(^|\/\/|\.)hcaptcha\.com\//i],
+    ['turnstile', /challenges\.cloudflare\.com\//i],
+    ['arkose', /arkoselabs\.com|funcaptcha\.com/i],
+    ['datadome', /captcha-delivery\.com/i],
+    ['geetest', /geetest\.com/i]
+  ];
+  var SELECTORS = [
+    ['geetest', '.geetest_panel, .geetest_box, .geetest_holder, .geetest_widget, .geetest_captcha'],
+    ['arkose', '#FunCaptcha, #arkose, [data-e2e="enforcement-frame"]'],
+    ['perimeterx', '#px-captcha'],
+    ['datadome', '#ddv1-captcha-container, .captcha__human'],
+    ['tiktok', '#captcha_container, #captcha-verify-container-main-page, .captcha_verify_container, .captcha-verify-container, [class*="captcha_verify"], [class*="captcha-verify"], [id^="tiktok-verify"]']
+  ];
+  var PHRASES = /drag the slider|drag the puzzle piece|slide to complete the puzzle|drag the puzzle|slide to verify|select all images with|press (and|&) hold/i;
+  var vw = window.innerWidth, vh = window.innerHeight;
+  function visible(el, rect) {
+    if (rect.width < 30 || rect.height < 30) return false;
+    var st = getComputedStyle(el);
+    return st.display !== 'none' && st.visibility !== 'hidden' && parseFloat(st.opacity || '1') > 0.05;
+  }
+  function frameOffset(win) {
+    var x = 0, y = 0;
+    try {
+      while (win && win !== window && win.frameElement) {
+        var r = win.frameElement.getBoundingClientRect();
+        x += r.left; y += r.top; win = win.parent;
+      }
+    } catch (e) {}
+    return [x, y];
+  }
+  function box(kind, el) {
+    var r = el.getBoundingClientRect();
+    if (!visible(el, r)) return null;
+    var off = frameOffset(el.ownerDocument.defaultView);
+    var left = r.left + off[0], top = r.top + off[1];
+    if (top + r.height <= 0 || top >= vh || left + r.width <= 0 || left >= vw) {
+      try { el.scrollIntoView({block: 'center', inline: 'center'}); } catch (e) {}
+      r = el.getBoundingClientRect(); off = frameOffset(el.ownerDocument.defaultView);
+      left = r.left + off[0]; top = r.top + off[1];
+    }
+    var x = Math.max(0, left), y = Math.max(0, top);
+    var w = Math.min(vw, left + r.width) - x, h = Math.min(vh, top + r.height) - y;
+    if (w < 10 || h < 10) return null;
+    return {kind: kind, x: Math.round(x), y: Math.round(y), width: Math.round(w), height: Math.round(h)};
+  }
+  function container(el) {
+    for (var n = el, i = 0; n && i < 12; i++) {
+      if (n.nodeType === 1) {
+        var tag = ((n.id || '') + ' ' + (typeof n.className === 'string' ? n.className : '')).toLowerCase();
+        if (/captcha|verify|challenge/.test(tag)) return n;
+        if (n.getAttribute('role') === 'dialog' || n.getAttribute('aria-modal') === 'true') return n;
+        var pos = getComputedStyle(n).position;
+        if ((pos === 'fixed' || pos === 'sticky') && n !== n.ownerDocument.body) return n;
+      }
+      n = n.parentNode || n.host;
+    }
+    return null;
+  }
+  var roots = [];
+  function collect(root, depth) {
+    if (!root || depth > 6) return;
+    roots.push(root);
+    var all = root.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.shadowRoot) collect(el.shadowRoot, depth + 1);
+      if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
+        try { if (el.contentDocument) collect(el.contentDocument, depth + 1); } catch (e) {}
+      }
+    }
+  }
+  collect(document, 0);
+  var found = null;
+  for (var ri = 0; ri < roots.length && !found; ri++) {
+    var frames = roots[ri].querySelectorAll('iframe');
+    for (var f = 0; f < frames.length && !found; f++) {
+      var src = frames[f].getAttribute('src') || '';
+      if (frames[f].closest && frames[f].closest('.grecaptcha-badge')) continue;
+      if (/recaptcha\/(api2|enterprise)\/anchor.*[?&]size=invisible/i.test(src)) continue;
+      for (var v = 0; v < VENDORS.length; v++) {
+        if (VENDORS[v][1].test(src)) { found = box(VENDORS[v][0], frames[f]); break; }
+      }
+    }
+  }
+  for (var ri2 = 0; ri2 < roots.length && !found; ri2++) {
+    for (var s = 0; s < SELECTORS.length && !found; s++) {
+      var els = roots[ri2].querySelectorAll(SELECTORS[s][1]);
+      for (var e = 0; e < els.length && !found; e++) found = box(SELECTORS[s][0], els[e]);
+    }
+  }
+  for (var ri3 = 0; ri3 < roots.length && !found; ri3++) {
+    var root = roots[ri3];
+    var walker = (root.ownerDocument || root).createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    var node;
+    while (!found && (node = walker.nextNode())) {
+      if (!PHRASES.test(node.nodeValue || '')) continue;
+      var c = container(node.parentNode);
+      if (c) found = box(/tiktok/i.test(location.hostname) ? 'tiktok' : 'puzzle', c);
+    }
+  }
+  return found;
+})()"##;
+
+pub const CAPTCHA_KINDS: &[&str] = &["recaptcha", "hcaptcha", "turnstile", "arkose", "geetest", "datadome", "perimeterx", "tiktok", "puzzle"];
+
+/// Where a CAPTCHA widget sits in the viewport, so the person's view can point at it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CaptchaHit {
+    pub kind: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl CaptchaHit {
+    /// Validates what the page returned: a known kind and a finite box inside the viewport.
+    pub fn parse(value: &Value) -> Option<Self> {
+        let kind = value.get("kind")?.as_str()?;
+        if !CAPTCHA_KINDS.contains(&kind) { return None; }
+        let num = |k: &str| value.get(k).and_then(Value::as_f64).filter(|n| n.is_finite());
+        let (x, y) = (num("x")?.clamp(0.0, 1280.0), num("y")?.clamp(0.0, 800.0));
+        let width = num("width")?.clamp(0.0, 1280.0 - x);
+        let height = num("height")?.clamp(0.0, 800.0 - y);
+        if width < 1.0 || height < 1.0 { return None; }
+        Some(Self { kind: kind.to_string(), x, y, width, height })
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self.kind.as_str() {
+            "recaptcha" => "reCAPTCHA",
+            "hcaptcha" => "hCaptcha",
+            "turnstile" => "Cloudflare Turnstile check",
+            "arkose" => "Arkose (FunCaptcha) puzzle",
+            "geetest" => "GeeTest puzzle",
+            "datadome" => "DataDome check",
+            "perimeterx" => "PerimeterX press-and-hold check",
+            "tiktok" => "TikTok slider puzzle",
+            _ => "slider / puzzle CAPTCHA",
+        }
+    }
+}
+
+/// Clicks only "reject" / "decline optional" in known cookie banners (OneTrust, Cookiebot,
+/// Didomi, Usercentrics, Quantcast, Google, TikTok) and in containers that are clearly a
+/// consent banner. Never accepts. Returns the clicked label or null.
+pub const CONSENT_REJECT_JS: &str = r##"(function () {
+  var KNOWN = ['#onetrust-reject-all-handler', '#CybotCookiebotDialogBodyButtonDecline',
+    '#didomi-notice-disagree-button', '[data-testid="uc-deny-all-button"]',
+    '.qc-cmp2-summary-buttons button[mode="secondary"]', '#truste-consent-required',
+    '.cmpboxbtnno', '#cmpwelcomebtnno a', '.fc-cta-do-not-consent', 'button#W0wltc'];
+  var REJECT = /^\s*(reject( all| optional)?( cookies)?|decline( all| optional)?( cookies)?|deny( all)?|refuse( all)?|only (necessary|essential|required)( cookies)?|use necessary cookies only|necessary cookies only|continue without accepting|alle ablehnen|ablehnen|tout refuser|refuser|rechazar( todo)?|rifiuta( tutto)?|weiger(en)?|odrzuć|відхилити|отклонить)\s*$/i;
+  var ACCEPT = /accept|allow|agree|consent|got it|^\s*ok\s*$|akzept|accepter|aceptar|accetta|zustimmen/i;
+  var NEGATED = /\b(not|don't|reject|decline|deny|refuse|necessary|essential|required)\b|ablehnen|refuser|rechazar|rifiuta/i;
+  var BANNER = /cookie|consent|gdpr|cmp|privacy|onetrust|didomi|usercentrics|cookiebot|qc-cmp|truste/i;
+  function label(el) { return (el.innerText || el.textContent || el.getAttribute('aria-label') || el.value || '').replace(/\s+/g, ' ').trim(); }
+  function shown(el) { var r = el.getBoundingClientRect(); var st = getComputedStyle(el); return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none'; }
+  function click(el) { var l = label(el); if (ACCEPT.test(l) && !NEGATED.test(l)) return null; el.click(); return l || 'reject'; }
+  var roots = [];
+  (function collect(root, d) { if (!root || d > 4) return; roots.push(root);
+    var all = root.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) { if (all[i].shadowRoot) collect(all[i].shadowRoot, d + 1);
+      if (all[i].tagName === 'IFRAME') { try { if (all[i].contentDocument) collect(all[i].contentDocument, d + 1); } catch (e) {} } }
+  })(document, 0);
+  for (var r = 0; r < roots.length; r++) {
+    for (var k = 0; k < KNOWN.length; k++) {
+      var el = roots[r].querySelector(KNOWN[k]);
+      if (el && shown(el)) { var c = click(el); if (c) return c; }
+    }
+  }
+  for (var r2 = 0; r2 < roots.length; r2++) {
+    var host = roots[r2].host;
+    var buttons = roots[r2].querySelectorAll('button, [role="button"], a[href="#"], input[type="button"]');
+    for (var b = 0; b < buttons.length; b++) {
+      var btn = buttons[b], text = label(btn);
+      if (!REJECT.test(text) || !shown(btn)) continue;
+      var inBanner = false;
+      for (var n = btn, i = 0; n && i < 10; i++, n = n.parentNode || n.host) {
+        if (n.nodeType !== 1) continue;
+        var tag = (n.id || '') + ' ' + (typeof n.className === 'string' ? n.className : '') + ' ' + (n.getAttribute('aria-label') || '') + ' ' + n.tagName;
+        if (BANNER.test(tag)) { inBanner = true; break; }
+      }
+      if (!inBanner && host) inBanner = BANNER.test(host.tagName + ' ' + (host.id || '') + ' ' + (host.className || ''));
+      if (inBanner) { btn.click(); return text; }
+    }
+  }
+  return null;
+})()"##;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NavigationResult {
     pub url: String,
@@ -260,6 +469,10 @@ pub struct BrowserController {
     /// Held while a human step (sign in, CAPTCHA) waits on the person: bot actions get
     /// `HumanControl` and the person's live-view input goes through without taking control.
     held_for_person: Arc<std::sync::Mutex<Option<OwnedRwLockWriteGuard<()>>>>,
+    /// Where the left button is held down from live-view pointer input, if it is.
+    pointer_held: Arc<std::sync::Mutex<Option<(f64, f64)>>>,
+    /// VM mode: this bot's cookies, saved outside the throwaway browser context.
+    cookie_jar: Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
 }
 
 impl std::fmt::Debug for BrowserController {
@@ -287,6 +500,8 @@ impl BrowserController {
             browser_level: false,
             control: Arc::new(RwLock::new(())),
             held_for_person: Arc::default(),
+            pointer_held: Arc::default(),
+            cookie_jar: Arc::default(),
         }
     }
 
@@ -329,6 +544,8 @@ impl BrowserController {
     }
 
     pub fn is_managed_session(&self) -> bool { self.target_id.is_some() }
+
+    pub(crate) fn pointer_held_slot(&self) -> &std::sync::Mutex<Option<(f64, f64)>> { &self.pointer_held }
 
     pub async fn refresh_location(&self) -> Result<(), BrowserError> {
         let result = self.send_cdp_command("Runtime.evaluate", json!({
@@ -568,7 +785,14 @@ impl BrowserController {
 
     pub async fn navigate(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
         let _permit = self.control.try_read().map_err(|_| BrowserError::HumanControl)?;
-        self.navigate_unlocked(target_url).await
+        let result = self.navigate_unlocked(target_url).await?;
+        // Bot navigation only: the person decides banners themselves in the live view
+        if let Some(clicked) = self.reject_consent().await {
+            tracing::debug!("Declined cookie banner via \"{}\"", clicked);
+            let _ = self.capture_screenshot().await;
+        }
+        self.persist_cookies().await;
+        Ok(result)
     }
 
     pub async fn navigate_unlocked(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
@@ -695,6 +919,76 @@ impl BrowserController {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let _ = self.capture_screenshot().await;
         Ok(())
+    }
+
+    /// A visible CAPTCHA widget on the page, if any. `Err` when the page couldn't be read
+    /// (mid-navigation, say): callers treat that as unknown, never as "gone".
+    pub async fn probe_captcha(&self) -> Result<Option<CaptchaHit>, BrowserError> {
+        let res = self.send_cdp_command("Runtime.evaluate", json!({
+            "expression": CAPTCHA_PROBE_JS, "returnByValue": true
+        })).await?;
+        if res.get("exceptionDetails").is_some() {
+            return Err(BrowserError::Protocol("CAPTCHA probe failed".into()));
+        }
+        Ok(CaptchaHit::parse(&res["result"]["value"]))
+    }
+
+    /// Declines optional cookies on a known consent banner. Never accepts.
+    pub async fn reject_consent(&self) -> Option<String> {
+        // Consent managers often render a moment after load: look twice
+        for attempt in 0..2 {
+            if attempt > 0 { tokio::time::sleep(Duration::from_millis(700)).await; }
+            let Ok(res) = self.send_cdp_command("Runtime.evaluate", json!({
+                "expression": CONSENT_REJECT_JS, "returnByValue": true
+            })).await else { return None };
+            if let Some(label) = res["result"]["value"].as_str() {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                return Some(label.chars().take(80).collect());
+            }
+        }
+        None
+    }
+
+    /// VM mode keeps cookies in a file because the browser's profile lives on tmpfs.
+    pub fn set_cookie_jar(&self, path: Option<std::path::PathBuf>) {
+        *self.cookie_jar.lock().unwrap_or_else(|e| e.into_inner()) = path;
+    }
+
+    fn cookie_jar_path(&self) -> Option<std::path::PathBuf> {
+        self.cookie_jar.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Saves this page's browser-context cookies to the jar (owner-only file, written atomically).
+    pub async fn persist_cookies(&self) {
+        let Some(path) = self.cookie_jar_path() else { return };
+        let Ok(res) = self.send_cdp_command("Network.getAllCookies", json!({})).await else { return };
+        let Some(cookies) = res["cookies"].as_array() else { return };
+        // session cookies die with the browser anyway; keep only persistent ones
+        let kept: Vec<&Value> = cookies.iter().filter(|c| c["session"].as_bool() != Some(true)).collect();
+        if let Err(error) = write_private(&path, &serde_json::to_vec(&kept).unwrap_or_default()) {
+            tracing::warn!("Could not save browser cookies: {}", error);
+        }
+    }
+
+    /// Loads the jar into a fresh browser context. Returns how many cookies were restored.
+    pub async fn restore_cookies(&self) -> usize {
+        let Some(path) = self.cookie_jar_path() else { return 0 };
+        let Ok(bytes) = std::fs::read(&path) else { return 0 };
+        let Ok(Value::Array(cookies)) = serde_json::from_slice::<Value>(&bytes) else { return 0 };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        let params: Vec<Value> = cookies.iter().filter(|c| c["expires"].as_f64().is_some_and(|e| e > now)).map(|c| {
+            let mut p = json!({});
+            for key in ["name", "value", "domain", "path", "secure", "httpOnly", "sameSite", "expires", "priority", "sameParty", "sourceScheme", "partitionKey"] {
+                if let Some(v) = c.get(key) { if !v.is_null() { p[key] = v.clone(); } }
+            }
+            p
+        }).collect();
+        if params.is_empty() { return 0; }
+        let count = params.len();
+        match self.send_cdp_command("Network.setCookies", json!({"cookies": params})).await {
+            Ok(_) => count,
+            Err(error) => { tracing::warn!("Could not restore browser cookies: {}", error); 0 }
+        }
     }
 
     /// Re-reads the page's real URL and title, since user clicks/keys can navigate

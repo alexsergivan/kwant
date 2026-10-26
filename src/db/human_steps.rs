@@ -1,6 +1,7 @@
 //! Steps only the person can do in the bot browser (`request_human_step`): sign in, solve a
 //! CAPTCHA, or something else. A step is `open` until the person marks it done or declines it,
-//! or its turn is stopped (`cancelled`).
+//! or its turn is stopped (`cancelled`). A CAPTCHA step also closes by itself when the check
+//! is gone from the page (`resolved_auto`) or nobody solved it in time (`timed_out`).
 
 use super::models::{Message, MessageExtra, NewMessage};
 use super::{Database, DbError};
@@ -15,8 +16,9 @@ pub const MAX_URL_CHARS: usize = 300;
 pub const MAX_OPEN_PER_KWANT: i64 = 5;
 
 pub const HUMAN_STEP_KINDS: [&str; 4] = ["sign_in", "captcha", "two_factor", "other"];
-/// "open", "done", "declined" or "cancelled" (its turn was stopped).
-pub const HUMAN_STEP_STATUSES: [&str; 4] = ["open", "done", "declined", "cancelled"];
+/// "open", "done", "declined", "cancelled" (its turn was stopped), "resolved_auto" (the
+/// CAPTCHA went away on its own or the person solved it without pressing Done) or "timed_out".
+pub const HUMAN_STEP_STATUSES: [&str; 6] = ["open", "done", "declined", "cancelled", "resolved_auto", "timed_out"];
 
 #[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
 pub struct HumanStep {
@@ -33,6 +35,10 @@ pub struct HumanStep {
     pub url: Option<String>,
     /// The bot browser it happens in (team, channel or kwant id).
     pub sandbox_target: Option<String>,
+    /// CAPTCHA steps: where the widget is, `{kind, x, y, width, height}` in viewport pixels,
+    /// kept as JSON text and sent as an object.
+    #[serde(serialize_with = "target_object")]
+    pub target: Option<String>,
     /// "bot" (the agent asked) or "auto" (kwnt saw a CAPTCHA).
     pub source: String,
     pub status: String,
@@ -40,6 +46,11 @@ pub struct HumanStep {
     pub message_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub closed_at: Option<DateTime<Utc>>,
+}
+
+fn target_object<S: serde::Serializer>(target: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
+    use serde::Serialize as _;
+    target.as_deref().and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok()).serialize(s)
 }
 
 impl HumanStep {
@@ -124,42 +135,60 @@ pub struct HumanStepPlace {
 /// A new step (with `true`), or the turn's step that is already open (with `false`).
 pub type Created = (HumanStep, bool, Option<Message>);
 
+const CREATE_HUMAN_STEPS: &str = "CREATE TABLE IF NOT EXISTS human_steps (
+    id TEXT PRIMARY KEY,
+    kwant_id TEXT NOT NULL,
+    channel_id TEXT,
+    direct_kwant_id TEXT,
+    thread_id TEXT,
+    turn_id TEXT,
+    kind TEXT NOT NULL CHECK (kind IN ('sign_in', 'captcha', 'two_factor', 'other')),
+    reason TEXT NOT NULL,
+    url TEXT,
+    sandbox_target TEXT,
+    target TEXT,
+    source TEXT NOT NULL CHECK (source IN ('bot', 'auto')),
+    status TEXT NOT NULL CHECK (status IN ('open', 'done', 'declined', 'cancelled', 'resolved_auto', 'timed_out')),
+    message_id TEXT,
+    created_at TIMESTAMP NOT NULL,
+    closed_at TIMESTAMP
+)";
+
 impl Database {
     pub(super) async fn migrate_human_steps(&self) -> Result<(), DbError> {
-        for stmt in [
-            "CREATE TABLE IF NOT EXISTS human_steps (
-                id TEXT PRIMARY KEY,
-                kwant_id TEXT NOT NULL,
-                channel_id TEXT,
-                direct_kwant_id TEXT,
-                thread_id TEXT,
-                turn_id TEXT,
-                kind TEXT NOT NULL CHECK (kind IN ('sign_in', 'captcha', 'two_factor', 'other')),
-                reason TEXT NOT NULL,
-                url TEXT,
-                sandbox_target TEXT,
-                source TEXT NOT NULL CHECK (source IN ('bot', 'auto')),
-                status TEXT NOT NULL CHECK (status IN ('open', 'done', 'declined', 'cancelled')),
-                message_id TEXT,
-                created_at TIMESTAMP NOT NULL,
-                closed_at TIMESTAMP
-            )",
-            "CREATE INDEX IF NOT EXISTS human_steps_by_status ON human_steps (status, kwant_id)",
-        ] {
-            sqlx::query(stmt).execute(&self.pool).await?;
+        sqlx::query(CREATE_HUMAN_STEPS).execute(&self.pool).await?;
+        // Tables made before CAPTCHA auto-resolve lack `target` and the two new statuses, which
+        // a CHECK can't gain in place: rebuild them once
+        let sql: Option<(String,)> = sqlx::query_as("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'human_steps'")
+            .fetch_optional(&self.pool)
+            .await?;
+        if sql.is_some_and(|(sql,)| !sql.contains("'timed_out'")) {
+            let columns = "id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, kind, reason, url, sandbox_target, source, status, message_id, created_at, closed_at";
+            let mut tx = self.pool.begin().await?;
+            sqlx::query("DROP INDEX IF EXISTS human_steps_by_status").execute(&mut *tx).await?;
+            sqlx::query("ALTER TABLE human_steps RENAME TO human_steps_old").execute(&mut *tx).await?;
+            sqlx::query(CREATE_HUMAN_STEPS).execute(&mut *tx).await?;
+            sqlx::query(&format!("INSERT INTO human_steps ({columns}) SELECT {columns} FROM human_steps_old"))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DROP TABLE human_steps_old").execute(&mut *tx).await?;
+            tx.commit().await?;
         }
+        sqlx::query("CREATE INDEX IF NOT EXISTS human_steps_by_status ON human_steps (status, kwant_id)").execute(&self.pool).await?;
         Ok(())
     }
 
     /// Saves a step together with the chat message that shows it (built by `card`), in one
     /// transaction. A turn that asks again while its step is open gets that step back, so a
     /// retrying agent (or the CAPTCHA check firing on every page) doesn't pile up cards.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_human_step_with_card(
         &self,
         place: &HumanStepPlace,
         kind: &str,
         reason: &str,
         url: Option<&str>,
+        target: Option<&str>,
         source: &str,
         card: impl FnOnce(&HumanStep) -> Option<(NewMessage, MessageExtra)>,
     ) -> Result<Created, HumanStepError> {
@@ -168,8 +197,8 @@ impl Database {
         // Writes first so the transaction holds SQLite's write lock before it reads
         let id = Uuid::new_v4().to_string();
         let inserted = sqlx::query(
-            "INSERT INTO human_steps (id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, kind, reason, url, sandbox_target, source, status, created_at)
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'open', ?12
+            "INSERT INTO human_steps (id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, kind, reason, url, sandbox_target, source, status, created_at, target)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'open', ?12, ?14
              WHERE (SELECT COUNT(*) FROM human_steps WHERE kwant_id = ?2 AND status = 'open') < ?13
                AND NOT EXISTS (SELECT 1 FROM human_steps WHERE status = 'open' AND ?6 IS NOT NULL AND turn_id = ?6)",
         )
@@ -186,6 +215,7 @@ impl Database {
         .bind(source)
         .bind(Utc::now())
         .bind(MAX_OPEN_PER_KWANT)
+        .bind(target)
         .execute(&mut *tx)
         .await?;
         if inserted.rows_affected() == 0 {
@@ -262,6 +292,17 @@ impl Database {
         Ok(n > 0)
     }
 
+    /// Moves an open step's CAPTCHA box (the widget showed up, or moved).
+    pub async fn set_human_step_target(&self, id: &str, target: &str) -> Result<bool, DbError> {
+        let done = sqlx::query("UPDATE human_steps SET target = ? WHERE id = ? AND status = 'open' AND target IS NOT ?")
+            .bind(target)
+            .bind(id)
+            .bind(target)
+            .execute(&self.pool)
+            .await?;
+        Ok(done.rows_affected() == 1)
+    }
+
     /// Closes an open step; `false` when it wasn't open any more (someone else closed it).
     pub async fn close_human_step(&self, id: &str, status: &str) -> Result<bool, DbError> {
         let done = sqlx::query("UPDATE human_steps SET status = ?, closed_at = ? WHERE id = ? AND status = 'open'")
@@ -302,11 +343,11 @@ mod tests {
             sandbox_target: Some("k".into()),
             ..Default::default()
         };
-        let (s, new, _) = db.create_human_step_with_card(&place("t1"), "sign_in", "Log in", None, "bot", |_| None).await.unwrap();
+        let (s, new, _) = db.create_human_step_with_card(&place("t1"), "sign_in", "Log in", None, None, "bot", |_| None).await.unwrap();
         assert!(new);
         assert_eq!(s.context_id(), "k");
         assert!(db.human_step_open_in("k").await.unwrap());
-        let (again, new, _) = db.create_human_step_with_card(&place("t1"), "captcha", "Solve", None, "auto", |_| None).await.unwrap();
+        let (again, new, _) = db.create_human_step_with_card(&place("t1"), "captcha", "Solve", None, None, "auto", |_| None).await.unwrap();
         assert!(!new);
         assert_eq!(again.id, s.id);
         assert_eq!(db.open_human_steps_for_turn("t1").await.unwrap().len(), 1);
@@ -317,10 +358,41 @@ mod tests {
         assert!(closed.closed_at.is_some());
         assert!(!db.human_step_open_in("k").await.unwrap());
         for i in 0..MAX_OPEN_PER_KWANT {
-            db.create_human_step_with_card(&place(&format!("t{}", i + 10)), "other", "Do it", None, "bot", |_| None).await.unwrap();
+            db.create_human_step_with_card(&place(&format!("t{}", i + 10)), "other", "Do it", None, None, "bot", |_| None).await.unwrap();
         }
-        let full = db.create_human_step_with_card(&place("t99"), "other", "Do it", None, "bot", |_| None).await;
+        let full = db.create_human_step_with_card(&place("t99"), "other", "Do it", None, None, "bot", |_| None).await;
         assert_eq!(full.err(), Some(HumanStepError::TooManyOpen));
         assert_eq!(db.list_human_steps(Some("open"), Some("k"), None).await.unwrap().len() as i64, MAX_OPEN_PER_KWANT);
+    }
+
+    #[tokio::test]
+    async fn old_tables_gain_target_and_the_auto_statuses_and_keep_their_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        // Recreate the table as it was before CAPTCHA auto-resolve, with one row
+        sqlx::query("DROP TABLE human_steps").execute(&db.pool).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE human_steps (id TEXT PRIMARY KEY, kwant_id TEXT NOT NULL, channel_id TEXT, direct_kwant_id TEXT,
+                thread_id TEXT, turn_id TEXT, kind TEXT NOT NULL CHECK (kind IN ('sign_in', 'captcha', 'two_factor', 'other')),
+                reason TEXT NOT NULL, url TEXT, sandbox_target TEXT, source TEXT NOT NULL CHECK (source IN ('bot', 'auto')),
+                status TEXT NOT NULL CHECK (status IN ('open', 'done', 'declined', 'cancelled')), message_id TEXT,
+                created_at TIMESTAMP NOT NULL, closed_at TIMESTAMP)",
+        ).execute(&db.pool).await.unwrap();
+        sqlx::query("INSERT INTO human_steps (id, kwant_id, kind, reason, source, status, created_at) VALUES ('old', 'k', 'captcha', 'Solve', 'auto', 'open', ?)")
+            .bind(Utc::now()).execute(&db.pool).await.unwrap();
+        db.migrate_human_steps().await.unwrap();
+        db.migrate_human_steps().await.unwrap();
+        let old = db.get_human_step("old").await.unwrap().unwrap();
+        assert_eq!((old.status.as_str(), old.target), ("open", None));
+        assert!(db.set_human_step_target("old", r#"{"kind":"tiktok","x":1,"y":2,"width":30,"height":40}"#).await.unwrap());
+        assert!(db.close_human_step("old", "resolved_auto").await.unwrap());
+        let json = serde_json::to_value(db.get_human_step("old").await.unwrap().unwrap()).unwrap();
+        assert_eq!(json["status"], "resolved_auto");
+        assert_eq!(json["target"]["kind"], "tiktok");
+        assert_eq!(json["target"]["width"], 30);
+        let place = HumanStepPlace { kwant_id: "k".into(), turn_id: Some("t".into()), ..Default::default() };
+        let (s, ..) = db.create_human_step_with_card(&place, "captcha", "Solve", None, None, "auto", |_| None).await.unwrap();
+        assert!(db.close_human_step(&s.id, "timed_out").await.unwrap());
+        assert!(serde_json::to_value(db.get_human_step(&s.id).await.unwrap().unwrap()).unwrap()["target"].is_null());
     }
 }

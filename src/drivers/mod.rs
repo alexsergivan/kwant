@@ -376,7 +376,8 @@ impl TurnInput {
             format!("http://127.0.0.1:{}/api/sandbox/{}", crate::config::DEFAULT_PORT, sandbox_target)
         });
         let control_rules = "A 409 / \"taken control\" answer means the user is using the browser: stop browser actions and wait for the user to hand it back. Never bypass the control API or connect to CDP directly.\n\
-            Report browser errors honestly. Never claim a page opened unless navigation succeeded, and only describe content that appears in the returned page text. If a response has \"blocked\": true (CAPTCHA / bot check), follow its \"notice\" instead of claiming results.";
+            Report browser errors honestly. Never claim a page opened unless navigation succeeded, and only describe content that appears in the returned page text. If a response has \"blocked\": true (CAPTCHA / bot check), follow its \"notice\" instead of claiming results.\n\
+            On a CAPTCHA, stop and wait for the person to solve it: never try to solve, bypass or click through it yourself. Prefer sites you are already signed in to and official APIs over scraping pages that challenge bots.";
         let browser_block = match browser {
             BrowserAccess::Tools => format!(
                 "\n\n[Bot Browser]\n\

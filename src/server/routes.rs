@@ -1715,7 +1715,9 @@ async fn run_kwant_turn_inner(
                             timestamp: chrono::Utc::now().to_rfc3339(),
                         });
                     }
-                    final_prompt = if let Some(kind) = crate::sandbox::detect_bot_wall(&nav.url, &nav.title, &page_text) {
+                    let captcha = ctrl.probe_captcha().await.ok().flatten();
+                    let wall = crate::sandbox::detect_bot_wall(&nav.url, &nav.title, &page_text).or(captcha.as_ref().map(|c| c.label()));
+                    final_prompt = if let Some(kind) = wall {
                         format!(
                             "{}\n\n[Sandbox Browser State: Tried to open {} in the right-panel bot browser. {}]",
                             prompt, target_url, bot_wall_notice(kind, &nav.url)
@@ -2851,6 +2853,8 @@ pub struct SettingsResponse {
     pub timezone: String,
     /// The person's city as they typed it, "" when not set.
     pub location: String,
+    /// How long a CAPTCHA step waits for the person before the bot moves on (1–60).
+    pub captcha_timeout_minutes: u64,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -2877,6 +2881,7 @@ pub struct SaveSettingsPayload {
     pub timezone_default: Option<String>,
     /// The person's city, plain text ("Ljubljana"); "" clears it. Never looked up anywhere.
     pub location: Option<String>,
+    pub captcha_timeout_minutes: Option<u64>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -2909,6 +2914,10 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         agent_tools: super::continuity::agent_tools_enabled(&state).await,
         timezone: state.db.get_setting(super::bot_actions::TIMEZONE_SETTING).await.ok().flatten().unwrap_or_default(),
         location: state.db.get_setting(super::bot_actions::LOCATION_SETTING).await.ok().flatten().unwrap_or_default(),
+        captcha_timeout_minutes: state.db.get_setting(super::human_steps::CAPTCHA_TIMEOUT_SETTING).await.ok().flatten()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|m| (1..=super::human_steps::MAX_CAPTCHA_TIMEOUT_MINUTES).contains(m))
+            .unwrap_or(super::human_steps::DEFAULT_CAPTCHA_TIMEOUT_MINUTES),
     }))
 }
 
@@ -2944,6 +2953,10 @@ pub async fn save_settings(
         return bad(format!("delegation_follow_up_minutes must be 0–{max_minutes}"));
     }
     let check_tz = |tz: &str| crate::routines::Schedule::Daily { time: "09:00".into(), tz: tz.to_string() }.validate();
+    let max_captcha = super::human_steps::MAX_CAPTCHA_TIMEOUT_MINUTES;
+    if payload.captcha_timeout_minutes.is_some_and(|m| !(1..=max_captcha).contains(&m)) {
+        return bad(format!("captcha_timeout_minutes must be 1–{max_captcha}"));
+    }
     let timezone = payload.timezone.as_deref().map(crate::routines::canonical_tz);
     if let Some(tz) = timezone.as_deref().filter(|t| !t.is_empty()) {
         if let Err(e) = check_tz(tz) {
@@ -2999,6 +3012,9 @@ pub async fn save_settings(
         tokio::spawn(async move {
             super::engine_routes::recheck_all(&state, &SpaceId::default_space()).await;
         });
+    }
+    if let Some(minutes) = payload.captcha_timeout_minutes {
+        let _ = state.db.set_setting(super::human_steps::CAPTCHA_TIMEOUT_SETTING, &minutes.to_string()).await;
     }
     if payload.max_turns_per_agent.is_some() || payload.max_turns_global.is_some() {
         let (per_agent, global) = state.turns.limiter.limits();
@@ -3595,9 +3611,16 @@ async fn sandbox_page_state(ctrl: &crate::sandbox::BrowserController) -> serde_j
         "clickable": clickable,
         "blocked": false,
     });
-    if let Some(kind) = crate::sandbox::detect_bot_wall(&url, &title, &text) {
+    // A CAPTCHA widget on an otherwise normal page (TikTok's slider over the feed, a
+    // reCAPTCHA on a form) counts too; its box tells the person's view where to look
+    let captcha = ctrl.probe_captcha().await.ok().flatten();
+    let wall = crate::sandbox::detect_bot_wall(&url, &title, &text).or(captcha.as_ref().map(|c| c.label()));
+    if let Some(kind) = wall {
         page["blocked"] = json!(true);
         page["notice"] = json!(bot_wall_notice(kind, &url));
+    }
+    if let Some(captcha) = captcha {
+        page["captcha"] = json!(captcha);
     }
     page
 }

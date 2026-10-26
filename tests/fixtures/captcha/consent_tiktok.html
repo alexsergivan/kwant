@@ -1,0 +1,10 @@
+<!doctype html><title>untouched</title><body style="font:16px sans-serif"><p>For You</p>
+<tiktok-cookie-banner></tiktok-cookie-banner>
+<button onclick="document.title='wrong'">Decline</button>
+<script>
+  const root = document.querySelector('tiktok-cookie-banner').attachShadow({mode: 'open'});
+  root.innerHTML = '<div class="tiktok-cookie-banner" style="position:fixed;bottom:0;left:0;right:0;height:100px;background:#fff">'
+    + '<button id="a">Allow all</button> <button id="d">Decline optional cookies</button></div>';
+  root.getElementById('a').onclick = () => document.title = 'accepted';
+  root.getElementById('d').onclick = () => document.title = 'declined';
+</script></body>

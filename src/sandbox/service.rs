@@ -286,6 +286,7 @@ impl BrowserService {
         let existing = state.sessions.get(id).filter(|session| targets["targetInfos"].as_array()
             .is_some_and(|targets| targets.iter().any(|target| target["targetId"] == session.target)));
         let local = self.mode() == ComputerMode::Local;
+        let fresh_context = existing.is_none() && !local;
         let session = if let Some(existing) = existing { existing.clone() } else if local {
             // Local pages share the kwant profile's default context, so a sign-in in the window
             // is kept. (`context` stays empty.) Each bot gets its own window, not a tab: Chrome
@@ -314,6 +315,16 @@ impl BrowserService {
         state.sessions.insert(id.to_string(), session.clone());
         self.save_sessions(&state.sessions).await?;
         let ctrl = BrowserController::at_endpoint(&state.endpoint, Some(session.target), false);
+        if !local {
+            // The VM browser's profile is on tmpfs, so its contexts' cookies go when the
+            // container restarts: keep them per bot in the data folder (local mode's on-disk
+            // profile already keeps them).
+            ctrl.set_cookie_jar(Some(self.cookie_jar(id)));
+            if fresh_context {
+                let restored = ctrl.restore_cookies().await;
+                if restored > 0 { tracing::debug!("Restored {} browser cookies for {}", restored, id); }
+            }
+        }
         // A real window keeps its own size; a windowless browser gets the viewer's fixed viewport.
         if !local || !self.local_window() {
             ctrl.send_cdp_command("Emulation.setDeviceMetricsOverride", json!({
@@ -324,7 +335,15 @@ impl BrowserService {
         Ok(ctrl)
     }
 
+    /// Where a bot's VM-browser cookies are kept between container restarts.
+    pub fn cookie_jar(&self, id: &str) -> PathBuf {
+        let name: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).take(120).collect();
+        self.root.join("browser-cookies").join(format!("{name}.json"))
+    }
+
     pub async fn reset(&self, id: &str) -> Result<(), BrowserError> {
+        // A reset is a clean slate, including the saved sign-ins
+        let _ = std::fs::remove_file(self.cookie_jar(id));
         let mut lock = self.state.lock().await;
         if lock.is_none() && self.sessions_file().exists() {
             *lock = Some(self.connect().await?);

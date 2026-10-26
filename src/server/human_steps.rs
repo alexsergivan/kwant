@@ -5,6 +5,11 @@
 //! turn waits until they press Done or Decline (`POST /api/human-steps/:id/done|decline`). If
 //! nobody answers in time the tool tells the agent to wrap up, and a later answer starts a new
 //! turn in the same chat with the outcome. Stopping the turn cancels the step.
+//!
+//! A CAPTCHA step is also watched: the page is probed every couple of seconds, and once the check
+//! is gone the step closes as `resolved_auto` and the bot carries on by itself. Nobody solving it
+//! within `captcha_timeout_minutes` (default 10) closes it as `timed_out`, and the bot is told to
+//! move on rather than wait.
 
 use super::continuity::{notify, Notification, SelfScope};
 use super::routes::{scope_for, try_kwant_turn, TurnOpts};
@@ -12,6 +17,7 @@ use super::AppState;
 use crate::db::human_steps::{clean_request, HumanStep, HumanStepError, HumanStepPlace, HUMAN_STEP_STATUSES};
 use crate::db::models::{MessageExtra, NewMessage};
 use crate::drivers::events::RuntimeEvent;
+use crate::sandbox::browser::{detect_bot_wall, BrowserController, CaptchaHit};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -33,6 +39,10 @@ pub const TOOL: &str = "request_human_step";
 pub enum Outcome {
     Done,
     Declined,
+    /// The CAPTCHA left the page (solved, or it passed by itself).
+    ResolvedAuto,
+    /// Nobody solved the CAPTCHA within the time limit.
+    TimedOut,
 }
 
 impl Outcome {
@@ -40,14 +50,26 @@ impl Outcome {
         match self {
             Outcome::Done => "done",
             Outcome::Declined => "declined",
+            Outcome::ResolvedAuto => "resolved_auto",
+            Outcome::TimedOut => "timed_out",
         }
     }
 }
+
+pub const CAPTCHA_TIMEOUT_SETTING: &str = "captcha_timeout_minutes";
+pub const DEFAULT_CAPTCHA_TIMEOUT_MINUTES: u64 = 10;
+pub const MAX_CAPTCHA_TIMEOUT_MINUTES: u64 = 60;
+/// Consecutive probes without the check before a step counts as solved: a page re-rendering
+/// between two looks doesn't close it.
+const GONE_AFTER_MISSES: u32 = 2;
 
 /// The turns waiting on a human step, by step id. Empty (no cost) when unused.
 pub struct HumanStepHub {
     waiters: Mutex<HashMap<String, oneshot::Sender<Outcome>>>,
     wait_ms: AtomicU64,
+    /// Tests only: CAPTCHA time limit and probe interval in ms (0 = setting / default).
+    captcha_timeout_ms: AtomicU64,
+    probe_ms: AtomicU64,
 }
 
 impl Default for HumanStepHub {
@@ -56,6 +78,8 @@ impl Default for HumanStepHub {
             waiters: Mutex::default(),
             // Shorter than the CLIs' tool timeout (approval timeout + 30 s), so the tool answers first
             wait_ms: AtomicU64::new((crate::mcp::APPROVAL_TIMEOUT_SECS - 10) * 1000),
+            captcha_timeout_ms: AtomicU64::new(0),
+            probe_ms: AtomicU64::new(0),
         }
     }
 }
@@ -68,6 +92,19 @@ impl HumanStepHub {
 
     fn wait(&self) -> Duration {
         Duration::from_millis(self.wait_ms.load(Ordering::Relaxed))
+    }
+
+    /// Tests: a short CAPTCHA time limit and probe interval instead of the setting and 2 s.
+    pub fn set_captcha_timing(&self, timeout: Duration, probe: Duration) {
+        self.captcha_timeout_ms.store(timeout.as_millis() as u64, Ordering::Relaxed);
+        self.probe_ms.store(probe.as_millis() as u64, Ordering::Relaxed);
+    }
+
+    fn probe_interval(&self) -> Duration {
+        match self.probe_ms.load(Ordering::Relaxed) {
+            0 => Duration::from_secs(2),
+            ms => Duration::from_millis(ms),
+        }
     }
 
     fn register(&self, id: &str) -> oneshot::Receiver<Outcome> {
@@ -122,7 +159,21 @@ fn card_meta(s: &HumanStep) -> Value {
         "sandbox_target": s.sandbox_target,
         "source": s.source,
         "status": s.status,
+        "target": s.target.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok()),
     })
+}
+
+/// How long the person has to solve a CAPTCHA: `captcha_timeout_minutes` (1 to 60, default 10).
+pub async fn captcha_timeout(state: &AppState) -> Duration {
+    match state.human_steps.captcha_timeout_ms.load(Ordering::Relaxed) {
+        0 => {}
+        ms => return Duration::from_millis(ms),
+    }
+    let minutes = state.db.get_setting(CAPTCHA_TIMEOUT_SETTING).await.ok().flatten()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|m| (1..=MAX_CAPTCHA_TIMEOUT_MINUTES).contains(m))
+        .unwrap_or(DEFAULT_CAPTCHA_TIMEOUT_MINUTES);
+    Duration::from_secs(minutes * 60)
 }
 
 fn place_message(s: &HumanStep, role: &str, sender: &str, text: String) -> (NewMessage, MessageExtra) {
@@ -166,8 +217,13 @@ async fn release_browser(state: &AppState, target: Option<&str>) {
     if state.db.human_step_open_in(target).await.unwrap_or(false) {
         return;
     }
-    if let Some(ctrl) = state.browser_controllers.lock().await.get(target) {
+    let ctrl = state.browser_controllers.lock().await.get(target).cloned();
+    if let Some(ctrl) = ctrl {
+        // never hand the bot a page with the person's drag still held down
+        ctrl.release_pointer().await;
         ctrl.release_person_hold();
+        // a solved CAPTCHA usually sets a clearance cookie: keep it past a browser restart
+        ctrl.persist_cookies().await;
     }
 }
 
@@ -224,20 +280,31 @@ pub async fn tool_request(state: &AppState, scope: &SelfScope, args: &Value) -> 
         Ok(v) => v,
         Err(e) => return (e.to_string(), true),
     };
-    match raise(state, scope, &kind, &reason, url.as_deref(), "bot").await {
-        Ok(outcome) => (outcome_text(outcome), false),
+    match raise(state, scope, &kind, &reason, url.as_deref(), None, "bot").await {
+        Ok(outcome) => (outcome_text(outcome, kind == "captcha"), false),
         Err(e) => (e, true),
     }
 }
 
 /// What the agent is told about the outcome.
-fn outcome_text(outcome: Option<Outcome>) -> String {
+fn outcome_text(outcome: Option<Outcome>, captcha: bool) -> String {
     match outcome {
         Some(Outcome::Done) => "The person says the step is done and handed the browser back. Look at the page \
             again (browser_page) before you continue."
             .into(),
         Some(Outcome::Declined) => "The person declined the step. Don't ask again: carry on without it if you can, or \
             end your turn and say plainly what is blocked."
+            .into(),
+        Some(Outcome::ResolvedAuto) => "The human check is gone from the page (solved or passed), and the browser is \
+            yours again. Look at the page again (browser_page) and continue."
+            .into(),
+        Some(Outcome::TimedOut) => "The person didn't solve the CAPTCHA in time, so the step was closed. Don't wait for \
+            it or ask again now: skip this site and use another source (an official API or a site you're signed in to), \
+            or tell the person you'll try this site later."
+            .into(),
+        None if captcha => "The person hasn't solved the CAPTCHA yet. Don't ask again: end your turn now with a short \
+            note on what you're waiting for. The step closes by itself once the check is gone or the time runs out, \
+            and you'll get a new turn either way."
             .into(),
         None => "The person hasn't done the step yet. Don't ask again: end your turn now with a short note on what \
             you're waiting for. When they finish, you'll get a new turn."
@@ -253,6 +320,7 @@ pub async fn raise(
     kind: &str,
     reason: &str,
     url: Option<&str>,
+    target: Option<&CaptchaHit>,
     source: &str,
 ) -> Result<Option<Outcome>, String> {
     let (Some(origin), Some(cancel)) = (&scope.origin, &scope.cancel) else {
@@ -268,16 +336,21 @@ pub async fn raise(
     };
     // Like ask_user, the step, its card and the waiter appear together
     let hub = &state.human_steps;
+    let target_json = target.and_then(|t| serde_json::to_string(t).ok());
     let mut waiter = None;
     let created = state
         .db
-        .create_human_step_with_card(&place, kind, reason, url, source, |s| {
+        .create_human_step_with_card(&place, kind, reason, url, target_json.as_deref(), source, |s| {
             waiter = Some((s.id.clone(), hub.register(&s.id)));
             let mut text = format!("{}: {}", kind_label(&s.kind), s.reason);
             if let Some(u) = &s.url {
                 text.push_str(&format!("\n{u}"));
             }
-            text.push_str("\n\nDo it in the browser panel, then press Done.");
+            text.push_str(if s.kind == "captcha" {
+                "\n\nSolve it in the browser panel. The bot carries on by itself once the check is gone (or press Done)."
+            } else {
+                "\n\nDo it in the browser panel, then press Done."
+            });
             let (msg, extra) = place_message(s, "kwant", &scope.kwant_id, text);
             Some((msg, MessageExtra { meta: Some(card_meta(s)), ..extra }))
         })
@@ -300,8 +373,21 @@ pub async fn raise(
         None => hub.register(&step.id),
     };
     let _guard = WaiterGuard { hub, id: step.id.clone() };
+    let mut wait = hub.wait();
+    if step.kind == "captcha" {
+        let limit = captcha_timeout(state).await;
+        let left = (step.created_at + chrono::Duration::from_std(limit).unwrap_or_default() - chrono::Utc::now())
+            .to_std()
+            .unwrap_or_default();
+        // A little past the limit, so the watcher's timed_out wakes the turn before the wait ends
+        wait = wait.min(left + hub.probe_interval() * 2);
+    }
     if is_new {
         hold_browser(state, step.sandbox_target.as_deref()).await;
+        if step.kind == "captcha" && step.sandbox_target.is_some() {
+            // a CAPTCHA kwnt saw is on the page already; one the bot named must show up first
+            tokio::spawn(watch_captcha(state.clone(), step.id.clone(), source == "auto"));
+        }
         if let Some(card) = card {
             if let Some(t) = &step.thread_id {
                 let _ = state.db.touch_thread(t).await;
@@ -334,7 +420,7 @@ pub async fn raise(
             close(state, &step.id, "cancelled").await;
             Err("The user stopped this turn. End it now.".into())
         }
-        _ = tokio::time::sleep(hub.wait()) => {
+        _ = tokio::time::sleep(wait) => {
             hub.take(&step.id);
             // An answer that arrived just as the wait ran out still counts
             Ok(rx.try_recv().ok())
@@ -347,16 +433,84 @@ pub async fn raise(
 pub async fn raise_for_bot_wall(state: &AppState, scope: &SelfScope, page: &Value) -> Option<String> {
     scope.origin.as_ref()?;
     scope.cancel.as_ref()?;
+    let target = CaptchaHit::parse(&page["captcha"]);
     let url = page["url"].as_str().and_then(crate::db::human_steps::clean_url);
     let host = url.as_deref().and_then(|u| url::Url::parse(u).ok()).and_then(|u| u.host_str().map(str::to_string));
     let reason = match host {
         Some(h) => format!("{h} is showing a CAPTCHA / human check to the bot browser. Please solve it."),
         None => "The page is showing a CAPTCHA / human check to the bot browser. Please solve it.".into(),
     };
-    Some(match raise(state, scope, "captcha", &reason, url.as_deref(), "auto").await {
-        Ok(outcome) => format!("A CAPTCHA blocked the page, so the person was asked to solve it. {}", outcome_text(outcome)),
+    Some(match raise(state, scope, "captcha", &reason, url.as_deref(), target.as_ref(), "auto").await {
+        Ok(outcome) => format!("A CAPTCHA blocked the page, so the person was asked to solve it. {}", outcome_text(outcome, true)),
         Err(e) => e,
     })
+}
+
+/// Whether the page still shows a human check: a CAPTCHA widget, or a bot-wall page (Cloudflare's
+/// "just a moment", Google's "unusual traffic"). `None` when the page couldn't be read.
+async fn wall_on_page(ctrl: &BrowserController) -> Option<(bool, Option<CaptchaHit>)> {
+    if let Some(hit) = ctrl.probe_captcha().await.ok()? {
+        return Some((true, Some(hit)));
+    }
+    let (url, title) = ctrl.sync_location().await?;
+    let text = ctrl.extract_content().await.ok()?;
+    Some((detect_bot_wall(&url, &title, &text).is_some(), None))
+}
+
+/// Watches an open CAPTCHA step until it closes: keeps its box current, closes it as
+/// `resolved_auto` once the check is gone, or as `timed_out` at the time limit, and tells the bot.
+async fn watch_captcha(state: AppState, id: String, mut seen: bool) {
+    let limit = captcha_timeout(&state).await;
+    let started = tokio::time::Instant::now();
+    let interval = state.human_steps.probe_interval();
+    let mut misses = 0u32;
+    loop {
+        tokio::time::sleep(interval.min(limit.saturating_sub(started.elapsed()))).await;
+        let Ok(Some(step)) = state.db.get_human_step(&id).await else { return };
+        if step.status != "open" {
+            return;
+        }
+        if started.elapsed() >= limit {
+            settle(&state, &id, Outcome::TimedOut).await;
+            return;
+        }
+        let Some(target) = step.sandbox_target.as_deref() else { return };
+        let ctrl = state.browser_controllers.lock().await.get(target).cloned();
+        let Some(ctrl) = ctrl else { continue };
+        match wall_on_page(&ctrl).await {
+            // unreadable (mid-navigation, say): unknown, never "gone"
+            None => {}
+            Some((true, hit)) => {
+                seen = true;
+                misses = 0;
+                if let Some(target_json) = hit.and_then(|h| serde_json::to_string(&h).ok()) {
+                    if state.db.set_human_step_target(&id, &target_json).await.unwrap_or(false) {
+                        if let Ok(Some(s)) = state.db.get_human_step(&id).await {
+                            changed(&state, &s).await;
+                        }
+                    }
+                }
+            }
+            Some((false, _)) if seen => {
+                misses += 1;
+                if misses >= GONE_AFTER_MISSES {
+                    settle(&state, &id, Outcome::ResolvedAuto).await;
+                    return;
+                }
+            }
+            Some((false, _)) => {}
+        }
+    }
+}
+
+/// Closes a CAPTCHA step kwnt decided on (gone or timed out) and tells the bot: the waiting turn
+/// at once, or a new turn in the chat if it already ended.
+async fn settle(state: &AppState, id: &str, outcome: Outcome) {
+    let Some(s) = close(state, id, outcome.status()).await else { return };
+    tracing::info!(human_step_id = %s.id, status = %s.status, "CAPTCHA step closed by kwnt");
+    if !state.human_steps.wake(&s.id, outcome) {
+        resume(state, &s, outcome).await;
+    }
 }
 
 // Routes
@@ -429,8 +583,8 @@ async fn finish(state: &AppState, id: &str, outcome: Outcome) -> Response {
         return error(StatusCode::CONFLICT, "the step was just closed");
     };
     let text = match outcome {
-        Outcome::Done => "Done",
         Outcome::Declined => "Declined",
+        _ => "Done",
     };
     let (msg, extra) = place_message(&s, "user", "user", text.into());
     let meta = json!({"kind": "human_step_reply", "human_step_id": s.id, "status": s.status});
@@ -469,6 +623,15 @@ async fn resume(state: &AppState, s: &HumanStep, outcome: Outcome) {
             "[The person declined the browser step you asked for earlier]\nStep: {}\n\nDon't ask again. Carry on without it if you can, or say plainly what is blocked.",
             s.reason
         ),
+        Outcome::ResolvedAuto => format!(
+            "[The human check in the browser is gone, so the browser is yours again]\nStep: {}\n\nLook at the browser page again and continue the task.",
+            s.reason
+        ),
+        Outcome::TimedOut => format!(
+            "[Nobody solved the CAPTCHA in time, so the step was closed]\nStep: {}\n\nDon't wait for it or ask again now. Skip this site and \
+             continue with another source (an official API or a site you're signed in to), or tell the person you'll try this site later.",
+            s.reason
+        ),
     };
     tokio::spawn(async move {
         let _job = job;
@@ -504,8 +667,14 @@ mod tests {
 
     #[test]
     fn the_agent_hears_each_outcome_plainly() {
-        assert!(outcome_text(Some(Outcome::Done)).contains("Look at the page"));
-        assert!(outcome_text(Some(Outcome::Declined)).contains("declined"));
-        assert!(outcome_text(None).contains("end your turn"));
+        assert!(outcome_text(Some(Outcome::Done), false).contains("Look at the page"));
+        assert!(outcome_text(Some(Outcome::Declined), false).contains("declined"));
+        assert!(outcome_text(None, false).contains("end your turn"));
+        assert!(outcome_text(Some(Outcome::ResolvedAuto), true).contains("continue"));
+        let timed_out = outcome_text(Some(Outcome::TimedOut), true);
+        assert!(timed_out.contains("skip this site") && timed_out.contains("another source"));
+        assert!(outcome_text(None, true).contains("closes by itself"));
+        assert_eq!(Outcome::ResolvedAuto.status(), "resolved_auto");
+        assert_eq!(Outcome::TimedOut.status(), "timed_out");
     }
 }

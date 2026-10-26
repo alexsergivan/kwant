@@ -151,6 +151,92 @@ async fn stream_input_control_lease_and_origin_protection() {
     app_task.abort(); cdp_task.abort();
 }
 
+async fn mouse_events(mock: &Mock) -> Vec<(String, i64, String)> {
+    mock.commands.lock().await.iter().filter(|c| c["method"] == "Input.dispatchMouseEvent").map(|c| (
+        c["params"]["type"].as_str().unwrap().to_string(),
+        c["params"]["buttons"].as_i64().unwrap_or(-1),
+        c["params"]["button"].as_str().unwrap_or("").to_string(),
+    )).collect()
+}
+
+#[tokio::test]
+async fn pointer_drags_press_move_release_in_order_and_let_go_on_release_or_disconnect() {
+    let (mock, cdp_task) = mock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = Config {data_dir:tmp.path().into(),browser_cdp_url:Some(format!("http://127.0.0.1:{}",mock.port)),..Config::default()};
+    let db = Database::init(tmp.path()).await.unwrap();
+    let id=db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
+    let state=AppState::new(config.clone(),db,ToolRunner::new(tmp.path().join("workspace")),PermissionBroker::new(),LayaRouter::new(config.laya_url));
+    let ctrl=kwnt::server::routes::get_or_create_browser_controller(&state,&id).await.unwrap();
+    let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port=listener.local_addr().unwrap().port();
+    let app=create_router(state);
+    let app_task=tokio::spawn(async move {axum::serve(listener,app).await.unwrap();});
+    let connect = || async {
+        let mut request=format!("ws://127.0.0.1:{port}/api/sandbox/{id}/stream").into_client_request().unwrap();
+        request.headers_mut().insert("Origin",format!("http://127.0.0.1:{port}").parse().unwrap());
+        let (mut ws,_)=connect_async(request).await.unwrap();
+        receive(&mut ws,"frame").await;
+        ws.send(WsMessage::Text(json!({"action":"take_control"}).to_string())).await.unwrap();
+        assert_eq!(receive(&mut ws,"control").await["active"],true);
+        ws
+    };
+    let mut ws = connect().await;
+    let send = |payload: Value| WsMessage::Text(payload.to_string());
+
+    // pointer input is bounds-checked like a click
+    mock.commands.lock().await.clear();
+    ws.send(send(json!({"action":"pointer_down","x":10,"y":10,"id":"out"}))).await.unwrap();
+    assert_eq!(receive(&mut ws,"ack").await["id"],"out");
+    ws.send(send(json!({"action":"pointer_down","x":1280,"y":10,"id":"edge"}))).await.unwrap();
+    assert!(receive(&mut ws,"error").await["error"].as_str().unwrap().contains("outside"), "same bounds as click");
+    ws.send(send(json!({"action":"pointer_up","x":10,"y":10,"id":"reset"}))).await.unwrap();
+    receive(&mut ws,"ack").await;
+    mock.commands.lock().await.clear();
+
+    // a slider drag: press, two moves while held, release
+    for (i, (action, x)) in [("pointer_down",100),("pointer_move",150),("pointer_move",220),("pointer_up",220),("pointer_move",230),("pointer_up",230)].into_iter().enumerate() {
+        ws.send(send(json!({"action":action,"x":x,"y":400,"id":i}))).await.unwrap();
+        assert_eq!(receive(&mut ws,"ack").await["id"],i);
+    }
+    assert_eq!(mouse_events(&mock).await, vec![
+        ("mousePressed".into(),1,"left".into()),
+        ("mouseMoved".into(),1,"left".into()),
+        ("mouseMoved".into(),1,"left".into()),
+        ("mouseReleased".into(),0,"left".into()),
+        // a hover after the drag is a plain move, and a stray pointer_up sends nothing
+        ("mouseMoved".into(),0,"none".into()),
+    ]);
+    assert!(ctrl.pointer_held().is_none());
+
+    // pressed, then control released: the button is let go where it was
+    mock.commands.lock().await.clear();
+    ws.send(send(json!({"action":"pointer_down","x":300,"y":400,"id":"d1"}))).await.unwrap();
+    receive(&mut ws,"ack").await;
+    ws.send(send(json!({"action":"pointer_move","x":340,"y":405,"id":"m1"}))).await.unwrap();
+    receive(&mut ws,"ack").await;
+    ws.send(send(json!({"action":"release_control"}))).await.unwrap();
+    assert_eq!(receive(&mut ws,"control").await["active"],false);
+    let events = mouse_events(&mock).await;
+    assert_eq!(events.last().unwrap(), &("mouseReleased".into(),0,"left".into()));
+    let released = mock.commands.lock().await.iter().rev().find(|c| c["params"]["type"]=="mouseReleased").cloned().unwrap();
+    assert_eq!((released["params"]["x"].as_f64(), released["params"]["y"].as_f64()), (Some(340.0), Some(405.0)));
+    ws.close(None).await.unwrap();
+
+    // pressed, then the socket drops mid-drag: released too, and bot actions come back
+    let mut ws = connect().await;
+    mock.commands.lock().await.clear();
+    ws.send(send(json!({"action":"pointer_down","x":500,"y":420,"id":"d2"}))).await.unwrap();
+    receive(&mut ws,"ack").await;
+    drop(ws);
+    timeout(Duration::from_secs(5),async {loop {
+        if ctrl.control.try_read().is_ok() && ctrl.pointer_held().is_none() {break;}
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }}).await.unwrap();
+    assert_eq!(mouse_events(&mock).await, vec![("mousePressed".into(),1,"left".into()),("mouseReleased".into(),0,"left".into())]);
+    app_task.abort(); cdp_task.abort();
+}
+
 /// Opt in after building docker/browser.Dockerfile. Uses disposable data and a local HTML page.
 #[tokio::test]
 #[ignore = "requires Docker and the kwnt-browser:v2 image"]
