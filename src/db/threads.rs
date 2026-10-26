@@ -55,6 +55,10 @@ pub struct Delegation {
     /// Times a kwnt restart sent it back to the queue (at most once).
     #[sqlx(default)]
     pub retries: i64,
+    /// A delegation whose result this one waits for before it starts ("@Writer, once @Analyst
+    /// has the numbers, …"). Set while it is parked as `queued`; cleared when it starts.
+    #[sqlx(default)]
+    pub after_delegation_id: Option<String>,
 }
 
 impl Delegation {
@@ -148,6 +152,9 @@ impl Database {
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        let _ = sqlx::query("ALTER TABLE delegations ADD COLUMN after_delegation_id TEXT;")
+            .execute(&self.pool)
+            .await;
         Ok(())
     }
 
@@ -284,6 +291,7 @@ impl Database {
             started_at: None,
             ended_at: None,
             retries: 0,
+            after_delegation_id: None,
         };
         sqlx::query(
             "INSERT INTO delegations (id, thread_id, lead_kwant_id, specialist_kwant_id, origin_channel_id, origin_kwant_id, \
@@ -412,6 +420,49 @@ impl Database {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Parks a queued delegation until `after` (another delegation) ends.
+    pub async fn set_delegation_after(&self, id: &str, after: &str) -> Result<(), DbError> {
+        sqlx::query("UPDATE delegations SET after_delegation_id = ? WHERE id = ? AND status = 'queued'")
+            .bind(after)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Delegations parked until `after` ends.
+    pub async fn list_dependent_delegations(&self, after: &str) -> Result<Vec<Delegation>, DbError> {
+        Ok(sqlx::query_as::<_, Delegation>(
+            "SELECT * FROM delegations WHERE after_delegation_id = ? AND status = 'queued' ORDER BY created_at",
+        )
+        .bind(after)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Every parked delegation, whatever it waits for.
+    pub async fn list_parked_delegations(&self) -> Result<Vec<Delegation>, DbError> {
+        Ok(sqlx::query_as::<_, Delegation>(
+            "SELECT * FROM delegations WHERE after_delegation_id IS NOT NULL AND status = 'queued' ORDER BY created_at",
+        )
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Unparks a delegation with its final `task` (the prerequisite's result added); `false`
+    /// when it isn't parked any more (cancelled, or another caller started it).
+    pub async fn unpark_delegation(&self, id: &str, task: &str) -> Result<bool, DbError> {
+        let res = sqlx::query(
+            "UPDATE delegations SET task = ?, after_delegation_id = NULL WHERE id = ? AND status = 'queued' \
+             AND after_delegation_id IS NOT NULL",
+        )
+        .bind(task)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     pub async fn set_delegation_result_message(&self, id: &str, message_id: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE delegations SET result_message_id = ? WHERE id = ?")
             .bind(message_id)
@@ -425,7 +476,7 @@ impl Database {
     pub async fn take_due_follow_ups(&self, now: DateTime<Utc>) -> Result<Vec<Delegation>, DbError> {
         let due = sqlx::query_as::<_, Delegation>(
             "SELECT * FROM delegations WHERE status IN ('queued', 'running') AND followed_up = 0 \
-             AND follow_up_at IS NOT NULL AND follow_up_at <= ? ORDER BY follow_up_at",
+             AND after_delegation_id IS NULL AND follow_up_at IS NOT NULL AND follow_up_at <= ? ORDER BY follow_up_at",
         )
         .bind(now)
         .fetch_all(&self.pool)
@@ -444,7 +495,7 @@ impl Database {
     /// One waiting out a usage limit (a parked turn) is left alone: its retry restarts it.
     pub async fn restart_open_delegations(&self) -> Result<(Vec<Delegation>, Vec<Delegation>), DbError> {
         let open = sqlx::query_as::<_, Delegation>(
-            "SELECT * FROM delegations WHERE status IN ('queued', 'running') AND id NOT IN \
+            "SELECT * FROM delegations WHERE status IN ('queued', 'running') AND after_delegation_id IS NULL AND id NOT IN \
              (SELECT delegation_id FROM parked_turns WHERE status = 'pending' AND delegation_id IS NOT NULL)",
         )
         .fetch_all(&self.pool)

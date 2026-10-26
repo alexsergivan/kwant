@@ -1,3 +1,4 @@
+pub mod depends;
 pub mod fallback;
 pub mod laya;
 pub mod sidecar;
@@ -5,6 +6,7 @@ pub mod sticky;
 pub mod tags;
 pub mod team;
 
+pub use depends::handoff_dependencies;
 pub use fallback::heuristic_fallback;
 pub use laya::LayaRouter;
 pub use tags::{handoff_mentions, handoff_targets, only_credited, HandoffMentions, parse_mentions, parse_mentions_with_lookup, TagMention};

@@ -14,6 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is solved, with a different buzz for errors. A bot reply arriving while the app is on screen gives a
   light double buzz, once per reply and at most one every 3 seconds. A **Vibration** switch in App
   settings turns it off; it starts off when the phone asks for reduced motion. iPhones and desktops have no web vibration.
+- **Hand-offs that wait for each other.** When a bot's reply asks one teammate to go "once @Analyst
+  has the numbers" (also "after", "when … has finished", "wait for"), that teammate starts only when
+  the other has finished, and gets its result. Other teammates in the same reply still start right
+  away. If the first one fails or asks you something, the waiting one doesn't start, and the chat says why.
+- **One list of questions.** When two or more bots ask you something after one message, the team
+  lead (or the bot that started) posts one numbered list of everything they need. Your answer goes
+  to the lead, which passes each part on; bots waiting on a question card continue directly.
 
 ### Changed
 - A bot reply that ends with a closing line such as "Anything else?", "Should I continue?" or

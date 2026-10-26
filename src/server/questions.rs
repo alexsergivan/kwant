@@ -347,18 +347,27 @@ pub async fn answer(State(state): State<AppState>, Path(id): Path<String>, Json(
     if q.status != "open" {
         return error(StatusCode::CONFLICT, format!("the question is already {}", q.status));
     }
-    let Some(q) = close(&state, &id, "answered", Some(&text)).await else {
+    let Some((q, live)) = answer_with(&state, &id, &text).await else {
         return error(StatusCode::CONFLICT, "the question was just closed");
     };
-    save_message(&state, &q, "user", "user", text.clone(), json!({"kind": "question_answer", "question_id": q.id})).await;
+    Json(json!({"question": q, "resumed": if live { "turn" } else { "new_turn" }})).into_response()
+}
+
+/// Answers an open question as if on its card: it closes, the answer is saved where it was
+/// asked, and the turn waiting on it gets it (`true`), or a new turn continues with it (`false`;
+/// in a delegation's thread that goes back to the lead). `None` when it wasn't open any more.
+pub async fn answer_with(state: &AppState, id: &str, text: &str) -> Option<(Question, bool)> {
+    let text: String = text.trim().chars().take(MAX_ANSWER_CHARS).collect();
+    let q = close(state, id, "answered", Some(&text)).await?;
+    save_message(state, &q, "user", "user", text.clone(), json!({"kind": "question_answer", "question_id": q.id})).await;
     let live = match state.questions.take(&q.id) {
         Some(tx) => tx.send(Reply::Answer(text.clone())).is_ok(),
         None => false,
     };
     if !live {
-        resume(&state, &q, &text).await;
+        resume(state, &q, &text).await;
     }
-    Json(json!({"question": q, "resumed": if live { "turn" } else { "new_turn" }})).into_response()
+    Some((q, live))
 }
 
 /// The person answered an open question by typing in the chat instead of on its card (their

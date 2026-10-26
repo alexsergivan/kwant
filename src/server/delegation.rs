@@ -148,6 +148,9 @@ pub struct StartRequest {
     pub origin_depth: i64,
     /// Agents the lead may delegate to, when its chat has a member list.
     pub allowed: Option<Vec<String>>,
+    /// Another open delegation of the same lead and chat whose result this task waits for: it is
+    /// created parked and starts with that result once it completes (see [`release_dependents`]).
+    pub after: Option<String>,
 }
 
 /// Checks a request, creates the thread and the delegation, and starts the specialist's turn
@@ -258,6 +261,25 @@ pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (S
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error".into()))?;
 
+    // Waits for a sibling of the same lead and chat that is still open; anything else is ignored
+    let prereq = match &req.after {
+        Some(id) => state
+            .db
+            .get_delegation(id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|p| p.lead_kwant_id == d.lead_kwant_id && p.origin_context() == d.origin_context() && p.is_open()),
+        None => None,
+    };
+    let d = match &prereq {
+        Some(p) => {
+            let _ = state.db.set_delegation_after(&d.id, &p.id).await;
+            state.db.get_delegation(&d.id).await.ok().flatten().unwrap_or(d)
+        }
+        None => d,
+    };
+
     // The task opens the thread, from the lead, so the specialist's history shows who asked
     let task_msg = NewMessage {
         channel_id: None,
@@ -273,24 +295,155 @@ pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (S
         .db
         .insert_message_with(&task_msg, &MessageExtra { thread_id: Some(thread.id.clone()), meta: None })
         .await;
-    post_to_origin(
-        state,
-        &d,
-        "system",
-        "kwnt",
-        format!("{} asked {} to work on “{}”. It runs in its own thread; the result will be posted here.", req.lead.name, req.specialist.name, d.title),
-        meta("delegation_started", &d, &req.specialist.name),
-    )
-    .await;
+    let started = match &prereq {
+        Some(p) => format!(
+            "{} asked {} to work on “{}” once {} has finished “{}”. It waits until then, runs in its own thread, and the result will be posted here.",
+            req.lead.name,
+            req.specialist.name,
+            d.title,
+            name_of(state, &p.specialist_kwant_id).await,
+            p.title
+        ),
+        None => format!("{} asked {} to work on “{}”. It runs in its own thread; the result will be posted here.", req.lead.name, req.specialist.name, d.title),
+    };
+    let mut m = meta("delegation_started", &d, &req.specialist.name);
+    if let Some(p) = &prereq {
+        m["after_delegation_id"] = json!(p.id);
+    }
+    post_to_origin(state, &d, "system", "kwnt", started, m).await;
     emit_thread(state, &thread);
     emit_delegation(state, &d);
-    tracing::info!(delegation = %d.id, lead = %req.lead.id, specialist = %req.specialist.id, depth = d.depth, "delegation started");
+    tracing::info!(delegation = %d.id, lead = %req.lead.id, specialist = %req.specialist.id, depth = d.depth, after = ?d.after_delegation_id, "delegation started");
+    if let Some(p) = prereq {
+        // It may have ended while this one was being set up
+        if !state.db.get_delegation(&p.id).await.ok().flatten().is_some_and(|p| p.is_open()) {
+            release_dependents(state, &p.id).await;
+        }
+        return Ok(state.db.get_delegation(&d.id).await.ok().flatten().unwrap_or(d));
+    }
 
-    let job = state.turns.start_job([d.id.clone(), thread.id.clone()]);
-    let runner_state = state.clone();
-    let (lead, specialist, delegation) = (req.lead, req.specialist, d.clone());
-    tokio::spawn(async move { run(runner_state, job, delegation, lead, specialist, false, false).await });
+    spawn_run(state, d.clone(), req.lead, req.specialist);
     Ok(d)
+}
+
+/// Starts a delegation's run in the background. A plain function, so the futures of [`run`] and
+/// [`release_dependents`] (which starts runs) don't contain each other.
+fn spawn_run(state: &AppState, d: Delegation, lead: Kwant, specialist: Kwant) {
+    let job = state.turns.start_job([d.id.clone(), d.thread_id.clone()]);
+    let runner_state = state.clone();
+    tokio::spawn(async move { run(runner_state, job, d, lead, specialist, false, false).await });
+}
+
+/// What a parked task gets of the result it waited for, at most.
+const WAITED_RESULT_CHARS: usize = 4000;
+
+/// The delegations parked until `prereq_id` ended (see [`StartRequest::after`]) go on, and so on
+/// down the chain:
+/// - it completed and asked the person nothing: each starts, with the result added to its task;
+/// - it completed but waits for the person's answer: they stay parked, and the chat says so
+///   (the answer continues it, and [`resume_after_answer`] calls this again);
+/// - it failed, was stopped or cut short: they don't start and end as failed, saying why.
+///
+/// Returns how many started.
+pub(super) async fn release_dependents(state: &AppState, prereq_id: &str) -> usize {
+    let mut started = 0;
+    let mut work = vec![prereq_id.to_string()];
+    while let Some(id) = work.pop() {
+        let Ok(Some(p)) = state.db.get_delegation(&id).await else { continue };
+        if p.is_open() {
+            continue;
+        }
+        let waiting = state.db.list_dependent_delegations(&p.id).await.unwrap_or_default();
+        if waiting.is_empty() {
+            continue;
+        }
+        let who = name_of(state, &p.specialist_kwant_id).await;
+        let asked = open_question(state, &p).await;
+        // A result whose last line asks the person: there is no card to answer, so nothing
+        // would start the waiting task later; it ends as not started, saying why
+        let result = if p.status == "completed" { result_of(state, &p).await } else { String::new() };
+        let asked_in_reply = asked.is_none() && crate::router::sticky::asks_the_person(&result);
+        for d in waiting {
+            let (Ok(Some(lead)), Ok(Some(specialist))) =
+                (state.db.get_kwant(&d.lead_kwant_id).await, state.db.get_kwant(&d.specialist_kwant_id).await)
+            else {
+                continue;
+            };
+            match (p.status.as_str(), &asked) {
+                ("completed", None) if !asked_in_reply => {
+                    let result = clip(&result, WAITED_RESULT_CHARS);
+                    let task = clip(&format!("{}\n\n{who}'s result, which this task waited for:\n{result}", d.task), MAX_TASK_CHARS);
+                    if !state.db.unpark_delegation(&d.id, &task).await.unwrap_or(false) {
+                        continue;
+                    }
+                    let Ok(Some(d)) = state.db.get_delegation(&d.id).await else { continue };
+                    post_to_origin(
+                        state,
+                        &d,
+                        "system",
+                        "kwnt",
+                        format!("{who} has finished, so {} starts on “{}” now, with {who}'s result.", specialist.name, d.title),
+                        meta("delegation_started", &d, &specialist.name),
+                    )
+                    .await;
+                    emit_delegation(state, &d);
+                    tracing::info!(delegation = %d.id, after = %p.id, "parked delegation started");
+                    spawn_run(state, d, lead, specialist);
+                    started += 1;
+                }
+                ("completed", Some(q)) => {
+                    let mut m = meta("delegation_waiting", &d, &specialist.name);
+                    m["after_delegation_id"] = json!(p.id);
+                    post_to_origin(
+                        state,
+                        &d,
+                        "system",
+                        "kwnt",
+                        format!(
+                            "{} hasn't started “{}”: it waits for {who}'s result, and {who} asked you “{}” first. Once you answer, {who} continues and {} starts.",
+                            specialist.name,
+                            d.title,
+                            clip(&q.question, 200),
+                            specialist.name
+                        ),
+                        m,
+                    )
+                    .await;
+                }
+                (status, _) => {
+                    let why = if asked_in_reply {
+                        format!("not started: it waits for {who}'s result, and {who} asked you something first. Answer {who}, then ask for it again")
+                    } else {
+                        format!("not started: it waited for {who}'s result, and {who}'s task was {status}")
+                    };
+                    if !state.db.finish_delegation(&d.id, "failed", Some(&why), None).await.unwrap_or(false) {
+                        continue;
+                    }
+                    let Ok(Some(done)) = state.db.get_delegation(&d.id).await else { continue };
+                    if let Some(mid) = post_to_origin(
+                        state,
+                        &done,
+                        "system",
+                        "kwnt",
+                        format!("{} didn't start “{}”: {}.", specialist.name, done.title, why.trim_start_matches("not started: ")),
+                        meta("delegation_result", &done, &specialist.name),
+                    )
+                    .await
+                    {
+                        let _ = state.db.set_delegation_result_message(&done.id, &mid).await;
+                    }
+                    emit_delegation(state, &done);
+                    work.push(done.id);
+                }
+            }
+        }
+    }
+    started
+}
+
+/// Whether `d` is parked behind another delegation and hasn't started.
+pub(super) fn is_parked(d: &Delegation) -> bool {
+    d.status == "queued" && d.after_delegation_id.is_some()
 }
 
 /// The background part: the specialist's turn in the thread, then the report in the origin chat.
@@ -494,6 +647,7 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
         },
     )
     .await;
+    release_dependents(state, &done.id).await;
     report_to_lead(state, &done, None).await;
 }
 
@@ -562,6 +716,10 @@ pub async fn resume_after_answer(state: &AppState, d: Delegation, question_id: &
             let _ = state.db.set_delegation_result_message(&d.id, &id).await;
         }
         tracing::info!(delegation = %d.id, "delegation continued after a late answer");
+        // A teammate waited for this result: it starts now, and the lead hears from both when it ends
+        if release_dependents(&state, &d.id).await > 0 {
+            return;
+        }
         if d.continue_lead {
             let opening = format!(
                 "{} got the person's answer to its question and continued the task you delegated (“{}”).",
@@ -591,7 +749,9 @@ async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegati
         .await
         .ok()?
         .into_iter()
-        .filter(|s| s.continue_lead && s.origin_context() == d.origin_context())
+        // A task parked behind one that waits for the person isn't running: the lead reports
+        // the rest now, and that task comes back with its own batch once it ran
+        .filter(|s| s.continue_lead && s.origin_context() == d.origin_context() && !is_parked(s))
         .collect();
     if siblings.iter().any(Delegation::is_open) {
         return None;
@@ -680,6 +840,14 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
             results.push_str(next);
             results.push('\n');
         }
+        for parked in state.db.list_dependent_delegations(&b.id).await.unwrap_or_default() {
+            results.push_str(&format!(
+                "(Not started yet: {} waits for {who}'s result on “{}”. It starts by itself once {who} has the person's answer; \
+                don't hand it on again.)\n",
+                name_of(state, &parked.specialist_kwant_id).await,
+                parked.title
+            ));
+        }
         results.push('\n');
     }
     let opening = match (opening, batch) {
@@ -720,6 +888,8 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
             .map(|m| m.text)
             .unwrap_or_else(|| d.task.clone());
         super::routes::run_handoffs_boxed(&scope, &spoken, &[(lead.clone(), reply)], &user_prompt).await;
+        // The chain may be over now: several open questions for the person become one list
+        super::asks::consolidate(&scope).await;
     }
 }
 
@@ -772,6 +942,7 @@ pub async fn cancel(state: &AppState, id: &str) -> Option<Delegation> {
         let _ = state.db.set_delegation_result_message(&done.id, &mid).await;
     }
     emit_delegation(state, &done);
+    release_dependents(state, &done.id).await;
     // A stopped task alone doesn't wake the lead, but other results of its batch must not be lost
     spawn_report_to_lead(state, done.clone());
     Some(done)
@@ -836,7 +1007,16 @@ pub async fn interrupt_open(state: &AppState) {
             meta("delegation_result", &done, &specialist),
         )
         .await;
+        release_dependents(state, &done.id).await;
         spawn_report_to_lead(state, done);
+    }
+    // Tasks parked behind one that ended while kwnt was down go on (or give up) now
+    for parked in state.db.list_parked_delegations().await.unwrap_or_default() {
+        if let Some(after) = &parked.after_delegation_id {
+            if !state.db.get_delegation(after).await.ok().flatten().is_some_and(|p| p.is_open()) {
+                release_dependents(state, after).await;
+            }
+        }
     }
     for d in again {
         let Ok(Some(d)) = state.db.get_delegation(&d.id).await else {
@@ -1061,6 +1241,7 @@ pub async fn create_delegation(State(state): State<AppState>, Json(p): Json<Dele
         continue_lead: p.continue_lead.unwrap_or(true),
         origin_depth,
         allowed: None,
+        after: None,
     };
     match start(&state, req).await {
         Ok(d) => (StatusCode::ACCEPTED, Json(d)).into_response(),
@@ -1138,6 +1319,7 @@ pub async fn tool_delegate(state: &AppState, scope: &super::continuity::SelfScop
         continue_lead: true,
         origin_depth: origin.depth,
         allowed: (!origin.member_ids.is_empty()).then(|| origin.member_ids.clone()),
+        after: None,
     };
     match start(state, req).await {
         Ok(d) => (

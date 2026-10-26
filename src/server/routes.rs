@@ -832,6 +832,8 @@ fn execute_single_turn(
         let opts = TurnOpts { routing, ..TurnOpts::default() };
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
             run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
+            // Several bots asked the person something: one list of it all (when the chain is over)
+            super::asks::consolidate(&scope).await;
         }
     });
 }
@@ -926,22 +928,24 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
     if scope.teammates.is_empty() {
         return;
     }
+    // (teammate, asked by, asker's text, the teammate whose result it waits for)
+    type Queued = (Kwant, String, String, Option<String>);
     let mut spoken: Vec<String> = already_spoken.to_vec();
-    let mut queue: std::collections::VecDeque<(Kwant, String, String)> = std::collections::VecDeque::new();
+    let mut queue: std::collections::VecDeque<Queued> = std::collections::VecDeque::new();
     let mut skipped: Vec<(String, String)> = Vec::new();
-    let mut enqueue = |queue: &mut std::collections::VecDeque<(Kwant, String, String)>,
-                       spoken: &[String],
-                       from: &Kwant,
-                       text: &str| {
+    let mut enqueue = |queue: &mut std::collections::VecDeque<Queued>, spoken: &[String], from: &Kwant, text: &str| {
         let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
         let found = crate::router::handoff_mentions(text, &names);
+        let deps = crate::router::handoff_dependencies(text, &names);
         skipped.extend(found.unknown.into_iter().map(|n| (n, String::new())));
         skipped.extend(found.in_code_block.iter().map(|&i| (scope.teammates[i].name.clone(), IN_CODE_BLOCK.to_string())));
-        for i in found.targets {
+        for &i in &found.targets {
             let k = &scope.teammates[i];
             // Someone who already spoke isn't handed the turn back: no ping-pong
-            if k.id != from.id && !spoken.contains(&k.id) && !queue.iter().any(|(q, _, _)| q.id == k.id) {
-                queue.push_back((k.clone(), from.name.clone(), text.to_string()));
+            if k.id != from.id && !spoken.contains(&k.id) && !queue.iter().any(|(q, _, _, _)| q.id == k.id) {
+                // "@Writer, once @Analyst has the numbers…": the Writer goes after the Analyst
+                let after = deps.iter().find(|&&(d, _)| d == i).map(|&(_, p)| scope.teammates[p].id.clone());
+                queue.push_back((k.clone(), from.name.clone(), text.to_string(), after));
             }
         }
     };
@@ -955,28 +959,60 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
 
     let events = scope.state.event_sender.clone();
     let context_id = scope.context_id(&replies[0].0);
+    let since = last_user_message_at(scope, &context_id).await;
+    // How each bot's turn in this chain went, for the teammates that wait on it
+    let mut outcomes: std::collections::HashMap<String, ChainOutcome> = std::collections::HashMap::new();
+    for (k, text) in replies {
+        outcomes.insert(k.id.clone(), chain_outcome(scope, &context_id, k, Some(text), since).await);
+    }
+    order_dependents(&mut queue);
     let total = |queue_len: usize, done: usize| (1 + done + queue_len).min(1 + MAX_HANDOFFS);
+    let names_of = |id: &str| scope.teammates.iter().find(|k| k.id == id).map(|k| k.name.clone()).unwrap_or_default();
     let _ = events.send(RuntimeEvent::DiscussionStarted {
         team_id: context_id.clone(),
         team_name: scope.team_keys.as_ref().map(|(_, n)| n.clone()).unwrap_or_default(),
         total_turns: total(queue.len(), 0),
-        speakers: queue.iter().map(|(k, _, _)| k.id.clone()).collect(),
-        plan: queue.iter().map(|(k, from, _)| format!("{}: asked by {}", k.name, from)).collect(),
+        speakers: queue.iter().map(|(k, _, _, _)| k.id.clone()).collect(),
+        plan: queue
+            .iter()
+            .map(|(k, from, _, after)| match after {
+                Some(p) => format!("{}: asked by {}, after {}", k.name, from, names_of(p)),
+                None => format!("{}: asked by {}", k.name, from),
+            })
+            .collect(),
         kind: "handoff".into(),
     });
 
+    // Teammates that waited for one who asked the person or failed
+    let mut not_started: Vec<(String, String)> = Vec::new();
     let mut done = 0;
-    while let Some((kwant, from, from_text)) = queue.pop_front() {
+    while let Some((kwant, from, from_text, after)) = queue.pop_front() {
         if done >= MAX_HANDOFFS || scope.cancel_token.is_cancelled() {
+            queue.push_front((kwant, from, from_text, after));
             break;
         }
-        let prompt = format!(
+        let waited_for = match after.as_ref().map(|p| (names_of(p), outcomes.get(p))) {
+            // Waits for a teammate whose turn hasn't run: it was never handed one, so don't wait
+            Some((_, None)) | None => None,
+            Some((name, Some(ChainOutcome::Done(result)))) => Some((name, result.clone())),
+            Some((name, Some(outcome))) => {
+                not_started.push((kwant.name.clone(), outcome.not_started(&name)));
+                continue;
+            }
+        };
+        let mut prompt = format!(
             "{from} handed this conversation to you by mentioning you.\n\nThe user's original request:\n{user}\n\n{text}\n\n\
             Reply to the user now with your own part of this, in character. Don't repeat what {from} already said.",
             from = from,
             user = user_prompt,
             text = crate::drivers::peer_message(&from, truncate_chars(&from_text, 4000)),
         );
+        if let Some((name, result)) = &waited_for {
+            prompt.push_str(&format!(
+                "\n\n{from} asked you to wait for {name}'s result. {name} has finished:\n{}",
+                crate::drivers::peer_message(name, truncate_chars(result, 4000)),
+            ));
+        }
         let _ = events.send(RuntimeEvent::DiscussionTurnStarted {
             speaker_id: kwant.id.clone(),
             speaker_name: kwant.name.clone(),
@@ -989,18 +1025,90 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
         done += 1;
         spoken.push(kwant.id.clone());
         match run_kwant_turn(scope, &kwant, prompt, TurnOpts::default()).await {
-            Some(reply) => enqueue(&mut queue, &spoken, &kwant, &reply),
+            Some(reply) => {
+                outcomes.insert(kwant.id.clone(), chain_outcome(scope, &context_id, &kwant, Some(&reply), since).await);
+                enqueue(&mut queue, &spoken, &kwant, &reply);
+                order_dependents(&mut queue);
+            }
             None if scope.cancel_token.is_cancelled() => break,
-            None => {}
+            None => {
+                outcomes.insert(kwant.id.clone(), ChainOutcome::Failed);
+            }
         }
     }
     drop(enqueue);
+    skipped.extend(not_started);
     if !scope.cancel_token.is_cancelled() {
-        skipped.extend(queue.into_iter().map(|(k, _, _)| (k.name, format!("only {MAX_HANDOFFS} teammates take a turn per message"))));
+        skipped.extend(queue.into_iter().map(|(k, _, _, _)| (k.name, format!("only {MAX_HANDOFFS} teammates take a turn per message"))));
     }
 
     let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: done + 1, context_id: Some(context_id.clone()) });
     report_skipped(scope, skipped).await;
+}
+
+/// How one bot's turn in a handoff chain ended, for a teammate that waits on its result.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum ChainOutcome {
+    /// Finished, with this reply.
+    Done(String),
+    /// Ended asking the person something (a question card, or a reply whose last line asks).
+    Asked,
+    /// Failed or was stopped.
+    Failed,
+}
+
+impl ChainOutcome {
+    /// Why a teammate waiting on `name` doesn't start.
+    pub(super) fn not_started(&self, name: &str) -> String {
+        match self {
+            ChainOutcome::Asked => format!("waiting for {name}, who asked you something first. Answer {name} and the chain goes on"),
+            _ => format!("waiting for {name}'s result, and {name} didn't finish"),
+        }
+    }
+}
+
+/// Whether `kwant`'s turn ended with `reply` asking the person: an open question card it raised in
+/// this chat since `since`, or a last line that asks ([`crate::router::sticky::asks_the_person`]).
+async fn chain_outcome(
+    scope: &TurnScope,
+    context_id: &str,
+    kwant: &Kwant,
+    reply: Option<&str>,
+    since: Option<chrono::DateTime<chrono::Utc>>,
+) -> ChainOutcome {
+    let Some(reply) = reply else { return ChainOutcome::Failed };
+    let open = scope.state.db.list_questions(Some("open"), Some(context_id), None).await.unwrap_or_default();
+    let carded = open.iter().any(|q| q.kwant_id == kwant.id && since.is_none_or(|t| q.created_at >= t));
+    if carded || crate::router::sticky::asks_the_person(reply) {
+        ChainOutcome::Asked
+    } else {
+        ChainOutcome::Done(reply.to_string())
+    }
+}
+
+/// When the person last wrote in this chat.
+pub(super) async fn last_user_message_at(scope: &TurnScope, context_id: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let messages = scope.state.db.list_messages(context_id, 100).await.unwrap_or_default();
+    messages.iter().rev().find(|m| m.sender_role == "user").and_then(|m| m.created_at)
+}
+
+/// Moves every queued teammate that waits for another queued one behind it; the rest keep
+/// their order. Dependencies have no cycles ([`crate::router::handoff_dependencies`]).
+fn order_dependents<T>(queue: &mut std::collections::VecDeque<(Kwant, String, String, Option<T>)>)
+where
+    T: AsRef<str>,
+{
+    for _ in 0..queue.len() {
+        let misplaced = queue.iter().enumerate().find_map(|(i, (_, _, _, after))| {
+            let p = after.as_ref()?;
+            let at = queue.iter().position(|(k, _, _, _)| k.id == p.as_ref())?;
+            (at > i).then_some((i, at))
+        });
+        let Some((i, at)) = misplaced else { return };
+        if let Some(item) = queue.remove(i) {
+            queue.insert(at, item);
+        }
+    }
 }
 
 const IN_CODE_BLOCK: &str = "the mention was inside code. Write the name as plain text to ask them";
@@ -1082,6 +1190,11 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
     let Some(cid) = scope.channel_id.clone() else { return };
     let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
     let found = crate::router::handoff_mentions(text, &names);
+    // "@Writer, once @Analyst has the numbers…": the Writer's task waits for the Analyst's result
+    let after_of: std::collections::HashMap<String, String> = crate::router::handoff_dependencies(text, &names)
+        .into_iter()
+        .map(|(d, p)| (scope.teammates[d].id.clone(), scope.teammates[p].id.clone()))
+        .collect();
     let mut skipped: Vec<(String, String)> = found.unknown.into_iter().map(|n| (n, String::new())).collect();
     skipped.extend(found.in_code_block.iter().map(|&i| (scope.teammates[i].name.clone(), IN_CODE_BLOCK.to_string())));
     if found.targets.iter().all(|&i| scope.teammates[i].id == lead.id) {
@@ -1105,7 +1218,7 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
     let asked = |id: &str| this_request.iter().filter(|d| d.specialist_kwant_id == id).count();
 
     let mut targets: Vec<&Kwant> = Vec::new();
-    for i in found.targets {
+    for &i in &found.targets {
         let k = &scope.teammates[i];
         if k.id == lead.id || targets.iter().any(|t| t.id == k.id) {
             continue;
@@ -1123,6 +1236,17 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
             targets.push(k);
         }
     }
+    // Teammates waited for start first, so their delegation exists when the waiting one is created
+    for _ in 0..targets.len() {
+        let misplaced = targets.iter().enumerate().find_map(|(i, k)| {
+            let at = targets.iter().position(|t| Some(&t.id) == after_of.get(&k.id))?;
+            (at > i).then_some((i, at))
+        });
+        let Some((i, at)) = misplaced else { break };
+        let k = targets.remove(i);
+        targets.insert(at, k);
+    }
+    let mut started: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let user = truncate_chars(user_prompt.trim(), 3000);
     let task = format!(
         "The user asked in the team channel:\n{user}\n\n{lead} mentioned you:\n{text}",
@@ -1143,6 +1267,22 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
             ));
             continue;
         }
+        // Waits for a teammate started here, or for one still on an earlier task from this chat
+        let after = match after_of.get(&specialist.id) {
+            Some(p) => {
+                let earlier = || mine.iter().find(|d| d.is_open() && &d.specialist_kwant_id == p).map(|d| d.id.clone());
+                match started.get(p).cloned().or_else(earlier) {
+                    Some(id) => Some(id),
+                    None if targets_mentioned(&found.targets, scope, p) => {
+                        let name = scope.teammates.iter().find(|k| &k.id == p).map(|k| k.name.clone()).unwrap_or_default();
+                        skipped.push((specialist.name.clone(), format!("it was to wait for {name}'s result, and {name} wasn't sent the task")));
+                        continue;
+                    }
+                    None => None,
+                }
+            }
+            None => None,
+        };
         let req = super::delegation::StartRequest {
             lead: lead.clone(),
             specialist: specialist.clone(),
@@ -1152,13 +1292,22 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
             continue_lead: true,
             origin_depth: scope.delegation_depth,
             allowed: Some(allowed.clone()),
+            after,
         };
         match super::delegation::start(&scope.state, req).await {
-            Ok(_) => room -= 1,
+            Ok(d) => {
+                started.insert(specialist.id.clone(), d.id);
+                room -= 1;
+            }
             Err((_, why)) => skipped.push((specialist.name.clone(), why.trim_end_matches('.').to_string())),
         }
     }
     report_skipped(scope, skipped).await;
+}
+
+/// Whether the teammate with `id` is among the @mentioned `targets` (indices into the teammates).
+fn targets_mentioned(targets: &[usize], scope: &TurnScope, id: &str) -> bool {
+    targets.iter().any(|&i| scope.teammates[i].id == id)
 }
 
 /// Runs a moderated team discussion: the lead opens (or pauses to ask the user), teammates react to
@@ -2347,6 +2496,8 @@ async fn send_chat_inner(
 
     // A reply with no @mention to a bot that just asked the person something goes back to that bot
     let mut awaiting: Option<(Kwant, Option<String>)> = None;
+    // Set when that is the lead of a gathered list of questions (see `super::asks`)
+    let mut gathered: Option<serde_json::Value> = None;
     let mut last_speaker: Option<String> = None;
     // The channel route worked out while deciding that, reused below instead of asking Laya twice
     let mut pre_route: Option<crate::router::team::ChannelRoute> = None;
@@ -2377,6 +2528,13 @@ async fn send_chat_inner(
                 }
             }
             if sticks {
+                // The answer to a list that gathered several bots' questions: its lead passes it on
+                if a.question_id.is_none() {
+                    let tail_from = recent.iter().rposition(|m| m.sender_role == "user").map_or(0, |i| i + 1);
+                    gathered = super::asks::consolidated_in(&recent[tail_from..])
+                        .filter(|(_, link)| link["kwant_id"].as_str() == Some(a.kwant.id.as_str()))
+                        .map(|(_, link)| link);
+                }
                 awaiting = Some((a.kwant.clone(), a.question_id));
             }
         }
@@ -2510,6 +2668,13 @@ async fn send_chat_inner(
     )
     .await;
     payload.prompt.push_str(&note);
+
+    // The person answered the lead's list: the cards close, specialists waiting in threads go
+    // on, and the lead is told whom to pass the rest to
+    if let Some(link) = &gathered {
+        let note = super::asks::deliver_answer(&state, link, &payload.prompt, &all_kwants).await;
+        payload.prompt.push_str(&note);
+    }
 
     // Typed instead of tapped: the answer closes the bot's open question, and a turn still waiting
     // on it carries on with it (no second turn)

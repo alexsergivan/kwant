@@ -29,6 +29,8 @@ impl PartialEq for Awaiting<'_> {
 /// The bot waiting for the person's answer in a chat, if any. `recent` is the chat oldest first,
 /// without the message being routed; `open` are the chat's open `ask_user` questions. Only what
 /// came after the person's last message counts:
+/// 0. a list that gathered several bots' questions into one (`meta.consolidated_asks`, see
+///    `server::asks`): its bot gets the answer and passes it on;
 /// 1. the newest open `ask_user` question asked since then by one of `members`;
 /// 2. else the last bot message since then, when it is an `ask_user` card or ends by asking
 ///    something (and isn't handing on to a teammate with an @mention).
@@ -37,6 +39,15 @@ pub fn awaiting_answer<'a>(recent: &[Message], open: &[Question], members: &'a [
     let last_user = recent.iter().rposition(|m| m.sender_role == "user");
     let since = last_user.and_then(|i| recent[i].created_at);
     let tail = &recent[last_user.map_or(0, |i| i + 1)..];
+
+    let gathered = tail.iter().rev().find_map(|m| {
+        let meta = serde_json::from_str::<serde_json::Value>(m.meta.as_deref()?).ok()?;
+        let id = meta.get("consolidated_asks")?["kwant_id"].as_str()?.to_string();
+        member(&id)
+    });
+    if let Some(kwant) = gathered {
+        return Some(Awaiting { kwant, question_id: None, card: true });
+    }
 
     let asked = open
         .iter()
@@ -218,6 +229,27 @@ mod tests {
             msg(10, "kwant", "Community", "Happy to set that up. **Which city are you in?**"),
         ];
         assert_eq!(awaiting_answer(&chat, &[], &m).map(|a| a.kwant.id.as_str()), Some("Community"));
+    }
+
+    /// Two bots asked, the lead gathered both into one list: the answer goes to the lead,
+    /// not to whichever card is newest.
+    #[test]
+    fn an_answer_to_a_gathered_list_goes_to_its_lead() {
+        let m = members();
+        let mut list = msg(30, "kwant", "Architect", "Two things I need from you:\n1. Community: which city?\n2. Analyst: which week?");
+        list.meta = Some(r#"{"consolidated_asks":{"kwant_id":"Architect","askers":["Community","Analyst"]}}"#.into());
+        let chat = [
+            msg(0, "user", "user", "Plan the launch"),
+            msg(10, "kwant", "Community", "Which city are you in?"),
+            msg(20, "kwant", "Analyst", "Which week should I chart?"),
+            list,
+        ];
+        let open = [question(25, "Analyst", "open")];
+        let a = awaiting_answer(&chat, &open, &m).expect("someone waits");
+        assert_eq!((a.kwant.id.as_str(), a.question_id, a.card), ("Architect", None, true));
+        // Without the list, the newest open card wins as before
+        let a = awaiting_answer(&chat[..3], &open, &m).expect("someone waits");
+        assert_eq!(a.kwant.id, "Analyst");
     }
 
     fn after(reply: &str) -> Option<String> {
