@@ -16,7 +16,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 kwnt = { path = "../.." }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tokio = { version = "1.40", features = ["rt-multi-thread", "sync", "macros"] }
+tauri-plugin-updater = "2"
+tokio = { version = "1.40", features = ["rt-multi-thread", "sync", "macros", "time"] }
 serde_json = "1.0"
 dirs = "5.0"
 tracing = "0.1"

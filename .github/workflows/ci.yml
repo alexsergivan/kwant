@@ -54,6 +54,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: check_site.py
         run: python3 scripts/check_site.py
+      # latest.json for in-app Mac updates
+      - name: Script tests
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
   rust:
     name: rust

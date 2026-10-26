@@ -41,6 +41,7 @@ pub mod connections;
 pub mod setup_routes;
 pub mod push;
 pub mod waiting;
+pub mod app_update_routes;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -107,6 +108,8 @@ pub struct AppState {
     pub setup: Arc<setup_routes::SetupJobs>,
     /// Web Push to the person's installed app: the VAPID key and subscriptions.
     pub push: Arc<push::Push>,
+    /// The Mac app's in-app update; unsupported (and never changing) anywhere else.
+    pub app_update: Arc<crate::app_update::UpdateHub>,
 }
 
 impl AppState {
@@ -154,6 +157,7 @@ impl AppState {
             documents: Default::default(),
             setup: Default::default(),
             push: Arc::new(push::Push::load(&config_data_dir)),
+            app_update: crate::app_update::UpdateHub::shared(),
         }
     }
 
@@ -182,6 +186,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/push/key", get(push::key))
         .route("/api/push/subscribe", post(push::subscribe))
         .route("/api/push/unsubscribe", post(push::unsubscribe))
+        .route("/api/app/update", get(app_update_routes::get_status))
+        .route("/api/app/update/check", post(app_update_routes::check))
+        .route("/api/app/update/install", post(app_update_routes::install))
         .route("/api/profiles", get(profile_routes::list).post(profile_routes::create))
         .route("/api/profiles/:id", axum::routing::patch(profile_routes::update).delete(profile_routes::remove))
         .route("/api/profiles/:id/key", put(profile_routes::set_key).delete(profile_routes::delete_key))

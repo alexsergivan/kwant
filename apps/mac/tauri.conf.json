@@ -16,6 +16,7 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg"],
+    "createUpdaterArtifacts": false,
     "category": "DeveloperTool",
     "shortDescription": "Your team of AI bots",
     "copyright": "© 2026 the kwant maintainer. AGPL-3.0-only",
@@ -35,6 +36,13 @@
         "appPosition": { "x": 180, "y": 170 },
         "applicationFolderPosition": { "x": 480, "y": 170 }
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE3OTFDNEY5QTBGRTEzMUYKUldRZkUvNmcrY1NScDlyak1rQWU0L1N3NHBXc2JhNnVzbk9MN2h3RksybmJleHRYbk9yZ0s5bHgK",
+      "endpoints": ["https://github.com/alexsergivan/kwant/releases/latest/download/latest.json"],
+      "requireSignedVersion": true
     }
   }
 }

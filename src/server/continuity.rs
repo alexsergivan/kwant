@@ -34,7 +34,7 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 9] = [
+pub const NOTIFY_KINDS: [&str; 10] = [
     "turn_finished",
     "approval_needed",
     "routine_failed",
@@ -44,6 +44,7 @@ pub const NOTIFY_KINDS: [&str; 9] = [
     "question_asked",
     "loose_ends",
     "human_step",
+    "app_update",
 ];
 const MASK: &str = "••••••••";
 

@@ -5,12 +5,21 @@ name: mac
 # Pushing a mac-v* tag (mac-v0.1.0, or mac-v0.2.0-rc.1 for a prerelease) also publishes a GitHub
 # release with the .dmg as kwant_universal.dmg, which the site's "Download for Mac" links to via
 # releases/latest/download/kwant_universal.dmg. The tag must match apps/mac's version.
+#
+# In-app updates: every build also makes the updater bundle (kwant.app.tar.gz + .sig). Tag builds
+# sign it with the release key (secrets TAURI_SIGNING_PRIVATE_KEY / _PASSWORD) and a full release
+# publishes it with latest.json, which installed apps read from releases/latest/download/latest.json.
+# Pull requests and manual runs never see the release key: they sign with a throwaway key, so the
+# same steps run without the secret. A full release needs a "## [Mac x.y.z]" CHANGELOG section,
+# which becomes the update's notes.
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - "apps/mac/**"
       - ".github/workflows/mac.yml"
+      - "scripts/mac_latest_json.py"
+      - "scripts/minisign_verify.py"
   push:
     tags:
       - "mac-v*"
@@ -56,6 +65,11 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ "$version" != "$base" ]; then echo "prerelease=true"; else echo "prerelease=false"; fi >> "$GITHUB_OUTPUT"
+          # a full release's update notes are its CHANGELOG section
+          if [ "$version" = "$base" ]; then
+            python3 -c 'import sys; sys.path.insert(0, "scripts"); import mac_latest_json as m; m.changelog_section(open("CHANGELOG.md").read(), sys.argv[1])' "$version" \
+              || { echo "::error::CHANGELOG.md has no \"## [Mac $version]\" section for the update notes"; exit 1; }
+          fi
 
   dmg:
     name: dmg
@@ -96,6 +110,18 @@ jobs:
           defaults write com.apple.finder AppleShowAllFiles -bool true
           killall Finder || true
           sleep 3
+      # Pull requests and manual runs sign the updater bundle with a throwaway key; only tag builds
+      # get the release key, so no PR code ever runs with it.
+      - name: Throwaway updater key
+        if: ${{ !startsWith(github.ref, 'refs/tags/mac-v') }}
+        run: |
+          set -euo pipefail
+          openssl rand -hex 16 > "$RUNNER_TEMP/ci-updater.password"
+          npx --yes @tauri-apps/cli@2 signer generate --ci -w "$RUNNER_TEMP/ci-updater.key" -p "$(cat "$RUNNER_TEMP/ci-updater.password")" > /dev/null
+          cp "$RUNNER_TEMP/ci-updater.key.pub" "$RUNNER_TEMP/updater.pub"
+      - name: Release updater key
+        if: startsWith(github.ref, 'refs/tags/mac-v')
+        run: python3 -c 'import json; print(json.load(open("apps/mac/tauri.conf.json"))["plugins"]["updater"]["pubkey"])' > "$RUNNER_TEMP/updater.pub"
       - name: Build the universal app and .dmg
         working-directory: apps/mac
         timeout-minutes: 30
@@ -103,7 +129,58 @@ jobs:
           # Tauri skips the Finder AppleScript that lays out the install window (background,
           # icon positions, hidden files moved out of view) when CI=true; run it anyway
           TAURI_BUNDLER_DMG_IGNORE_CI: "true"
-        run: npx --yes @tauri-apps/cli@2 build --ci --target universal-apple-darwin --bundles app,dmg -- --locked
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/mac-v') }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ startsWith(github.ref, 'refs/tags/mac-v') && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/mac-v') && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_TAG" = "true" ]; then
+            if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+              echo "::error::the repository secret TAURI_SIGNING_PRIVATE_KEY is missing, so installed apps couldn't verify this release"
+              exit 1
+            fi
+          else
+            TAURI_SIGNING_PRIVATE_KEY=$(cat "$RUNNER_TEMP/ci-updater.key")
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(cat "$RUNNER_TEMP/ci-updater.password")
+            export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+          npx --yes @tauri-apps/cli@2 build --ci --target universal-apple-darwin --bundles app,dmg \
+            --config '{"bundle":{"createUpdaterArtifacts":true}}' -- --locked
+      # The installed app only accepts an update whose signature matches the key built into it and
+      # whose signed version matches latest.json (requireSignedVersion). Checked here with the same
+      # rules, so a bad bundle fails this job instead of every installed app.
+      - name: Updater bundle and latest.json
+        id: updater
+        working-directory: apps/mac/target/universal-apple-darwin/release/bundle
+        run: |
+          set -euo pipefail
+          tarball=macos/kwant.app.tar.gz
+          ls -l "$tarball" "$tarball.sig"
+          version=$(python3 -c 'import json; print(json.load(open("'"$GITHUB_WORKSPACE"'/apps/mac/tauri.conf.json"))["version"])')
+          python3 -m venv "$RUNNER_TEMP/sigvenv"
+          "$RUNNER_TEMP/sigvenv/bin/pip" install --quiet pynacl
+          "$RUNNER_TEMP/sigvenv/bin/python" -I "$GITHUB_WORKSPACE/scripts/minisign_verify.py" \
+            --pubkey "$RUNNER_TEMP/updater.pub" --file "$tarball" --signature "$tarball.sig" --version "$version"
+          # the archive holds kwant.app and nothing else
+          tar -tzf "$tarball" | cut -d/ -f1 | sort -u | tee "$RUNNER_TEMP/tar-top.txt"
+          test "$(cat "$RUNNER_TEMP/tar-top.txt")" = "kwant.app"
+          if grep -q "^## \[Mac $version\]" "$GITHUB_WORKSPACE/CHANGELOG.md"; then
+            python3 "$GITHUB_WORKSPACE/scripts/mac_latest_json.py" --version "$version" --signature "$tarball.sig" \
+              --changelog "$GITHUB_WORKSPACE/CHANGELOG.md" \
+              --url "https://github.com/$GITHUB_REPOSITORY/releases/download/mac-v$version/kwant_universal.app.tar.gz" \
+              > "$RUNNER_TEMP/latest.json"
+            cat "$RUNNER_TEMP/latest.json"
+          else
+            echo "::notice::no CHANGELOG section for Mac $version yet, so no sample latest.json"
+          fi
+          mkdir -p "$RUNNER_TEMP/updater"
+          cp "$tarball" "$tarball.sig" "$RUNNER_TEMP/updater/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: updater
+          path: ${{ runner.temp }}/updater
+          if-no-files-found: error
+          retention-days: 14
       - name: Inspect the bundle
         id: bundle
         working-directory: apps/mac/target/universal-apple-darwin/release/bundle
@@ -268,6 +345,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      # for scripts/mac_latest_json.py and the CHANGELOG section it reads
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -283,6 +362,19 @@ jobs:
           test -n "$dmg"
           cp "$dmg" kwant_universal.dmg
           sha256sum kwant_universal.dmg > kwant_universal.dmg.sha256
+          tarball=$(find dist -type f -name 'kwant.app.tar.gz' | head -1)
+          test -n "$tarball" && test -f "$tarball.sig"
+          cp "$tarball" kwant_universal.app.tar.gz
+          cp "$tarball.sig" kwant_universal.app.tar.gz.sig
+          assets=(kwant_universal.dmg kwant_universal.dmg.sha256 kwant_universal.app.tar.gz kwant_universal.app.tar.gz.sig)
+          # Installed apps read releases/latest/download/latest.json, which only ever resolves to the
+          # newest full release; a prerelease gets no latest.json, so it's never offered as an update
+          if [ "$PRERELEASE" != "true" ]; then
+            python3 scripts/mac_latest_json.py --version "$VERSION" --signature kwant_universal.app.tar.gz.sig \
+              --url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/kwant_universal.app.tar.gz" > latest.json
+            cat latest.json
+            assets+=(latest.json)
+          fi
           cat > notes.md <<NOTES
           kwant for Mac $VERSION: one universal app for Apple silicon and Intel Macs (macOS 11 or later).
 
@@ -304,4 +396,4 @@ jobs:
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); else flags+=(--latest); fi
           gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag \
             --title "kwant for Mac $VERSION" --notes-file notes.md "${flags[@]}" \
-            kwant_universal.dmg kwant_universal.dmg.sha256
+            "${assets[@]}"

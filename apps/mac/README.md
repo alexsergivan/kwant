@@ -10,6 +10,12 @@ A Tauri v2 shell around kwant. The app links the `kwnt` crate and runs the same 
   `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin` to find `claude`, `codex` and `grok`.
 - **Menu bar:** Open kwant, a status line (approvals waiting), Quit. Closing the window keeps kwant
   running; Quit stops it.
+- **Updates:** 15 seconds after start and then every 6 hours the app reads
+  `releases/latest/download/latest.json` (prereleases are never offered). A newer version shows in
+  the web app (`GET /api/app/update`), as one notification per version and as **Update to x.y.z…**
+  at the top of the menu-bar menu. Installing downloads `kwant_universal.app.tar.gz`, checks its
+  signature against `plugins.updater.pubkey` in `tauri.conf.json`, replaces the app, stops kwant and
+  relaunches. If anything fails, the running app stays as it was. See `src/update.rs`.
 - `kwant --check` starts kwant headless on a free port with a throwaway data dir, waits for
   `/api/health` and exits 0. CI runs it on the built app.
 
@@ -35,3 +41,16 @@ into the image's `.DS_Store` through AppleScript, which Tauri skips when `CI=tru
 files (`.VolumeIcon.icns`, `.background`, …) outside the window, so they stay out of view even
 with hidden files shown. The art is drawn by `dmg/make-background.py`; `background.tiff` is built
 from the two PNGs and not committed.
+
+## Releases and the updater key
+
+`mac.yml` signs the updater bundle on `mac-v*` tags with the repository secrets
+`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, checks the signature
+(`scripts/minisign_verify.py`) and, for a full release, publishes `latest.json` built by
+`scripts/mac_latest_json.py` from the version's `## [Mac x.y.z]` CHANGELOG section. Pull requests
+sign with a throwaway key, so they never see the secret.
+
+The public half of the key is built into every app. If the private key is lost, installed apps can
+never update themselves again and everyone has to download the next version by hand, so keep a
+backup of the key and its password outside GitHub. Replacing the key works the same way: ship one
+release signed with the old key that carries the new public key.

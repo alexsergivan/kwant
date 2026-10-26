@@ -2,6 +2,7 @@
 //! Closing the window keeps kwant running; Quit in the menu stops it.
 
 mod startup;
+mod update;
 
 use startup::PortChoice;
 use std::sync::{mpsc, Mutex};
@@ -68,10 +69,12 @@ fn main() {
     };
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Target { port })
         .setup(move |app| {
             if let Some(server) = server {
                 app.manage(server);
+                update::start(app.handle());
             }
             build_tray(app.handle())?;
             open_window(app.handle());
@@ -174,7 +177,10 @@ fn open_window(handle: &tauri::AppHandle) {
 }
 
 /// The menu-bar icon: Open kwant, a status line, Quit. The status counts approvals waiting.
+/// "Update to x.y.z…" appears at the top while a newer version is on offer.
 fn build_tray(handle: &tauri::AppHandle) -> tauri::Result<()> {
+    let update = MenuItem::with_id(handle, "update", "Update kwant bots…", true, None::<&str>)?;
+    let update_separator = PredefinedMenuItem::separator(handle)?;
     let open = MenuItem::with_id(handle, "open", "Open kwant", true, None::<&str>)?;
     let status = MenuItem::with_id(handle, "status", "Starting…", false, None::<&str>)?;
     let quit = MenuItem::with_id(handle, "quit", "Quit kwant", true, Some("CmdOrCtrl+Q"))?;
@@ -189,17 +195,43 @@ fn build_tray(handle: &tauri::AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => open_window(app),
+            "update" => {
+                // The window shows the download and the relaunch
+                if let Err(e) = kwnt::app_update::UpdateHub::shared().install() {
+                    tracing::info!(reason = e.message(), "update from the menu not started");
+                }
+                open_window(app);
+            }
             "quit" => app.exit(0),
             _ => {}
         })
         .build(handle)?;
 
     let port = handle.state::<Target>().port;
-    std::thread::spawn(move || loop {
-        let (line, badge) = status_line(port);
-        let _ = status.set_text(line);
-        let _ = tray.set_title(badge.as_deref());
-        std::thread::sleep(Duration::from_secs(5));
+    let hub = kwnt::app_update::UpdateHub::shared();
+    std::thread::spawn(move || {
+        let mut shown = false;
+        loop {
+            let (line, badge) = status_line(port);
+            let _ = status.set_text(line);
+            let _ = tray.set_title(badge.as_deref());
+            match update::menu_item(&hub.status()) {
+                Some((text, enabled)) => {
+                    if !shown {
+                        shown = menu.insert_items(&[&update, &update_separator], 0).is_ok();
+                    }
+                    let _ = update.set_text(text);
+                    let _ = update.set_enabled(enabled);
+                }
+                None if shown => {
+                    let _ = menu.remove(&update);
+                    let _ = menu.remove(&update_separator);
+                    shown = false;
+                }
+                None => {}
+            }
+            std::thread::sleep(Duration::from_secs(5));
+        }
     });
     Ok(())
 }

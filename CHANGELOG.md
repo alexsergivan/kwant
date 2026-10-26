@@ -34,6 +34,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Token budget per request.** When bots handing work to each other go over it (200k fresh tokens
   by default, 0 turns it off) for one of your messages, they pause with one notice in the chat;
   press **Continue** or say "continue" to let them go on.
+- **Updates inside the Mac app.** kwant bots for Mac checks for a new version on start and every 6 hours
+  and tells you once per version. **Update to x.y.z…** in the menu bar (or in the web app) downloads
+  it, checks its signature, replaces the app and restarts it. If anything goes wrong, the running
+  version keeps working. Versions before this one need one last download by hand.
 
 ### Changed
 - A bot reply that ends with a closing line such as "Anything else?", "Should I continue?" or
@@ -50,6 +54,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A CAPTCHA step now holds the browser before the step appears, so a bot can't act on the page in between.
 
 ### Security
+- Only the person can check for or install a Mac app update: `POST /api/app/update/check` and
+  `/install` refuse a bot's turn token. Bots can still read `GET /api/app/update`.
 - Only the person can switch which computer the bots run on (Settings → Computer) or open their
   browser as a window: `PUT /api/settings/computer` and `/api/settings/computer/window` now refuse
   a bot's turn token, like `POST /api/settings`.

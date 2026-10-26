@@ -55,6 +55,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     crate::server::scheduler::spawn_background(state.clone(), cancel.clone());
     crate::server::engine_routes::spawn_startup_check(state.clone());
     crate::server::parallel_routes::spawn_startup_sweep(state.clone());
+    crate::server::app_update_routes::spawn_notifier(state.clone());
     let api_token = state.api_token.clone();
     let app = create_router(state);
 
