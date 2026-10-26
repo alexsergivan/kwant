@@ -111,8 +111,11 @@ async fn the_probe_finds_each_vendor_with_its_box_and_ignores_lookalikes() {
     let bot = state.db.list_kwants(&SpaceId::default_space()).await.unwrap()[0].id.clone();
     let ctrl = kwnt::server::routes::get_or_create_browser_controller(&state, &bot).await.expect("browser");
     let base = serve_fixtures().await;
-    let cases: [(&str, Option<Expected>); 15] = [
+    let cases: [(&str, Option<Expected>); 20] = [
+        // a bare sign-up form with nothing but the checkbox counts as a wall
         ("recaptcha.html", Some(("recaptcha", 304.0, 78.0))),
+        // an open image challenge counts on any page, with the challenge's box
+        ("recaptcha_challenge.html", Some(("recaptcha", 400.0, 580.0))),
         ("hcaptcha.html", Some(("hcaptcha", 303.0, 78.0))),
         ("turnstile.html", Some(("turnstile", 300.0, 65.0))),
         ("arkose.html", Some(("arkose", 400.0, 400.0))),
@@ -121,24 +124,38 @@ async fn the_probe_finds_each_vendor_with_its_box_and_ignores_lookalikes() {
         ("perimeterx.html", Some(("perimeterx", 312.0, 102.0))),
         ("tiktok_slider.html", Some(("tiktok", 360.0, 380.0))),
         ("shadow.html", Some(("tiktok", 360.0, 300.0))),
-        // a slider prompt in a modal on a site without a known vendor
+        // a slider prompt in a captcha-like box on a site without a known vendor
         ("dialog_puzzle.html", Some(("puzzle", 402.0, 322.0))),
-        // scrolled into view, so the box is on screen
-        ("offscreen.html", Some(("hcaptcha", 303.0, 78.0))),
         // reCAPTCHA v3's badge is no challenge, a hidden widget isn't shown, an article about
         // sliders is just text
         ("recaptcha_v3_badge.html", None),
         ("hidden.html", None),
         ("article.html", None),
         ("consent_onetrust.html", None),
+        // look-alikes: a v2 checkbox on a contact form or in a footer form is something to tick
+        // when submitting, not a wall, and neither is its closed challenge; "press and hold" in a
+        // newsletter dialog or a sticky cookie bar isn't a CAPTCHA
+        ("contact_recaptcha.html", None),
+        ("footer_recaptcha.html", None),
+        ("recaptcha_challenge_closed.html", None),
+        ("consent_dialog_phrases.html", None),
+        // below the fold: found, but without a box, and the page isn't scrolled
+        ("offscreen.html", Some(("hcaptcha", 0.0, 0.0))),
     ];
     for (file, want) in cases {
         open(&ctrl, &format!("{base}{file}")).await;
         let hit = ctrl.probe_captcha().await.unwrap();
+        let scrolled = ctrl.send_cdp_command("Runtime.evaluate", json!({"expression": "window.scrollX + window.scrollY", "returnByValue": true})).await.unwrap();
+        assert_eq!(scrolled["result"]["value"].as_f64(), Some(0.0), "{file}: the probe must never scroll");
         match (want, hit) {
             (None, None) => {}
+            (Some((kind, 0.0, 0.0)), Some(hit)) => {
+                assert_eq!(hit.kind, kind, "{file}");
+                assert!(hit.offscreen && hit.clone().on_screen().is_none(), "{file}: {hit:?}");
+            }
             (Some((kind, w, h)), Some(hit)) => {
                 assert_eq!(hit.kind, kind, "{file}");
+                assert!(!hit.offscreen, "{file}: {hit:?}");
                 assert!((hit.width - w).abs() <= 2.0 && (hit.height - h).abs() <= 2.0, "{file}: {hit:?}");
                 assert!(hit.x >= 0.0 && hit.y >= 0.0 && hit.x + hit.width <= 1280.0 && hit.y + hit.height <= 800.0, "{file}: {hit:?}");
             }
@@ -199,6 +216,7 @@ async fn vm_cookies_are_kept_per_bot_across_a_browser_restart() {
     {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&jar).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(jar.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
     }
     assert!(!service.cookie_jar("bot-b").exists() || !std::fs::read_to_string(service.cookie_jar("bot-b")).unwrap().contains("kwnt_test"));
 

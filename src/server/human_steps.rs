@@ -433,7 +433,7 @@ pub async fn raise(
 pub async fn raise_for_bot_wall(state: &AppState, scope: &SelfScope, page: &Value) -> Option<String> {
     scope.origin.as_ref()?;
     scope.cancel.as_ref()?;
-    let target = CaptchaHit::parse(&page["captcha"]);
+    let target = CaptchaHit::parse(&page["captcha"]).and_then(CaptchaHit::on_screen);
     let url = page["url"].as_str().and_then(crate::db::human_steps::clean_url);
     let host = url.as_deref().and_then(|u| url::Url::parse(u).ok()).and_then(|u| u.host_str().map(str::to_string));
     let reason = match host {
@@ -483,7 +483,7 @@ async fn watch_captcha(state: AppState, id: String, mut seen: bool) {
             Some((true, hit)) => {
                 seen = true;
                 misses = 0;
-                if let Some(target_json) = hit.and_then(|h| serde_json::to_string(&h).ok()) {
+                if let Some(target_json) = hit.and_then(CaptchaHit::on_screen).and_then(|h| serde_json::to_string(&h).ok()) {
                     if state.db.set_human_step_target(&id, &target_json).await.unwrap_or(false) {
                         if let Ok(Some(s)) = state.db.get_human_step(&id).await {
                             changed(&state, &s).await;

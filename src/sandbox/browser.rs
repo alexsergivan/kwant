@@ -144,7 +144,11 @@ pub fn detect_bot_wall(url: &str, title: &str, text: &str) -> Option<&'static st
 
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+        #[cfg(unix)]
+        { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?; }
+    }
     let tmp = path.with_extension("tmp");
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -157,8 +161,12 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// Finds a visible CAPTCHA widget in the page (document, open shadow roots and same-origin
-/// frames) and returns `{kind, x, y, width, height}` in viewport pixels, or null. Scrolls an
-/// off-screen widget into view first so the person sees it in the live view.
+/// frames) and returns `{kind, x, y, width, height}` in viewport pixels, or null. Never scrolls:
+/// a widget below the fold comes back with `offscreen: true` and no usable box.
+///
+/// Look-alikes are skipped: a reCAPTCHA v2 checkbox only counts while its challenge (bframe) is
+/// open or the page is otherwise a wall (no field to fill, little text), and phrases like
+/// "press and hold" only count inside an element whose id or class looks like a CAPTCHA.
 pub const CAPTCHA_PROBE_JS: &str = r##"(function () {
   var VENDORS = [
     ['recaptcha', /(^|\.)google\.com\/recaptcha\/|recaptcha\.net\/recaptcha\//i],
@@ -176,6 +184,8 @@ pub const CAPTCHA_PROBE_JS: &str = r##"(function () {
     ['tiktok', '#captcha_container, #captcha-verify-container-main-page, .captcha_verify_container, .captcha-verify-container, [class*="captcha_verify"], [class*="captcha-verify"], [id^="tiktok-verify"]']
   ];
   var PHRASES = /drag the slider|drag the puzzle piece|slide to complete the puzzle|drag the puzzle|slide to verify|select all images with|press (and|&) hold/i;
+  // ids/classes a real challenge box carries; a cookie or newsletter dialog doesn't
+  var CAPTCHA_LIKE = /captcha|challenge|verif(y|ication)|secsdk|geetest|(^|[\s_-])(px|dd)[-_]/;
   var vw = window.innerWidth, vh = window.innerHeight;
   function visible(el, rect) {
     if (rect.width < 30 || rect.height < 30) return false;
@@ -197,28 +207,33 @@ pub const CAPTCHA_PROBE_JS: &str = r##"(function () {
     if (!visible(el, r)) return null;
     var off = frameOffset(el.ownerDocument.defaultView);
     var left = r.left + off[0], top = r.top + off[1];
-    if (top + r.height <= 0 || top >= vh || left + r.width <= 0 || left >= vw) {
-      try { el.scrollIntoView({block: 'center', inline: 'center'}); } catch (e) {}
-      r = el.getBoundingClientRect(); off = frameOffset(el.ownerDocument.defaultView);
-      left = r.left + off[0]; top = r.top + off[1];
-    }
     var x = Math.max(0, left), y = Math.max(0, top);
     var w = Math.min(vw, left + r.width) - x, h = Math.min(vh, top + r.height) - y;
-    if (w < 10 || h < 10) return null;
+    if (w < 10 || h < 10) return {kind: kind, offscreen: true, x: 0, y: 0, width: 0, height: 0};
     return {kind: kind, x: Math.round(x), y: Math.round(y), width: Math.round(w), height: Math.round(h)};
+  }
+  function captchaLike(n) {
+    var tag = ((n.id || '') + ' ' + (typeof n.className === 'string' ? n.className : '')).toLowerCase();
+    return CAPTCHA_LIKE.test(tag);
   }
   function container(el) {
     for (var n = el, i = 0; n && i < 12; i++) {
-      if (n.nodeType === 1) {
-        var tag = ((n.id || '') + ' ' + (typeof n.className === 'string' ? n.className : '')).toLowerCase();
-        if (/captcha|verify|challenge/.test(tag)) return n;
-        if (n.getAttribute('role') === 'dialog' || n.getAttribute('aria-modal') === 'true') return n;
-        var pos = getComputedStyle(n).position;
-        if ((pos === 'fixed' || pos === 'sticky') && n !== n.ownerDocument.body) return n;
-      }
+      if (n.nodeType === 1 && captchaLike(n)) return n;
       n = n.parentNode || n.host;
     }
     return null;
+  }
+  // A page that is nothing but the check (Google's "sorry" page, a bare verify form): no field a
+  // person would fill in and little text. A contact form or a page with a footer form isn't.
+  function wallPage() {
+    var fields = document.querySelectorAll('input, textarea, select');
+    for (var i = 0; i < fields.length; i++) {
+      var t = (fields[i].getAttribute('type') || 'text').toLowerCase();
+      if (fields[i].tagName === 'INPUT' && /^(hidden|submit|button|image|reset|checkbox|radio)$/.test(t)) continue;
+      var r = fields[i].getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) return false;
+    }
+    return ((document.body && document.body.innerText) || '').trim().length < 1000;
   }
   var roots = [];
   function collect(root, depth) {
@@ -234,7 +249,7 @@ pub const CAPTCHA_PROBE_JS: &str = r##"(function () {
     }
   }
   collect(document, 0);
-  var found = null;
+  var found = null, anchor = null;
   for (var ri = 0; ri < roots.length && !found; ri++) {
     var frames = roots[ri].querySelectorAll('iframe');
     for (var f = 0; f < frames.length && !found; f++) {
@@ -242,10 +257,23 @@ pub const CAPTCHA_PROBE_JS: &str = r##"(function () {
       if (frames[f].closest && frames[f].closest('.grecaptcha-badge')) continue;
       if (/recaptcha\/(api2|enterprise)\/anchor.*[?&]size=invisible/i.test(src)) continue;
       for (var v = 0; v < VENDORS.length; v++) {
-        if (VENDORS[v][1].test(src)) { found = box(VENDORS[v][0], frames[f]); break; }
+        if (!VENDORS[v][1].test(src)) continue;
+        if (VENDORS[v][0] === 'recaptcha') {
+          if (/recaptcha\/(api2|enterprise)\/bframe/i.test(src)) {
+            // Google parks a closed challenge at top:-10000px and hides it
+            var b = box('recaptcha', frames[f]);
+            if (b && frames[f].getBoundingClientRect().top + window.scrollY > -1000) found = b;
+          } else if (!anchor) {
+            anchor = frames[f];
+          }
+        } else {
+          found = box(VENDORS[v][0], frames[f]);
+        }
+        break;
       }
     }
   }
+  if (!found && anchor && wallPage()) found = box('recaptcha', anchor);
   for (var ri2 = 0; ri2 < roots.length && !found; ri2++) {
     for (var s = 0; s < SELECTORS.length && !found; s++) {
       var els = roots[ri2].querySelectorAll(SELECTORS[s][1]);
@@ -275,19 +303,32 @@ pub struct CaptchaHit {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+    /// The widget is on the page but outside the viewport (the probe never scrolls), so the box
+    /// is empty and shouldn't be pointed at.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub offscreen: bool,
 }
 
 impl CaptchaHit {
-    /// Validates what the page returned: a known kind and a finite box inside the viewport.
+    /// Validates what the page returned: a known kind and a finite box inside the viewport, or an
+    /// off-screen widget without a box.
     pub fn parse(value: &Value) -> Option<Self> {
         let kind = value.get("kind")?.as_str()?;
         if !CAPTCHA_KINDS.contains(&kind) { return None; }
+        if value.get("offscreen").and_then(Value::as_bool) == Some(true) {
+            return Some(Self { kind: kind.to_string(), x: 0.0, y: 0.0, width: 0.0, height: 0.0, offscreen: true });
+        }
         let num = |k: &str| value.get(k).and_then(Value::as_f64).filter(|n| n.is_finite());
         let (x, y) = (num("x")?.clamp(0.0, 1280.0), num("y")?.clamp(0.0, 800.0));
         let width = num("width")?.clamp(0.0, 1280.0 - x);
         let height = num("height")?.clamp(0.0, 800.0 - y);
         if width < 1.0 || height < 1.0 { return None; }
-        Some(Self { kind: kind.to_string(), x, y, width, height })
+        Some(Self { kind: kind.to_string(), x, y, width, height, offscreen: false })
+    }
+
+    /// The box, when it's on screen and worth pointing the person's view at.
+    pub fn on_screen(self) -> Option<Self> {
+        (!self.offscreen).then_some(self)
     }
 
     pub fn label(&self) -> &'static str {
