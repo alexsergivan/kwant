@@ -112,7 +112,8 @@ export type NotifyKind =
   | 'delegation_stalled'
   | 'skill_proposed'
   | 'question_asked'
-  | 'human_step';
+  | 'human_step'
+  | 'app_update';
 export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'turn_finished', label: 'A bot finished replying' },
   { id: 'approval_needed', label: 'A bot needs your approval' },
@@ -123,6 +124,16 @@ export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'question_asked', label: 'A bot has a question for you' },
   { id: 'human_step', label: 'A bot needs you in the browser' },
 ];
+
+/** Only the Mac app sends it (and only its server accepts it), so it is listed there alone. */
+export const APP_UPDATE_KIND: { id: NotifyKind; label: string } = { id: 'app_update', label: 'App updates' };
+
+/** The checkboxes under "Tell me when": App updates only in the Mac app. */
+export const notifyKindsFor = (appUpdates: boolean) => (appUpdates ? [...NOTIFY_KINDS, APP_UPDATE_KIND] : NOTIFY_KINDS);
+
+/** What to save: never app_update off the Mac app, whose server would refuse the unknown kind. */
+export const notifyOnToSave = (on: NotifyKind[], appUpdates: boolean) =>
+  appUpdates ? on : on.filter((k) => k !== APP_UPDATE_KIND.id);
 
 /** Kinds also shown as an in-app toast while kwnt is visible (the others only matter in the background). */
 export const TOAST_KINDS: NotifyKind[] = ['routine_failed', 'delegation_finished', 'delegation_stalled', 'skill_proposed', 'question_asked', 'human_step'];

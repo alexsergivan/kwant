@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shows why, with **Try again** and **Download manually**, and the current app keeps working.
   Hiding the bar hides it for that version only. App settings → About shows the running version and
   has **Check for updates**. Nothing shows outside the Mac app, and phones get only the About row.
+  In the Mac app, App settings → Notifications has an **App updates** switch for the update notification.
 - **Vibration on Android phones.** The web app gives a short buzz when you send a message, answer a
   question or approval card, press **Solve it**, **Done**, **Skip** or **Hand back**, and when a puzzle
   is solved, with a different buzz for errors. A bot reply arriving while the app is on screen gives a
