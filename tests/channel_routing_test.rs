@@ -11,7 +11,11 @@ use axum::{
 use kwnt::{
     broker::PermissionBroker,
     config::Config,
-    db::{models::NewChannel, spaces::SpaceId, Database},
+    db::{
+        models::{NewChannel, NewMessage},
+        spaces::SpaceId,
+        Database,
+    },
     router::LayaRouter,
     server::{create_router, AppState},
     tools::ToolRunner,
@@ -189,4 +193,69 @@ async fn a_one_bot_channel_gets_laya_once_members_are_added() {
     assert_eq!((c.routing_mode.as_str(), serde_json::from_str::<Vec<String>>(&c.member_kwants).unwrap()), ("auto", vec![ann, bob]));
     let (s, _) = call(&app, "PATCH", "/api/channels/nope", Some(json!({"routing_mode": "auto"}))).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+/// Sends `prompt` to the channel and returns who it was routed to and how.
+async fn routed_to(app: &Router, state: &AppState, channel: &str, prompt: &str) -> (String, Option<String>) {
+    let mut events = state.event_sender.subscribe();
+    ok(app, "POST", "/api/chat/send", Some(json!({"channel_id": channel, "prompt": prompt, "sender_id": "user"}))).await;
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let mut pick = None;
+        loop {
+            match events.recv().await.map(|e| e.unscoped().clone()) {
+                Ok(RuntimeEvent::RoutingDecided { kwant_id, basis, .. }) => pick = Some((kwant_id, basis)),
+                Ok(RuntimeEvent::TurnEnded { .. }) => return pick.expect("routed"),
+                Err(e) => panic!("events: {e}"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("the message was handled")
+}
+
+/// F3: the person's answer without an @mention goes back to the bot that asked, not to the lead
+/// Laya's fallback would pick; an @mention still wins, and once the asker has replied it's over.
+#[tokio::test]
+async fn an_answer_goes_back_to_the_bot_that_asked_it() {
+    let (app, state, _tmp) = setup().await;
+    let ann = ok(&app, "POST", "/api/kwants", Some(bot("Ann"))).await["id"].as_str().unwrap().to_string();
+    let bob = ok(&app, "POST", "/api/kwants", Some(bot("Bob"))).await["id"].as_str().unwrap().to_string();
+    let c = ok(&app, "POST", "/api/channels", Some(json!({"name": "desk", "lead_kwant_id": ann, "member_kwants": [ann, bob]}))).await;
+    let cid = c["id"].as_str().unwrap().to_string();
+    let say = |role: &'static str, who: String, text: &'static str| {
+        let (db, cid) = (state.db.clone(), cid.clone());
+        async move {
+            db.insert_message(&NewMessage {
+                channel_id: Some(cid),
+                direct_kwant_id: None,
+                sender_role: role.into(),
+                sender_id: who,
+                text: text.into(),
+                reasoning_content: None,
+                tool_calls: None,
+                tokens_used: 0,
+            })
+            .await
+            .unwrap();
+        }
+    };
+    say("user", "user".into(), "Every morning send me an overview of my day").await;
+    say("kwant", bob.clone(), "Happy to. **Which city are you in?**").await;
+    assert_eq!(routed_to(&app, &state, &cid, "Munich").await, (bob.clone(), Some("asked".into())));
+
+    // Bob answered ("answer ok", no question), so the next message is routed as usual
+    let (to, basis) = routed_to(&app, &state, &cid, "Who takes this?").await;
+    assert_ne!(basis.as_deref(), Some("asked"), "{to}");
+
+    // An @mention wins over an open question
+    say("kwant", bob.clone(), "Which day should it start?").await;
+    let mut events = state.event_sender.subscribe();
+    let sent = ok(&app, "POST", "/api/chat/send", Some(json!({"channel_id": cid, "prompt": "@Ann can you take over?", "sender_id": "user"}))).await;
+    assert_eq!(sent["kwant"], "Ann", "{sent}");
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !matches!(events.recv().await.map(|e| e.unscoped().clone()), Ok(RuntimeEvent::TurnEnded { .. })) {}
+    })
+    .await
+    .expect("Ann's turn ended");
 }

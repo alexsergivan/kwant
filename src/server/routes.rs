@@ -2345,6 +2345,21 @@ async fn send_chat_inner(
         }
     });
 
+    // A reply with no @mention to a bot that just asked the person something goes back to that bot
+    let mut awaiting: Option<(Kwant, Option<String>)> = None;
+    let mut last_speaker: Option<String> = None;
+    if let (None, None, None, None, Some(cid)) =
+        (kwant_mention, team_mention, payload.kwant_id.as_ref(), payload.team_id.as_ref(), payload.channel_id.as_ref())
+    {
+        let recent = state.db.list_messages(cid, 30).await.unwrap_or_default();
+        let open = state.db.list_questions(Some("open"), Some(cid), None).await.unwrap_or_default();
+        let open: Vec<_> = open.into_iter().filter(|q| q.channel_id.as_deref() == Some(cid.as_str())).collect();
+        if let Some(a) = crate::router::sticky::awaiting_answer(&recent, &open, &all_kwants) {
+            awaiting = Some((a.kwant.clone(), a.question_id));
+        }
+        last_speaker = recent.iter().rev().find(|m| m.sender_role == "kwant").map(|m| m.sender_id.clone());
+    }
+
     // Detect if a team is targeted
     let target_team = if let Some(tid) = &payload.team_id {
         all_teams
@@ -2356,7 +2371,7 @@ async fn send_chat_inner(
             .iter()
             .find(|t| t.name.eq_ignore_ascii_case(tname))
             .cloned()
-    } else if kwant_mention.is_none() && payload.kwant_id.is_none() {
+    } else if kwant_mention.is_none() && payload.kwant_id.is_none() && awaiting.is_none() {
         if let Some(cid) = &payload.channel_id {
             if let Ok(Some(channel)) = state.db.get_channel(cid).await {
                 if channel.name.starts_with("team-") {
@@ -2473,6 +2488,19 @@ async fn send_chat_inner(
     )
     .await;
     payload.prompt.push_str(&note);
+
+    // Typed instead of tapped: the answer closes the bot's open question, and a turn still waiting
+    // on it carries on with it (no second turn)
+    if let Some((asker, Some(qid))) = &awaiting {
+        if super::questions::answer_by_message(&state, qid, &payload.prompt).await {
+            return Ok(Json(json!({
+                "status": "answered",
+                "user_message_id": saved_user_msg.id,
+                "kwant": asker.name,
+                "question_id": qid,
+            })));
+        }
+    }
 
     // Stop answers to this message, chat or team; other dispatches (threads, other chats) keep going
     let mut keys = vec![saved_user_msg.id.clone()];
@@ -2636,6 +2664,23 @@ async fn send_chat_inner(
                 .iter()
                 .find(|k| &k.id == kid || k.name.eq_ignore_ascii_case(kid))
                 .cloned()
+        } else if let Some((asker, _)) = awaiting.clone() {
+            let reason = format!("{} asked you a question here, so your reply goes back to {}", asker.name, asker.name);
+            let candidates = chat_teammates.len().max(1);
+            routing = Some(routing_meta(&asker, &reason, candidates, false, &[], "asked"));
+            let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
+                context_id: payload.channel_id.clone(),
+                kwant_id: asker.id.clone(),
+                kwant_name: asker.name.clone(),
+                kwant_title: asker.title.clone(),
+                reason,
+                mode: "direct".into(),
+                candidate_count: Some(candidates),
+                fallback: false,
+                matched_terms: Vec::new(),
+                basis: Some("asked".into()),
+            });
+            Some(asker)
         } else if let Some(cid) = &payload.channel_id {
             if let Ok(Some(channel)) = state.db.get_channel(cid).await {
                 let lead = all_kwants
@@ -2664,7 +2709,13 @@ async fn send_chat_inner(
                     });
                     let route = state
                         .router
-                        .route_channel_query_detailed(&payload.prompt, &channel.name, &channel.lead_kwant_id, &members)
+                        .route_channel_query_after(
+                            &payload.prompt,
+                            &channel.name,
+                            &channel.lead_kwant_id,
+                            &members,
+                            last_speaker.as_deref(),
+                        )
                         .await;
                     let chosen = members.iter().find(|k| k.id == route.kwant_id).cloned().or(lead);
                     if let Some(ref k) = chosen {

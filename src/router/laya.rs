@@ -5,6 +5,21 @@ use super::sidecar::{LayaState, LayaStatus};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+/// How long a routing question to Laya may take before kwant routes by keywords instead. 1.5 s was
+/// too short on a busy 2-vCPU server: 5 of 14 channel messages on the live kwant (2026-10-25) fell
+/// back while Laya was healthy, and the keyword pick for "send me…" was the wrong bot.
+pub const DEFAULT_TIMEOUT_MS: u64 = 4000;
+
+/// [`DEFAULT_TIMEOUT_MS`], or `KWNT_LAYA_TIMEOUT_MS` (250 ms to 30 s) when set.
+pub fn routing_timeout() -> Duration {
+    let ms = std::env::var("KWNT_LAYA_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|ms| ms.clamp(250, 30_000))
+        .unwrap_or(DEFAULT_TIMEOUT_MS);
+    Duration::from_millis(ms)
+}
+
 #[derive(Clone, Debug)]
 pub struct LayaRouter {
     pub base_url: String,
@@ -15,7 +30,7 @@ pub struct LayaRouter {
 impl LayaRouter {
     pub fn new(base_url: String) -> Self {
         let client = Client::builder()
-            .timeout(Duration::from_millis(1500))
+            .timeout(routing_timeout())
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -57,7 +72,7 @@ impl LayaRouter {
     }
 
     /// Sends a throwaway decision so the first real query doesn't pay the
-    /// model's cold-start cost (which can exceed the 1.5s routing timeout).
+    /// model's cold-start cost (which can exceed the routing timeout).
     pub async fn warm_up(&self) {
         let payload = json!({
             "state": {"prompt": "hello, can you help me plan a trip?"},
@@ -108,7 +123,7 @@ impl LayaRouter {
 
         let started = std::time::Instant::now();
         let fallback = |why: &str| {
-            // Info, not debug: on a slow machine Laya can miss the 1.5s limit on most messages, and
+            // Info, not debug: on a slow machine Laya can miss the routing limit on most messages, and
             // then keywords are routing without anyone knowing.
             tracing::info!(elapsed_ms = started.elapsed().as_millis() as u64, reason = why, "Laya didn't pick the model for this message; using keyword fallback");
             crate::router::fallback::heuristic_fallback_with_models(prompt, context, &candidate_models)

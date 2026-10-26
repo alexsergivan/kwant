@@ -151,6 +151,10 @@ async fn routine_is_created_in_this_chat_as_this_bot_with_a_card_and_managed_thr
         "instructions": "Send the person a short, upbeat motivation message for the day.",
         "schedule": {"type": "daily", "time": "07:00"}})).await;
     assert!(text.contains("daily 07:00 Europe/Berlin") && text.contains("#general"), "{text}");
+    // F9: the first run on the person's clock, for the bot to repeat ("first run: Tue 27 Oct 07:00 Europe/Berlin")
+    let first = text.split("first run: ").nth(1).unwrap_or_else(|| panic!("no first run: {text}"));
+    assert!(first.starts_with(|c: char| c.is_ascii_uppercase()) && first.contains(" 07:00 Europe/Berlin\""), "{text}");
+    assert!(!text.contains("Z."), "no raw UTC timestamp: {text}");
     let list = routines(&e).await;
     assert_eq!(list.len(), 1);
     let r = &list[0];

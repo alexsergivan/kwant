@@ -107,7 +107,8 @@ pub fn tools() -> Vec<Value> {
             "description": "Schedule a routine: at each time, `instructions` are posted as a message to the bot, and the bot replies \
                 in the chat. Use it whenever the person asks for something to happen on its own (\"every morning\", \"each Friday\", \
                 \"remind me at 5\"). It applies at once and the person sees a card with Undo. By default the routine runs as you and \
-                delivers into this chat.",
+                delivers into this chat. The result says when it first runs on the person's clock: tell them, and \
+                don't present a hand-written sample as its output.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -775,6 +776,7 @@ impl Ctx<'_> {
             (Schedule::Once { .. }, None) if target.id == self.scope.kwant_id => self.anchor().await,
             _ => None,
         };
+        let schedule_tz = schedule.tz().map(str::to_string);
         let payload = RoutinePayload {
             kwant_id: Some(target.id.clone()),
             channel_id,
@@ -803,14 +805,30 @@ impl Ctx<'_> {
             d["schedule_text"].as_str().unwrap_or(""),
             d["delivers_to"].as_str().unwrap_or("")
         );
+        // The first run on the person's clock, so they know when to look (nothing is run now: a test
+        // run could send things)
+        let zone = match schedule_tz {
+            Some(tz) => Some(tz),
+            None => self.db().get_setting(TIMEZONE_SETTING).await.ok().flatten(),
+        };
+        let first_run = view["next_run_at"]
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| crate::routines::run_time_text(t.with_timezone(&chrono::Utc), zone.as_deref()));
         let reply = format!(
-            "Created routine [{}] '{}': {} as {}, delivering to {}; first run {}.",
+            "Created routine [{}] '{}': {} as {}, delivering to {}. {}",
             view["id"].as_str().unwrap_or(""),
             view["name"].as_str().unwrap_or(""),
             d["schedule_text"].as_str().unwrap_or(""),
             target.name,
             d["delivers_to"].as_str().unwrap_or(""),
-            view["next_run_at"].as_str().unwrap_or("not scheduled"),
+            match &first_run {
+                Some(t) => format!(
+                    "First run: {t}. Tell the person in your reply, in these words: \"first run: {t}\". It hasn't run yet, \
+                    so don't describe its output as if it had."
+                ),
+                None => "It has no next run scheduled; tell the person.".into(),
+            },
         );
         self.applied("routine_create", "routine", view["id"].as_str().map(str::to_string), summary, None, d, reply).await
     }

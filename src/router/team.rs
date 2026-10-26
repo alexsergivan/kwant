@@ -126,21 +126,42 @@ impl LayaRouter {
         lead_kwant_id: &str,
         members: &[Kwant],
     ) -> ChannelRoute {
+        self.route_channel_query_after(prompt, channel_name, lead_kwant_id, members, None).await
+    }
+
+    /// [`Self::route_channel_query_detailed`] knowing which bot spoke last in the channel: a greeting
+    /// or a message nothing matches goes to that bot (else the lead), not to a guess.
+    pub async fn route_channel_query_after(
+        &self,
+        prompt: &str,
+        channel_name: &str,
+        lead_kwant_id: &str,
+        members: &[Kwant],
+        last_speaker: Option<&str>,
+    ) -> ChannelRoute {
         let started = std::time::Instant::now();
+        let mut why_not_laya = None;
         let laya = match self.query_laya_for_kwant(prompt, channel_name, members).await {
-            Ok(data) => laya_guess(&data, members),
-            Err(e) => {
+            Ok(data) => {
+                let guess = laya_guess(&data, members);
+                if guess.is_none() {
+                    why_not_laya = Some("no usable pick");
+                }
+                guess
+            }
+            Err((kind, e)) => {
                 let elapsed_ms = started.elapsed().as_millis() as u64;
                 if self.status().is_up() {
-                    tracing::warn!(error = %e, url = %self.base_url, elapsed_ms, "Laya channel routing failed, using keyword fallback");
+                    tracing::warn!(error = %e, reason = kind, url = %self.base_url, elapsed_ms, "Laya channel routing failed, using keyword fallback");
                 } else {
-                    tracing::info!(error = %e, elapsed_ms, "Laya didn't pick the bot for this message; using keyword fallback");
+                    tracing::info!(error = %e, reason = kind, elapsed_ms, "Laya didn't pick the bot for this message; using keyword fallback");
                 }
+                why_not_laya = Some(kind);
                 None
             }
         };
         let fallback = laya.is_none();
-        match pick_member(prompt, lead_kwant_id, members, laya, "channel lead") {
+        let route = match pick_member_after(prompt, lead_kwant_id, members, laya, "channel lead", last_speaker) {
             Some(p) => ChannelRoute {
                 kwant_id: p.kwant.id.clone(),
                 reason: if fallback { format!("{}. {}", p.reason, self.offline_note()) } else { p.reason },
@@ -155,7 +176,21 @@ impl LayaRouter {
                 matched_terms: Vec::new(),
                 basis: "lead".into(),
             },
+        };
+        // Every pick Laya didn't make is logged with why, so the fallback rate can be read from the log
+        let reason = why_not_laya.or_else(|| fallback_reason(laya, &route)).or_else(|| {
+            (laya.is_some_and(|g| g.kwant.id != route.kwant_id) && is_small_talk(prompt)).then_some("small talk")
+        });
+        if let Some(reason) = reason {
+            tracing::info!(
+                reason,
+                basis = %route.basis,
+                kwant_id = %route.kwant_id,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "channel message routed without Laya's pick"
+            );
         }
+        route
     }
 
     async fn query_laya_for_kwant(
@@ -163,7 +198,7 @@ impl LayaRouter {
         prompt: &str,
         channel_name: &str,
         members: &[Kwant],
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<serde_json::Value, (&'static str, String)> {
         let kwant_criteria = kwant_choice_criteria(members);
 
         let payload = json!({
@@ -187,18 +222,34 @@ impl LayaRouter {
             .json(&payload)
             .send()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| (error_kind(&e), e.to_string()))?;
 
         if !resp.status().is_success() {
-            return Err(format!("Laya HTTP status {}", resp.status()));
+            return Err(("error", format!("Laya HTTP status {}", resp.status())));
         }
 
-        let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        let data: serde_json::Value = resp.json().await.map_err(|e| (error_kind(&e), e.to_string()))?;
         if laya_guess(&data, members).is_none() {
-            return Err("Laya response missing valid kwant choice".into());
+            return Err(("error", "Laya response missing valid kwant choice".into()));
         }
         Ok(data)
     }
+}
+
+/// "timeout" when Laya took longer than [`super::laya::routing_timeout`], else "error".
+fn error_kind(e: &reqwest::Error) -> &'static str {
+    if e.is_timeout() {
+        "timeout"
+    } else {
+        "error"
+    }
+}
+
+/// Why a channel pick isn't Laya's when Laya did answer: "low confidence" when its guess was too
+/// close to call and the pick went elsewhere. `None` when Laya's pick was used or agreed.
+pub fn fallback_reason(laya: Option<LayaGuess<'_>>, route: &ChannelRoute) -> Option<&'static str> {
+    let g = laya?;
+    (!g.confident && g.kwant.id != route.kwant_id).then_some("low confidence")
 }
 
 /// Laya scores each option by how well its key and description match the prompt. Opaque IDs and
@@ -492,6 +543,20 @@ pub fn pick_member<'a>(
     laya: Option<LayaGuess<'a>>,
     lead_word: &str,
 ) -> Option<Pick<'a>> {
+    pick_member_after(prompt, lead_kwant_id, members, laya, lead_word, None)
+}
+
+/// [`pick_member`] knowing which bot spoke last. When nothing in the message points anywhere — a
+/// greeting, "ok, go ahead", or no match while Laya wasn't sure or wasn't asked — the bot that spoke
+/// last carries on, else the lead. Laya's titles-only guess sent "Hi" to a different bot each time.
+pub fn pick_member_after<'a>(
+    prompt: &str,
+    lead_kwant_id: &str,
+    members: &'a [Kwant],
+    laya: Option<LayaGuess<'a>>,
+    lead_word: &str,
+    last_speaker: Option<&str>,
+) -> Option<Pick<'a>> {
     let only = match members {
         [] => return None,
         [one] => Some(one),
@@ -616,10 +681,15 @@ pub fn pick_member<'a>(
         return Some(chosen(k, terms.clone(), &how));
     }
 
-    // 5. Nothing in the message matched: Laya's pick only when it was clear, else the lead
-    if let Some(g) = laya.filter(|g| g.confident) {
+    // 5. Nothing in the message matched: Laya's pick only when it was clear and there was something
+    //    to match, else the bot that spoke last, else the lead
+    if let Some(g) = laya.filter(|g| g.confident && !is_small_talk(prompt)) {
         let reason = format!("Laya matched this to {}'s role ({}); no words in your message named a role", g.kwant.name, g.kwant.title);
         return Some(Pick { kwant: g.kwant, basis: "skills", reason, terms: vec![] });
+    }
+    if let Some(k) = last_speaker.and_then(|id| members.iter().find(|m| m.id == id)) {
+        let reason = format!("Nothing in your message named a role, so {} ({}), who spoke last here, carries on", k.name, k.title);
+        return Some(Pick { kwant: k, basis: "last", reason, terms: vec![] });
     }
     let reason = format!("No one's role matched this, so it went to the {lead_word}, {} ({})", lead.name, lead.title);
     Some(Pick { kwant: lead, basis: "lead", reason, terms: vec![] })
@@ -633,8 +703,25 @@ const GENERIC_WORDS: &[&str] = &[
     "work", "working", "get", "start", "starting", "set", "setup", "analyze", "analyse", "analize", "bot",
     "bots", "agent", "agents", "good", "best", "first", "next", "now", "today", "also", "just", "like",
     "know", "look", "let", "lets", "let's", "go", "going", "think", "sure", "people", "way", "find",
-    "finding",
+    "finding", "send", "sends", "sending", "sent", "manage", "managing", "give", "show", "tell", "every",
+    "please", "want", "thanks", "thank",
 ];
+
+/// Words that greet, thank or agree: a message of only these (and everyday words) names no one's work.
+const SMALL_TALK: &[&str] = &[
+    "hi", "hello", "hey", "hiya", "yo", "morning", "evening", "afternoon", "night", "thanks", "thank", "thx", "ok",
+    "okay", "yes", "yeah", "yep", "no", "nope", "sure", "great", "cool", "nice", "perfect", "ahead", "go", "do",
+    "it", "please", "good", "fine", "agreed", "continue", "proceed", "there", "all", "you", "everyone",
+];
+
+/// A greeting, a thank-you or a go-ahead ("Hi", "ok, go ahead", "thanks!"): nothing in it for
+/// Laya or keywords to match, so it stays with whoever is talking.
+pub fn is_small_talk(prompt: &str) -> bool {
+    let words = tokens(prompt);
+    !words.is_empty()
+        && words.len() <= 6
+        && words.iter().all(|w| SMALL_TALK.contains(&w.as_str()) || STOP_WORDS.contains(&w.as_str()))
+}
 
 /// Said to the lead with a team-building request, so it proposes the bots instead of treating the
 /// message as its own specialty.
@@ -1133,5 +1220,58 @@ mod tests {
             _ => panic!("Expected Discuss decision"),
         }
     }
-}
 
+    fn community() -> Kwant {
+        let (_, m) = make_test_fixture();
+        Kwant {
+            id: "kwant-3".into(),
+            name: "Community".into(),
+            title: "Comments & Audience Manager".into(),
+            persona_prompt: "Replies to comments and sends messages to the audience".into(),
+            ..m[0].clone()
+        }
+    }
+
+    /// F2a: one generic verb ("send") no longer wins the pick; nothing specific goes to the lead.
+    #[test]
+    fn a_generic_verb_alone_does_not_pick_a_bot() {
+        let (_, mut members) = make_test_fixture();
+        members.push(community());
+        let p = pick_member_after("Every morning send me an overview of my day at 7:00", "kwant-1", &members, None, "lead", None).unwrap();
+        assert_eq!(p.kwant.id, "kwant-1", "{p:?}");
+        assert!(!p.terms.iter().any(|t| t == "send"), "{p:?}");
+    }
+
+    /// F2a: a greeting goes to whoever spoke last (else the lead), never to Laya's titles-only guess.
+    #[test]
+    fn a_greeting_stays_with_the_last_speaker_not_laya() {
+        let (_, mut members) = make_test_fixture();
+        members.push(community());
+        let guess = Some(LayaGuess { kwant: &members[1], confident: true });
+        let p = pick_member_after("Hi!", "kwant-1", &members, guess, "lead", Some("kwant-3")).unwrap();
+        assert_eq!((p.kwant.id.as_str(), p.basis), ("kwant-3", "last"), "{p:?}");
+        let p = pick_member_after("Hi!", "kwant-1", &members, guess, "lead", None).unwrap();
+        assert_eq!(p.kwant.id, "kwant-1", "{p:?}");
+        // A last speaker who isn't a member here doesn't count
+        let p = pick_member_after("hello there", "kwant-1", &members, None, "lead", Some("stranger")).unwrap();
+        assert_eq!(p.kwant.id, "kwant-1", "{p:?}");
+        // Real work still goes to Laya's clear pick
+        let p = pick_member_after("Can you look into why the build broke?", "kwant-1", &members, guess, "lead", Some("kwant-3")).unwrap();
+        assert_eq!(p.kwant.id, "kwant-2", "{p:?}");
+        assert!(is_small_talk("Hi") && is_small_talk("thanks, ok!") && !is_small_talk("hi, deploy the app"));
+        assert!(!is_small_talk(""));
+    }
+
+    /// F2a: a pick that went against Laya's unsure guess is logged as "low confidence".
+    #[test]
+    fn a_low_confidence_guess_is_named_as_the_fallback_reason() {
+        let (_, members) = make_test_fixture();
+        let route = |id: &str| ChannelRoute { kwant_id: id.into(), reason: String::new(), fallback: false, matched_terms: vec![], basis: "lead".into() };
+        let unsure = Some(LayaGuess { kwant: &members[1], confident: false });
+        assert_eq!(fallback_reason(unsure, &route("kwant-1")), Some("low confidence"));
+        assert_eq!(fallback_reason(unsure, &route("kwant-2")), None);
+        let sure = Some(LayaGuess { kwant: &members[1], confident: true });
+        assert_eq!(fallback_reason(sure, &route("kwant-2")), None);
+        assert_eq!(fallback_reason(None, &route("kwant-1")), None);
+    }
+}

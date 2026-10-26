@@ -1,7 +1,7 @@
 // The line under "Sending your question to X" on Laya's routing card: why that bot, in words that
 // match how it was actually picked.
 
-export type RouteBasis = 'skills' | 'lead' | 'keywords' | 'only' | 'several' | 'discuss' | 'team';
+export type RouteBasis = 'skills' | 'lead' | 'keywords' | 'only' | 'several' | 'discuss' | 'team' | 'asked' | 'last';
 
 export interface RouteReasonInput {
   kwantName?: string;

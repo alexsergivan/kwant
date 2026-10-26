@@ -1,6 +1,7 @@
 pub mod fallback;
 pub mod laya;
 pub mod sidecar;
+pub mod sticky;
 pub mod tags;
 pub mod team;
 

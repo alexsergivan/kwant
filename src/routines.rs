@@ -243,7 +243,26 @@ fn parse_weekday(day: &str) -> Result<Weekday, String> {
     }
 }
 
+/// A run time as the person reads it: "Mon 26 Oct 07:00 Europe/Berlin". In UTC when `tz` is
+/// unknown or unreadable, so the text never claims a zone it didn't convert to.
+pub fn run_time_text(at: DateTime<Utc>, tz: Option<&str>) -> String {
+    match tz.map(str::trim).filter(|t| !t.is_empty()).and_then(|t| now_in(t, at).ok().map(|local| (t, local))) {
+        Some((tz, local)) => format!("{} {tz}", local.format("%a %-d %b %H:%M")),
+        None => format!("{} UTC", at.format("%a %-d %b %H:%M")),
+    }
+}
+
 impl Schedule {
+    /// The zone the schedule's times are in; `None` for one-off and interval schedules.
+    pub fn tz(&self) -> Option<&str> {
+        match self {
+            Schedule::Daily { tz, .. } | Schedule::Weekly { tz, .. } | Schedule::Monthly { tz, .. } | Schedule::Cron { tz, .. } => {
+                Some(tz)
+            }
+            Schedule::Once { .. } | Schedule::Interval { .. } => None,
+        }
+    }
+
     /// The same schedule with its time zone under its current IANA name, as it should be stored.
     pub fn canonical(self) -> Self {
         match self {
@@ -959,5 +978,16 @@ mod tests {
         let parsed: Schedule = serde_json::from_str(r#"{"type":"cron","expression":"0 9 1 * *","tz":"UTC"}"#).unwrap();
         assert!(parsed.validate().is_ok());
         assert!(serde_json::from_str::<Schedule>(r#"{"type":"cron","expression":"0 9 1 * *"}"#).is_err());
+    }
+
+    /// F9: the first run as the person reads it, in their zone.
+    #[test]
+    fn run_time_text_is_in_the_persons_zone() {
+        let at = utc("2026-10-26T06:00:00Z");
+        assert_eq!(run_time_text(at, Some("Europe/Berlin")), "Mon 26 Oct 07:00 Europe/Berlin");
+        assert_eq!(run_time_text(at, Some("Not/AZone")), "Mon 26 Oct 06:00 UTC");
+        assert_eq!(run_time_text(at, None), "Mon 26 Oct 06:00 UTC");
+        let s = Schedule::Daily { time: "07:00".into(), tz: "Europe/Berlin".into() };
+        assert_eq!(s.tz(), Some("Europe/Berlin"));
     }
 }

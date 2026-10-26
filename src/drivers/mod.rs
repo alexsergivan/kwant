@@ -232,7 +232,50 @@ pub fn person_date_block(now: chrono::DateTime<chrono::Utc>, person: &PersonPlac
         (None, Some((tz, _))) => block.push_str(&format!("\nThe person is in the {tz} time zone.")),
         (None, None) => {}
     }
+    if let Some(line) = local_units_line(person) {
+        block.push('\n');
+        block.push_str(&line);
+    }
     block
+}
+
+/// Zones of the countries that don't use metric day to day: the US (with its territories' main
+/// zones), Liberia and Myanmar.
+fn non_metric_zone(tz: &str) -> bool {
+    const US: &[&str] = &[
+        "America/New_York", "America/Chicago", "America/Denver", "America/Phoenix", "America/Los_Angeles",
+        "America/Anchorage", "America/Adak", "America/Boise", "America/Detroit", "America/Juneau", "America/Menominee",
+        "America/Metlakatla", "America/Nome", "America/Sitka", "America/Yakutat", "America/Puerto_Rico",
+        "Pacific/Honolulu", "Pacific/Guam", "Africa/Monrovia", "Asia/Yangon", "Asia/Rangoon",
+    ];
+    US.contains(&tz)
+        || ["America/Indiana/", "America/Kentucky/", "America/North_Dakota/", "US/"].iter().any(|p| tz.starts_with(p))
+}
+
+/// One line asking for the person's local units and sources, once their zone or city is known. A
+/// Munich briefing came from the UK Met Office with gusts in mph (live kwant, 2026-10-25). A zone
+/// like "UTC" says nothing about a place, so it gets no line on its own.
+pub fn local_units_line(person: &PersonPlace) -> Option<String> {
+    let city = person.location.as_deref().map(clean_location).filter(|c| !c.is_empty());
+    let zone = person
+        .timezone
+        .as_deref()
+        .map(str::trim)
+        .filter(|tz| tz.contains('/') && !tz.starts_with("Etc/") && crate::routines::now_in(tz, chrono::Utc::now()).is_ok());
+    let place = match (&city, zone) {
+        (Some(c), _) => c.clone(),
+        (None, Some(tz)) => format!("the {tz} area"),
+        (None, None) => return None,
+    };
+    let units = match zone {
+        Some(tz) if non_metric_zone(tz) => "US customary units (°F, mph, miles)".to_string(),
+        Some(_) => "metric units (°C, km/h, km)".to_string(),
+        None => format!("the units people use in {place}"),
+    };
+    Some(format!(
+        "Give measurements in {units}, and for weather, news, opening hours or prices prefer sources local to {place} \
+        (such as its national weather service) and name the source you used."
+    ))
 }
 
 fn date_block(now: chrono::DateTime<chrono::FixedOffset>, zone: Option<&str>) -> String {

@@ -361,6 +361,21 @@ pub async fn answer(State(state): State<AppState>, Path(id): Path<String>, Json(
     Json(json!({"question": q, "resumed": if live { "turn" } else { "new_turn" }})).into_response()
 }
 
+/// The person answered an open question by typing in the chat instead of on its card (their
+/// message is already saved). The question closes with that text; a turn still waiting on it gets
+/// the answer and `true` comes back, so no new turn is started. `false` when no turn is waiting
+/// (the caller routes the message to the bot that asked) or the question was already closed.
+pub async fn answer_by_message(state: &AppState, id: &str, text: &str) -> bool {
+    let text: String = text.trim().chars().take(MAX_ANSWER_CHARS).collect();
+    if close(state, id, "answered", Some(&text)).await.is_none() {
+        return false;
+    }
+    match state.questions.take(id) {
+        Some(tx) => tx.send(Reply::Answer(text)).is_ok(),
+        None => false,
+    }
+}
+
 /// A late answer: a new turn in the question's chat, queued like any other turn. In an ended
 /// delegation's thread the result also goes back to the lead (see
 /// [`super::delegation::resume_after_answer`]).

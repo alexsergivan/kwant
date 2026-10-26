@@ -9,7 +9,7 @@ to the turn's bot and its space. Code: `src/server/bot_actions.rs`, `src/db/bot_
 | Tool | Arguments | Effect |
 |---|---|---|
 | `routine_list` | – | Routines in the bot's space |
-| `routine_create` | `name`, `instructions`, `schedule`, `bot?`, `channel?` | Applied, undo deletes it |
+| `routine_create` | `name`, `instructions`, `schedule`, `bot?`, `channel?` | Applied, undo deletes it. The result gives the first run in the person's zone ("first run: Mon 26 Oct 07:00 Europe/Berlin") for the bot to repeat |
 | `routine_update` | `routine`, `name?`, `instructions?`, `schedule?`, `bot?`, `channel?` | Applied, undo restores |
 | `routine_pause` / `routine_resume` | `routine` | Applied, undo restores |
 | `routine_run_now` | `routine` | Logged with a card, no undo |

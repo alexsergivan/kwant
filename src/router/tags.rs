@@ -24,7 +24,7 @@ impl TagMention {
 }
 
 /// Parses @mentions in text and classifies them as Kwant or Team mentions.
-/// Mentions follow the pattern `@([a-zA-Z0-9_-]+)`.
+/// Mentions follow the pattern `@([a-zA-Z0-9_-]+)`; a dotted handle or domain (`@mr.absurdia`) is skipped whole.
 /// Mentions containing hyphens or matching team naming conventions (team, squad, group, engineering, etc.)
 /// are classified as Team mentions, while other single-name tokens are classified as Kwants.
 pub fn parse_mentions(text: &str) -> Vec<TagMention> {
@@ -51,6 +51,17 @@ pub fn parse_mentions_with_lookup(
                 let start = i;
                 while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '-') {
                     i += 1;
+                }
+                // A handle or domain ("@mr.absurdia", "@acme.io") is one token, not "@mr" plus text,
+                // and isn't a teammate: skip all of it. "@Growth." ending a sentence is still a mention.
+                let dotted = |j: usize| {
+                    j + 1 < len && chars[j] == '.' && (chars[j + 1].is_ascii_alphanumeric() || chars[j + 1] == '_')
+                };
+                if i > start && dotted(i) {
+                    while i < len && (chars[i].is_ascii_alphanumeric() || "_-.".contains(chars[i])) {
+                        i += 1;
+                    }
+                    continue;
                 }
                 if i > start {
                     let token: String = chars[start..i].iter().collect();
@@ -344,6 +355,21 @@ mod tests {
         assert_eq!(mentions.len(), 2);
         assert!(mentions[0].is_team());
         assert!(mentions[1].is_kwant());
+    }
+
+    /// The live kwant, 2026-10-25: "manage @mr.absurdia tiktok channel" posted "Not sent to mr".
+    #[test]
+    fn a_dotted_handle_is_not_a_mention() {
+        let names = ["Community", "Analyst", "mr"];
+        let m = handoff_mentions("manage @mr.absurdia tiktok channel", &names);
+        assert_eq!(m, HandoffMentions::default(), "neither a target nor an unknown name to report");
+        let m = handoff_mentions("@Analyst, look at @some.brand_2.official and @acme.io", &names);
+        assert_eq!((m.targets, m.unknown), (vec![1], vec![]));
+        // A mention ending a sentence still counts, and so does one before "..."
+        assert_eq!(handoff_targets("Over to @Analyst. Thanks!", &names), vec![1]);
+        assert_eq!(handoff_targets("Over to @Analyst.", &names), vec![1]);
+        assert_eq!(handoff_targets("@Community... then @Analyst", &names), vec![0, 1]);
+        assert!(parse_mentions("follow @mr.absurdia on TikTok").is_empty());
     }
 
     /// Oleks's screenshot (2026-10-24): "Handing off now: @Social revise …, @Writer draft Pillar 1 …"
