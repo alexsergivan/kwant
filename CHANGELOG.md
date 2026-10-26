@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.1.2] - 2026-10-26
+
 ### Added
 - **Update banner in the Mac app.** When a new Mac version is out, a slim bar at the top says
   "kwant bots X.Y.Z is ready" with **Update and restart** and **What's new** (that version's notes).
@@ -114,5 +116,6 @@ First public release of kwant for Mac: one universal app for Apple silicon and I
 later) that runs the kwant server and its interface, with a menu-bar icon. It uses the same data folder
 as `kwnt serve` (`~/.kwnt`).
 
+[Mac 0.1.2]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.2
 [Mac 0.1.1]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.1
 [Mac 0.1.0]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.0
