@@ -73,6 +73,11 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
       <span className="inline-flex items-center gap-1.5 text-amber-300">
         <Clock size={13} aria-hidden="true" /> {kwantName} is paused and waiting for you.
       </span>
+    ) : captcha ? (
+      // The turn ended, but the step's watcher still resumes the bot once the puzzle clears.
+      <span className="inline-flex items-center gap-1.5 text-zinc-400">
+        <Clock size={13} aria-hidden="true" /> {kwantName}’s turn ended. It continues by itself once the puzzle is solved.
+      </span>
     ) : (
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
         <Clock size={13} aria-hidden="true" /> {kwantName} stopped waiting. Press Done any time and it picks up in a new reply.

@@ -78,6 +78,14 @@ test('closed and stale cards', () => {
   assert.match(ui.render(props({ meta: h.parseHumanStepMeta(meta({ source: 'auto' })) })), /spotted automatically/);
 });
 
+test('captcha card after the turn ended: continues by itself, not "stopped waiting"', () => {
+  const html = ui.render(props({ waiting: false, meta: h.parseHumanStepMeta(meta({ step_kind: 'captcha' })) }));
+  assert.match(html, /Pixel’s turn ended\. It continues by itself once the puzzle is solved\./);
+  assert.doesNotMatch(html, /stopped waiting|instantly/);
+  // Other kinds keep the pick-it-up-later copy
+  assert.match(ui.render(props({ waiting: false, meta: h.parseHumanStepMeta(meta({ step_kind: 'sign_in' })) })), /stopped waiting\. Press Done any time/);
+});
+
 test('captcha target: finite box only, kind defaults to puzzle', () => {
   assert.deepEqual(h.parseCaptchaTarget({ x: 460, y: 180, width: 360, height: 380 }), { kind: 'puzzle', x: 460, y: 180, width: 360, height: 380 });
   assert.equal(h.parseCaptchaTarget({ x: 1, y: 1, width: 0, height: 5 }), null);
