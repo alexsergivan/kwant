@@ -178,26 +178,34 @@ fn strategy_for(class: &str) -> &'static str {
 /// What the person must do when AutoFix stopped short of the retry budget.
 pub const RECOVERY_BUDGET_FIX: &str = "Retry budget used up: raise it or retry by hand.";
 
-/// What the person must do for a failure AutoFix never retries.
-fn fix_text(class: &str, summary: &str) -> Option<String> {
+/// What the person must do for a failure AutoFix never retries. It never repeats the failure's
+/// summary: the task already shows that next to it.
+fn fix_text(class: &str) -> Option<&'static str> {
     match class {
-        "auth" => Some(format!("Sign in to the bot's engine again, then retry: {summary}")),
-        "quota" => Some(format!("Usage limit reached: wait for it to reset or switch account, then retry: {summary}")),
-        "budget" => Some("Raise the task's budget, then retry it.".into()),
-        "denied" => Some("An action was denied during the run. Decide whether it may run, then retry.".into()),
+        "auth" => Some("Sign in to the bot's engine again, then retry."),
+        "quota" => Some("Usage limit reached: wait for it to reset or switch account, then retry."),
+        "budget" => Some("Raise the task's budget, then retry it."),
+        "denied" => Some("An action was denied during the run. Decide whether it may run, then retry."),
         _ => None,
     }
 }
 
 // Redaction
 
-/// Masks anything that looks like a key, token or password, line by line. Words are runs of
-/// key-like characters, so a key inside quotes, JSON or after a `:` is found too.
+const MASK: &str = "[redacted]";
+
+/// Masks anything that looks like a key, token or password, line by line, and is safe to run
+/// twice. Three rules, each kept narrow so that command names, paths and ids stay readable:
+/// a labelled value of any length (`password=x`, `--token x`, `Authorization: Basic x`,
+/// `user:pass@host`, plus `key=x`, `--key x` and a password flag of a tool that takes one,
+/// [`mask_flags`]); a word with a known key prefix (`sk-`, `ghp_`…); and a bare word that reads
+/// as random ([`looks_random`]). A short bare password with no label can't be told from a word
+/// and is not masked.
 pub fn redact(text: &str) -> String {
     let word = |c: char| c.is_ascii_alphanumeric() || "-_.=/+".contains(c);
     text.lines()
         .map(|line| {
-            let line = crate::profiles::classify::mask_credentials(line);
+            let line = mask_flags(&crate::profiles::classify::mask_credentials(line));
             let mut out = String::with_capacity(line.len());
             let mut rest = line.as_str();
             while let Some(start) = rest.find(word) {
@@ -205,12 +213,8 @@ pub fn redact(text: &str) -> String {
                 let tail = &rest[start..];
                 let end = tail.find(|c: char| !word(c)).unwrap_or(tail.len());
                 let w = &tail[..end];
-                let looks_secret = w.len() >= 20
-                    && w.chars().any(|c| c.is_ascii_digit())
-                    && !w.starts_with('/')
-                    && !w.starts_with("http");
                 let prefixed = ["sk-", "xai-", "sess-", "ghp_", "gho_", "github_pat_", "xox", "AKIA"].iter().any(|p| w.starts_with(p)) && w.len() > 8;
-                out.push_str(if looks_secret || prefixed { "[redacted]" } else { w });
+                out.push_str(if prefixed || bare_secret(w) { MASK } else { w });
                 rest = &tail[end..];
             }
             out.push_str(rest);
@@ -218,6 +222,127 @@ pub fn redact(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Tools whose password flag is a single letter: `mysql -phunter2`, `sshpass -p hunter2`,
+/// `redis-cli -a hunter2`. Elsewhere `-p` is a port or "parents" and stays readable.
+const PASSWORD_FLAGS: [(&str, &str); 7] = [
+    ("mysql", "-p"),
+    ("mysqldump", "-p"),
+    ("mysqladmin", "-p"),
+    ("mariadb", "-p"),
+    ("mariadb-dump", "-p"),
+    ("sshpass", "-p"),
+    ("redis-cli", "-a"),
+];
+
+/// The values [`mask_credentials`](crate::profiles::classify::mask_credentials) leaves: `key=x`,
+/// `"key": "x"`, `--key x` / `--key=x` (and `--…-key`), and the password flag of a tool in
+/// [`PASSWORD_FLAGS`] used on this line, glued (`-phunter2`) or not. A value already masked is
+/// left as it is.
+fn mask_flags(line: &str) -> String {
+    let tokens: Vec<&str> = line.split(' ').collect();
+    let program = |t: &str| t.rsplit('/').next().unwrap_or(t).to_string();
+    let flags: Vec<&str> = PASSWORD_FLAGS.iter().filter(|(tool, _)| tokens.iter().any(|t| program(t) == *tool)).map(|(_, f)| *f).collect();
+    let is_key_flag = |t: &str| t.starts_with("--") && (t == "--key" || t.ends_with("-key")) && !t.starts_with("--no-");
+    let mut out: Vec<String> = Vec::with_capacity(tokens.len());
+    let mut hide_next = false;
+    for t in &tokens {
+        if hide_next && !t.is_empty() && !t.starts_with('-') {
+            out.push(mask_word(t));
+            hide_next = false;
+            continue;
+        }
+        hide_next = false;
+        if is_key_flag(t) || flags.contains(t) {
+            hide_next = true;
+            out.push((*t).to_string());
+            continue;
+        }
+        if let Some((name, value)) = t.split_once('=') {
+            if !value.is_empty() && (name.eq_ignore_ascii_case("key") || is_key_flag(name)) {
+                out.push(format!("{name}={}", mask_word(value)));
+                continue;
+            }
+        }
+        if let Some(f) = flags.iter().find(|f| t.len() > f.len() && t.starts_with(**f) && !t[f.len()..].starts_with(MASK)) {
+            out.push(format!("{f}{MASK}"));
+            continue;
+        }
+        out.push((*t).to_string());
+    }
+    let line = out.join(" ");
+    // JSON: `"key": "x"`
+    let mut res = String::with_capacity(line.len());
+    let mut rest = line.as_str();
+    while let Some(at) = rest.find("\"key\"") {
+        let after = &rest[at + 5..];
+        let gap = after.len() - after.trim_start().len();
+        let after_colon = after.trim_start().strip_prefix(':').map(str::trim_start);
+        match after_colon.and_then(|v| v.strip_prefix('"')).and_then(|v| v.find('"').map(|e| (v, e))) {
+            Some((v, e)) if e > 0 && &v[..e] != MASK => {
+                let value_at = rest.len() - v.len();
+                res.push_str(&rest[..value_at]);
+                res.push_str(MASK);
+                rest = &rest[value_at + e..];
+            }
+            _ => {
+                res.push_str(&rest[..at + 5 + gap]);
+                rest = &rest[at + 5 + gap..];
+            }
+        }
+    }
+    res.push_str(rest);
+    res
+}
+
+/// A flag's value masked, keeping a closing quote or bracket it was written with.
+fn mask_word(t: &str) -> String {
+    let core = t.trim_matches(|c| "\"'".contains(c));
+    if core.is_empty() || core.starts_with(MASK) {
+        return t.to_string();
+    }
+    let lead = &t[..t.len() - t.trim_start_matches(|c| "\"'".contains(c)).len()];
+    let trail = &t[t.trim_end_matches(|c| "\"'".contains(c)).len()..];
+    format!("{lead}{MASK}{trail}")
+}
+
+/// Whether a bare word reads as a secret: not a URL or absolute path, and (for a relative path
+/// like `./scripts/x.sh`, each part on its own) [`looks_random`]. Base64 (`+`, a trailing `=`) is
+/// judged whole, since its `/` is not a folder.
+fn bare_secret(w: &str) -> bool {
+    if w.starts_with('/') || w.starts_with("http") || w.starts_with('~') {
+        return false;
+    }
+    if w.contains('+') || w.ends_with('=') || !w.contains('/') {
+        return looks_random(w);
+    }
+    w.split('/').any(looks_random)
+}
+
+/// At least 20 letters and digits that break into short pieces, as generated keys do
+/// (`Zq8VwK3mT9pL2rX7nB4c`, a hex key), while names built from words and a number
+/// (`nonexistent_cmd_xyz_ev10`, `MyServiceV2HealthCheck2026`) break into long ones. A piece ends
+/// where digits meet letters or a lower-case letter meets an upper-case one; a capital followed
+/// by lower case letters is one piece (`Health`). A UUID is an id, not a secret.
+fn looks_random(w: &str) -> bool {
+    if is_uuid(w) {
+        return false;
+    }
+    let class = |c: char| if c.is_ascii_digit() { 0 } else if c.is_ascii_uppercase() { 1 } else { 2 };
+    let chars: Vec<char> = w.chars().filter(char::is_ascii_alphanumeric).collect();
+    let n = chars.len();
+    if n < 20 || !chars.iter().any(char::is_ascii_digit) || !chars.iter().any(char::is_ascii_alphabetic) {
+        return false;
+    }
+    let pieces = 1 + chars.windows(2).filter(|p| class(p[0]) != class(p[1]) && !(class(p[0]) == 1 && class(p[1]) == 2)).count();
+    pieces >= 5 && pieces * 3 > n
+}
+
+fn is_uuid(w: &str) -> bool {
+    let parts: Vec<&str> = w.split('-').collect();
+    parts.len() == 5
+        && parts.iter().zip([8, 4, 4, 4, 12]).all(|(p, len)| p.len() == len && p.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// [`redact`] over every string in `v` (a check's spec, a change's before/after).
@@ -372,7 +497,8 @@ async fn plan(state: &AppState, task: &Task, failure: &Failure) -> Option<Attemp
     let k = key(&task.id, &failure.id, strategy);
     let new = |status, not_before, reason: String| NewAttempt { task, failure_id: &failure.id, strategy, idempotency_key: k.clone(), status, not_before, reason };
     if strategy == "none" {
-        let why = fix_text(&failure.class, &failure.summary).unwrap_or_else(|| "AutoFix retried this once already".into());
+        // The code first, as for the other skips, so the attempt doesn't repeat the Needs-you text
+        let why = fix_text(&failure.class).map_or_else(|| "AutoFix retried this once already".into(), |fix| format!("not_retryable: {fix}"));
         return insert(state, &new("skipped", None, why)).await;
     }
     if strategy == "propose_change" {
@@ -691,8 +817,8 @@ pub async fn needs_you(state: &AppState, task: &Task) -> Vec<Value> {
                 let attempts = state.db.attempts_of(&task.id).await.unwrap_or_default();
                 attempts.iter().rev().find(|a| a.failure_id == f.id).is_some_and(|a| a.status == "skipped" && a.reason.starts_with("over_recovery_budget"))
             };
-            if let Some(text) = fix_text(&f.class, &f.summary) {
-                items.push(json!({"kind": "fix_needed", "id": f.id, "text": cut(&text, 200)}));
+            if let Some(text) = fix_text(&f.class) {
+                items.push(json!({"kind": "fix_needed", "id": f.id, "text": text}));
             } else if task.state == "failed" && over_budget().await {
                 items.push(json!({"kind": "fix_needed", "id": f.id, "text": RECOVERY_BUDGET_FIX}));
             }
@@ -1121,8 +1247,7 @@ mod tests {
         for t in &texts {
             assert_eq!(classify("turn", "error", t), "quota", "{t}");
             assert_eq!(strategy_for(classify("turn", "error", t)), "none", "{t}");
-            let fix = fix_text("quota", t).unwrap();
-            assert!(fix.starts_with("Usage limit reached: wait for it to reset or switch account"), "{fix}");
+            assert_eq!(fix_text(classify("turn", "error", t)), Some("Usage limit reached: wait for it to reset or switch account, then retry."), "{t}");
         }
         // A plain rate limit still passes in a minute
         assert_eq!(classify("turn", "error", "stream error: rate-limiting (HTTP 429)"), "transient");
@@ -1161,5 +1286,81 @@ mod tests {
         assert_eq!(redact("key [sk-ant-api03abcdef]"), "key [[redacted]]");
         assert_eq!(redact("'ghp_abcdefghij0123456789'"), "'[redacted]'");
         assert_eq!(redact("exit code 1\nexpected 42 got 41"), "exit code 1\nexpected 42 got 41");
+    }
+
+    #[test]
+    fn names_paths_and_ids_next_to_a_secret_stay_readable() {
+        // eval 10: the command name was masked as `[redacted] --go`
+        assert_eq!(redact("nonexistent_cmd_xyz_ev10 --go"), "nonexistent_cmd_xyz_ev10 --go");
+        assert_eq!(redact("./scripts/check_deploy_20261027.sh --go"), "./scripts/check_deploy_20261027.sh --go");
+        assert_eq!(redact("MyServiceV2HealthCheckEndpoint2026 ok"), "MyServiceV2HealthCheckEndpoint2026 ok");
+        assert_eq!(redact("task 71579df3-4d9b-4edc-9d88-20e540399f9c failed"), "task 71579df3-4d9b-4edc-9d88-20e540399f9c failed");
+        assert_eq!(redact("report_2026_10_27_final_v12.txt"), "report_2026_10_27_final_v12.txt");
+        // the neighbours of a real key keep their names
+        assert_eq!(
+            redact("nonexistent_cmd_ev10b --go Zq8VwK3mT9pL2rX7nB4c done"),
+            "nonexistent_cmd_ev10b --go [redacted] done"
+        );
+        // generated keys are still found, bare and inside a relative path
+        assert_eq!(redact("aB3dE5gH7jK9mN1pQ3sT"), "[redacted]");
+        assert_eq!(redact("9f86d081884c7d659a2feaa0c55ad015"), "[redacted]");
+        assert_eq!(redact("cfg/Zq8VwK3mT9pL2rX7nB4c/x"), "[redacted]");
+        assert_eq!(redact("dGhpc2lzYVNlY3JldDEyMzQ1Ng+/x9="), "[redacted]");
+    }
+
+    #[test]
+    fn labelled_secrets_are_masked_however_short() {
+        let cases = [
+            ("login --password hunter2 --go", "login --password [redacted] --go"),
+            ("login --password=pw1", "login --password=[redacted]"),
+            ("password=x1 user=bob", "password=[redacted] user=bob"),
+            ("curl -H 'X-Token: abc'", "curl -H 'X-Token: [redacted]'"),
+            ("api --token t0k", "api --token [redacted]"),
+            ("secret: s3", "secret: [redacted]"),
+            ("run --key k1 --go", "run --key [redacted] --go"),
+            ("run --key=k1", "run --key=[redacted]"),
+            ("run --api-key=k1", "run --api-key=[redacted]"),
+            ("run --license-key 'ab'", "run --license-key '[redacted]'"),
+            ("key=k1 && go", "key=[redacted] && go"),
+            (r#"{"key": "k1", "keep": "me"}"#, r#"{"key": "[redacted]", "keep": "me"}"#),
+            ("Authorization: Basic YWI6Y2Q=", "Authorization: Basic [redacted]"),
+            ("Authorization: Bearer t1", "Authorization: Bearer [redacted]"),
+            ("curl https://bob:pw@db.local/x", "curl https://bob:[redacted]@db.local/x"),
+            ("mysql -u root -phunter2 db", "mysql -u root -p[redacted] db"),
+            ("sshpass -p pw ssh host", "sshpass -p [redacted] ssh host"),
+            ("/usr/bin/redis-cli -a pw ping", "/usr/bin/redis-cli -a [redacted] ping"),
+        ];
+        for (text, want) in cases {
+            assert_eq!(redact(text), want, "{text}");
+        }
+        // `-p` of other tools is a port or "parents", and a key in prose isn't a label
+        assert_eq!(redact("mkdir -p out && ssh -p 2222 host"), "mkdir -p out && ssh -p 2222 host");
+        assert_eq!(redact("the key point: it works"), "the key point: it works");
+        assert_eq!(redact("cargo test --no-key x"), "cargo test --no-key x");
+    }
+
+    #[test]
+    fn masking_twice_changes_nothing() {
+        // eval 10: a stored (masked) excerpt was masked again and showed `[redacted]]`
+        for text in [
+            "echo password=hunter2hunter2 token=abc; exit 1",
+            "nonexistent_cmd_ev10b --key sk-ant-api03abcdefghij --token ghp_abcdefghij0123456789",
+            "mysql -phunter2 && curl https://u:p@h/x -H 'Authorization: Bearer abc'",
+            r#"{"command": "x --password pw", "key": "k1"}"#,
+        ] {
+            let once = redact(text);
+            assert_eq!(redact(&once), once, "{text}");
+            assert!(!once.contains("]]"), "{once}");
+            assert_eq!(redact_value(&redact_value(&json!({"c": text}))), redact_value(&json!({"c": text})));
+        }
+    }
+
+    #[test]
+    fn a_never_retried_failure_says_what_to_do_once() {
+        for class in ["auth", "quota", "budget", "denied"] {
+            let fix = fix_text(class).unwrap();
+            assert!(fix.ends_with('.') && !fix.contains("retry:"), "{fix}");
+        }
+        assert_eq!(fix_text("transient"), None);
     }
 }

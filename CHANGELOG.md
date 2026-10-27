@@ -83,6 +83,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and its spend doesn't change. Before, the check was only approved and never ran.
 
 ### Fixed
+- **Mission board: AutoFix hides passwords without hiding command names.** A check's command name or a
+  file path is no longer shown as `[redacted]`, short passwords after a flag like `--key` or `-p` (for
+  mysql, sshpass, redis-cli) are hidden, and a stray `]` no longer appears. A sign-in or usage-limit
+  card says what to do once instead of repeating the failure.
 - **Mission Control: racing Redo requests make one copy, and restore refuses unknown forced paths.**
   Two Redo requests on the same flag at the same moment, without an `Idempotency-Key`, could each make
   a copy; now the flag is claimed in the same step as the copy, so one wins and the rest get 409. A

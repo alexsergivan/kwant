@@ -385,6 +385,9 @@ pub fn mask_credentials(text: &str) -> String {
                 let end = text[j..].find(['\n', '\r']).map_or(bytes.len(), |e| j + e);
                 (j, text[j..end].trim_end().len() + j)
             }
+            // already masked (text that went through here once): leave it, or the `]` would be
+            // left behind as `[redacted]]`
+            _ if text[j..].starts_with("[redacted]") => (j, j),
             _ => {
                 let end = text[j..]
                     .find(|c: char| c.is_whitespace() || ",;&)]}\"'".contains(c))
