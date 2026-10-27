@@ -100,6 +100,9 @@ export interface Task {
   checks_summary: ChecksSummary;
   /** The task this one redoes (a fork); older servers leave it out. */
   forked_from?: string | null;
+  /** Set when a restore held the task: nothing claims it until `POST /api/tasks/:id/run`
+   *  (the person's Run). Older servers leave it out. */
+  held_at?: string | null;
   /** Open "may be invalid" flags; older servers leave it out. */
   flags?: TaskFlag[];
   /** Time Machine checkpoints of this task; older servers leave these out. */
@@ -146,8 +149,10 @@ export interface RestorePreview {
   /** Send back as `preview_sha256`; a changed folder or task makes the restore 409 `stale_preview`. */
   preview_sha256: string;
   changes: { path: string; action: RestoreAction }[];
-  /** Changed by another task since the checkpoint: skipped unless named in `force_paths`. */
-  conflicts: { path: string; changed_by_task: string }[];
+  /** Changed since the checkpoint by someone else: skipped unless named in `force_paths`.
+   *  `changed_by_task` names a task only when that task's own file calls wrote the path;
+   *  otherwise it is null and `why` is "changed outside this task". */
+  conflicts: { path: string; changed_by_task: string | null; why?: string }[];
   skipped: { path: string; why: string }[];
   external_not_undone: ExternalCall[];
   /** Always "kwant can't undo these. Check them yourself." */

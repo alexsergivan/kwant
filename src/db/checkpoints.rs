@@ -81,6 +81,9 @@ pub struct ToolCall {
     pub approval_id: Option<String>,
     pub idempotency_key: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// For a `workspace` file tool: the file it names, relative to the task's folder.
+    /// Server-only; it proves which task wrote a path (D11).
+    pub path: Option<String>,
 }
 
 const TRIGGERS: [&str; 3] = [
@@ -133,6 +136,18 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS turn_tool_calls_task ON turn_tool_calls (task_id, id)",
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
+        }
+        // The file a workspace call named came after the first ledgers
+        let has_path: Option<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('turn_tool_calls') WHERE name = 'path'").fetch_optional(&self.pool).await?;
+        if has_path.is_none() {
+            sqlx::query("ALTER TABLE turn_tool_calls ADD COLUMN path TEXT").execute(&self.pool).await?;
+        }
+        // A restore holds a task until the person runs it (D10)
+        let has_held: Option<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('tasks') WHERE name = 'held_at'").fetch_optional(&self.pool).await?;
+        if has_held.is_none() {
+            sqlx::query("ALTER TABLE tasks ADD COLUMN held_at TIMESTAMP").execute(&self.pool).await?;
         }
         for t in TRIGGERS {
             sqlx::query(t).execute(&self.pool).await?;
@@ -262,10 +277,11 @@ impl Database {
         summary: &str,
         decision: &str,
         approval_id: Option<&str>,
+        path: Option<&str>,
     ) -> Result<(), DbError> {
         sqlx::query(
-            "INSERT INTO turn_tool_calls (turn_id, kwant_id, task_id, tool_name, effect, summary, decision, approval_id, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO turn_tool_calls (turn_id, kwant_id, task_id, tool_name, effect, summary, decision, approval_id, created_at, path) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(turn_id)
         .bind(kwant_id)
@@ -276,9 +292,22 @@ impl Database {
         .bind(decision)
         .bind(approval_id)
         .bind(Utc::now())
+        .bind(path)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Holds `task_id` (a restore, D10) or lets it go; returns whether a hold changed.
+    pub async fn set_task_hold(&self, task_id: &str, held: bool) -> Result<bool, DbError> {
+        let r = if held {
+            sqlx::query("UPDATE tasks SET held_at = ?, updated_at = ? WHERE id = ? AND held_at IS NULL").bind(Utc::now()).bind(Utc::now()).bind(task_id)
+        } else {
+            sqlx::query("UPDATE tasks SET held_at = NULL, updated_at = ? WHERE id = ? AND held_at IS NOT NULL").bind(Utc::now()).bind(task_id)
+        }
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() > 0)
     }
 
     /// The task's logged tool calls, oldest first.

@@ -374,6 +374,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tasks/:id/retry", post(missions::routes::retry_task))
         .route("/api/tasks/:id/cancel", post(missions::routes::cancel_task))
         .route("/api/tasks/:id/fork", post(missions::graph::fork_task))
+        .route("/api/tasks/:id/run", post(missions::checkpoints::run_held))
         .route("/api/tasks/:id/checkpoints", get(missions::checkpoints::list).post(missions::checkpoints::create))
         .route("/api/tasks/:id/checkpoints/:cid/restore-preview", get(missions::checkpoints::preview))
         .route("/api/tasks/:id/checkpoints/:cid/restore", post(missions::checkpoints::restore))

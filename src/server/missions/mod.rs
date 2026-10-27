@@ -965,6 +965,7 @@ mod tests {
             updated_at: Utc::now(),
             finished_at: None,
             forked_from: None,
+            held_at: None,
         }
     }
 

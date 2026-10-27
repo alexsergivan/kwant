@@ -422,7 +422,7 @@ it is listed as "not undone".
 ### Tables
 
 - `task_checkpoints`: `id`, `task_id`, `mission_id`, `kind` (`before_run`, `after_run`, `manual`, `before_restore`), `claim_id`, `turn_id`, `attempt`, `created_at`, `created_by`, `files`, `bytes`, `skipped` (a count; the paths and reasons stay in the manifest), `git_head`, `error`. Server-only columns `manifest_path`, `manifest_sha256`, `folder` are never serialized. Rows are never updated; pruning deletes them.
-- `turn_tool_calls` (the ledger; append-only, no UPDATE or DELETE): `turn_id`, `kwant_id`, `task_id`, `tool_name`, `effect` (`none`, `workspace`, `external`), `summary`, `decision`, `approval_id`, `created_at`.
+- `turn_tool_calls` (the ledger; append-only, no UPDATE or DELETE): `turn_id`, `kwant_id`, `task_id`, `tool_name`, `effect` (`none`, `workspace`, `external`), `summary`, `decision`, `approval_id`, `created_at`, and server-only `path` (for a `workspace` file call: the file it names, relative to the task folder; D11).
   - Only task turns are logged (D9): a call is logged when the bot holds a task in that turn.
   - Every call that reaches kwant's permission check is logged, including the ones allowed without a card and the ones refused.
   - `none`: read-only tools (Read, Glob, Grep, LS, WebSearch, TodoWrite…) and the `task_*`/`mission_plan` self tools. `workspace`: Write, Edit, MultiEdit, NotebookEdit inside the task folder. Everything else is `external`, Bash always (D6).
@@ -434,12 +434,14 @@ it is listed as "not undone".
 - `POST /api/tasks/:id/checkpoints` (person only): a manual checkpoint; 201 with the item, 500 if the snapshot failed.
 - `GET /api/tasks/:id/checkpoints/:cid/restore-preview`: `{checkpoint_id, preview_sha256, changes: [{path, action: overwrite|create|delete}], conflicts: [{path, changed_by_task}], skipped: [{path, why}], external_not_undone: [{tool_name, summary, at}], not_undone_note, effects_known, task_state_after, refused: null|fork_instead|running}`.
   - Only paths this task's runs changed are restored. A path another task's run changed after the checkpoint is a conflict, left alone unless forced.
+  - Conflict attribution (D11): `changed_by_task` names a task only when that task's own logged file calls (Write/Edit/MultiEdit/NotebookEdit, `turn_tool_calls.path`) wrote the path during a run after the checkpoint. A path that merely changed while another task ran in the same folder (a shell command, or anyone) is `{path, changed_by_task: null, why: "changed outside this task"}`, unless this task's own calls wrote it and it is still as this task's last run left it.
   - Every `force_paths` entry must be listed by the preview (in `changes` or `conflicts`); otherwise 422 `unknown_force_path` naming the paths, and nothing is written.
   - `effects_known` is false when a run after the checkpoint changed files but no tool call that could have was logged.
   - 409 `not_restorable` when the snapshot failed or was pruned.
-- `POST /api/tasks/:id/checkpoints/:cid/restore` (person only, `Idempotency-Key` required): body `{preview_sha256, force_paths?: [path]}`. Returns `{restored, deleted, failed: [{path, why}], before_restore_checkpoint_id, external_not_undone, not_undone_note, effects_known, task}`.
+- `POST /api/tasks/:id/checkpoints/:cid/restore` (person only, `Idempotency-Key` required): body `{preview_sha256, force_paths?: [path], rerun?: bool}`. Returns `{restored, deleted, failed: [{path, why}], before_restore_checkpoint_id, external_not_undone, not_undone_note, effects_known, task}`.
   - 409 `fork_instead` for a verified task, `running` while a claim is live, `stale_preview` when the folder or task changed since the preview.
   - The task moves review/failed → ready and blocked → backlog; other states stay. A `restored` task event records the counts.
+  - A restore never re-runs a task by itself (D10). When the task ends up ready or backlog it is held (`held_at` set, `held` task event): neither the runner nor a bot's `task_claim` takes it until the person calls `POST /api/tasks/:id/run` (person only; 409 `not_held` when it isn't held; `released` task event). `rerun: true` ("restore and run again") leaves it unheld, or lets go of an earlier hold.
   - Never writes through a symlink or outside the folder.
 - `POST /api/tasks/:id/fork` accepts `from_checkpoint`: the original's task-owned paths are restored to that checkpoint first (after a `before_restore`), then the fork is made. The response adds `restore`.
-- `task_json` gains `checkpoint_count` and `last_checkpoint_at`.
+- `task_json` gains `checkpoint_count`, `last_checkpoint_at` and `held_at` (null unless a restore holds the task).

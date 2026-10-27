@@ -691,3 +691,125 @@ async fn the_scan_stops_at_200_files_and_skips_files_over_50_mb() {
     assert_eq!((skipped[0]["path"].as_str(), skipped[0]["why"].as_str()), (Some("big.bin"), Some("over 50 MB")), "{r}");
     assert_eq!(Path::new(&big).metadata().unwrap().len(), 51 * 1024 * 1024);
 }
+
+// D10
+#[tokio::test]
+async fn a_restore_holds_the_task_until_the_person_runs_it() {
+    let e = setup().await;
+    let (mid, tid, dir) = cli_mission(&e).await;
+    let cid = id(of_kind(&checkpoints(&e, &tid).await, "before_run")[0]);
+    let p = preview(&e, &tid, &cid).await;
+    let (s, r, _) = restore(&e, &tid, &cid, "hold-1", &p["preview_sha256"]).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(r["task"]["state"], "ready", "{r}");
+    assert!(r["task"]["held_at"].is_string(), "a restored task is held: {r}");
+    assert_eq!(events(&e, &tid, "held").await.len(), 1);
+
+    // The runner (tick and the Run button of the mission) leaves it alone
+    kwnt::server::missions::runner::tick(&e.state).await;
+    let run = person(&e, "POST", &format!("/api/missions/{mid}/run"), Some(json!({"max_tasks": 1}))).await;
+    assert!(run["started"].as_array().unwrap().is_empty(), "{run}");
+    assert!(e.state.db.open_claim(&tid).await.unwrap().is_none(), "a held task isn't claimed");
+    assert_eq!(state_of(&e, &tid).await, "ready");
+    // A bot can't claim it either
+    let token = turn(&e, &e.bot, "t-held").await;
+    let rpc = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "task_claim", "arguments": {"task_id": tid}}});
+    let (_, v) = call(&e.app, "POST", "/api/mcp/self", Some(&token), Some(rpc)).await;
+    assert!(v["result"]["isError"].as_bool().unwrap_or(false), "{v}");
+    assert!(v["result"]["content"][0]["text"].as_str().unwrap().contains("waits for the person"), "{v}");
+
+    // Undo works: the task never started, so no 409 running; it stays held
+    let safety = r["before_restore_checkpoint_id"].as_str().unwrap().to_string();
+    let p = preview(&e, &tid, &safety).await;
+    assert!(p["refused"].is_null(), "{p}");
+    let (s, r, _) = restore(&e, &tid, &safety, "hold-2", &p["preview_sha256"]).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "changed");
+    assert!(r["task"]["held_at"].is_string(), "{r}");
+
+    // The person's Run lets it go, once
+    let r = person(&e, "POST", &format!("/api/tasks/{tid}/run"), None).await;
+    assert!(r["task"]["held_at"].is_null(), "{r}");
+    let (s, v) = call(&e.app, "POST", &format!("/api/tasks/{tid}/run"), None, None).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::CONFLICT, Some("not_held")), "{v}");
+    assert_eq!(events(&e, &tid, "released").await.len(), 1);
+    cli_run(&e, &mid, &tid).await;
+
+    // "Restore and run again" doesn't hold it: the runner picks it up
+    let cid = id(of_kind(&checkpoints(&e, &tid).await, "before_run").last().unwrap());
+    let p = preview(&e, &tid, &cid).await;
+    let uri = format!("/api/tasks/{tid}/checkpoints/{cid}/restore");
+    let (s, r, _) = send(&e.app, "POST", &uri, None, Some("hold-3"), Some(json!({"preview_sha256": p["preview_sha256"], "rerun": true}))).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(r["task"]["held_at"].is_null(), "{r}");
+    cli_run(&e, &mid, &tid).await;
+}
+
+/// `bot` claims `tid` in its own turn; returns the turn id and token.
+async fn claim_as(e: &Env, bot: &Kwant, tid: &str) -> (String, String) {
+    let turn_id = format!("t-{tid}-{}", uuid::Uuid::new_v4());
+    let token = turn(e, bot, &turn_id).await;
+    ok(e, &token, "task_claim", json!({"task_id": tid})).await;
+    (turn_id, token)
+}
+
+/// `bot` writes `rel` in `dir`, through a logged Write call when `logged` (else like a shell would).
+async fn write_as(e: &Env, bot: &Kwant, turn_id: &str, dir: &Path, rel: &str, body: &str, logged: bool) {
+    if logged {
+        let req = kwnt::mcp::ToolApprovalRequest {
+            kwant_id: bot.id.clone(),
+            kwant_name: bot.name.clone(),
+            turn_id: turn_id.into(),
+            tool_name: "Write".into(),
+            server: String::new(),
+            tool: "Write".into(),
+            arguments: json!({"file_path": rel, "content": body}),
+            builtin: Some(kwnt::mcp::BuiltinCall { cwd: Some(dir.to_string_lossy().into_owned()), outside_folder: false }),
+            smart: None,
+        };
+        kwnt::server::missions::checkpoints::log_call(&e.state.db, &e.state.config.data_dir, &req, "allowed", None).await;
+    }
+    std::fs::write(dir.join(rel), body).unwrap();
+}
+
+// D11
+#[tokio::test]
+async fn a_conflict_names_another_task_only_when_its_own_calls_wrote_the_path() {
+    let e = setup().await;
+    let bot = json!({"name": "Bea", "title": "Bea the builder", "persona_prompt": "Test persona",
+                     "avatar_sprite": "s", "driver_type": "cli", "preferred_model": "claude"});
+    let bea: Kwant = e.state.db.get_kwant(&id(&person(&e, "POST", "/api/kwants", Some(bot)).await)).await.unwrap().unwrap();
+    let me = e.bot.id.clone();
+    let (mid, ids) = mission(&e, &me, json!([{"title": "A", "owner": me}, {"title": "B", "owner": bea.id}])).await;
+    let (a, b) = (ids[0].clone(), ids[1].clone());
+    let dir = folder(&e, &mid).await;
+    std::fs::write(dir.join("seed.txt"), "seed").unwrap();
+    // A and B run at the same time in one folder
+    let (ta, ka) = claim_as(&e, &e.bot, &a).await;
+    let (tb, kb) = claim_as(&e, &bea, &b).await;
+    write_as(&e, &e.bot, &ta, &dir, "a.txt", "by A", true).await;
+    write_as(&e, &bea, &tb, &dir, "b.txt", "by B", true).await;
+    write_as(&e, &bea, &tb, &dir, "seed.txt", "by a shell", false).await;
+    ok(&e, &ka, "task_update", json!({"task_id": a, "status": "review"})).await;
+    ok(&e, &kb, "task_update", json!({"task_id": b, "status": "review"})).await;
+    let calls = e.state.db.tool_calls_of(&a).await.unwrap();
+    assert_eq!(calls.iter().filter_map(|c| c.path.as_deref()).collect::<Vec<_>>(), vec!["a.txt"], "{calls:?}");
+
+    let conflict = |p: &Value, path: &str| p["conflicts"].as_array().unwrap().iter().find(|c| c["path"] == path).cloned();
+    let change = |p: &Value, path: &str| p["changes"].as_array().unwrap().iter().any(|c| c["path"] == path);
+    // Restoring B: a.txt is A's (A's own Write), seed.txt nobody's own call wrote
+    let cb = id(of_kind(&checkpoints(&e, &b).await, "before_run")[0]);
+    let pb = preview(&e, &b, &cb).await;
+    assert_eq!(conflict(&pb, "a.txt").map(|c| c["changed_by_task"].clone()), Some(json!(a)), "{pb}");
+    assert!(change(&pb, "b.txt"), "B's own file is a plain change: {pb}");
+    let seed = conflict(&pb, "seed.txt").unwrap_or_else(|| panic!("{pb}"));
+    assert!(seed["changed_by_task"].is_null() && seed["why"] == "changed outside this task", "{pb}");
+    // Restoring A: b.txt is B's; a.txt, only A's own call wrote, is never shown as B's
+    let ca = id(of_kind(&checkpoints(&e, &a).await, "before_run")[0]);
+    let pa = preview(&e, &a, &ca).await;
+    assert_eq!(conflict(&pa, "b.txt").map(|c| c["changed_by_task"].clone()), Some(json!(b)), "{pa}");
+    assert!(change(&pa, "a.txt") && conflict(&pa, "a.txt").is_none(), "{pa}");
+    assert!(conflict(&pa, "seed.txt").is_some_and(|c| c["changed_by_task"].is_null()), "{pa}");
+    let named: Vec<&Value> = pa["conflicts"].as_array().unwrap().iter().chain(pb["conflicts"].as_array().unwrap()).filter(|c| !c["changed_by_task"].is_null()).collect();
+    assert_eq!(named.len(), 2, "only proven writes name a task: {named:?}");
+}

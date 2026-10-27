@@ -41,6 +41,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and blocked work. Turn it on in Settings → Mission board. It works on phone and desktop.
 
 ### Changed
+- **Mission Control: a restore no longer starts the task again by itself.** A restored task that could
+  run waits until you press Run; "restore and run again" keeps the old behaviour. A restore conflict
+  names another task only when that task's own file edits wrote the file; otherwise it says "changed
+  outside this task".
 - **An optional check never shows as needing you.** While a required check is still running, an
   optional check waiting for your OK no longer counts in "Needs you now" or shows the amber "Waiting
   for you" block on the receipt. You can still allow it from its row.

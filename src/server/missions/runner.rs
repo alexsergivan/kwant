@@ -73,7 +73,7 @@ pub async fn run_mission(state: &AppState, mission: &Mission, max: usize) -> (Ve
     let ready = state.db.list_tasks(&space, Some("ready"), Some(&mission.id), None, 100).await.unwrap_or_default();
     let mut picked: Vec<(Task, crate::db::models::Kwant)> = Vec::new();
     let mut reason = None;
-    for t in ready.iter().filter(|t| matches!(t.source_kind.as_str(), "mission" | "person")) {
+    for t in ready.iter().filter(|t| matches!(t.source_kind.as_str(), "mission" | "person") && t.held_at.is_none()) {
         if picked.len() >= max {
             break;
         }

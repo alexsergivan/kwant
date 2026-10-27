@@ -848,6 +848,7 @@ mod tests {
         assert!(person_only(&post, "/api/tasks/t1/checks/run"));
         assert!(person_only(&post, "/api/checks/c1/approve"));
         assert!(person_only(&post, "/api/tasks/t1/fork"));
+        assert!(person_only(&post, "/api/tasks/t1/run"));
         assert!(person_only(&post, "/api/tasks/t1/checkpoints"));
         assert!(person_only(&post, "/api/tasks/t1/checkpoints/c1/restore"));
         assert!(!person_only(&get, "/api/tasks/t1/checkpoints"));

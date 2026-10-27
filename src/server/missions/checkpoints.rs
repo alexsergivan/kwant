@@ -41,6 +41,8 @@ pub const MAX_FILES: usize = 20_000;
 pub const SKIP_DIRS: [&str; 4] = [".git", "node_modules", "target", ".venv"];
 /// What restore says about external side effects, always.
 pub const NOT_UNDONE: &str = "kwant can't undo these. Check them yourself.";
+/// A conflict no task's own calls account for (D11).
+pub const OUTSIDE: &str = "changed outside this task";
 
 /// One snapshot, prune or restore at a time: blob GC never races a snapshot writing blobs.
 static STORE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -95,6 +97,8 @@ pub struct Skip {
 }
 
 /// One run of a task: the paths that differ between its `before_run` and `after_run`.
+/// In a shared folder `paths` also holds what other tasks changed meanwhile; `touched` is
+/// only what this run's own logged file calls named (D11: the proof that names a task).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Run {
     claim_id: Option<String>,
@@ -102,6 +106,8 @@ struct Run {
     at: chrono::DateTime<chrono::Utc>,
     folder: String,
     paths: Vec<String>,
+    #[serde(default)]
+    touched: Vec<String>,
 }
 
 fn private_dir(dir: &FsPath) -> std::io::Result<()> {
@@ -475,7 +481,23 @@ async fn note_run(state: &AppState, task: &Task, after: &Checkpoint, after_m: &M
             after_m.files.iter().map(|f| f.path.clone()).collect()
         }
     };
-    let run = Run { claim_id: after.claim_id.clone(), after_run_id: after.id.clone(), at: after.created_at, folder: after.folder.clone(), paths };
+    // The run's own workspace calls since its before_run (all of the task's when there is none)
+    let since = all.iter().rev().find(|c| c.kind == "before_run" && c.claim_id.is_some() && c.claim_id == after.claim_id).map(|c| c.created_at);
+    let calls = state.db.tool_calls_of(&task.id).await.unwrap_or_default();
+    let named: BTreeSet<&str> = calls
+        .iter()
+        .filter(|t| t.decision != "denied" && since.is_none_or(|s| t.created_at >= s) && t.created_at <= after.created_at)
+        .filter_map(|t| t.path.as_deref())
+        .collect();
+    let touched = paths.iter().filter(|p| named.contains(p.as_str())).cloned().collect();
+    let run = Run {
+        claim_id: after.claim_id.clone(),
+        after_run_id: after.id.clone(),
+        at: after.created_at,
+        folder: after.folder.clone(),
+        paths,
+        touched,
+    };
     let dir = root(state).join(&task.id);
     if let Err(e) = tokio::task::spawn_blocking(move || append_run(&dir, &run)).await.unwrap_or_else(|e| Err(std::io::Error::other(e))) {
         tracing::warn!(error = %e, "could not record a run's paths");
@@ -581,21 +603,33 @@ pub fn effect(req: &crate::mcp::ToolApprovalRequest, task_folder: Option<&FsPath
         return "none";
     }
     if FILE_TOOLS.contains(&tool) {
-        let path = ["file_path", "notebook_path", "path"].iter().find_map(|k| req.arguments[*k].as_str()).unwrap_or("");
-        let Some(folder) = task_folder.and_then(|f| crate::mcp::builtin_tools::canonical_folder(Some(f))) else { return "external" };
-        if path.is_empty() {
-            return "external";
-        }
-        // A relative path is the bot's working folder's
-        let p = FsPath::new(path);
-        let abs = match (p.is_absolute(), req.builtin.as_ref().and_then(|b| b.cwd.as_deref())) {
-            (true, _) => p.to_path_buf(),
-            (false, Some(cwd)) => FsPath::new(cwd).join(p),
-            (false, None) => return "external",
-        };
+        let Some((folder, abs)) = file_target(req, task_folder) else { return "external" };
         return if crate::mcp::builtin_tools::is_inside(&folder, &abs.to_string_lossy()) { "workspace" } else { "external" };
     }
     "external"
+}
+
+/// A file tool's canonical task folder and the absolute path it names (a relative path is the
+/// bot's working folder's).
+fn file_target(req: &crate::mcp::ToolApprovalRequest, task_folder: Option<&FsPath>) -> Option<(PathBuf, PathBuf)> {
+    let path = ["file_path", "notebook_path", "path"].iter().find_map(|k| req.arguments[*k].as_str()).unwrap_or("");
+    let folder = task_folder.and_then(|f| crate::mcp::builtin_tools::canonical_folder(Some(f)))?;
+    if path.is_empty() {
+        return None;
+    }
+    let p = FsPath::new(path);
+    let abs = match (p.is_absolute(), req.builtin.as_ref().and_then(|b| b.cwd.as_deref())) {
+        (true, _) => p.to_path_buf(),
+        (false, Some(cwd)) => FsPath::new(cwd).join(p),
+        (false, None) => return None,
+    };
+    Some((folder, abs))
+}
+
+/// The task-folder-relative file a `workspace` call names, as the manifests spell it.
+fn workspace_path(req: &crate::mcp::ToolApprovalRequest, task_folder: Option<&FsPath>) -> Option<String> {
+    let (folder, abs) = file_target(req, task_folder)?;
+    crate::mcp::builtin_tools::inside_rel(&folder, &abs.to_string_lossy()).filter(|r| safe_rel(r))
 }
 
 /// Keys whose values are bodies, never shown: only their length.
@@ -641,8 +675,9 @@ pub async fn log_call(db: &crate::db::Database, data_dir: &FsPath, req: &crate::
         _ => None,
     };
     let effect = effect(req, folder.as_deref());
+    let path = if effect == "workspace" { workspace_path(req, folder.as_deref()) } else { None };
     let summary = summary(&req.tool_name, &req.arguments);
-    if let Err(e) = db.log_tool_call(&req.turn_id, &req.kwant_id, &task_id, &req.tool_name, effect, &summary, decision, approval_id).await {
+    if let Err(e) = db.log_tool_call(&req.turn_id, &req.kwant_id, &task_id, &req.tool_name, effect, &summary, decision, approval_id, path.as_deref()).await {
         tracing::warn!(error = %e, "could not log a tool call");
     }
 }
@@ -695,24 +730,38 @@ pub async fn plan(state: &AppState, task: &Task, c: &Checkpoint) -> Result<Plan,
     let blobs = root(state).join("blobs");
     // Every path this task's runs changed, and what other tasks' runs changed after `c`
     let mut owned = BTreeSet::new();
+    let mut own_touched = BTreeSet::new();
     for r in read_runs(&task_dir) {
         if r.folder == c.folder {
             owned.extend(r.paths);
+            own_touched.extend(r.touched);
         }
     }
+    // D11: a task is named only when its own logged calls wrote the path; a path that merely
+    // changed while another task ran in the same folder is "changed outside this task"
     let mut others: BTreeMap<String, String> = BTreeMap::new();
+    let mut outside = BTreeSet::new();
     let mut seen = BTreeSet::new();
     for o in state.db.run_checkpoints_except(&task.id).await.map_err(|e| PlanError::Db(e.to_string()))? {
         if seen.insert(o.task_id.clone()) {
             for r in read_runs(&root(state).join(&o.task_id)) {
                 if r.folder == c.folder && r.at > c.created_at {
-                    for p in r.paths {
+                    for p in r.touched {
                         others.entry(p).or_insert_with(|| o.task_id.clone());
                     }
+                    outside.extend(r.paths);
                 }
             }
         }
     }
+    // What this task's last run left: a path its own calls wrote, still as it left it, is its own
+    let all = state.db.checkpoints_of(&task.id).await.map_err(|e| PlanError::Db(e.to_string()))?;
+    let left: Option<BTreeMap<String, String>> = all
+        .iter()
+        .rev()
+        .find(|x| x.kind == "after_run" && !x.failed() && x.folder == c.folder && x.created_at >= c.created_at)
+        .and_then(read_manifest)
+        .map(|m| m.files.into_iter().map(|e| (e.path, e.sha256)).collect());
     let mut skipped = Vec::new();
     let mut entries = BTreeMap::new();
     for e in &manifest.files {
@@ -765,9 +814,13 @@ pub async fn plan(state: &AppState, task: &Task, c: &Checkpoint) -> Result<Plan,
             Err(why) => skipped.push(json!({"path": p, "why": why})),
             Ok((None, sha)) => hashes.push((p, sha)),
             Ok((Some(action), sha)) => {
-                hashes.push((p.clone(), sha));
+                hashes.push((p.clone(), sha.clone()));
+                let as_left = own_touched.contains(&p) && left.as_ref().is_some_and(|l| l.get(&p).map(String::as_str).unwrap_or("") == sha);
                 if let Some(t) = others.get(&p) {
                     conflicts.push(json!({"path": p, "changed_by_task": t}));
+                    forced.insert(p, action);
+                } else if outside.contains(&p) && !as_left {
+                    conflicts.push(json!({"path": p, "changed_by_task": null, "why": OUTSIDE}));
                     forced.insert(p, action);
                 } else {
                     changes.push(Change { path: p, action });
@@ -988,6 +1041,9 @@ pub struct RestoreBody {
     preview_sha256: String,
     #[serde(default)]
     force_paths: Vec<String>,
+    /// "Restore and run again"; otherwise a task the runner could pick up is held (D10).
+    #[serde(default)]
+    rerun: bool,
 }
 
 /// `POST /api/tasks/:id/checkpoints/:cid/restore` (person-only, `Idempotency-Key` required).
@@ -1022,6 +1078,13 @@ pub async fn restore(
             return Err(coded(StatusCode::UNPROCESSABLE_ENTITY, "unknown_force_path", &msg));
         }
         let mut out = write_back(&state, &task, &c, &p, b.force_paths.into_iter().collect()).await?;
+        // Held before the move, so the runner never sees it ready and unheld (D10)
+        let runnable = matches!(p.state_after.unwrap_or(task.state.as_str()), "ready" | "backlog");
+        let changed = state.db.set_task_hold(&task.id, runnable && !b.rerun).await.map_err(internal)?;
+        if changed {
+            let kind = if b.rerun { "released" } else { "held" };
+            state.db.task_event(&task.id, task.mission_id.as_deref(), kind, "person", &json!({"checkpoint_id": c.id})).await.map_err(internal)?;
+        }
         let mut t = state.db.get_task(&task.id).await.map_err(internal)?.unwrap_or(task.clone());
         if let Some(to) = p.state_after {
             let change = TaskChange { reason: Some("restored from a checkpoint".into()), detail: Some(json!({"checkpoint_id": c.id})), ..Default::default() };
@@ -1033,6 +1096,24 @@ pub async fn restore(
         Ok(out)
     })
     .await
+}
+
+/// `POST /api/tasks/:id/run` (person-only): lets a task a restore held be claimed again (D10).
+pub async fn run_held(State(state): State<AppState>, RawQuery(q): RawQuery, Path(id): Path<String>) -> Response {
+    let task = match load_task(&state, q.as_deref(), &id).await {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    match state.db.set_task_hold(&task.id, false).await {
+        Ok(true) => {
+            let _ = state.db.task_event(&task.id, task.mission_id.as_deref(), "released", "person", &json!({})).await;
+        }
+        Ok(false) => return coded(StatusCode::CONFLICT, "not_held", "the task isn't on hold"),
+        Err(e) => return internal(e),
+    }
+    let t = state.db.get_task(&task.id).await.ok().flatten().unwrap_or(task);
+    emit_task(&state, &t).await;
+    Json(json!({"task": task_json(&state, &t).await})).into_response()
 }
 
 /// Fork `from_checkpoint` (B1 `POST /api/tasks/:id/fork`): writes the original's task-owned

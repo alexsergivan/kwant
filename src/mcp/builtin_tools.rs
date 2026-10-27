@@ -405,6 +405,18 @@ pub fn is_inside(folder: &Path, path: &str) -> bool {
     }
 }
 
+/// `path` (absolute, or relative to `folder`) relative to `folder`, judged like [`is_inside`];
+/// `None` when it is outside or is the folder itself.
+pub fn inside_rel(folder: &Path, path: &str) -> Option<String> {
+    if path.starts_with('~') {
+        return None;
+    }
+    let p = Path::new(path);
+    let joined = if p.is_absolute() { p.to_path_buf() } else { folder.join(p) };
+    let rel = resolve(&joined)?.strip_prefix(folder).ok()?.to_string_lossy().into_owned();
+    (!rel.is_empty()).then_some(rel)
+}
+
 /// Follows symlinks through the existing part of `path` and appends the rest, refusing a `..`
 /// (or anything but a plain name) in the part that doesn't exist yet.
 fn resolve(path: &Path) -> Option<PathBuf> {

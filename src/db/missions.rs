@@ -71,6 +71,8 @@ pub struct Task {
     pub finished_at: Option<DateTime<Utc>>,
     /// The task this one redoes (a fork, Phase B1); `None` otherwise.
     pub forked_from: Option<String>,
+    /// Set by a restore (D10): no claim until the person runs the task (`POST /api/tasks/:id/run`).
+    pub held_at: Option<DateTime<Utc>>,
 }
 
 /// A lease on a task. Times are unix milliseconds so the SQLite triggers can compare them.
@@ -237,6 +239,8 @@ pub enum ClaimRefused {
     Budget { remaining: i64, needed: i64 },
     MissionNotActive,
     Missing,
+    /// A restore put the task on hold until the person runs it (D10)
+    OnHold,
 }
 
 impl std::fmt::Display for ClaimRefused {
@@ -250,6 +254,7 @@ impl std::fmt::Display for ClaimRefused {
             }
             ClaimRefused::MissionNotActive => write!(f, "the mission isn't approved and active"),
             ClaimRefused::Missing => write!(f, "no such task"),
+            ClaimRefused::OnHold => write!(f, "the task was restored and waits for the person to run it"),
         }
     }
 }
@@ -718,6 +723,9 @@ impl Database {
         if task.state != "ready" {
             let held = matches!(task.state.as_str(), "working" | "needs_you");
             return Ok(Err(if held { ClaimRefused::Held } else { ClaimRefused::NotReady(task.state) }));
+        }
+        if task.held_at.is_some() {
+            return Ok(Err(ClaimRefused::OnHold));
         }
         let now = now_ms();
         if !system {
