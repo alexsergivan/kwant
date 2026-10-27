@@ -313,6 +313,25 @@ fn absolute(base: &url::Url, href: &str) -> String {
     base.join(href.trim()).map(|u| u.to_string()).unwrap_or_else(|_| href.trim().to_string())
 }
 
+/// Where an image comes from, to name it in a report: `src`, else a lazy-loading attribute, else the
+/// first `srcset` candidate. Without any, its id or class, so a script-filled image isn't reported
+/// as the page itself.
+fn image_src(tag: &Tag, base: &url::Url) -> String {
+    let attr = |n: &str| tag.attr(n).map(str::trim).filter(|v| !v.is_empty());
+    let src = attr("src")
+        .or_else(|| attr("data-src"))
+        .or_else(|| attr("data-lazy-src"))
+        .or_else(|| attr("srcset").or_else(|| attr("data-srcset")).and_then(|s| s.split_whitespace().next()));
+    match src {
+        Some(s) => absolute(base, s),
+        None => match (attr("id"), attr("class")) {
+            (Some(id), _) => format!("(no src; id=\"{id}\")"),
+            (None, Some(class)) => format!("(no src; class=\"{class}\")"),
+            (None, None) => "(no src)".into(),
+        },
+    }
+}
+
 /// What an audit reads from a page's HTML.
 pub fn page_facts(html: &str, base: &url::Url) -> Value {
     let mut title: Option<String> = None;
@@ -391,8 +410,7 @@ pub fn page_facts(html: &str, base: &url::Url) -> Value {
                     None => {
                         missing_alt += 1;
                         if no_alt.len() < MAX_LIST {
-                            let src = tag.attr("src").or(tag.attr("data-src")).unwrap_or("");
-                            no_alt.push(absolute(base, src));
+                            no_alt.push(image_src(&tag, base));
                         }
                     }
                     Some(a) if a.trim().is_empty() => empty_alt += 1,
@@ -508,6 +526,24 @@ mod tests {
         assert_eq!(f["images"]["missing_alt_src"], json!(["https://booktun.ing/b.jpg"]));
         assert_eq!(f["links"], json!({"total": 2, "nofollow": 1}));
         assert_eq!(f["json_ld"][0]["types"], json!(["Book", "WebPage", "ItemPage"]));
+    }
+
+    #[test]
+    fn an_image_without_src_is_named_by_its_lazy_source_or_id_not_the_page() {
+        let base = url::Url::parse("https://booktun.ing/p/").unwrap();
+        let html = r#"<img data-src="lazy.jpg"><img srcset="s1.jpg 1x, s2.jpg 2x"><img id="cover"><img class="hero big"><img src="">"#;
+        let f = page_facts(html, &base);
+        assert_eq!(f["images"]["missing_alt"], 5);
+        assert_eq!(
+            f["images"]["missing_alt_src"],
+            json!([
+                "https://booktun.ing/p/lazy.jpg",
+                "https://booktun.ing/p/s1.jpg",
+                "(no src; id=\"cover\")",
+                "(no src; class=\"hero big\")",
+                "(no src)"
+            ])
+        );
     }
 
     #[test]
