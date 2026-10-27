@@ -199,7 +199,9 @@ async fn apply_creates_bots_without_tools_pending_skills_and_paused_routines_the
     let routines: Vec<_> = e.state.db.list_routines(&space).await.unwrap().into_iter().filter(|r| r.kwant_id == bot_id).collect();
     assert_eq!(routines.len(), 1);
     assert!(!routines[0].enabled && routines[0].next_run_at.is_none(), "routines arrive paused");
-    assert_eq!(e.state.db.list_memories(&bot_id).await.unwrap().len(), 1);
+    let memories = e.state.db.list_memories(&bot_id).await.unwrap();
+    assert_eq!(memories.len(), 1);
+    assert!(memories[0].imported && memories[0].source == "user", "an imported note is labelled imported, not the person's words");
     assert!(!srv.id.is_empty(), "the space had a tool the import had to opt the bot out of");
 
     let (status, list) = get(&e.app, "/api/imports").await;

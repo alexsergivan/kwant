@@ -308,7 +308,7 @@ fn exempt(path: &str) -> bool {
 }
 
 /// Routes only the person may call: saved passwords and the password vault (Bitwarden), changing app-wide settings, what bots wait on the person for, answering an approval card, Loose ends, Connections and Parallel Universe, the
-/// approvals switch, and deleting a bot or team or undoing a bot action or import (those delete saved passwords too). A bot's turn token (or any
+/// approvals switch, team and channel instructions, notes written for a bot, skills, and deleting a bot or team or undoing a bot action or import (those delete saved passwords too). A bot's turn token (or any
 /// bearer that isn't the API token) is refused with 403 everywhere. From another machine they need the API token (401);
 /// from this machine they don't, unless `KWNT_REQUIRE_TOKEN=always` (`person_token_needed`).
 pub fn person_only(method: &Method, path: &str) -> bool {
@@ -353,7 +353,18 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "app", "update", ..] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
-        ["", "api", "kwants" | "teams", _] => *method == Method::DELETE,
+        // A team's instructions go into every member's prompt (PUT and PATCH both set them), and a
+        // channel's PATCH sets its instructions and members: bots change these through their
+        // `team_update` / `channel_update` actions, which the person can undo
+        ["", "api", "teams", _] => matches!(*method, Method::DELETE | Method::PUT | Method::PATCH),
+        ["", "api", "channels", _] => *method == Method::PATCH,
+        ["", "api", "kwants", _] => *method == Method::DELETE,
+        // A note written here is saved as the person's ("written by the person"), for any bot:
+        // bots keep their own notes with the memory tools
+        ["", "api", "kwants", _, "memories", ..] => *method != Method::GET && *method != Method::HEAD,
+        // Skills go into prompts. A skill made or switched on here is live at once, and approving
+        // or rejecting one is the person's call: bots only propose (`skill_propose`)
+        ["", "api", "skills", ..] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "bot-actions" | "imports", _, "undo"] => *method == Method::POST,
         _ => false,
     }
@@ -914,6 +925,23 @@ mod tests {
         assert!(!person_only(&put, "/api/kwants/k1"));
         assert!(!person_only(&get, "/api/teams/t1"));
         assert!(!person_only(&post, "/api/bot-actions/b1/confirm"));
+        // C0: instructions, notes written for a bot, and skills
+        let patch = Method::PATCH;
+        assert!(person_only(&patch, "/api/teams/t1"));
+        assert!(person_only(&put, "/api/teams/t1"));
+        assert!(person_only(&patch, "/api/channels/c1"));
+        assert!(!person_only(&get, "/api/channels/c1"));
+        assert!(person_only(&post, "/api/kwants/k1/memories"));
+        assert!(person_only(&patch, "/api/kwants/k1/memories/m1"));
+        assert!(person_only(&del, "/api/kwants/k1/memories/m1"));
+        assert!(!person_only(&get, "/api/kwants/k1/memories"));
+        assert!(person_only(&post, "/api/skills/s1/approve"));
+        assert!(person_only(&post, "/api/skills/s1/reject"));
+        assert!(person_only(&post, "/api/skills"));
+        assert!(person_only(&patch, "/api/skills/s1"));
+        assert!(person_only(&del, "/api/skills/s1"));
+        assert!(!person_only(&get, "/api/skills"));
+        assert!(!person_only(&get, "/api/skills/s1"));
     }
 
     #[test]

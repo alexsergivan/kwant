@@ -211,7 +211,7 @@ impl Database {
                 .execute(&mut *tx)
                 .await?;
             for text in &bot.memories {
-                sqlx::query("INSERT INTO kwant_memories (id, kwant_id, text, source, created_at, updated_at) VALUES (?, ?, ?, 'user', ?, ?)")
+                sqlx::query("INSERT INTO kwant_memories (id, kwant_id, text, source, imported, created_at, updated_at) VALUES (?, ?, ?, 'user', 1, ?, ?)")
                     .bind(Uuid::new_v4().to_string())
                     .bind(&id)
                     .bind(text)

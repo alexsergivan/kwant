@@ -20,14 +20,15 @@ pub const MAX_PINNED_PER_KWANT: i64 = 10;
 /// Most results from one memory search.
 pub const MAX_MEMORY_SEARCH_LIMIT: i64 = 20;
 /// Columns a [`Memory`] row is read with.
-const MEMORY_COLUMNS: &str = "id, kwant_id, text, source, pinned_by, created_at, updated_at";
+const MEMORY_COLUMNS: &str = "id, kwant_id, text, source, pinned_by, imported, created_at, updated_at";
 /// Undoes the pinning and memory-search migration (see [`Database::migrate_continuity`]): the
 /// table goes back to the shape older releases read. Kept for rollbacks and tested.
 pub const MEMORY_PINS_DOWN: &str = "DROP TRIGGER IF EXISTS kwant_memories_fts_ai; \
     DROP TRIGGER IF EXISTS kwant_memories_fts_ad; \
     DROP TRIGGER IF EXISTS kwant_memories_fts_au; \
     DROP TABLE IF EXISTS kwant_memories_fts; \
-    ALTER TABLE kwant_memories DROP COLUMN pinned_by";
+    ALTER TABLE kwant_memories DROP COLUMN pinned_by; \
+    ALTER TABLE kwant_memories DROP COLUMN imported";
 /// Most search results per request.
 pub const MAX_SEARCH_LIMIT: i64 = 50;
 /// Most runs kept per routine; older ones are pruned when a run starts.
@@ -41,6 +42,9 @@ pub struct Memory {
     pub source: String,
     /// Who pinned it ('user' or 'agent'); `None` when it isn't pinned. Pinned notes always load first.
     pub pinned_by: Option<String>,
+    /// Came in with an import (the person's, `source = 'user'`, but not words they wrote here).
+    /// Cleared when the person edits it.
+    pub imported: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -284,7 +288,7 @@ impl Database {
         self.migrate_memory_pins().await
     }
 
-    /// Additive and reversible ([`MEMORY_PINS_DOWN`]): a `pinned_by` column and a search index
+    /// Additive and reversible ([`MEMORY_PINS_DOWN`]): `pinned_by` and `imported` columns and a search index
     /// over memories, filled from existing notes the first time. Older binaries ignore both, and
     /// the triggers keep the index current for their writes too.
     async fn migrate_memory_pins(&self) -> Result<(), DbError> {
@@ -293,6 +297,9 @@ impl Database {
         )
         .execute(&self.pool)
         .await;
+        let _ = sqlx::query("ALTER TABLE kwant_memories ADD COLUMN imported INTEGER NOT NULL DEFAULT 0")
+            .execute(&self.pool)
+            .await;
         let had_index: Option<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'kwant_memories_fts'",
         )
@@ -494,6 +501,7 @@ impl Database {
             text,
             source: source.into(),
             pinned_by,
+            imported: false,
             created_at: now,
             updated_at: now,
         })
@@ -509,7 +517,7 @@ impl Database {
     ) -> Result<Memory, MemoryError> {
         let text = clean_memory_text(text)?;
         let res = sqlx::query(
-            "UPDATE kwant_memories SET text = ?, source = 'user', updated_at = ? WHERE id = ? AND kwant_id = ?",
+            "UPDATE kwant_memories SET text = ?, source = 'user', imported = 0, updated_at = ? WHERE id = ? AND kwant_id = ?",
         )
         .bind(&text)
         .bind(Utc::now())

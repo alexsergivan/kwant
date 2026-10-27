@@ -123,6 +123,7 @@ Suggested buttons:
 - `POST /api/bot-actions/:id/confirm` and `POST /api/bot-actions/:id/decline`: only for pending actions; 409 otherwise.
 - All three return **403** for a turn token (self tools or MCP session) or any non-API bearer.
 - Undo is person-only: a turn token gets 403, and from another machine (or with `KWNT_REQUIRE_TOKEN=always`) it needs the API token (401 `{person_only:true}` without it), because undoing a bot or channel deletes its saved passwords. The same holds for `POST /api/imports/:id/undo`, `DELETE /api/kwants/:id` and `DELETE /api/teams/:id`.
+- Prompt inputs are person-only too (Phase C C0), with the same 403/401 rules: `PUT`/`PATCH /api/teams/:id` and `PATCH /api/channels/:id` (instructions, members), every non-GET `/api/kwants/:id/memories…` route (a note written there is saved as the person's, for any bot), and every non-GET `/api/skills…` route (create, edit, enable, delete, approve, reject). Bots keep using their actions (`team_update`, `channel_update`), memory tools and `skill_propose`; reads stay open. Imported notes are flagged `imported: true` and shown to bots as "(imported)", not "(written by the person)"; the person editing one clears the flag.
 - After a change, the card's meta is updated and SSE sends `bot_action_updated { action }`. That event is routed to the space and the chat context (channel, direct chat or thread).
 
 ## Hiring
