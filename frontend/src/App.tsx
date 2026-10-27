@@ -29,6 +29,8 @@ import { HireCard, type HireDecision } from './components/HireCard';
 import type { RoutineFocus } from './components/RoutinesPanel';
 import { AwayPage } from './components/AwayView';
 import { LooseEndsPage } from './components/LooseEndsView';
+import { MissionBoardPage } from './components/MissionBoardView';
+import { MISSION_BOARD_SETTING_EVENT, emitMission, parseMissionBoardSetting, sourceChat } from './missions';
 import { ParallelPage } from './components/ParallelUniverseView';
 import { ConnectionsPage } from './components/ConnectionsView';
 import { AlertTriangle, Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
@@ -296,6 +298,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [showLoose, setShowLoose] = useState(false);
   const [showConnections, setShowConnections] = useState(false);
   const [showParallel, setShowParallel] = useState(false);
+  // Mission board: shown in the sidebar only when the server has it switched on.
+  const [showMissions, setShowMissions] = useState(false);
+  const [missionBoard, setMissionBoard] = useState(false);
   const [awayCount, setAwayCount] = useState(0);
   const awaySinceRef = useRef<string | null>(null);
   const awayTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -373,6 +378,23 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     sw.addEventListener('message', onMessage);
     return () => sw.removeEventListener('message', onMessage);
   }, [space.id]);
+  // The Mission board is off unless the server says otherwise; Settings tells us when it changes.
+  useEffect(() => {
+    let live = true;
+    fetch('/api/settings')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const on = parseMissionBoardSetting(d);
+        if (live && on !== null) setMissionBoard(on);
+      })
+      .catch(() => {});
+    const onSetting = (e: Event) => setMissionBoard(Boolean((e as CustomEvent<boolean>).detail));
+    window.addEventListener(MISSION_BOARD_SETTING_EVENT, onSetting);
+    return () => {
+      live = false;
+      window.removeEventListener(MISSION_BOARD_SETTING_EVENT, onSetting);
+    };
+  }, []);
   const showNotificationRef = useRef(showNotification);
   showNotificationRef.current = showNotification;
   const refreshProfiles = useCallback(() => {
@@ -876,6 +898,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'MemoryChanged':
             emitContinuity({ type: 'memory_changed', data: event.data });
             break;
+          case 'task_updated':
+            if (event.data?.task) emitMission({ type: 'task_updated', data: { task: event.data.task } });
+            break;
+          case 'mission_updated':
+            if (event.data?.mission) emitMission({ type: 'mission_updated', data: { mission: event.data.mission } });
+            break;
           case 'routine_run':
           case 'RoutineRun':
             emitContinuity({ type: 'routine_run', data: event.data });
@@ -1354,6 +1382,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setShowLoose(false);
     setShowConnections(false);
     setShowParallel(false);
+    setShowMissions(false);
     setPhoneView('chat');
     setSelectedTeamId(team.id);
     const targetChannel = teamChannelOf(channels, team);
@@ -1393,6 +1422,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setShowLoose(false);
     setShowConnections(false);
     setShowParallel(false);
+    setShowMissions(false);
     setPhoneView('chat');
     setSelectedId(channel.id);
     selectedIdRef.current = channel.id;
@@ -1410,6 +1440,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setShowLoose(false);
     setShowConnections(false);
     setShowParallel(false);
+    setShowMissions(false);
     setPhoneView('chat');
     setSelectedId(kwant.id);
     selectedIdRef.current = kwant.id;
@@ -1477,6 +1508,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setShowLoose(false);
     setShowConnections(false);
     setShowParallel(false);
+    setShowMissions(false);
     if (selectedIdRef.current !== kwant.id || isChannelRef.current) handleSelectKwant(kwant);
     else playSfx('click');
     setOpenThreadId(threadId);
@@ -1493,6 +1525,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setShowLoose(false);
     setShowConnections(false);
     setShowParallel(false);
+    setShowMissions(false);
   };
 
   const openDirectChat = () => {
@@ -2728,6 +2761,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       parallelActive={showParallel}
       onOpenParallel={() => {
         setShowParallel(true);
+        setShowMissions(false);
         setShowLoose(false);
         setShowConnections(false);
         setShowAway(false);
@@ -2739,6 +2773,18 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setShowConnections(true);
         setShowLoose(false);
         setShowParallel(false);
+        setShowMissions(false);
+        setShowAway(false);
+        setPhoneView('chat');
+        playSfx('click');
+      }}
+      missionBoard={missionBoard}
+      missionsActive={showMissions}
+      onOpenMissions={() => {
+        setShowMissions(true);
+        setShowConnections(false);
+        setShowLoose(false);
+        setShowParallel(false);
         setShowAway(false);
         setPhoneView('chat');
         playSfx('click');
@@ -2747,6 +2793,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setShowConnections(false);
         setShowLoose(true);
         setShowParallel(false);
+        setShowMissions(false);
         setShowAway(false);
         setPhoneView('chat');
         playSfx('click');
@@ -2756,6 +2803,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setShowLoose(false);
         setShowConnections(false);
         setShowParallel(false);
+        setShowMissions(false);
         setPhoneView('chat');
         playSfx('click');
       }}
@@ -2774,6 +2822,21 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpenTools={() => setIsMcpOpen(true)}
       onOpenAccounts={openSettings}
       onOpenLooseEnds={() => { setShowConnections(false); setShowLoose(true); }}
+    />
+  );
+  const missionNames = Object.fromEntries(kwants.map((k) => [k.id, k.name]));
+  const missionsPage = (
+    <MissionBoardPage
+      key={space.id}
+      spaceId={space.id}
+      names={missionNames}
+      onBack={isPhone ? () => { setShowMissions(false); setPhoneView('list'); } : undefined}
+      onOpenChat={(t) => {
+        const c = sourceChat(t);
+        if (!c) return;
+        if (c.kwantId && c.threadId) return openThread(c.kwantId, c.threadId);
+        if (!openTarget({ channel_id: c.channelId, kwant_id: c.kwantId })) pushToast('That chat no longer exists.');
+      }}
     />
   );
   const loose = <LooseEndsPage onBack={isPhone ? () => { setShowLoose(false); setPhoneView('list'); } : undefined} onOpenChat={openThread} />;
@@ -2880,7 +2943,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onChangeDecision={handleChangeDecision}
         />
   );
-  const mainPane = needsSetup ? setupChecklist : showParallel ? parallel : showConnections ? connectionsPage : showLoose ? loose : showAway ? away : !loaded ? (
+  const mainPane = needsSetup ? setupChecklist : showParallel ? parallel : showMissions && missionBoard ? missionsPage : showConnections ? connectionsPage : showLoose ? loose : showAway ? away : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…
     </main>
@@ -2931,6 +2994,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                         setShowLoose(false);
                         setShowConnections(false);
                         setShowParallel(false);
+                        setShowMissions(false);
                         setPhoneView('chat');
                         return;
                       }
@@ -3095,6 +3159,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             setShowConnections(true);
             setShowLoose(false);
             setShowParallel(false);
+            setShowMissions(false);
             setShowAway(false);
             setPhoneView('chat');
             playSfx('click');

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles } from 'lucide-react';
+import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import { budgetError, budgetValue } from '../chainBudget';
 import { DailyUsagePanel } from './DailyUsage';
@@ -30,6 +30,7 @@ import { useEngines } from '../useEngines';
 import { LayaStatusRow } from './LayaStatus';
 import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
 import { ProactiveSettings, WORK_AHEAD_CAP_MAX, WORK_AHEAD_CAP_MIN, parseProactiveSettings } from '../decideFirst';
+import { MISSION_BOARD_SETTING_EVENT, parseMissionBoardSetting } from '../missions';
 
 /** One labelled switch row, like the others in this dialog. */
 const SwitchRow: React.FC<{ id: string; label: string; hint: string; checked: boolean; onToggle: () => void; children?: React.ReactNode }> = ({
@@ -130,6 +131,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [agentTools, setAgentTools] = useState<boolean | null>(null);
   // Deciding and working ahead on their own; null on a server without these settings
   const [proactive, setProactive] = useState<ProactiveSettings | null>(null);
+  // null: this server has no Mission board, so the switch stays hidden.
+  const [missionBoard, setMissionBoard] = useState<boolean | null>(null);
   // null until loaded, and on a server without these settings
   const [place, setPlace] = useState<{ timezone: string; location: string } | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -193,6 +196,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           setChainBudget(typeof data.chain_token_budget === 'number' ? String(data.chain_token_budget) : null);
           setAgentTools(typeof data.agent_tools === 'boolean' ? data.agent_tools : null);
           setProactive(parseProactiveSettings(data));
+          setMissionBoard(parseMissionBoardSetting(data));
           setPlace(
             typeof data.timezone === 'string'
               ? { timezone: data.timezone || defaultTimeZone(), location: typeof data.location === 'string' ? data.location : '' }
@@ -272,12 +276,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           ...(chainBudget !== null ? { chain_token_budget: budgetValue(chainBudget) } : {}),
           ...(agentTools !== null ? { agent_tools: agentTools } : {}),
           ...(proactive ?? {}),
+          ...(missionBoard !== null ? { mission_board: missionBoard } : {}),
           ...(place ? { timezone: place.timezone.trim(), location: place.location.trim() } : {}),
         }),
       });
 
       if (res.ok) {
         setSaveSuccess(true);
+        if (missionBoard !== null) window.dispatchEvent(new CustomEvent(MISSION_BOARD_SETTING_EVENT, { detail: missionBoard }));
         // Saving a key or the Ollama URL re-checks engines on the server; show the result.
         window.setTimeout(engines.reload, 1500);
         window.setTimeout(engines.reload, 6000);
@@ -674,6 +680,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                   </span>
                 </div>
               </SwitchRow>
+            </fieldset>
+          )}
+
+          {missionBoard !== null && (
+            <fieldset className="space-y-3 pt-2 border-t border-zinc-800" data-testid="mission-board-settings">
+              <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
+                <KanbanSquare size={14} className="text-sky-400" aria-hidden="true" />
+                <span>Mission board</span>
+              </legend>
+              <SwitchRow
+                id="mission-board"
+                label="Show the Mission board"
+                hint="One board for all your team’s work: Ready, Working, Needs you, Review and Verified. A task reaches Verified only when a check passes, not on a bot’s word."
+                checked={missionBoard}
+                onToggle={() => setMissionBoard((v) => !v)}
+              />
             </fieldset>
           )}
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split, Hand, Plug, MoreHorizontal, UserMinus, MessageSquare } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split, Hand, Plug, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
@@ -102,6 +102,10 @@ export interface SidebarProps {
   onOpenLooseEnds?: () => void;
   parallelActive?: boolean;
   onOpenParallel?: () => void;
+  /** Shows the Mission board row; the server's mission_board setting decides. */
+  missionBoard?: boolean;
+  missionsActive?: boolean;
+  onOpenMissions?: () => void;
   onOpenAway?: () => void;
   /** Opens Space settings → Accounts from the footer. */
   onOpenAccounts?: () => void;
@@ -160,6 +164,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenConnections,
   parallelActive = false,
   onOpenParallel,
+  missionBoard = false,
+  missionsActive = false,
+  onOpenMissions,
   onOpenLooseEnds,
   onOpenAway,
   onOpenAccounts,
@@ -311,6 +318,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <span className="sr-only"> new</span>
               </span>
             )}
+          </button>
+          )}
+          {missionBoard && onOpenMissions && (
+          <button type="button" onClick={onOpenMissions} aria-current={missionsActive ? 'page' : undefined} className={navRow(missionsActive)}>
+            <KanbanSquare size={15} className={missionsActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
+            <span className="truncate flex-1">Mission board</span>
           </button>
           )}
           {onOpenLooseEnds && (

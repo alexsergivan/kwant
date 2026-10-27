@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   evidence, or you), never on the bot's own word. Missions have a token budget that claims can't
   exceed, tasks wait for the tasks they depend on, and anything waiting on you shows under **Needs
   you**. Turn it on with `mission_board` in settings. API: `docs/mission-control.md`.
+- **Mission board.** One board per space with Ready, Working, Needs you, Review and Verified. Each
+  card shows its owner, cost and checks. Its evidence receipt lists every check with its result and
+  says "Not checked" when nothing has run. A strip shows this week's verified tasks, false successes
+  and blocked work. Turn it on in Settings → Mission board. It works on phone and desktop.
 
 ### Changed
 - **Deciding for you costs fewer tokens.** Before deciding a choice itself, a bot now hears at most one
