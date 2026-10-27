@@ -576,11 +576,18 @@ async fn an_unreadable_folder_fails_the_checkpoint_but_not_the_turn() {
 #[tokio::test]
 async fn an_idempotency_key_retries_once() {
     let e = setup().await;
-    let (_mid, ids) = mission(&e, &e.bot.id, json!([{"title": "A", "owner": e.bot.id}])).await;
+    let plan = json!([{"title": "A", "owner": e.bot.id, "checks": [{"kind": "file_exists", "spec": {"path": "never.txt"}}]}]);
+    let (_mid, ids) = mission(&e, &e.bot.id, plan).await;
     let tid = &ids[0];
-    let token = turn(&e, &e.bot, "t-fail").await;
-    ok(&e, &token, "task_claim", json!({"task_id": tid})).await;
-    ok(&e, &token, "task_update", json!({"task_id": tid, "status": "failed", "note": "can't"})).await;
+    // Its check fails on every attempt, so the last one fails the task
+    for n in 0..5 {
+        if state_of(&e, tid).await == "failed" {
+            break;
+        }
+        let token = turn(&e, &e.bot, &format!("t-fail-{n}")).await;
+        ok(&e, &token, "task_claim", json!({"task_id": tid})).await;
+        ok(&e, &token, "task_update", json!({"task_id": tid, "status": "review"})).await;
+    }
     assert_eq!(state_of(&e, tid).await, "failed");
     let uri = format!("/api/tasks/{tid}/retry");
     let (s1, first, r1) = send(&e.app, "POST", &uri, None, Some("retry-1"), None).await;
