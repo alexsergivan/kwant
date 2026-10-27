@@ -31,6 +31,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   optional check".
 - **Deciding for you costs fewer tokens.** Before deciding a choice itself, a bot now hears at most one
   teammate, and only when the choice or an open check names that teammate.
+- **Mission API: `checks_summary.required_needs_approval`.** Counts the required checks waiting for
+  your OK, so a card can tell "needs you" from "a required check is still running while an optional
+  one waits".
 
 ## [Mac 0.1.3] - 2026-10-26
 

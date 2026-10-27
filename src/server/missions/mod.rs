@@ -339,12 +339,14 @@ pub async fn evaluate(state: &AppState, task_id: &str) -> Option<Task> {
 }
 
 /// `checks_summary` of a task: `passed` only when [`verdict`] could pass on them. Counts the
-/// checks that count (see [`counts`]); `needs_approval` is how many wait for the person.
+/// checks that count (see [`counts`]); `needs_approval` is how many wait for the person, and
+/// `required_needs_approval` how many of those are required, so hold the task.
 pub fn checks_summary(task: &Task, checks: &[OutcomeCheck]) -> Value {
     let live: Vec<&OutcomeCheck> = checks.iter().filter(|c| counts(task, c)).collect();
     let waiting = checks.iter().filter(|c| !c.approved).count();
     // An optional check waiting for approval is listed but doesn't hold the task (see [`verdict`])
-    let holding = checks.iter().any(|c| c.required && !c.approved);
+    let required_waiting = checks.iter().filter(|c| c.required && !c.approved).count();
+    let holding = required_waiting > 0;
     let gating = |c: &&&OutcomeCheck| c.required;
     let passed = live.iter().filter(|c| c.status == "passed").count();
     let failed = live.iter().filter(gating).filter(|c| matches!(c.status.as_str(), "failed" | "error")).count();
@@ -357,7 +359,14 @@ pub fn checks_summary(task: &Task, checks: &[OutcomeCheck]) -> Value {
     } else {
         "passed"
     };
-    json!({"status": status, "passed": passed, "failed": failed, "needs_approval": waiting, "total": checks.len()})
+    json!({
+        "status": status,
+        "passed": passed,
+        "failed": failed,
+        "needs_approval": waiting,
+        "required_needs_approval": required_waiting,
+        "total": checks.len(),
+    })
 }
 
 // Budget
@@ -1007,6 +1016,22 @@ mod tests {
         // An optional check waiting for approval doesn't hold it
         waiting.required = false;
         assert_eq!(verdict(&t, &[both[0].clone(), waiting], None), Verdict::Pass);
+    }
+
+    #[test]
+    fn summary_tells_a_required_waiting_check_from_an_optional_one() {
+        let t = task("bot-a");
+        let mut waiting = check("http", "needs_approval", None, true);
+        (waiting.approved, waiting.approved_by) = (false, None);
+        let s = checks_summary(&t, &[waiting.clone()]);
+        assert_eq!((s["needs_approval"].as_u64(), s["required_needs_approval"].as_u64()), (Some(1), Some(1)));
+        assert_eq!(s["status"], "pending");
+        // A required check still running plus an optional one waiting: pending, but not on the person
+        waiting.required = false;
+        let s = checks_summary(&t, &[check("command", "running", None, true), waiting.clone()]);
+        assert_eq!(s["status"], "pending");
+        assert_eq!((s["needs_approval"].as_u64(), s["required_needs_approval"].as_u64()), (Some(1), Some(0)));
+        assert_eq!(checks_summary(&t, &[])["required_needs_approval"], 0);
     }
 
     #[test]

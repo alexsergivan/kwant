@@ -59,6 +59,8 @@ export interface ChecksSummary {
   failed: number;
   /** Checks waiting for the person to allow them (older servers leave it out). */
   needs_approval?: number;
+  /** How many of `needs_approval` are required, so hold the task (older servers leave it out). */
+  required_needs_approval?: number;
   total: number;
 }
 

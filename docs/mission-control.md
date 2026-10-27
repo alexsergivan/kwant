@@ -126,8 +126,11 @@ outcome_checks(id, task_id, kind, spec JSON, required, approved, status, output_
 - A task with no checks stays in `review` ("not checked") until a peer review or the person verifies it.
 
 `checks_summary` on each task: `{"status": "not_checked" | "pending" | "passed" | "failed",
-"passed": n, "failed": n, "needs_approval": n, "total": n}`. `passed`/`failed` count checks that
-count; `needs_approval` counts checks waiting for the person. `status` is `passed` only when the task
+"passed": n, "failed": n, "needs_approval": n, "required_needs_approval": n, "total": n}`.
+`passed`/`failed` count checks that count; `needs_approval` counts checks waiting for the person, and
+`required_needs_approval` how many of those are required (so hold the task in `review`). A card shows
+"Needs you" only when `required_needs_approval > 0`; `status: "pending"` with
+`required_needs_approval: 0` means a required check is still running, not that the person is needed. `status` is `passed` only when the task
 could be verified on them, and `pending` while a required check waits for approval (an optional
 one waiting is counted in `needs_approval` but doesn't hold the task).
 
@@ -200,7 +203,7 @@ claim conflict), 403 (bot token on a person route).
  "depends_on": ["task id"], "waiting_on": ["task id not verified yet"],
  "claim": null | {"kwant_id","claimed_at","expires_at"},
  "needs_you": [{"kind": "question"|"approval"|"human_step"|"check_approval", "id", "text"}],
- "checks_summary": {"status","passed","failed","needs_approval","total"}}
+ "checks_summary": {"status","passed","failed","needs_approval","required_needs_approval","total"}}
 // needs_you: question/approval/human_step while working or needs_you; check_approval (id = the
 // check's id, approve it with POST /api/checks/:id/approve) while in review
 
