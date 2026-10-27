@@ -313,13 +313,17 @@ export function optionalWaitingText(n: number | null | undefined): string | null
 
 /**
  * Whether checks waiting for the person hold the task, from the summary alone (cards only have the
- * summary). Only a required one does, and then the server says `checks_summary.status == "pending"`;
- * an optional one waiting never blocks Verified. "pending" also covers a required check that hasn't
- * finished, so with both at once this errs towards "needs you"; the receipt, which has the checks,
- * tells them apart (see [`buildReceipt`]).
+ * summary). Only a required one does: `checks_summary.required_needs_approval`. A "pending" status
+ * with none of those means a required check is still running, not that it waits for you. Older
+ * servers leave the field out; that reads as 0, so they never show "Needs you" on a card.
  */
 export function approvalHolds(s: ChecksSummary): boolean {
-  return (s.needs_approval ?? 0) > 0 && s.status === 'pending';
+  return (s.required_needs_approval ?? 0) > 0;
+}
+
+/** Optional checks waiting for the person: they never hold the task. */
+function optionalWaitingCount(s: ChecksSummary): number {
+  return Math.max(0, (s.needs_approval ?? 0) - (s.required_needs_approval ?? 0));
 }
 
 /**
@@ -329,7 +333,7 @@ export function approvalHolds(s: ChecksSummary): boolean {
  */
 export function checksText(s: ChecksSummary): { text: string; tone: Tone } {
   const n = (k: number, one: string, many: string) => (k === 1 ? one : many.replace('#', String(k)));
-  if (approvalHolds(s)) return { text: n(s.needs_approval ?? 0, '1 check needs your OK', '# checks need your OK'), tone: 'amber' };
+  if (approvalHolds(s)) return { text: n(s.required_needs_approval ?? 0, '1 check needs your OK', '# checks need your OK'), tone: 'amber' };
   if (s.status === 'not_checked') return { text: 'Not checked', tone: 'zinc' };
   if (s.status === 'failed') return { text: n(s.failed, '1 check failed', '# checks failed'), tone: 'rose' };
   if (s.status === 'pending') return { text: s.passed > 0 ? n(s.passed, '1 check passed, still checking', '# checks passed, still checking') : 'Checking', tone: 'zinc' };
@@ -338,12 +342,12 @@ export function checksText(s: ChecksSummary): { text: string; tone: Tone } {
 
 /**
  * The grey note next to the chip for optional checks waiting for you ("1 optional check waiting"),
- * else null. Only when the summary has passed: then every waiting check is optional, since a required
- * one waiting makes it "pending".
+ * else null. Shown while a required check is still running too, since the optional one never holds
+ * the task.
  */
 export function optionalChecksNote(s: ChecksSummary): string | null {
-  const k = s.needs_approval ?? 0;
-  if (k <= 0 || s.status !== 'passed') return null;
+  const k = optionalWaitingCount(s);
+  if (k <= 0) return null;
   return k === 1 ? '1 optional check waiting' : `${k} optional checks waiting`;
 }
 
@@ -382,8 +386,11 @@ export function cardStatus(t: Task, names: Record<string, string> = {}, now: num
     case 'needs_you':
       return t.needs_you[0]?.text ?? 'A bot is waiting for you';
     case 'review':
-      if (approvalHolds(t.checks_summary)) return waitingApprovalText(t.checks_summary.needs_approval);
-      return t.checks_summary.status === 'not_checked' ? 'Bot says done. Not checked yet' : optionalWaitingText(t.checks_summary.needs_approval) ?? 'Bot says done. Checking';
+      if (approvalHolds(t.checks_summary)) return waitingApprovalText(t.checks_summary.required_needs_approval);
+      if (t.checks_summary.status === 'not_checked') return 'Bot says done. Not checked yet';
+      // While a required check runs the card reads as checking; the grey note covers optional ones.
+      if (t.checks_summary.status === 'pending') return 'Bot says done. Checking';
+      return optionalWaitingText(optionalWaitingCount(t.checks_summary)) ?? 'Bot says done. Checking';
     case 'verified':
       return t.finished_at ? `Verified ${ago(t.finished_at, now)}` : 'Verified';
     default:

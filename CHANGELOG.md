@@ -21,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and blocked work. Turn it on in Settings → Mission board. It works on phone and desktop.
 
 ### Changed
+- **A card says "Needs you" only when a check that counts waits for your OK.** A task whose required
+  check is still running while an optional check waits now reads as still checking, with a grey
+  "1 optional check waiting" note. The quiet "Not run" optional check on a verified task has a grey
+  icon instead of the amber hand.
 - **A task's spend shows up the moment it is verified.** When a bot hands a task in partway through
   its turn, the tokens used so far land on the task and mission right away; the rest of the turn is
   added when it ends, so nothing is counted twice. Before, a just-verified task showed 0 tokens for a

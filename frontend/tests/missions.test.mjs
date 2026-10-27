@@ -173,7 +173,7 @@ test("the owner's own check waits for you: the receipt says why the task isn't V
   const passed = check({ approved_by: 'mission', counts: true });
   const t = task({
     state: 'review',
-    checks_summary: { status: 'pending', passed: 1, failed: 0, needs_approval: 1, total: 2 },
+    checks_summary: { status: 'pending', passed: 1, failed: 0, needs_approval: 1, required_needs_approval: 1, total: 2 },
     needs_you: [{ kind: 'check_approval', id: 'ch2', text: 'Allow the check “File exists: out.txt”' }],
   });
   const d = { task: t, checks: [passed, own], evidence: [], events: [] };
@@ -196,7 +196,7 @@ test("the owner's own check waits for you: the receipt says why the task isn't V
   assert.match(c, /Needs you/);
   assert.match(c, /Waiting for you to allow 1 check/);
   assert.match(c, /1 check needs your OK/);
-  assert.equal(m.checksText({ status: 'pending', passed: 1, failed: 0, needs_approval: 2, total: 3 }).text, '2 checks need your OK');
+  assert.equal(m.checksText({ status: 'pending', passed: 1, failed: 0, needs_approval: 2, required_needs_approval: 2, total: 3 }).text, '2 checks need your OK');
   assert.equal(m.waitingApprovalText(0), null);
   assert.equal(m.waitingApprovalText(3), 'Waiting for you to allow 3 checks');
   // Verified tasks never show the banner, and a passing check that doesn't count can't be the reason.
@@ -231,7 +231,7 @@ test('an optional check waiting for you is not worded as blocking; a required on
 
   // Same task, but the waiting check is required: the server says "pending" and the wording blocks.
   const required = { ...optional, required: true };
-  const held = { ...t, checks_summary: { ...t.checks_summary, status: 'pending' } };
+  const held = { ...t, checks_summary: { ...t.checks_summary, status: 'pending', required_needs_approval: 1 } };
   const rr = m.buildReceipt({ task: held, checks: [passed, required], evidence: [], events: [] }, names);
   assert.equal(rr.waitingOnYou, 'Waiting for you to allow 1 check');
   assert.equal(rr.optionalWaiting, null);
@@ -251,7 +251,7 @@ test('a Verified task with an optional check waiting never reads "1 of 2"; it sa
   assert.equal(m.optionalChecksNote(summary), '1 optional check waiting');
   assert.equal(m.optionalChecksNote({ ...summary, needs_approval: 2 }), '2 optional checks waiting');
   assert.equal(m.optionalChecksNote({ ...summary, needs_approval: 0 }), null);
-  assert.equal(m.optionalChecksNote({ ...summary, status: 'pending' }), null, 'pending may be a required check waiting');
+  assert.equal(m.optionalChecksNote({ ...summary, status: 'pending', required_needs_approval: 1 }), null, 'a required check waiting is not optional');
   const c = ui.card({ task: t, names, now: NOW, onOpen: noop });
   assert.doesNotMatch(c, /of 2/);
   assert.match(c, /Check passed/);
@@ -297,6 +297,59 @@ test('a Review task with a required check still running and an optional one wait
   assert.doesNotMatch(html, /Not verified yet\. Waiting for you/);
   assert.match(html, /Allow this check/, 'in Review the normal Allow button stays');
   assert.doesNotMatch(html, /Run this optional check/);
+});
+
+test('the card says "Needs you" only when a required check waits for your OK (required_needs_approval)', () => {
+  // #90: checks_summary.required_needs_approval tells "a required check waits for you" from
+  // "a required check is still running and an optional one waits".
+  const base = { failed: 0, total: 2 };
+
+  // 1. A required check waits for you: Needs you.
+  const held = task({ state: 'review', checks_summary: { ...base, status: 'pending', passed: 1, needs_approval: 1, required_needs_approval: 1 }, needs_you: [{ kind: 'check_approval', id: 'ch2', text: 'Allow …' }] });
+  assert.equal(m.approvalHolds(held.checks_summary), true);
+  const hc = ui.card({ task: held, names, now: NOW, onOpen: noop });
+  assert.match(hc, /Needs you/);
+  assert.match(hc, /Waiting for you to allow 1 check/);
+  assert.match(hc, /1 check needs your OK/);
+  assert.doesNotMatch(hc, /data-optional-note/);
+
+  // 2. A required check still running, an optional one waiting: still checking, grey note, no Needs you.
+  const running = task({ state: 'review', checks_summary: { ...base, status: 'pending', passed: 0, needs_approval: 1, required_needs_approval: 0 }, needs_you: [{ kind: 'check_approval', id: 'ch3', text: 'Allow …' }] });
+  assert.equal(m.approvalHolds(running.checks_summary), false);
+  assert.deepEqual(m.checksText(running.checks_summary), { text: 'Checking', tone: 'zinc' });
+  assert.equal(m.checksText({ ...running.checks_summary, passed: 1, total: 3 }).text, '1 check passed, still checking');
+  assert.equal(m.optionalChecksNote(running.checks_summary), '1 optional check waiting');
+  assert.equal(m.cardStatus(running, names, NOW), 'Bot says done. Checking');
+  const rc = ui.card({ task: running, names, now: NOW, onOpen: noop });
+  assert.doesNotMatch(rc, /Needs you|needs your OK|Waiting for you to allow/);
+  assert.match(rc, /Checking/);
+  assert.match(rc, /data-optional-note[^>]*>1 optional check waiting</);
+
+  // Mixed: 1 required + 2 optional waiting counts only the required one as needing you.
+  const mixed = { ...base, total: 4, status: 'pending', passed: 1, needs_approval: 3, required_needs_approval: 1 };
+  assert.equal(m.checksText(mixed).text, '1 check needs your OK');
+  assert.equal(m.optionalChecksNote(mixed), '2 optional checks waiting');
+
+  // 3. An older server leaves the field out: treated as 0, never Needs you.
+  const old = task({ state: 'review', checks_summary: { ...base, status: 'pending', passed: 0, needs_approval: 1 } });
+  assert.equal(m.approvalHolds(old.checks_summary), false);
+  const oc = ui.card({ task: old, names, now: NOW, onOpen: noop });
+  assert.doesNotMatch(oc, /Needs you|needs your OK/);
+  assert.match(oc, /1 optional check waiting/);
+});
+
+test('the quiet "Not run" optional row on a Verified task has a grey icon, not the amber hand', () => {
+  const passed = check({ approved_by: 'mission', counts: true });
+  const optional = check({ id: 'ch3', required: false, status: 'needs_approval', approved: false, approved_by: null, counts: false, requested_by: 'k_lin', checked_by: null, finished_at: null });
+  const t = task({ state: 'verified', finished_at: '2026-10-27T11:58:00Z', checks_summary: { status: 'passed', passed: 1, failed: 0, needs_approval: 1, required_needs_approval: 0, total: 2 } });
+  const html = ui.receipt({ task: t, checks: [passed, optional], evidence: [], events: [] }, names);
+  const row = html.slice(html.indexOf('data-check="ch3"'));
+  assert.match(row, /Not run/);
+  assert.doesNotMatch(row.slice(0, row.indexOf('Not run')), /text-amber-300/);
+  // In Review the same check still shows the amber hand: it is waiting on you there.
+  const review = ui.receipt({ task: task({ state: 'review' }), checks: [optional], evidence: [], events: [] }, names);
+  const rrow = review.slice(review.indexOf('data-check="ch3"'));
+  assert.match(rrow.slice(0, rrow.indexOf('Needs your OK')), /text-amber-300/);
 });
 
 test('only web links open; file paths and other schemes are shown as text', () => {

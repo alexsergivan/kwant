@@ -464,7 +464,7 @@ export const EvidenceReceipt: React.FC<{
         {receipt.lines.map((l) => (
           <li key={l.check.id} className="p-3 space-y-1.5" data-check={l.check.id} data-check-status={l.check.status}>
             <div className="flex items-start gap-2">
-              <span className="mt-px">{statusIcon(l.status.tone)}</span>
+              <span className="mt-px">{statusIcon(receipt.settledVerified && l.check.status === 'needs_approval' && !l.check.required ? 'zinc' : l.status.tone)}</span>
               <div className="min-w-0 flex-1">
                 <p className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="font-medium text-zinc-100">{checkKindLabel(l.check.kind)}</span>
