@@ -769,9 +769,7 @@ pub async fn add_task_check(State(state): State<AppState>, RawQuery(q): RawQuery
         Ok(c) => c,
         Err(e) => return internal(e),
     };
-    // In review the check may decide the task. On a verified task it runs for the record only:
-    // `evaluate` leaves a verified task alone, so a failing optional check can't undo it.
-    let check = if matches!(t.state.as_str(), "review" | "verified") { checks::run_check(&state, &t, &check).await } else { check };
+    let check = if t.state == "review" { checks::run_check(&state, &t, &check).await } else { check };
     if let Some(t) = evaluate(&state, &id).await {
         emit_task(&state, &t).await;
     }
