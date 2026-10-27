@@ -203,6 +203,42 @@ test("the owner's own check waits for you: the receipt says why the task isn't V
   assert.equal(v.verifiedBy, null);
 });
 
+test('an optional check waiting for you is not worded as blocking; a required one is', () => {
+  // contract.md §13: checks_summary.status is "pending" only while a *required* check waits for approval.
+  const optional = check({ id: 'ch3', required: false, status: 'needs_approval', approved: false, approved_by: null, counts: false, requested_by: 'k_lin', checked_by: null, finished_at: null });
+  const passed = check({ approved_by: 'mission', counts: true });
+  const t = task({
+    state: 'review',
+    checks_summary: { status: 'passed', passed: 1, failed: 0, needs_approval: 1, total: 2 },
+    needs_you: [{ kind: 'check_approval', id: 'ch3', text: 'Allow this check: …' }],
+  });
+  const r = m.buildReceipt({ task: t, checks: [passed, optional], evidence: [], events: [] }, names);
+  assert.equal(r.waitingOnYou, null, 'an optional check never says the task waits on you');
+  assert.equal(r.optionalWaiting, 'Optional check waiting for your OK');
+  const html = ui.detail({ detail: { task: t, checks: [passed, optional], evidence: [], events: [] }, names, now: NOW, onAction: noop, onApproveCheck: noop, onOpenChat: noop });
+  assert.doesNotMatch(html, /Not verified yet/);
+  assert.doesNotMatch(html, /data-waiting-on-you/);
+  assert.match(html, /Optional check waiting for your OK\. It doesn’t hold the task/);
+  const c = ui.card({ task: t, names, now: NOW, onOpen: noop });
+  assert.doesNotMatch(c, /Needs you/);
+  assert.doesNotMatch(c, /Waiting for you to allow/);
+  assert.doesNotMatch(c, /needs your OK/);
+  assert.match(c, /Optional check waiting for your OK/);
+  assert.equal(m.approvalHolds(t.checks_summary), false);
+  assert.equal(m.optionalWaitingText(2), '2 optional checks waiting for your OK');
+
+  // Same task, but the waiting check is required: the server says "pending" and the wording blocks.
+  const required = { ...optional, required: true };
+  const held = { ...t, checks_summary: { ...t.checks_summary, status: 'pending' } };
+  const rr = m.buildReceipt({ task: held, checks: [passed, required], evidence: [], events: [] }, names);
+  assert.equal(rr.waitingOnYou, 'Waiting for you to allow 1 check');
+  assert.equal(rr.optionalWaiting, null);
+  const hc = ui.card({ task: held, names, now: NOW, onOpen: noop });
+  assert.match(hc, /Needs you/);
+  assert.match(hc, /Waiting for you to allow 1 check/);
+  assert.equal(m.approvalHolds(held.checks_summary), true);
+});
+
 test('only web links open; file paths and other schemes are shown as text', () => {
   assert.equal(m.safeHttps('https://a.example/x'), 'https://a.example/x');
   assert.equal(m.safeHttps('javascript:alert(1)'), null);

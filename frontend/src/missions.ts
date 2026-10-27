@@ -303,9 +303,23 @@ export function waitingApprovalText(n: number | null | undefined): string | null
   return n === 1 ? 'Waiting for you to allow 1 check' : `Waiting for you to allow ${n} checks`;
 }
 
+/** "Optional check waiting for your OK": it waits for the person but doesn't hold the task. */
+export function optionalWaitingText(n: number | null | undefined): string | null {
+  if (!n || n <= 0) return null;
+  return n === 1 ? 'Optional check waiting for your OK' : `${n} optional checks waiting for your OK`;
+}
+
+/**
+ * Whether checks waiting for the person hold the task. Only a required one does, and the server
+ * says so with `checks_summary.status == "pending"`; an optional one waiting never blocks Verified.
+ */
+export function approvalHolds(s: ChecksSummary): boolean {
+  return (s.needs_approval ?? 0) > 0 && s.status === 'pending';
+}
+
 /** The one-line check chip on a card. A task that has never been checked says so, plainly. */
 export function checksText(s: ChecksSummary): { text: string; tone: Tone } {
-  if (s.needs_approval && s.needs_approval > 0) return { text: s.needs_approval === 1 ? '1 check needs your OK' : `${s.needs_approval} checks need your OK`, tone: 'amber' };
+  if (s.needs_approval && s.needs_approval > 0 && approvalHolds(s)) return { text: s.needs_approval === 1 ? '1 check needs your OK' : `${s.needs_approval} checks need your OK`, tone: 'amber' };
   if (s.total === 0 || s.status === 'not_checked') return { text: 'Not checked', tone: 'zinc' };
   if (s.status === 'failed') return { text: s.failed === 1 ? '1 check failed' : `${s.failed} checks failed`, tone: 'rose' };
   if (s.status === 'pending') return { text: `${s.passed} of ${s.total} checks passed`, tone: 'amber' };
@@ -347,7 +361,8 @@ export function cardStatus(t: Task, names: Record<string, string> = {}, now: num
     case 'needs_you':
       return t.needs_you[0]?.text ?? 'A bot is waiting for you';
     case 'review':
-      return waitingApprovalText(t.checks_summary.needs_approval) ?? (t.checks_summary.status === 'not_checked' ? 'Bot says done. Not checked yet' : 'Bot says done. Checking');
+      if (approvalHolds(t.checks_summary)) return waitingApprovalText(t.checks_summary.needs_approval);
+      return t.checks_summary.status === 'not_checked' ? 'Bot says done. Not checked yet' : optionalWaitingText(t.checks_summary.needs_approval) ?? 'Bot says done. Checking';
     case 'verified':
       return t.finished_at ? `Verified ${ago(t.finished_at, now)}` : 'Verified';
     default:
@@ -429,8 +444,10 @@ export interface Receipt {
   notChecked: boolean;
   /** The passing check that made it Verified, when there is one. */
   verifiedBy: ReceiptLine | null;
-  /** Why a task in Review isn't Verified yet because checks wait for the person ("Waiting for you to allow 1 check"). */
+  /** Why a task in Review isn't Verified yet because required checks wait for the person ("Waiting for you to allow 1 check"). */
   waitingOnYou: string | null;
+  /** Optional checks waiting for the person; they don't hold the task ("Optional check waiting for your OK"). */
+  optionalWaiting: string | null;
 }
 
 /** Builds the evidence receipt: every check with its result and output, newest result first per check. */
@@ -455,13 +472,16 @@ export function buildReceipt(d: Pick<TaskDetail, 'task' | 'checks' | 'evidence'>
     }));
   const ran = lines.some((l) => l.check.status === 'passed' || l.check.status === 'failed' || l.check.status === 'error');
   const verifiedBy = d.task.state === 'verified' ? lines.find((l) => l.check.status === 'passed' && !l.ownClaim && !l.notCounting) ?? null : null;
-  const waiting = d.task.checks_summary.needs_approval ?? d.checks.filter((c) => c.status === 'needs_approval' && c.required).length;
+  const waitingChecks = d.checks.filter((c) => c.status === 'needs_approval');
+  const requiredWaiting = waitingChecks.filter((c) => c.required).length;
+  const review = d.task.state === 'review';
   return {
     lines,
     attachments: d.evidence.filter((e) => e.kind !== 'check_output').sort((a, b) => Date.parse(b.captured_at) - Date.parse(a.captured_at)),
     notChecked: !ran,
     verifiedBy,
-    waitingOnYou: d.task.state === 'review' ? waitingApprovalText(waiting) : null,
+    waitingOnYou: review && approvalHolds(d.task.checks_summary) ? waitingApprovalText(requiredWaiting || d.task.checks_summary.needs_approval) : null,
+    optionalWaiting: review ? optionalWaitingText(waitingChecks.length - requiredWaiting) : null,
   };
 }
 

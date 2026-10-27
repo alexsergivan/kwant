@@ -43,6 +43,7 @@ import {
   cardStatus,
   checkKindLabel,
   checksText,
+  approvalHolds,
   columnOf,
   costRatio,
   costText,
@@ -240,13 +241,13 @@ export const TaskCard: React.FC<{
           {t.state === 'blocked' && <Badge tone="rose">Blocked</Badge>}
           {t.state === 'failed' && <Badge tone="rose">Failed</Badge>}
           {t.state === 'backlog' && <Badge tone="zinc">Waiting</Badge>}
-          {t.state === 'review' && (t.checks_summary.needs_approval ?? 0) > 0 && <Badge tone="amber">Needs you</Badge>}
+          {t.state === 'review' && approvalHolds(t.checks_summary) && <Badge tone="amber">Needs you</Badge>}
           {t.priority >= 2 && <Badge tone={t.priority >= 3 ? 'rose' : 'amber'}>{priorityLabel(t.priority)}</Badge>}
           {showMission && t.mission_title && <span className="min-w-0 truncate text-[11px] text-zinc-500">{t.mission_title}</span>}
         </span>
         <span className="block text-sm font-medium text-zinc-100 break-words">{t.title}</span>
         {status && (
-          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || (t.state === 'review' && (t.checks_summary.needs_approval ?? 0) > 0) ? 'text-amber-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
+          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || (t.state === 'review' && approvalHolds(t.checks_summary)) ? 'text-amber-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
             {status}
           </span>
         )}
@@ -432,7 +433,12 @@ export const EvidenceReceipt: React.FC<{
     )}
     {receipt.waitingOnYou && (
       <p className="px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-200" data-waiting-on-you>
-        Not verified yet. {receipt.waitingOnYou}: a bot added it, so it runs and counts only after you allow it below.
+        Not verified yet. {receipt.waitingOnYou}. A check a bot adds runs and counts only after you allow it below.
+      </p>
+    )}
+    {receipt.optionalWaiting && (
+      <p className="px-3 py-2 rounded-lg border border-zinc-800 text-xs text-zinc-400" data-optional-waiting>
+        {receipt.optionalWaiting}. It doesn’t hold the task: it can be verified without it.
       </p>
     )}
     {receipt.notChecked && (
