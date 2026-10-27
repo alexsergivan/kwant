@@ -47,8 +47,11 @@ import {
   failureClassLabel,
   failureTone,
   autofixErrorText,
+  fixTextShown,
+  needsYouCount,
   recoveryText,
   restoreErrorText,
+  skippedWithFixText,
   restoredText,
   workflowTargetLabel,
   COLUMNS,
@@ -166,8 +169,13 @@ const initials = (name: string) =>
 
 // ---------- Insights ----------
 
-export const InsightsStrip: React.FC<{ insights: Insights | null }> = ({ insights }) => {
+export const InsightsStrip: React.FC<{
+  insights: Insights | null;
+  /** The Needs you column's count across all work; the tile shows it instead of the server's count. */
+  needsYou?: number;
+}> = ({ insights, needsYou }) => {
   if (!insights) return null;
+  const needsNow = needsYou ?? insights.needs_you_now;
   const blockedMin = insights.blocked_minutes_7d;
   const items: Array<{ label: string; value: string; hint: string; tone?: Tone; sub?: string }> = [
     { label: 'Verified this week', value: String(insights.verified_7d), hint: 'Tasks a check confirmed in the last 7 days', tone: 'emerald' },
@@ -177,7 +185,7 @@ export const InsightsStrip: React.FC<{ insights: Insights | null }> = ({ insight
       hint: 'A bot said done, then the check failed (last 7 days)',
       tone: insights.false_success_7d > 0 ? 'rose' : undefined,
     },
-    { label: 'Needs you now', value: String(insights.needs_you_now), hint: 'Waiting on a question, approval or step from you', tone: insights.needs_you_now > 0 ? 'amber' : undefined },
+    { label: 'Needs you now', value: String(needsNow), hint: 'Waiting on a question, approval or step from you', tone: needsNow > 0 ? 'amber' : undefined },
     typeof blockedMin === 'number'
       ? {
           label: 'Blocked this week',
@@ -715,7 +723,10 @@ export const FailureBox: React.FC<{
   const recovery = recoveryText(task);
   if (!f && !a) return null;
   const tone = f ? failureTone(f.class) : 'violet';
-  const status = a ? autofixStatusText(a, now) : null;
+  const fix = fixText ? fixTextShown(fixText, f?.summary) : null;
+  // With a "To fix", a skipped retry gets one short line (or none), not the reason again.
+  const folded = fix && a ? skippedWithFixText(a) : undefined;
+  const status = folded !== undefined ? folded : a ? autofixStatusText(a, now) : null;
   const waiting = a && a.status === 'suggested' && a.strategy !== 'propose_change' && (task.state === 'failed' || task.state === 'blocked');
   const scheduled = a && a.status === 'scheduled';
   const earlier = failures.slice(0, -1).reverse();
@@ -736,10 +747,10 @@ export const FailureBox: React.FC<{
             <span className="text-[11px] text-zinc-500">{ago(f.created_at, now)}</span>
           </p>
         )}
-        {fixText && (
+        {fix && (
           <p className="px-2.5 py-2 rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-100" data-fix-needed>
             <span className="font-medium">To fix: </span>
-            {fixText}
+            {fix}
           </p>
         )}
         {latest?.excerpt && (
@@ -1815,7 +1826,7 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
 
           {tasks !== null && (
             <>
-              <InsightsStrip insights={insights} />
+              <InsightsStrip insights={insights} needsYou={needsYouCount(tasks)} />
 
               {visibleMissions.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2">

@@ -87,6 +87,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   file path is no longer shown as `[redacted]`, short passwords after a flag like `--key` or `-p` (for
   mysql, sshpass, redis-cli) are hidden, and a stray `]` no longer appears. A sign-in or usage-limit
   card says what to do once instead of repeating the failure.
+- **Mission board: "Needs you now" matches the Needs you column.** The tile counted only questions and
+  approvals, so failed tasks waiting on a fix showed 0 next to a full column. It now counts the column's
+  cards, and a task whose check waits for your OK sits in Needs you. A failure's panel says the summary,
+  what to fix and whether AutoFix retries once each, instead of up to three times.
 - **Mission Control: racing Redo requests make one copy, and restore refuses unknown forced paths.**
   Two Redo requests on the same flag at the same moment, without an `Idempotency-Key`, could each make
   a copy; now the flag is claimed in the same step as the copy, so one wins and the rest get 409. A

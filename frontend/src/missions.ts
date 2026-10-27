@@ -448,17 +448,25 @@ export function sortTasks(tasks: Task[]): Task[] {
 }
 
 /**
- * Which column a task card sits in: its state's column, except that an open "may be invalid" flag, or an
- * AutoFix item (a retry to OK, something to fix, a proposed change), puts it in Needs you: they wait for
- * the person in any state.
+ * Which column a task card sits in: its state's column, except that an open "may be invalid" flag, an
+ * AutoFix item (a retry to OK, something to fix, a proposed change) or a required check waiting for the
+ * person's OK puts it in Needs you: they wait for the person in any state.
  */
 export function columnOfTask(t: Pick<Task, 'state' | 'flags' | 'needs_you'>): Column | null {
   const c = columnOf(t.state);
   return c && (openFlags(t).length || (t.needs_you ?? []).some((n) => PERSON_ITEMS.has(n.kind))) ? 'needs_you' : c;
 }
 
-/** AutoFix items that wait for the person whatever the task's state, so its card sits in Needs you. */
-const PERSON_ITEMS = new Set<NeedsYouItem['kind']>(['autofix_suggested', 'fix_needed', 'workflow_change']);
+/** Items that wait for the person whatever the task's state, so its card sits in Needs you. */
+const PERSON_ITEMS = new Set<NeedsYouItem['kind']>(['autofix_suggested', 'fix_needed', 'workflow_change', 'check_approval']);
+
+/**
+ * The "Needs you now" count: the cards the Needs you column holds across all work, so the tile and the
+ * column never disagree. The server's `needs_you_now` leaves out tasks only AutoFix items hold.
+ */
+export function needsYouCount(tasks: Task[]): number {
+  return tasks.filter((t) => columnOfTask(t) === 'needs_you').length;
+}
 
 export function groupByColumn(tasks: Task[]): Record<Column, Task[]> {
   const out: Record<Column, Task[]> = { ready: [], working: [], needs_you: [], review: [], verified: [] };
@@ -825,6 +833,32 @@ export function autofixStatusText(a: Pick<AutofixAttempt, 'status' | 'strategy' 
     default:
       return `AutoFix didn’t retry: ${skipText(a.reason)}.`;
   }
+}
+
+/**
+ * The "To fix" text without the failure summary an older server appends after it ("…then retry: <summary>",
+ * often cut short with "…"): the panel shows the summary once, on the failure line above.
+ */
+export function fixTextShown(fix: string, summary?: string | null): string {
+  const s = (summary ?? '').trim();
+  if (!s) return fix;
+  const at = fix.indexOf(s.slice(0, Math.min(40, s.length)));
+  if (at <= 0) return fix;
+  const head = fix.slice(0, at).replace(/[\s:;,.\u2013\u2014-]+$/, '');
+  return head ? `${head}.` : fix;
+}
+
+/**
+ * The AutoFix line under a failure the person must fix, else null to leave it out. "To fix" already says
+ * what to do, so this only adds that AutoFix won't retry, in one short line, and says nothing when it
+ * repeats "To fix" (a used-up retry budget). Works with the older server's reason, which is the fix text.
+ */
+export function skippedWithFixText(a: Pick<AutofixAttempt, 'status' | 'reason'>): string | null | undefined {
+  if (a.status !== 'skipped') return undefined;
+  const r = a.reason.trim();
+  if (r.startsWith('over_recovery_budget')) return null;
+  if (r.startsWith('no_attempts_left')) return 'AutoFix didn’t retry: no tries left.';
+  return 'AutoFix doesn’t retry this kind of failure.';
 }
 
 /** The card line for a failed task AutoFix is handling, else null. */

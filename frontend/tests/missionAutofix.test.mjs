@@ -96,7 +96,7 @@ test('a usage limit reads as "Usage limit reached", is never retried by AutoFix,
   const html = ui.detail(detailProps(t));
   assert.match(html, /data-failure-class="quota"[\s\S]*Usage limit reached/);
   assert.match(html, /data-fix-needed[^>]*><span[^>]*>To fix: <\/span>Usage limit reached: wait for it to reset or switch account/);
-  assert.match(html, /data-autofix-status="skipped"[^>]*>[\s\S]*this kind of failure isn’t retried/);
+  assert.match(html, /data-autofix-status="skipped"[^>]*>[\s\S]*AutoFix doesn’t retry this kind of failure\./);
   assert.doesNotMatch(html, /data-autofix-retry/, 'no AutoFix Retry now for a usage limit');
   assert.doesNotMatch(html, /data-autofix-skip/);
   // Even if an older server left a suggested attempt, a refused retry reads plainly.
@@ -104,6 +104,62 @@ test('a usage limit reads as "Usage limit reached", is never retried by AutoFix,
   assert.match(refused, /doesn’t retry this kind of failure/);
   assert.match(refused, /usage limit/);
   assert.doesNotMatch(refused, /409|not_retryable/, 'no codes shown to the person');
+});
+
+// The text eval 10 saw on a real server (before #103): the summary echoed in "To fix" (cut at 200
+// characters) and again as the skipped attempt's reason.
+const REAL_SUMMARY = '⚠ [Evalbot] The claude profile "This machine" is out of usage until 21:01 UTC. Add another profile or wait for the limit to reset.';
+const OLD_FIX = `Usage limit reached: wait for it to reset or switch account, then retry: ${REAL_SUMMARY}`;
+const count = (html, text) => html.split(text).length - 1;
+
+test('the failure panel says each fact once, with the older server text and the newer one', () => {
+  for (const [label, fixText, reason] of [
+    ['older server', `${OLD_FIX.slice(0, 199)}…`, OLD_FIX],
+    ['newer server', 'Usage limit reached: wait for it to reset or switch account, then retry.', 'not_retryable: Usage limit reached: wait for it to reset or switch account, then retry.'],
+  ]) {
+    const t = task({
+      state: 'failed', autofix_attempts: 0,
+      last_failure: { class: 'quota', summary: REAL_SUMMARY, created_at: '2026-10-27T11:50:00Z' },
+      autofix: attempt({ status: 'skipped', strategy: 'none', reason }),
+      needs_you: [{ kind: 'fix_needed', id: 'fl5', text: fixText }],
+    });
+    const html = ui.detail(detailProps(t));
+    assert.equal(count(html, 'is out of usage until 21:01 UTC'), 1, `${label}: the summary appears once`);
+    assert.equal(count(html, 'wait for it to reset or switch account'), 1, `${label}: the fix appears once`);
+    assert.match(html, /To fix: <\/span>Usage limit reached: wait for it to reset or switch account, then retry\.</, label);
+    assert.match(html, /data-autofix-status="skipped"[^>]*>[\s\S]*?<span>AutoFix doesn’t retry this kind of failure\.<\/span>/, `${label}: one short line`);
+    assert.doesNotMatch(html, /…/, `${label}: nothing cut short`);
+  }
+  // An older sign-in fix text, and one without an echo, keep their own words.
+  assert.equal(m.fixTextShown('Sign in to the bot\'s engine again, then retry: bad key', 'bad key'), 'Sign in to the bot\'s engine again, then retry.');
+  assert.equal(m.fixTextShown('Raise the task\'s budget, then retry it.', 'Out of tokens'), 'Raise the task\'s budget, then retry it.');
+  assert.equal(m.fixTextShown('Sign in to GitHub again.', null), 'Sign in to GitHub again.');
+  assert.equal(m.fixTextShown('bad key', 'bad key'), 'bad key', 'a fix that is only the summary is kept');
+  assert.equal(m.skippedWithFixText(attempt({ status: 'skipped', reason: 'no_attempts_left: the task used all its attempts' })), 'AutoFix didn’t retry: no tries left.');
+  assert.equal(m.skippedWithFixText(attempt({ status: 'failed' })), undefined, 'only a skipped attempt is folded');
+});
+
+test('"Needs you now" counts the same cards as the Needs you column', () => {
+  const tasks = [
+    task({ id: 'q', state: 'needs_you' }),
+    failed({ id: 'f', needs_you: [{ kind: 'fix_needed', id: 'fl1', text: 'Usage limit reached.' }] }),
+    failed({ id: 's', needs_you: [{ kind: 'autofix_suggested', id: 'af1', text: 'Retry?' }] }),
+    task({ id: 'w', state: 'blocked', needs_you: [{ kind: 'workflow_change', id: 'wc1', text: 'Allow this change' }] }),
+    task({ id: 'r', state: 'review', checks_summary: { ...none, status: 'pending', needs_approval: 1, required_needs_approval: 1, total: 1 }, needs_you: [{ kind: 'check_approval', id: 'c1', text: 'Allow this check' }] }),
+    task({ id: 'v', state: 'verified', flags: [{ id: 'fg1', kind: 'may_be_invalid', cause: 'upstream_forked', cause_task_id: 'u', cause_title: 'Upstream', detail: {}, created_at: '2026-10-27T11:00:00Z' }] }),
+    task({ id: 'x', state: 'review' }),
+    failed({ id: 'y' }),
+    task({ id: 'z', state: 'working' }),
+  ];
+  const grouped = m.groupByColumn(tasks);
+  assert.deepEqual(grouped.needs_you.map((t) => t.id).sort(), ['f', 'q', 'r', 's', 'v', 'w']);
+  assert.equal(m.needsYouCount(tasks), grouped.needs_you.length);
+  assert.equal(m.columnOfTask(tasks[4]), 'needs_you', 'a check waiting for your OK waits on you, like its "Needs you" badge says');
+  // Eval 10: the server said 0 while 9 failed tasks waited on a fix; the tile follows the column.
+  const nine = Array.from({ length: 9 }, (_, i) => failed({ id: `f${i}`, needs_you: [{ kind: 'fix_needed', id: `fl${i}`, text: 'Sign in again.' }] }));
+  const ins = { verified_7d: 1, false_success_7d: 7, needs_you_now: 0, blocked_now: 0, tokens_7d: 0, tokens_per_verified_7d: null };
+  assert.match(ui.insights({ insights: ins, needsYou: m.needsYouCount(nine) }), /Needs you now<\/dt><dd class="[^"]*text-amber-300[^"]*">9</);
+  assert.match(ui.insights({ insights: ins }), /Needs you now<\/dt><dd[^>]*>0</, 'without the board it falls back to the server count');
 });
 
 test('AutoFix tries come from the server count, not from counting failures in the browser', () => {
@@ -120,7 +176,7 @@ test('a retry skipped over the retry budget shows the Needs-you card and why it 
   });
   const html = ui.detail(detailProps(t));
   assert.match(html, /data-fix-needed[^>]*><span[^>]*>To fix: <\/span>Retry budget used up: raise it or retry by hand\./);
-  assert.match(html, /data-autofix-status="skipped"[\s\S]*retry budget/);
+  assert.doesNotMatch(html, /data-autofix-status/, '"To fix" already says the budget is used up, so no second line says it again');
   assert.doesNotMatch(html, /data-autofix-retry/, 'AutoFix offers no retry of its own; the person retries by hand');
   assert.doesNotMatch(html, /data-needs-you/, 'the card is shown once, in What went wrong');
 });
