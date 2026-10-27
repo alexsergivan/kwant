@@ -333,10 +333,12 @@ pub struct ResolveBody {
     note: Option<String>,
 }
 
-/// `POST /api/tasks/:id/flags/:flag_id/resolve` (person-only).
+/// `POST /api/tasks/:id/flags/:flag_id/resolve` (person-only; `Idempotency-Key` optional, so
+/// two Redo clicks from two tabs make one fork).
 pub async fn resolve_flag(
     State(state): State<AppState>,
     RawQuery(q): RawQuery,
+    headers: HeaderMap,
     Path((id, flag_id)): Path<(String, String)>,
     Json(p): Json<ResolveBody>,
 ) -> Response {
@@ -344,76 +346,67 @@ pub async fn resolve_flag(
         return bad("resolution must be still_valid, redo or cancelled");
     }
     let note = p.note.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(|n| n.chars().take(500).collect::<String>());
-    let t = match load_task(&state, q.as_deref(), &id).await {
-        Ok(t) => t,
-        Err(r) => return r,
-    };
-    let flag = match state.db.get_flag(&flag_id).await {
-        Ok(Some(f)) if f.task_id == t.id => f,
-        Ok(_) => return not_found("flag"),
-        Err(e) => return internal(e),
-    };
-    if flag.resolved_at.is_some() {
-        return conflict("this flag is already resolved");
-    }
-    let mut fork_out = None;
-    let mut extra = json!({});
-    match (p.resolution.as_str(), t.state.as_str()) {
-        ("still_valid", _) => {}
-        ("redo", "working" | "needs_you") => return conflict("it's running; resolve when it stops"),
-        ("redo", "cancelled") => return conflict("the task is cancelled; fork it to redo it"),
-        ("redo", "verified") => {
-            let reason = note.clone().unwrap_or_else(|| "redo: it may no longer hold".into());
-            match fork(&state, &t, &reason).await {
-                Ok(f) => {
-                    extra = json!({"fork_id": f.id});
-                    fork_out = Some(f);
-                }
-                Err(r) => return r,
-            }
+    let route = format!("POST /api/tasks/{id}/flags/{flag_id}/resolve");
+    idempotent(&state, &headers, route, || async {
+        let t = load_task(&state, q.as_deref(), &id).await?;
+        let flag = match state.db.get_flag(&flag_id).await {
+            Ok(Some(f)) if f.task_id == t.id => f,
+            Ok(_) => return Err(not_found("flag")),
+            Err(e) => return Err(internal(e)),
+        };
+        if flag.resolved_at.is_some() {
+            return Err(conflict("this flag is already resolved"));
         }
-        ("redo", from @ ("review" | "failed")) => {
-            let change = TaskChange { reason: Some("redo: it may no longer hold".into()), detail: Some(json!({"flag_id": flag.id})), ..Default::default() };
-            if let Err(r) = moved(transition(&state, &t.id, from, "ready", Actor::Person, "person", change).await) {
-                return r;
+        let mut fork_out = None;
+        let mut extra = json!({});
+        match (p.resolution.as_str(), t.state.as_str()) {
+            ("still_valid", _) => {}
+            ("redo", "working" | "needs_you") => return Err(conflict("it's running; resolve when it stops")),
+            ("redo", "cancelled") => return Err(conflict("the task is cancelled; fork it to redo it")),
+            ("redo", "verified") => {
+                let reason = note.clone().unwrap_or_else(|| "redo: it may no longer hold".into());
+                let f = fork(&state, &t, &reason).await?;
+                extra = json!({"fork_id": f.id});
+                fork_out = Some(f);
             }
-            let _ = state.db.reset_attempts(&t.id).await;
-        }
-        ("redo", "blocked") => {
-            let change = TaskChange { reason: Some("redo: it may no longer hold".into()), detail: Some(json!({"flag_id": flag.id})), ..Default::default() };
-            match moved(transition(&state, &t.id, "blocked", "backlog", Actor::Person, "person", change).await) {
-                Ok(t) => super::promote_one(&state, &t).await,
-                Err(r) => return r,
+            ("redo", from @ ("review" | "failed")) => {
+                let change = TaskChange { reason: Some("redo: it may no longer hold".into()), detail: Some(json!({"flag_id": flag.id})), ..Default::default() };
+                moved(transition(&state, &t.id, from, "ready", Actor::Person, "person", change).await)?;
+                let _ = state.db.reset_attempts(&t.id).await;
             }
-        }
-        // backlog or ready: it runs again anyway
-        ("redo", _) => {}
-        ("cancelled", "verified") => return conflict("a verified task can't be cancelled; choose still_valid or redo"),
-        ("cancelled", "cancelled") => {}
-        ("cancelled", from) => {
-            let change = TaskChange { reason: Some("cancelled by the person: it may no longer hold".into()), ..Default::default() };
-            if let Err(r) = moved(transition(&state, &t.id, from, "cancelled", Actor::Person, "person", change).await) {
-                return r;
+            ("redo", "blocked") => {
+                let change = TaskChange { reason: Some("redo: it may no longer hold".into()), detail: Some(json!({"flag_id": flag.id})), ..Default::default() };
+                let t = moved(transition(&state, &t.id, "blocked", "backlog", Actor::Person, "person", change).await)?;
+                super::promote_one(&state, &t).await;
             }
+            // backlog or ready: it runs again anyway
+            ("redo", _) => {}
+            ("cancelled", "verified") => return Err(conflict("a verified task can't be cancelled; choose still_valid or redo")),
+            ("cancelled", "cancelled") => {}
+            ("cancelled", from) => {
+                let change = TaskChange { reason: Some("cancelled by the person: it may no longer hold".into()), ..Default::default() };
+                moved(transition(&state, &t.id, from, "cancelled", Actor::Person, "person", change).await)?;
+            }
+            _ => return Err(bad("resolution must be still_valid, redo or cancelled")),
         }
-        _ => return bad("resolution must be still_valid, redo or cancelled"),
-    }
-    match state.db.resolve_flag(&flag.id, &p.resolution, note.as_deref(), Some(&extra)).await {
-        Ok(true) => {}
-        Ok(false) => return conflict("this flag is already resolved"),
-        Err(e) => return internal(e),
-    }
-    let t = state.db.get_task(&t.id).await.ok().flatten().unwrap_or(t);
-    emit_task(&state, &t).await;
-    if let Some(mid) = &t.mission_id {
-        emit_mission(&state, mid).await;
-    }
-    let flag = state.db.get_flag(&flag.id).await.ok().flatten().unwrap_or(flag);
-    let fork_json = match &fork_out {
-        Some(f) => task_json(&state, f).await,
-        None => Value::Null,
-    };
-    Json(json!({"flag": flag_json(&flag), "task": task_json(&state, &t).await, "fork": fork_json})).into_response()
+        match state.db.resolve_flag(&flag.id, &p.resolution, note.as_deref(), Some(&extra)).await {
+            Ok(true) => {}
+            Ok(false) => return Err(conflict("this flag is already resolved")),
+            Err(e) => return Err(internal(e)),
+        }
+        let t = state.db.get_task(&t.id).await.ok().flatten().unwrap_or(t);
+        emit_task(&state, &t).await;
+        if let Some(mid) = &t.mission_id {
+            emit_mission(&state, mid).await;
+        }
+        let flag = state.db.get_flag(&flag.id).await.ok().flatten().unwrap_or(flag);
+        let fork_json = match &fork_out {
+            Some(f) => task_json(&state, f).await,
+            None => Value::Null,
+        };
+        Ok(json!({"flag": flag_json(&flag), "task": task_json(&state, &t).await, "fork": fork_json}))
+    })
+    .await
 }
 
 /// `GET /api/tasks/:id/flags` (open ones; `?all=1` adds resolved ones).

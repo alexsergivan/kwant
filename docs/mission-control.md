@@ -380,7 +380,7 @@ What else happens:
 
 ### Idempotency-Key
 
-The header works on `POST /api/tasks/:id/fork` and `POST /api/tasks/:id/retry`. Keys are 1–200 characters.
+The header works on `POST /api/tasks/:id/fork`, `POST /api/tasks/:id/retry` and `POST /api/tasks/:id/flags/:flag_id/resolve` (so two Redo clicks from two tabs make one fork; the route includes the flag id). Keys are 1–200 characters.
 - The same key on the same route (method plus path, task id included) returns the stored response with `idempotent-replayed: true`, and nothing runs again.
 - The same key on another route gets 422.
 - Only successful responses are stored. Keyed requests run one at a time.

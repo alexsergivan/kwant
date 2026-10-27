@@ -481,6 +481,55 @@ async fn an_idempotency_key_forks_once_and_belongs_to_one_route() {
     assert_eq!(e.state.db.forks_of(&ids[0]).await.unwrap().len(), 2, "a new key is a new fork");
 }
 
+#[tokio::test]
+async fn an_idempotency_key_resolves_a_redo_once_and_belongs_to_one_flag() {
+    let e = setup().await;
+    let (mid, ids) = graph_mission(&e, &[("a", &[]), ("b", &["a"])]).await;
+    do_task(&e, &mid, &ids[0], "a").await;
+    do_task(&e, &mid, &ids[1], "b").await;
+    drift(&e, &mid, "a").await;
+    scan(&e, &mid).await;
+    let fa = id(&flags(&task(&e, &ids[0]).await)[0]);
+    let fb = id(&flags(&task(&e, &ids[1]).await)[0]);
+    let resolve = |t: &str, f: &str| format!("/api/tasks/{t}/flags/{f}/resolve");
+    let send = |uri: String, key: Option<&'static str>| {
+        let app = e.app.clone();
+        async move {
+            let mut req = Request::builder().method("POST").uri(uri).header("content-type", "application/json");
+            if let Some(k) = key {
+                req = req.header("idempotency-key", k);
+            }
+            let resp = app.oneshot(req.body(Body::from(json!({"resolution": "redo"}).to_string())).unwrap()).await.unwrap();
+            let status = resp.status();
+            let replayed = resp.headers().get("idempotent-replayed").is_some();
+            let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (status, replayed, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+        }
+    };
+
+    // Two Redo clicks (two tabs) with one key: one fork, the second reply is the first one replayed
+    let (s1, r1, first) = send(resolve(&ids[0], &fa), Some("redo-a-1")).await;
+    let (s2, r2, second) = send(resolve(&ids[0], &fa), Some("redo-a-1")).await;
+    assert!(s1.is_success() && s2.is_success(), "{first} {second}");
+    assert!(!r1 && r2, "only the second reply is replayed");
+    assert!(first["fork"]["id"].is_string(), "{first}");
+    assert_eq!(first["fork"]["id"], second["fork"]["id"]);
+    assert_eq!(e.state.db.forks_of(&ids[0]).await.unwrap().len(), 1, "one fork for one key");
+
+    // The same key on another flag is refused and changes nothing
+    let (s3, _, v) = send(resolve(&ids[1], &fb), Some("redo-a-1")).await;
+    assert_eq!(s3, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    assert!(flags(&task(&e, &ids[1]).await).iter().any(|f| id(f) == fb), "B's flag is still open");
+    assert!(e.state.db.forks_of(&ids[1]).await.unwrap().is_empty());
+
+    // Without a key nothing changes: the first resolve forks, a second one is 409
+    let (s4, r4, v) = send(resolve(&ids[1], &fb), None).await;
+    assert!(s4.is_success() && !r4, "{v}");
+    let (s5, _, v) = send(resolve(&ids[1], &fb), None).await;
+    assert_eq!(s5, StatusCode::CONFLICT, "{v}");
+    assert_eq!(e.state.db.forks_of(&ids[1]).await.unwrap().len(), 1);
+}
+
 // 10
 #[tokio::test]
 async fn a_scan_reads_nothing_outside_the_task_folder() {
