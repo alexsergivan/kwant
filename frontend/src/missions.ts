@@ -41,7 +41,7 @@ export interface Mission {
 }
 
 export interface NeedsYouItem {
-  /** check_approval: a check waits for the person's OK (id = the check's id); only on tasks in review. */
+  /** check_approval: a required check waits for the person's OK (id = the check's id); only on tasks in review. Optional checks never appear here. */
   kind: 'question' | 'approval' | 'human_step' | 'check_approval';
   id: string;
   text: string;

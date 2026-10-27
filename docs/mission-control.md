@@ -122,7 +122,9 @@ outcome_checks(id, task_id, kind, spec JSON, required, approved, status, output_
   in `review`; one waiting for approval also shows as a `check_approval` item in the task's
   `needs_you` and counts in Insights `needs_you_now`. The person's own Verify (a passed `person`
   check) doesn't wait for unapproved checks, but approved checks still have to pass. Optional checks
-  (`required: false`) are shown but never hold, fail or verify a task.
+  (`required: false`) are shown but never hold, fail or verify a task. An optional check waiting for
+  approval is never a `needs_you` item and never counts in `needs_you_now`; it can still be approved,
+  and `checks_summary.needs_approval` counts it.
 - A task with no checks stays in `review` ("not checked") until a peer review or the person verifies it.
 
 `checks_summary` on each task: `{"status": "not_checked" | "pending" | "passed" | "failed",
@@ -207,7 +209,7 @@ claim conflict), 403 (bot token on a person route).
  "needs_you": [{"kind": "question"|"approval"|"human_step"|"check_approval", "id", "text"}],
  "checks_summary": {"status","passed","failed","needs_approval","required_needs_approval","total"}}
 // needs_you: question/approval/human_step while working or needs_you; check_approval (id = the
-// check's id, approve it with POST /api/checks/:id/approve) while in review
+// check's id, approve it with POST /api/checks/:id/approve) while in review, for required checks only
 
 // TaskDetail = {"task": Task, "checks": [Check], "evidence": [Evidence], "events": [Event]}   (events oldest first, max 500)
 // MissionDetail = {"mission": Mission, "tasks": [Task]}

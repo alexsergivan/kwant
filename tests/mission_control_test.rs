@@ -526,3 +526,41 @@ async fn a_failing_optional_check_on_a_verified_task_is_recorded_and_the_task_st
     assert_eq!(t["task"]["spent_tokens"], before["task"]["spent_tokens"]);
     assert_eq!(t["task"]["needs_you"], json!([]));
 }
+
+#[tokio::test]
+async fn only_a_required_check_waiting_for_approval_needs_the_person() {
+    let e = setup().await;
+    let (m, tasks) = mission(&e, 200_000, json!([
+        {"title": "A slow", "owner": e.bot.id, "checks": [{"kind": "file_exists", "spec": {"path": "slow.txt"}}]},
+        {"title": "B own", "owner": e.bot.id}])).await;
+    let (slow, own) = (id(&tasks[0]), id(&tasks[1]));
+    let dir = folder(&e, &id(&m)).await;
+    std::fs::write(dir.join("slow.txt"), "done").unwrap();
+    let token = turn(&e, &e.bot, "t-required-only").await;
+
+    // A required check still running plus the owner's optional check waiting: nothing is on the person
+    ok(&e, &token, "task_claim", json!({"task_id": slow})).await;
+    ok(&e, &token, "task_request_check", json!({"task_id": slow, "kind": "file_exists", "spec": {"path": "slow.txt"}, "required": false})).await;
+    let required = e.state.db.list_checks(&slow).await.unwrap().into_iter().find(|c| c.required).unwrap();
+    assert!(e.state.db.start_check(&required.id).await.unwrap(), "the required check is mid-run");
+    ok(&e, &token, "task_update", json!({"task_id": slow, "status": "review"})).await;
+    let t = task(&e, &slow).await;
+    assert_eq!(t["task"]["state"], "review", "{t}");
+    let s = &t["task"]["checks_summary"];
+    assert_eq!((s["needs_approval"].as_u64(), s["required_needs_approval"].as_u64()), (Some(1), Some(0)), "{s}");
+    assert_eq!(t["task"]["needs_you"], json!([]), "an optional check never needs the person: {t}");
+    let insights = person(&e, "GET", "/api/missions/insights", None).await;
+    assert_eq!(insights["needs_you_now"], 0, "{insights}");
+
+    // Control: the owner's own required check waits for the person, and does land in needs_you
+    ok(&e, &token, "task_claim", json!({"task_id": own})).await;
+    let added = ok(&e, &token, "task_request_check", json!({"task_id": own, "kind": "file_exists", "spec": {"path": "slow.txt"}})).await;
+    ok(&e, &token, "task_update", json!({"task_id": own, "status": "review"})).await;
+    let t = task(&e, &own).await;
+    assert_eq!(t["task"]["state"], "review", "{t}");
+    let items = t["task"]["needs_you"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{t}");
+    assert_eq!((items[0]["kind"].as_str(), items[0]["id"].as_str()), (Some("check_approval"), added["checks"][0]["id"].as_str()));
+    let insights = person(&e, "GET", "/api/missions/insights", None).await;
+    assert_eq!(insights["needs_you_now"], 1, "{insights}");
+}

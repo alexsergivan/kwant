@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and blocked work. Turn it on in Settings → Mission board. It works on phone and desktop.
 
 ### Changed
+- **An optional check never shows as needing you.** While a required check is still running, an
+  optional check waiting for your OK no longer counts in "Needs you now" or shows the amber "Waiting
+  for you" block on the receipt. You can still allow it from its row.
 - **A card says "Needs you" only when a check that counts waits for your OK.** A task whose required
   check is still running while an optional check waits now reads as still checking, with a grey
   "1 optional check waiting" note. The quiet "Not run" optional check on a verified task has a grey

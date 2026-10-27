@@ -475,13 +475,15 @@ pub async fn needs_you(state: &AppState, task: &Task) -> Vec<Value> {
         .collect()
 }
 
-/// A task in review waits on the person for each check that needs their approval
-/// (`{"kind": "check_approval", "id": <check id>, "text"}`).
+/// A task in review waits on the person for each required check that needs their approval
+/// (`{"kind": "check_approval", "id": <check id>, "text"}`). An optional check can't hold the
+/// task, so it never lands here; it can still be approved, and `checks_summary.needs_approval`
+/// still counts it.
 pub async fn check_approvals(state: &AppState, task: &Task) -> Vec<Value> {
     let checks = state.db.list_checks(&task.id).await.unwrap_or_default();
     checks
         .iter()
-        .filter(|c| !c.approved)
+        .filter(|c| c.required && !c.approved)
         .map(|c| {
             let text = format!("Allow this check: {} {}", c.kind, c.spec_value());
             json!({"kind": "check_approval", "id": c.id, "text": text.chars().take(200).collect::<String>()})
