@@ -847,6 +847,11 @@ mod tests {
         assert!(person_only(&post, "/api/tasks/t1/verify"));
         assert!(person_only(&post, "/api/tasks/t1/checks/run"));
         assert!(person_only(&post, "/api/checks/c1/approve"));
+        assert!(person_only(&post, "/api/tasks/t1/fork"));
+        assert!(person_only(&post, "/api/tasks/t1/flags/f1/resolve"));
+        assert!(person_only(&post, "/api/missions/m1/graph/scan"));
+        assert!(!person_only(&get, "/api/missions/m1/graph"));
+        assert!(!person_only(&get, "/api/tasks/t1/flags"));
         assert!(!person_only(&get, "/api/tasks"));
         assert!(!person_only(&get, "/api/missions/insights"));
         assert!(person_only(&post, "/api/passwords/bitwarden/unlock"));

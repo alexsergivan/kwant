@@ -41,8 +41,11 @@ export interface Mission {
 }
 
 export interface NeedsYouItem {
-  /** check_approval: a required check waits for the person's OK (id = the check's id); only on tasks in review. Optional checks never appear here. */
-  kind: 'question' | 'approval' | 'human_step' | 'check_approval';
+  /** check_approval: a required check waits for the person's OK (id = the check's id); only on tasks in review.
+   * Optional checks never appear here.
+   * may_be_invalid: an open flag (id = the flag's id), in any state, verified included; resolve it with
+   * `POST /api/tasks/:id/flags/:flag_id/resolve`. */
+  kind: 'question' | 'approval' | 'human_step' | 'check_approval' | 'may_be_invalid';
   id: string;
   text: string;
 }
@@ -95,6 +98,80 @@ export interface Task {
   claim: Claim | null;
   needs_you: NeedsYouItem[];
   checks_summary: ChecksSummary;
+  /** The task this one redoes (a fork); older servers leave it out. */
+  forked_from?: string | null;
+  /** Open "may be invalid" flags; older servers leave it out. */
+  flags?: TaskFlag[];
+}
+
+// Work graph (Phase B1, docs/mission-control.md §11)
+
+export type FlagCause = 'evidence_changed' | 'upstream_evidence_changed' | 'upstream_forked';
+export type FlagResolution = 'still_valid' | 'redo' | 'cancelled';
+
+export interface TaskFlag {
+  id: string;
+  kind: 'may_be_invalid';
+  cause: FlagCause;
+  /** The upstream task, or the task itself for evidence_changed. */
+  cause_task_id: string;
+  cause_title: string | null;
+  /** evidence_*: {path, old_sha256, new_sha256 (null when the file is gone)}; upstream_forked: {fork_id, reason}. */
+  detail: Record<string, unknown>;
+  created_at: string;
+  resolved_at: string | null;
+  resolution: FlagResolution | null;
+}
+
+export interface GraphNode {
+  id: string;
+  title: string;
+  state: TaskState;
+  owner_kwant_id: string | null;
+  owner_name: string | null;
+  attempts: number;
+  max_attempts: number;
+  forked_from: string | null;
+  /** Tasks that depend on this one, directly or further down ("N more downstream"). */
+  downstream: number;
+  /** Open flags only. */
+  flags: TaskFlag[];
+  checks_summary: ChecksSummary;
+}
+
+/** `from` is the upstream task (depends_on_id), `to` the task that depends on it. */
+export interface GraphEdge {
+  from: string;
+  to: string;
+}
+
+export interface ScanSkipped {
+  task_id: string;
+  path: string;
+  why: string;
+}
+
+/** `GET /api/missions/:id/graph`, or `GET /api/graph` (tasks without a mission; mission_id null). */
+export interface WorkGraph {
+  mission_id: string | null;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  scanned_at: string | null;
+  scan_skipped: ScanSkipped[];
+}
+
+/** `POST /api/missions/:id/graph/scan`. */
+export interface GraphScanResult {
+  scanned: number;
+  flagged: string[];
+  skipped: ScanSkipped[];
+}
+
+/** `POST /api/tasks/:id/flags/:flag_id/resolve`: the closed flag, the task, and the fork when `redo` forked a verified task. */
+export interface ResolveFlagResult {
+  flag: TaskFlag;
+  task: Task;
+  fork: Task | null;
 }
 
 export interface Check {

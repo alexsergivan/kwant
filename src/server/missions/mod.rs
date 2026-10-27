@@ -13,6 +13,7 @@
 //!   a bot adds run only after the person approves them, and person actions are person-only routes.
 
 pub mod checks;
+pub mod graph;
 pub mod listener;
 pub mod routes;
 pub mod runner;
@@ -456,8 +457,15 @@ pub(crate) async fn name_of(state: &AppState, id: Option<&str>) -> Option<String
     }
 }
 
-/// The open cards (questions, approvals, human steps) the task's owner waits on the person with.
+/// What the task waits on the person for: the owner's open cards (questions, approvals, human
+/// steps) or, in review, check approvals; then, in every state, its open "may be invalid" flags.
 pub async fn needs_you(state: &AppState, task: &Task) -> Vec<Value> {
+    let mut items = owner_needs_you(state, task).await;
+    items.extend(graph::flag_items(state, task).await);
+    items
+}
+
+async fn owner_needs_you(state: &AppState, task: &Task) -> Vec<Value> {
     if task.state == "review" {
         return check_approvals(state, task).await;
     }
@@ -512,6 +520,7 @@ pub async fn task_json(state: &AppState, task: &Task) -> Value {
             }),
         );
         obj.insert("needs_you".into(), json!(needs_you(state, task).await));
+        obj.insert("flags".into(), json!(graph::open_flags(state, task).await));
         obj.insert("checks_summary".into(), checks_summary(task, &checks));
     }
     v
@@ -942,6 +951,7 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             finished_at: None,
+            forked_from: None,
         }
     }
 

@@ -292,3 +292,106 @@ because kwant counts tokens when a model call returns.
   `channel_id`, `thread_id`. A command check in a person-created mission is approved at once.
 - Not in Phase A: a plain @mention hand-off creates a task only when it goes through the delegation
   machinery; a Loose End's own owner turn doesn't create a `zombie` task (the person taking it on does).
+
+## 11. Work graph (Phase B1)
+
+Design and decisions: `/home/maus/shared/ship-software-safely/mission-control/phase-b/contract.md` §2
+and `decisions.md` (D1–D3). A verified task stays final. When its inputs may have changed, kwant
+**flags** it as "may be invalid", and the person decides. A flag never changes any task's state.
+
+### Tables
+
+- `tasks.forked_from TEXT`: the task this one redoes (a fork), else NULL.
+- `task_flags`:
+  - `id`, `task_id`, `kind` (`may_be_invalid`)
+  - `cause`: one of `evidence_changed`, `upstream_evidence_changed`, `upstream_forked`
+  - `cause_task_id`: the upstream task, or the task itself for `evidence_changed`
+  - `detail` JSON, `created_at`
+  - `resolved_at`, `resolved_by`, and `resolution`: one of `still_valid`, `redo`, `cancelled`
+- Indexes and triggers on `task_flags`:
+  - The unique index `task_flags_one_open (task_id, cause_task_id, cause) WHERE resolved_at IS NULL` allows at most one open flag per cause.
+  - `task_flags_resolve_once`: a resolved flag can't change.
+  - `task_flags_person_resolves`: only `resolved_by = 'person'` resolves a flag.
+  - `task_flags_no_delete`: flags are never deleted.
+- `idempotency_keys (key, route, response, created_at)` keeps each key for 24 h.
+- `graph_scans (mission_id, scanned_at, skipped)` records each mission's last drift scan. It feeds the graph's `scanned_at`/`scan_skipped` and the 10-minute throttle.
+
+### When a flag is raised
+
+1. **Evidence drift.** The scan looks at each verified task's `file` evidence and uses the latest row per path.
+   - If the file now hashes differently or is gone, the task gets `evidence_changed` with detail `{path, old_sha256, new_sha256|null}`.
+   - Each **direct** dependent that has started gets `upstream_evidence_changed`. Started means the state is past `ready`, or `attempts > 0`, or the task was ever claimed. Cancelled dependents are left out.
+2. **Fork of a verified task.** Each started direct dependent of the original gets `upstream_forked`, with detail `{fork_id, reason}`.
+
+Things that are never flagged:
+- Backlog or ready dependents, and anything further down the graph (D2). The graph shows how many tasks sit further down as `downstream`.
+- A drift that a flag already recorded: same task, cause task, cause, path and new hash. Once the person calls a drift `still_valid`, the same file contents don't flag it again. A new change does.
+
+Each flag:
+- writes a `flagged` event (actor `kwant`, no state change);
+- posts a line in the mission's chat (or the task's own) as the owner;
+- adds a `{"kind": "may_be_invalid", "id": <flag id>, "text": "Check this still holds: …"}` item to `needs_you` in **every** state. Insights `needs_you_now` counts flagged tasks.
+
+Bots have no tool to resolve a flag (D1).
+
+### The drift scan
+
+- The runner tick scans each active mission at most every 10 minutes. `POST /api/missions/:id/graph/scan` also runs it on demand for any mission that isn't cancelled, which matters because a mission whose tasks are all verified is `done`.
+- It hashes at most 200 files and skips files over 50 MB.
+- Paths go through the same `inside(folder, rel)` guard as evidence capture: no `..`, nothing outside the task folder, no secret or env files.
+- A skipped file is reported with a reason and never counts as changed.
+
+### Resolving (person only)
+
+`POST /api/tasks/:id/flags/:flag_id/resolve` with body `{"resolution", "note"?}` writes `flag_resolved` (actor `person`).
+
+| resolution | effect |
+|---|---|
+| `still_valid` | Closes the flag. The task is unchanged. |
+| `redo` | **Verified:** forks the task and returns the fork. **review/failed:** moves it to `ready` (attempts reset). **blocked:** moves it to `backlog`. **backlog/ready:** just closes the flag. **working/needs_you:** 409 "it's running; resolve when it stops". **cancelled:** 409. |
+| `cancelled` | A verified task gets 409. A cancelled task just has the flag closed. Any other task is cancelled. |
+
+Other responses:
+- 409 when the flag is already resolved.
+- 404 when the flag belongs to another task.
+- Success returns `{flag, task, fork|null}`.
+
+### Fork (person only)
+
+`POST /api/tasks/:id/fork` with body `{"reason", "from_checkpoint"?}`.
+- `reason` is required, at most 500 characters.
+- `from_checkpoint` gets 400 until Phase B2.
+- The `Idempotency-Key` header is optional.
+
+The new `backlog` task copies these from the original:
+- `mission_id`, `title`, `acceptance`, `priority`, `budget_tokens`, `max_attempts`, `source_kind` and the chat;
+- its dependencies;
+- its checks, reset to pending with results cleared. An approval carries over only when `approved_by` is `person` or `mission`. Any other check waits for approval again (`needs_approval`).
+
+Other fields on the new task:
+- `suggested_kwant_id` is the original's owner.
+- `source_id` is NULL, `created_by` is `person`, and `forked_from` is the original's id.
+
+What else happens:
+- The original is untouched. Its dependents are not rewired (D3).
+- `promote_one` runs on the fork.
+- Events: `forked` on the original (`{fork_id, reason}`) and `created` on the fork (`{forked_from}`).
+- A `done` mission opens again (`active`) so the fork can run. A cancelled mission refuses with 409.
+
+### Idempotency-Key
+
+The header works on `POST /api/tasks/:id/fork` and `POST /api/tasks/:id/retry`. Keys are 1–200 characters.
+- The same key on the same route (method plus path, task id included) returns the stored response with `idempotent-replayed: true`, and nothing runs again.
+- The same key on another route gets 422.
+- Only successful responses are stored. Keyed requests run one at a time.
+
+### Graph routes
+
+- `GET /api/missions/:id/graph` returns `{mission_id, nodes, edges, scanned_at, scan_skipped}`.
+  - Each node: `{id, title, state, owner_kwant_id, owner_name, attempts, max_attempts, forked_from, downstream, flags (open), checks_summary}`.
+  - Each edge: `{from: depends_on_id, to: task_id}`.
+- `GET /api/graph` is the active space's tasks without a mission: open ones, plus ones finished in the last 7 days. `mission_id` is null there, and so is `scanned_at`.
+- `GET /api/tasks/:id/flags` lists open flags; `?all=1` adds resolved ones. Flag shape: `{id, kind, cause, cause_task_id, cause_title, detail, created_at, resolved_at, resolution}`.
+- `POST /api/missions/:id/graph/scan` (person only) returns `{scanned, flagged: [flag ids], skipped: [{task_id, path, why}]}`.
+- `task_json` gains `forked_from` and `flags` (open only).
+- There are no new SSE types: flags and forks go out as `task_updated` and `mission_updated`.

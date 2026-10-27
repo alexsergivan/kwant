@@ -69,6 +69,8 @@ pub struct Task {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
+    /// The task this one redoes (a fork, Phase B1); `None` otherwise.
+    pub forked_from: Option<String>,
 }
 
 /// A lease on a task. Times are unix milliseconds so the SQLite triggers can compare them.
@@ -1144,7 +1146,7 @@ impl Default for TaskChange {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn insert_event(
+pub(super) async fn insert_event(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     task_id: &str,
     mission_id: Option<&str>,

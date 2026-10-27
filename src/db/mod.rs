@@ -25,6 +25,7 @@ pub mod work_ahead;
 pub mod api_context;
 pub mod usage;
 pub mod missions;
+pub mod mission_graph;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -158,6 +159,7 @@ impl Database {
         db.migrate_api_context().await?;
         db.migrate_usage().await?;
         db.migrate_missions().await?;
+        db.migrate_mission_graph().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;

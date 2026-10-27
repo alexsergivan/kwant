@@ -52,6 +52,8 @@ pub async fn tick(state: &AppState) {
     super::listener::reconcile(state).await;
     super::sweep_leases(state).await;
     for m in state.db.active_missions().await.unwrap_or_default() {
+        // Evidence drift, at most every 10 minutes per mission (Phase B1)
+        super::graph::scan_if_due(state, &m).await;
         if is_running(&m.id) {
             continue;
         }

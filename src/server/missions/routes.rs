@@ -18,29 +18,29 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-fn err(status: StatusCode, msg: impl Into<String>) -> Response {
+pub(super) fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({"error": msg.into()}))).into_response()
 }
 
-fn bad(msg: impl Into<String>) -> Response {
+pub(super) fn bad(msg: impl Into<String>) -> Response {
     err(StatusCode::BAD_REQUEST, msg)
 }
 
-fn conflict(msg: impl Into<String>) -> Response {
+pub(super) fn conflict(msg: impl Into<String>) -> Response {
     err(StatusCode::CONFLICT, msg)
 }
 
-fn not_found(what: &str) -> Response {
+pub(super) fn not_found(what: &str) -> Response {
     err(StatusCode::NOT_FOUND, format!("no such {what}"))
 }
 
-fn internal(e: impl std::fmt::Display) -> Response {
+pub(super) fn internal(e: impl std::fmt::Display) -> Response {
     tracing::warn!(error = %e, "mission control");
     err(StatusCode::INTERNAL_SERVER_ERROR, "something went wrong")
 }
 
 #[allow(clippy::result_large_err)]
-fn moved(r: Result<Task, MoveError>) -> Result<Task, Response> {
+pub(super) fn moved(r: Result<Task, MoveError>) -> Result<Task, Response> {
     r.map_err(|e| match e {
         MoveError::Missing => not_found("task"),
         MoveError::Db(crate::db::DbError::Sqlx(_)) | MoveError::NotAllowed(_) | MoveError::Stale => conflict(e.to_string()),
@@ -50,7 +50,7 @@ fn moved(r: Result<Task, MoveError>) -> Result<Task, Response> {
 
 /// The task `id`, refused (404) when an explicit `?space=` names another space.
 #[allow(clippy::result_large_err)]
-async fn load_task(state: &AppState, query: Option<&str>, id: &str) -> Result<Task, Response> {
+pub(super) async fn load_task(state: &AppState, query: Option<&str>, id: &str) -> Result<Task, Response> {
     match state.db.get_task(id).await {
         Ok(Some(t)) if space_param(query).is_none_or(|s| s.trim() == t.space_id) => Ok(t),
         Ok(_) => Err(not_found("task")),
@@ -59,7 +59,7 @@ async fn load_task(state: &AppState, query: Option<&str>, id: &str) -> Result<Ta
 }
 
 #[allow(clippy::result_large_err)]
-async fn load_mission(state: &AppState, query: Option<&str>, id: &str) -> Result<crate::db::missions::Mission, Response> {
+pub(super) async fn load_mission(state: &AppState, query: Option<&str>, id: &str) -> Result<crate::db::missions::Mission, Response> {
     match state.db.get_mission(id).await {
         Ok(Some(m)) if space_param(query).is_none_or(|s| s.trim() == m.space_id) => Ok(m),
         Ok(_) => Err(not_found("mission")),
@@ -312,9 +312,10 @@ pub async fn insights(State(state): State<AppState>, Scope(space): Scope) -> Res
         }
     }
     let all = state.db.list_tasks(&space, None, None, None, 1000).await.unwrap_or_default();
-    let mut needs_you = all.iter().filter(|t| t.state == "needs_you").count();
-    for t in all.iter().filter(|t| t.state == "review") {
-        if !super::check_approvals(&state, t).await.is_empty() {
+    let flagged: std::collections::HashSet<String> = state.db.flagged_task_ids(&space).await.unwrap_or_default().into_iter().collect();
+    let mut needs_you = 0;
+    for t in &all {
+        if t.state == "needs_you" || flagged.contains(&t.id) || (t.state == "review" && !super::check_approvals(&state, t).await.is_empty()) {
             needs_you += 1;
         }
     }
@@ -716,21 +717,20 @@ pub async fn unblock_task(State(state): State<AppState>, RawQuery(q): RawQuery, 
     }
 }
 
-pub async fn retry_task(State(state): State<AppState>, RawQuery(q): RawQuery, Path(id): Path<String>) -> Response {
-    if let Err(r) = load_task(&state, q.as_deref(), &id).await {
-        return r;
-    }
-    // A retry gets the same number of attempts again
-    let change = TaskChange { reason: Some("retried by the person".into()), detail: Some(json!({"reset_attempts": true})), ..Default::default() };
-    match moved(transition(&state, &id, "failed", "ready", Actor::Person, "person", change).await) {
-        Ok(t) => {
-            let _ = state.db.reset_attempts(&id).await;
-            let t = state.db.get_task(&id).await.ok().flatten().unwrap_or(t);
-            emit_task(&state, &t).await;
-            task_out(&state, &t).await
-        }
-        Err(r) => r,
-    }
+/// `Idempotency-Key` optional (Phase B1 §5): a repeated retry returns the first response.
+pub async fn retry_task(State(state): State<AppState>, RawQuery(q): RawQuery, headers: axum::http::HeaderMap, Path(id): Path<String>) -> Response {
+    let route = format!("POST /api/tasks/{id}/retry");
+    super::graph::idempotent(&state, &headers, route, || async {
+        load_task(&state, q.as_deref(), &id).await?;
+        // A retry gets the same number of attempts again
+        let change = TaskChange { reason: Some("retried by the person".into()), detail: Some(json!({"reset_attempts": true})), ..Default::default() };
+        let t = moved(transition(&state, &id, "failed", "ready", Actor::Person, "person", change).await)?;
+        let _ = state.db.reset_attempts(&id).await;
+        let t = state.db.get_task(&id).await.ok().flatten().unwrap_or(t);
+        emit_task(&state, &t).await;
+        Ok(task_json(&state, &t).await)
+    })
+    .await
 }
 
 pub async fn cancel_task(State(state): State<AppState>, RawQuery(q): RawQuery, Path(id): Path<String>) -> Response {

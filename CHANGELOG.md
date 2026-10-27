@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
+- **Mission Control: work graph and "may be invalid" flags (backend).** When a verified task's evidence
+  file changes or disappears, or a verified task is redone, kwant flags that task and the started tasks
+  that directly depend on it as "may be invalid". Their state never changes, and only you decide:
+  still valid, redo, or cancel. Redo forks the task, so verified history stays untouched. New
+  endpoints serve the mission's graph (`/api/missions/:id/graph`), flags, forks and an on-demand drift
+  scan. Fork and retry accept an `Idempotency-Key`. The board UI follows separately.
 - **Mission Control (preview, off by default).** One task board for everything bots work on: planned
   missions, team hand-offs, routine runs, Loose Ends you take on and work-ahead posts. A task counts as
   **verified** only when an outcome check passes (a command, a URL, a file, a teammate's review with
