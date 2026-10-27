@@ -243,6 +243,13 @@ async fn cli_bot(e: &Env) -> String {
 
 /// The runner starts `tid` on the stand-in CLI; waits until the turn hands it in.
 async fn cli_run(e: &Env, mid: &str, tid: &str) {
+    // An earlier runner turn of this mission may still be ending after its hand-in
+    for _ in 0..200 {
+        if !kwnt::server::missions::runner::is_running(mid) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let r = person(e, "POST", &format!("/api/missions/{mid}/run"), Some(json!({"max_tasks": 1}))).await;
     assert_eq!(r["started"][0]["task_id"], tid, "{r}");
     for _ in 0..300 {
