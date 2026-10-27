@@ -975,6 +975,14 @@ pub async fn preview(State(state): State<AppState>, RawQuery(q): RawQuery, Path(
     }
 }
 
+/// `force_paths` entries the preview lists neither as a change nor as a conflict.
+fn unlisted_force_paths<'a>(p: &Plan, force: &'a [String]) -> Vec<&'a str> {
+    let listed: BTreeSet<&str> = p.changes.iter().map(|c| c.path.as_str()).chain(p.conflicts.iter().filter_map(|c| c["path"].as_str())).collect();
+    let mut out: Vec<&str> = force.iter().map(String::as_str).filter(|f| !listed.contains(f)).collect();
+    out.dedup();
+    out
+}
+
 #[derive(Deserialize)]
 pub struct RestoreBody {
     preview_sha256: String,
@@ -1007,6 +1015,11 @@ pub async fn restore(
         }
         if p.sha != b.preview_sha256.trim() {
             return Err(coded(StatusCode::CONFLICT, "stale_preview", "the folder or the task changed since the preview; look at it again"));
+        }
+        let unknown = unlisted_force_paths(&p, &b.force_paths);
+        if !unknown.is_empty() {
+            let msg = format!("force_paths names a path the preview doesn't list: {}", unknown.join(", "));
+            return Err(coded(StatusCode::UNPROCESSABLE_ENTITY, "unknown_force_path", &msg));
         }
         let mut out = write_back(&state, &task, &c, &p, b.force_paths.into_iter().collect()).await?;
         let mut t = state.db.get_task(&task.id).await.map_err(internal)?.unwrap_or(task.clone());

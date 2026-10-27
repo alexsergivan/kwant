@@ -65,6 +65,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   check and records whether it passed or failed, with its output. The task stays Verified either way
   and its spend doesn't change. Before, the check was only approved and never ran.
 
+### Fixed
+- **Mission Control: racing Redo requests make one copy, and restore refuses unknown forced paths.**
+  Two Redo requests on the same flag at the same moment, without an `Idempotency-Key`, could each make
+  a copy; now the flag is claimed in the same step as the copy, so one wins and the rest get 409. A
+  restore whose `force_paths` names a path the preview doesn't list is now refused with 422 naming the
+  path, instead of being ignored.
+
 ## [Mac 0.1.3] - 2026-10-26
 
 ### Added

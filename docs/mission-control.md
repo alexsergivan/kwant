@@ -352,7 +352,7 @@ Bots have no tool to resolve a flag (D1).
 | `cancelled` | A verified task gets 409. A cancelled task just has the flag closed. Any other task is cancelled. |
 
 Other responses:
-- 409 when the flag is already resolved.
+- 409 when the flag is already resolved. A Verified task's redo claims the flag in the same transaction as the fork, so of several simultaneous redos (with or without a key) one forks and the rest get 409 with no copy.
 - 404 when the flag belongs to another task.
 - Success returns `{flag, task, fork|null}`.
 
@@ -434,6 +434,7 @@ it is listed as "not undone".
 - `POST /api/tasks/:id/checkpoints` (person only): a manual checkpoint; 201 with the item, 500 if the snapshot failed.
 - `GET /api/tasks/:id/checkpoints/:cid/restore-preview`: `{checkpoint_id, preview_sha256, changes: [{path, action: overwrite|create|delete}], conflicts: [{path, changed_by_task}], skipped: [{path, why}], external_not_undone: [{tool_name, summary, at}], not_undone_note, effects_known, task_state_after, refused: null|fork_instead|running}`.
   - Only paths this task's runs changed are restored. A path another task's run changed after the checkpoint is a conflict, left alone unless forced.
+  - Every `force_paths` entry must be listed by the preview (in `changes` or `conflicts`); otherwise 422 `unknown_force_path` naming the paths, and nothing is written.
   - `effects_known` is false when a run after the checkpoint changed files but no tool call that could have was logged.
   - 409 `not_restorable` when the snapshot failed or was pruned.
 - `POST /api/tasks/:id/checkpoints/:cid/restore` (person only, `Idempotency-Key` required): body `{preview_sha256, force_paths?: [path]}`. Returns `{restored, deleted, failed: [{path, why}], before_restore_checkpoint_id, external_not_undone, not_undone_note, effects_known, task}`.

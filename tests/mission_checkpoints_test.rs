@@ -346,6 +346,33 @@ async fn a_restore_brings_back_the_tasks_files_and_can_itself_be_undone() {
     assert_eq!(std::fs::read(dir.join("keep.txt")).unwrap(), keep_before);
 }
 
+#[tokio::test]
+async fn a_force_path_the_preview_does_not_list_is_refused_and_writes_nothing() {
+    let e = setup().await;
+    let (_mid, tid, dir) = cli_mission(&e).await;
+    let cid = id(of_kind(&checkpoints(&e, &tid).await, "before_run")[0]);
+    let p = preview(&e, &tid, &cid).await;
+    assert_eq!(p["changes"], json!([{"path": "a.txt", "action": "overwrite"}]), "{p}");
+    let uri = format!("/api/tasks/{tid}/checkpoints/{cid}/restore");
+    let body = |force: Value| Some(json!({"preview_sha256": p["preview_sha256"], "force_paths": force}));
+
+    // keep.txt is in the folder but not in the preview; nope.txt is nowhere
+    let (s, r, _) = send(&e.app, "POST", &uri, None, Some("force-1"), body(json!(["a.txt", "keep.txt", "nope.txt"]))).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{r}");
+    assert_eq!(r["code"], "unknown_force_path", "{r}");
+    let msg = r["error"].as_str().unwrap();
+    assert!(msg.contains("keep.txt") && msg.contains("nope.txt") && !msg.contains("a.txt"), "{r}");
+    assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "changed", "nothing is written");
+    assert!(of_kind(&checkpoints(&e, &tid).await, "before_restore").is_empty(), "no safety checkpoint either");
+    assert!(events(&e, &tid, "restored").await.is_empty());
+
+    // The refusal isn't stored under the key: the same key with a listed path restores
+    let (s, r, replayed) = send(&e.app, "POST", &uri, None, Some("force-1"), body(json!(["a.txt"]))).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(!replayed);
+    assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "original");
+}
+
 // 3
 #[tokio::test]
 async fn a_verified_task_forks_instead_and_a_running_one_is_refused() {

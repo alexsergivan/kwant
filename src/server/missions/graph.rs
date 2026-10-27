@@ -6,7 +6,7 @@
 use super::checks::{hex, inside};
 use super::routes::{bad, conflict, internal, load_mission, load_task, moved, not_found};
 use super::{emit_mission, emit_task, emit_task_id, name_of, post_line, task_folder, task_json, transition, Actor};
-use crate::db::mission_graph::{GraphScan, TaskFlag, FLAG_RESOLUTIONS};
+use crate::db::mission_graph::{FlagClaim, GraphScan, TaskFlag, FLAG_RESOLUTIONS};
 use crate::db::missions::{Mission, Task, TaskChange};
 use crate::server::spaces::Scope;
 use crate::server::AppState;
@@ -222,7 +222,9 @@ pub async fn scan_if_due(state: &AppState, mission: &Mission) {
 /// Forks `orig` to redo it (see `Database::fork_task`). A done mission opens again so the fork
 /// runs; a cancelled one refuses. Forking a verified task flags its started direct dependents
 /// (`upstream_forked`); they keep depending on the original until the person decides.
-pub async fn fork(state: &AppState, orig: &Task, reason: &str) -> Result<Task, Response> {
+/// With `claim`, the flag is resolved in the fork's own transaction: a flag that is already
+/// resolved is a 409 and makes no fork, so racing redos make one copy.
+pub async fn fork(state: &AppState, orig: &Task, reason: &str, claim: Option<&FlagClaim<'_>>) -> Result<Task, Response> {
     if let Some(mid) = &orig.mission_id {
         let m = match state.db.get_mission(mid).await {
             Ok(Some(m)) => m,
@@ -237,7 +239,11 @@ pub async fn fork(state: &AppState, orig: &Task, reason: &str) -> Result<Task, R
             _ => {}
         }
     }
-    let f = state.db.fork_task(orig, reason).await.map_err(internal)?;
+    let f = match state.db.fork_task(orig, reason, claim).await {
+        Ok(Some(f)) => f,
+        Ok(None) => return Err(conflict("this flag is already resolved")),
+        Err(e) => return Err(internal(e)),
+    };
     if orig.state == "verified" {
         let detail = json!({"fork_id": f.id, "reason": reason});
         for dep in state.db.started_dependents(&orig.id).await.unwrap_or_default() {
@@ -317,7 +323,7 @@ pub async fn fork_task(State(state): State<AppState>, RawQuery(q): RawQuery, hea
             Some(cid) => Some(super::checkpoints::restore_for_fork(&state, &orig, cid).await?),
             None => None,
         };
-        let f = fork(&state, &orig, &reason).await?;
+        let f = fork(&state, &orig, &reason, None).await?;
         let mut out = task_json(&state, &f).await;
         if let Some(r) = restore {
             out["restore"] = r;
@@ -358,16 +364,15 @@ pub async fn resolve_flag(
             return Err(conflict("this flag is already resolved"));
         }
         let mut fork_out = None;
-        let mut extra = json!({});
         match (p.resolution.as_str(), t.state.as_str()) {
             ("still_valid", _) => {}
             ("redo", "working" | "needs_you") => return Err(conflict("it's running; resolve when it stops")),
             ("redo", "cancelled") => return Err(conflict("the task is cancelled; fork it to redo it")),
             ("redo", "verified") => {
                 let reason = note.clone().unwrap_or_else(|| "redo: it may no longer hold".into());
-                let f = fork(&state, &t, &reason).await?;
-                extra = json!({"fork_id": f.id});
-                fork_out = Some(f);
+                // The fork claims the flag first, in its own transaction
+                let claim = FlagClaim { id: &flag.id, resolution: &p.resolution, note: note.as_deref() };
+                fork_out = Some(fork(&state, &t, &reason, Some(&claim)).await?);
             }
             ("redo", from @ ("review" | "failed")) => {
                 let change = TaskChange { reason: Some("redo: it may no longer hold".into()), detail: Some(json!({"flag_id": flag.id})), ..Default::default() };
@@ -389,10 +394,12 @@ pub async fn resolve_flag(
             }
             _ => return Err(bad("resolution must be still_valid, redo or cancelled")),
         }
-        match state.db.resolve_flag(&flag.id, &p.resolution, note.as_deref(), Some(&extra)).await {
-            Ok(true) => {}
-            Ok(false) => return Err(conflict("this flag is already resolved")),
-            Err(e) => return Err(internal(e)),
+        if fork_out.is_none() {
+            match state.db.resolve_flag(&flag.id, &p.resolution, note.as_deref(), None).await {
+                Ok(true) => {}
+                Ok(false) => return Err(conflict("this flag is already resolved")),
+                Err(e) => return Err(internal(e)),
+            }
         }
         let t = state.db.get_task(&t.id).await.ok().flatten().unwrap_or(t);
         emit_task(&state, &t).await;

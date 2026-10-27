@@ -168,21 +168,9 @@ impl Database {
     /// Closes an open flag as the person. False when it was already resolved.
     pub async fn resolve_flag(&self, id: &str, resolution: &str, note: Option<&str>, detail: Option<&Value>) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
-        let r = sqlx::query("UPDATE task_flags SET resolved_at = ?, resolved_by = 'person', resolution = ? WHERE id = ? AND resolved_at IS NULL")
-            .bind(Utc::now())
-            .bind(resolution)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-        if r.rows_affected() == 0 {
+        if !claim_flag(&mut tx, &FlagClaim { id, resolution, note }, detail).await? {
             return Ok(false);
         }
-        let (task_id,): (String,) = sqlx::query_as("SELECT task_id FROM task_flags WHERE id = ?").bind(id).fetch_one(&mut *tx).await?;
-        let mut event = serde_json::json!({"flag_id": id, "resolution": resolution, "note": note});
-        if let (Some(obj), Some(Value::Object(more))) = (event.as_object_mut(), detail) {
-            obj.extend(more.clone());
-        }
-        insert_event(&mut tx, &task_id, None, "flag_resolved", "person", None, None, &event).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -270,15 +258,24 @@ impl Database {
     /// attempts, suggested to the original owner, the same dependencies, and the same checks reset
     /// to pending (approval carries over only when the person or the approved plan gave it). The
     /// original is untouched. Logs `forked` on the original and `created` on the fork.
-    pub async fn fork_task(&self, orig: &Task, reason: &str) -> Result<Task, DbError> {
+    ///
+    /// With `claim`, the flag is resolved in the same transaction, before anything is written:
+    /// `None` when it was already resolved, and then there is no fork.
+    pub async fn fork_task(&self, orig: &Task, reason: &str, claim: Option<&FlagClaim<'_>>) -> Result<Option<Task>, DbError> {
         let now = Utc::now();
         let mut tx = self.pool.begin().await?;
+        let fork_id = Uuid::new_v4().to_string();
+        if let Some(c) = claim {
+            if !claim_flag(&mut tx, c, Some(&serde_json::json!({"fork_id": fork_id}))).await? {
+                return Ok(None);
+            }
+        }
         let fork = sqlx::query_as::<_, Task>(
             "INSERT INTO tasks (id, space_id, mission_id, title, acceptance, state, priority, suggested_kwant_id, budget_tokens, max_attempts, \
              source_kind, source_id, channel_id, direct_kwant_id, thread_id, created_by, created_at, updated_at, forked_from) \
              VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'person', ?, ?, ?) RETURNING *",
         )
-        .bind(Uuid::new_v4().to_string())
+        .bind(&fork_id)
         .bind(&orig.space_id)
         .bind(&orig.mission_id)
         .bind(&orig.title)
@@ -337,7 +334,7 @@ impl Database {
         )
         .await?;
         tx.commit().await?;
-        Ok(fork)
+        Ok(Some(fork))
     }
 
     /// Forks of `task_id`, newest first.
@@ -366,4 +363,32 @@ impl Database {
             .await?;
         Ok(())
     }
+}
+
+/// The person resolving one flag.
+pub struct FlagClaim<'a> {
+    pub id: &'a str,
+    pub resolution: &'a str,
+    pub note: Option<&'a str>,
+}
+
+/// Resolves the flag inside `tx` if it is still open, and logs `flag_resolved` with `detail`
+/// merged in. False when it was already resolved; nothing is written then.
+async fn claim_flag(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, c: &FlagClaim<'_>, detail: Option<&Value>) -> Result<bool, DbError> {
+    let r = sqlx::query("UPDATE task_flags SET resolved_at = ?, resolved_by = 'person', resolution = ? WHERE id = ? AND resolved_at IS NULL")
+        .bind(Utc::now())
+        .bind(c.resolution)
+        .bind(c.id)
+        .execute(&mut **tx)
+        .await?;
+    if r.rows_affected() == 0 {
+        return Ok(false);
+    }
+    let (task_id,): (String,) = sqlx::query_as("SELECT task_id FROM task_flags WHERE id = ?").bind(c.id).fetch_one(&mut **tx).await?;
+    let mut event = serde_json::json!({"flag_id": c.id, "resolution": c.resolution, "note": c.note});
+    if let (Some(obj), Some(Value::Object(more))) = (event.as_object_mut(), detail) {
+        obj.extend(more.clone());
+    }
+    insert_event(tx, &task_id, None, "flag_resolved", "person", None, None, &event).await?;
+    Ok(true)
 }

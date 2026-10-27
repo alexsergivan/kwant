@@ -530,6 +530,45 @@ async fn an_idempotency_key_resolves_a_redo_once_and_belongs_to_one_flag() {
     assert_eq!(e.state.db.forks_of(&ids[1]).await.unwrap().len(), 1);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn racing_keyless_redos_make_one_fork_and_the_rest_are_409() {
+    let e = setup().await;
+    let (mid, ids) = graph_mission(&e, &[("a", &[])]).await;
+    do_task(&e, &mid, &ids[0], "a").await;
+    drift(&e, &mid, "a").await;
+    scan(&e, &mid).await;
+    let fa = id(&flags(&task(&e, &ids[0]).await)[0]);
+    let uri = format!("/api/tasks/{}/flags/{fa}/resolve", ids[0]);
+
+    // Eight Redo requests at once, none with an Idempotency-Key
+    let sends = (0..8).map(|_| {
+        let (app, uri) = (e.app.clone(), uri.clone());
+        tokio::spawn(async move {
+            let req = Request::builder().method("POST").uri(uri).header("content-type", "application/json");
+            let resp = app.oneshot(req.body(Body::from(json!({"resolution": "redo"}).to_string())).unwrap()).await.unwrap();
+            let status = resp.status();
+            let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+        })
+    });
+    let replies: Vec<(StatusCode, Value)> = futures::future::join_all(sends).await.into_iter().map(Result::unwrap).collect();
+    let won: Vec<&Value> = replies.iter().filter(|(s, _)| s.is_success()).map(|(_, v)| v).collect();
+    assert_eq!(won.len(), 1, "{replies:?}");
+    assert!(replies.iter().all(|(s, _)| s.is_success() || *s == StatusCode::CONFLICT), "{replies:?}");
+    let forks = e.state.db.forks_of(&ids[0]).await.unwrap();
+    assert_eq!(forks.len(), 1, "a loser makes no copy: {replies:?}");
+    assert_eq!(won[0]["fork"]["id"], forks[0].id.as_str());
+
+    // One flag_resolved event, naming that fork; the original is still verified
+    let events = e.state.db.task_events(&ids[0], 100).await.unwrap();
+    let resolved: Vec<Value> = events.iter().filter(|ev| ev.kind == "flag_resolved").map(|ev| ev.detail_value()).collect();
+    assert_eq!(resolved.len(), 1, "{resolved:?}");
+    assert_eq!(resolved[0]["fork_id"], forks[0].id.as_str());
+    assert_eq!(resolved[0]["resolution"], "redo");
+    assert_eq!(events.iter().filter(|ev| ev.kind == "forked").count(), 1);
+    assert_eq!(state_of(&e, &ids[0]).await, "verified");
+}
+
 // 10
 #[tokio::test]
 async fn a_scan_reads_nothing_outside_the_task_folder() {
