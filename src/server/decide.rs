@@ -1,6 +1,6 @@
 //! Decide first: a bot's final reply that ends by asking the person to pick between reversible
 //! options is held back. The bot gets one hidden round to finish the job instead: it runs the
-//! checks its reply lists as not done, hears up to two teammates, decides, applies what it decided
+//! checks its reply lists as not done, hears the one teammate its open choices name (if any), decides, applies what it decided
 //! and posts one reply that says what it chose, why, and how to change it. Each choice is kept in
 //! the reply's `meta.decisions` with a Change button (see [`change`]), and every pick the person
 //! makes or changes is kept as a decision note (see [`crate::db::decisions`]), which the bots read
@@ -32,9 +32,9 @@ use std::sync::{Arc, Mutex};
 pub const SETTING: &str = "decide_first";
 /// Fresh tokens the hidden round needs to be left in the chain's budget.
 pub const RESERVE_TOKENS: u64 = 30_000;
-/// Teammates asked for their view at most: the one most relevant to the open choices, or two when
-/// the reply's choices or undone checks name both (see [`consultees`]).
-pub const MAX_CONSULTS: usize = 2;
+/// Teammates asked for their view at most: the one the open choices or undone checks name (see
+/// [`consultees`]). Each view is a full extra turn, so one is the cap.
+pub const MAX_CONSULTS: usize = 1;
 /// The `purpose` of the hidden round's turns in `GET /api/turns` (`turns[]`).
 pub const PURPOSE: &str = "decide";
 /// Non-empty lines at a reply's end looked at for open choices.
@@ -515,9 +515,9 @@ async fn fits_budget(scope: &TurnScope) -> bool {
 }
 
 /// Which of `names` to ask, as indexes: the one the open choices or undone checks name (the latest
-/// such line wins), else the one the reply names last. Two only when the choices and undone checks
-/// name two, at most [`MAX_CONSULTS`].
-pub fn pick_consultees(names: &[&str], text: &str, gate: &Gate) -> Vec<usize> {
+/// such line wins), at most [`MAX_CONSULTS`]. None when they name no teammate: a name elsewhere in
+/// the reply isn't a reason to spend a turn on that teammate's view.
+pub fn pick_consultees(names: &[&str], gate: &Gate) -> Vec<usize> {
     let named = |line: &str| -> Vec<(usize, usize)> {
         // "Pia's" names Pia
         let ws: Vec<String> = words(&line.to_lowercase().replace('’', "'"))
@@ -545,23 +545,18 @@ pub fn pick_consultees(names: &[&str], text: &str, gate: &Gate) -> Vec<usize> {
             }
         }
     }
-    if !focus.is_empty() {
-        focus.truncate(MAX_CONSULTS);
-        return focus;
-    }
-    let mut hits = named(text);
-    hits.sort_by_key(|&(_, pos)| std::cmp::Reverse(pos));
-    hits.into_iter().map(|(i, _)| i).take(1).collect()
+    focus.truncate(MAX_CONSULTS);
+    focus
 }
 
 /// Teammates to ask about the held reply (in a channel), besides the speaker (see [`pick_consultees`]).
-fn consultees<'a>(scope: &'a TurnScope, speaker: &Kwant, text: &str, gate: &Gate) -> Vec<&'a Kwant> {
+fn consultees<'a>(scope: &'a TurnScope, speaker: &Kwant, gate: &Gate) -> Vec<&'a Kwant> {
     if scope.channel_id.is_none() {
         return Vec::new();
     }
     let others: Vec<&Kwant> = scope.teammates.iter().filter(|k| k.id != speaker.id).collect();
     let names: Vec<&str> = others.iter().map(|k| k.name.as_str()).collect();
-    pick_consultees(&names, text, gate).into_iter().map(|i| others[i]).collect()
+    pick_consultees(&names, gate).into_iter().map(|i| others[i]).collect()
 }
 
 fn bullet_list(items: &[String]) -> String {
@@ -637,7 +632,7 @@ pub(super) async fn decide(scope: &TurnScope, kwant: &Kwant, mut held: Held) -> 
     if asked.iter().any(|q| q.turn_id.as_deref() == Some(held.turn_id.as_str())) {
         return post_original(scope, kwant, held, &[], "posted_original").await;
     }
-    let consult: Vec<Kwant> = consultees(scope, kwant, &held.text, &gate).into_iter().cloned().collect();
+    let consult: Vec<Kwant> = consultees(scope, kwant, &gate).into_iter().cloned().collect();
     let names: Vec<String> = consult.iter().map(|k| k.name.clone()).collect();
     event(scope, kwant, "deciding", &held.turn_id, &names, None);
     if !fits_budget(scope).await {
@@ -963,15 +958,18 @@ mod tests {
     }
 
     #[test]
-    fn one_teammate_is_asked_unless_the_choices_name_two() {
+    fn at_most_one_teammate_is_asked_and_only_when_the_choices_name_one() {
         let names = ["Pia", "Ana", "Wren"];
         let g = gate(SCREENSHOT.replace("Designer only looked at B", "Pia only looked at B").as_str()).unwrap();
-        assert_eq!(pick_consultees(&names, "Pia and Ana and Wren worked on it", &g), vec![0]);
+        assert_eq!(pick_consultees(&names, &g), vec![0]);
+        // Two named: the latest mention only
         let g = Gate { choices: vec!["Pia's B or Ana's C?".into()], ..Default::default() };
-        assert_eq!(pick_consultees(&names, "", &g), vec![1, 0]);
+        assert_eq!(pick_consultees(&names, &g), vec![1]);
+        let g = Gate { choices: vec!["A or B?".into()], unchecked: vec!["Wren hasn't read the copy".into()], ..Default::default() };
+        assert_eq!(pick_consultees(&names, &g), vec![2]);
+        // Named only elsewhere in the reply (or not at all): nobody
         let g = Gate { choices: vec!["A or B?".into()], ..Default::default() };
-        assert_eq!(pick_consultees(&names, "Pia drew it, then Wren wrote the copy.\nA or B?", &g), vec![2]);
-        assert_eq!(pick_consultees(&names, "A or B?", &g), Vec::<usize>::new());
+        assert_eq!(pick_consultees(&names, &g), Vec::<usize>::new());
     }
 
     #[test]
