@@ -651,6 +651,7 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
             super::parked::run_due(&state, Utc::now()).await;
             super::waiting::run_due(&state, Utc::now()).await;
             super::work_ahead::scan(&state, Utc::now(), false).await;
+            super::missions::runner::tick(&state).await;
             let next = [
                 state.db.next_routine_due().await.ok().flatten(),
                 state.db.next_parked_due().await.ok().flatten(),
@@ -682,5 +683,6 @@ pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     super::continuity::spawn_notifier(state.clone());
     crate::zombie::hunt::spawn(state.clone(), shutdown.clone());
     crate::documents::reminders::spawn(state.clone(), shutdown.clone());
+    super::missions::listener::spawn(state.clone(), shutdown.clone());
     spawn(state, shutdown);
 }

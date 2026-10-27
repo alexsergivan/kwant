@@ -331,6 +331,7 @@ const READ_ONLY_SELF_TOOLS: &[&str] = &[
     "read_attachment",
     "mcp_search",
     "skill_get",
+    "task_list",
 ];
 
 #[async_trait]
@@ -347,9 +348,12 @@ impl ToolApprover for SelfToolsApprover {
     }
 }
 
-fn tool_list(scope: &SelfScope) -> Value {
+fn tool_list(scope: &SelfScope, board: bool) -> Value {
     let mut tools = memory_tools();
     if let Some(list) = tools.as_array_mut() {
+        if board {
+            list.extend(super::missions::tools::tools());
+        }
         list.extend(super::skills::tools());
         list.extend(super::mcp_suggest::tools());
         list.extend(super::bot_actions::tools());
@@ -659,7 +663,7 @@ pub async fn self_endpoint(
             }),
         ),
         "ping" => rpc_result(id, json!({})),
-        "tools/list" => rpc_result(id, json!({ "tools": tool_list(&scope) })),
+        "tools/list" => rpc_result(id, json!({ "tools": tool_list(&scope, super::missions::enabled(&state).await) })),
         "tools/call" => {
             let args = &msg["params"]["arguments"];
             let name = msg["params"]["name"].as_str().unwrap_or("");
@@ -813,6 +817,7 @@ async fn call_tool(
         "mcp_suggest" => super::mcp_suggest::tool_suggest(state, scope, args).await,
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
         n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
+        n if super::missions::tools::handles(n) => super::missions::tools::call(state, scope, n, args).await,
         "list_attachments" if scope.origin.is_some() => super::attachments::tool_list(state, scope).await,
         "share_file" if scope.origin.is_some() => super::attachments::tool_share(state, scope, args).await,
         "delegate" => super::delegation::tool_delegate(state, scope, args).await,

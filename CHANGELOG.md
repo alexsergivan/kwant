@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Mission Control (preview, off by default).** One task board for everything bots work on: planned
+  missions, team hand-offs, routine runs, Loose Ends you take on and work-ahead posts. A task counts as
+  **verified** only when an outcome check passes (a command, a URL, a file, a teammate's review with
+  evidence, or you), never on the bot's own word. Missions have a token budget that claims can't
+  exceed, tasks wait for the tasks they depend on, and anything waiting on you shows under **Needs
+  you**. Turn it on with `mission_board` in settings. API: `docs/mission-control.md`.
+
 ### Changed
 - **Deciding for you costs fewer tokens.** Before deciding a choice itself, a bot now hears at most one
   teammate, and only when the choice or an open check names that teammate.
