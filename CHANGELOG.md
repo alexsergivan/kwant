@@ -83,6 +83,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and its spend doesn't change. Before, the check was only approved and never ran.
 
 ### Fixed
+- **Mac app: sign-in pages open in your browser.** Outside pages, such as a Google or Cloudflare
+  sign-in, no longer take over the kwant window with no way back. The window only shows kwant; every
+  other link opens in your default browser. Connecting an MCP server, a Composio app or Claude still
+  finishes: the app notices the sign-in by itself, and the browser tab says to go back to kwant.
 - **Mission Control: racing Redo requests make one copy, and restore refuses unknown forced paths.**
   Two Redo requests on the same flag at the same moment, without an `Idempotency-Key`, could each make
   a copy; now the flag is claimed in the same step as the copy, so one wins and the rest get 409. A

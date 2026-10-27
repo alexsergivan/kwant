@@ -20,6 +20,7 @@ import {
   storedLabel,
   usedByText,
 } from '../connections';
+import { inMacApp } from '../externalLinks';
 
 const TONES: Record<Tone, string> = {
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
@@ -175,13 +176,15 @@ export const ComposioAppSearch: React.FC<{
 
   const connect = async (app: ComposioApp) => {
     // open the tab now, while the click still counts as the person's, then point it at Composio
-    const tab = typeof window !== 'undefined' ? window.open('', '_blank') : null;
+    // The Mac app opens no second window: its links go to the default browser.
+    const tab = typeof window !== 'undefined' && !inMacApp() ? window.open('', '_blank') : null;
     if (tab) tab.opener = null;
     setConnecting(app.slug);
     setError(null);
     try {
       const { redirect_url } = await api.connect(app.slug);
       if (tab) tab.location.href = redirect_url;
+      else if (inMacApp()) window.location.assign(redirect_url);
       else window.open(redirect_url, '_blank', 'noopener,noreferrer');
       setOpened(app.name);
     } catch (err) {
@@ -223,7 +226,7 @@ export const ComposioAppSearch: React.FC<{
         {error && <p className="px-3 py-2 rounded-lg border border-rose-500/20 bg-rose-500/5 text-xs text-rose-300">{error}</p>}
         {opened && (
           <p className="text-xs text-emerald-200">
-            Opened {opened}’s sign-in on Composio in a new tab. Its tools reach your bots through the Composio server once you finish there.
+            Opened {opened}’s sign-in on Composio in {inMacApp() ? 'your browser' : 'a new tab'}. Its tools reach your bots through the Composio server once you finish there.
           </p>
         )}
         {apps && apps.length === 0 && <p className="text-xs text-zinc-400">No Composio apps match.</p>}

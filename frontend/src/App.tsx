@@ -100,6 +100,7 @@ import { personFetch } from './auth';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, showDeviceNotification } from './push';
+import { inMacApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -1710,8 +1711,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
   // Same flow as the servers screen: the window opens inside the click, the address comes after.
+  // In the Mac app the sign-in opens in the default browser and the server is watched instead.
   const handleSuggestionSignIn = async (serverId: string): Promise<string | void> => {
-    const popup = window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
+    const macApp = inMacApp();
+    const popup = macApp ? null : window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
+    const before = macApp ? await mcpSignIn(serverId).catch(() => undefined) : undefined;
     let url: string;
     try {
       const res = await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}/oauth/start`, {
@@ -1728,19 +1732,26 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       return `Couldn't start the sign-in: ${errText(err)}`;
     }
     if (!popup || popup.closed) {
-      window.location.assign(url);
-      return;
+      leaveForSignIn(url);
+      if (!macApp) return;
+      const finished = await new Promise<boolean>((resolve) => {
+        pollUntil(async () => signInChanged(before, await mcpSignIn(serverId)), () => resolve(true), {
+          onTimeout: () => resolve(false),
+        });
+      });
+      if (!finished) return 'The sign-in didn’t finish in your browser. Try again.';
+    } else {
+      popup.location.href = url;
+      popup.focus();
+      await new Promise<void>((resolve) => {
+        const t = window.setInterval(() => {
+          if (popup.closed) {
+            window.clearInterval(t);
+            resolve();
+          }
+        }, 500);
+      });
     }
-    popup.location.href = url;
-    popup.focus();
-    await new Promise<void>((resolve) => {
-      const t = window.setInterval(() => {
-        if (popup.closed) {
-          window.clearInterval(t);
-          resolve();
-        }
-      }, 500);
-    });
     try {
       const test = await suggestionsApi.testServer(serverId);
       if (test.ok) {

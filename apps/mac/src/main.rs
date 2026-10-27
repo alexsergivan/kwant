@@ -1,6 +1,7 @@
 //! kwant for Mac: the kwant server in this process, its UI in a window, and a menu-bar icon.
 //! Closing the window keeps kwant running; Quit in the menu stops it.
 
+mod links;
 mod startup;
 mod update;
 
@@ -10,6 +11,7 @@ use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
+    webview::NewWindowResponse,
     Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 
@@ -150,10 +152,31 @@ fn open_window(handle: &tauri::AppHandle) {
         let _ = window.set_focus();
         return;
     }
+    let port = handle.state::<Target>().port;
     let window = match WebviewWindowBuilder::new(handle, MAIN, WebviewUrl::App("index.html".into()))
         .title("kwant")
         .inner_size(1280.0, 820.0)
         .min_inner_size(900.0, 600.0)
+        // Tells kwant's page it runs in the app, so sign-ins say "finish in your browser"
+        .initialization_script("window.__KWANT_APP__ = 'mac';")
+        // The window only shows kwant; every other page opens in the default browser
+        .on_navigation(move |url| match links::navigation(url, port) {
+            links::Link::Stay => true,
+            links::Link::Browser => {
+                links::open_in_browser(url);
+                false
+            }
+            links::Link::Drop => {
+                tracing::info!(scheme = url.scheme(), "blocked a link the app doesn't open");
+                false
+            }
+        })
+        .on_new_window(move |url, _| {
+            if links::new_window(&url, port) == links::Link::Browser {
+                links::open_in_browser(&url);
+            }
+            NewWindowResponse::Deny
+        })
         .build()
     {
         Ok(w) => w,
@@ -162,7 +185,6 @@ fn open_window(handle: &tauri::AppHandle) {
             return;
         }
     };
-    let port = handle.state::<Target>().port;
     std::thread::spawn(move || {
         if startup::wait_for_health(port, Duration::from_secs(120)).is_none() {
             tracing::error!(port, "kwant didn't answer within 2 minutes");
