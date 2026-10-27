@@ -448,13 +448,17 @@ export function sortTasks(tasks: Task[]): Task[] {
 }
 
 /**
- * Which column a task card sits in: its state's column, except that an open "may be invalid" flag puts
- * it in Needs you (the flag waits for the person in any state, and Insights counts it there).
+ * Which column a task card sits in: its state's column, except that an open "may be invalid" flag, or an
+ * AutoFix item (a retry to OK, something to fix, a proposed change), puts it in Needs you: they wait for
+ * the person in any state.
  */
 export function columnOfTask(t: Pick<Task, 'state' | 'flags' | 'needs_you'>): Column | null {
   const c = columnOf(t.state);
-  return c && openFlags(t).length ? 'needs_you' : c;
+  return c && (openFlags(t).length || (t.needs_you ?? []).some((n) => PERSON_ITEMS.has(n.kind))) ? 'needs_you' : c;
 }
+
+/** AutoFix items that wait for the person whatever the task's state, so its card sits in Needs you. */
+const PERSON_ITEMS = new Set<NeedsYouItem['kind']>(['autofix_suggested', 'fix_needed', 'workflow_change']);
 
 export function groupByColumn(tasks: Task[]): Record<Column, Task[]> {
   const out: Record<Column, Task[]> = { ready: [], working: [], needs_you: [], review: [], verified: [] };
@@ -616,9 +620,14 @@ export function cardStatus(t: Task, names: Record<string, string> = {}, now: num
   switch (t.state) {
     case 'blocked':
       return t.blocked_reason === 'budget' ? 'Out of budget' : t.blocked_reason ? `Blocked: ${t.blocked_reason}` : 'Blocked';
-    case 'failed':
+    case 'failed': {
+      const auto = autofixCardText(t, now);
+      if (auto) return auto;
+      if (t.last_failure) return `${failureClassLabel(t.last_failure.class)} (try ${t.attempts} of ${t.max_attempts})`;
       return `Checks failed ${t.attempts} of ${t.max_attempts} times`;
+    }
     case 'backlog':
+      if (t.held_at) return 'On hold after restore. Press Run to start it';
       if (t.waiting_on.length) return t.waiting_on.length === 1 ? 'Waiting on 1 task' : `Waiting on ${t.waiting_on.length} tasks`;
       return 'Waiting for the mission to be approved';
     case 'working':
@@ -633,6 +642,8 @@ export function cardStatus(t: Task, names: Record<string, string> = {}, now: num
       return optionalWaitingText(optionalWaitingCount(t.checks_summary)) ?? 'Bot says done. Checking';
     case 'verified':
       return t.finished_at ? `Verified ${ago(t.finished_at, now)}` : 'Verified';
+    case 'ready':
+      return t.held_at ? 'On hold after restore. Press Run to start it' : null;
     default:
       return null;
   }
@@ -757,6 +768,225 @@ export function newIdempotencyKey(): string {
   const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
   if (c?.randomUUID) return c.randomUUID();
   return `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+// ---------------------------------------------------------------------------
+// AutoFix and restore holds (Phase B3, docs/mission-control.md §12–§13)
+
+export const FAILURE_LABELS: Record<FailureClass, { label: string; tone: Tone }> = {
+  transient: { label: 'A temporary error', tone: 'amber' },
+  stalled: { label: 'Stopped before finishing', tone: 'amber' },
+  check_failed: { label: 'A check failed', tone: 'rose' },
+  bad_spec: { label: 'A check can’t run as written', tone: 'amber' },
+  auth: { label: 'Signed out, or the key was rejected', tone: 'rose' },
+  budget: { label: 'Out of budget', tone: 'rose' },
+  denied: { label: 'An action was denied', tone: 'rose' },
+  needs_input: { label: 'Waiting for you', tone: 'amber' },
+  unknown: { label: 'An unexpected error', tone: 'rose' },
+};
+export const failureClassLabel = (c: string): string => FAILURE_LABELS[c as FailureClass]?.label ?? humanize(c);
+export const failureTone = (c: string): Tone => FAILURE_LABELS[c as FailureClass]?.tone ?? 'rose';
+
+const STRATEGY_LABELS: Record<AutofixStrategy, string> = {
+  wait_and_retry: 'Wait, then try again',
+  retry_from_checkpoint: 'Carry on from where it stopped',
+  retry_with_diagnostics: 'Try again with the check’s output',
+  retry_same: 'Try again',
+  propose_change: 'Propose a change for you to approve',
+  none: 'No retry',
+};
+export const strategyLabel = (s: string): string => STRATEGY_LABELS[s as AutofixStrategy] ?? (s ? humanize(s) : 'Try again');
+
+/** Why AutoFix didn't retry, in words: the server's reason starts with a code. */
+export function skipText(reason: string): string {
+  const r = reason.trim();
+  if (r.startsWith('no_attempts_left')) return 'no tries left';
+  if (r.startsWith('over_recovery_budget')) return 'another try would go over its retry budget';
+  if (r.startsWith('not_retryable')) return 'this kind of failure isn’t retried';
+  return r || 'it wasn’t retried';
+}
+
+/** One line for an AutoFix attempt: what it does, and when. */
+export function autofixStatusText(a: Pick<AutofixAttempt, 'status' | 'strategy' | 'not_before' | 'reason'>, now: number = Date.now()): string {
+  switch (a.status) {
+    case 'suggested':
+      return a.strategy === 'propose_change' ? 'AutoFix proposed a change. It waits for your OK.' : `AutoFix suggests: ${strategyLabel(a.strategy).toLowerCase()}. It waits for your OK.`;
+    case 'scheduled': {
+      const when = a.not_before ? untilText(a.not_before, now) : 'now';
+      return `AutoFix will ${strategyLabel(a.strategy).toLowerCase()} ${when === 'now' ? 'shortly' : when}.`;
+    }
+    case 'running':
+      return 'AutoFix is retrying it now.';
+    case 'succeeded':
+      return 'AutoFix’s retry worked.';
+    case 'failed':
+      return 'AutoFix’s retry failed too.';
+    default:
+      return `AutoFix didn’t retry: ${skipText(a.reason)}.`;
+  }
+}
+
+/** The card line for a failed task AutoFix is handling, else null. */
+export function autofixCardText(t: Pick<Task, 'autofix'>, now: number = Date.now()): string | null {
+  const a = t.autofix;
+  if (!a) return null;
+  if (a.status === 'running') return 'AutoFix is retrying';
+  if (a.status === 'scheduled') {
+    const when = a.not_before ? untilText(a.not_before, now) : 'now';
+    return when === 'now' ? 'AutoFix retries shortly' : `AutoFix retries ${when}`;
+  }
+  if (a.status === 'suggested' && a.strategy !== 'propose_change') return 'AutoFix suggests a retry';
+  return null;
+}
+
+/** "3.2k of 12.5k tokens for retries"; null on a server without AutoFix. */
+export function recoveryText(t: Pick<Task, 'recovery_spent_tokens' | 'recovery_budget_tokens'>): string | null {
+  if (typeof t.recovery_spent_tokens !== 'number') return null;
+  const spent = formatTokens(t.recovery_spent_tokens);
+  return typeof t.recovery_budget_tokens === 'number' && t.recovery_budget_tokens > 0
+    ? `${spent} of ${formatTokens(t.recovery_budget_tokens)} tokens`
+    : `${spent} tokens`;
+}
+
+/** A plain message for a refused AutoFix retry. */
+export function autofixErrorText(e: unknown): string {
+  if (e instanceof MissionError && e.status === 409) {
+    if (e.code === 'no_attempts_left') return 'No tries left. You can still try it again yourself.';
+    if (e.code === 'over_recovery_budget') return 'Another retry would go over this task’s retry budget. You can still try it again yourself.';
+    if (e.code === 'not_retryable') return 'AutoFix can’t retry this kind of failure. See what to fix above.';
+    return 'The retry changed while you were deciding. The task now shows the latest.';
+  }
+  return e instanceof Error ? e.message : 'Something went wrong.';
+}
+
+export const AUTOFIX_MODES: { value: AutofixMode; label: string; hint: string }[] = [
+  { value: 'off', label: 'Off', hint: 'Failures are recorded. Nothing is retried on its own.' },
+  { value: 'suggest', label: 'Suggest', hint: 'AutoFix plans a retry and waits for your OK in Needs you.' },
+  { value: 'on', label: 'On', hint: 'AutoFix retries within each task’s tries and retry budget.' },
+];
+
+export interface AutofixSettings {
+  autofix: AutofixMode;
+  recovery_budget_pct: number;
+}
+
+/** `autofix` and `recovery_budget_pct` from GET /api/settings; null on a server without AutoFix. */
+export function parseAutofixSettings(data: unknown): AutofixSettings | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (d.autofix !== 'off' && d.autofix !== 'suggest' && d.autofix !== 'on') return null;
+  const pct = typeof d.recovery_budget_pct === 'number' ? Math.max(0, Math.min(100, Math.round(d.recovery_budget_pct))) : 25;
+  return { autofix: d.autofix, recovery_budget_pct: pct };
+}
+
+export const WORKFLOW_TARGET_LABELS: Record<WorkflowTarget, string> = {
+  check_spec: 'A check',
+  task_acceptance: 'What done looks like',
+  max_attempts: 'Max tries',
+  routine_instructions: 'The routine’s instructions',
+  routine_schedule: 'The routine’s schedule',
+};
+export const workflowTargetLabel = (t: string): string => WORKFLOW_TARGET_LABELS[t as WorkflowTarget] ?? humanize(t);
+
+export interface ChangeRow {
+  key: string;
+  label: string;
+  before: string;
+  after: string;
+  changed: boolean;
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  kind: 'Kind',
+  spec: 'Check',
+  required: 'Required',
+  instructions: 'Instructions',
+  schedule: 'Schedule',
+  acceptance: 'What done looks like',
+  max_attempts: 'Max tries',
+};
+
+const showValue = (v: unknown): string => {
+  if (v === undefined) return '—';
+  if (v === null) return 'none';
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number') return String(v);
+  return JSON.stringify(v, null, 2);
+};
+
+/**
+ * A proposed change as rows of before and after, changed rows first. Ids (`check_id`) aren't shown;
+ * a bare value (a number, some text) is one row.
+ */
+export function changeRows(before: unknown, after: unknown): ChangeRow[] {
+  const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+  const b = obj(before);
+  const a = obj(after);
+  if (!b || !a) {
+    const x = showValue(before);
+    const y = showValue(after);
+    return [{ key: 'value', label: 'Value', before: x, after: y, changed: x !== y }];
+  }
+  const keys = [...new Set([...Object.keys(b), ...Object.keys(a)])].filter((k) => !k.endsWith('_id'));
+  const rows = keys.map((k) => {
+    const x = showValue(b[k]);
+    const y = showValue(a[k]);
+    return { key: k, label: FIELD_LABELS[k] ?? humanize(k), before: x, after: y, changed: x !== y };
+  });
+  return [...rows.filter((r) => r.changed), ...rows.filter((r) => !r.changed)];
+}
+
+export const CHECKPOINT_LABELS: Record<CheckpointKind, string> = {
+  before_run: 'Before a run',
+  after_run: 'After a run',
+  manual: 'Saved by you',
+  before_restore: 'Before a restore',
+};
+export const checkpointLabel = (k: string): string => CHECKPOINT_LABELS[k as CheckpointKind] ?? humanize(k);
+
+/** Who changed a conflicting file: a task only on proof (D11), else "outside this task". */
+export function conflictText(c: RestorePreview['conflicts'][number], titleOf: (id: string) => string | undefined = () => undefined): string {
+  if (!c.changed_by_task) return 'Changed outside this task';
+  const t = titleOf(c.changed_by_task);
+  return t ? `Changed by “${t}”` : 'Changed by another task';
+}
+
+export const RESTORE_ACTION_LABELS: Record<RestoreAction, string> = { overwrite: 'Put back', create: 'Bring back', delete: 'Remove' };
+
+/** A plain message for a refused restore or Run. */
+export function restoreErrorText(e: unknown): string {
+  if (e instanceof MissionError) {
+    switch (e.code) {
+      case 'stale_preview':
+        return 'Files changed since this preview. Look at the new preview, then restore.';
+      case 'running':
+        return 'A bot is working on it now. Restore once it stops.';
+      case 'fork_instead':
+        return 'A verified task isn’t restored. Use “Redo as a copy” instead.';
+      case 'not_restorable':
+        return 'This checkpoint can’t be restored: its snapshot failed or was cleared out.';
+      case 'unknown_force_path':
+        return 'A file you picked isn’t in the preview any more. Look at the new preview.';
+      case 'checkpoint_failed':
+        return 'The safety checkpoint couldn’t be taken, so nothing was restored.';
+      case 'not_held':
+        return 'It isn’t on hold any more, maybe Run was pressed in another tab.';
+      default:
+        break;
+    }
+  }
+  return e instanceof Error ? e.message : 'Something went wrong.';
+}
+
+/** What a restore did, in one sentence. */
+export function restoredText(r: Pick<RestoreResult, 'restored' | 'deleted' | 'failed' | 'task'>, rerun: boolean): string {
+  const n = (k: number, one: string, many: string) => (k === 1 ? one : many.replace('#', String(k)));
+  const parts = [r.restored.length ? n(r.restored.length, '1 file put back', '# files put back') : null, r.deleted.length ? n(r.deleted.length, '1 file removed', '# files removed') : null].filter(Boolean);
+  const what = parts.length ? `Restored: ${parts.join(', ')}.` : 'Restored. No files needed changing.';
+  const failed = r.failed.length ? ` ${n(r.failed.length, '1 file couldn’t be written', '# files couldn’t be written')}.` : '';
+  const next = r.task.held_at ? ' It’s on hold until you press Run.' : rerun && (r.task.state === 'ready' || r.task.state === 'backlog') ? ' It will run again.' : '';
+  return `${what}${failed}${next}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -987,6 +1217,7 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
     case 'claimed':
       return `${Who} took it on`;
     case 'released':
+      if (e.actor === 'person' && !note) return 'You let it run again';
       return `${Who} let it go${note ? `: ${note}` : ''}`;
     case 'lease_expired':
       return 'The claim ran out with no activity, so it went back to Ready';
@@ -1014,6 +1245,33 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
     }
     case 'forked':
       return `${Who} made a copy to redo it${note ? `: ${note}` : ''}`;
+    case 'held':
+      return 'On hold after the restore, until you press Run';
+    case 'restored': {
+      const n = (k: unknown, one: string, many: string) => (typeof k === 'number' && k > 0 ? (k === 1 ? one : many.replace('#', String(k))) : null);
+      const parts = [n(d.restored, '1 file put back', '# files put back'), n(d.deleted, '1 removed', '# removed')].filter(Boolean);
+      return `${Who} restored it from a checkpoint${parts.length ? `: ${parts.join(', ')}` : ''}`;
+    }
+    case 'failure':
+      return `It failed: ${failureClassLabel(str(d.class) ?? 'unknown').toLowerCase()}${str(d.summary) ? `. ${str(d.summary)}` : ''}`;
+    case 'autofix':
+      return `AutoFix sent it back to Ready: ${strategyLabel(str(d.strategy) ?? '').toLowerCase()}`;
+    case 'autofix_scheduled':
+      return str(d.status) === 'suggested' ? 'AutoFix suggested a retry. It waits for your OK' : `AutoFix planned a retry: ${strategyLabel(str(d.strategy) ?? '').toLowerCase()}`;
+    case 'autofix_started':
+      return 'AutoFix started a retry';
+    case 'autofix_finished': {
+      const s = str(d.status);
+      if (s === 'succeeded') return 'AutoFix’s retry worked';
+      if (s === 'skipped') return `AutoFix didn’t retry: ${skipText(str(d.reason) ?? '')}`;
+      return 'AutoFix’s retry failed';
+    }
+    case 'workflow_change_proposed':
+      return `${Who} proposed a change for you to approve`;
+    case 'workflow_change_decided':
+      return str(d.status) === 'stale' ? 'A proposed change went out of date, so nothing changed' : `${Who} ${str(d.status) === 'rejected' ? 'rejected' : 'approved'} a proposed change`;
+    case 'workflow_change_applied':
+      return 'The approved change was applied';
     default:
       return `${Who}: ${humanize(e.kind)}`;
   }
@@ -1114,6 +1372,8 @@ export class MissionError extends Error {
   constructor(
     message: string,
     public status: number,
+    /** The server's `code` on a refusal (e.g. `stale_preview`, `no_attempts_left`), when it sends one. */
+    public code: string | null = null,
   ) {
     super(message);
   }
@@ -1129,9 +1389,10 @@ const sentence = (s: string) => {
 export function errorFrom(status: number, answer: unknown): MissionError {
   const a = answer && typeof answer === 'object' ? (answer as Record<string, unknown>) : {};
   const err = typeof a.error === 'string' && a.error.trim() ? sentence(a.error) : null;
+  const code = typeof a.code === 'string' && a.code ? a.code : null;
   if (status === 403) return new MissionError('Only you can change tasks on the board.', 403);
   if (status === 404 && !err) return new MissionError('This server doesn’t have the Mission board yet. Update the app and try again.', 404);
-  return new MissionError(err ?? `Something went wrong (HTTP ${status}).`, status);
+  return new MissionError(err ?? `Something went wrong (HTTP ${status}).`, status, code);
 }
 
 async function call<T>(url: string, method = 'GET', body?: unknown, extra?: Record<string, string>): Promise<T> {
@@ -1172,6 +1433,19 @@ export const missionsApi = {
     call<ResolveFlagResult>(`/api/tasks/${enc(taskId)}/flags/${enc(flagId)}/resolve`, 'POST', note ? { resolution, note } : { resolution }, { 'Idempotency-Key': key }),
   /** Copy a task to redo it; the same key returns the same copy. */
   fork: (taskId: string, reason: string, key: string) => call<Task>(`/api/tasks/${enc(taskId)}/fork`, 'POST', { reason }, { 'Idempotency-Key': key }),
+  /** Let a task a restore held run again (person only). */
+  runHeld: (id: string, key: string) => call<{ task: Task }>(`/api/tasks/${enc(id)}/run`, 'POST', {}, { 'Idempotency-Key': key }).then((r) => r.task),
+  checkpoints: (id: string) => call<Checkpoint[]>(`/api/tasks/${enc(id)}/checkpoints`),
+  restorePreview: (id: string, cid: string) => call<RestorePreview>(`/api/tasks/${enc(id)}/checkpoints/${enc(cid)}/restore-preview`),
+  restore: (id: string, cid: string, body: { preview_sha256: string; force_paths?: string[]; rerun?: boolean }, key: string) =>
+    call<RestoreResult>(`/api/tasks/${enc(id)}/checkpoints/${enc(cid)}/restore`, 'POST', body, { 'Idempotency-Key': key }),
+  failures: (id: string) => call<TaskFailure[]>(`/api/tasks/${enc(id)}/failures`),
+  /** Run the suggested retry now (or plan one). The same key returns the same attempt. */
+  runAutofix: (id: string, key: string, failureId?: string) =>
+    call<AutofixAttempt>(`/api/tasks/${enc(id)}/autofix`, 'POST', failureId ? { failure_id: failureId } : {}, { 'Idempotency-Key': key }),
+  cancelAutofix: (id: string, aid: string) => call<AutofixAttempt>(`/api/tasks/${enc(id)}/autofix/${enc(aid)}/cancel`, 'POST', {}),
+  workflowChanges: (status: WorkflowChangeStatus = 'proposed') => call<WorkflowChange[]>(`/api/workflow-changes?status=${status}`),
+  decideChange: (id: string, approve: boolean) => call<WorkflowChange>(`/api/workflow-changes/${enc(id)}/${approve ? 'approve' : 'reject'}`, 'POST', {}),
   /** One person action on a task. `run_checks` answers `{checks, task}`, the others the Task. */
   act: async (id: string, action: TaskAction, reason?: string): Promise<Task> => {
     const base = `/api/tasks/${enc(id)}`;

@@ -9,15 +9,20 @@ import {
   ExternalLink,
   FileText,
   GitBranch,
+  History,
   Hand,
   Image as ImageIcon,
   Link2,
   Loader2,
   MessageSquare,
+  PauseCircle,
+  Play,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   StickyNote,
   Target,
+  Wrench,
   X,
   XCircle,
 } from 'lucide-react';
@@ -26,6 +31,26 @@ import { playSfx } from '../audio/chiptune';
 import {
   ACTION_DONE,
   ACTION_LABELS,
+  AutofixAttempt,
+  Checkpoint,
+  NeedsYouItem,
+  RESTORE_ACTION_LABELS,
+  RestorePreview,
+  RestoreResult,
+  TaskFailure,
+  WorkflowChange,
+  autofixCardText,
+  autofixStatusText,
+  changeRows,
+  checkpointLabel,
+  conflictText,
+  failureClassLabel,
+  failureTone,
+  autofixErrorText,
+  recoveryText,
+  restoreErrorText,
+  restoredText,
+  workflowTargetLabel,
   COLUMNS,
   Check,
   Column,
@@ -168,12 +193,26 @@ export const InsightsStrip: React.FC<{ insights: Insights | null }> = ({ insight
       hint: `${formatTokens(insights.tokens_7d)} tokens used in the last 7 days`,
     },
   ];
+  const af = insights.autofix_7d;
+  if (af) {
+    const byClass = Object.entries(insights.failures_by_class_7d ?? {})
+      .filter(([, n]) => (n ?? 0) > 0)
+      .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+      .map(([c, n]) => `${failureClassLabel(c)}: ${n}`);
+    items.push({
+      label: 'Fixed by AutoFix',
+      value: af.attempts > 0 ? `${af.succeeded} of ${af.attempts}` : '0',
+      hint: `Retries AutoFix ran in the last 7 days, and how many ended Verified.${byClass.length ? ` Failures: ${byClass.join(', ')}.` : ''}`,
+      tone: af.succeeded > 0 ? 'emerald' : undefined,
+      sub: af.attempts > 0 ? `${formatTokens(af.tokens)} tokens on retries` : 'No retries this week',
+    });
+  }
   const valueTone: Partial<Record<Tone, string>> = { emerald: 'text-emerald-300', rose: 'text-rose-300', amber: 'text-amber-300' };
   return (
     <section aria-label="This week" data-insights>
-      <dl className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+      <dl className={`grid grid-cols-2 sm:grid-cols-3 ${items.length > 5 ? 'lg:grid-cols-6' : 'lg:grid-cols-5'} gap-2`}>
         {items.map((it, i) => (
-          <div key={it.label} title={it.hint} className={`${card} px-3 py-2 ${i === items.length - 1 ? 'col-span-2 sm:col-span-1' : ''}`}>
+          <div key={it.label} title={it.hint} className={`${card} px-3 py-2 ${i === items.length - 1 && items.length % 2 === 1 ? 'col-span-2 sm:col-span-1' : ''}`}>
             <dt className="text-[11px] text-zinc-400 truncate">{it.label}</dt>
             <dd className={`text-lg font-semibold tabular-nums ${it.tone ? valueTone[it.tone] ?? 'text-zinc-100' : 'text-zinc-100'}`}>{it.value}</dd>
             {it.sub && <dd className="text-[10px] text-zinc-400 truncate">{it.sub}</dd>}
@@ -247,7 +286,8 @@ export const TaskCard: React.FC<{
   const optionalNote = optionalChecksNote(t.checks_summary);
   const status = cardStatus(t, names, now);
   const flags = openFlags(t);
-  const dimmed = t.state === 'backlog' && !flags.length;
+  const dimmed = t.state === 'backlog' && !flags.length && !t.held_at;
+  const autofixLive = !!autofixCardText(t, now);
   return (
     <li data-task={t.id} data-state={t.state}>
       <button
@@ -258,7 +298,17 @@ export const TaskCard: React.FC<{
         <span className="flex flex-wrap items-center gap-1.5">
           {t.state === 'blocked' && <Badge tone="rose">Blocked</Badge>}
           {t.state === 'failed' && <Badge tone="rose">Failed</Badge>}
-          {t.state === 'backlog' && <Badge tone="zinc">Waiting</Badge>}
+          {t.state === 'backlog' && !t.held_at && <Badge tone="zinc">Waiting</Badge>}
+          {t.held_at && (t.state === 'ready' || t.state === 'backlog') && (
+            <span data-held-badge>
+              <Badge tone="amber">On hold</Badge>
+            </span>
+          )}
+          {autofixLive && (
+            <span data-autofix-badge>
+              <Badge tone="violet">AutoFix</Badge>
+            </span>
+          )}
           {t.state === 'review' && approvalHolds(t.checks_summary) && <Badge tone="amber">Needs you</Badge>}
           {flags.length > 0 && (
             <span data-flag-badge>
@@ -271,7 +321,7 @@ export const TaskCard: React.FC<{
         </span>
         <span className="block text-sm font-medium text-zinc-100 break-words">{t.title}</span>
         {status && (
-          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || (t.state === 'review' && approvalHolds(t.checks_summary)) ? 'text-amber-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
+          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || t.held_at || (t.state === 'review' && approvalHolds(t.checks_summary)) ? 'text-amber-200' : autofixLive ? 'text-violet-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
             {status}
           </span>
         )}
@@ -629,7 +679,481 @@ export const FlagBox: React.FC<{
   );
 };
 
+// ---------- AutoFix, workflow changes and restore holds ----------
+
+/** A task a restore put on hold: nothing picks it up until the person presses Run (D10). */
+export const HeldBox: React.FC<{ task: Task; busy?: boolean; now?: number; onRun?: () => void }> = ({ task, busy = false, now = Date.now(), onRun }) => (
+  <section aria-labelledby="held-h" className="px-3 py-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-100 space-y-2" data-held>
+    <h4 id="held-h" className="flex items-center gap-1.5 font-semibold">
+      <PauseCircle size={14} className="shrink-0 text-amber-300" aria-hidden="true" />
+      On hold after restore
+    </h4>
+    <p>
+      You restored its files {task.held_at ? ago(task.held_at, now) : ''}. No bot picks it up until you press Run, so you can look at the files first.
+    </p>
+    {onRun && (
+      <button type="button" disabled={busy} onClick={onRun} className={mainBtn} data-run-held>
+        <Play size={13} aria-hidden="true" /> Run
+      </button>
+    )}
+  </section>
+);
+
+/** Why the task failed last, what AutoFix is doing about it, and what retries cost. */
+export const FailureBox: React.FC<{
+  task: Task;
+  failures?: TaskFailure[];
+  /** The "fix it yourself" text for a failure AutoFix never retries. */
+  fixText?: string | null;
+  busy?: boolean;
+  now?: number;
+  onRetry?: (failureId?: string) => void;
+  onSkip?: (a: AutofixAttempt) => void;
+}> = ({ task, failures = [], fixText, busy = false, now = Date.now(), onRetry, onSkip }) => {
+  const f = task.last_failure;
+  const a = task.autofix ?? null;
+  const recovery = recoveryText(task);
+  if (!f && !a) return null;
+  const tone = f ? failureTone(f.class) : 'violet';
+  const status = a ? autofixStatusText(a, now) : null;
+  const waiting = a && a.status === 'suggested' && a.strategy !== 'propose_change' && (task.state === 'failed' || task.state === 'blocked');
+  const scheduled = a && a.status === 'scheduled';
+  const earlier = failures.slice(0, -1).reverse();
+  const latest = failures[failures.length - 1];
+  return (
+    <section aria-labelledby="fail-h" className="space-y-2" data-failure>
+      <h4 id="fail-h" className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
+        <Wrench size={13} className="text-zinc-400" aria-hidden="true" />
+        What went wrong
+      </h4>
+      <div className={`${card} px-3 py-2.5 space-y-2 text-xs`}>
+        {f && (
+          <p className="flex flex-wrap items-start gap-1.5 break-words">
+            <span data-failure-class={f.class}>
+              <Badge tone={tone}>{failureClassLabel(f.class)}</Badge>
+            </span>
+            <span className="flex-1 min-w-[10rem] text-zinc-200">{f.summary}</span>
+            <span className="text-[11px] text-zinc-500">{ago(f.created_at, now)}</span>
+          </p>
+        )}
+        {fixText && (
+          <p className="px-2.5 py-2 rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-100" data-fix-needed>
+            <span className="font-medium">To fix: </span>
+            {fixText}
+          </p>
+        )}
+        {latest?.excerpt && (
+          <details className="text-[11px]">
+            <summary className={`cursor-pointer text-zinc-400 hover:text-zinc-200 rounded ${focusRing}`}>Show the output</summary>
+            <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-zinc-950 p-2 text-zinc-300">{latest.excerpt}</pre>
+          </details>
+        )}
+        {status && (
+          <p className="flex items-start gap-1.5 text-violet-200" data-autofix-status={a!.status}>
+            <RefreshCw size={13} className="mt-px shrink-0" aria-hidden="true" />
+            <span>{status}</span>
+          </p>
+        )}
+        {(waiting || scheduled) && (onRetry || onSkip) && (
+          <div className="flex flex-wrap gap-2">
+            {onRetry && (
+              <button type="button" disabled={busy} onClick={() => onRetry(latest?.id)} className={mainBtn} data-autofix-retry>
+                <RefreshCw size={13} aria-hidden="true" /> Retry now
+              </button>
+            )}
+            {onSkip && (
+              <button type="button" disabled={busy} onClick={() => onSkip(a!)} className={quietBtn} data-autofix-skip>
+                Don’t retry
+              </button>
+            )}
+          </div>
+        )}
+        <dl className="grid grid-cols-2 gap-3 pt-1">
+          <Fact label="AutoFix tries">
+            {failures.filter((x) => x.autofix && x.autofix.status !== 'suggested' && x.autofix.status !== 'skipped').length || (a && a.status !== 'suggested' && a.status !== 'skipped' ? 1 : 0)}
+          </Fact>
+          {recovery && <Fact label="Spent on retries">{recovery}</Fact>}
+        </dl>
+        {earlier.length > 0 && (
+          <details className="text-[11px]" data-earlier-failures>
+            <summary className={`cursor-pointer text-zinc-400 hover:text-zinc-200 rounded ${focusRing}`}>Earlier failures ({earlier.length})</summary>
+            <ul className="mt-1 space-y-1.5">
+              {earlier.map((x) => (
+                <li key={x.id} className="break-words text-zinc-400">
+                  <span className="text-zinc-300">Try {x.attempt}:</span> {failureClassLabel(x.class)}. {x.summary}
+                  {x.autofix && <span className="block text-zinc-500">{autofixStatusText(x.autofix, now)}</span>}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+      </div>
+    </section>
+  );
+};
+
+/** A change AutoFix proposes to the task's setup, before and after; only the person approves it. */
+export const WorkflowChangeBox: React.FC<{
+  item: NeedsYouItem;
+  change?: WorkflowChange | null;
+  names?: Record<string, string>;
+  busy?: boolean;
+  now?: number;
+  onDecide?: (id: string, approve: boolean) => void;
+}> = ({ item, change, names = {}, busy = false, now = Date.now(), onDecide }) => {
+  const rows = change ? changeRows(change.before, change.after) : [];
+  const changed = rows.filter((r) => r.changed);
+  const same = rows.filter((r) => !r.changed);
+  const by = change ? (change.proposed_by === 'kwant' ? 'AutoFix' : change.proposed_by_name || names[change.proposed_by] || 'A bot') : null;
+  const Cell: React.FC<{ label: string; value: string; tone: 'before' | 'after' }> = ({ label, value, tone }) => (
+    <div className={`min-w-0 rounded-md px-2 py-1.5 ${tone === 'before' ? 'bg-zinc-950/60 text-zinc-400' : 'bg-emerald-500/10 text-emerald-100'}`}>
+      <p className="text-[10px] uppercase tracking-wide opacity-70">{label}</p>
+      <p className="whitespace-pre-wrap break-words font-mono text-[11px]">{value}</p>
+    </div>
+  );
+  return (
+    <li className="px-3 py-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-100 space-y-2" data-workflow-change={item.id}>
+      <p className="break-words">
+        <span className="font-semibold">Proposed change{change ? ` to ${workflowTargetLabel(change.target).toLowerCase()}` : ''}: </span>
+        {change ? change.reason : item.text}
+      </p>
+      {change && by && (
+        <p className="text-[11px] text-amber-100/70">
+          {by} proposed it {ago(change.created_at, now)}.
+        </p>
+      )}
+      {changed.length > 0 && (
+        <ul className="space-y-2" aria-label="What changes">
+          {changed.map((r) => (
+            <li key={r.key} className="space-y-1" data-change-row={r.key}>
+              <p className="text-[11px] font-medium text-amber-100">{r.label}</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                <Cell label="Now" value={r.before} tone="before" />
+                <Cell label="After" value={r.after} tone="after" />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {same.length > 0 && (
+        <details className="text-[11px]">
+          <summary className={`cursor-pointer text-amber-100/70 hover:text-amber-100 rounded ${focusRing}`}>Unchanged ({same.length})</summary>
+          <dl className="mt-1 space-y-1">
+            {same.map((r) => (
+              <div key={r.key} className="min-w-0">
+                <dt className="text-amber-100/70">{r.label}</dt>
+                <dd className="whitespace-pre-wrap break-words font-mono text-zinc-300">{r.before}</dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      )}
+      {!change && <p className="text-[11px] text-amber-100/70">Loading the details…</p>}
+      {onDecide && (
+        <>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Decide on this change">
+            <button type="button" disabled={busy || !change} onClick={() => onDecide(item.id, true)} className={goodBtn} data-change-approve>
+              <CheckCircle2 size={13} aria-hidden="true" /> Approve and apply
+            </button>
+            <button type="button" disabled={busy || !change} onClick={() => onDecide(item.id, false)} className={dangerBtn} data-change-reject>
+              Reject
+            </button>
+          </div>
+          <p className="text-[11px] text-amber-100/70">Nothing changes until you approve.</p>
+        </>
+      )}
+    </li>
+  );
+};
+
+/** A restore preview with the person's choices: which conflicting files to overwrite, and run again or not. */
+export const RestorePreviewForm: React.FC<{
+  preview: RestorePreview;
+  checkpoint?: Checkpoint | null;
+  titleOf?: (id: string) => string | undefined;
+  busy?: boolean;
+  onRestore?: (opts: { force_paths: string[]; rerun: boolean }) => void;
+  onCancel?: () => void;
+}> = ({ preview, checkpoint, titleOf, busy = false, onRestore, onCancel }) => {
+  const [force, setForce] = useState<string[]>([]);
+  useEffect(() => setForce([]), [preview.preview_sha256]);
+  const toggle = (p: string) => setForce((xs) => (xs.includes(p) ? xs.filter((x) => x !== p) : [...xs, p]));
+  const nothing = preview.changes.length === 0 && force.length === 0;
+  return (
+    <div className="space-y-3 text-xs" data-restore-preview>
+      {checkpoint && (
+        <p className="text-zinc-400">
+          Back to: <span className="text-zinc-200">{checkpointLabel(checkpoint.kind)}</span>, try {checkpoint.attempt}
+        </p>
+      )}
+      {preview.refused && (
+        <p className="px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-200" data-restore-refused={preview.refused}>
+          {preview.refused === 'running' ? 'A bot is working on it now. Restore once it stops.' : 'A verified task isn’t restored. Use “Redo as a copy” instead.'}
+        </p>
+      )}
+      <section aria-label="Files that change" className="space-y-1">
+        <h5 className="text-[11px] font-semibold text-zinc-300">Files that change ({preview.changes.length})</h5>
+        {preview.changes.length ? (
+          <ul className="space-y-0.5 max-h-40 overflow-auto">
+            {preview.changes.map((c) => (
+              <li key={c.path} className="flex gap-2 min-w-0" data-restore-change={c.action}>
+                <span className="shrink-0 w-20 text-zinc-500">{RESTORE_ACTION_LABELS[c.action]}</span>
+                <span className="min-w-0 break-all font-mono text-zinc-200">{c.path}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-zinc-500">No files need changing.</p>
+        )}
+      </section>
+      {preview.conflicts.length > 0 && (
+        <fieldset className="space-y-1.5" data-restore-conflicts>
+          <legend className="text-[11px] font-semibold text-amber-200">Changed since then ({preview.conflicts.length})</legend>
+          <p className="text-[11px] text-zinc-400">These are left alone unless you tick them.</p>
+          <ul className="space-y-1">
+            {preview.conflicts.map((c) => (
+              <li key={c.path}>
+                <label className="flex items-start gap-2 min-h-[32px] cursor-pointer">
+                  <input type="checkbox" className="mt-0.5 shrink-0 accent-amber-500" checked={force.includes(c.path)} onChange={() => toggle(c.path)} data-force={c.path} />
+                  <span className="min-w-0">
+                    <span className="block break-all font-mono text-zinc-200">{c.path}</span>
+                    <span className="block text-[11px] text-amber-200/80" data-conflict-by>
+                      {conflictText(c, titleOf)}. Tick to put it back anyway.
+                    </span>
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </fieldset>
+      )}
+      {preview.skipped.length > 0 && (
+        <details className="text-[11px]">
+          <summary className={`cursor-pointer text-zinc-400 hover:text-zinc-200 rounded ${focusRing}`}>Not restored ({preview.skipped.length})</summary>
+          <ul className="mt-1 space-y-0.5">
+            {preview.skipped.map((s) => (
+              <li key={s.path} className="break-all text-zinc-400">
+                <span className="font-mono text-zinc-300">{s.path}</span>: {s.why}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {(preview.external_not_undone.length > 0 || !preview.effects_known) && (
+        <section className="px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-100 space-y-1" data-not-undone>
+          <p className="font-medium">{preview.not_undone_note}</p>
+          {preview.external_not_undone.length > 0 && (
+            <ul className="space-y-0.5 text-[11px]">
+              {preview.external_not_undone.map((x, i) => (
+                <li key={`${x.at}-${i}`} className="break-words">
+                  {x.summary}
+                </li>
+              ))}
+            </ul>
+          )}
+          {!preview.effects_known && <p className="text-[11px]" data-effects-unknown>Side effects unknown: a run changed files without a logged tool call, so something else may have happened too.</p>}
+        </section>
+      )}
+      {preview.task_state_after && (
+        <p className="text-[11px] text-zinc-400">
+          The task goes back to {stateLabel(preview.task_state_after).label}. With “Restore”, it stays on hold until you press Run.
+        </p>
+      )}
+      {onRestore && !preview.refused && (
+        <div className="flex flex-wrap gap-2">
+          <button type="button" disabled={busy || nothing} onClick={() => onRestore({ force_paths: force, rerun: false })} className={mainBtn} data-restore>
+            <RotateCcw size={13} aria-hidden="true" /> Restore
+          </button>
+          <button type="button" disabled={busy || nothing} onClick={() => onRestore({ force_paths: force, rerun: true })} className={quietBtn} data-restore-rerun>
+            Restore and run again
+          </button>
+          {onCancel && (
+            <button type="button" onClick={onCancel} className={quietBtn}>
+              Never mind
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+type RestoreApi = Pick<typeof missionsApi, 'checkpoints' | 'restorePreview' | 'restore'>;
+
+/** Time Machine for one task: pick a checkpoint, look at the preview, restore. */
+export const RestoreSection: React.FC<{
+  task: Task;
+  api?: RestoreApi;
+  titleOf?: (id: string) => string | undefined;
+  now?: number;
+  onRestored?: (r: RestoreResult, rerun: boolean) => void;
+  onError?: (e: unknown) => void;
+}> = ({ task, api = missionsApi, titleOf, now = Date.now(), onRestored, onError }) => {
+  const [open, setOpen] = useState(false);
+  const [list, setList] = useState<Checkpoint[] | null>(null);
+  const [picked, setPicked] = useState<Checkpoint | null>(null);
+  const [preview, setPreview] = useState<RestorePreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [undoId, setUndoId] = useState<string | null>(null);
+  const keys = useRef<Record<string, string>>({});
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    setOpen(false);
+    setList(null);
+    setPicked(null);
+    setPreview(null);
+    setErr(null);
+    setUndoId(null);
+  }, [task.id]);
+
+  const load = async () => {
+    setErr(null);
+    try {
+      setList(await api.checkpoints(task.id));
+    } catch (e) {
+      setErr(restoreErrorText(e));
+      onError?.(e);
+    }
+  };
+  const pick = async (c: Checkpoint) => {
+    setPicked(c);
+    setPreview(null);
+    setErr(null);
+    try {
+      setPreview(await api.restorePreview(task.id, c.id));
+    } catch (e) {
+      setErr(restoreErrorText(e));
+      onError?.(e);
+    }
+  };
+  const restore = async (opts: { force_paths: string[]; rerun: boolean }) => {
+    if (!picked || !preview || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setErr(null);
+    const k = `${picked.id}|${preview.preview_sha256}|${[...opts.force_paths].sort().join(',')}|${opts.rerun}`;
+    keys.current[k] ??= newIdempotencyKey();
+    try {
+      const r = await api.restore(task.id, picked.id, { preview_sha256: preview.preview_sha256, force_paths: opts.force_paths, rerun: opts.rerun }, keys.current[k]);
+      setUndoId(r.before_restore_checkpoint_id);
+      setPicked(null);
+      setPreview(null);
+      setList(null);
+      onRestored?.(r, opts.rerun);
+    } catch (e) {
+      setErr(restoreErrorText(e));
+      if (e instanceof MissionError && e.code === 'stale_preview') void pick(picked);
+      onError?.(e);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
+  const undo = async () => {
+    if (!undoId) return;
+    const cps = list ?? (await api.checkpoints(task.id).catch(() => [] as Checkpoint[]));
+    setList(cps);
+    setOpen(true);
+    const c = cps.find((x) => x.id === undoId);
+    if (c) void pick(c);
+    else setErr('The checkpoint taken before the restore isn’t there any more.');
+  };
+
+  if (!task.checkpoint_count) return null;
+  const blocked = task.state === 'verified' || task.state === 'cancelled';
+
+  return (
+    <section aria-labelledby="tm-h" className="space-y-2" data-restore-section>
+      <h4 id="tm-h" className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
+        <History size={13} className="text-zinc-400" aria-hidden="true" />
+        Checkpoints
+      </h4>
+      {err && <Notice text={err} error />}
+      {undoId && !picked && (
+        <button type="button" onClick={() => void undo()} className={quietBtn} data-restore-undo>
+          <RotateCcw size={13} aria-hidden="true" /> Undo this restore
+        </button>
+      )}
+      {blocked ? (
+        <p className="text-[11px] text-zinc-500">
+          {task.state === 'verified' ? 'A verified task isn’t restored. Use “Redo as a copy” to work on it again.' : 'A cancelled task isn’t restored.'}
+        </p>
+      ) : task.state === 'working' ? (
+        <p className="text-[11px] text-zinc-500">A bot is working on it now. You can restore once it stops.</p>
+      ) : !open ? (
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(true);
+            void load();
+          }}
+          className={quietBtn}
+          data-restore-open
+        >
+          <History size={13} aria-hidden="true" /> Restore files from a checkpoint ({task.checkpoint_count})
+        </button>
+      ) : picked ? (
+        preview ? (
+          <RestorePreviewForm
+            preview={preview}
+            checkpoint={picked}
+            titleOf={titleOf}
+            busy={busy}
+            onRestore={(o) => void restore(o)}
+            onCancel={() => {
+              setPicked(null);
+              setPreview(null);
+            }}
+          />
+        ) : (
+          <p className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+            <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Working out what would change…
+          </p>
+        )
+      ) : list === null ? (
+        <p className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+          <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Loading checkpoints…
+        </p>
+      ) : (
+        <ul className="space-y-1" data-checkpoints>
+          {[...list].reverse().map((c) => (
+            <li key={c.id}>
+              <button
+                type="button"
+                disabled={!c.restorable}
+                onClick={() => void pick(c)}
+                title={c.error ?? undefined}
+                className={`w-full text-left px-3 py-2 min-h-[44px] rounded-lg border border-zinc-800 bg-zinc-900/40 hover:border-zinc-600 disabled:opacity-50 disabled:hover:border-zinc-800 ${focusRing}`}
+                data-checkpoint={c.id}
+              >
+                <span className="block text-xs text-zinc-200">
+                  {checkpointLabel(c.kind)} · try {c.attempt}
+                </span>
+                <span className="block text-[11px] text-zinc-500">
+                  {ago(c.created_at, now)} · {c.files} {c.files === 1 ? 'file' : 'files'}
+                  {c.effects_after.external.length > 0 && ` · ${c.effects_after.external.length} outside actions after it`}
+                  {!c.restorable && ' · can’t be restored'}
+                </span>
+              </button>
+            </li>
+          ))}
+          <li>
+            <button type="button" onClick={() => setOpen(false)} className={subtleBtn}>
+              Close
+            </button>
+          </li>
+        </ul>
+      )}
+    </section>
+  );
+};
+
 // ---------- Task detail ----------
+
+/** Needs-you kinds shown in their own section, not under "Waiting for you". */
+const OWN_SECTION = new Set<NeedsYouItem['kind']>(['may_be_invalid', 'autofix_suggested', 'fix_needed', 'workflow_change']);
 
 const Fact: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div className="min-w-0">
@@ -652,10 +1176,46 @@ export const TaskDetailBody: React.FC<{
   onResolveFlag?: (f: OpenFlag, choice: ResolveChoice) => void;
   /** Copy a verified task to redo it, with the reason typed. */
   onFork?: (reason: string) => void;
-}> = ({ detail, names, tasksById = {}, now = Date.now(), busy = false, notice, onAction, onApproveCheck, onOpenChat, onOpenTask, onResolveFlag, onFork }) => {
+  /** GET /api/tasks/:id/failures, oldest first. */
+  failures?: TaskFailure[];
+  /** Proposed workflow changes for this task. */
+  changes?: WorkflowChange[];
+  onRunHeld?: () => void;
+  onRetryAutofix?: (failureId?: string) => void;
+  onSkipAutofix?: (a: AutofixAttempt) => void;
+  onDecideChange?: (id: string, approve: boolean) => void;
+  restoreApi?: RestoreApi;
+  onRestored?: (r: RestoreResult, rerun: boolean) => void;
+  onRestoreError?: (e: unknown) => void;
+}> = ({
+  detail,
+  names,
+  tasksById = {},
+  now = Date.now(),
+  busy = false,
+  notice,
+  onAction,
+  onApproveCheck,
+  onOpenChat,
+  onOpenTask,
+  onResolveFlag,
+  onFork,
+  failures = [],
+  changes = [],
+  onRunHeld,
+  onRetryAutofix,
+  onSkipAutofix,
+  onDecideChange,
+  restoreApi,
+  onRestored,
+  onRestoreError,
+}) => {
   const t = detail.task;
   const flags = openFlags(t);
-  const others = t.needs_you.filter((n) => n.kind !== 'may_be_invalid');
+  const others = t.needs_you.filter((n) => !OWN_SECTION.has(n.kind));
+  const changeItems = t.needs_you.filter((n) => n.kind === 'workflow_change');
+  const fixText = t.needs_you.find((n) => n.kind === 'fix_needed')?.text ?? null;
+  const held = !!t.held_at && (t.state === 'ready' || t.state === 'backlog');
   const copies = Object.values(tasksById).filter((x) => x.forked_from === t.id && x.id !== t.id);
   const source = t.forked_from ? tasksById[t.forked_from] : undefined;
   const [forking, setForking] = useState(false);
@@ -699,6 +1259,7 @@ export const TaskDetailBody: React.FC<{
           <p className="px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-xs text-rose-200">{cardStatus(t, names, now)}</p>
         )}
         {notice && <Notice text={notice.text} error={notice.error} />}
+        {held && <HeldBox task={t} busy={busy} now={now} onRun={onRunHeld} />}
         {actions.length > 0 && !asking && (
           <div className="flex flex-wrap gap-2" data-actions>
             {actions.map((a) => (
@@ -792,6 +1353,21 @@ export const TaskDetailBody: React.FC<{
           </ul>
         </section>
       )}
+
+      {changeItems.length > 0 && (
+        <section aria-labelledby="wc-h" className="space-y-2" data-workflow-changes>
+          <h4 id="wc-h" className="text-xs font-semibold text-amber-200">
+            Change to approve
+          </h4>
+          <ul className="space-y-2">
+            {changeItems.map((n) => (
+              <WorkflowChangeBox key={n.id} item={n} change={changes.find((c) => c.id === n.id)} names={names} busy={busy} now={now} onDecide={onDecideChange} />
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <FailureBox task={t} failures={failures} fixText={fixText} busy={busy} now={now} onRetry={onRetryAutofix} onSkip={onSkipAutofix} />
 
       {(t.forked_from || copies.length > 0) && (
         <section aria-label="Copies" className="space-y-1 text-xs" data-copies>
@@ -934,6 +1510,8 @@ export const TaskDetailBody: React.FC<{
       )}
 
       <EvidenceReceipt receipt={receipt} names={names} busy={busy} onApproveCheck={onApproveCheck} />
+
+      <RestoreSection task={t} api={restoreApi} titleOf={(id) => tasksById[id]?.title} now={now} onRestored={onRestored} onError={onRestoreError} />
 
       {detail.events.length > 0 && (
         <section aria-labelledby="ev-h" className="space-y-1.5">
@@ -1336,6 +1914,8 @@ export const MissionBoardPage: React.FC<{
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailNotice, setDetailNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const [failures, setFailures] = useState<TaskFailure[]>([]);
+  const [changes, setChanges] = useState<WorkflowChange[]>([]);
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<'board' | 'graph'>('board');
   const [graph, setGraph] = useState<WorkGraph | null>(null);
@@ -1380,6 +1960,14 @@ export const MissionBoardPage: React.FC<{
       if (!alive.current || openIdRef.current !== id) return;
       setDetail(d);
       setDetailError(null);
+      // AutoFix extras: never block the panel on them.
+      const t = d.task;
+      if (t.last_failure || t.autofix) {
+        missionsApi.failures(id).then((f) => alive.current && openIdRef.current === id && setFailures(f), () => {});
+      } else setFailures([]);
+      if (t.needs_you.some((n) => n.kind === 'workflow_change')) {
+        missionsApi.workflowChanges('proposed').then((cs) => alive.current && openIdRef.current === id && setChanges(cs.filter((c) => c.task_id === id)), () => {});
+      } else setChanges([]);
     } catch (e) {
       if (alive.current && openIdRef.current === id) setDetailError(failMsg(e));
     }
@@ -1451,6 +2039,8 @@ export const MissionBoardPage: React.FC<{
   const openTask = (id: string) => {
     setOpenId(id);
     setDetail(null);
+    setFailures([]);
+    setChanges([]);
     setDetailError(null);
     setDetailNotice(null);
     loadDetail(id);
@@ -1557,6 +2147,80 @@ export const MissionBoardPage: React.FC<{
     }
   };
 
+  /** One person action on the open task: keyed, one at a time, 401 asks for the token, 409 shows what it is now. */
+  const personAction = async (what: string, run: (taskId: string, key: string) => Promise<string>, errorText: (e: unknown) => string) => {
+    if (!openId || inFlight.current) return;
+    const taskId = openId;
+    inFlight.current = true;
+    setBusy(true);
+    setDetailNotice(null);
+    try {
+      const text = await run(taskId, keyFor(what));
+      pendingKey.current = null;
+      if (!alive.current) return;
+      setDetailNotice({ text, error: false });
+      playSfx('click');
+      await afterChange([], taskId);
+      load();
+    } catch (e) {
+      if (!alive.current) return;
+      if (e instanceof MissionError && e.status === 401) setNeedsToken(true);
+      if (e instanceof MissionError && e.status >= 400 && e.status < 500 && e.status !== 401) pendingKey.current = null;
+      setDetailNotice({ text: errorText(e), error: true });
+      if (e instanceof MissionError && e.status === 409) await loadDetail(taskId);
+    } finally {
+      inFlight.current = false;
+      if (alive.current) setBusy(false);
+    }
+  };
+
+  const runHeld = () =>
+    personAction(
+      `run:${openId}`,
+      async (id, key) => {
+        const t = await missionsApi.runHeld(id, key);
+        setTasks((list) => (list ? upsertTask(list, t) : list));
+        return 'Off hold. A bot picks it up next.';
+      },
+      restoreErrorText,
+    );
+  const retryAutofix = (failureId?: string) =>
+    personAction(
+      `autofix:${openId}:${failureId ?? ''}`,
+      async (id, key) => {
+        await missionsApi.runAutofix(id, key, failureId);
+        return 'AutoFix retries it now.';
+      },
+      autofixErrorText,
+    );
+  const skipAutofix = (a: AutofixAttempt) =>
+    personAction(
+      `autofix-skip:${a.id}`,
+      async (id) => {
+        await missionsApi.cancelAutofix(id, a.id);
+        return 'AutoFix won’t retry it. It stays failed until you try again.';
+      },
+      autofixErrorText,
+    );
+  const decideChange = (cid: string, approve: boolean) =>
+    personAction(
+      `change:${cid}:${approve}`,
+      async () => {
+        const c = await missionsApi.decideChange(cid, approve);
+        if (!approve) return 'Rejected. Nothing changed.';
+        return c.status === 'stale' ? 'This change no longer fits: what it changes was edited since. Nothing changed.' : 'Approved and applied.';
+      },
+      (e) => (e instanceof MissionError && e.status === 409 ? 'Someone already decided on this change.' : failMsg(e)),
+    );
+  const restored = async (r: RestoreResult, rerun: boolean) => {
+    setDetailNotice({ text: restoredText(r, rerun), error: false });
+    playSfx('click');
+    await afterChange([r.task], r.task.id);
+  };
+  const restoreError = (e: unknown) => {
+    if (e instanceof MissionError && e.status === 401) setNeedsToken(true);
+  };
+
   const scan = async () => {
     if (!missionId) return;
     setScanning(true);
@@ -1645,6 +2309,14 @@ export const MissionBoardPage: React.FC<{
               onApproveCheck={approveCheck}
               onResolveFlag={resolveFlag}
               onFork={forkTask}
+              failures={failures}
+              changes={changes}
+              onRunHeld={runHeld}
+              onRetryAutofix={retryAutofix}
+              onSkipAutofix={skipAutofix}
+              onDecideChange={decideChange}
+              onRestored={restored}
+              onRestoreError={restoreError}
               onOpenChat={
                 onOpenChat
                   ? (t) => {

@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
+- **Mission board: AutoFix, change approvals and restore.** A failed task shows why it failed in plain
+  words, what AutoFix plans, its tries and what retries cost, with Retry now and Don't retry. Proposed
+  changes to a check, the acceptance or a routine appear in Needs you with before and after, and only
+  you can approve them. A task's checkpoints can be previewed and restored from its panel; a restore
+  puts the task on hold until you press Run, or pick "Restore and run again". Settings has an AutoFix
+  switch (off by default) and the retry budget; Insights counts what AutoFix fixed.
 - **Mission Control: AutoFix (backend).** Every failed task now records why it failed, with secrets
   masked. Turn on the new `autofix` setting (off by default, or "suggest" to approve each retry) and
   kwant retries what is safe to retry: after a temporary error it waits 1, 5, then 25 minutes; after a

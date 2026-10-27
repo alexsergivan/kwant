@@ -30,7 +30,9 @@ import { useEngines } from '../useEngines';
 import { LayaStatusRow } from './LayaStatus';
 import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
 import { ProactiveSettings, WORK_AHEAD_CAP_MAX, WORK_AHEAD_CAP_MIN, parseProactiveSettings } from '../decideFirst';
-import { MISSION_BOARD_SETTING_EVENT, parseMissionBoardSetting } from '../missions';
+import { AUTOFIX_MODES, AutofixSettings, MISSION_BOARD_SETTING_EVENT, parseAutofixSettings, parseMissionBoardSetting } from '../missions';
+
+const RECOVERY_PCTS = [0, 10, 25, 50, 100];
 
 /** One labelled switch row, like the others in this dialog. */
 const SwitchRow: React.FC<{ id: string; label: string; hint: string; checked: boolean; onToggle: () => void; children?: React.ReactNode }> = ({
@@ -133,6 +135,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [proactive, setProactive] = useState<ProactiveSettings | null>(null);
   // null: this server has no Mission board, so the switch stays hidden.
   const [missionBoard, setMissionBoard] = useState<boolean | null>(null);
+  const [autofix, setAutofix] = useState<AutofixSettings | null>(null);
   // null until loaded, and on a server without these settings
   const [place, setPlace] = useState<{ timezone: string; location: string } | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -197,6 +200,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           setAgentTools(typeof data.agent_tools === 'boolean' ? data.agent_tools : null);
           setProactive(parseProactiveSettings(data));
           setMissionBoard(parseMissionBoardSetting(data));
+          setAutofix(parseAutofixSettings(data));
           setPlace(
             typeof data.timezone === 'string'
               ? { timezone: data.timezone || defaultTimeZone(), location: typeof data.location === 'string' ? data.location : '' }
@@ -277,6 +281,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           ...(agentTools !== null ? { agent_tools: agentTools } : {}),
           ...(proactive ?? {}),
           ...(missionBoard !== null ? { mission_board: missionBoard } : {}),
+          ...(autofix !== null ? { autofix: autofix.autofix, recovery_budget_pct: autofix.recovery_budget_pct } : {}),
           ...(place ? { timezone: place.timezone.trim(), location: place.location.trim() } : {}),
         }),
       });
@@ -696,6 +701,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                 checked={missionBoard}
                 onToggle={() => setMissionBoard((v) => !v)}
               />
+              {autofix !== null && (
+                <SwitchRow
+                  id="autofix"
+                  label="Retry failed tasks with AutoFix"
+                  hint="When a task fails, AutoFix works out why and plans a retry that fits: wait a bit, start from a checkpoint, or pass along what the check said. It never retries a missing login, a denied action or a spent budget."
+                  checked={autofix.autofix !== 'off'}
+                  onToggle={() => setAutofix((a) => (a ? { ...a, autofix: a.autofix === 'off' ? 'suggest' : 'off' } : a))}
+                >
+                  {autofix.autofix !== 'off' && (
+                    <div className="mt-2 space-y-2" data-testid="autofix-options">
+                      <div role="radiogroup" aria-label="How AutoFix retries" className="space-y-1">
+                        {AUTOFIX_MODES.filter((m) => m.value !== 'off').map((m) => (
+                          <label key={m.value} className="flex items-start gap-2 min-h-[32px] cursor-pointer text-[11px]">
+                            <input
+                              type="radio"
+                              name="autofix-mode"
+                              value={m.value}
+                              checked={autofix.autofix === m.value}
+                              onChange={() => setAutofix((a) => (a ? { ...a, autofix: m.value } : a))}
+                              className="mt-0.5 accent-sky-500"
+                            />
+                            <span>
+                              <span className="block font-medium text-zinc-200">{m.value === 'suggest' ? 'Ask me first' : 'Retry on its own'}</span>
+                              <span className="block text-zinc-500">{m.hint}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label htmlFor="recovery-pct" className="text-[11px] text-zinc-300">
+                          Retries may spend up to
+                        </label>
+                        <select
+                          id="recovery-pct"
+                          value={autofix.recovery_budget_pct}
+                          onChange={(e) => setAutofix((a) => (a ? { ...a, recovery_budget_pct: Number(e.target.value) } : a))}
+                          className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+                        >
+                          {[...new Set([...RECOVERY_PCTS, autofix.recovery_budget_pct])]
+                            .sort((x, y) => x - y)
+                            .map((n) => (
+                              <option key={n} value={n}>
+                                {n}%
+                              </option>
+                            ))}
+                        </select>
+                        <span className="text-[11px] text-zinc-300">of each task’s budget</span>
+                      </div>
+                    </div>
+                  )}
+                </SwitchRow>
+              )}
             </fieldset>
           )}
 
