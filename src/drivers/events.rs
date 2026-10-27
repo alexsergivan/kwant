@@ -241,6 +241,13 @@ pub enum RuntimeEvent {
         run_id: String,
         status: String,
     },
+    /// A Mission Control task changed (state, claim, checks, evidence). `task` is the board's Task
+    /// shape and carries `space_id`.
+    #[serde(rename = "task_updated", alias = "TaskUpdated")]
+    TaskUpdated { task: Value },
+    /// A mission changed (status, budget, counts). `mission` carries `space_id`.
+    #[serde(rename = "mission_updated", alias = "MissionUpdated")]
+    MissionUpdated { mission: Value },
     /// Something the user asked to be told about. `kind` is one of `continuity::NOTIFY_KINDS`
     /// ("turn_finished", "approval_needed", "human_step", …). `body` never holds chat text, tool arguments or secrets.
     #[serde(rename = "notify", alias = "Notify")]

@@ -334,6 +334,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "waiting", ..] => true,
         // Starting work-ahead runs now spends the person's tokens
         ["", "api", "work-ahead", ..] => true,
+        // Mission Control: approving plans, verifying, rejecting, retrying and approving checks are
+        // the person's calls; bots act on tasks only through their task tools
+        ["", "api", "missions" | "tasks" | "checks", ..] => *method != Method::GET && *method != Method::HEAD,
         // App-wide settings, including where notifications go (`notify_webhook_url`), and the
         // sub-routes such as `/computer` (which machine the bots run on) and `/computer/window`:
         // bots change the allowed ones through their `settings_update` action, never these routes
@@ -837,6 +840,15 @@ mod tests {
         assert!(person_only(&get, "/api/passwords/store"));
         assert!(person_only(&post, "/api/messages/m1/decisions/0/change"));
         assert!(person_only(&post, "/api/work-ahead/run"));
+        assert!(person_only(&post, "/api/missions"));
+        assert!(person_only(&post, "/api/missions/m1/approve"));
+        assert!(person_only(&post, "/api/missions/m1/run"));
+        assert!(person_only(&Method::PATCH, "/api/missions/m1"));
+        assert!(person_only(&post, "/api/tasks/t1/verify"));
+        assert!(person_only(&post, "/api/tasks/t1/checks/run"));
+        assert!(person_only(&post, "/api/checks/c1/approve"));
+        assert!(!person_only(&get, "/api/tasks"));
+        assert!(!person_only(&get, "/api/missions/insights"));
         assert!(person_only(&post, "/api/passwords/bitwarden/unlock"));
         assert!(person_only(&del, "/api/passwords/bitwarden"));
         assert!(person_only(&post, "/api/passwords/migrate"));

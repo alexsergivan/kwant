@@ -107,6 +107,7 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         E::DecideUpdated { kwant_id, context_id, thread_id, .. } => contexts([context_id, thread_id, &Some(kwant_id.clone())]),
         E::Error { kwant_id, .. } => contexts([kwant_id]),
         E::RoutineRun { routine_id, .. } => vec![Owner::Routine(routine_id.clone())],
+        E::TaskUpdated { task: v } | E::MissionUpdated { mission: v } => fields(v, &["space_id"], Owner::Space),
         E::Notify { space_id, kwant_id, channel_id, .. } => {
             let mut out: Vec<Owner> = space_id.iter().cloned().map(Owner::Space).collect();
             out.extend(contexts([channel_id, &Some(kwant_id.clone())]));
@@ -280,6 +281,8 @@ mod tests {
             E::Error { code: s("x"), message: s("x"), kwant_id: Some(s("k")) },
             E::MemoryChanged { kwant_id: s("k") },
             E::RoutineRun { routine_id: s("r"), run_id: s("x"), status: s("ok") },
+            E::TaskUpdated { task: json!({"id": "t", "space_id": "spc_x"}) },
+            E::MissionUpdated { mission: json!({"id": "m", "space_id": "spc_x"}) },
             E::Notify {
                 kind: s("x"),
                 kwant_id: s("k"),
@@ -328,6 +331,8 @@ mod tests {
                 | E::Error { .. }
                 | E::MemoryChanged { .. }
                 | E::RoutineRun { .. }
+                | E::TaskUpdated { .. }
+                | E::MissionUpdated { .. }
                 | E::Notify { .. } => {}
             }
         }

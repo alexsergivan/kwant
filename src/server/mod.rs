@@ -43,6 +43,7 @@ pub mod push;
 pub mod waiting;
 pub mod decide;
 pub mod work_ahead;
+pub mod missions;
 pub mod app_update_routes;
 
 use crate::broker::PermissionBroker;
@@ -355,6 +356,23 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/questions/:id/answer", post(questions::answer))
         .route("/api/messages/:message_id/decisions/:index/change", post(decide::change))
         .route("/api/work-ahead/run", post(work_ahead::run_now))
+        .route("/api/missions", get(missions::routes::list_missions).post(missions::routes::create_mission))
+        .route("/api/missions/insights", get(missions::routes::insights))
+        .route("/api/missions/:id", get(missions::routes::get_mission).patch(missions::routes::patch_mission))
+        .route("/api/missions/:id/approve", post(missions::routes::approve_mission))
+        .route("/api/missions/:id/cancel", post(missions::routes::cancel_mission))
+        .route("/api/missions/:id/run", post(missions::routes::run_mission))
+        .route("/api/tasks", get(missions::routes::list_tasks).post(missions::routes::create_task))
+        .route("/api/tasks/:id", get(missions::routes::get_task).patch(missions::routes::patch_task))
+        .route("/api/tasks/:id/verify", post(missions::routes::verify_task))
+        .route("/api/tasks/:id/reject", post(missions::routes::reject_task))
+        .route("/api/tasks/:id/block", post(missions::routes::block_task))
+        .route("/api/tasks/:id/unblock", post(missions::routes::unblock_task))
+        .route("/api/tasks/:id/retry", post(missions::routes::retry_task))
+        .route("/api/tasks/:id/cancel", post(missions::routes::cancel_task))
+        .route("/api/tasks/:id/checks", post(missions::routes::add_task_check))
+        .route("/api/tasks/:id/checks/run", post(missions::routes::run_task_checks))
+        .route("/api/checks/:id/approve", post(missions::routes::approve_check))
         .route("/api/questions/:id/cancel", post(questions::cancel))
         .route("/api/human-steps", get(human_steps::list))
         .route("/api/human-steps/:id", get(human_steps::get))

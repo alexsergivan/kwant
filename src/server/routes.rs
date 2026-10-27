@@ -2422,6 +2422,9 @@ async fn run_kwant_turn_inner(
             // Counts toward the chain's token budget (see `super::budget`)
             let fresh = output.usage.map_or(output.tokens_used as u64, |u| u.fresh());
             state.turns.add_job_tokens(&scope.job_id, fresh);
+            // …and toward the task the bot holds, if any (see `super::missions`)
+            let turn_started_ms = chrono::Utc::now().timestamp_millis() - turn_start.elapsed().as_millis() as i64;
+            super::missions::spend(state, &target_kwant.id, &scope.context_id(target_kwant), Some(&tag.turn_id), turn_started_ms, fresh).await;
 
             let mut reply_text = output.text.clone();
             let saved = match &opts.discussion {
@@ -3254,6 +3257,12 @@ pub struct SettingsResponse {
     pub work_ahead: bool,
     /// Work-ahead runs per space per day (1–10).
     pub work_ahead_daily_cap: u64,
+    /// Mission Control: the board, the bots' task tools and the mission runner (see `super::missions`).
+    pub mission_board: bool,
+    /// Minutes a task claim lives without activity (5–240).
+    pub mission_lease_minutes: i64,
+    /// A new mission's token budget when none is given.
+    pub mission_default_budget_tokens: i64,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3286,6 +3295,9 @@ pub struct SaveSettingsPayload {
     pub decide_first: Option<bool>,
     pub work_ahead: Option<bool>,
     pub work_ahead_daily_cap: Option<u64>,
+    pub mission_board: Option<bool>,
+    pub mission_lease_minutes: Option<i64>,
+    pub mission_default_budget_tokens: Option<i64>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3327,6 +3339,9 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         decide_first: super::decide::enabled(&state).await,
         work_ahead: super::decide::work_ahead_enabled(&state).await,
         work_ahead_daily_cap: super::decide::work_ahead_cap(&state).await,
+        mission_board: super::missions::enabled(&state).await,
+        mission_lease_minutes: super::missions::lease_minutes(&state).await,
+        mission_default_budget_tokens: super::missions::default_budget(&state).await,
     }))
 }
 
@@ -3372,6 +3387,9 @@ pub async fn save_settings(
     }
     if payload.work_ahead_daily_cap.is_some_and(|n| !(1..=super::decide::MAX_WORK_AHEAD_CAP).contains(&n)) {
         return bad(format!("work_ahead_daily_cap must be 1–{}", super::decide::MAX_WORK_AHEAD_CAP));
+    }
+    if let Some(e) = super::missions::settings_error(payload.mission_lease_minutes, payload.mission_default_budget_tokens) {
+        return bad(e);
     }
     if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
         return bad(format!("chain_token_budget must be 0–{}", super::budget::MAX));
@@ -3461,6 +3479,15 @@ pub async fn save_settings(
     }
     if let Some(n) = payload.work_ahead_daily_cap {
         let _ = state.db.set_setting(super::decide::WORK_AHEAD_CAP_SETTING, &n.to_string()).await;
+    }
+    if let Some(on) = payload.mission_board {
+        let _ = state.db.set_setting(super::missions::SETTING, if on { "true" } else { "false" }).await;
+    }
+    if let Some(m) = payload.mission_lease_minutes {
+        let _ = state.db.set_setting(super::missions::LEASE_SETTING, &m.to_string()).await;
+    }
+    if let Some(n) = payload.mission_default_budget_tokens {
+        let _ = state.db.set_setting(super::missions::BUDGET_SETTING, &n.to_string()).await;
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;

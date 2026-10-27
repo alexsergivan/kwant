@@ -202,6 +202,8 @@ pub async fn run(state: &AppState, c: Candidate, row: WorkAheadRun) -> Option<Me
     let saved = scope.save(&scope.message("kwant", &c.lead.name, text), Some(meta)).await;
     let _ = state.db.finish_work_ahead_run(&row.id, if saved.is_some() { "posted" } else { "failed" }, saved.as_ref().map(|m| m.id.as_str()), tokens).await;
     let saved = saved?;
+    let place = (scope.channel_id.clone(), scope.kwant_id.clone(), scope.thread_id.clone());
+    super::missions::listener::on_work_ahead_posted(state, &c.lead, place, &row.id, &saved.text).await;
     let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or(Value::Null) });
     notify(
         state,

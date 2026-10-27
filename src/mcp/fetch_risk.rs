@@ -72,6 +72,37 @@ pub fn fetch_risk_with(url: &str, resolve: &dyn Fn(&str, u16) -> Option<Vec<IpAd
     }
 }
 
+/// The addresses `url` reaches when every one of them is public (no dev-server exemption), with the
+/// host name to pin them to; else why not. For fetches kwnt makes itself on a bot's behalf
+/// (outcome checks): pinning the answer closes the DNS-rebinding gap [`fetch_risk`] leaves open.
+pub fn public_only(url: &str) -> Result<(String, Vec<std::net::SocketAddr>), String> {
+    public_only_with(url, &system_resolve)
+}
+
+/// [`public_only`] with the name lookup supplied (tests).
+pub fn public_only_with(url: &str, resolve: &dyn Fn(&str, u16) -> Option<Vec<IpAddr>>) -> Result<(String, Vec<std::net::SocketAddr>), String> {
+    let parsed = url::Url::parse(url.trim()).map_err(|_| "kwnt can't read this URL".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!("it fetches a `{}:` URL", parsed.scheme()));
+    }
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let (name, addrs) = match parsed.host() {
+        None => return Err("kwnt can't tell where this URL goes".into()),
+        Some(url::Host::Ipv4(ip)) => (ip.to_string(), vec![IpAddr::V4(ip)]),
+        Some(url::Host::Ipv6(ip)) => (ip.to_string(), vec![IpAddr::V6(ip)]),
+        Some(url::Host::Domain(name)) => {
+            let name = name.trim_end_matches('.').to_ascii_lowercase();
+            let addrs = resolve(&name, port).filter(|a| !a.is_empty()).ok_or_else(|| format!("kwnt couldn't look up `{name}`"))?;
+            (name, addrs)
+        }
+    };
+    match addrs.iter().map(|ip| reach(*ip)).find(|r| *r != Reach::Public) {
+        Some(Reach::Local) => Err(format!("`{name}` is this computer")),
+        Some(_) => Err(format!("`{name}` is on a private network")),
+        None => Ok((name, addrs.into_iter().map(|ip| std::net::SocketAddr::new(ip, port)).collect())),
+    }
+}
+
 fn by_reach(reach: Reach, shown: &str, local_and_kwnt: impl FnOnce() -> Option<String>) -> Option<String> {
     match reach {
         Reach::Local => local_and_kwnt(),
@@ -241,5 +272,16 @@ mod tests {
         assert!(fetch_risk_with("http://10.1.2.3/", &fake).unwrap().contains("private"));
         assert!(fetch_risk_with("http://nowhere.invalid/", &fake).unwrap().contains("couldn't look up"));
         assert!(fetch_risk_with("http://2130706433:8799/", &fake).unwrap().contains("kwnt itself"));
+    }
+
+    #[test]
+    fn public_only_has_no_dev_server_exemption_and_pins_the_answer() {
+        for url in ["http://127.0.0.1:8080/", "http://localhost:5173/", "http://[::1]:3000/", "http://localtest.me/",
+                    "http://nas.example/", "http://dual.example/", "http://nowhere.example/", "file:///etc/passwd", "http://2130706433/"] {
+            assert!(public_only_with(url, &fake).is_err(), "{url}");
+        }
+        let (host, addrs) = public_only_with("https://example.com/status", &fake).unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(addrs, vec!["93.184.216.34:443".parse().unwrap()]);
     }
 }
