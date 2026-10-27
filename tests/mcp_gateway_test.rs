@@ -179,6 +179,7 @@ async fn gateway_calls_wait_for_the_approval_card() {
     let base = serve(state.clone()).await;
     let approver = Arc::new(BrokerApprover {
         db: state.db.clone(),
+        data_dir: state.config.data_dir.clone(),
         broker: state.broker.clone(),
         events: state.event_sender.clone(),
         timeout: Duration::from_secs(10),
@@ -238,6 +239,7 @@ async fn ending_the_turn_cancels_a_call_waiting_for_its_card() {
     let base = serve(state.clone()).await;
     let approver = Arc::new(BrokerApprover {
         db: state.db.clone(),
+        data_dir: state.config.data_dir.clone(),
         broker: state.broker.clone(),
         events: state.event_sender.clone(),
         timeout: Duration::from_secs(300),

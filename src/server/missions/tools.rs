@@ -253,6 +253,7 @@ async fn claim(state: &AppState, scope: &SelfScope, task: &Task) -> ToolResult {
     match state.db.claim_task(&task.id, &scope.kwant_id, scope.turn_id.as_deref(), None, lease, false, &scope.kwant_id).await {
         Ok(Ok(t)) => {
             super::emit_task(state, &t).await;
+            super::checkpoints::before_run(state, &t).await;
             if let Some(m) = &t.mission_id {
                 super::emit_mission(state, m).await;
             }

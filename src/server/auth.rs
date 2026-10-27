@@ -848,6 +848,10 @@ mod tests {
         assert!(person_only(&post, "/api/tasks/t1/checks/run"));
         assert!(person_only(&post, "/api/checks/c1/approve"));
         assert!(person_only(&post, "/api/tasks/t1/fork"));
+        assert!(person_only(&post, "/api/tasks/t1/checkpoints"));
+        assert!(person_only(&post, "/api/tasks/t1/checkpoints/c1/restore"));
+        assert!(!person_only(&get, "/api/tasks/t1/checkpoints"));
+        assert!(!person_only(&get, "/api/tasks/t1/checkpoints/c1/restore-preview"));
         assert!(person_only(&post, "/api/tasks/t1/flags/f1/resolve"));
         assert!(person_only(&post, "/api/missions/m1/graph/scan"));
         assert!(!person_only(&get, "/api/missions/m1/graph"));

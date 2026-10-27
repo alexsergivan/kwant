@@ -311,6 +311,11 @@ pub trait ToolApprover: Send + Sync {
             ApprovalOutcome::Denied
         }
     }
+
+    /// Records a decision in the task's side-effect ledger (`turn_tool_calls`): `allowed`,
+    /// `auto_allowed`, `approved` or `denied`. Called for the calls the permission hook lets
+    /// through on its own too. Default: nothing is recorded.
+    async fn note(&self, _request: &ToolApprovalRequest, _decision: &'static str, _approval_id: Option<&str>) {}
 }
 
 /// What became of a call that may have needed a card.

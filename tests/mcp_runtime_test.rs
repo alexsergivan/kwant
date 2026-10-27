@@ -104,6 +104,7 @@ async fn ask(state: &AppState, approver: Arc<BrokerApprover>, tool: &str) -> (to
 fn approver(state: &AppState, timeout: Duration) -> Arc<BrokerApprover> {
     Arc::new(BrokerApprover {
         db: state.db.clone(),
+        data_dir: state.config.data_dir.clone(),
         broker: state.broker.clone(),
         events: state.event_sender.clone(),
         timeout,

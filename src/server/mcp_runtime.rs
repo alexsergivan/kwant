@@ -129,6 +129,8 @@ pub struct BrokerApprover {
     /// turns kwnt starts on its own that nobody asked for (the loose-ends owner). A call the
     /// person allowed on a card (late Allow) still runs once.
     pub always_ask: bool,
+    /// Where task folders resolve, for the side-effect ledger (`turn_tool_calls`).
+    pub data_dir: PathBuf,
 }
 
 /// Withdraws the ticket if the waiting turn is cancelled (its future dropped) mid-wait.
@@ -161,6 +163,20 @@ impl ToolApprover for BrokerApprover {
     }
 
     async fn decide(&self, req: ToolApprovalRequest) -> ApprovalOutcome {
+        let noted = req.clone();
+        let (outcome, decision, ticket) = self.classified(req).await;
+        self.note(&noted, decision, ticket.as_deref()).await;
+        outcome
+    }
+
+    async fn note(&self, req: &ToolApprovalRequest, decision: &'static str, approval_id: Option<&str>) {
+        super::missions::checkpoints::log_call(&self.db, &self.data_dir, req, decision, approval_id).await;
+    }
+}
+
+impl BrokerApprover {
+    /// [`ToolApprover::decide`], with the ledger's decision class and the card's id.
+    async fn classified(&self, req: ToolApprovalRequest) -> (ApprovalOutcome, &'static str, Option<String>) {
         // Approvals the person switched off: run, and keep a record of what ran. A setting that
         // can't be read asks, as before.
         let mode = self.db.kwant_approvals(&req.kwant_id).await.ok();
@@ -209,28 +225,28 @@ impl ToolApprover for BrokerApprover {
             if let Err(e) = self.db.save_refused(&record).await {
                 tracing::warn!(error = %e, "could not record a refused call");
             }
-            return ApprovalOutcome::Denied;
+            return (ApprovalOutcome::Denied, "denied", None);
         }
         if let Some(mcp::SmartVerdict::Allow(why)) = &smart {
             tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, reason = %why, "ran without a card: not risky");
             if let Err(e) = self.db.save_auto_allowed(&record).await {
                 tracing::warn!(error = %e, "could not record a call that ran without a card");
             }
-            return ApprovalOutcome::Allowed;
+            return (ApprovalOutcome::Allowed, "auto_allowed", None);
         }
         if !off && !self.always_ask && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
-            return ApprovalOutcome::Allowed;
+            return (ApprovalOutcome::Allowed, "allowed", None);
         }
         if off {
             if let Err(e) = self.db.save_auto_allowed(&record).await {
                 tracing::warn!(error = %e, "could not record a call that ran with approvals off");
             }
-            return ApprovalOutcome::Allowed;
+            return (ApprovalOutcome::Allowed, "auto_allowed", None);
         }
         // The person allowed this exact call on a card its earlier turn stopped waiting for
         if self.broker.take_grant(&req.kwant_id, &self.conversation, &req.tool_name, &req.arguments).await {
             tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, "ran a call the person allowed after its turn ended");
-            return ApprovalOutcome::Allowed;
+            return (ApprovalOutcome::Allowed, "approved", None);
         }
         let ticket = match self
             .db
@@ -240,7 +256,7 @@ impl ToolApprover for BrokerApprover {
             Ok(a) => a.id,
             Err(e) => {
                 tracing::warn!(error = %e, "could not store MCP approval ticket; denying");
-                return ApprovalOutcome::Denied;
+                return (ApprovalOutcome::Denied, "denied", None);
             }
         };
         let rx = self
@@ -274,7 +290,7 @@ impl ToolApprover for BrokerApprover {
             Err(_) => "stopped",
         };
         super::activity::approval_settled(&req.turn_id, &ticket, settled);
-        match decision {
+        let outcome = match decision {
             Ok(Ok(ApprovalDecision::AllowOnce)) => ApprovalOutcome::Allowed,
             Ok(Ok(ApprovalDecision::AlwaysAllowSession)) => {
                 self.broker.allow_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await;
@@ -285,19 +301,21 @@ impl ToolApprover for BrokerApprover {
             // (see `resume_late_approval`)
             Err(_) => {
                 if !self.broker.cancel(&ticket).await {
-                    return ApprovalOutcome::Denied;
+                    return (ApprovalOutcome::Denied, "denied", Some(ticket));
                 }
                 let chat = self.chat.clone().unwrap_or_else(|| json!({"direct_kwant_id": req.kwant_id}));
                 match self.db.park_approval(&ticket, &chat).await {
                     Ok(true) => ApprovalOutcome::Unanswered,
                     _ => {
                         let _ = self.db.update_approval_status(&ticket, "expired").await;
-                        let _ = self.events.send(RuntimeEvent::ApprovalWithdrawn { id: ticket });
+                        let _ = self.events.send(RuntimeEvent::ApprovalWithdrawn { id: ticket.clone() });
                         ApprovalOutcome::Denied
                     }
                 }
             }
-        }
+        };
+        let class = if outcome.allowed() { "approved" } else { "denied" };
+        (outcome, class, Some(ticket))
     }
 }
 
@@ -485,6 +503,7 @@ pub async fn prepare_turn_with_opts(
         conversation: turn_conversation(state, &turn_id),
         chat,
         always_ask: opts.always_ask,
+        data_dir: state.config.data_dir.clone(),
     });
     let ctx = McpTurnContext {
         servers,
@@ -524,6 +543,21 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Response {
     Json(json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})).into_response()
 }
 
+/// A request for the side-effect ledger only (the call never reaches the approver).
+fn noted_request(session: &PermissionSession, tool_name: &str, server: &str, tool: &str, input: &Value, builtin: Option<mcp::BuiltinCall>) -> ToolApprovalRequest {
+    ToolApprovalRequest {
+        kwant_id: session.kwant_id.clone(),
+        kwant_name: session.kwant_name.clone(),
+        turn_id: session.turn_id.clone(),
+        tool_name: tool_name.to_string(),
+        server: server.to_string(),
+        tool: tool.to_string(),
+        arguments: input.clone(),
+        builtin,
+        smart: None,
+    }
+}
+
 /// Answers one claude permission prompt. MCP tools from the kwant's own servers get their
 /// approval card; claude's own tools follow [`mcp::builtin_tools`]; tools from servers the
 /// kwant doesn't have are denied.
@@ -550,6 +584,10 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value
             (server, tool, None)
         }
         _ if tool_name.is_empty() || tool_name.starts_with("mcp__") => {
+            if !tool_name.is_empty() {
+                let req = noted_request(session, tool_name, "", tool_name, &input, None);
+                session.ctx.approver.note(&req, "denied", None).await;
+            }
             return json!({"behavior": "deny", "message": format!("{tool_name} is not available to this bot.")});
         }
         _ => {
@@ -568,6 +606,10 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value
             };
             match decision {
                 mcp::builtin_tools::BuiltinDecision::Allow => {
+                    // No card and no approval record, but the task's ledger still gets it
+                    let cwd = folder.or_else(|| session.cwd.clone()).map(|f| f.display().to_string());
+                    let req = noted_request(session, tool_name, "", tool_name, &input, Some(mcp::BuiltinCall { cwd, outside_folder: false }));
+                    session.ctx.approver.note(&req, "allowed", None).await;
                     return json!({"behavior": "allow", "updatedInput": input});
                 }
                 mcp::builtin_tools::BuiltinDecision::Ask { outside_folder } => {

@@ -342,9 +342,14 @@ impl ToolApprover for SelfToolsApprover {
 
     async fn decide(&self, req: ToolApprovalRequest) -> crate::mcp::ApprovalOutcome {
         if req.server == SELF_SERVER_NAME && (!self.always_ask || READ_ONLY_SELF_TOOLS.contains(&req.tool.as_str())) {
+            self.inner.note(&req, "allowed", None).await;
             return crate::mcp::ApprovalOutcome::Allowed;
         }
         self.inner.decide(req).await
+    }
+
+    async fn note(&self, req: &ToolApprovalRequest, decision: &'static str, approval_id: Option<&str>) {
+        self.inner.note(req, decision, approval_id).await
     }
 }
 

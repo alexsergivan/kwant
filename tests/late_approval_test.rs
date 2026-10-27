@@ -14,6 +14,7 @@ use std::time::Duration;
 fn approver(env: &Env, timeout: Duration) -> Arc<BrokerApprover> {
     Arc::new(BrokerApprover {
         db: env.state.db.clone(),
+        data_dir: env.state.config.data_dir.clone(),
         broker: env.state.broker.clone(),
         events: env.state.event_sender.clone(),
         timeout,
@@ -93,6 +94,7 @@ async fn a_grant_runs_once_only_in_its_own_conversation() {
     // Another conversation of the same bot can't use it
     let elsewhere = BrokerApprover {
         db: env.state.db.clone(),
+        data_dir: env.state.config.data_dir.clone(),
         broker: env.state.broker.clone(),
         events: env.state.event_sender.clone(),
         timeout: Duration::from_millis(200),

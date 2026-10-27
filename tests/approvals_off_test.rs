@@ -262,6 +262,7 @@ async fn an_always_ask_turn_asks_even_with_approvals_off() {
     for (always_ask, want) in [(false, ApprovalOutcome::Allowed), (true, ApprovalOutcome::Unanswered)] {
         let approver = mcp_runtime::BrokerApprover {
             db: e.state.db.clone(),
+            data_dir: e.state.config.data_dir.clone(),
             broker: e.state.broker.clone(),
             events: e.state.event_sender.clone(),
             timeout: Duration::from_millis(200),

@@ -102,6 +102,80 @@ export interface Task {
   forked_from?: string | null;
   /** Open "may be invalid" flags; older servers leave it out. */
   flags?: TaskFlag[];
+  /** Time Machine checkpoints of this task; older servers leave these out. */
+  checkpoint_count?: number;
+  last_checkpoint_at?: string | null;
+}
+
+// Time Machine (Phase B2, docs/mission-control.md §12)
+
+export type CheckpointKind = 'before_run' | 'after_run' | 'manual' | 'before_restore';
+
+/** A tool call the task's runs made that kwant can't undo. */
+export interface ExternalCall {
+  tool_name: string;
+  /** Tool name plus a redacted outline of the arguments (≤ 300 chars, never a body). */
+  summary: string;
+  at: string;
+}
+
+/** `GET /api/tasks/:id/checkpoints` item (oldest first); `POST` (person-only) returns one. */
+export interface Checkpoint {
+  id: string;
+  kind: CheckpointKind;
+  attempt: number;
+  created_at: string;
+  created_by: 'kwant' | 'person';
+  files: number;
+  bytes: number;
+  skipped: number;
+  git_head: string | null;
+  /** Why the snapshot failed; such a checkpoint isn't restorable. */
+  error: string | null;
+  restorable: boolean;
+  /** Tool calls of this task between this checkpoint and the next one. */
+  effects_after: { workspace: number; external: ExternalCall[] };
+}
+
+export type RestoreAction = 'overwrite' | 'create' | 'delete';
+export type RestoreRefusal = 'fork_instead' | 'running';
+
+/** `GET /api/tasks/:id/checkpoints/:cid/restore-preview`. Only paths this task's runs changed are listed. */
+export interface RestorePreview {
+  checkpoint_id: string;
+  /** Send back as `preview_sha256`; a changed folder or task makes the restore 409 `stale_preview`. */
+  preview_sha256: string;
+  changes: { path: string; action: RestoreAction }[];
+  /** Changed by another task since the checkpoint: skipped unless named in `force_paths`. */
+  conflicts: { path: string; changed_by_task: string }[];
+  skipped: { path: string; why: string }[];
+  external_not_undone: ExternalCall[];
+  /** Always "kwant can't undo these. Check them yourself." */
+  not_undone_note: string;
+  /** False when a run changed files but logged no call that could have: show "side effects unknown", never "none". */
+  effects_known: boolean;
+  task_state_after: 'ready' | 'backlog' | null;
+  refused: RestoreRefusal | null;
+}
+
+/** `POST /api/tasks/:id/checkpoints/:cid/restore` (person-only; `Idempotency-Key` header required). */
+export interface RestoreResult {
+  restored: string[];
+  deleted: string[];
+  /** Paths that couldn't be written (e.g. a symlink appeared). */
+  failed: { path: string; why: string }[];
+  /** Restore this one to undo the restore. */
+  before_restore_checkpoint_id: string;
+  external_not_undone: ExternalCall[];
+  not_undone_note: string;
+  effects_known: boolean;
+  task: Task;
+}
+
+/** 409 bodies carry `code`: `fork_instead`, `running`, `stale_preview` or `not_restorable`. */
+export interface RestoreError {
+  error: string;
+  code?: RestoreRefusal | 'stale_preview' | 'not_restorable' | 'checkpoint_failed';
 }
 
 // Work graph (Phase B1, docs/mission-control.md §11)

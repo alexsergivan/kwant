@@ -132,7 +132,10 @@ async fn start_held(
 /// kwant takes `task` for `owner` (a system claim: it doesn't stop the bot from holding its own).
 async fn hold(state: &AppState, task: &Task, owner: &str, context_id: &str) {
     match state.db.claim_task(&task.id, owner, None, Some(context_id), lease_ms(state).await, true, "kwant").await {
-        Ok(Ok(t)) => super::emit_task(state, &t).await,
+        Ok(Ok(t)) => {
+            super::emit_task(state, &t).await;
+            super::checkpoints::before_run(state, &t).await;
+        }
         Ok(Err(why)) => {
             tracing::info!(task_id = %task.id, %why, "a held task wasn't claimed");
             super::emit_task(state, task).await;

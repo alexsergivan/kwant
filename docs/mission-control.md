@@ -395,3 +395,50 @@ The header works on `POST /api/tasks/:id/fork` and `POST /api/tasks/:id/retry`. 
 - `POST /api/missions/:id/graph/scan` (person only) returns `{scanned, flagged: [flag ids], skipped: [{task_id, path, why}]}`.
 - `task_json` gains `forked_from` and `flags` (open only).
 - There are no new SSE types: flags and forks go out as `task_updated` and `mission_updated`.
+
+## 12. Checkpoints and restore (Phase B2)
+
+Design and decisions: `/home/maus/shared/ship-software-safely/mission-control/phase-b/contract.md` §3
+and `decisions.md` (D4, D6, D8, D9). A checkpoint is a snapshot of a task's folder (the mission's
+`workspace_path`, else the owner bot's workspace). A restore writes back only the paths this task's
+own runs changed. What a tool did outside the folder (Bash, web, email, other bots) is never undone:
+it is listed as "not undone".
+
+### When a checkpoint is taken
+
+- `before_run` when a task is claimed (runner, `task_claim`, a team-lead hand-off), and `after_run` when the claim ends (the task leaves `working`/`needs_you`).
+- `manual`: `POST /api/tasks/:id/checkpoints` (person only).
+- `before_restore`: always, right before a restore writes anything. If it can't be taken, nothing is restored (500, `code: checkpoint_failed`).
+- The setting `checkpoints` (default on) turns off only `before_run`/`after_run`. Manual and safety checkpoints are always taken.
+- A failed snapshot (for example an unreadable folder) never stops the turn. It is stored as a checkpoint with `error` set and `restorable: false`, plus a `checkpoint_failed` task event.
+
+### The store
+
+- Under `<data_dir>/checkpoints/` (folder mode 0700, files 0600): `blobs/<sha256>` is deduplicated content, `<task_id>/<checkpoint_id>.json` is each manifest, and `<task_id>/runs.jsonl` holds the paths each run changed.
+- Snapshots include `.env`, keys and other secrets, which is why no route ever returns a manifest path, a blob path or file contents.
+- Never snapshotted (counted in `skipped`; the manifest keeps each path and why): symlinks (never followed), `.git`, `node_modules`, `target`, `.venv`, files over 20 MB, and anything past 20,000 files. Past the per-checkpoint cap, the largest files are skipped first.
+- Caps (settings): `checkpoint_max_mb` (10–2000, default 200) per checkpoint; `checkpoint_keep` (1–20, default 5) per task, plus the task's first `before_run`, which is always kept. All checkpoints together are kept under 2 GB, oldest first. Pruning writes a `checkpoint_pruned` event. Blobs no manifest uses are removed after every checkpoint.
+
+### Tables
+
+- `task_checkpoints`: `id`, `task_id`, `mission_id`, `kind` (`before_run`, `after_run`, `manual`, `before_restore`), `claim_id`, `turn_id`, `attempt`, `created_at`, `created_by`, `files`, `bytes`, `skipped` (a count; the paths and reasons stay in the manifest), `git_head`, `error`. Server-only columns `manifest_path`, `manifest_sha256`, `folder` are never serialized. Rows are never updated; pruning deletes them.
+- `turn_tool_calls` (the ledger; append-only, no UPDATE or DELETE): `turn_id`, `kwant_id`, `task_id`, `tool_name`, `effect` (`none`, `workspace`, `external`), `summary`, `decision`, `approval_id`, `created_at`.
+  - Only task turns are logged (D9): a call is logged when the bot holds a task in that turn.
+  - Every call that reaches kwant's permission check is logged, including the ones allowed without a card and the ones refused.
+  - `none`: read-only tools (Read, Glob, Grep, LS, WebSearch, TodoWrite…) and the `task_*`/`mission_plan` self tools. `workspace`: Write, Edit, MultiEdit, NotebookEdit inside the task folder. Everything else is `external`, Bash always (D6).
+  - `summary` is at most 300 characters, never a file body or message text, with credentials masked.
+
+### Routes
+
+- `GET /api/tasks/:id/checkpoints`: oldest first. Each item: `{id, kind, attempt, created_at, created_by, files, bytes, skipped, git_head, error, restorable, effects_after: {workspace: n, external: [{tool_name, summary, at}]}}`. `effects_after` covers the calls between this checkpoint and the next.
+- `POST /api/tasks/:id/checkpoints` (person only): a manual checkpoint; 201 with the item, 500 if the snapshot failed.
+- `GET /api/tasks/:id/checkpoints/:cid/restore-preview`: `{checkpoint_id, preview_sha256, changes: [{path, action: overwrite|create|delete}], conflicts: [{path, changed_by_task}], skipped: [{path, why}], external_not_undone: [{tool_name, summary, at}], not_undone_note, effects_known, task_state_after, refused: null|fork_instead|running}`.
+  - Only paths this task's runs changed are restored. A path another task's run changed after the checkpoint is a conflict, left alone unless forced.
+  - `effects_known` is false when a run after the checkpoint changed files but no tool call that could have was logged.
+  - 409 `not_restorable` when the snapshot failed or was pruned.
+- `POST /api/tasks/:id/checkpoints/:cid/restore` (person only, `Idempotency-Key` required): body `{preview_sha256, force_paths?: [path]}`. Returns `{restored, deleted, failed: [{path, why}], before_restore_checkpoint_id, external_not_undone, not_undone_note, effects_known, task}`.
+  - 409 `fork_instead` for a verified task, `running` while a claim is live, `stale_preview` when the folder or task changed since the preview.
+  - The task moves review/failed → ready and blocked → backlog; other states stay. A `restored` task event records the counts.
+  - Never writes through a symlink or outside the folder.
+- `POST /api/tasks/:id/fork` accepts `from_checkpoint`: the original's task-owned paths are restored to that checkpoint first (after a `before_restore`), then the fork is made. The response adds `restore`.
+- `task_json` gains `checkpoint_count` and `last_checkpoint_at`.

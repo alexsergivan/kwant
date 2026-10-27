@@ -12,6 +12,7 @@
 //! - nothing here widens a bot's permissions: the bot tools only touch the board, `command` checks
 //!   a bot adds run only after the person approves them, and person actions are person-only routes.
 
+pub mod checkpoints;
 pub mod checks;
 pub mod graph;
 pub mod listener;
@@ -46,7 +47,7 @@ pub async fn enabled(state: &AppState) -> bool {
     matches!(state.db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim), Some("true" | "1" | "on"))
 }
 
-async fn int_setting(state: &AppState, key: &str, range: (i64, i64), default: i64) -> i64 {
+pub(crate) async fn int_setting(state: &AppState, key: &str, range: (i64, i64), default: i64) -> i64 {
     state
         .db
         .get_setting(key)
@@ -178,6 +179,10 @@ pub async fn transition(
     }
     let task = state.db.get_task(task_id).await.map_err(MoveError::Db)?.ok_or(MoveError::Missing)?;
     emit_task(state, &task).await;
+    // The run's claim was released: snapshot what it left (after the commit, never inside it)
+    if matches!(from, "working" | "needs_you") && !matches!(to, "working" | "needs_you") {
+        checkpoints::after_run(state, &task).await;
+    }
     after_move(state, &task, to).await;
     Ok(task)
 }
@@ -522,6 +527,9 @@ pub async fn task_json(state: &AppState, task: &Task) -> Value {
         obj.insert("needs_you".into(), json!(needs_you(state, task).await));
         obj.insert("flags".into(), json!(graph::open_flags(state, task).await));
         obj.insert("checks_summary".into(), checks_summary(task, &checks));
+        let (count, last) = state.db.checkpoint_stats(&task.id).await.unwrap_or((0, None));
+        obj.insert("checkpoint_count".into(), json!(count));
+        obj.insert("last_checkpoint_at".into(), json!(last));
     }
     v
 }
@@ -883,8 +891,13 @@ pub async fn create_task(state: &AppState, space: &SpaceId, t: NewTask) -> Resul
 
 /// The folder a task's file checks and evidence resolve in: its mission's, else its owner's.
 pub async fn task_folder(state: &AppState, task: &Task) -> Option<std::path::PathBuf> {
+    task_folder_in(&state.db, &state.config.data_dir, task).await
+}
+
+/// [`task_folder`] without the app state (the permission hook has only the database).
+pub async fn task_folder_in(db: &crate::db::Database, data_dir: &std::path::Path, task: &Task) -> Option<std::path::PathBuf> {
     if let Some(mid) = &task.mission_id {
-        if let Ok(Some(m)) = state.db.get_mission(mid).await {
+        if let Ok(Some(m)) = db.get_mission(mid).await {
             if !m.workspace_path.is_empty() {
                 return Some(std::path::PathBuf::from(m.workspace_path));
             }
@@ -892,7 +905,7 @@ pub async fn task_folder(state: &AppState, task: &Task) -> Option<std::path::Pat
     }
     let owner = task.owner_kwant_id.as_deref().or(task.suggested_kwant_id.as_deref())?;
     let space = SpaceId::new(&task.space_id);
-    Some(crate::tools::bot_workspace(&crate::db::spaces::space_data_dir(&state.config.data_dir, &space), owner))
+    Some(crate::tools::bot_workspace(&crate::db::spaces::space_data_dir(data_dir, &space), owner))
 }
 
 #[cfg(test)]

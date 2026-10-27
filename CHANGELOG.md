@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
+- **Mission Control: checkpoints and restore (backend).** kwant snapshots a task's folder before and
+  after each run, and on demand. You can preview and restore a checkpoint: only the files that task's
+  runs changed are written back, after a safety checkpoint you can restore in turn. What the bot did
+  outside the folder (commands, web, messages) is listed as not undone. Every tool call of a task's
+  turns is now recorded with its effect. Snapshots stay private on the server. The board UI follows
+  separately.
 - **Mission Control: work graph and "may be invalid" flags (backend).** When a verified task's evidence
   file changes or disappears, or a verified task is redone, kwant flags that task and the started tasks
   that directly depend on it as "may be invalid". Their state never changes, and only you decide:

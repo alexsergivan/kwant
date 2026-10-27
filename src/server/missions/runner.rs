@@ -86,6 +86,7 @@ pub async fn run_mission(state: &AppState, mission: &Mission, max: usize) -> (Ve
         match state.db.claim_task(&t.id, &bot.id, None, Some(&context), lease_ms(state).await, false, "kwant").await {
             Ok(Ok(task)) => {
                 super::emit_task(state, &task).await;
+                super::checkpoints::before_run(state, &task).await;
                 picked.push((task, bot));
             }
             Ok(Err(ClaimRefused::Budget { remaining, needed })) => {

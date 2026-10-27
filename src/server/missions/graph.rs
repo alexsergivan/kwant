@@ -309,14 +309,20 @@ pub async fn fork_task(State(state): State<AppState>, RawQuery(q): RawQuery, hea
     if reason.is_empty() || reason.chars().count() > 500 {
         return bad("reason is required (at most 500 characters)");
     }
-    if p.from_checkpoint.is_some() {
-        return bad("from_checkpoint isn't supported yet");
-    }
     let route = format!("POST /api/tasks/{id}/fork");
     idempotent(&state, &headers, route, || async {
         let orig = load_task(&state, q.as_deref(), &id).await?;
+        // The fork starts from the checkpoint: the original's task-owned paths go back first
+        let restore = match p.from_checkpoint.as_deref().map(str::trim) {
+            Some(cid) => Some(super::checkpoints::restore_for_fork(&state, &orig, cid).await?),
+            None => None,
+        };
         let f = fork(&state, &orig, &reason).await?;
-        Ok(task_json(&state, &f).await)
+        let mut out = task_json(&state, &f).await;
+        if let Some(r) = restore {
+            out["restore"] = r;
+        }
+        Ok(out)
     })
     .await
 }
