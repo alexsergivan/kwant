@@ -295,8 +295,11 @@ test('a Review task with a required check still running and an optional one wait
   const html = ui.detail({ detail: d, names, now: NOW, onAction: noop, onApproveCheck: noop, onOpenChat: noop });
   assert.match(html, /Optional check waiting for your OK\. It doesn’t hold the task/);
   assert.doesNotMatch(html, /Not verified yet\. Waiting for you/);
-  assert.match(html, /Allow this check/, 'in Review the normal Allow button stays');
-  assert.doesNotMatch(html, /Run this optional check/);
+  // Rigel eval 6: an optional check can't hold the task, so in Review it's the quiet row too.
+  const row = html.slice(html.indexOf('data-check="ch3"'));
+  assert.match(row, /data-run-optional[^>]*>Run this optional check</);
+  assert.doesNotMatch(row, /Allow this check/);
+  assert.doesNotMatch(row, /A bot added this check\. It runs only after you OK it/);
 });
 
 test('the card says "Needs you" only when a required check waits for your OK (required_needs_approval)', () => {
@@ -346,10 +349,14 @@ test('the quiet "Not run" optional row on a Verified task has a grey icon, not t
   const row = html.slice(html.indexOf('data-check="ch3"'));
   assert.match(row, /Not run/);
   assert.doesNotMatch(row.slice(0, row.indexOf('Not run')), /text-amber-300/);
-  // In Review the same check still shows the amber hand: it is waiting on you there.
+  // In Review an optional check is quiet too (it can't hold the task); a required one keeps the amber hand.
   const review = ui.receipt({ task: task({ state: 'review' }), checks: [optional], evidence: [], events: [] }, names);
   const rrow = review.slice(review.indexOf('data-check="ch3"'));
-  assert.match(rrow.slice(0, rrow.indexOf('Needs your OK')), /text-amber-300/);
+  assert.match(rrow, /Not run/);
+  assert.doesNotMatch(rrow, /text-amber-300|text-amber-200|Needs your OK/);
+  const req = ui.receipt({ task: task({ state: 'review' }), checks: [{ ...optional, required: true }], evidence: [], events: [] }, names);
+  const qrow = req.slice(req.indexOf('data-check="ch3"'));
+  assert.match(qrow.slice(0, qrow.indexOf('Needs your OK')), /text-amber-300/);
 });
 
 test('only web links open; file paths and other schemes are shown as text', () => {

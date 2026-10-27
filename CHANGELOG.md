@@ -15,6 +15,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   outside the folder (commands, web, messages) is listed as not undone. Every tool call of a task's
   turns is now recorded with its effect. Snapshots stay private on the server. The board UI follows
   separately.
+- **Mission board: "May be invalid" flags, redo copies and how tasks connect.** A flagged task shows
+  a "May be invalid" badge and the reason on its card, waits under **Needs you**, and stays Verified
+  until you pick Still valid, Redo or Cancel on the task (Cancel is off for a verified task). Redo on a
+  verified task makes a copy that starts running on its own; the copy links back with "Copied from". A
+  new **How tasks connect** view lists a mission's tasks step by step, with open flags and how many
+  tasks further down weren't flagged, plus a **Check files now** button. In Review, an optional check
+  waiting for you now uses the same quiet grey row as on Verified.
 - **Mission Control: work graph and "may be invalid" flags (backend).** When a verified task's evidence
   file changes or disappears, or a verified task is redone, kwant flags that task and the started tasks
   that directly depend on it as "may be invalid". Their state never changes, and only you decide:

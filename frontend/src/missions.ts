@@ -367,10 +367,19 @@ export function sortTasks(tasks: Task[]): Task[] {
   return [...tasks].sort((a, b) => b.priority - a.priority || Date.parse(b.updated_at) - Date.parse(a.updated_at));
 }
 
+/**
+ * Which column a task card sits in: its state's column, except that an open "may be invalid" flag puts
+ * it in Needs you (the flag waits for the person in any state, and Insights counts it there).
+ */
+export function columnOfTask(t: Pick<Task, 'state' | 'flags' | 'needs_you'>): Column | null {
+  const c = columnOf(t.state);
+  return c && openFlags(t).length ? 'needs_you' : c;
+}
+
 export function groupByColumn(tasks: Task[]): Record<Column, Task[]> {
   const out: Record<Column, Task[]> = { ready: [], working: [], needs_you: [], review: [], verified: [] };
   for (const t of sortTasks(tasks)) {
-    const c = columnOf(t.state);
+    const c = columnOfTask(t);
     if (c) out[c].push(t);
   }
   return out;
@@ -550,6 +559,192 @@ export function cardStatus(t: Task, names: Record<string, string> = {}, now: num
 }
 
 // ---------------------------------------------------------------------------
+// "May be invalid" flags and forks (Phase B1, docs/mission-control.md §11)
+
+/** An open flag as the board shows it; `cause` is null when only the needs_you item arrived. */
+export interface OpenFlag {
+  id: string;
+  cause: FlagCause | null;
+  causeTaskId: string | null;
+  text: string;
+  createdAt: string | null;
+}
+
+const quote = (s: string | null | undefined) => (s && s.trim() ? `“${s.trim()}”` : 'a task it builds on');
+
+/** One plain sentence for why a task may no longer hold. */
+export function flagText(f: Pick<TaskFlag, 'cause' | 'cause_title' | 'detail'>): string {
+  const d = f.detail ?? {};
+  const path = str(d.path);
+  switch (f.cause) {
+    case 'evidence_changed':
+      if (path && d.new_sha256 === null) return `Its file ${path} is gone since it was verified`;
+      return path ? `Its file ${path} changed since it was verified` : 'A file it was verified with changed';
+    case 'upstream_evidence_changed':
+      return `A file from ${quote(f.cause_title)}, which this builds on, changed`;
+    case 'upstream_forked':
+      return `${quote(f.cause_title)}, which this builds on, is being redone`;
+    default:
+      return 'Something it depends on changed';
+  }
+}
+
+/**
+ * The task's open flags: from `flags` when the server sends them, plus any `may_be_invalid` needs_you
+ * item without one (so a flag is never hidden). Older servers send neither: no flags.
+ */
+export function openFlags(t: Pick<Task, 'flags' | 'needs_you'>): OpenFlag[] {
+  const out: OpenFlag[] = (t.flags ?? [])
+    .filter((f) => !f.resolved_at)
+    .map((f) => ({ id: f.id, cause: f.cause, causeTaskId: f.cause_task_id, text: flagText(f), createdAt: f.created_at }));
+  for (const n of t.needs_you ?? []) {
+    if (n.kind === 'may_be_invalid' && !out.some((f) => f.id === n.id)) {
+      out.push({ id: n.id, cause: null, causeTaskId: null, text: n.text.replace(/^Check this still holds:\s*/i, '') || 'Something it depends on changed', createdAt: null });
+    }
+  }
+  return out;
+}
+
+export type ResolveChoice = FlagResolution;
+
+export interface ResolveOption {
+  choice: ResolveChoice;
+  label: string;
+  /** What it does, in one line, for this task's state. */
+  hint: string;
+  /** Why it's off (it would get a 409), or null when it can be pressed. */
+  disabled: string | null;
+}
+
+/** The three ways the person can settle a flag, worded and enabled for the task's state (§11 table). */
+export function resolveOptions(state: TaskState): ResolveOption[] {
+  const running = state === 'working' || state === 'needs_you';
+  const redoHint: Partial<Record<TaskState, string>> = {
+    verified: 'Makes a copy of this task that starts running on its own. This one stays as it is.',
+    review: 'Sends it back to Ready for another try, with its tries reset.',
+    failed: 'Sends it back to Ready for another try, with its tries reset.',
+    blocked: 'Moves it back to Waiting so it can run again.',
+    backlog: 'It hasn’t run yet, so it will run again anyway. This just closes the flag.',
+    ready: 'It hasn’t run yet, so it will run again anyway. This just closes the flag.',
+  };
+  return [
+    { choice: 'still_valid', label: 'Still valid', hint: 'You checked: it still holds. Nothing else changes.', disabled: null },
+    {
+      choice: 'redo',
+      label: 'Redo',
+      hint: redoHint[state] ?? '',
+      disabled: running ? 'A bot is working on it. Decide once it stops.' : state === 'cancelled' ? 'It’s cancelled, so there’s nothing to redo.' : null,
+    },
+    {
+      choice: 'cancelled',
+      label: 'Cancel',
+      hint: state === 'cancelled' ? 'It’s already cancelled. This just closes the flag.' : 'Cancels the task.',
+      disabled: state === 'verified' ? 'A verified task can’t be cancelled. Choose Still valid or Redo.' : null,
+    },
+  ];
+}
+
+export const RESOLVE_DONE: Record<ResolveChoice, string> = {
+  still_valid: 'Marked still valid.',
+  redo: 'Sent back for another try.',
+  cancelled: 'Cancelled.',
+};
+
+/** What happened after a resolve, in one sentence. A fork says plainly that it runs on its own. */
+export function resolvedText(choice: ResolveChoice, r: Pick<ResolveFlagResult, 'fork' | 'task'>): string {
+  if (choice === 'redo' && r.fork) return `Made a copy to redo it: “${r.fork.title}”. It starts running on its own; this task stays as it was.`;
+  if (choice === 'redo' && (r.task.state === 'backlog' || r.task.state === 'ready')) return 'Flag closed. It will run again.';
+  if (choice === 'cancelled' && r.task.state === 'cancelled') return 'Cancelled.';
+  return RESOLVE_DONE[choice];
+}
+
+/** A plain message for a refused resolve or fork; 409 says what changed instead of the raw reason. */
+export function flagErrorText(e: unknown): string {
+  if (e instanceof MissionError && e.status === 409) {
+    const msg = e.message.toLowerCase();
+    if (msg.includes('already resolved')) return 'This flag was already settled, maybe in another tab. The board now shows the latest.';
+    if (msg.includes('running')) return 'A bot is working on it now. Decide once it stops.';
+    if (msg.includes('verified task can')) return 'A verified task can’t be cancelled. Choose Still valid or Redo.';
+    if (msg.includes('mission is cancelled')) return 'Its mission is cancelled, so it can’t be redone.';
+    if (msg.includes('cancelled')) return 'The task is cancelled, so there’s nothing to redo.';
+    return 'The task changed while you were deciding. The board now shows the latest; try again.';
+  }
+  return e instanceof Error ? e.message : 'Something went wrong.';
+}
+
+/** A fresh Idempotency-Key for one press, so a repeat of the same press can't make a second copy. */
+export function newIdempotencyKey(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  return `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Work graph view
+
+export interface GraphRow {
+  node: GraphNode;
+  /** Tasks this one builds on (edge `from`), in graph order. */
+  after: GraphNode[];
+  /** How many tasks were flagged because of this one (open flags whose cause is this task, itself excluded). */
+  flaggedBecause: number;
+  /** "2 more tasks further down weren't flagged" when this task caused flags, else null. */
+  notFlaggedText: string | null;
+}
+
+export interface GraphLevel {
+  /** 1 for tasks that build on nothing, 2 for what follows them, and so on. */
+  step: number;
+  rows: GraphRow[];
+}
+
+/**
+ * Lays the graph out as steps: each task one step after the latest task it builds on. A list reads at
+ * 390 px where a drawn graph wouldn't. A loop (it shouldn't happen) lands in a last step, never lost.
+ */
+export function graphLevels(g: Pick<WorkGraph, 'nodes' | 'edges'>): GraphLevel[] {
+  const byId = new Map(g.nodes.map((n) => [n.id, n]));
+  const parents = new Map<string, string[]>(g.nodes.map((n) => [n.id, []]));
+  for (const e of g.edges) if (byId.has(e.from) && byId.has(e.to)) parents.get(e.to)!.push(e.from);
+  const level = new Map<string, number>();
+  const visiting = new Set<string>();
+  const depth = (id: string): number => {
+    const known = level.get(id);
+    if (known !== undefined) return known;
+    if (visiting.has(id)) return Number.POSITIVE_INFINITY;
+    visiting.add(id);
+    const ps = parents.get(id) ?? [];
+    const d = ps.length ? Math.max(...ps.map(depth)) + 1 : 1;
+    visiting.delete(id);
+    level.set(id, d);
+    return d;
+  };
+  const flaggedBy = new Map<string, number>();
+  for (const n of g.nodes) for (const f of n.flags ?? []) if (!f.resolved_at && f.cause_task_id !== n.id) flaggedBy.set(f.cause_task_id, (flaggedBy.get(f.cause_task_id) ?? 0) + 1);
+  const causes = new Set<string>();
+  for (const n of g.nodes) for (const f of n.flags ?? []) if (!f.resolved_at) causes.add(f.cause_task_id);
+  const steps = new Map<number, GraphRow[]>();
+  const finite = g.nodes.map((n) => depth(n.id)).filter(Number.isFinite);
+  const last = (finite.length ? Math.max(...finite) : 0) + 1;
+  for (const n of g.nodes) {
+    const d = Number.isFinite(depth(n.id)) ? depth(n.id) : last;
+    const flagged = flaggedBy.get(n.id) ?? 0;
+    const rest = Math.max(0, (n.downstream ?? 0) - flagged);
+    const row: GraphRow = {
+      node: n,
+      after: (parents.get(n.id) ?? []).map((id) => byId.get(id)!),
+      flaggedBecause: flagged,
+      notFlaggedText: causes.has(n.id) && rest > 0 ? (rest === 1 ? '1 more task further down wasn’t flagged' : `${rest} more tasks further down weren’t flagged`) : null,
+    };
+    if (!steps.has(d)) steps.set(d, []);
+    steps.get(d)!.push(row);
+  }
+  return [...steps.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, rows], i) => ({ step: i + 1, rows: rows.sort((a, b) => a.node.title.localeCompare(b.node.title)) }));
+}
+
+// ---------------------------------------------------------------------------
 // Evidence receipt
 
 export const CHECK_KINDS: Record<string, string> = {
@@ -629,6 +824,9 @@ export interface Receipt {
   optionalWaiting: string | null;
   /** The task is Verified: a waiting optional check is offered quietly ("Run this optional check"). */
   settledVerified: boolean;
+  /** Whether a check's row is the quiet optional one: grey "Not run" and "Run this optional check". It
+   * can't hold the task in any state, so it never gets the amber hand or "Allow this check". */
+  quietOptional: (c: Pick<Check, 'status' | 'required'>) => boolean;
 }
 
 /** Builds the evidence receipt: every check with its result and output, newest result first per check. */
@@ -666,8 +864,12 @@ export function buildReceipt(d: Pick<TaskDetail, 'task' | 'checks' | 'evidence'>
     waitingOnYou: review ? waitingApprovalText(requiredWaiting) : null,
     optionalWaiting: settled ? optionalWaitingText(waitingChecks.length - requiredWaiting) : null,
     settledVerified: d.task.state === 'verified',
+    quietOptional: isQuietOptional,
   };
 }
+
+/** An optional check waiting for the person: it can run, but it never holds the task. */
+export const isQuietOptional = (c: Pick<Check, 'status' | 'required'>): boolean => c.status === 'needs_approval' && !c.required;
 
 /** 2 048 → "2 KB". */
 export function formatBytes(n: number | null | undefined): string | null {
@@ -724,6 +926,14 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
       return 'It reached its token budget';
     case 'edited':
       return `${Who} edited it`;
+    case 'flagged':
+      return 'Flagged: it may no longer hold';
+    case 'flag_resolved': {
+      const r = str(d.resolution);
+      return `${Who} settled a flag: ${r === 'still_valid' ? 'still valid' : r === 'redo' ? 'redo' : r === 'cancelled' ? 'cancel' : 'decided'}`;
+    }
+    case 'forked':
+      return `${Who} made a copy to redo it${note ? `: ${note}` : ''}`;
     default:
       return `${Who}: ${humanize(e.kind)}`;
   }
@@ -844,13 +1054,14 @@ export function errorFrom(status: number, answer: unknown): MissionError {
   return new MissionError(err ?? `Something went wrong (HTTP ${status}).`, status);
 }
 
-async function call<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
+async function call<T>(url: string, method = 'GET', body?: unknown, extra?: Record<string, string>): Promise<T> {
   let res: Response;
+  const headers = { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...extra };
   try {
     res = await personFetch(url, {
       method,
       cache: 'no-store',
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers: Object.keys(headers).length ? headers : undefined,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (e) {
@@ -874,6 +1085,13 @@ export const missionsApi = {
   tasks: () => call<{ tasks: Task[] }>('/api/tasks?limit=500').then((r) => r.tasks),
   task: (id: string) => call<TaskDetail>(`/api/tasks/${enc(id)}`),
   approveCheck: (id: string) => call<Check>(`/api/checks/${enc(id)}/approve`, 'POST', {}),
+  graph: (missionId: string) => call<WorkGraph>(`/api/missions/${enc(missionId)}/graph`),
+  scan: (missionId: string) => call<GraphScanResult>(`/api/missions/${enc(missionId)}/graph/scan`, 'POST', {}),
+  /** Settle a flag. The key rides along on `redo` too, since a verified task's redo makes a copy. */
+  resolveFlag: (taskId: string, flagId: string, resolution: FlagResolution, key: string, note?: string) =>
+    call<ResolveFlagResult>(`/api/tasks/${enc(taskId)}/flags/${enc(flagId)}/resolve`, 'POST', note ? { resolution, note } : { resolution }, { 'Idempotency-Key': key }),
+  /** Copy a task to redo it; the same key returns the same copy. */
+  fork: (taskId: string, reason: string, key: string) => call<Task>(`/api/tasks/${enc(taskId)}/fork`, 'POST', { reason }, { 'Idempotency-Key': key }),
   /** One person action on a task. `run_checks` answers `{checks, task}`, the others the Task. */
   act: async (id: string, action: TaskAction, reason?: string): Promise<Task> => {
     const base = `/api/tasks/${enc(id)}`;

@@ -5,8 +5,10 @@ import {
   ChevronLeft,
   Circle,
   CircleDashed,
+  Copy,
   ExternalLink,
   FileText,
+  GitBranch,
   Hand,
   Image as ImageIcon,
   Link2,
@@ -28,15 +30,19 @@ import {
   Check,
   Column,
   Evidence,
+  GraphLevel,
   Insights,
   Mission,
   MissionError,
+  OpenFlag,
+  ResolveChoice,
   NEEDS_REASON,
   Receipt,
   Task,
   TaskAction,
   TaskDetail,
   Tone,
+  WorkGraph,
   actionsFor,
   ago,
   buildReceipt,
@@ -45,7 +51,14 @@ import {
   checksText,
   optionalChecksNote,
   approvalHolds,
-  columnOf,
+  columnOfTask,
+  flagText,
+  flagErrorText,
+  graphLevels,
+  newIdempotencyKey,
+  openFlags,
+  resolveOptions,
+  resolvedText,
   costRatio,
   costText,
   durationText,
@@ -233,7 +246,8 @@ export const TaskCard: React.FC<{
   const checks = checksText(t.checks_summary);
   const optionalNote = optionalChecksNote(t.checks_summary);
   const status = cardStatus(t, names, now);
-  const dimmed = t.state === 'backlog';
+  const flags = openFlags(t);
+  const dimmed = t.state === 'backlog' && !flags.length;
   return (
     <li data-task={t.id} data-state={t.state}>
       <button
@@ -246,6 +260,12 @@ export const TaskCard: React.FC<{
           {t.state === 'failed' && <Badge tone="rose">Failed</Badge>}
           {t.state === 'backlog' && <Badge tone="zinc">Waiting</Badge>}
           {t.state === 'review' && approvalHolds(t.checks_summary) && <Badge tone="amber">Needs you</Badge>}
+          {flags.length > 0 && (
+            <span data-flag-badge>
+              <Badge tone="amber">May be invalid</Badge>
+            </span>
+          )}
+          {t.state === 'verified' && flags.length > 0 && <Badge tone="emerald">Verified</Badge>}
           {t.priority >= 2 && <Badge tone={t.priority >= 3 ? 'rose' : 'amber'}>{priorityLabel(t.priority)}</Badge>}
           {showMission && t.mission_title && <span className="min-w-0 truncate text-[11px] text-zinc-500">{t.mission_title}</span>}
         </span>
@@ -255,6 +275,16 @@ export const TaskCard: React.FC<{
             {status}
           </span>
         )}
+        {flags.length > 0 && (
+          <span className="flex items-start gap-1 text-[11px] text-amber-200 break-words" data-flag-line>
+            <AlertTriangle size={11} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span className="line-clamp-2">
+              {flags[0].text}
+              {flags.length > 1 ? ` (+${flags.length - 1} more)` : ''}
+            </span>
+          </span>
+        )}
+        {t.forked_from && <span className="block text-[11px] text-zinc-500" data-forked-from>A copy, made to redo an earlier task</span>}
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-400">
           {owner ? (
             <span className="inline-flex items-center gap-1 min-w-0">
@@ -464,11 +494,11 @@ export const EvidenceReceipt: React.FC<{
         {receipt.lines.map((l) => (
           <li key={l.check.id} className="p-3 space-y-1.5" data-check={l.check.id} data-check-status={l.check.status}>
             <div className="flex items-start gap-2">
-              <span className="mt-px">{statusIcon(receipt.settledVerified && l.check.status === 'needs_approval' && !l.check.required ? 'zinc' : l.status.tone)}</span>
+              <span className="mt-px">{statusIcon(receipt.quietOptional(l.check) ? 'zinc' : l.status.tone)}</span>
               <div className="min-w-0 flex-1">
                 <p className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="font-medium text-zinc-100">{checkKindLabel(l.check.kind)}</span>
-                  {receipt.settledVerified && l.check.status === 'needs_approval' && !l.check.required ? (
+                  {receipt.quietOptional(l.check) ? (
                     <Badge tone="zinc">Not run</Badge>
                   ) : (
                     <Badge tone={l.status.tone}>{l.status.label}</Badge>
@@ -479,7 +509,7 @@ export const EvidenceReceipt: React.FC<{
                 <p className="mt-1 text-[10px] text-zinc-500">
                   {[l.by ? `Checked by ${l.by}` : null, l.check.finished_at ? ago(l.check.finished_at) : null].filter(Boolean).join(' · ') || 'Hasn’t run yet'}
                 </p>
-                {l.notCounting && !l.ownClaim && !(receipt.settledVerified && !l.check.required) && (
+                {l.notCounting && !l.ownClaim && !receipt.quietOptional(l.check) && !(receipt.settledVerified && !l.check.required) && (
                   <p className="mt-1 text-[11px] text-amber-200" data-not-counting>
                     {l.notCounting}
                   </p>
@@ -487,7 +517,7 @@ export const EvidenceReceipt: React.FC<{
                 {l.ownClaim && <p className="mt-1 text-[11px] text-amber-200">This is the owner’s own check, so it doesn’t count toward Verified.</p>}
               </div>
             </div>
-            {l.check.status === 'needs_approval' && onApproveCheck && receipt.settledVerified && !l.check.required ? (
+            {onApproveCheck && receipt.quietOptional(l.check) ? (
               <div className="pl-6">
                 <button type="button" disabled={busy} onClick={() => onApproveCheck(l.check)} className={subtleBtn} data-run-optional>
                   Run this optional check
@@ -529,6 +559,76 @@ export const EvidenceReceipt: React.FC<{
   </section>
 );
 
+// ---------- May be invalid ----------
+
+/** One open flag with the person's three choices. Choices that would be refused are off, with why. */
+export const FlagBox: React.FC<{
+  flag: OpenFlag;
+  state: Task['state'];
+  causeTitle?: string | null;
+  busy?: boolean;
+  onResolve?: (f: OpenFlag, choice: ResolveChoice) => void;
+  onOpenTask?: (id: string) => void;
+}> = ({ flag, state, causeTitle, busy = false, onResolve, onOpenTask }) => {
+  const opts = resolveOptions(state);
+  const hintId = useId();
+  const off = opts.filter((o) => o.disabled);
+  return (
+    <li className="px-3 py-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-100 space-y-2" data-flag={flag.id} data-flag-cause={flag.cause ?? ''}>
+      <p className="flex items-start gap-1.5 break-words">
+        <AlertTriangle size={14} className="mt-px shrink-0 text-amber-300" aria-hidden="true" />
+        <span>
+          <span className="font-semibold">May be invalid: </span>
+          {flag.text}.{' '}
+          {state === 'verified' ? 'It stays Verified until you decide.' : 'Nothing has changed on the task until you decide.'}
+          {flag.causeTaskId && flag.cause !== 'evidence_changed' && onOpenTask && (
+            <>
+              {' '}
+              <button type="button" onClick={() => onOpenTask(flag.causeTaskId!)} className={`text-sky-300 hover:underline rounded ${focusRing}`} data-flag-cause-link>
+                Open {causeTitle ? `“${causeTitle}”` : 'that task'}
+              </button>
+            </>
+          )}
+        </span>
+      </p>
+      {onResolve && (
+        <>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Decide on this flag" aria-describedby={hintId}>
+            {opts.map((o) => (
+              <button
+                key={o.choice}
+                type="button"
+                disabled={busy || !!o.disabled}
+                title={o.disabled ?? o.hint}
+                onClick={() => onResolve(flag, o.choice)}
+                className={o.choice === 'still_valid' ? goodBtn : o.choice === 'redo' ? mainBtn : dangerBtn}
+                data-resolve={o.choice}
+              >
+                {o.choice === 'redo' && state === 'verified' && <Copy size={13} aria-hidden="true" />}
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <ul id={hintId} className="space-y-0.5 text-[11px] text-amber-100/80">
+            {opts
+              .filter((o) => !o.disabled && o.hint)
+              .map((o) => (
+                <li key={o.choice} data-resolve-hint={o.choice}>
+                  <span className="font-medium">{o.label}:</span> {o.hint}
+                </li>
+              ))}
+            {off.map((o) => (
+              <li key={o.choice} className="text-zinc-400" data-resolve-off={o.choice}>
+                {o.disabled}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </li>
+  );
+};
+
 // ---------- Task detail ----------
 
 const Fact: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
@@ -549,8 +649,18 @@ export const TaskDetailBody: React.FC<{
   onApproveCheck: (c: Check) => void;
   onOpenChat?: (t: Task) => void;
   onOpenTask?: (id: string) => void;
-}> = ({ detail, names, tasksById = {}, now = Date.now(), busy = false, notice, onAction, onApproveCheck, onOpenChat, onOpenTask }) => {
+  onResolveFlag?: (f: OpenFlag, choice: ResolveChoice) => void;
+  /** Copy a verified task to redo it, with the reason typed. */
+  onFork?: (reason: string) => void;
+}> = ({ detail, names, tasksById = {}, now = Date.now(), busy = false, notice, onAction, onApproveCheck, onOpenChat, onOpenTask, onResolveFlag, onFork }) => {
   const t = detail.task;
+  const flags = openFlags(t);
+  const others = t.needs_you.filter((n) => n.kind !== 'may_be_invalid');
+  const copies = Object.values(tasksById).filter((x) => x.forked_from === t.id && x.id !== t.id);
+  const source = t.forked_from ? tasksById[t.forked_from] : undefined;
+  const [forking, setForking] = useState(false);
+  const [forkReason, setForkReason] = useState('');
+  const forkId = useId();
   const receipt = useMemo(() => buildReceipt(detail, names), [detail, names]);
   const [asking, setAsking] = useState<TaskAction | null>(null);
   const [reason, setReason] = useState('');
@@ -565,6 +675,8 @@ export const TaskDetailBody: React.FC<{
   useEffect(() => {
     setAsking(null);
     setReason('');
+    setForking(false);
+    setForkReason('');
   }, [t.id, t.state]);
 
   const press = (a: TaskAction) => {
@@ -628,7 +740,91 @@ export const TaskDetailBody: React.FC<{
           </form>
         )}
         {t.state === 'review' && <p className="text-[11px] text-zinc-500">“Mark verified” records that you checked it yourself.</p>}
+        {t.state === 'verified' && onFork && !forking && (
+          <button type="button" disabled={busy} onClick={() => setForking(true)} className={quietBtn} data-fork>
+            <Copy size={13} aria-hidden="true" /> Redo as a copy
+          </button>
+        )}
+        {t.state === 'verified' && onFork && forking && (
+          <form
+            className="space-y-2"
+            data-fork-form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!forkReason.trim()) return;
+              onFork(forkReason.trim());
+            }}
+          >
+            <label htmlFor={forkId} className="block text-[11px] font-medium text-zinc-300">
+              Why redo it?
+            </label>
+            <textarea id={forkId} autoFocus rows={2} maxLength={500} value={forkReason} onChange={(e) => setForkReason(e.target.value)} className={`${field} resize-y`} />
+            <p className="text-[11px] text-zinc-400">The copy starts running on its own. This task stays Verified, and tasks that build on it get a “May be invalid” flag.</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="submit" disabled={busy || !forkReason.trim()} className={mainBtn}>
+                Make the copy
+              </button>
+              <button type="button" onClick={() => setForking(false)} className={quietBtn}>
+                Never mind
+              </button>
+            </div>
+          </form>
+        )}
       </div>
+
+      {flags.length > 0 && (
+        <section aria-labelledby="flag-h" className="space-y-2" data-flags>
+          <h4 id="flag-h" className="text-xs font-semibold text-amber-200">
+            May be invalid
+          </h4>
+          <ul className="space-y-2">
+            {flags.map((f) => (
+              <FlagBox
+                key={f.id}
+                flag={f}
+                state={t.state}
+                causeTitle={(t.flags ?? []).find((x) => x.id === f.id)?.cause_title ?? (f.causeTaskId ? tasksById[f.causeTaskId]?.title : null)}
+                busy={busy}
+                onResolve={onResolveFlag}
+                onOpenTask={onOpenTask}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {(t.forked_from || copies.length > 0) && (
+        <section aria-label="Copies" className="space-y-1 text-xs" data-copies>
+          {t.forked_from && (
+            <p className="flex flex-wrap items-center gap-1.5 text-zinc-400" data-copied-from>
+              <GitBranch size={13} aria-hidden="true" />
+              Copied from{' '}
+              {onOpenTask ? (
+                <button type="button" onClick={() => onOpenTask(t.forked_from!)} className={`text-left text-sky-300 hover:underline rounded ${focusRing}`}>
+                  {source ? `“${source.title}”` : 'an earlier task'}
+                </button>
+              ) : (
+                <span className="text-zinc-200">{source ? `“${source.title}”` : 'an earlier task'}</span>
+              )}
+              {source && <span className="text-zinc-500">· {stateLabel(source.state).label}</span>}
+            </p>
+          )}
+          {copies.map((c) => (
+            <p key={c.id} className="flex flex-wrap items-center gap-1.5 text-zinc-400" data-redone-as={c.id}>
+              <Copy size={13} aria-hidden="true" />
+              Redone as{' '}
+              {onOpenTask ? (
+                <button type="button" onClick={() => onOpenTask(c.id)} className={`text-left text-sky-300 hover:underline rounded ${focusRing}`}>
+                  “{c.title}”
+                </button>
+              ) : (
+                <span className="text-zinc-200">“{c.title}”</span>
+              )}
+              <span className="text-zinc-500">· {stateLabel(c.state).label}</span>
+            </p>
+          ))}
+        </section>
+      )}
 
       <section aria-labelledby="acc-h" className="space-y-1">
         <h4 id="acc-h" className="text-xs font-semibold text-zinc-200">
@@ -678,13 +874,13 @@ export const TaskDetailBody: React.FC<{
         </section>
       )}
 
-      {t.needs_you.length > 0 && (
+      {others.length > 0 && (
         <section aria-labelledby="ny-h" className="space-y-2" data-needs-you>
           <h4 id="ny-h" className="text-xs font-semibold text-amber-200">
             Waiting for you
           </h4>
           <ul className="space-y-1.5">
-            {t.needs_you.map((n) => (
+            {others.map((n) => (
               <li key={n.id} className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-100">
                 <span className="flex-1 min-w-[10rem] break-words">
                   <span className="font-medium">
@@ -801,6 +997,119 @@ export const TaskPanel: React.FC<{
   );
 };
 
+// ---------- Work graph ----------
+
+/** How a mission's tasks connect, as steps: each task sits one step after what it builds on. */
+export const WorkGraphView: React.FC<{
+  graph: WorkGraph | null;
+  names: Record<string, string>;
+  loading?: boolean;
+  error?: string | null;
+  scanning?: boolean;
+  now?: number;
+  onOpenTask: (id: string) => void;
+  onScan?: () => void;
+  onRetry?: () => void;
+}> = ({ graph, names, loading = false, error = null, scanning = false, now = Date.now(), onOpenTask, onScan, onRetry }) => {
+  const levels: GraphLevel[] = useMemo(() => (graph ? graphLevels(graph) : []), [graph]);
+  const titles = useMemo(() => Object.fromEntries((graph?.nodes ?? []).map((n) => [n.id, n.title])), [graph]);
+  const flagged = (graph?.nodes ?? []).filter((n) => n.flags.length > 0).length;
+  return (
+    <section aria-labelledby="graph-h" className="space-y-3" data-graph>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <h3 id="graph-h" className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
+            <GitBranch size={14} className="text-sky-400" aria-hidden="true" /> How the tasks connect
+          </h3>
+          <p className="text-[11px] text-zinc-500">
+            {graph?.scanned_at ? `Files last checked for changes ${ago(graph.scanned_at, now)}` : 'Files haven’t been checked for changes yet'}
+            {flagged > 0 ? ` · ${flagged} may be invalid` : ''}
+          </p>
+        </div>
+        {onScan && (
+          <button type="button" disabled={scanning || loading} onClick={onScan} className={quietBtn} data-scan>
+            <RefreshCw size={12} className={scanning ? 'animate-spin motion-reduce:animate-none' : ''} aria-hidden="true" />
+            Check files now
+          </button>
+        )}
+      </div>
+      {error && (
+        <div role="alert" className="px-3 py-2 rounded-lg border border-rose-500/20 bg-rose-500/5 flex items-center gap-2 text-xs text-rose-300">
+          <span className="flex-1 min-w-0 break-words">Couldn’t load how the tasks connect. {error}</span>
+          {onRetry && (
+            <button type="button" onClick={onRetry} className="shrink-0 px-2 py-0.5 rounded border border-rose-500/30 hover:bg-rose-500/10 min-h-[32px]">
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+      {!graph && loading && (
+        <p className="flex items-center gap-2 text-xs text-zinc-400">
+          <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Loading…
+        </p>
+      )}
+      {graph && graph.nodes.length === 0 && <p className="px-3 py-6 rounded-xl border border-dashed border-zinc-800 text-center text-xs text-zinc-500" data-graph-empty>This mission has no tasks yet.</p>}
+      {graph && graph.scan_skipped.length > 0 && (
+        <p className="text-[11px] text-zinc-500" data-scan-skipped>
+          {graph.scan_skipped.length === 1 ? '1 file wasn’t checked' : `${graph.scan_skipped.length} files weren’t checked`} (too big, too many, or outside the task folder). A file that isn’t checked never counts as changed.
+        </p>
+      )}
+      {levels.length > 0 && (
+        <ol className="grid gap-3 lg:grid-flow-col lg:auto-cols-[minmax(13rem,1fr)] lg:overflow-x-auto pb-1">
+          {levels.map((lv) => (
+            <li key={lv.step} className="min-w-0 space-y-2" data-graph-step={lv.step}>
+              <h4 className="px-1 text-[11px] font-medium text-zinc-500">{lv.step === 1 ? 'Step 1 · builds on nothing' : `Step ${lv.step}`}</h4>
+              <ul className="space-y-2">
+                {lv.rows.map(({ node: n, after, notFlaggedText }) => {
+                  const st = stateLabel(n.state);
+                  const owner = (n.owner_kwant_id && names[n.owner_kwant_id]) || n.owner_name;
+                  return (
+                    <li key={n.id} data-graph-node={n.id} data-state={n.state}>
+                      <button
+                        type="button"
+                        onClick={() => onOpenTask(n.id)}
+                        className={`${card} w-full text-left p-2.5 space-y-1 hover:border-zinc-700 hover:bg-zinc-900/70 ${focusRing} ${n.flags.length ? 'border-amber-500/40' : ''}`}
+                      >
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <Badge tone={st.tone}>{st.label}</Badge>
+                          {n.flags.length > 0 && <Badge tone="amber">May be invalid</Badge>}
+                        </span>
+                        <span className="block text-xs font-medium text-zinc-100 break-words">{n.title}</span>
+                        {after.length > 0 && (
+                          <span className="block text-[11px] text-zinc-400 break-words" data-graph-after>
+                            After {after.map((a) => `“${a.title}”`).join(', ')}
+                          </span>
+                        )}
+                        {n.forked_from && (
+                          <span className="block text-[11px] text-zinc-500 break-words" data-graph-forked>
+                            Copied from {titles[n.forked_from] ? `“${titles[n.forked_from]}”` : 'an earlier task'}
+                          </span>
+                        )}
+                        {n.flags.map((f) => (
+                          <span key={f.id} className="flex items-start gap-1 text-[11px] text-amber-200 break-words" data-graph-flag={f.cause}>
+                            <AlertTriangle size={11} className="mt-0.5 shrink-0" aria-hidden="true" />
+                            {flagText(f)}
+                          </span>
+                        ))}
+                        {notFlaggedText && (
+                          <span className="block text-[11px] text-zinc-500" data-graph-not-flagged>
+                            {notFlaggedText}
+                          </span>
+                        )}
+                        {owner && <span className="block text-[11px] text-zinc-500 truncate">{owner}</span>}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+};
+
 // ---------- Page ----------
 
 export interface MissionBoardViewProps {
@@ -823,6 +1132,15 @@ export interface MissionBoardViewProps {
   onCancelMission: (m: Mission) => void;
   onRefresh: () => void;
   onBack?: () => void;
+  /** With a mission picked: the board, or how its tasks connect. */
+  view?: 'board' | 'graph';
+  onView?: (v: 'board' | 'graph') => void;
+  graph?: WorkGraph | null;
+  graphLoading?: boolean;
+  graphError?: string | null;
+  scanning?: boolean;
+  onScan?: () => void;
+  onRetryGraph?: () => void;
 }
 
 export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
@@ -845,10 +1163,19 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
   onCancelMission,
   onRefresh,
   onBack,
+  view = 'board',
+  onView,
+  graph = null,
+  graphLoading = false,
+  graphError = null,
+  scanning = false,
+  onScan,
+  onRetryGraph,
 }) => {
   const selectId = useId();
   const visibleMissions = missions.filter((m) => m.status !== 'cancelled');
   const mission = missionId ? missions.find((m) => m.id === missionId) ?? null : null;
+  const showGraph = !!mission && !!onView && view === 'graph';
   const drafts = mission ? [] : visibleMissions.filter((m) => m.status === 'draft');
   const shown = (tasks ?? []).filter((t) => t.state !== 'cancelled' && (!missionId || t.mission_id === missionId));
   const empty = tasks !== null && shown.length === 0 && !mission && drafts.length === 0;
@@ -935,11 +1262,41 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
               )}
 
               {mission && <MissionSummary mission={mission} busy={busyMission} onApprove={() => onApproveMission(mission)} onCancel={() => onCancelMission(mission)} />}
+              {mission && onView && (
+                <div role="group" aria-label="Show as" className="inline-flex rounded-lg border border-zinc-800 p-0.5" data-view-toggle>
+                  {(['board', 'graph'] as const).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      aria-pressed={view === v}
+                      onClick={() => onView(v)}
+                      className={`min-h-[40px] sm:min-h-[32px] px-3 rounded-md text-xs font-medium ${focusRing} ${view === v ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`}
+                    >
+                      {v === 'board' ? 'Board' : 'How tasks connect'}
+                    </button>
+                  ))}
+                </div>
+              )}
               {drafts.map((m) => (
                 <MissionSummary key={m.id} mission={m} busy={busyMission} onApprove={() => onApproveMission(m)} onCancel={() => onCancelMission(m)} />
               ))}
 
-              {empty ? (
+              {showGraph ? (
+                <WorkGraphView
+                  graph={graph}
+                  names={names}
+                  loading={graphLoading}
+                  error={graphError}
+                  scanning={scanning}
+                  now={now}
+                  onOpenTask={(id) => {
+                    const t = (tasks ?? []).find((x) => x.id === id);
+                    if (t) onOpenTask(t);
+                  }}
+                  onScan={onScan}
+                  onRetry={onRetryGraph}
+                />
+              ) : empty ? (
                 <div className="py-12 flex flex-col items-center text-center gap-2" data-empty>
                   <Target size={28} className="text-sky-400" aria-hidden="true" />
                   <p className="text-sm font-medium text-zinc-200">No tasks yet</p>
@@ -980,6 +1337,18 @@ export const MissionBoardPage: React.FC<{
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailNotice, setDetailNotice] = useState<{ text: string; error: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [view, setView] = useState<'board' | 'graph'>('board');
+  const [graph, setGraph] = useState<WorkGraph | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphError, setGraphError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  // One key per intent: a repeat of the same press (double click, retry after a dropped answer) reuses it.
+  const pendingKey = useRef<{ what: string; key: string } | null>(null);
+  const inFlight = useRef(false);
+  const keyFor = (what: string) => {
+    if (pendingKey.current?.what !== what) pendingKey.current = { what, key: newIdempotencyKey() };
+    return pendingKey.current.key;
+  };
   const alive = useRef(true);
   const openIdRef = useRef<string | null>(null);
   openIdRef.current = openId;
@@ -1027,9 +1396,35 @@ export const MissionBoardPage: React.FC<{
     };
   }, [load]);
 
+  const loadGraph = useCallback(async (id: string) => {
+    setGraphLoading(true);
+    try {
+      const g = await missionsApi.graph(id);
+      if (!alive.current) return;
+      setGraph(g.mission_id === id ? g : { ...g, mission_id: id });
+      setGraphError(null);
+    } catch (e) {
+      if (alive.current) setGraphError(failMsg(e));
+    } finally {
+      if (alive.current) setGraphLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (view === 'graph' && missionId) loadGraph(missionId);
+    if (!missionId) setGraph(null);
+  }, [view, missionId, loadGraph]);
+
   // Live: patch the list from each event; the open card re-reads its checks and activity.
   const insightsTimer = useRef<number | null>(null);
+  const graphTimer = useRef<number | null>(null);
+  const graphMission = useRef<string | null>(null);
+  graphMission.current = view === 'graph' ? missionId : null;
   useEffect(() => {
+    const refreshGraph = () => {
+      if (graphTimer.current) window.clearTimeout(graphTimer.current);
+      graphTimer.current = window.setTimeout(() => graphMission.current && loadGraph(graphMission.current), 800);
+    };
     const refreshInsights = () => {
       if (insightsTimer.current) window.clearTimeout(insightsTimer.current);
       insightsTimer.current = window.setTimeout(() => missionsApi.insights().then((i) => alive.current && setInsights(i), () => {}), 1500);
@@ -1038,6 +1433,7 @@ export const MissionBoardPage: React.FC<{
       if (!task || task.space_id !== spaceId) return;
       setTasks((list) => (list ? upsertTask(list, task) : list));
       if (openIdRef.current === task.id) loadDetail(task.id);
+      if (graphMission.current && task.mission_id === graphMission.current) refreshGraph();
       refreshInsights();
     });
     const offMission = onMission('mission_updated', ({ mission }) => {
@@ -1048,8 +1444,9 @@ export const MissionBoardPage: React.FC<{
       offTask();
       offMission();
       if (insightsTimer.current) window.clearTimeout(insightsTimer.current);
+      if (graphTimer.current) window.clearTimeout(graphTimer.current);
     };
-  }, [spaceId, loadDetail]);
+  }, [spaceId, loadDetail, loadGraph]);
 
   const openTask = (id: string) => {
     setOpenId(id);
@@ -1100,6 +1497,86 @@ export const MissionBoardPage: React.FC<{
     }
   };
 
+  const afterChange = async (changed: Task[], openNext: string | null) => {
+    setTasks((list) => (list ? changed.reduce((l, x) => upsertTask(l, x), list) : list));
+    if (graphMission.current) loadGraph(graphMission.current);
+    missionsApi.insights().then((i) => alive.current && setInsights(i), () => {});
+    if (openNext) await loadDetail(openNext);
+  };
+
+  const resolveFlag = async (f: OpenFlag, choice: ResolveChoice) => {
+    if (!openId || inFlight.current) return;
+    const taskId = openId;
+    inFlight.current = true;
+    setBusy(true);
+    setDetailNotice(null);
+    try {
+      const r = await missionsApi.resolveFlag(taskId, f.id, choice, keyFor(`resolve:${f.id}:${choice}`));
+      pendingKey.current = null;
+      if (!alive.current) return;
+      setDetailNotice({ text: resolvedText(choice, r), error: false });
+      playSfx('click');
+      if (r.task.state === 'cancelled') {
+        await afterChange([r.task], null);
+        closeTask();
+      } else await afterChange(r.fork ? [r.task, r.fork] : [r.task], taskId);
+    } catch (e) {
+      if (!alive.current) return;
+      if (e instanceof MissionError && e.status === 401) setNeedsToken(true);
+      if (e instanceof MissionError && e.status === 409) pendingKey.current = null;
+      setDetailNotice({ text: flagErrorText(e), error: true });
+      // A 409 means the task moved on: show what it is now.
+      if (e instanceof MissionError && e.status === 409) await loadDetail(taskId);
+    } finally {
+      inFlight.current = false;
+      if (alive.current) setBusy(false);
+    }
+  };
+
+  const forkTask = async (reason: string) => {
+    if (!openId || inFlight.current) return;
+    const taskId = openId;
+    inFlight.current = true;
+    setBusy(true);
+    setDetailNotice(null);
+    try {
+      const fork = await missionsApi.fork(taskId, reason, keyFor(`fork:${taskId}`));
+      pendingKey.current = null;
+      if (!alive.current) return;
+      setDetailNotice({ text: `Made a copy to redo it: “${fork.title}”. It starts running on its own; this task stays Verified.`, error: false });
+      playSfx('click');
+      await afterChange([fork], taskId);
+    } catch (e) {
+      if (!alive.current) return;
+      if (e instanceof MissionError && e.status === 401) setNeedsToken(true);
+      if (e instanceof MissionError && e.status >= 400 && e.status < 500 && e.status !== 401) pendingKey.current = null;
+      setDetailNotice({ text: flagErrorText(e), error: true });
+    } finally {
+      inFlight.current = false;
+      if (alive.current) setBusy(false);
+    }
+  };
+
+  const scan = async () => {
+    if (!missionId) return;
+    setScanning(true);
+    setNotice(null);
+    try {
+      const r = await missionsApi.scan(missionId);
+      if (!alive.current) return;
+      const n = r.flagged.length;
+      setNotice({ text: n === 0 ? `Checked ${r.scanned === 1 ? '1 file' : `${r.scanned} files`}. Nothing changed.` : n === 1 ? 'A file changed: 1 new “May be invalid” flag.' : `Files changed: ${n} new “May be invalid” flags.`, error: false });
+      await loadGraph(missionId);
+      load();
+    } catch (e) {
+      if (!alive.current) return;
+      if (e instanceof MissionError && e.status === 401) setNeedsToken(true);
+      else setNotice({ text: failMsg(e), error: true });
+    } finally {
+      if (alive.current) setScanning(false);
+    }
+  };
+
   const missionAction = async (m: Mission, approve: boolean) => {
     setBusyMission(true);
     setNotice(null);
@@ -1141,8 +1618,19 @@ export const MissionBoardPage: React.FC<{
         onOpenTask={(t) => openTask(t.id)}
         onApproveMission={(m) => missionAction(m, true)}
         onCancelMission={(m) => missionAction(m, false)}
-        onRefresh={load}
+        onRefresh={() => {
+          load();
+          if (view === 'graph' && missionId) loadGraph(missionId);
+        }}
         onBack={onBack}
+        view={view}
+        onView={setView}
+        graph={graph && graph.mission_id === missionId ? graph : null}
+        graphLoading={graphLoading}
+        graphError={graphError}
+        scanning={scanning}
+        onScan={scan}
+        onRetryGraph={() => missionId && loadGraph(missionId)}
       />
       {openId && (
         <TaskPanel title={detail?.task.title ?? listed?.title ?? 'Task'} onClose={closeTask}>
@@ -1155,6 +1643,8 @@ export const MissionBoardPage: React.FC<{
               notice={detailNotice}
               onAction={act}
               onApproveCheck={approveCheck}
+              onResolveFlag={resolveFlag}
+              onFork={forkTask}
               onOpenChat={
                 onOpenChat
                   ? (t) => {
@@ -1166,7 +1656,7 @@ export const MissionBoardPage: React.FC<{
               onOpenTask={(id) => {
                 const dep = tasksById[id];
                 if (dep) {
-                  const c = columnOf(dep.state);
+                  const c = columnOfTask(dep);
                   if (c) setColumn(c);
                 }
                 openTask(id);
