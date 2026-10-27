@@ -124,7 +124,7 @@ export interface Task {
 
 export type AutofixMode = 'off' | 'suggest' | 'on';
 export type FailureClass =
-  | 'transient' | 'stalled' | 'check_failed' | 'bad_spec' | 'auth' | 'budget' | 'denied' | 'needs_input' | 'unknown';
+  | 'transient' | 'stalled' | 'check_failed' | 'bad_spec' | 'auth' | 'quota' | 'budget' | 'denied' | 'needs_input' | 'unknown';
 export type FailureSource = 'check' | 'turn' | 'lease' | 'budget' | 'routine' | 'handoff';
 export type AutofixStrategy =
   | 'wait_and_retry' | 'retry_from_checkpoint' | 'retry_with_diagnostics' | 'retry_same' | 'propose_change' | 'none';

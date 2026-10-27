@@ -58,7 +58,7 @@ pub fn settings_error(mode: Option<&str>, pct: Option<i64>) -> Option<String> {
 
 // Classification
 
-const AUTH: [&str; 17] = [
+const AUTH: [&str; 16] = [
     "not logged in",
     "not signed in",
     "/login",
@@ -70,13 +70,30 @@ const AUTH: [&str; 17] = [
     "authentication_error",
     "token has expired",
     "login has expired",
-    "credit balance is too low",
     // kwant's own messages when no account can take the turn (profile_turn.rs, drivers/engines.rs)
     "signed out",
     "key was rejected",
     "no account can run bots",
     "no other account is on",
     "no custom api account is on",
+];
+
+// A usage limit or empty balance: a retry before it resets only burns an attempt
+const QUOTA: [&str; 13] = [
+    "usage limit",
+    "hit your limit",
+    "reached your limit",
+    "hour limit reached",
+    "weekly limit reached",
+    "out of credits",
+    "insufficient_quota",
+    "exceeded your current quota",
+    "usage_limit_exceeded",
+    "credit balance is too low",
+    "billing_error",
+    // kwant's own messages when an account ran out (profile_turn.rs, drivers/engines.rs)
+    "out of usage",
+    "quota exceeded",
 ];
 
 const TRANSIENT: [&str; 18] = [
@@ -115,6 +132,10 @@ fn is_auth(t: &str) -> bool {
     AUTH.iter().any(|p| t.contains(p)) || has_code(t, "401")
 }
 
+fn is_quota(t: &str) -> bool {
+    QUOTA.iter().any(|p| t.contains(p)) || has_code(t, "402")
+}
+
 fn is_transient(t: &str) -> bool {
     TRANSIENT.iter().any(|p| t.contains(p)) || TRANSIENT_CODES.iter().any(|c| has_code(t, c))
 }
@@ -133,7 +154,9 @@ pub fn classify(source: &str, status: &str, text: &str) -> &'static str {
         ("turn", "stalled") => "stalled",
         ("turn", "denied") => "denied",
         ("turn", "needs_input") => "needs_input",
-        // auth before transient: "401" next to "Reconnecting… timed out" is still a login problem
+        // quota and auth before transient: "429 usage limit reached" won't pass in a minute, and
+        // "401" next to "Reconnecting… timed out" is still a login problem
+        (_, _) if is_quota(&t) => "quota",
         (_, _) if is_auth(&t) => "auth",
         (_, _) if is_transient(&t) => "transient",
         _ => "unknown",
@@ -159,6 +182,7 @@ pub const RECOVERY_BUDGET_FIX: &str = "Retry budget used up: raise it or retry b
 fn fix_text(class: &str, summary: &str) -> Option<String> {
     match class {
         "auth" => Some(format!("Sign in to the bot's engine again, then retry: {summary}")),
+        "quota" => Some(format!("Usage limit reached: wait for it to reset or switch account, then retry: {summary}")),
         "budget" => Some("Raise the task's budget, then retry it.".into()),
         "denied" => Some("An action was denied during the run. Decide whether it may run, then retry.".into()),
         _ => None,
@@ -746,7 +770,7 @@ pub async fn run_autofix(State(state): State<AppState>, RawQuery(q): RawQuery, h
             Some(fid) => failures.iter().find(|f| &f.id == fid).cloned().ok_or_else(|| not_found("failure"))?,
             None => failures.last().cloned().ok_or_else(|| coded(StatusCode::CONFLICT, "not_retryable", "the task has no failure to fix"))?,
         };
-        if t.state != "failed" || matches!(failure.class.as_str(), "auth" | "budget" | "denied" | "needs_input" | "bad_spec") || t.source_kind == "delegation" {
+        if t.state != "failed" || matches!(failure.class.as_str(), "auth" | "quota" | "budget" | "denied" | "needs_input" | "bad_spec") || t.source_kind == "delegation" {
             return Err(coded(StatusCode::CONFLICT, "not_retryable", "AutoFix can't retry this; see the task's Needs-you item"));
         }
         if let Some(code) = limit(&state, &t).await {
@@ -1059,6 +1083,50 @@ mod tests {
         }
         // The give-up text has no "401" of its own: the words alone must carry it
         assert!(!texts[0].contains("401"), "{}", texts[0]);
+    }
+
+    #[test]
+    fn kwants_own_out_of_usage_messages_are_quota() {
+        use crate::db::models::LlmProfile;
+        use crate::profiles::classify::{FailClass, ProviderFailure};
+        use crate::server::profile_turn::{give_up_notice, switch_notice};
+        let p = |name: &str| LlmProfile {
+            id: name.into(),
+            engine: "claude".into(),
+            name: name.into(),
+            kind: "subscription".into(),
+            home_dir: None,
+            priority: 0,
+            enabled: true,
+            is_default: true,
+            created_at: None,
+            space_id: "spc_default".into(),
+        };
+        let reset = chrono::Utc::now() + chrono::Duration::hours(2);
+        let until = ProviderFailure { class: FailClass::Quota, retry_at: Some(reset), detail: "429".into() };
+        let open = ProviderFailure { class: FailClass::Quota, retry_at: None, detail: String::new() };
+        // The exact texts a turn ends with, built by the code that writes them: a rewording breaks this
+        let texts = [
+            give_up_notice("Ann", &p("This machine"), &until, 1),
+            give_up_notice("Ann", &p("Work"), &open, 2),
+            switch_notice(&p("Work"), &p("Personal"), &until),
+            // and the Claude CLI's own usage-limit lines
+            "Claude AI usage limit reached|1792162800".to_string(),
+            "You've hit your limit · resets 5pm".to_string(),
+            "You've hit your usage limit. Upgrade to Pro or try again in 3 hours 20 minutes.".to_string(),
+            "5-hour limit reached ∙ resets 3pm".to_string(),
+            "Your credit balance is too low to access the Anthropic API".to_string(),
+            "API Error: 429 {\"type\":\"error\",\"error\":{\"message\":\"usage limit reached\"}}".to_string(),
+        ];
+        for t in &texts {
+            assert_eq!(classify("turn", "error", t), "quota", "{t}");
+            assert_eq!(strategy_for(classify("turn", "error", t)), "none", "{t}");
+            let fix = fix_text("quota", t).unwrap();
+            assert!(fix.starts_with("Usage limit reached: wait for it to reset or switch account"), "{fix}");
+        }
+        // A plain rate limit still passes in a minute
+        assert_eq!(classify("turn", "error", "stream error: rate-limiting (HTTP 429)"), "transient");
+        assert_eq!(classify("turn", "error", "rate limit exceeded, retry in 20s"), "transient");
     }
 
     #[tokio::test]

@@ -289,10 +289,15 @@ fn classify_maps_every_signal_to_its_class() {
         ("turn", "error", "OAuth token has expired. Please obtain a new token or refresh your existing token.", "auth"),
         ("turn", "error", "API key rejected (401)", "auth"),
         ("turn", "error", "unexpected status 401 Unauthorized: Reconnecting… timed out", "auth"),
-        ("turn", "error", "Credit balance is too low", "auth"),
+        ("turn", "error", "Credit balance is too low", "quota"),
+        ("turn", "error", "Claude AI usage limit reached|1792162800", "quota"),
+        ("turn", "error", "You've hit your limit · resets 5pm", "quota"),
+        ("turn", "error", "5-hour limit reached ∙ resets 3pm", "quota"),
+        ("turn", "error", "API Error: 429 usage limit reached", "quota"),
+        ("turn", "error", "Error: insufficient_quota: You exceeded your current quota", "quota"),
         ("turn", "error", "API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}", "transient"),
         ("turn", "error", "stream error: rate-limiting (HTTP 429)", "transient"),
-        ("routine", "error", "Quota exceeded (429)", "transient"),
+        ("routine", "error", "Quota exceeded (429)", "quota"),
         ("handoff", "error", "error sending request: connection refused", "transient"),
         ("turn", "error", "upstream 503 Service Unavailable", "transient"),
         ("turn", "error", "the model said something odd", "unknown"),
@@ -513,6 +518,11 @@ async fn auth_budget_and_denied_are_never_retried_and_ask_the_person() {
     let started = Utc::now();
     claim(&e, &auth).await;
     runner::after_turn(&e.state, &auth, Some("Not logged in · Please run /login"), started).await;
+    // a usage limit: a retry before it resets only burns an attempt
+    let quota = person_task(&e, json!([])).await;
+    let started = Utc::now();
+    claim(&e, &quota).await;
+    runner::after_turn(&e.state, &quota, Some("Claude AI usage limit reached|1792162800"), started).await;
     // denied
     let denied = person_task(&e, json!([])).await;
     let started = Utc::now();
@@ -523,7 +533,7 @@ async fn auth_budget_and_denied_are_never_retried_and_ask_the_person() {
         .await
         .unwrap();
     runner::after_turn(&e.state, &denied, None, started).await;
-    for (tid, class) in [(&auth, "auth"), (&denied, "denied")] {
+    for (tid, class) in [(&auth, "auth"), (&quota, "quota"), (&denied, "denied")] {
         let t = task(&e, tid).await;
         assert_eq!(t["state"], "failed", "{t}");
         assert_eq!(t["last_failure"]["class"], class, "{t}");
@@ -531,6 +541,10 @@ async fn auth_budget_and_denied_are_never_retried_and_ask_the_person() {
         assert_eq!(a.len(), 1, "{a:?}");
         assert_eq!((a[0].strategy.as_str(), a[0].status.as_str()), ("none", "skipped"), "{a:?}");
         assert!(kinds(&t["needs_you"]).contains(&"fix_needed".to_string()), "{t}");
+        if class == "quota" {
+            let texts = t["needs_you"].to_string();
+            assert!(texts.contains("Usage limit reached: wait for it to reset or switch account"), "{t}");
+        }
         let (status, v) = send(&e.app, "POST", &format!("/api/tasks/{tid}/autofix"), None, None).await;
         assert_eq!((status, v["code"].as_str()), (StatusCode::CONFLICT, Some("not_retryable")), "{v}");
     }
