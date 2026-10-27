@@ -44,8 +44,11 @@ export interface NeedsYouItem {
   /** check_approval: a required check waits for the person's OK (id = the check's id); only on tasks in review.
    * Optional checks never appear here.
    * may_be_invalid: an open flag (id = the flag's id), in any state, verified included; resolve it with
-   * `POST /api/tasks/:id/flags/:flag_id/resolve`. */
-  kind: 'question' | 'approval' | 'human_step' | 'check_approval' | 'may_be_invalid';
+   * `POST /api/tasks/:id/flags/:flag_id/resolve`.
+   * autofix_suggested: a retry waits for the person (id = the attempt's id); run it with `POST /api/tasks/:id/autofix`.
+   * fix_needed: a failure AutoFix never retries (id = the failure's id). workflow_change: a proposed change
+   * (id = the change's id); approve or reject it under /api/workflow-changes. */
+  kind: 'question' | 'approval' | 'human_step' | 'check_approval' | 'may_be_invalid' | 'autofix_suggested' | 'fix_needed' | 'workflow_change';
   id: string;
   text: string;
 }
@@ -108,6 +111,73 @@ export interface Task {
   /** Time Machine checkpoints of this task; older servers leave these out. */
   checkpoint_count?: number;
   last_checkpoint_at?: string | null;
+  /** AutoFix (Phase B3); older servers leave these out. Recovery spend is part of `spent_tokens`. */
+  recovery_spent_tokens?: number;
+  recovery_budget_tokens?: number;
+  last_failure?: { class: FailureClass; summary: string; created_at: string } | null;
+  autofix?: AutofixAttempt | null;
+}
+
+// AutoFix (Phase B3, docs/mission-control.md §13)
+
+export type AutofixMode = 'off' | 'suggest' | 'on';
+export type FailureClass =
+  | 'transient' | 'stalled' | 'check_failed' | 'bad_spec' | 'auth' | 'budget' | 'denied' | 'needs_input' | 'unknown';
+export type FailureSource = 'check' | 'turn' | 'lease' | 'budget' | 'routine' | 'handoff';
+export type AutofixStrategy =
+  | 'wait_and_retry' | 'retry_from_checkpoint' | 'retry_with_diagnostics' | 'retry_same' | 'propose_change' | 'none';
+export type AutofixStatus = 'suggested' | 'scheduled' | 'running' | 'succeeded' | 'failed' | 'skipped';
+
+export interface AutofixAttempt {
+  id: string;
+  strategy: AutofixStrategy;
+  status: AutofixStatus;
+  /** When a scheduled retry may start (backoff); null to start as soon as possible. */
+  not_before: string | null;
+  /** Why; for a skipped attempt it starts with `no_attempts_left`, `over_recovery_budget` or `not_retryable`. */
+  reason: string;
+  tokens_spent: number;
+  /** A routine retry's new task. */
+  retry_task_id: string | null;
+}
+
+/** GET /api/tasks/:id/failures, oldest first. */
+export interface TaskFailure {
+  id: string;
+  attempt: number;
+  source: FailureSource;
+  class: FailureClass;
+  summary: string;
+  /** Redacted output, at most 2,000 characters. */
+  excerpt: string | null;
+  checkpoint_id: string | null;
+  created_at: string;
+  autofix: AutofixAttempt | null;
+}
+
+/** 409 from POST /api/tasks/:id/autofix. */
+export interface AutofixError {
+  error: string;
+  code: 'not_retryable' | 'no_attempts_left' | 'over_recovery_budget';
+}
+
+export type WorkflowTarget = 'check_spec' | 'task_acceptance' | 'max_attempts' | 'routine_instructions' | 'routine_schedule';
+export type WorkflowChangeStatus = 'proposed' | 'approved' | 'rejected' | 'applied' | 'stale';
+
+/** GET /api/workflow-changes (person only). */
+export interface WorkflowChange {
+  id: string;
+  task_id: string | null;
+  routine_id: string | null;
+  target: WorkflowTarget;
+  before: unknown;
+  after: unknown;
+  reason: string;
+  proposed_by: string;
+  proposed_by_name: string | null;
+  status: WorkflowChangeStatus;
+  decided_at: string | null;
+  created_at: string;
 }
 
 // Time Machine (Phase B2, docs/mission-control.md §12)
@@ -327,6 +397,9 @@ export interface Insights {
   interventions_7d: number;
   tokens_7d: number;
   tokens_per_verified_7d: number | null;
+  /** AutoFix over the last 7 days (older servers leave these out). */
+  autofix_7d?: { attempts: number; succeeded: number; tokens: number };
+  failures_by_class_7d?: Partial<Record<FailureClass, number>>;
 }
 
 // ---------------------------------------------------------------------------

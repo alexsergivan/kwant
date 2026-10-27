@@ -234,7 +234,8 @@ pub async fn on_routine_run(state: &AppState, routine_id: &str, run_id: &str, st
             finish(state, &t, "review", "the routine run finished").await;
         }
         (Some(t), "error") => {
-            if finish(state, &t, "failed", "the routine run failed").await {
+            let failed = finish(state, &t, "failed", "the routine run failed").await;
+            if failed {
                 let err = state.db.routine_run_error(run_id).await.ok().flatten().unwrap_or_else(|| "the routine run failed".into());
                 super::autofix::record(state, &t.id, "routine", "error", &err, err.lines().next().unwrap_or("the routine run failed")).await;
             }

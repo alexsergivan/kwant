@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
+- **Mission Control: AutoFix (backend).** Every failed task now records why it failed, with secrets
+  masked. Turn on the new `autofix` setting (off by default, or "suggest" to approve each retry) and
+  kwant retries what is safe to retry: after a temporary error it waits 1, 5, then 25 minutes; after a
+  failed check it runs again with the check's output. Retries stay within the task's attempts and a
+  recovery budget (25% of the task's budget by default). Sign-in problems, budget overruns and denied
+  actions are never retried; they ask you instead. Bots can propose changes to a check, the acceptance
+  or a routine, and nothing changes until you approve. The board UI follows separately.
 - **Mission Control: checkpoints and restore (backend).** kwant snapshots a task's folder before and
   after each run, and on demand. You can preview and restore a checkpoint: only the files that task's
   runs changed are written back, after a safety checkpoint you can restore in turn. What the bot did

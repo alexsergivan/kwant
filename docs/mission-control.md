@@ -445,3 +445,47 @@ it is listed as "not undone".
   - Never writes through a symlink or outside the folder.
 - `POST /api/tasks/:id/fork` accepts `from_checkpoint`: the original's task-owned paths are restored to that checkpoint first (after a `before_restore`), then the fork is made. The response adds `restore`.
 - `task_json` gains `checkpoint_count`, `last_checkpoint_at` and `held_at` (null unless a restore holds the task).
+
+## 13. AutoFix (Phase B3)
+
+Design and decisions: `/home/maus/shared/ship-software-safely/mission-control/phase-b/contract.md` §4–§5
+and `decisions.md` (D5, D7, D12). Every failure of a task is recorded with a class. With the setting
+`autofix` on, AutoFix may retry it a bounded number of times. A permanent change (a check, the
+acceptance, a routine) is only ever proposed; it applies when the person approves it.
+
+### Settings
+
+- `autofix`: `off` (default), `suggest` or `on`. `off` records failures only (Phase A behaviour: a failed check sends the task back to `ready`). `suggest` plans one attempt and waits for the person (`autofix_suggested` Needs-you item). `on` runs the attempt.
+- `recovery_budget_pct` (0–100, default 25): the share of the task's budget that AutoFix retries may spend.
+
+### Failures
+
+- `task_failures` (append-only): `id`, `task_id`, `attempt`, `source` (`check`, `turn`, `lease`, `budget`, `routine`, `handoff`), `class`, `summary`, `excerpt`, `checkpoint_id` (the last good `after_run`), `created_at`, and server-only `diagnostics_path`.
+- `classify(source, status, text)` is deterministic. A check that failed is `check_failed`, or `bad_spec` when its command can't run (exit 127, "command not found"). A check that errored is `transient` for a timeout or 429/5xx, else `bad_spec`. A lease that ran out or a turn that ended without a review is `stalled`; over budget is `budget`; a denied action is `denied`; a task waiting on the person is `needs_input`. Other errors are `auth` (not logged in, 401, expired token, credit too low), then `transient` (rate limit, overloaded, timeouts, connection errors, 429/500/502/503/504/529 as whole numbers), else `unknown`.
+- The text is redacted (credentials in URLs, `sk-`/`xai-`/`ghp_`… prefixes, long digit-bearing tokens) before it is stored. The excerpt is at most 2,000 characters. The full redacted output goes to `<data_dir>/autofix/<task_id>/<uuid>.log` (folder 0700, file 0600, 256 KB). No route returns that path.
+
+### Attempts
+
+- `autofix_attempts`: `id`, `task_id`, `failure_id`, `strategy`, `status` (`suggested`, `scheduled`, `running`, `succeeded`, `failed`, `skipped`), `not_before`, `reason`, `retry_task_id`, `tokens_spent`, `created_at`, `finished_at`, and server-only `idempotency_key` (unique: sha256 of task, failure and strategy, so a failure is never planned twice). At most one `scheduled`/`running` attempt per task (`autofix_one_live`), and a trigger refuses one past the task's `max_attempts`.
+- Strategies: `transient` → `wait_and_retry` after 1, 5, then 25 minutes; `stalled` → `retry_from_checkpoint` (the folder is as the run left it) or `retry_same`; `check_failed` → `retry_with_diagnostics`; `bad_spec` → `propose_change` (a `check_spec` proposal making the check optional; the attempt stays `suggested` and never runs); `unknown` → `retry_same`, once per task. `auth`, `budget` and `denied` are never retried: a `skipped` attempt with what to do and a `fix_needed` Needs-you item. `needs_input` and hand-off tasks get no attempt.
+- Limits, checked when planning and again when starting: a `blocked` task is never moved (`not_retryable`); no attempts left (`no_attempts_left`); `recovery_spent_tokens` plus the average spend per attempt over the recovery budget (`over_recovery_budget`). A limit makes the attempt `skipped` with that reason.
+- While attempts are left and AutoFix isn't off, a failure parks the task in `failed` instead of `ready` (no "failed" chat line). The retry moves it `failed → ready` as `Actor::AutoFix`, the only move that actor may make, with a task event of kind `autofix`. A routine run is retried as a new routine run; its task gets `forked_from` = the failed task and counts on from its attempts, and the failed task stays `failed`.
+- Recovery spend: a claim taken while an attempt runs carries its `autofix_id`, and that claim's spend (at hand-in and at turn end) also adds to `tasks.recovery_spent_tokens` and the attempt's `tokens_spent`. Plain runs never count as recovery.
+- The retry prompt (runner and `task_claim`) says which attempt it is and why, the failing check and its redacted output, `KWANT_IDEMPOTENCY_KEY=<key>`, and the external tool calls earlier attempts already made. Calls in an attempt's turns record the key in `turn_tool_calls.idempotency_key`.
+- An attempt ends `succeeded` when its task is verified, `skipped` when it is cancelled, `failed` at the next failure.
+- Scheduled attempts live in the table; the scheduler tick runs the due ones, so a restart loses nothing.
+
+### Workflow changes (person only)
+
+- `workflow_changes`: `id`, `task_id`, `routine_id`, `target` (`check_spec`, `task_acceptance`, `max_attempts`, `routine_instructions`, `routine_schedule`), `before`, `after`, `reason`, `proposed_by`, `status` (`proposed`, `approved`, `rejected`, `applied`, `stale`), `decided_by`, `decided_at`, `created_at`. Triggers: only the person decides; `applied` only after `approved`.
+- Bots propose with the `workflow_propose` tool; kwant reads `before` itself. Approving applies the change once, only while the target still holds `before`; otherwise it goes `stale` and nothing is written.
+
+### Routes
+
+- `GET /api/tasks/:id/failures`: oldest first, each `{id, attempt, source, class, summary, excerpt, checkpoint_id, created_at, autofix: attempt|null}`.
+- `POST /api/tasks/:id/autofix` (person only, `Idempotency-Key` accepted), body `{failure_id?}`: runs the suggested or scheduled attempt now, or plans one. 409 with `code` `not_retryable`, `no_attempts_left` or `over_recovery_budget`.
+- `POST /api/tasks/:id/autofix/:aid/cancel` (person only): a `suggested`/`scheduled` attempt becomes `skipped`.
+- `GET /api/workflow-changes?status=`, `POST /api/workflow-changes/:id/approve`, `POST /api/workflow-changes/:id/reject`: all person only (`/api/workflow-changes` is a person-only segment).
+- `task_json` gains `recovery_spent_tokens`, `recovery_budget_tokens`, `last_failure: {class, summary, created_at}|null` and `autofix: attempt|null`. Needs-you kinds: `autofix_suggested`, `fix_needed`, `workflow_change`.
+- Insights gain `autofix_7d: {attempts, succeeded, tokens}` and `failures_by_class_7d`, for the space.
+- Task events: `failure`, `autofix_scheduled`, `autofix_started`, `autofix_finished`, `workflow_change_proposed`, `workflow_change_decided`, `workflow_change_applied`.

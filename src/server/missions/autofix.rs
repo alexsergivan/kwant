@@ -6,7 +6,7 @@
 //! task's own attempts and recovery budget allow. `suggest` plans the same retry but waits for the
 //! person. Permanent changes (a routine's instructions or schedule, a check's spec, a task's
 //! acceptance or max attempts) are only ever proposed; the person approves them, and they are
-//! applied once. Contract: docs/mission-control.md §16.
+//! applied once. Contract: docs/mission-control.md §13.
 
 use super::routes::{bad, conflict, internal, load_task, not_found};
 use super::{emit_task, transition, Actor};
@@ -558,7 +558,7 @@ pub async fn retry_note(state: &AppState, task: &Task) -> Option<String> {
         "retry_with_diagnostics" => {
             let checks = state.db.list_checks(&task.id).await.unwrap_or_default();
             if let Some(c) = checks.iter().find(|c| matches!(c.status.as_str(), "failed" | "error")) {
-                out.push_str(&format!("The check that failed: {} {}\n", c.kind, c.spec_value()));
+                out.push_str(&format!("The check that failed: {} {}\n", c.kind, redact(&c.spec_value().to_string())));
             }
             if let Some(x) = &failure.excerpt {
                 out.push_str(&format!("Its output (secrets masked):\n{x}\n"));
@@ -812,7 +812,7 @@ async fn change_json(state: &AppState, c: &WorkflowChange) -> Value {
 pub async fn list_changes(State(state): State<AppState>, RawQuery(q): RawQuery) -> Response {
     let status = q.as_deref().unwrap_or("").split('&').find_map(|p| p.strip_prefix("status=")).map(str::to_string);
     if let Some(s) = status.as_deref().filter(|s| !["proposed", "approved", "rejected", "applied", "stale"].contains(s)) {
-        return bad(&format!("status must be proposed, approved, rejected, applied or stale (got {s})"));
+        return bad(format!("status must be proposed, approved, rejected, applied or stale (got {s})"));
     }
     match state.db.list_changes(status.as_deref(), None).await {
         Ok(list) => {
@@ -980,9 +980,9 @@ pub async fn propose(state: &AppState, bot_id: &str, args: &Value) -> Result<Val
     Ok(json!({"id": c.id, "status": c.status, "note": "Proposed. Only the person can approve it; nothing changes until then."}))
 }
 
-/// Insights: `autofix_7d` and `failures_by_class_7d`.
-pub async fn insights(state: &AppState, since: DateTime<Utc>) -> (Value, Value) {
-    let (attempts, succeeded, tokens, classes) = state.db.autofix_stats(since).await.unwrap_or_default();
+/// Insights for a space: `autofix_7d` and `failures_by_class_7d`.
+pub async fn insights(state: &AppState, space_id: &str, since: DateTime<Utc>) -> (Value, Value) {
+    let (attempts, succeeded, tokens, classes) = state.db.autofix_stats(space_id, since).await.unwrap_or_default();
     let by_class: serde_json::Map<String, Value> = classes.into_iter().map(|(c, n)| (c, json!(n))).collect();
     (json!({"attempts": attempts, "succeeded": succeeded, "tokens": tokens}), Value::Object(by_class))
 }

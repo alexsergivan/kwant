@@ -3,7 +3,7 @@
 //! strategy, at most one live per task) and the permanent changes it or a bot proposes
 //! (`workflow_changes`, applied once and only after the person approves). The diagnostics files
 //! live under `<data_dir>/autofix/`; no path stored here ever reaches the API. Contract:
-//! docs/mission-control.md §16.
+//! docs/mission-control.md §13.
 
 use super::missions::{insert_event, Task};
 use super::{Database, DbError};
@@ -233,8 +233,8 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         let mut tx = self.pool.begin().await?;
         let r = sqlx::query(
-            "INSERT OR IGNORE INTO autofix_attempts (id, task_id, failure_id, strategy, idempotency_key, status, not_before, reason, created_at, finished_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO autofix_attempts (id, task_id, failure_id, strategy, idempotency_key, status, not_before, reason, created_at, finished_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING",
         )
         .bind(&id)
         .bind(&a.task.id)
@@ -543,18 +543,23 @@ impl Database {
     }
 
     /// Insights: AutoFix attempts that ran, succeeded, and their tokens; failures by class.
-    pub async fn autofix_stats(&self, since: DateTime<Utc>) -> Result<(i64, i64, i64, Vec<(String, i64)>), DbError> {
+    pub async fn autofix_stats(&self, space_id: &str, since: DateTime<Utc>) -> Result<(i64, i64, i64, Vec<(String, i64)>), DbError> {
         let (attempts, succeeded, tokens): (i64, i64, i64) = sqlx::query_as(
-            "SELECT COUNT(*), COALESCE(SUM(status = 'succeeded'), 0), COALESCE(SUM(tokens_spent), 0) FROM autofix_attempts \
-             WHERE created_at >= ? AND status IN ('running', 'succeeded', 'failed')",
+            "SELECT COUNT(*), COALESCE(SUM(a.status = 'succeeded'), 0), COALESCE(SUM(a.tokens_spent), 0) FROM autofix_attempts a \
+             JOIN tasks t ON t.id = a.task_id WHERE t.space_id = ? AND a.created_at >= ? AND a.status IN ('running', 'succeeded', 'failed')",
         )
+        .bind(space_id)
         .bind(since)
         .fetch_one(&self.pool)
         .await?;
-        let classes: Vec<(String, i64)> = sqlx::query_as("SELECT class, COUNT(*) FROM task_failures WHERE created_at >= ? GROUP BY class ORDER BY class")
-            .bind(since)
-            .fetch_all(&self.pool)
-            .await?;
+        let classes: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT f.class, COUNT(*) FROM task_failures f JOIN tasks t ON t.id = f.task_id \
+             WHERE t.space_id = ? AND f.created_at >= ? GROUP BY f.class ORDER BY f.class",
+        )
+        .bind(space_id)
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
         Ok((attempts, succeeded, tokens, classes))
     }
 }

@@ -194,6 +194,8 @@ pub async fn run_check(state: &AppState, task: &Task, check: &OutcomeCheck) -> O
     // didn't add or approve is held to public addresses again now, pinned against DNS rebinding.
     let person_ok = check.requested_by == "person" || approved_by_person(state, check).await;
     let (status, output) = run_spec(&check.kind, &spec, folder.as_deref(), person_ok).await;
+    // The excerpt reaches bots and the API: credentials in the output never get stored
+    let output = super::autofix::redact(&output);
     let ev = state
         .db
         .add_evidence(&NewEvidence {

@@ -183,7 +183,7 @@ async fn run_one(state: &AppState, m: &Mission, task: &Task, bot: &crate::db::mo
 
 /// After a runner turn of `task_id`: still `working` means the bot didn't finish or let go, so the
 /// lease is released (one attempt used). With AutoFix on, a task with attempts left parks in
-/// `failed` for it (§16), and the failure is recorded: the turn's error, a denied action since
+/// `failed` for it (§13), and the failure is recorded: the turn's error, a denied action since
 /// `started`, or a stall; a task left waiting on the person records `needs_input`.
 pub async fn after_turn(state: &AppState, task_id: &str, err: Option<&str>, started: chrono::DateTime<chrono::Utc>) {
     let Ok(Some(t)) = state.db.get_task(task_id).await else { return };
