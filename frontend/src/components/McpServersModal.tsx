@@ -57,6 +57,7 @@ import {
   readOAuthMessage,
   isBlankRequired,
 } from '../mcp';
+import { inMacApp, leaveForSignIn, pollUntil, signInChanged } from '../externalLinks';
 
 interface McpServersModalProps {
   isOpen: boolean;
@@ -381,6 +382,9 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   const [confirmDisconnect, setConfirmDisconnect] = useState<string | null>(null);
   const popupRef = useRef<Window | null>(null);
   const popupWatch = useRef<number | null>(null);
+  /** Mac app: stops watching the server for a sign-in finished in the browser. */
+  const signInWatch = useRef<(() => void) | null>(null);
+  const macApp = inMacApp();
 
   const refresh = useCallback(async (): Promise<McpServer[] | null> => {
     try {
@@ -401,6 +405,8 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     if (popupWatch.current !== null) window.clearInterval(popupWatch.current);
     popupWatch.current = null;
     popupRef.current = null;
+    signInWatch.current?.();
+    signInWatch.current = null;
   }, []);
 
   const setStatus = useCallback((id: string, status: StoredStatus | null) => {
@@ -500,8 +506,10 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   const connect = async (server: McpServer) => {
     playSfx('click');
     setOauthErrors(({ [server.id]: _, ...rest }) => rest);
+    const before = server.oauth;
     // Open the window inside the click so popup blockers allow it; the address comes after the fetch.
-    const popup = window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
+    // The Mac app never opens a second window: its sign-ins go to the default browser.
+    const popup = macApp ? null : window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
     if (popup) {
       try {
         popup.document.title = 'Signing in…';
@@ -532,7 +540,27 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     }
     if (!popup || popup.closed) {
       // Blocked anyway: sign in in this tab. kwnt brings you back to the app afterwards.
-      window.location.assign(url);
+      leaveForSignIn(url);
+      if (macApp) {
+        // The browser can't report back to the app: watch the server for the new sign-in.
+        stopWatchingPopup();
+        const stopWaiting = () => {
+          signInWatch.current = null;
+          setConnecting((c) => (c === server.id ? null : c));
+        };
+        signInWatch.current = pollUntil(
+          async () => {
+            const list = await refresh();
+            return signInChanged(before, list?.find((s) => s.id === server.id)?.oauth);
+          },
+          () => {
+            stopWaiting();
+            setOauthErrors(({ [server.id]: _, ...rest }) => rest);
+            runTest(server.id);
+          },
+          { onTimeout: stopWaiting },
+        );
+      }
       return;
     }
     popup.location.href = url;
@@ -749,7 +777,9 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
               <KeyRound size={13} className="flex-shrink-0 mt-px text-amber-400" />
               <span>
                 {isConnecting
-                  ? 'Waiting for you to approve access in the sign-in window…'
+                  ? macApp
+                    ? 'Finish signing in in your browser. This updates by itself when you’re done.'
+                    : 'Waiting for you to approve access in the sign-in window…'
                   : 'This server asks you to sign in and approve access.'}
               </span>
             </div>
@@ -762,11 +792,11 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             <button
               type="button"
               onClick={() => connect(server)}
-              disabled={isConnecting}
+              disabled={isConnecting && !macApp}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-60"
             >
-              {isConnecting ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
-              {isConnecting ? 'Waiting…' : oauthError ? 'Retry' : 'Connect'}
+              {isConnecting && !macApp ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
+              {isConnecting ? (macApp ? 'Open the sign-in again' : 'Waiting…') : oauthError ? 'Retry' : 'Connect'}
             </button>
           </div>
         )}

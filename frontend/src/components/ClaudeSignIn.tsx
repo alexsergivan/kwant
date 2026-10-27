@@ -3,6 +3,7 @@ import { AlertTriangle, ExternalLink, Loader2, LogIn, LogOut, RotateCcw } from '
 import { ClaudeLoginError, ClaudeLoginSession, claudeLoginApi, isClaudeSignInUrl, isLoginActive, loginFailure } from '../claudeLogin';
 import type { EngineInfo } from '../engines';
 import { playSfx } from '../audio/chiptune';
+import { inMacApp } from '../externalLinks';
 
 const POLL_MS = 2000;
 
@@ -15,6 +16,8 @@ const link = 'inline-flex items-center gap-1 font-medium text-sky-300 underline 
 /** A blank tab opened while the click still counts as a user gesture, so popup blockers allow it.
  *  `noopener` would make window.open return null, so the opener is cut by hand before navigating. */
 function openBlankTab(): Window | null {
+  // The Mac app opens no second window; the link below opens in the default browser.
+  if (inMacApp()) return null;
   try {
     const tab = window.open('about:blank', '_blank');
     if (tab) tab.opener = null;
@@ -37,6 +40,8 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
   /** The new tab didn't open: show the link instead. */
   const [blocked, setBlocked] = useState(false);
   const tab = useRef<Window | null>(null);
+  /** Mac app: the link goes to the default browser once it arrives (no blank tab to fill). */
+  const toBrowser = useRef(false);
   const startRef = useRef<HTMLButtonElement>(null);
   const codeRef = useRef<HTMLInputElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
@@ -52,7 +57,13 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
   /** Sends the blank tab to the link once there is one; once only. */
   const showLink = useCallback((s: ClaudeLoginSession) => {
     const t = tab.current;
-    if (!t || !isClaudeSignInUrl(s.url)) return;
+    if (!isClaudeSignInUrl(s.url)) return;
+    if (!t && toBrowser.current) {
+      toBrowser.current = false;
+      window.location.assign(s.url);
+      return;
+    }
+    if (!t) return;
     tab.current = null;
     if (t.closed) setBlocked(true);
     else t.location.replace(s.url);
@@ -62,7 +73,8 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
     playSfx('click');
     const t = openBlankTab();
     tab.current = t;
-    setBlocked(!t);
+    toBrowser.current = inMacApp();
+    setBlocked(!t && !toBrowser.current);
     setBusy('start');
     setError(null);
     setCode('');
@@ -221,7 +233,7 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
           </p>
           {url && (
             <p className="text-[11px] text-zinc-400">
-              {blocked ? 'Your browser didn’t open a new tab. ' : 'Closed the tab? '}
+              {blocked ? 'Your browser didn’t open a new tab. ' : inMacApp() ? 'Opened claude.ai in your browser. ' : 'Closed the tab? '}
               <a href={url} target="_blank" rel="noopener noreferrer" className={link} onClick={() => setBlocked(false)}>
                 {blocked ? 'Open claude.ai to sign in' : 'Open claude.ai again'} <ExternalLink size={10} aria-hidden="true" />
               </a>

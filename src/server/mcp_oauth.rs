@@ -250,8 +250,12 @@ fn script_json(v: &Value) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
-/// The page the sign-in popup lands on: tells the opener the outcome and closes, or goes to
-/// the app when there is no opener.
+/// The sessionStorage key the app sets before it leaves its own tab to sign in.
+pub const RETURN_KEY: &str = "kwnt-mcp-oauth-return";
+
+/// The page the sign-in popup lands on: tells the opener the outcome and closes. Without an
+/// opener it goes back to the app only when this tab left kwant to sign in ([`RETURN_KEY`]);
+/// a browser tab the Mac app opened just says to go back, and the app notices the sign-in itself.
 pub fn callback_page(server_id: Option<&str>, result: Result<(), String>) -> Response {
     let (ok, error) = match &result {
         Ok(()) => (true, None),
@@ -261,17 +265,20 @@ pub fn callback_page(server_id: Option<&str>, result: Result<(), String>) -> Res
     if let Some(e) = &error {
         message["error"] = json!(e);
     }
-    let text = match &error {
-        None => "Signed in. You can close this window.".to_string(),
-        Some(e) => format!("Sign-in failed: {e}"),
+    let (text, next) = match &error {
+        None => ("Signed in.".to_string(), "You can close this tab and go back to kwant."),
+        Some(e) => (format!("Sign-in failed: {e}"), "Go back to kwant and try Connect again."),
     };
     let page = format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>kwnt sign-in</title></head>\
-         <body><p>{}</p><script>(function(){{var m={};\
-         if(window.opener){{try{{window.opener.postMessage(m,location.origin)}}catch(e){{}}window.close()}}\
-         else{{location.replace(\"/\")}}}})();</script></body></html>",
+         <body><p>{}</p><p>{}</p><script>(function(){{var m={},k={};\
+         if(window.opener){{try{{window.opener.postMessage(m,location.origin)}}catch(e){{}}window.close();return}}\
+         try{{if(sessionStorage.getItem(k)){{sessionStorage.removeItem(k);location.replace(\"/\")}}}}catch(e){{}}\
+         }})();</script></body></html>",
         html_escape(&text),
-        script_json(&message)
+        html_escape(next),
+        script_json(&message),
+        script_json(&json!(RETURN_KEY))
     );
     (
         StatusCode::OK,
@@ -355,6 +362,19 @@ mod tests {
         assert!(body.contains("&lt;img"));
         assert!(body.contains("\\u003cimg"));
         assert!(body.contains("postMessage(m,location.origin)"));
+    }
+
+    /// A browser tab the Mac app opened has no opener and no return mark: it stays on the page
+    /// and says to go back, instead of loading kwant in the browser.
+    #[test]
+    fn callback_page_without_opener_returns_only_when_marked() {
+        let resp = callback_page(Some("s1"), Ok(()));
+        let body = futures::executor::block_on(axum::body::to_bytes(resp.into_body(), 1 << 16)).unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("You can close this tab and go back to kwant."), "{body}");
+        assert!(body.contains("k=\"kwnt-mcp-oauth-return\""), "{body}");
+        assert!(body.contains("if(sessionStorage.getItem(k)){sessionStorage.removeItem(k);location.replace(\"/\")}"), "{body}");
+        assert_eq!(body.matches("location.replace").count(), 1, "{body}");
     }
 
     #[test]

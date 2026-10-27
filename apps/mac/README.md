@@ -8,6 +8,11 @@ A Tauri v2 shell around kwant. The app links the `kwnt` crate and runs the same 
   app opens a window on it and starts nothing. If something else holds the port, it uses a free one.
 - **PATH:** apps opened from Finder get a bare PATH, so the app merges the login shell's PATH with
   `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin` to find `claude`, `codex` and `grok`.
+- **Links:** the window only shows kwant (its loopback page and the bundled loading page). Any other
+  web or mail address, including sign-in pages and `target=_blank` links, opens in the default
+  browser; the app never opens a second window. Other schemes (`file:`, app links) are ignored.
+  The page sees `window.__KWANT_APP__ = 'mac'`, so sign-ins say to finish in the browser and watch
+  the server for the result. See `src/links.rs`.
 - **Menu bar:** Open kwant, a status line (approvals waiting), Quit. Closing the window keeps kwant
   running; Quit stops it.
 - **Updates:** 15 seconds after start and then every 6 hours the app reads

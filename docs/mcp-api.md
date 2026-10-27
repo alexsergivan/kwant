@@ -114,7 +114,9 @@ earlier attempt. Registrations are reused per server, callback URL and authoriza
 Where the provider redirects the popup. kwnt exchanges the code and stores the tokens, then
 returns a small HTML page that runs
 `window.opener.postMessage({type: "kwnt-mcp-oauth", server_id, ok, error?}, location.origin)`
-and closes itself (or goes to `/` when it has no opener). `server_id` is null when the `state`
+and closes itself. With no opener it goes to `/` only when the app marked the tab before leaving
+it (sessionStorage `kwnt-mcp-oauth-return`); otherwise, as in the browser tab the Mac app opens,
+it stays and says to go back, and the app sees the sign-in in `GET /api/mcp/servers`. `server_id` is null when the `state`
 is unknown, expired or already used. `error` is a short readable reason.
 
 ### `DELETE /api/mcp/servers/:id/oauth`

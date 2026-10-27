@@ -102,6 +102,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   approvals, so failed tasks waiting on a fix showed 0 next to a full column. It now counts the column's
   cards, and a task whose check waits for your OK sits in Needs you. A failure's panel says the summary,
   what to fix and whether AutoFix retries once each, instead of up to three times.
+- **Mac app: sign-in pages open in your browser.** Outside pages, such as a Google or Cloudflare
+  sign-in, no longer take over the kwant window with no way back. The window only shows kwant; every
+  other link opens in your default browser. Connecting an MCP server, a Composio app or Claude still
+  finishes: the app notices the sign-in by itself, and the browser tab says to go back to kwant.
 - **Mission Control: racing Redo requests make one copy, and restore refuses unknown forced paths.**
   Two Redo requests on the same flag at the same moment, without an `Idempotency-Key`, could each make
   a copy; now the flag is claimed in the same step as the copy, so one wins and the rest get 409. A
