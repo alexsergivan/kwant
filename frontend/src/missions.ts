@@ -1434,6 +1434,7 @@ export const missionsApi = {
   /** Copy a task to redo it; the same key returns the same copy. */
   fork: (taskId: string, reason: string, key: string) => call<Task>(`/api/tasks/${enc(taskId)}/fork`, 'POST', { reason }, { 'Idempotency-Key': key }),
   /** Let a task a restore held run again (person only). */
+  /** Take a held task off hold. The same key replays the first 200, so a double press is a success. */
   runHeld: (id: string, key: string) => call<{ task: Task }>(`/api/tasks/${enc(id)}/run`, 'POST', {}, { 'Idempotency-Key': key }).then((r) => r.task),
   checkpoints: (id: string) => call<Checkpoint[]>(`/api/tasks/${enc(id)}/checkpoints`),
   restorePreview: (id: string, cid: string) => call<RestorePreview>(`/api/tasks/${enc(id)}/checkpoints/${enc(cid)}/restore-preview`),
@@ -1444,7 +1445,8 @@ export const missionsApi = {
   runAutofix: (id: string, key: string, failureId?: string) =>
     call<AutofixAttempt>(`/api/tasks/${enc(id)}/autofix`, 'POST', failureId ? { failure_id: failureId } : {}, { 'Idempotency-Key': key }),
   cancelAutofix: (id: string, aid: string) => call<AutofixAttempt>(`/api/tasks/${enc(id)}/autofix/${enc(aid)}/cancel`, 'POST', {}),
-  workflowChanges: (status: WorkflowChangeStatus = 'proposed') => call<WorkflowChange[]>(`/api/workflow-changes?status=${status}`),
+  workflowChanges: (status: WorkflowChangeStatus = 'proposed', taskId?: string) =>
+    call<WorkflowChange[]>(`/api/workflow-changes?status=${status}${taskId ? `&task_id=${enc(taskId)}` : ''}`),
   decideChange: (id: string, approve: boolean) => call<WorkflowChange>(`/api/workflow-changes/${enc(id)}/${approve ? 'approve' : 'reject'}`, 'POST', {}),
   /** One person action on a task. `run_checks` answers `{checks, task}`, the others the Task. */
   act: async (id: string, action: TaskAction, reason?: string): Promise<Task> => {

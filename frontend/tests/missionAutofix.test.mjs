@@ -68,7 +68,7 @@ test('the task panel shows the failure, the AutoFix plan, its tries and its spen
     { id: 'fl0', attempt: 1, source: 'turn', class: 'transient', summary: 'the model timed out', excerpt: null, checkpoint_id: null, created_at: '2026-10-27T11:00:00Z', autofix: attempt({ id: 'af0', status: 'succeeded', strategy: 'wait_and_retry' }) },
     { id: 'fl1', attempt: 2, source: 'check', class: 'check_failed', summary: 'npm test: 2 tests failed', excerpt: 'FAIL pricing.test.js', checkpoint_id: null, created_at: '2026-10-27T11:50:00Z', autofix: attempt() },
   ];
-  const html = ui.detail(detailProps(failed({ needs_you: [{ kind: 'autofix_suggested', id: 'af1', text: 'Retry with the check output? npm test: 2 tests failed' }] }), { failures, onRetryAutofix: noop, onSkipAutofix: noop }));
+  const html = ui.detail(detailProps(failed({ autofix_attempts: 1, needs_you: [{ kind: 'autofix_suggested', id: 'af1', text: 'Retry with the check output? npm test: 2 tests failed' }] }), { failures, onRetryAutofix: noop, onSkipAutofix: noop }));
   assert.match(html, /data-failure-class="check_failed"[\s\S]*A check failed[\s\S]*npm test: 2 tests failed/);
   assert.match(html, /data-autofix-status="suggested"/);
   assert.match(html, /data-autofix-retry[^>]*>[\s\S]*Retry now/);
@@ -82,6 +82,57 @@ test('the task panel shows the failure, the AutoFix plan, its tries and its spen
   assert.match(fix, /data-fix-needed[^>]*><span[^>]*>To fix: <\/span>Sign in to GitHub again in Connections\./);
   assert.doesNotMatch(fix, /data-autofix-retry/, 'nothing to retry');
   assert.doesNotMatch(ui.detail(detailProps(task())), /data-failure/, 'nothing without a failure');
+});
+
+test('AutoFix tries come from the server count, not from counting failures in the browser', () => {
+  const failures = [1, 2, 3].map((n) => ({ id: `fl${n}`, attempt: n, source: 'turn', class: 'transient', summary: 'timed out', excerpt: null, checkpoint_id: null, created_at: '2026-10-27T11:00:00Z', autofix: attempt({ id: `af${n}`, status: 'succeeded' }) }));
+  assert.match(ui.failure({ task: failed({ autofix_attempts: 2 }), failures, now: NOW }), />AutoFix tries<\/dt><dd[^>]*>2</);
+  assert.match(ui.failure({ task: failed({ autofix_attempts: undefined }), failures, now: NOW }), />AutoFix tries<\/dt><dd[^>]*>0</, 'an older server without the count shows 0');
+});
+
+test('a retry skipped over the retry budget shows the Needs-you card and why it stopped', () => {
+  const t = failed({
+    state: 'failed', autofix_attempts: 1, recovery_spent_tokens: 10000, recovery_budget_tokens: 10000,
+    autofix: attempt({ status: 'skipped', reason: 'over_recovery_budget: 10000 of 10000 used' }),
+    needs_you: [{ kind: 'fix_needed', id: 'fl3', text: 'Retry budget used up: raise it or retry by hand.' }],
+  });
+  const html = ui.detail(detailProps(t));
+  assert.match(html, /data-fix-needed[^>]*><span[^>]*>To fix: <\/span>Retry budget used up: raise it or retry by hand\./);
+  assert.match(html, /data-autofix-status="skipped"[\s\S]*retry budget/);
+  assert.doesNotMatch(html, /data-autofix-retry/, 'AutoFix offers no retry of its own; the person retries by hand');
+  assert.doesNotMatch(html, /data-needs-you/, 'the card is shown once, in What went wrong');
+});
+
+test('a masked value in a check spec is shown as the server sent it', () => {
+  const spec = { cmd: 'curl -H "Authorization: Bearer [redacted]" https://api.example.com/health' };
+  const c = {
+    id: 'wc2', task_id: 'a', routine_id: null, target: 'check_spec', reason: 'The check URL is wrong',
+    before: { check_id: 'c1', kind: 'command', spec, required: true }, after: { check_id: 'c1', kind: 'command', spec, required: false },
+    proposed_by: 'kwant', proposed_by_name: null, status: 'proposed', decided_at: null, created_at: '2026-10-27T11:55:00Z',
+  };
+  const html = ui.change({ item: { kind: 'workflow_change', id: 'wc2', text: 'Allow this change to a check: …' }, change: c, now: NOW, onDecide: noop });
+  assert.match(html, /Bearer \[redacted\]/);
+  assert.doesNotMatch(html, /unmask|reveal|show (the )?(key|password)/i);
+});
+
+test('the API asks for one task’s workflow changes and sends one key per Run', async () => {
+  const seen = [];
+  const prev = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    seen.push({ url: String(url), method: init.method ?? 'GET', key: new Headers(init.headers).get('Idempotency-Key') });
+    const body = String(url).includes('/run') ? { task: task({ state: 'ready', held_at: null }) } : [];
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    await m.missionsApi.workflowChanges('proposed', 'a b');
+    await m.missionsApi.runHeld('a', 'k-1');
+    await m.missionsApi.runHeld('a', 'k-1');
+  } finally {
+    globalThis.fetch = prev;
+  }
+  assert.match(seen[0].url, /\/api\/workflow-changes\?status=proposed&task_id=a%20b$/);
+  assert.deepEqual(seen.slice(1).map((x) => [x.method, x.key]), [['POST', 'k-1'], ['POST', 'k-1']]);
+  assert.match(seen[1].url, /\/api\/tasks\/a\/run$/);
 });
 
 test('AutoFix retries show as AutoFix in the activity, not as the person', () => {

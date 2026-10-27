@@ -770,7 +770,7 @@ export const FailureBox: React.FC<{
         )}
         <dl className="grid grid-cols-2 gap-3 pt-1">
           <Fact label="AutoFix tries">
-            {failures.filter((x) => x.autofix && x.autofix.status !== 'suggested' && x.autofix.status !== 'skipped').length || (a && a.status !== 'suggested' && a.status !== 'skipped' ? 1 : 0)}
+            {task.autofix_attempts ?? 0}
           </Fact>
           {recovery && <Fact label="Spent on retries">{recovery}</Fact>}
         </dl>
@@ -1929,6 +1929,8 @@ export const MissionBoardPage: React.FC<{
     if (pendingKey.current?.what !== what) pendingKey.current = { what, key: newIdempotencyKey() };
     return pendingKey.current.key;
   };
+  // Run on a held task: one key per hold, kept after success, so a second press replays the first 200.
+  const runKeys = useRef<Record<string, string>>({});
   const alive = useRef(true);
   const openIdRef = useRef<string | null>(null);
   openIdRef.current = openId;
@@ -1966,7 +1968,7 @@ export const MissionBoardPage: React.FC<{
         missionsApi.failures(id).then((f) => alive.current && openIdRef.current === id && setFailures(f), () => {});
       } else setFailures([]);
       if (t.needs_you.some((n) => n.kind === 'workflow_change')) {
-        missionsApi.workflowChanges('proposed').then((cs) => alive.current && openIdRef.current === id && setChanges(cs.filter((c) => c.task_id === id)), () => {});
+        missionsApi.workflowChanges('proposed', id).then((cs) => alive.current && openIdRef.current === id && setChanges(cs), () => {});
       } else setChanges([]);
     } catch (e) {
       if (alive.current && openIdRef.current === id) setDetailError(failMsg(e));
@@ -2148,14 +2150,14 @@ export const MissionBoardPage: React.FC<{
   };
 
   /** One person action on the open task: keyed, one at a time, 401 asks for the token, 409 shows what it is now. */
-  const personAction = async (what: string, run: (taskId: string, key: string) => Promise<string>, errorText: (e: unknown) => string) => {
+  const personAction = async (what: string, run: (taskId: string, key: string) => Promise<string>, errorText: (e: unknown) => string, key?: string) => {
     if (!openId || inFlight.current) return;
     const taskId = openId;
     inFlight.current = true;
     setBusy(true);
     setDetailNotice(null);
     try {
-      const text = await run(taskId, keyFor(what));
+      const text = await run(taskId, key ?? keyFor(what));
       pendingKey.current = null;
       if (!alive.current) return;
       setDetailNotice({ text, error: false });
@@ -2174,8 +2176,10 @@ export const MissionBoardPage: React.FC<{
     }
   };
 
-  const runHeld = () =>
-    personAction(
+  const runHeld = () => {
+    const hold = `${openId}:${detail?.task.held_at ?? ''}`;
+    runKeys.current[hold] ??= newIdempotencyKey();
+    return personAction(
       `run:${openId}`,
       async (id, key) => {
         const t = await missionsApi.runHeld(id, key);
@@ -2183,7 +2187,9 @@ export const MissionBoardPage: React.FC<{
         return 'Off hold. A bot picks it up next.';
       },
       restoreErrorText,
+      runKeys.current[hold],
     );
+  };
   const retryAutofix = (failureId?: string) =>
     personAction(
       `autofix:${openId}:${failureId ?? ''}`,
