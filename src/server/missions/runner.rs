@@ -51,6 +51,8 @@ pub async fn tick(state: &AppState) {
     // Sources first, so a live hand-off or routine refreshes kwant's lease before the sweep
     super::listener::reconcile(state).await;
     super::sweep_leases(state).await;
+    // AutoFix retries whose time has come, before tasks are picked (Phase B3)
+    super::autofix::run_due(state).await;
     for m in state.db.active_missions().await.unwrap_or_default() {
         // Evidence drift, at most every 10 minutes per mission (Phase B1)
         super::graph::scan_if_due(state, &m).await;
@@ -156,6 +158,7 @@ async fn prompt(state: &AppState, m: &Mission, t: &Task) -> String {
 }
 
 async fn run_one(state: &AppState, m: &Mission, task: &Task, bot: &crate::db::models::Kwant) {
+    let started = chrono::Utc::now();
     let context = mission_context(m, bot);
     let job = state.turns.start_job([context.clone()]);
     let (channel, thread) = mission_place(m, bot);
@@ -163,7 +166,10 @@ async fn run_one(state: &AppState, m: &Mission, task: &Task, bot: &crate::db::mo
         Ok(scope) => {
             let mut opts = TurnOpts::default();
             (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(PURPOSE.into()));
-            let p = prompt(state, m, task).await;
+            let mut p = prompt(state, m, task).await;
+            if let Some(note) = super::autofix::retry_note(state, task).await {
+                p.push_str(&note);
+            }
             turn_once(&scope, bot, p, opts).await
         }
         Err(e) => Err(e),
@@ -171,22 +177,46 @@ async fn run_one(state: &AppState, m: &Mission, task: &Task, bot: &crate::db::mo
     if let Err(e) = &reply {
         tracing::info!(task_id = %task.id, error = %e, "mission runner turn ended without a reply");
     }
-    // Still working after the turn: the bot didn't finish or let go, so the lease is released
-    if let Ok(Some(t)) = state.db.get_task(&task.id).await {
-        if t.state == "working" {
-            let change = TaskChange {
-                kind: "released".into(),
-                reason: Some("the runner turn ended without a review".into()),
-                attempt: true,
-                ..Default::default()
-            };
-            let _ = transition(state, &t.id, "working", "ready", Actor::Kwant, "kwant", change).await;
-            if let Ok(Some(t)) = state.db.get_task(&task.id).await {
-                if t.attempts >= t.max_attempts && t.state == "ready" {
-                    let change = TaskChange { reason: Some("no review after its last attempt".into()), ..Default::default() };
-                    let _ = transition(state, &t.id, "ready", "blocked", Actor::Kwant, "kwant", change).await;
-                }
+    let err = reply.as_ref().err().map(ToString::to_string);
+    after_turn(state, &task.id, err.as_deref(), started).await;
+}
+
+/// After a runner turn of `task_id`: still `working` means the bot didn't finish or let go, so the
+/// lease is released (one attempt used). With AutoFix on, a task with attempts left parks in
+/// `failed` for it (§16), and the failure is recorded: the turn's error, a denied action since
+/// `started`, or a stall; a task left waiting on the person records `needs_input`.
+pub async fn after_turn(state: &AppState, task_id: &str, err: Option<&str>, started: chrono::DateTime<chrono::Utc>) {
+    let Ok(Some(t)) = state.db.get_task(task_id).await else { return };
+    if t.state == "needs_you" {
+        super::autofix::record(state, &t.id, "turn", "needs_input", "", "the bot is waiting on the person").await;
+        return;
+    }
+    if t.state != "working" {
+        return;
+    }
+    let park = super::autofix::parks(state, &t, true).await;
+    let change = TaskChange {
+        kind: "released".into(),
+        reason: Some("the runner turn ended without a review".into()),
+        attempt: true,
+        ..Default::default()
+    };
+    let to = if park { "failed" } else { "ready" };
+    if transition(state, &t.id, "working", to, Actor::Kwant, "kwant", change).await.is_err() {
+        return;
+    }
+    if !park {
+        if let Ok(Some(t)) = state.db.get_task(task_id).await {
+            if t.attempts >= t.max_attempts && t.state == "ready" {
+                let change = TaskChange { reason: Some("no review after its last attempt".into()), ..Default::default() };
+                let _ = transition(state, &t.id, "ready", "blocked", Actor::Kwant, "kwant", change).await;
             }
         }
     }
+    let denied = state.db.denied_since(task_id, started).await.unwrap_or_default();
+    match (err, denied) {
+        (Some(e), _) => super::autofix::record(state, task_id, "turn", "error", e, e.lines().next().unwrap_or("the turn failed")).await,
+        (None, Some(what)) => super::autofix::record(state, task_id, "turn", "denied", &what, &format!("denied: {what}")).await,
+        (None, None) => super::autofix::record(state, task_id, "turn", "stalled", "", "the runner turn ended without a review").await,
+    };
 }

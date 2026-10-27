@@ -12,6 +12,7 @@
 //! - nothing here widens a bot's permissions: the bot tools only touch the board, `command` checks
 //!   a bot adds run only after the person approves them, and person actions are person-only routes.
 
+pub mod autofix;
 pub mod checkpoints;
 pub mod checks;
 pub mod graph;
@@ -91,6 +92,8 @@ pub enum Actor {
     Person,
     /// kwant itself: checks, leases, hand-offs, routine runs, cards.
     Kwant,
+    /// AutoFix, retrying a failed task (Phase B3): only `failed → ready`.
+    AutoFix,
 }
 
 /// Whether `actor` may move a task from `from` to `to`. Conditions beyond the pair (live claim,
@@ -113,7 +116,7 @@ pub fn allowed(from: &str, to: &str, actor: Actor) -> bool {
         ("review", "verified") => actor == Kwant,
         ("review", "ready") => matches!(actor, Kwant | Person),
         ("review", "failed") => actor == Kwant,
-        ("failed", "ready") => actor == Person,
+        ("failed", "ready") => matches!(actor, Person | AutoFix),
         (_, "cancelled") => open && matches!(actor, Person | Kwant),
         _ => false,
     }
@@ -188,6 +191,9 @@ pub async fn transition(
 }
 
 async fn after_move(state: &AppState, task: &Task, to: &str) {
+    autofix::settle(state, task, to).await;
+    // A task parked for AutoFix isn't done failing: no "failed" line until it is
+    let to = if to == "failed" && autofix::parked(state, task).await { "parked" } else { to };
     let Some(mid) = task.mission_id.clone() else {
         if matches!(to, "verified" | "failed") {
             task_chat_line(state, task, None).await;
@@ -336,9 +342,18 @@ pub async fn evaluate(state: &AppState, task_id: &str) -> Option<Task> {
         }
         Verdict::Fail(why) => {
             let last = task.attempts + 1 >= task.max_attempts;
-            let to = if last { "failed" } else { "ready" };
-            let change = TaskChange { reason: Some(why), attempt: true, ..Default::default() };
-            transition(state, task_id, "review", to, Actor::Kwant, "kwant", change).await.ok().or(Some(task))
+            let to = if last || autofix::parks(state, &task, true).await { "failed" } else { "ready" };
+            let change = TaskChange { reason: Some(why.clone()), attempt: true, ..Default::default() };
+            let moved = transition(state, task_id, "review", to, Actor::Kwant, "kwant", change).await.ok();
+            if moved.is_some() {
+                let bad = checks.iter().filter(|c| matches!(c.status.as_str(), "failed" | "error")).find(|c| c.required).or_else(|| checks.iter().find(|c| matches!(c.status.as_str(), "failed" | "error")));
+                if let Some(c) = bad {
+                    let text = format!("{} {}\n{}", c.kind, c.spec_value(), c.output_excerpt.as_deref().unwrap_or(""));
+                    autofix::record(state, task_id, "check", &c.status, &text, &why).await;
+                }
+            }
+            let task = state.db.get_task(task_id).await.ok().flatten().or(moved).unwrap_or(task);
+            Some(task)
         }
         Verdict::Waiting => Some(task),
     }
@@ -400,6 +415,7 @@ pub async fn spend(state: &AppState, kwant_id: &str, context_id: &str, turn_id: 
     if state.db.spend_on_task(&claim.task_id, due).await.is_err() {
         return;
     }
+    autofix::spend_on_claim(state, &claim.task_id, Some(&claim.id), due).await;
     let _ = state.db.renew_claim(&claim.task_id, lease_ms(state).await).await;
     let Ok(Some(task)) = state.db.get_task(&claim.task_id).await else { return };
     if task.spent_tokens > task.budget_tokens && matches!(task.state.as_str(), "working" | "needs_you") {
@@ -409,7 +425,10 @@ pub async fn spend(state: &AppState, kwant_id: &str, context_id: &str, turn_id: 
             detail: Some(json!({"spent_tokens": task.spent_tokens, "budget_tokens": task.budget_tokens})),
             ..Default::default()
         };
-        let _ = transition(state, &task.id, &task.state, "blocked", Actor::Kwant, "kwant", change).await;
+        if transition(state, &task.id, &task.state, "blocked", Actor::Kwant, "kwant", change).await.is_ok() {
+            let summary = format!("over budget: {} of {} tokens", task.spent_tokens, task.budget_tokens);
+            autofix::record(state, &task.id, "budget", "error", &summary, &summary).await;
+        }
     } else {
         emit_task(state, &task).await;
     }
@@ -432,6 +451,7 @@ pub async fn spend_at_hand_in(state: &AppState, task_id: &str, turn_id: Option<&
     if state.db.spend_on_task(task_id, tokens).await.is_err() {
         return;
     }
+    autofix::spend_on_claim(state, task_id, None, tokens).await;
     if let Ok(Some(task)) = state.db.get_task(task_id).await {
         emit_task(state, &task).await;
         if let Some(m) = &task.mission_id {
@@ -440,13 +460,16 @@ pub async fn spend_at_hand_in(state: &AppState, task_id: &str, turn_id: Option<&
     }
 }
 
-/// Working tasks whose lease ran out go back to ready (one attempt used).
+/// Working tasks whose lease ran out go back to ready (one attempt used), or park in `failed` for
+/// AutoFix.
 pub async fn sweep_leases(state: &AppState) -> usize {
     let mut n = 0;
     for t in state.db.expired_working().await.unwrap_or_default() {
         let change = TaskChange { kind: "lease_expired".into(), reason: Some("the lease ran out".into()), attempt: true, ..Default::default() };
-        if transition(state, &t.id, "working", "ready", Actor::Kwant, "kwant", change).await.is_ok() {
+        let to = if autofix::parks(state, &t, true).await { "failed" } else { "ready" };
+        if transition(state, &t.id, "working", to, Actor::Kwant, "kwant", change).await.is_ok() {
             n += 1;
+            autofix::record(state, &t.id, "lease", "stalled", "", "the lease ran out").await;
         }
     }
     n
@@ -466,6 +489,7 @@ pub(crate) async fn name_of(state: &AppState, id: Option<&str>) -> Option<String
 /// steps) or, in review, check approvals; then, in every state, its open "may be invalid" flags.
 pub async fn needs_you(state: &AppState, task: &Task) -> Vec<Value> {
     let mut items = owner_needs_you(state, task).await;
+    items.extend(autofix::needs_you(state, task).await);
     items.extend(graph::flag_items(state, task).await);
     items
 }
@@ -530,6 +554,7 @@ pub async fn task_json(state: &AppState, task: &Task) -> Value {
         let (count, last) = state.db.checkpoint_stats(&task.id).await.unwrap_or((0, None));
         obj.insert("checkpoint_count".into(), json!(count));
         obj.insert("last_checkpoint_at".into(), json!(last));
+        autofix::extend_task_json(state, task, obj).await;
     }
     v
 }
@@ -966,6 +991,7 @@ mod tests {
             finished_at: None,
             forked_from: None,
             held_at: None,
+            recovery_spent_tokens: 0,
         }
     }
 

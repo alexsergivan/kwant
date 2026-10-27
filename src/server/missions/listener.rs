@@ -147,25 +147,28 @@ async fn hold(state: &AppState, task: &Task, owner: &str, context_id: &str) {
     }
 }
 
-/// The source finished: to review (and its checks), failed, cancelled or back to ready.
-async fn finish(state: &AppState, task: &Task, to: &str, why: &str) {
+/// The source finished: to review (and its checks), failed, cancelled or back to ready. Whether
+/// the task moved.
+async fn finish(state: &AppState, task: &Task, to: &str, why: &str) -> bool {
     let mut from = task.state.clone();
     if !matches!(from.as_str(), "working" | "needs_you") {
-        return;
+        return false;
     }
     if to == "review" && from == "needs_you" {
         // review is reached from working only
         let _ = state.db.refresh_claim(&task.id, lease_ms(state).await).await;
         let change = TaskChange { reason: Some(why.into()), ..Default::default() };
         if transition(state, &task.id, "needs_you", "working", Actor::Kwant, "kwant", change).await.is_err() {
-            return;
+            return false;
         }
         from = "working".into();
     }
     let change = TaskChange { reason: Some(why.into()), ..Default::default() };
-    if transition(state, &task.id, &from, to, Actor::Kwant, "kwant", change).await.is_ok() && to == "review" {
+    let moved = transition(state, &task.id, &from, to, Actor::Kwant, "kwant", change).await.is_ok();
+    if moved && to == "review" {
         run_task_checks(state, &task.id, None).await;
     }
+    moved
 }
 
 pub async fn on_delegation(state: &AppState, delegation_id: &str) {
@@ -189,10 +192,21 @@ pub async fn on_delegation(state: &AppState, delegation_id: &str) {
             // Still going: keep kwant's lease on it
             let _ = state.db.refresh_claim(&t.id, lease_ms(state).await).await;
         }
-        (Some(t), "completed") => finish(state, &t, "review", "the hand-off finished").await,
-        (Some(t), "failed") => finish(state, &t, "failed", d.error.as_deref().unwrap_or("the hand-off failed")).await,
-        (Some(t), "cancelled") => finish(state, &t, "cancelled", "the hand-off was cancelled").await,
-        (Some(t), "interrupted") => finish(state, &t, "ready", "a restart interrupted the hand-off").await,
+        (Some(t), "completed") => {
+            finish(state, &t, "review", "the hand-off finished").await;
+        }
+        (Some(t), "failed") => {
+            let why = d.error.as_deref().unwrap_or("the hand-off failed");
+            if finish(state, &t, "failed", why).await {
+                super::autofix::record(state, &t.id, "handoff", "error", why, why.lines().next().unwrap_or(why)).await;
+            }
+        }
+        (Some(t), "cancelled") => {
+            finish(state, &t, "cancelled", "the hand-off was cancelled").await;
+        }
+        (Some(t), "interrupted") => {
+            finish(state, &t, "ready", "a restart interrupted the hand-off").await;
+        }
         _ => {}
     }
 }
@@ -216,8 +230,15 @@ pub async fn on_routine_run(state: &AppState, routine_id: &str, run_id: &str, st
         (Some(t), "running") => {
             let _ = state.db.refresh_claim(&t.id, lease_ms(state).await).await;
         }
-        (Some(t), "ok") => finish(state, &t, "review", "the routine run finished").await,
-        (Some(t), "error") => finish(state, &t, "failed", "the routine run failed").await,
+        (Some(t), "ok") => {
+            finish(state, &t, "review", "the routine run finished").await;
+        }
+        (Some(t), "error") => {
+            if finish(state, &t, "failed", "the routine run failed").await {
+                let err = state.db.routine_run_error(run_id).await.ok().flatten().unwrap_or_else(|| "the routine run failed".into());
+                super::autofix::record(state, &t.id, "routine", "error", &err, err.lines().next().unwrap_or("the routine run failed")).await;
+            }
+        }
         _ => {}
     }
 }

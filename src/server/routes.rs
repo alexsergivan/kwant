@@ -3273,6 +3273,10 @@ pub struct SettingsResponse {
     pub checkpoint_max_mb: i64,
     /// Checkpoints kept per task (1–20), plus its first `before_run`.
     pub checkpoint_keep: i64,
+    /// AutoFix: `off` (record failures only), `suggest` (the person starts each retry) or `on`.
+    pub autofix: String,
+    /// Share of a task's budget its AutoFix retries may spend (0–100).
+    pub recovery_budget_pct: i64,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3311,6 +3315,8 @@ pub struct SaveSettingsPayload {
     pub checkpoints: Option<bool>,
     pub checkpoint_max_mb: Option<i64>,
     pub checkpoint_keep: Option<i64>,
+    pub autofix: Option<String>,
+    pub recovery_budget_pct: Option<i64>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3358,6 +3364,8 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         checkpoints: super::missions::checkpoints::enabled(&state).await,
         checkpoint_max_mb: super::missions::checkpoints::max_mb(&state).await,
         checkpoint_keep: super::missions::checkpoints::keep(&state).await,
+        autofix: super::missions::autofix::mode(&state).await.into(),
+        recovery_budget_pct: super::missions::autofix::recovery_pct(&state).await,
     }))
 }
 
@@ -3408,6 +3416,9 @@ pub async fn save_settings(
         return bad(e);
     }
     if let Some(e) = super::missions::checkpoints::settings_error(payload.checkpoint_max_mb, payload.checkpoint_keep) {
+        return bad(e);
+    }
+    if let Some(e) = super::missions::autofix::settings_error(payload.autofix.as_deref(), payload.recovery_budget_pct) {
         return bad(e);
     }
     if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
@@ -3516,6 +3527,12 @@ pub async fn save_settings(
     }
     if let Some(n) = payload.checkpoint_keep {
         let _ = state.db.set_setting(super::missions::checkpoints::KEEP_SETTING, &n.to_string()).await;
+    }
+    if let Some(m) = &payload.autofix {
+        let _ = state.db.set_setting(super::missions::autofix::SETTING, m).await;
+    }
+    if let Some(n) = payload.recovery_budget_pct {
+        let _ = state.db.set_setting(super::missions::autofix::PCT_SETTING, &n.to_string()).await;
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;

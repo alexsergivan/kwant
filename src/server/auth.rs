@@ -337,6 +337,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // Mission Control: approving plans, verifying, rejecting, retrying and approving checks are
         // the person's calls; bots act on tasks only through their task tools
         ["", "api", "missions" | "tasks" | "checks", ..] => *method != Method::GET && *method != Method::HEAD,
+        // AutoFix's proposed changes to routines, checks and tasks: only the person reads, approves
+        // or rejects them; bots only propose (the `workflow_propose` tool)
+        ["", "api", "workflow-changes", ..] => true,
         // App-wide settings, including where notifications go (`notify_webhook_url`), and the
         // sub-routes such as `/computer` (which machine the bots run on) and `/computer/window`:
         // bots change the allowed ones through their `settings_update` action, never these routes
@@ -854,6 +857,12 @@ mod tests {
         assert!(!person_only(&get, "/api/tasks/t1/checkpoints"));
         assert!(!person_only(&get, "/api/tasks/t1/checkpoints/c1/restore-preview"));
         assert!(person_only(&post, "/api/tasks/t1/flags/f1/resolve"));
+        assert!(person_only(&get, "/api/workflow-changes"));
+        assert!(person_only(&post, "/api/workflow-changes/w1/approve"));
+        assert!(person_only(&post, "/api/workflow-changes/w1/reject"));
+        assert!(person_only(&post, "/api/tasks/t1/autofix"));
+        assert!(person_only(&post, "/api/tasks/t1/autofix/a1/cancel"));
+        assert!(!person_only(&get, "/api/tasks/t1/failures"));
         assert!(person_only(&post, "/api/missions/m1/graph/scan"));
         assert!(!person_only(&get, "/api/missions/m1/graph"));
         assert!(!person_only(&get, "/api/tasks/t1/flags"));

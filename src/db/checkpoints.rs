@@ -280,8 +280,9 @@ impl Database {
         path: Option<&str>,
     ) -> Result<(), DbError> {
         sqlx::query(
-            "INSERT INTO turn_tool_calls (turn_id, kwant_id, task_id, tool_name, effect, summary, decision, approval_id, created_at, path) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO turn_tool_calls (turn_id, kwant_id, task_id, tool_name, effect, summary, decision, approval_id, created_at, path, idempotency_key) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT a.idempotency_key FROM agent_claims c JOIN autofix_attempts a ON a.id = c.autofix_id \
+             WHERE c.task_id = ? AND c.released_at IS NULL ORDER BY c.claimed_at DESC LIMIT 1))",
         )
         .bind(turn_id)
         .bind(kwant_id)
@@ -293,6 +294,7 @@ impl Database {
         .bind(approval_id)
         .bind(Utc::now())
         .bind(path)
+        .bind(task_id)
         .execute(&self.pool)
         .await?;
         Ok(())

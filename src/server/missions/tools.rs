@@ -21,7 +21,7 @@ fn ok(v: Value) -> ToolResult {
     (serde_json::to_string_pretty(&v).unwrap_or_default(), false)
 }
 
-const NAMES: [&str; 7] = ["mission_plan", "task_list", "task_claim", "task_update", "task_attach_evidence", "task_request_check", "task_review"];
+const NAMES: [&str; 8] = ["mission_plan", "task_list", "task_claim", "task_update", "task_attach_evidence", "task_request_check", "task_review", "workflow_propose"];
 
 pub fn handles(name: &str) -> bool {
     NAMES.contains(&name)
@@ -148,6 +148,21 @@ pub fn tools() -> Vec<Value> {
                 "required": ["task_id", "verdict", "note"],
             },
         }),
+        json!({
+            "name": "workflow_propose",
+            "description": "Propose a lasting fix after a failure: a routine's instructions or schedule, a check's spec, a task's acceptance or max attempts. It is only a proposal: the person approves or rejects it, and nothing changes until they approve.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "enum": crate::db::autofix::TARGETS},
+                    "routine_id": {"type": "string", "description": "For routine_instructions and routine_schedule."},
+                    "task_id": {"type": "string", "description": "For check_spec, task_acceptance and max_attempts."},
+                    "after": {"description": "The new value: instructions or acceptance (string), a schedule (object), {check_id, spec?, required?} for a check, or a number 1–10 for max_attempts."},
+                    "reason": {"type": "string", "description": "Why, in a sentence: what failed and how this fixes it."},
+                },
+                "required": ["target", "after", "reason"],
+            },
+        }),
     ]
 }
 
@@ -164,6 +179,22 @@ pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value)
     }
     if name == "task_list" {
         return list(state, scope, &space, args).await;
+    }
+    if name == "workflow_propose" {
+        if let Some(t) = args["task_id"].as_str() {
+            if !matches!(state.db.get_task(t).await, Ok(Some(t)) if t.space_id == space.as_str()) {
+                return fail("No such task in your space.");
+            }
+        }
+        if let Some(r) = args["routine_id"].as_str() {
+            if !matches!(state.db.get_routine(r).await, Ok(Some(r)) if r.space_id == space.as_str()) {
+                return fail("No such routine in your space.");
+            }
+        }
+        return match super::autofix::propose(state, &scope.kwant_id, args).await {
+            Ok(v) => ok(v),
+            Err(e) => fail(e),
+        };
     }
     let Some(task_id) = args["task_id"].as_str().map(str::trim).filter(|s| !s.is_empty()) else {
         return fail("task_id is required.");
@@ -258,12 +289,16 @@ async fn claim(state: &AppState, scope: &SelfScope, task: &Task) -> ToolResult {
                 super::emit_mission(state, m).await;
             }
             let checks = state.db.list_checks(&t.id).await.unwrap_or_default();
-            ok(json!({
+            let mut out = json!({
                 "task": brief(&t),
                 "lease_minutes": lease / 60_000,
                 "checks": checks.iter().map(|c| json!({"id": c.id, "kind": c.kind, "spec": c.spec_value(), "approved": c.approved})).collect::<Vec<_>>(),
                 "next": "Do the work, attach evidence with task_attach_evidence, then task_update status=review.",
-            }))
+            });
+            if let Some(note) = super::autofix::retry_note(state, &t).await {
+                out["autofix"] = json!(note.trim());
+            }
+            ok(out)
         }
         Ok(Err(why)) => fail(format!("Not claimed: {why}.")),
         Err(e) => fail(format!("Could not claim: {e}")),
@@ -327,6 +362,7 @@ async fn update(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) 
         "review" if summary["status"] == "not_checked" => "No checks: it stays in review (not checked) until a teammate reviews it or the person verifies it.",
         "review" => "Waiting on checks that need the person's approval.",
         "ready" => "A check failed; the task is back in ready. Fix it and claim it again.",
+        "failed" if after.attempts < after.max_attempts => "A check failed; AutoFix decides whether to retry it (see the task's autofix). Don't claim it again yourself.",
         "failed" => "A check failed on the last attempt; the task failed.",
         _ => "",
     };

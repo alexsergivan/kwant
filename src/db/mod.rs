@@ -27,6 +27,7 @@ pub mod usage;
 pub mod missions;
 pub mod mission_graph;
 pub mod checkpoints;
+pub mod autofix;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -162,6 +163,7 @@ impl Database {
         db.migrate_missions().await?;
         db.migrate_mission_graph().await?;
         db.migrate_checkpoints().await?;
+        db.migrate_autofix().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;

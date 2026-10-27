@@ -374,7 +374,7 @@ pub struct FlagClaim<'a> {
 
 /// Resolves the flag inside `tx` if it is still open, and logs `flag_resolved` with `detail`
 /// merged in. False when it was already resolved; nothing is written then.
-async fn claim_flag(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, c: &FlagClaim<'_>, detail: Option<&Value>) -> Result<bool, DbError> {
+pub(crate) async fn claim_flag(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, c: &FlagClaim<'_>, detail: Option<&Value>) -> Result<bool, DbError> {
     let r = sqlx::query("UPDATE task_flags SET resolved_at = ?, resolved_by = 'person', resolution = ? WHERE id = ? AND resolved_at IS NULL")
         .bind(Utc::now())
         .bind(c.resolution)

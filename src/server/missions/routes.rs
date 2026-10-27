@@ -324,6 +324,7 @@ pub async fn insights(State(state): State<AppState>, Scope(space): Scope) -> Res
     let still_blocked: Vec<&str> = all.iter().filter(|t| t.state == "blocked").map(|t| t.id.as_str()).collect();
     let blocked_minutes = blocked_minutes(&events, &still_blocked, since, chrono::Utc::now());
     let per = if verified.is_empty() { Value::Null } else { json!(tokens / verified.len() as i64) };
+    let (autofix_7d, failures_by_class_7d) = super::autofix::insights(&state, since).await;
     Json(json!({
         "verified_7d": verified.len(),
         "false_success_7d": false_success,
@@ -333,6 +334,8 @@ pub async fn insights(State(state): State<AppState>, Scope(space): Scope) -> Res
         "interventions_7d": interventions,
         "tokens_7d": tokens,
         "tokens_per_verified_7d": per,
+        "autofix_7d": autofix_7d,
+        "failures_by_class_7d": failures_by_class_7d,
     }))
     .into_response()
 }

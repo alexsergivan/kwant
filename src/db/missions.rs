@@ -73,6 +73,8 @@ pub struct Task {
     pub forked_from: Option<String>,
     /// Set by a restore (D10): no claim until the person runs the task (`POST /api/tasks/:id/run`).
     pub held_at: Option<DateTime<Utc>>,
+    /// Tokens AutoFix runs spent (Phase B3); part of `spent_tokens`, capped by the recovery budget.
+    pub recovery_spent_tokens: i64,
 }
 
 /// A lease on a task. Times are unix milliseconds so the SQLite triggers can compare them.
@@ -657,6 +659,12 @@ impl Database {
     pub async fn move_task(&self, id: &str, from: &str, to: &str, actor: &str, change: &TaskChange) -> Result<bool, DbError> {
         let now = Utc::now();
         let mut tx = self.pool.begin().await?;
+        if let Some((fid, resolution, note)) = &change.flag {
+            let claim = crate::db::mission_graph::FlagClaim { id: fid, resolution, note: note.as_deref() };
+            if !crate::db::mission_graph::claim_flag(&mut tx, &claim, None).await? {
+                return Ok(false);
+            }
+        }
         let r = sqlx::query(
             "UPDATE tasks SET state = ?, updated_at = ?, \
              attempts = attempts + ?, \
@@ -768,7 +776,8 @@ impl Database {
             .execute(&mut *tx)
             .await?;
         sqlx::query(
-            "INSERT INTO agent_claims (id, task_id, kwant_id, turn_id, context_id, system, claimed_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO agent_claims (id, task_id, kwant_id, turn_id, context_id, system, claimed_at, expires_at, autofix_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT id FROM autofix_attempts WHERE task_id = ? AND status = 'running'))",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(task_id)
@@ -778,6 +787,7 @@ impl Database {
         .bind(system)
         .bind(now)
         .bind(now + lease_ms.max(1000))
+        .bind(task_id)
         .execute(&mut *tx)
         .await?;
         sqlx::query("UPDATE tasks SET state = 'working', owner_kwant_id = ?, updated_at = ? WHERE id = ? AND state = 'ready'")
@@ -1145,11 +1155,14 @@ pub struct TaskChange {
     /// `Some(x)` sets the owner to `x`.
     pub owner: Option<Option<String>>,
     pub detail: Option<Value>,
+    /// The person resolving this flag (id, resolution, note) by this move: the flag is claimed
+    /// first in the move's transaction, so of two racing resolves only one moves the task.
+    pub flag: Option<(String, String, Option<String>)>,
 }
 
 impl Default for TaskChange {
     fn default() -> Self {
-        TaskChange { kind: "state".into(), reason: None, attempt: false, owner: None, detail: None }
+        TaskChange { kind: "state".into(), reason: None, attempt: false, owner: None, detail: None, flag: None }
     }
 }
 

@@ -364,6 +364,8 @@ pub async fn resolve_flag(
             return Err(conflict("this flag is already resolved"));
         }
         let mut fork_out = None;
+        let mut claimed = false;
+        let flag_claim = (flag.id.clone(), p.resolution.clone(), note.clone());
         match (p.resolution.as_str(), t.state.as_str()) {
             ("still_valid", _) => {}
             ("redo", "working" | "needs_you") => return Err(conflict("it's running; resolve when it stops")),
@@ -374,14 +376,28 @@ pub async fn resolve_flag(
                 let claim = FlagClaim { id: &flag.id, resolution: &p.resolution, note: note.as_deref() };
                 fork_out = Some(fork(&state, &t, &reason, Some(&claim)).await?);
             }
+            // The move claims the flag first, in its own transaction (D12): of two racing
+            // resolves one moves the task and the other gets a 409
             ("redo", from @ ("review" | "failed")) => {
-                let change = TaskChange { reason: Some("redo: it may no longer hold".into()), detail: Some(json!({"flag_id": flag.id})), ..Default::default() };
-                moved(transition(&state, &t.id, from, "ready", Actor::Person, "person", change).await)?;
+                let change = TaskChange {
+                    reason: Some("redo: it may no longer hold".into()),
+                    detail: Some(json!({"flag_id": flag.id})),
+                    flag: Some(flag_claim.clone()),
+                    ..Default::default()
+                };
+                claimed_move(&state, &flag.id, transition(&state, &t.id, from, "ready", Actor::Person, "person", change).await).await?;
+                claimed = true;
                 let _ = state.db.reset_attempts(&t.id).await;
             }
             ("redo", "blocked") => {
-                let change = TaskChange { reason: Some("redo: it may no longer hold".into()), detail: Some(json!({"flag_id": flag.id})), ..Default::default() };
-                let t = moved(transition(&state, &t.id, "blocked", "backlog", Actor::Person, "person", change).await)?;
+                let change = TaskChange {
+                    reason: Some("redo: it may no longer hold".into()),
+                    detail: Some(json!({"flag_id": flag.id})),
+                    flag: Some(flag_claim.clone()),
+                    ..Default::default()
+                };
+                let t = claimed_move(&state, &flag.id, transition(&state, &t.id, "blocked", "backlog", Actor::Person, "person", change).await).await?;
+                claimed = true;
                 super::promote_one(&state, &t).await;
             }
             // backlog or ready: it runs again anyway
@@ -389,12 +405,17 @@ pub async fn resolve_flag(
             ("cancelled", "verified") => return Err(conflict("a verified task can't be cancelled; choose still_valid or redo")),
             ("cancelled", "cancelled") => {}
             ("cancelled", from) => {
-                let change = TaskChange { reason: Some("cancelled by the person: it may no longer hold".into()), ..Default::default() };
-                moved(transition(&state, &t.id, from, "cancelled", Actor::Person, "person", change).await)?;
+                let change = TaskChange {
+                    reason: Some("cancelled by the person: it may no longer hold".into()),
+                    flag: Some(flag_claim.clone()),
+                    ..Default::default()
+                };
+                claimed_move(&state, &flag.id, transition(&state, &t.id, from, "cancelled", Actor::Person, "person", change).await).await?;
+                claimed = true;
             }
             _ => return Err(bad("resolution must be still_valid, redo or cancelled")),
         }
-        if fork_out.is_none() {
+        if fork_out.is_none() && !claimed {
             match state.db.resolve_flag(&flag.id, &p.resolution, note.as_deref(), None).await {
                 Ok(true) => {}
                 Ok(false) => return Err(conflict("this flag is already resolved")),
@@ -414,6 +435,15 @@ pub async fn resolve_flag(
         Ok(json!({"flag": flag_json(&flag), "task": task_json(&state, &t).await, "fork": fork_json}))
     })
     .await
+}
+
+/// A move that claimed `flag_id` first: when it didn't happen because the flag was resolved
+/// meanwhile, that's the 409 to give.
+async fn claimed_move(state: &AppState, flag_id: &str, r: Result<Task, super::MoveError>) -> Result<Task, Response> {
+    if matches!(r, Err(super::MoveError::Stale)) && state.db.get_flag(flag_id).await.ok().flatten().is_some_and(|f| f.resolved_at.is_some()) {
+        return Err(conflict("this flag is already resolved"));
+    }
+    moved(r)
 }
 
 /// `GET /api/tasks/:id/flags` (open ones; `?all=1` adds resolved ones).
