@@ -28,7 +28,8 @@ pub fn tools() -> Vec<Value> {
             Search Console, Google Analytics, Google Ads, HubSpot, Notion, Slack), shown as a card in this chat. \
             Connections go through Composio; `app` is its app slug, lower case with underscores \
             (google_search_console, google_analytics, googleads, hubspot). This connects nothing: the user signs in \
-            themselves. Use it instead of reporting that something is impossible for lack of access, then carry on \
+            themselves, so post it rather than asking whether to. Use it instead of reporting that something is \
+            impossible for lack of access, then carry on \
             with everything you can do without it. At most 3 per turn.",
         "inputSchema": {
             "type": "object",

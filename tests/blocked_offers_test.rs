@@ -149,7 +149,7 @@ async fn the_prompt_says_to_try_the_fallback_and_offer_the_fix() {
     let args = invocations_with("REPLYTAG:bo1").pop().unwrap();
     assert!(args.contains("Before you call anything impossible, try the fallback"), "fallback rule missing");
     assert!(args.contains("`page_source` reads a public page's HTML source"));
-    assert!(args.contains("`connection_suggest` offers the user a one-tap connection card"));
+    assert!(args.contains("`connection_suggest` posts a one-tap connection card. Post it in the same turn rather than asking"));
     assert!(args.contains("pagespeed.web.dev"));
     assert!(args.contains("not its HTML: for tags and attributes"), "claude's tool paragraph explains WebFetch");
 }

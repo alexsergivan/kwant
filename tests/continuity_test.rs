@@ -1017,6 +1017,7 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
             "skill_get",
             "mcp_search",
             "mcp_suggest",
+            "page_source",
             "routine_list",
             "routine_create",
             "follow_up_create",
