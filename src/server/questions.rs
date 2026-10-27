@@ -9,7 +9,7 @@ use super::continuity::{notify, Notification, SelfScope};
 use super::routes::{scope_for, try_kwant_turn, TurnOpts};
 use super::AppState;
 use crate::db::models::{MessageExtra, NewMessage};
-use crate::db::questions::{clean_question, Question, QuestionError, QuestionPlace, MAX_ANSWER_CHARS, QUESTION_STATUSES};
+use crate::db::questions::{clean_question, Question, QuestionError, QuestionPlace, QuestionReason, MAX_ANSWER_CHARS, QUESTION_STATUSES};
 use crate::drivers::events::RuntimeEvent;
 use axum::{
     extract::{Path, Query, State},
@@ -250,18 +250,18 @@ pub async fn tool_ask(state: &AppState, scope: &SelfScope, args: &Value) -> (Str
     // transaction, so neither a list poll nor a very fast answer can see one without the others.
     // The text keeps the choices readable in history and for older clients; the card uses meta
     let hub = &state.questions;
+    let reason = QuestionReason { why_you: why_you.as_deref(), checked: checked.as_deref() };
     let mut waiter = None;
     let created = state
         .db
-        .create_question_with_card(&place, &question, &choices, |q| {
+        .create_question_with_card(&place, &question, &choices, reason, |q| {
             waiter = Some((q.id.clone(), hub.register(&q.id)));
             let text = format!("{}\n\nChoices: {}", q.question, choices.join(" · "));
             let (msg, extra) = place_message(q, "kwant", &scope.kwant_id, text);
-            let shown = Question { why_you: why_you.clone(), checked: checked.clone(), ..q.clone() };
-            Some((msg, MessageExtra { meta: Some(card_meta(&shown)), ..extra }))
+            Some((msg, MessageExtra { meta: Some(card_meta(q)), ..extra }))
         })
         .await;
-    let (mut q, card) = match created {
+    let (q, card) = match created {
         Ok(v) => v,
         Err(e) => {
             if let Some((id, _)) = waiter {
@@ -277,11 +277,6 @@ pub async fn tool_ask(state: &AppState, scope: &SelfScope, args: &Value) -> (Str
         return ("Could not save the question.".into(), true);
     };
     let _guard = WaiterGuard { hub, id: q.id.clone() };
-    if why_you.is_some() || checked.is_some() {
-        let _ = state.db.set_question_reason(&q.id, why_you.as_deref(), checked.as_deref()).await;
-        q.why_you = why_you;
-        q.checked = checked;
-    }
     if let Some(card) = card {
         if let Some(t) = &q.thread_id {
             let _ = state.db.touch_thread(t).await;
@@ -590,7 +585,7 @@ pub async fn record_native(state: &AppState, place: &QuestionPlace, kwant_name: 
     for (question, choices) in native_questions(args) {
         let created = state
             .db
-            .create_question_with_card(place, &question, &choices, |q| {
+            .create_question_with_card(place, &question, &choices, QuestionReason::default(), |q| {
                 let text = match choices.is_empty() {
                     true => q.question.clone(),
                     false => format!("{}\n\nChoices: {}", q.question, choices.join(" · ")),

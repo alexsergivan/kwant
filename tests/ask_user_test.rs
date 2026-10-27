@@ -111,6 +111,8 @@ async fn a_question_is_never_visible_without_its_card_and_waiter() {
     };
     let id = q["id"].as_str().unwrap().to_string();
     let mid = q["message_id"].as_str().unwrap_or_else(|| panic!("open question without its card: {q}")).to_string();
+    // Why the bot asked and what it checked are saved with the question, not after it
+    assert_eq!((q["why_you"].as_str(), q["checked"].as_str()), (Some("irreversible"), Some("Read the release notes.")), "{q}");
     assert!(question(&env, &id).await["waiting"].as_bool().unwrap(), "open question without a waiting turn");
     assert!(messages(&env, &env.a).await.iter().any(|m| m.id == mid), "card message missing");
     let (s, v) = call(&env.app, "POST", &format!("/api/questions/{id}/answer"), Some(json!({"choice": 0}))).await;

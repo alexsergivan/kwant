@@ -118,6 +118,14 @@ pub fn clean_question(question: &str, choices: &[String]) -> Result<(String, Vec
     Ok((q.to_string(), out))
 }
 
+/// Why the bot asked (`why_you`) and what it checked first, saved with the question so no
+/// reader ever sees an open question without them.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QuestionReason<'a> {
+    pub why_you: Option<&'a str>,
+    pub checked: Option<&'a str>,
+}
+
 /// Where a question is asked.
 #[derive(Debug, Clone, Default)]
 pub struct QuestionPlace {
@@ -157,24 +165,13 @@ impl Database {
         Ok(())
     }
 
-    /// Saves why the bot asked and what it checked first.
-    pub async fn set_question_reason(&self, id: &str, why_you: Option<&str>, checked: Option<&str>) -> Result<(), DbError> {
-        sqlx::query("UPDATE questions SET why_you = ?, checked = ? WHERE id = ?")
-            .bind(why_you)
-            .bind(checked)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     pub async fn create_question(
         &self,
         place: &QuestionPlace,
         question: &str,
         choices: &[String],
     ) -> Result<Question, QuestionError> {
-        let (q, _) = self.create_question_with_card(place, question, choices, |_| None).await?;
+        let (q, _) = self.create_question_with_card(place, question, choices, QuestionReason::default(), |_| None).await?;
         Ok(q)
     }
 
@@ -185,6 +182,7 @@ impl Database {
         place: &QuestionPlace,
         question: &str,
         choices: &[String],
+        reason: QuestionReason<'_>,
         card: impl FnOnce(&Question) -> Option<(NewMessage, MessageExtra)>,
     ) -> Result<(Question, Option<Message>), QuestionError> {
         // The first statement writes, so the transaction takes SQLite's write lock up front
@@ -192,8 +190,8 @@ impl Database {
         let mut tx = self.pool.begin().await?;
         let id = Uuid::new_v4().to_string();
         let inserted = sqlx::query(
-            "INSERT INTO questions (id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, question, choices, status, created_at)
-             SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?
+            "INSERT INTO questions (id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, question, choices, why_you, checked, status, created_at)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?
              WHERE (SELECT COUNT(*) FROM questions WHERE kwant_id = ? AND status = 'open') < ?",
         )
         .bind(&id)
@@ -204,6 +202,8 @@ impl Database {
         .bind(&place.turn_id)
         .bind(question)
         .bind(serde_json::to_string(choices).unwrap_or_else(|_| "[]".into()))
+        .bind(reason.why_you)
+        .bind(reason.checked)
         .bind(Utc::now())
         .bind(&place.kwant_id)
         .bind(MAX_OPEN_PER_KWANT)
