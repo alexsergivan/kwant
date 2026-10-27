@@ -30,7 +30,7 @@ Task `state` (exactly these strings):
 | `ready` | Ready | Can be claimed. |
 | `working` | Working | A bot holds a live lease (`claim`). |
 | `needs_you` | Needs you | The owner has an open question card, approval card or human step (`needs_you` lists them). |
-| `review` | Review | Owner says done. Waiting for its checks. `checks_summary.status = "not_checked"` when there's no check yet. A check waiting for the person's approval keeps it here and adds a `check_approval` item to `needs_you`. |
+| `review` | Review | Owner says done. Waiting for its checks. `checks_summary.status = "not_checked"` when no check that counts exists and none waits for approval. A check waiting for the person's approval keeps it here and adds a `check_approval` item to `needs_you`. |
 | `verified` | Verified | Every required check that counts has passed, none waits for approval, and at least one isn't the owner's own (see §4). Terminal. |
 | `blocked` | badge | `blocked_reason` says why (owner/person said so, or `budget`). |
 | `failed` | badge | Checks failed `max_attempts` times. The person can retry. |
@@ -128,7 +128,8 @@ outcome_checks(id, task_id, kind, spec JSON, required, approved, status, output_
 `checks_summary` on each task: `{"status": "not_checked" | "pending" | "passed" | "failed",
 "passed": n, "failed": n, "needs_approval": n, "total": n}`. `passed`/`failed` count checks that
 count; `needs_approval` counts checks waiting for the person. `status` is `passed` only when the task
-could be verified on them, and `pending` while any check waits for approval.
+could be verified on them, and `pending` while a required check waits for approval (an optional
+one waiting is counted in `needs_approval` but doesn't hold the task).
 
 ## 5. Bot tools (MCP self tools; only while `mission_board` is on)
 

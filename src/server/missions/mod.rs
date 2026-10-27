@@ -343,6 +343,8 @@ pub async fn evaluate(state: &AppState, task_id: &str) -> Option<Task> {
 pub fn checks_summary(task: &Task, checks: &[OutcomeCheck]) -> Value {
     let live: Vec<&OutcomeCheck> = checks.iter().filter(|c| counts(task, c)).collect();
     let waiting = checks.iter().filter(|c| !c.approved).count();
+    // An optional check waiting for approval is listed but doesn't hold the task (see [`verdict`])
+    let holding = checks.iter().any(|c| c.required && !c.approved);
     let gating = |c: &&&OutcomeCheck| c.required;
     let passed = live.iter().filter(|c| c.status == "passed").count();
     let failed = live.iter().filter(gating).filter(|c| matches!(c.status.as_str(), "failed" | "error")).count();
@@ -350,7 +352,7 @@ pub fn checks_summary(task: &Task, checks: &[OutcomeCheck]) -> Value {
         "not_checked"
     } else if failed > 0 {
         "failed"
-    } else if waiting > 0 || live.iter().filter(gating).any(|c| c.status != "passed") || !live.iter().any(gating) {
+    } else if holding || live.iter().filter(gating).any(|c| c.status != "passed") || !live.iter().any(|c| c.required) {
         "pending"
     } else {
         "passed"
@@ -954,7 +956,8 @@ mod tests {
         own.approved_by = Some("auto".into());
         assert!(!counts(&t, &own));
         assert_eq!(verdict(&t, &[own.clone()], None), Verdict::Waiting, "its own file_exists doesn't verify it");
-        assert_eq!(checks_summary(&t, &[own.clone()])["status"], "pending");
+        // It was added before the bot became the owner, so it ran, but nothing that counts checked it
+        assert_eq!(checks_summary(&t, &[own.clone()])["status"], "not_checked");
         own.approved_by = Some("person".into());
         assert!(counts(&t, &own));
         assert_eq!(verdict(&t, &[own.clone()], None), Verdict::Pass);
