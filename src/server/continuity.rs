@@ -110,7 +110,8 @@ pub async fn prompt_block(
             shows. It never needs the user's approval.\n\
             - When a request needs an app you can't reach (Google Search Console, Google Analytics, a CRM…), \
             `connection_suggest` posts a one-tap connection card. Post it in the same turn rather than asking whether to: \
-            it connects nothing until the user signs in. Then carry on with everything you can do without it.\n\
+            it connects nothing until the user signs in. Never end with an offer to post one (\"I can suggest a connection if \
+            you'd like\"): post it, then carry on with everything you can do without it.\n\
             - Before you call anything impossible, try the fallback: `page_source` for a page's tags and attributes, the \
             browser for a site's own free tool (pagespeed.web.dev when the PageSpeed API is rate-limited), web search for \
             public data. When access is truly missing, offer the concrete fix: `connection_suggest` for an app, `mcp_search` \
