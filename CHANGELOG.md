@@ -54,6 +54,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and blocked work. Turn it on in Settings → Mission board. It works on phone and desktop.
 
 ### Changed
+- **Only you change what goes into a bot's prompt.** Approving, rejecting, making or editing a skill,
+  writing a bot's notes, and changing team or channel instructions are now refused when a bot calls the
+  API with its own token; bots keep proposing skills and saving their own notes with their tools.
+  Notes that came in with an import are labelled "imported" for the bots instead of "written by the
+  person".
 - **Mission Control: a restore no longer starts the task again by itself.** A restored task that could
   run waits until you press Run; "restore and run again" keeps the old behaviour. A restore conflict
   names another task only when that task's own file edits wrote the file; otherwise it says "changed
