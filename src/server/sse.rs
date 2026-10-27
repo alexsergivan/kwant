@@ -57,8 +57,8 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         | E::ToolCallPending { .. }
         | E::ToolCallCompleted { .. }
         | E::Activity { .. } => Vec::new(),
-        // Never broadcast: the turn's stall watchdog takes it
-        E::Progress => Vec::new(),
+        // Never broadcast: the turn's stall watchdog and spend meter take them
+        E::Progress | E::UsageSoFar { .. } => Vec::new(),
         E::ApprovalRequired { id, .. } | E::ApprovalWithdrawn { id } => vec![Owner::Approval(id.clone())],
         E::TurnComplete { kwant_id, .. } => contexts([kwant_id]),
         E::TurnStarted { kwant_id, context_id, thread_id, .. }
@@ -210,6 +210,7 @@ mod tests {
             E::ToolCallPending { id: s("x"), name: s("x"), args: json!({}) },
             E::ToolCallCompleted { id: s("x"), result: json!({}) },
             E::Progress,
+            E::UsageSoFar { fresh: 1 },
             E::ApprovalRequired { id: s("a"), tool_name: s("x"), details: json!({}) },
             E::ApprovalWithdrawn { id: s("a") },
             E::TurnComplete { tokens: 1, duration_ms: 1, kwant_id: Some(s("k")), profile_id: None },
@@ -301,6 +302,7 @@ mod tests {
                 | E::ToolCallPending { .. }
                 | E::ToolCallCompleted { .. }
                 | E::Progress
+                | E::UsageSoFar { .. }
                 | E::ApprovalRequired { .. }
                 | E::ApprovalWithdrawn { .. }
                 | E::TurnComplete { .. }
@@ -346,7 +348,7 @@ mod tests {
     #[test]
     fn every_event_is_placed_in_a_space_or_is_global() {
         // Only ever sent inside a turn; bare, they are dropped from scoped streams on purpose
-        let turn_only = ["TextDelta", "ThinkingDelta", "ToolCallPending", "ToolCallCompleted", "Progress", "activity"];
+        let turn_only = ["TextDelta", "ThinkingDelta", "ToolCallPending", "ToolCallCompleted", "Progress", "UsageSoFar", "activity"];
         for e in samples() {
             let t = wire_type(&e);
             if turn_only.contains(&t.as_str()) && !matches!(e, RuntimeEvent::Scoped { .. }) {
