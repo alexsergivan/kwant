@@ -41,7 +41,8 @@ export interface Mission {
 }
 
 export interface NeedsYouItem {
-  kind: 'question' | 'approval' | 'human_step';
+  /** check_approval: a check waits for the person's OK (id = the check's id); only on tasks in review. */
+  kind: 'question' | 'approval' | 'human_step' | 'check_approval';
   id: string;
   text: string;
 }
@@ -56,6 +57,8 @@ export interface ChecksSummary {
   status: ChecksStatus;
   passed: number;
   failed: number;
+  /** Checks waiting for the person to allow them (older servers leave it out). */
+  needs_approval?: number;
   total: number;
 }
 
@@ -99,6 +102,10 @@ export interface Check {
   spec: Record<string, unknown>;
   required: boolean;
   approved: boolean;
+  /** Who let it run and count; null while it waits for approval. */
+  approved_by?: 'person' | 'mission' | 'auto' | null;
+  /** Whether it can count toward Verified (the owner's own check can't until you allow it). */
+  counts?: boolean;
   status: CheckStatus;
   output_excerpt: string | null;
   checked_by: string | null;
@@ -157,6 +164,8 @@ export interface Insights {
   false_success_7d: number;
   needs_you_now: number;
   blocked_now: number;
+  /** Minutes tasks spent blocked over the last 7 days (older servers leave it out). */
+  blocked_minutes_7d?: number;
   interventions_7d: number;
   tokens_7d: number;
   tokens_per_verified_7d: number | null;
@@ -278,8 +287,25 @@ export function costText(spent: number, budget: number): string {
 /** 0..1 for a spend bar. */
 export const costRatio = (spent: number, budget: number): number => (budget > 0 ? Math.max(0, Math.min(1, spent / budget)) : 0);
 
+/** "45 min", "3 h", "1.5 h", "2 d": a plain length of time from minutes. */
+export function durationText(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes));
+  if (m < 60) return `${m} min`;
+  const h = m / 60;
+  if (h < 48) return `${h < 10 ? trim(Math.round(h * 2) / 2) : Math.round(h)} h`;
+  const d = h / 24;
+  return `${d < 10 ? trim(Math.round(d * 2) / 2) : Math.round(d)} d`;
+}
+
+/** "Waiting for you to allow 1 check" when checks wait for the person's OK, else null. */
+export function waitingApprovalText(n: number | null | undefined): string | null {
+  if (!n || n <= 0) return null;
+  return n === 1 ? 'Waiting for you to allow 1 check' : `Waiting for you to allow ${n} checks`;
+}
+
 /** The one-line check chip on a card. A task that has never been checked says so, plainly. */
 export function checksText(s: ChecksSummary): { text: string; tone: Tone } {
+  if (s.needs_approval && s.needs_approval > 0) return { text: s.needs_approval === 1 ? '1 check needs your OK' : `${s.needs_approval} checks need your OK`, tone: 'amber' };
   if (s.total === 0 || s.status === 'not_checked') return { text: 'Not checked', tone: 'zinc' };
   if (s.status === 'failed') return { text: s.failed === 1 ? '1 check failed' : `${s.failed} checks failed`, tone: 'rose' };
   if (s.status === 'pending') return { text: `${s.passed} of ${s.total} checks passed`, tone: 'amber' };
@@ -321,7 +347,7 @@ export function cardStatus(t: Task, names: Record<string, string> = {}, now: num
     case 'needs_you':
       return t.needs_you[0]?.text ?? 'A bot is waiting for you';
     case 'review':
-      return t.checks_summary.status === 'not_checked' ? 'Bot says done. Not checked yet' : 'Bot says done. Checking';
+      return waitingApprovalText(t.checks_summary.needs_approval) ?? (t.checks_summary.status === 'not_checked' ? 'Bot says done. Not checked yet' : 'Bot says done. Checking');
     case 'verified':
       return t.finished_at ? `Verified ${ago(t.finished_at, now)}` : 'Verified';
     default:
@@ -391,6 +417,8 @@ export interface ReceiptLine {
   output: Evidence | null;
   /** The owner's own pass: shown, but it doesn't count toward Verified. */
   ownClaim: boolean;
+  /** Why this check doesn't count toward Verified yet, or null when it does. */
+  notCounting: string | null;
 }
 
 export interface Receipt {
@@ -401,6 +429,8 @@ export interface Receipt {
   notChecked: boolean;
   /** The passing check that made it Verified, when there is one. */
   verifiedBy: ReceiptLine | null;
+  /** Why a task in Review isn't Verified yet because checks wait for the person ("Waiting for you to allow 1 check"). */
+  waitingOnYou: string | null;
 }
 
 /** Builds the evidence receipt: every check with its result and output, newest result first per check. */
@@ -416,14 +446,22 @@ export function buildReceipt(d: Pick<TaskDetail, 'task' | 'checks' | 'evidence'>
       by: c.checked_by ? actorName(c.checked_by, c.checked_by_name, names) : null,
       output: c.evidence_id ? byId.get(c.evidence_id) ?? null : null,
       ownClaim: !!owner && c.checked_by === owner,
+      notCounting:
+        c.counts !== false
+          ? null
+          : !!owner && c.requested_by === owner
+            ? 'Doesn’t count yet: the task’s own bot added it. It counts once you allow it.'
+            : 'Doesn’t count toward Verified yet.',
     }));
   const ran = lines.some((l) => l.check.status === 'passed' || l.check.status === 'failed' || l.check.status === 'error');
-  const verifiedBy = d.task.state === 'verified' ? lines.find((l) => l.check.status === 'passed' && !l.ownClaim) ?? null : null;
+  const verifiedBy = d.task.state === 'verified' ? lines.find((l) => l.check.status === 'passed' && !l.ownClaim && !l.notCounting) ?? null : null;
+  const waiting = d.task.checks_summary.needs_approval ?? d.checks.filter((c) => c.status === 'needs_approval' && c.required).length;
   return {
     lines,
     attachments: d.evidence.filter((e) => e.kind !== 'check_output').sort((a, b) => Date.parse(b.captured_at) - Date.parse(a.captured_at)),
     notChecked: !ran,
     verifiedBy,
+    waitingOnYou: d.task.state === 'review' ? waitingApprovalText(waiting) : null,
   };
 }
 

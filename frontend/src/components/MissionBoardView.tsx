@@ -46,6 +46,7 @@ import {
   columnOf,
   costRatio,
   costText,
+  durationText,
   eventText,
   formatBytes,
   formatTokens,
@@ -125,7 +126,8 @@ const initials = (name: string) =>
 
 export const InsightsStrip: React.FC<{ insights: Insights | null }> = ({ insights }) => {
   if (!insights) return null;
-  const items: Array<{ label: string; value: string; hint: string; tone?: Tone }> = [
+  const blockedMin = insights.blocked_minutes_7d;
+  const items: Array<{ label: string; value: string; hint: string; tone?: Tone; sub?: string }> = [
     { label: 'Verified this week', value: String(insights.verified_7d), hint: 'Tasks a check confirmed in the last 7 days', tone: 'emerald' },
     {
       label: 'False successes',
@@ -134,7 +136,15 @@ export const InsightsStrip: React.FC<{ insights: Insights | null }> = ({ insight
       tone: insights.false_success_7d > 0 ? 'rose' : undefined,
     },
     { label: 'Needs you now', value: String(insights.needs_you_now), hint: 'Waiting on a question, approval or step from you', tone: insights.needs_you_now > 0 ? 'amber' : undefined },
-    { label: 'Blocked now', value: String(insights.blocked_now), hint: 'Tasks that can’t move until something changes', tone: insights.blocked_now > 0 ? 'rose' : undefined },
+    typeof blockedMin === 'number'
+      ? {
+          label: 'Blocked this week',
+          value: durationText(blockedMin),
+          hint: 'Time tasks spent blocked in the last 7 days',
+          tone: insights.blocked_now > 0 ? 'rose' : undefined,
+          sub: insights.blocked_now > 0 ? `${insights.blocked_now} blocked now` : undefined,
+        }
+      : { label: 'Blocked now', value: String(insights.blocked_now), hint: 'Tasks that can’t move until something changes', tone: insights.blocked_now > 0 ? 'rose' : undefined },
     {
       label: 'Tokens per verified',
       value: insights.tokens_per_verified_7d === null ? '—' : formatTokens(insights.tokens_per_verified_7d),
@@ -149,6 +159,7 @@ export const InsightsStrip: React.FC<{ insights: Insights | null }> = ({ insight
           <div key={it.label} title={it.hint} className={`${card} px-3 py-2 ${i === items.length - 1 ? 'col-span-2 sm:col-span-1' : ''}`}>
             <dt className="text-[11px] text-zinc-400 truncate">{it.label}</dt>
             <dd className={`text-lg font-semibold tabular-nums ${it.tone ? valueTone[it.tone] ?? 'text-zinc-100' : 'text-zinc-100'}`}>{it.value}</dd>
+            {it.sub && <dd className="text-[10px] text-zinc-400 truncate">{it.sub}</dd>}
           </div>
         ))}
       </dl>
@@ -229,12 +240,13 @@ export const TaskCard: React.FC<{
           {t.state === 'blocked' && <Badge tone="rose">Blocked</Badge>}
           {t.state === 'failed' && <Badge tone="rose">Failed</Badge>}
           {t.state === 'backlog' && <Badge tone="zinc">Waiting</Badge>}
+          {t.state === 'review' && (t.checks_summary.needs_approval ?? 0) > 0 && <Badge tone="amber">Needs you</Badge>}
           {t.priority >= 2 && <Badge tone={t.priority >= 3 ? 'rose' : 'amber'}>{priorityLabel(t.priority)}</Badge>}
           {showMission && t.mission_title && <span className="min-w-0 truncate text-[11px] text-zinc-500">{t.mission_title}</span>}
         </span>
         <span className="block text-sm font-medium text-zinc-100 break-words">{t.title}</span>
         {status && (
-          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' ? 'text-amber-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
+          <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || (t.state === 'review' && (t.checks_summary.needs_approval ?? 0) > 0) ? 'text-amber-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
             {status}
           </span>
         )}
@@ -418,6 +430,11 @@ export const EvidenceReceipt: React.FC<{
         {receipt.verifiedBy.check.finished_at ? ` ${ago(receipt.verifiedBy.check.finished_at)}` : ''}.
       </p>
     )}
+    {receipt.waitingOnYou && (
+      <p className="px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-200" data-waiting-on-you>
+        Not verified yet. {receipt.waitingOnYou}: a bot added it, so it runs and counts only after you allow it below.
+      </p>
+    )}
     {receipt.notChecked && (
       <div className="px-3 py-2 rounded-lg border border-dashed border-zinc-700 text-xs" data-not-checked>
         <p className="font-semibold text-zinc-200">Not checked</p>
@@ -442,12 +459,17 @@ export const EvidenceReceipt: React.FC<{
                 <p className="mt-1 text-[10px] text-zinc-500">
                   {[l.by ? `Checked by ${l.by}` : null, l.check.finished_at ? ago(l.check.finished_at) : null].filter(Boolean).join(' · ') || 'Hasn’t run yet'}
                 </p>
+                {l.notCounting && !l.ownClaim && (
+                  <p className="mt-1 text-[11px] text-amber-200" data-not-counting>
+                    {l.notCounting}
+                  </p>
+                )}
                 {l.ownClaim && <p className="mt-1 text-[11px] text-amber-200">This is the owner’s own check, so it doesn’t count toward Verified.</p>}
               </div>
             </div>
             {l.check.status === 'needs_approval' && onApproveCheck && (
               <div className="flex flex-wrap items-center gap-2 pl-6">
-                <p className="text-[11px] text-amber-200 flex-1 min-w-[10rem]">A bot added this check. It runs only after you OK it.</p>
+                <p className="text-[11px] text-amber-200 flex-1 min-w-[10rem]">{l.notCounting ? '' : 'A bot added this check. It runs only after you OK it.'}</p>
                 <button type="button" disabled={busy} onClick={() => onApproveCheck(l.check)} className={quietBtn}>
                   Allow this check
                 </button>
@@ -639,10 +661,21 @@ export const TaskDetailBody: React.FC<{
             {t.needs_you.map((n) => (
               <li key={n.id} className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-100">
                 <span className="flex-1 min-w-[10rem] break-words">
-                  <span className="font-medium">{n.kind === 'approval' ? 'Approval' : n.kind === 'human_step' ? 'Step in the browser' : 'Question'}: </span>
+                  <span className="font-medium">
+                    {n.kind === 'approval' ? 'Approval' : n.kind === 'human_step' ? 'Step in the browser' : n.kind === 'check_approval' ? 'Check to allow' : 'Question'}:{' '}
+                  </span>
                   {n.text}
                 </span>
-                {chat && onOpenChat && (
+                {n.kind === 'check_approval' ? (
+                  (() => {
+                    const c = detail.checks.find((x) => x.id === n.id);
+                    return c && c.status === 'needs_approval' ? (
+                      <button type="button" disabled={busy} onClick={() => onApproveCheck(c)} className="px-2 py-1 rounded border border-amber-500/40 hover:bg-amber-500/10 min-h-[32px] disabled:opacity-50">
+                        Allow this check
+                      </button>
+                    ) : null;
+                  })()
+                ) : chat && onOpenChat && (
                   <button type="button" onClick={() => onOpenChat(t)} className="px-2 py-1 rounded border border-amber-500/40 hover:bg-amber-500/10 min-h-[32px]">
                     Answer in chat
                   </button>
@@ -830,7 +863,12 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
           {error && !needsToken && (
             <div role="alert" className="px-3 py-2 rounded-lg border border-rose-500/20 bg-rose-500/5 flex items-center gap-2 text-xs text-rose-300">
               <AlertTriangle size={14} className="shrink-0" aria-hidden="true" />
-              <span className="flex-1">{error}</span>
+              <span className="flex-1 min-w-0">
+                <span className="block font-medium">Couldn’t load the board.</span>
+                <span className="block mt-0.5 text-[11px] text-rose-300/70 break-words" data-error-detail>
+                  {error}
+                </span>
+              </span>
               <button type="button" onClick={onRefresh} className="shrink-0 px-2 py-0.5 rounded border border-rose-500/30 hover:bg-rose-500/10 min-h-[32px]">
                 Retry
               </button>
@@ -1110,7 +1148,10 @@ export const MissionBoardPage: React.FC<{
             />
           ) : detailError ? (
             <div role="alert" className="px-3 py-2 rounded-lg border border-rose-500/20 bg-rose-500/5 flex items-center gap-2 text-xs text-rose-300">
-              <span className="flex-1">{detailError}</span>
+              <span className="flex-1 min-w-0">
+                <span className="block font-medium">Couldn’t load this task.</span>
+                <span className="block mt-0.5 text-[11px] text-rose-300/70 break-words">{detailError}</span>
+              </span>
               <button type="button" onClick={() => loadDetail(openId)} className="shrink-0 px-2 py-0.5 rounded border border-rose-500/30 hover:bg-rose-500/10 min-h-[32px]">
                 Retry
               </button>

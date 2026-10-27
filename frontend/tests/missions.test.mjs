@@ -165,6 +165,44 @@ test('a check a bot added waits for the person, with an Allow button', () => {
   assert.match(html, /Allow this check/);
 });
 
+test("the owner's own check waits for you: the receipt says why the task isn't Verified yet", () => {
+  // contract.md §13: an owner-added check starts unapproved, doesn't count, and keeps the task in Review.
+  const own = check({ id: 'ch2', kind: 'file_exists', spec: { path: 'out.txt' }, status: 'needs_approval', approved: false, approved_by: null, counts: false, requested_by: 'k_lin', checked_by: null, finished_at: null });
+  const passed = check({ approved_by: 'mission', counts: true });
+  const t = task({
+    state: 'review',
+    checks_summary: { status: 'pending', passed: 1, failed: 0, needs_approval: 1, total: 2 },
+    needs_you: [{ kind: 'check_approval', id: 'ch2', text: 'Allow the check “File exists: out.txt”' }],
+  });
+  const d = { task: t, checks: [passed, own], evidence: [], events: [] };
+  const r = m.buildReceipt(d, names);
+  assert.equal(r.waitingOnYou, 'Waiting for you to allow 1 check');
+  assert.equal(r.verifiedBy, null, 'a task in review names no verifying check');
+  assert.match(r.lines.find((l) => l.check.id === 'ch2').notCounting, /the task’s own bot added it/);
+  assert.equal(r.lines.find((l) => l.check.id === 'ch1').notCounting, null);
+
+  let approved = null;
+  const html = ui.detail({ detail: d, names, now: NOW, onAction: noop, onApproveCheck: (c) => (approved = c), onOpenChat: noop });
+  assert.match(html, /data-waiting-on-you/);
+  assert.match(html, /Not verified yet\. Waiting for you to allow 1 check/);
+  assert.match(html, /Check to allow:/);
+  assert.match(html, /Doesn’t count yet: the task’s own bot added it/);
+  assert.equal((html.match(/Allow this check/g) || []).length, 2, 'one in Waiting for you, one on the receipt line');
+  assert.doesNotMatch(html, /Answer in chat/, 'a check to allow is not a chat question');
+
+  const c = ui.card({ task: t, names, now: NOW, onOpen: noop });
+  assert.match(c, /Needs you/);
+  assert.match(c, /Waiting for you to allow 1 check/);
+  assert.match(c, /1 check needs your OK/);
+  assert.equal(m.checksText({ status: 'pending', passed: 1, failed: 0, needs_approval: 2, total: 3 }).text, '2 checks need your OK');
+  assert.equal(m.waitingApprovalText(0), null);
+  assert.equal(m.waitingApprovalText(3), 'Waiting for you to allow 3 checks');
+  // Verified tasks never show the banner, and a passing check that doesn't count can't be the reason.
+  const v = m.buildReceipt({ task: task({ state: 'verified' }), checks: [check({ counts: false, requested_by: 'k_lin' })], evidence: [] }, names);
+  assert.equal(v.waitingOnYou, null);
+  assert.equal(v.verifiedBy, null);
+});
+
 test('only web links open; file paths and other schemes are shown as text', () => {
   assert.equal(m.safeHttps('https://a.example/x'), 'https://a.example/x');
   assert.equal(m.safeHttps('javascript:alert(1)'), null);
@@ -208,10 +246,27 @@ test('insights strip: verified this week, false successes, blocked', () => {
   const html = ui.insights({ insights: insightsRow });
   assert.match(html, /Verified this week/);
   assert.match(html, /False successes/);
-  assert.match(html, /Blocked now/);
+  assert.match(html, /Blocked now/, 'an older server without blocked_minutes_7d still shows the count');
   assert.match(html, /120k/);
   assert.equal(ui.insights({ insights: null }), '');
   assert.match(ui.insights({ insights: { ...insightsRow, tokens_per_verified_7d: null } }), /—/);
+});
+
+test('insights strip shows time blocked this week from blocked_minutes_7d', () => {
+  const html = ui.insights({ insights: { ...insightsRow, blocked_minutes_7d: 185 } });
+  assert.match(html, /Blocked this week/);
+  assert.match(html, />3 h</);
+  assert.match(html, /1 blocked now/);
+  assert.doesNotMatch(html, /Blocked now/);
+  const none = ui.insights({ insights: { ...insightsRow, blocked_now: 0, blocked_minutes_7d: 0 } });
+  assert.match(none, />0 min</);
+  assert.doesNotMatch(none, /blocked now/);
+  assert.equal(m.durationText(45), '45 min');
+  assert.equal(m.durationText(90), '1.5 h');
+  assert.equal(m.durationText(185), '3 h');
+  assert.equal(m.durationText(14 * 60), '14 h');
+  assert.equal(m.durationText(60 * 60), '2.5 d');
+  assert.equal(m.durationText(-5), '0 min');
 });
 
 test('a draft mission waits for the person; over budget says what it means', () => {
@@ -229,8 +284,10 @@ test('a draft mission waits for the person; over budget says what it means', () 
 test('board states: loading, empty, error, sign-in', () => {
   assert.match(ui.view(viewProps({ tasks: null, loading: true })), /Loading the board/);
   assert.match(ui.view(viewProps({ tasks: [], missions: [] })), /No tasks yet/);
-  const err = ui.view(viewProps({ error: 'Could not reach the server.' }));
+  const err = ui.view(viewProps({ error: 'Boom.' }));
   assert.match(err, /role="alert"/);
+  assert.match(err, /Couldn’t load the board\./, 'a plain headline, not the raw server text');
+  assert.match(err, /data-error-detail[^>]*>Boom\.</, 'the server detail stays, in small text underneath');
   assert.match(err, /Retry/);
   assert.match(ui.view(viewProps({ needsToken: true })), /Confirm it’s you/);
   assert.match(ui.view(viewProps({ onBack: noop })), /aria-label="Back to chats"/);
