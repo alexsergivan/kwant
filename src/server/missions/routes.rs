@@ -315,17 +315,55 @@ pub async fn insights(State(state): State<AppState>, Scope(space): Scope) -> Res
     let needs_you = all.iter().filter(|t| t.state == "needs_you").count();
     let blocked = all.iter().filter(|t| t.state == "blocked").count();
     let tokens: i64 = all.iter().filter(|t| t.updated_at >= since).map(|t| t.spent_tokens).sum();
+    let still_blocked: Vec<&str> = all.iter().filter(|t| t.state == "blocked").map(|t| t.id.as_str()).collect();
+    let blocked_minutes = blocked_minutes(&events, &still_blocked, since, chrono::Utc::now());
     let per = if verified.is_empty() { Value::Null } else { json!(tokens / verified.len() as i64) };
     Json(json!({
         "verified_7d": verified.len(),
         "false_success_7d": false_success,
         "needs_you_now": needs_you,
         "blocked_now": blocked,
+        "blocked_minutes_7d": blocked_minutes,
         "interventions_7d": interventions,
         "tokens_7d": tokens,
         "tokens_per_verified_7d": per,
     }))
     .into_response()
+}
+
+/// Minutes tasks spent in `blocked` between `since` and `now`, from the state events in that
+/// window. A task whose first event in the window leaves `blocked`, or that is still blocked with
+/// no event in the window, counts from `since`.
+pub fn blocked_minutes(
+    events: &[TaskEvent],
+    still_blocked: &[&str],
+    since: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> i64 {
+    let mut open: std::collections::HashMap<&str, chrono::DateTime<chrono::Utc>> = Default::default();
+    let mut seen: std::collections::HashSet<&str> = Default::default();
+    let mut total = chrono::Duration::zero();
+    for e in events.iter().filter(|e| e.to_state.is_some()) {
+        let id = e.task_id.as_str();
+        if seen.insert(id) && e.from_state.as_deref() == Some("blocked") {
+            open.insert(id, since);
+        }
+        if let Some(start) = open.remove(id) {
+            total += e.created_at - start;
+        }
+        if e.to_state.as_deref() == Some("blocked") {
+            open.insert(id, e.created_at);
+        }
+    }
+    for id in still_blocked {
+        if !seen.contains(id) {
+            open.insert(id, since);
+        }
+    }
+    for start in open.values() {
+        total += now - *start;
+    }
+    total.num_minutes().max(0)
 }
 
 // Tasks
@@ -762,4 +800,42 @@ pub async fn approve_check(State(state): State<AppState>, RawQuery(q): RawQuery,
         emit_task(&state, &t).await;
     }
     Json(super::check_json(&check, super::name_of(&state, check.checked_by.as_deref()).await)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, TimeZone, Utc};
+
+    fn ev(task: &str, from: &str, to: &str, at: chrono::DateTime<Utc>) -> TaskEvent {
+        TaskEvent {
+            id: 0,
+            task_id: task.into(),
+            mission_id: None,
+            kind: "state".into(),
+            actor: "person".into(),
+            from_state: Some(from.into()),
+            to_state: Some(to.into()),
+            detail: String::new(),
+            created_at: at,
+        }
+    }
+
+    #[test]
+    fn blocked_minutes_sums_time_in_blocked_within_the_window() {
+        let since = Utc.with_ymd_and_hms(2026, 10, 20, 0, 0, 0).unwrap();
+        let now = since + Duration::days(7);
+        let events = vec![
+            // a: blocked for 30 minutes inside the window
+            ev("a", "ready", "blocked", since + Duration::hours(1)),
+            ev("a", "blocked", "ready", since + Duration::hours(1) + Duration::minutes(30)),
+            // b: blocked before the window, unblocked 2 hours in
+            ev("b", "blocked", "ready", since + Duration::hours(2)),
+            // c: blocked 10 minutes before now and still blocked
+            ev("c", "ready", "blocked", now - Duration::minutes(10)),
+        ];
+        // d: blocked the whole window with no event in it
+        assert_eq!(blocked_minutes(&events, &["c", "d"], since, now), 30 + 120 + 10 + 7 * 24 * 60);
+        assert_eq!(blocked_minutes(&[], &[], since, now), 0);
+    }
 }

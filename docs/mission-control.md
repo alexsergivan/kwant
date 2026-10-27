@@ -201,7 +201,7 @@ claim conflict), 403 (bot token on a person route).
 //       check_started | check_result | review | budget | edited
 
 // Insights (counts, last 7 days unless noted)
-{"verified_7d": 0, "false_success_7d": 0, "needs_you_now": 0, "blocked_now": 0,
+{"verified_7d": 0, "false_success_7d": 0, "needs_you_now": 0, "blocked_now": 0, "blocked_minutes_7d": 0,
  "interventions_7d": 0, "tokens_7d": 0, "tokens_per_verified_7d": null}
 ```
 
