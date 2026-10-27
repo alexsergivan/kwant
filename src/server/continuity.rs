@@ -105,6 +105,11 @@ pub async fn prompt_block(
             suggest at most one or two good matches, then carry on with your reply as best you can without them. \
             If it needs a key, the user types it into the card itself. Once installed, its tools are yours from your next turn; \
             the first use of each new tool asks the user for one approval.\n\
+            - `page_source` reads a public page's HTML source: the <head> (title, meta description, canonical, robots, \
+            hreflang, Open Graph), headings, image alt text, links and structured data, none of which WebFetch or the browser \
+            shows. It never needs the user's approval.\n\
+            - When a request needs an app you can't reach (Google Search Console, Google Analytics, a CRM…), \
+            `connection_suggest` offers the user a one-tap connection card. Then carry on with everything you can do without it.\n\
             - You can set up and manage the app yourself; when asked, do it in that same turn instead of telling the user how. \
             When the user wants something to happen on its own (\"every morning\", \"each Friday\", \"remind me at 5\"), \
             `routine_create` schedules it (it runs as you and replies in this chat by default; calendar rules like \"the 1st of each \
@@ -131,6 +136,11 @@ pub async fn prompt_block(
             - Research before you ask: first try your tools (the named site and its pricing and docs pages, web search, files, \
             notes, earlier chats). Ask only what stays unknowable or is the person's decision, and say what you checked. Told \
             you could have looked it up? Look it up now.\n\
+            - Before you call anything impossible, try the fallback: `page_source` for a page's tags and attributes, the \
+            browser for a site's own free tool (pagespeed.web.dev when the PageSpeed API is rate-limited), web search for \
+            public data. When access is truly missing, offer the concrete fix: `connection_suggest` for an app, `mcp_search` \
+            and `mcp_suggest` for a tool server, or the exact key and where the user adds it. A bare \"not possible\" with no \
+            offered fix is the exception; then say what you tried.\n\
             - For a reversible choice (wording, order, a setting that can change later), don't `ask_user`: pick, state the \
             assumption in your reply and continue. Ask only before a step that can't be undone or reaches outside (sending, \
             paying, deleting, contacting someone), or with no sensible default.\n\
@@ -330,6 +340,7 @@ const READ_ONLY_SELF_TOOLS: &[&str] = &[
     "list_attachments",
     "read_attachment",
     "mcp_search",
+    super::page_source::TOOL,
     "skill_get",
     "task_list",
 ];
@@ -361,6 +372,7 @@ fn tool_list(scope: &SelfScope, board: bool) -> Value {
         }
         list.extend(super::skills::tools());
         list.extend(super::mcp_suggest::tools());
+        list.extend(super::page_source::tools());
         list.extend(super::bot_actions::tools());
         list.extend(super::hires::tools());
         if scope.sandbox_target.is_some() {
@@ -369,6 +381,7 @@ fn tool_list(scope: &SelfScope, board: bool) -> Value {
         if scope.origin.is_some() {
             list.extend(delegation_tools());
             list.extend(super::attachments::tools());
+            list.extend(super::connection_suggest::tools());
             if scope.cancel.is_some() {
                 list.extend(super::questions::tools());
                 if scope.sandbox_target.is_some() {
@@ -820,6 +833,8 @@ async fn call_tool(
         super::human_steps::TOOL => super::human_steps::tool_request(state, scope, args).await,
         "mcp_search" => super::mcp_suggest::tool_search(state, scope, args).await,
         "mcp_suggest" => super::mcp_suggest::tool_suggest(state, scope, args).await,
+        super::page_source::TOOL => super::page_source::tool_call(state, scope, args).await,
+        super::connection_suggest::TOOL if scope.origin.is_some() => super::connection_suggest::tool_call(state, scope, args).await,
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
         n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
         n if super::missions::tools::handles(n) => super::missions::tools::call(state, scope, n, args).await,

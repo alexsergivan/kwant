@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
+- **Bots try the way round before saying "not possible".** Bots can now read a public page's HTML with a
+  new `page_source` tool: meta description, canonical, robots, Open Graph tags, headings, image alt text
+  and structured data, which reading a page normally leaves out. When a bot lacks access to an app such
+  as Google Search Console, it offers you a connection card instead of stopping, and carries on with the
+  rest. Bots are told to try the fallback first, such as the PageSpeed website when the API is
+  rate-limited.
 - **Mission board: AutoFix, change approvals and restore.** A failed task shows why it failed in plain
   words, what AutoFix plans, its tries and what retries cost, with Retry now and Don't retry. Proposed
   changes to a check, the acceptance or a routine appear in Needs you with before and after, and only

@@ -460,6 +460,8 @@ pub fn prompt_block(folder: Option<&Path>, smart: bool) -> String {
     };
     format!(
         "\n\n[Your tools]\nYou can search the web (WebSearch) and read web pages (WebFetch) whenever it helps; cite the pages you used. \
+         WebFetch returns a summary of a page's text, not its HTML: for tags and attributes (meta description, canonical, \
+         alt text, structured data) use kwnt's `page_source` tool when you have it, else curl in Bash. \
          {place} {cards} \
          Ask for what you need and wait for their answer instead of giving up. If they deny it, say what you would have done."
     )
