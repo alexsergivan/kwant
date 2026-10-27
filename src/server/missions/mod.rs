@@ -348,7 +348,7 @@ pub async fn evaluate(state: &AppState, task_id: &str) -> Option<Task> {
             if moved.is_some() {
                 let bad = checks.iter().filter(|c| matches!(c.status.as_str(), "failed" | "error")).find(|c| c.required).or_else(|| checks.iter().find(|c| matches!(c.status.as_str(), "failed" | "error")));
                 if let Some(c) = bad {
-                    let text = format!("{} {}\n{}", c.kind, c.spec_value(), c.output_excerpt.as_deref().unwrap_or(""));
+                    let text = format!("{} {}\n{}", c.kind, autofix::redact_value(&c.spec_value()), c.output_excerpt.as_deref().unwrap_or(""));
                     autofix::record(state, task_id, "check", &c.status, &text, &why).await;
                 }
             }
@@ -522,7 +522,7 @@ pub async fn check_approvals(state: &AppState, task: &Task) -> Vec<Value> {
         .iter()
         .filter(|c| c.required && !c.approved)
         .map(|c| {
-            let text = format!("Allow this check: {} {}", c.kind, c.spec_value());
+            let text = format!("Allow this check: {} {}", c.kind, autofix::redact_value(&c.spec_value()));
             json!({"kind": "check_approval", "id": c.id, "text": text.chars().take(200).collect::<String>()})
         })
         .collect()
@@ -582,7 +582,8 @@ pub async fn mission_json(state: &AppState, m: &Mission) -> Value {
 pub fn check_json(task: &Task, c: &OutcomeCheck, checked_by_name: Option<String>) -> Value {
     let mut v = serde_json::to_value(c).unwrap_or(Value::Null);
     if let Some(obj) = v.as_object_mut() {
-        obj.insert("spec".into(), c.spec_value());
+        // The spec reaches the API and bots: a key typed into it is masked like check output
+        obj.insert("spec".into(), autofix::redact_value(&c.spec_value()));
         obj.insert("checked_by_name".into(), json!(checked_by_name));
         obj.insert("counts".into(), json!(counts(task, c)));
     }

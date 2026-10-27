@@ -292,7 +292,7 @@ async fn claim(state: &AppState, scope: &SelfScope, task: &Task) -> ToolResult {
             let mut out = json!({
                 "task": brief(&t),
                 "lease_minutes": lease / 60_000,
-                "checks": checks.iter().map(|c| json!({"id": c.id, "kind": c.kind, "spec": c.spec_value(), "approved": c.approved})).collect::<Vec<_>>(),
+                "checks": checks.iter().map(|c| json!({"id": c.id, "kind": c.kind, "spec": super::autofix::redact_value(&c.spec_value()), "approved": c.approved})).collect::<Vec<_>>(),
                 "next": "Do the work, attach evidence with task_attach_evidence, then task_update status=review.",
             });
             if let Some(note) = super::autofix::retry_note(state, &t).await {

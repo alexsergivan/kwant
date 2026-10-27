@@ -136,7 +136,7 @@ async fn prompt(state: &AppState, m: &Mission, t: &Task) -> String {
     let list: Vec<String> = checks
         .iter()
         .filter(|c| c.approved)
-        .map(|c| format!("- {} {}{}", c.kind, c.spec_value(), if c.required { "" } else { " (optional)" }))
+        .map(|c| format!("- {} {}{}", c.kind, super::autofix::redact_value(&c.spec_value()), if c.required { "" } else { " (optional)" }))
         .collect();
     let deps = state.db.dependencies_of(&t.id).await.unwrap_or_default();
     format!(

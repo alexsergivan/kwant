@@ -122,7 +122,7 @@ async fn http(url: &str, spec: &Value, person_ok: bool) -> Result<(bool, String)
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client.get(url).send().await.map_err(|e| format!("GET {url} failed: {e}"))?;
+    let resp = client.get(url).send().await.map_err(|e| send_error(url, &e))?;
     let status = resp.status().as_u16();
     let ok_status = match spec["expect_status"].as_u64() {
         Some(want) => u64::from(status) == want,
@@ -144,6 +144,19 @@ async fn http(url: &str, spec: &Value, person_ok: bool) -> Result<(bool, String)
         out.push_str(&format!("; {} \"{t}\"", if has { "contains" } else { "does not contain" }));
     }
     Ok((ok_status && has, out))
+}
+
+/// Why a GET didn't get a response. A refused or dropped connection and a timeout say so in
+/// words AutoFix classes as temporary; reqwest's own text ("error sending request") doesn't.
+fn send_error(url: &str, e: &reqwest::Error) -> String {
+    let why = if e.is_timeout() {
+        "timed out"
+    } else if e.is_connect() {
+        "connection refused or unreachable"
+    } else {
+        return format!("GET {url} failed: {e}");
+    };
+    format!("GET {url} failed: network error, {why} ({e})")
 }
 
 async fn file(kind: &str, rel: &str, spec: &Value, dir: &Path) -> Result<(bool, String), String> {

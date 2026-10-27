@@ -1098,22 +1098,24 @@ pub async fn restore(
     .await
 }
 
-/// `POST /api/tasks/:id/run` (person-only): lets a task a restore held be claimed again (D10).
-pub async fn run_held(State(state): State<AppState>, RawQuery(q): RawQuery, Path(id): Path<String>) -> Response {
-    let task = match load_task(&state, q.as_deref(), &id).await {
-        Ok(t) => t,
-        Err(r) => return r,
-    };
-    match state.db.set_task_hold(&task.id, false).await {
-        Ok(true) => {
-            let _ = state.db.task_event(&task.id, task.mission_id.as_deref(), "released", "person", &json!({})).await;
+/// `POST /api/tasks/:id/run` (person-only; `Idempotency-Key` optional): lets a task a restore
+/// held be claimed again (D10). The same key again replays the first 200 instead of `not_held`.
+pub async fn run_held(State(state): State<AppState>, RawQuery(q): RawQuery, headers: HeaderMap, Path(id): Path<String>) -> Response {
+    let route = format!("POST /api/tasks/{id}/run");
+    super::graph::idempotent(&state, &headers, route, || async {
+        let task = load_task(&state, q.as_deref(), &id).await?;
+        match state.db.set_task_hold(&task.id, false).await {
+            Ok(true) => {
+                let _ = state.db.task_event(&task.id, task.mission_id.as_deref(), "released", "person", &json!({})).await;
+            }
+            Ok(false) => return Err(coded(StatusCode::CONFLICT, "not_held", "the task isn't on hold")),
+            Err(e) => return Err(internal(e)),
         }
-        Ok(false) => return coded(StatusCode::CONFLICT, "not_held", "the task isn't on hold"),
-        Err(e) => return internal(e),
-    }
-    let t = state.db.get_task(&task.id).await.ok().flatten().unwrap_or(task);
-    emit_task(&state, &t).await;
-    Json(json!({"task": task_json(&state, &t).await})).into_response()
+        let t = state.db.get_task(&task.id).await.ok().flatten().unwrap_or(task);
+        emit_task(&state, &t).await;
+        Ok(json!({"task": task_json(&state, &t).await}))
+    })
+    .await
 }
 
 /// Fork `from_checkpoint` (B1 `POST /api/tasks/:id/fork`): writes the original's task-owned

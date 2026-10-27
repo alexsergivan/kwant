@@ -116,6 +116,8 @@ export interface Task {
   recovery_budget_tokens?: number;
   last_failure?: { class: FailureClass; summary: string; created_at: string } | null;
   autofix?: AutofixAttempt | null;
+  /** Retries AutoFix started for this task (running, succeeded or failed). */
+  autofix_attempts?: number;
 }
 
 // AutoFix (Phase B3, docs/mission-control.md §13)
@@ -164,7 +166,7 @@ export interface AutofixError {
 export type WorkflowTarget = 'check_spec' | 'task_acceptance' | 'max_attempts' | 'routine_instructions' | 'routine_schedule';
 export type WorkflowChangeStatus = 'proposed' | 'approved' | 'rejected' | 'applied' | 'stale';
 
-/** GET /api/workflow-changes (person only). */
+/** GET /api/workflow-changes?status=…&task_id=… (person only; both filters optional). */
 export interface WorkflowChange {
   id: string;
   task_id: string | null;

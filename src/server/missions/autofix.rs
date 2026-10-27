@@ -58,7 +58,7 @@ pub fn settings_error(mode: Option<&str>, pct: Option<i64>) -> Option<String> {
 
 // Classification
 
-const AUTH: [&str; 12] = [
+const AUTH: [&str; 17] = [
     "not logged in",
     "not signed in",
     "/login",
@@ -71,6 +71,12 @@ const AUTH: [&str; 12] = [
     "token has expired",
     "login has expired",
     "credit balance is too low",
+    // kwant's own messages when no account can take the turn (profile_turn.rs, drivers/engines.rs)
+    "signed out",
+    "key was rejected",
+    "no account can run bots",
+    "no other account is on",
+    "no custom api account is on",
 ];
 
 const TRANSIENT: [&str; 18] = [
@@ -146,6 +152,9 @@ fn strategy_for(class: &str) -> &'static str {
     }
 }
 
+/// What the person must do when AutoFix stopped short of the retry budget.
+pub const RECOVERY_BUDGET_FIX: &str = "Retry budget used up: raise it or retry by hand.";
+
 /// What the person must do for a failure AutoFix never retries.
 fn fix_text(class: &str, summary: &str) -> Option<String> {
     match class {
@@ -158,31 +167,43 @@ fn fix_text(class: &str, summary: &str) -> Option<String> {
 
 // Redaction
 
-/// Masks anything that looks like a key, token or password, line by line.
+/// Masks anything that looks like a key, token or password, line by line. Words are runs of
+/// key-like characters, so a key inside quotes, JSON or after a `:` is found too.
 pub fn redact(text: &str) -> String {
+    let word = |c: char| c.is_ascii_alphanumeric() || "-_.=/+".contains(c);
     text.lines()
         .map(|line| {
             let line = crate::profiles::classify::mask_credentials(line);
-            line.split(' ')
-                .map(|w| {
-                    let bare = w.trim_matches(|c: char| "\"'`,;()[]{}<>".contains(c));
-                    let looks_secret = bare.len() >= 20
-                        && bare.chars().all(|c| c.is_ascii_alphanumeric() || "-_.=/+".contains(c))
-                        && bare.chars().any(|c| c.is_ascii_digit())
-                        && !bare.starts_with("http")
-                        && !bare.starts_with('/');
-                    let prefixed = ["sk-", "xai-", "sess-", "ghp_", "gho_", "github_pat_", "xox", "AKIA"].iter().any(|p| bare.starts_with(p)) && bare.len() > 8;
-                    if looks_secret || prefixed {
-                        w.replace(bare, "[redacted]")
-                    } else {
-                        w.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
+            let mut out = String::with_capacity(line.len());
+            let mut rest = line.as_str();
+            while let Some(start) = rest.find(word) {
+                out.push_str(&rest[..start]);
+                let tail = &rest[start..];
+                let end = tail.find(|c: char| !word(c)).unwrap_or(tail.len());
+                let w = &tail[..end];
+                let looks_secret = w.len() >= 20
+                    && w.chars().any(|c| c.is_ascii_digit())
+                    && !w.starts_with('/')
+                    && !w.starts_with("http");
+                let prefixed = ["sk-", "xai-", "sess-", "ghp_", "gho_", "github_pat_", "xox", "AKIA"].iter().any(|p| w.starts_with(p)) && w.len() > 8;
+                out.push_str(if looks_secret || prefixed { "[redacted]" } else { w });
+                rest = &tail[end..];
+            }
+            out.push_str(rest);
+            out
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// [`redact`] over every string in `v` (a check's spec, a change's before/after).
+pub fn redact_value(v: &Value) -> Value {
+    match v {
+        Value::String(s) => Value::String(redact(s)),
+        Value::Array(a) => Value::Array(a.iter().map(redact_value).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), redact_value(v))).collect()),
+        other => other.clone(),
+    }
 }
 
 fn cut(text: &str, max: usize) -> String {
@@ -558,7 +579,7 @@ pub async fn retry_note(state: &AppState, task: &Task) -> Option<String> {
         "retry_with_diagnostics" => {
             let checks = state.db.list_checks(&task.id).await.unwrap_or_default();
             if let Some(c) = checks.iter().find(|c| matches!(c.status.as_str(), "failed" | "error")) {
-                out.push_str(&format!("The check that failed: {} {}\n", c.kind, redact(&c.spec_value().to_string())));
+                out.push_str(&format!("The check that failed: {} {}\n", c.kind, redact_value(&c.spec_value())));
             }
             if let Some(x) = &failure.excerpt {
                 out.push_str(&format!("Its output (secrets masked):\n{x}\n"));
@@ -617,6 +638,9 @@ pub async fn extend_task_json(state: &AppState, task: &Task, obj: &mut serde_jso
     );
     let current = state.db.current_attempt(&task.id).await.ok().flatten();
     obj.insert("autofix".into(), current.as_ref().map_or(Value::Null, attempt_json));
+    // Retries AutoFix actually started (planned, suggested or skipped ones don't count)
+    let ran = state.db.attempts_of(&task.id).await.unwrap_or_default().iter().filter(|a| matches!(a.status.as_str(), "running" | "succeeded" | "failed")).count();
+    obj.insert("autofix_attempts".into(), json!(ran));
 }
 
 /// AutoFix's Needs-you items, for a task that isn't running: a suggested retry, a proposed
@@ -639,8 +663,14 @@ pub async fn needs_you(state: &AppState, task: &Task) -> Vec<Value> {
             items.push(json!({"kind": "autofix_suggested", "id": a.id, "text": cut(&text, 200)}));
         }
         if let Some(f) = last {
+            let over_budget = || async {
+                let attempts = state.db.attempts_of(&task.id).await.unwrap_or_default();
+                attempts.iter().rev().find(|a| a.failure_id == f.id).is_some_and(|a| a.status == "skipped" && a.reason.starts_with("over_recovery_budget"))
+            };
             if let Some(text) = fix_text(&f.class, &f.summary) {
                 items.push(json!({"kind": "fix_needed", "id": f.id, "text": cut(&text, 200)}));
+            } else if task.state == "failed" && over_budget().await {
+                items.push(json!({"kind": "fix_needed", "id": f.id, "text": RECOVERY_BUDGET_FIX}));
             }
         }
     }
@@ -797,8 +827,8 @@ async fn change_json(state: &AppState, c: &WorkflowChange) -> Value {
         "task_id": c.task_id,
         "routine_id": c.routine_id,
         "target": c.target,
-        "before": parse(&c.before),
-        "after": parse(&c.after),
+        "before": redact_value(&parse(&c.before)),
+        "after": redact_value(&parse(&c.after)),
         "reason": c.reason,
         "proposed_by": c.proposed_by,
         "proposed_by_name": super::name_of(state, Some(&c.proposed_by)).await,
@@ -808,13 +838,15 @@ async fn change_json(state: &AppState, c: &WorkflowChange) -> Value {
     })
 }
 
-/// `GET /api/workflow-changes?status=proposed` (person-only).
+/// `GET /api/workflow-changes?status=proposed&task_id=…` (person-only; both filters optional).
 pub async fn list_changes(State(state): State<AppState>, RawQuery(q): RawQuery) -> Response {
-    let status = q.as_deref().unwrap_or("").split('&').find_map(|p| p.strip_prefix("status=")).map(str::to_string);
+    let param = |name: &str| q.as_deref().unwrap_or("").split('&').find_map(|p| p.strip_prefix(name)).map(str::to_string);
+    let status = param("status=");
     if let Some(s) = status.as_deref().filter(|s| !["proposed", "approved", "rejected", "applied", "stale"].contains(s)) {
         return bad(format!("status must be proposed, approved, rejected, applied or stale (got {s})"));
     }
-    match state.db.list_changes(status.as_deref(), None).await {
+    let task_id = param("task_id=").filter(|t| !t.is_empty());
+    match state.db.list_changes(status.as_deref(), task_id.as_deref()).await {
         Ok(list) => {
             let mut out = Vec::new();
             for c in &list {
@@ -958,6 +990,9 @@ pub async fn propose(state: &AppState, bot_id: &str, args: &Value) -> Result<Val
             let cid = after["check_id"].as_str().ok_or("after.check_id is required")?;
             let c = state.db.get_check(cid).await.map_err(|e| e.to_string())?.filter(|c| c.task_id == t.id).ok_or("no such check on this task")?;
             let spec = after.get("spec").cloned().unwrap_or_else(|| c.spec_value());
+            if spec.to_string().contains("[redacted]") {
+                return Err("after.spec has masked values ([redacted]); ask the person for the real ones".into());
+            }
             super::validate_check(&c.kind, &spec, true)?;
             let required = after["required"].as_bool().unwrap_or(c.required);
             (None, json!({"check_id": c.id, "kind": c.kind, "spec": c.spec_value(), "required": c.required}), json!({"check_id": c.id, "kind": c.kind, "spec": spec, "required": required}))
@@ -985,4 +1020,78 @@ pub async fn insights(state: &AppState, space_id: &str, since: DateTime<Utc>) ->
     let (attempts, succeeded, tokens, classes) = state.db.autofix_stats(space_id, since).await.unwrap_or_default();
     let by_class: serde_json::Map<String, Value> = classes.into_iter().map(|(c, n)| (c, json!(n))).collect();
     (json!({"attempts": attempts, "succeeded": succeeded, "tokens": tokens}), Value::Object(by_class))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kwants_own_no_account_messages_are_auth() {
+        use crate::db::models::LlmProfile;
+        use crate::profiles::classify::{FailClass, ProviderFailure};
+        use crate::server::profile_turn::{give_up_notice, switch_notice};
+        let p = |name: &str| LlmProfile {
+            id: name.into(),
+            engine: "claude".into(),
+            name: name.into(),
+            kind: "subscription".into(),
+            home_dir: None,
+            priority: 0,
+            enabled: true,
+            is_default: true,
+            created_at: None,
+            space_id: "spc_default".into(),
+        };
+        let auth = ProviderFailure { class: FailClass::Auth, retry_at: None, detail: "401".into() };
+        // The exact texts a turn ends with, built by the code that writes them: a rewording breaks this
+        let texts = [
+            give_up_notice("Ann", &p("This machine"), &auth, 1),
+            give_up_notice("Ann", &p("Work"), &auth, 2),
+            switch_notice(&p("Work"), &p("Personal"), &auth),
+            crate::drivers::engines::no_engine_notice("Ann", false).0,
+            crate::drivers::engines::no_engine_notice("Ann", true).0,
+            crate::drivers::engines::NO_CUSTOM_ACCOUNT.to_string(),
+        ];
+        for t in &texts {
+            assert_eq!(classify("turn", "error", t), "auth", "{t}");
+            assert_eq!(strategy_for(classify("turn", "error", t)), "none", "{t}");
+        }
+        // The give-up text has no "401" of its own: the words alone must carry it
+        assert!(!texts[0].contains("401"), "{}", texts[0]);
+    }
+
+    #[tokio::test]
+    async fn an_http_check_on_a_closed_port_is_transient_and_waits() {
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let spec = json!({"url": format!("http://127.0.0.1:{port}/health")});
+        let (status, out) = super::super::checks::run_spec("http", &spec, None, true).await;
+        assert_eq!(status, "error", "{out}");
+        assert!(out.contains("network error"), "{out}");
+        assert_eq!(classify("check", &status, &out), "transient", "{out}");
+        assert_eq!(strategy_for("transient"), "wait_and_retry");
+        // The text fallback still holds for words the engines print
+        assert_eq!(classify("check", "error", "connection refused"), "transient");
+    }
+
+    #[test]
+    fn a_bare_key_inside_a_spec_is_masked() {
+        // Glued to other characters, as typed into a command: no space on either side of the key
+        let spec = json!({"command": "test \"$(cat t)\" = \"Zq8VwK3mT9pL2rX7nB4c\">/dev/null && curl https://example.com/v1/items", "timeout_secs": 30});
+        let out = redact_value(&spec);
+        let s = out.to_string();
+        assert!(!s.contains("Zq8VwK3mT9pL2rX7nB4c"), "{s}");
+        assert!(s.contains("= \\\"[redacted]\\\">/dev/null"), "{s}");
+        assert!(s.contains("https://example.com/v1/items"), "{s}");
+        // As text (the failure excerpt) too
+        assert!(!redact(&spec.to_string()).contains("Zq8VwK3mT9pL2rX7nB4c"));
+        assert_eq!(out["timeout_secs"], 30);
+        // Quotes and brackets around a key are kept as they were
+        assert_eq!(redact("key [sk-ant-api03abcdef]"), "key [[redacted]]");
+        assert_eq!(redact("'ghp_abcdefghij0123456789'"), "'[redacted]'");
+        assert_eq!(redact("exit code 1\nexpected 42 got 41"), "exit code 1\nexpected 42 got 41");
+    }
 }

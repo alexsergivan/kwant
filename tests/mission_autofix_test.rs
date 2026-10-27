@@ -99,6 +99,8 @@ struct Env {
 
 /// kwant on a real port (the stand-in CLI calls back), with the mission board on.
 async fn setup() -> Env {
+    // The CLI lookup is cached per process: put the stand-in first before any test can resolve `claude`
+    fake_cli();
     let tmp = tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -343,6 +345,7 @@ async fn a_failing_check_is_retried_with_its_diagnostics_until_the_attempts_run_
         "{a:?}"
     );
     assert!(a[2].reason.starts_with("no_attempts_left"), "{a:?}");
+    assert_eq!(t["autofix_attempts"], 2, "two retries ran; the skipped one doesn't count: {t}");
     let ins = person(&e, "GET", "/api/missions/insights", None).await;
     assert_eq!(ins["failures_by_class_7d"]["check_failed"], 3, "{ins}");
     assert_eq!(ins["autofix_7d"]["attempts"], 2, "{ins}");
@@ -433,6 +436,10 @@ async fn a_retry_over_the_recovery_budget_is_skipped_and_only_autofix_turns_coun
     assert!(a[1].reason.starts_with("over_recovery_budget"), "{a:?}");
     assert_eq!(t["state"], "failed", "{t}");
     assert_eq!(t["attempts"], 2, "an attempt is left, but no recovery budget: {t}");
+    // The person is told, not just shown a failed task
+    let fix: Vec<&Value> = t["needs_you"].as_array().unwrap().iter().filter(|i| i["kind"] == "fix_needed").collect();
+    assert_eq!(fix.len(), 1, "{t}");
+    assert_eq!(fix[0]["text"], kwnt::server::missions::autofix::RECOVERY_BUDGET_FIX, "{t}");
     // At 10% the person can't push one through either
     autofix(&e, "on", 10).await;
     let (status, v) = send(&e.app, "POST", &format!("/api/tasks/{tid}/autofix"), None, None).await;
@@ -641,6 +648,11 @@ async fn a_bad_check_spec_only_proposes_a_change() {
     assert_eq!(changes[0]["target"], "check_spec");
     assert_eq!(changes[0]["task_id"], tid.as_str());
     assert_eq!(changes[0]["after"]["required"], false, "{changes:?}");
+    // The board asks for one task's changes only
+    let mine = person(&e, "GET", &format!("/api/workflow-changes?status=proposed&task_id={tid}"), None).await;
+    assert_eq!(mine.as_array().unwrap().len(), 1, "{mine}");
+    let other = person(&e, "GET", "/api/workflow-changes?task_id=no-such-task", None).await;
+    assert_eq!(other.as_array().unwrap().len(), 0, "{other}");
     assert!(kinds(&t["needs_you"]).contains(&"workflow_change".to_string()), "{t}");
     // Unchanged until approved, and AutoFix doesn't rerun a check that can't run
     let checks = e.state.db.list_checks(&tid).await.unwrap();
@@ -694,4 +706,81 @@ async fn diagnostics_are_redacted_and_their_path_never_reaches_the_api() {
     }
     let note = kwnt::server::missions::autofix::retry_note(&e.state, &e.state.db.get_task(&tid).await.unwrap().unwrap()).await.unwrap();
     assert!(!note.contains("api03abcdefghij0123456789") && !note.contains("hunter2secretpw"), "{note}");
+}
+
+// Eval 9 follow-ups
+
+#[tokio::test]
+async fn a_key_typed_into_a_check_spec_is_masked_wherever_the_spec_is_shown() {
+    let e = setup().await;
+    autofix(&e, "suggest", 25).await;
+    let secret = "Zq8VwK3mT9pL2rX7nB4c";
+    // The key is glued to quotes and a redirect, as people type it; the output never prints it
+    let cmd = format!("test \"$(echo nope)\" = \"{secret}\">/dev/null; echo checked; exit 1");
+    let tid = person_task(&e, json!([{"kind": "command", "spec": {"command": cmd}}])).await;
+    hand_in(&e, &tid).await;
+    wait_state(&e, &tid, "failed").await;
+    // It still ran with the real value: the stored spec is untouched
+    let checks = e.state.db.list_checks(&tid).await.unwrap();
+    assert!(checks[0].spec_value()["command"].as_str().unwrap().contains(secret));
+    let mut seen = Vec::new();
+    for uri in [format!("/api/tasks/{tid}"), format!("/api/tasks/{tid}/failures"), "/api/tasks".into()] {
+        let (status, v) = send(&e.app, "GET", &uri, None, None).await;
+        if status == StatusCode::OK {
+            seen.push((uri, v.to_string()));
+        }
+    }
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    let t = person(&e, "GET", &format!("/api/tasks/{tid}"), None).await;
+    assert!(t["checks"][0]["spec"]["command"].as_str().unwrap().contains("[redacted]"), "{t}");
+    for (uri, body) in &seen {
+        assert!(!body.contains(secret), "{uri}: {body}");
+    }
+    for ev in e.state.db.task_events(&tid, 500).await.unwrap() {
+        assert!(!ev.detail.contains(secret), "{ev:?}");
+    }
+    let dir = e.state.config.data_dir.join("autofix").join(&tid);
+    for f in std::fs::read_dir(&dir).unwrap() {
+        let body = std::fs::read_to_string(f.unwrap().path()).unwrap();
+        assert!(body.contains("checked") && !body.contains(secret), "{body}");
+    }
+    let note = kwnt::server::missions::autofix::retry_note(&e.state, &e.state.db.get_task(&tid).await.unwrap().unwrap()).await;
+    assert!(note.is_none_or(|n| !n.contains(secret)));
+    // A bot can't copy the masked spec back as a "change"
+    let token = turn(&e, &e.bot, &format!("t-{}", uuid::Uuid::new_v4())).await;
+    let args = json!({"target": "check_spec", "task_id": tid, "reason": "fix it",
+                      "after": {"check_id": checks[0].id, "spec": t["checks"][0]["spec"].clone()}});
+    let (status, v) = send(&e.app, "POST", "/api/mcp/self", Some(&token), Some(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "workflow_propose", "arguments": args}}))).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert!(v.to_string().contains("masked values"), "{v}");
+}
+
+#[tokio::test]
+async fn running_a_held_task_twice_with_one_key_replays_the_first_200() {
+    let e = setup().await;
+    let tid = person_task(&e, json!([])).await;
+    assert!(e.state.db.set_task_hold(&tid, true).await.unwrap());
+    let run = |key: Option<&'static str>| {
+        let mut req = Request::builder().method("POST").uri(format!("/api/tasks/{tid}/run")).header("content-type", "application/json");
+        if let Some(k) = key {
+            req = req.header("idempotency-key", k);
+        }
+        e.app.clone().oneshot(req.body(Body::from("{}")).unwrap())
+    };
+    let first = run(Some("run-1")).await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first: Value = serde_json::from_slice(&to_bytes(first.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert!(first["task"]["held_at"].is_null(), "{first}");
+    let again = run(Some("run-1")).await.unwrap();
+    assert_eq!(again.status(), StatusCode::OK);
+    assert_eq!(again.headers().get("idempotent-replayed").map(|v| v.to_str().unwrap()), Some("true"));
+    let again: Value = serde_json::from_slice(&to_bytes(again.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(again, first);
+    // A new key (or none) on a task that isn't held is still a 409
+    for key in [Some("run-2"), None] {
+        let r = run(key).await.unwrap();
+        assert_eq!(r.status(), StatusCode::CONFLICT, "{key:?}");
+    }
+    let released = e.state.db.task_events(&tid, 500).await.unwrap().iter().filter(|ev| ev.kind == "released").count();
+    assert_eq!(released, 1);
 }
