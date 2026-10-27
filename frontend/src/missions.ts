@@ -779,6 +779,7 @@ export const FAILURE_LABELS: Record<FailureClass, { label: string; tone: Tone }>
   check_failed: { label: 'A check failed', tone: 'rose' },
   bad_spec: { label: 'A check can’t run as written', tone: 'amber' },
   auth: { label: 'Signed out, or the key was rejected', tone: 'rose' },
+  quota: { label: 'Usage limit reached', tone: 'amber' },
   budget: { label: 'Out of budget', tone: 'rose' },
   denied: { label: 'An action was denied', tone: 'rose' },
   needs_input: { label: 'Waiting for you', tone: 'amber' },
@@ -853,7 +854,7 @@ export function autofixErrorText(e: unknown): string {
   if (e instanceof MissionError && e.status === 409) {
     if (e.code === 'no_attempts_left') return 'No tries left. You can still try it again yourself.';
     if (e.code === 'over_recovery_budget') return 'Another retry would go over this task’s retry budget. You can still try it again yourself.';
-    if (e.code === 'not_retryable') return 'AutoFix can’t retry this kind of failure. See what to fix above.';
+    if (e.code === 'not_retryable') return 'AutoFix doesn’t retry this kind of failure, such as a sign-in problem or a usage limit. See what to fix above, then try it again yourself.';
     return 'The retry changed while you were deciding. The task now shows the latest.';
   }
   return e instanceof Error ? e.message : 'Something went wrong.';

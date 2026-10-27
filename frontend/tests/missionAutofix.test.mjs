@@ -84,6 +84,28 @@ test('the task panel shows the failure, the AutoFix plan, its tries and its spen
   assert.doesNotMatch(ui.detail(detailProps(task())), /data-failure/, 'nothing without a failure');
 });
 
+test('a usage limit reads as "Usage limit reached", is never retried by AutoFix, and says what to do', () => {
+  assert.equal(m.failureClassLabel('quota'), 'Usage limit reached');
+  assert.equal(m.failureTone('quota'), 'amber', 'it clears on its own once the limit resets');
+  const t = task({
+    state: 'failed', autofix_attempts: 0,
+    last_failure: { class: 'quota', summary: 'Claude AI usage limit reached', created_at: '2026-10-27T11:50:00Z' },
+    autofix: attempt({ status: 'skipped', strategy: 'none', reason: 'not_retryable: quota' }),
+    needs_you: [{ kind: 'fix_needed', id: 'fl4', text: 'Usage limit reached: wait for it to reset or switch account, then retry: Claude AI usage limit reached' }],
+  });
+  const html = ui.detail(detailProps(t));
+  assert.match(html, /data-failure-class="quota"[\s\S]*Usage limit reached/);
+  assert.match(html, /data-fix-needed[^>]*><span[^>]*>To fix: <\/span>Usage limit reached: wait for it to reset or switch account/);
+  assert.match(html, /data-autofix-status="skipped"[^>]*>[\s\S]*this kind of failure isn’t retried/);
+  assert.doesNotMatch(html, /data-autofix-retry/, 'no AutoFix Retry now for a usage limit');
+  assert.doesNotMatch(html, /data-autofix-skip/);
+  // Even if an older server left a suggested attempt, a refused retry reads plainly.
+  const refused = m.autofixErrorText(new m.MissionError('not retryable', 409, 'not_retryable'));
+  assert.match(refused, /doesn’t retry this kind of failure/);
+  assert.match(refused, /usage limit/);
+  assert.doesNotMatch(refused, /409|not_retryable/, 'no codes shown to the person');
+});
+
 test('AutoFix tries come from the server count, not from counting failures in the browser', () => {
   const failures = [1, 2, 3].map((n) => ({ id: `fl${n}`, attempt: n, source: 'turn', class: 'transient', summary: 'timed out', excerpt: null, checkpoint_id: null, created_at: '2026-10-27T11:00:00Z', autofix: attempt({ id: `af${n}`, status: 'succeeded' }) }));
   assert.match(ui.failure({ task: failed({ autofix_attempts: 2 }), failures, now: NOW }), />AutoFix tries<\/dt><dd[^>]*>2</);
