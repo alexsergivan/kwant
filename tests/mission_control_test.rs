@@ -366,7 +366,11 @@ async fn a_command_a_bot_adds_later_waits_for_the_persons_approval() {
     let c = person(&e, "POST", &format!("/api/tasks/{tid}/checks"), Some(json!({"kind": "command", "spec": {"command": "true"}}))).await;
     assert_eq!(c["approved"], true);
     let run = person(&e, "POST", &format!("/api/tasks/{tid}/checks/run"), None).await;
-    assert!(run["checks"].as_array().unwrap().iter().all(|c| c["status"] == "passed"), "{run}");
+    for c in run["checks"].as_array().unwrap() {
+        // The local URL nobody approved never ran; the approved ones passed
+        let want = if c["kind"] == "http" { "needs_approval" } else { "passed" };
+        assert_eq!(c["status"], want, "{run}");
+    }
     assert!(marker.exists());
 }
 
