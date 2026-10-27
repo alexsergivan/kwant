@@ -318,7 +318,7 @@ async fn update(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) 
     }
     let (checks, after) = run_task_checks(state, &task.id, None).await;
     let after = after.unwrap_or(task);
-    let summary = super::checks_summary(&checks);
+    let summary = super::checks_summary(&after, &checks);
     let next = match after.state.as_str() {
         "verified" => "Verified by its checks.",
         "review" if summary["status"] == "not_checked" => "No checks: it stays in review (not checked) until a teammate reviews it or the person verifies it.",
@@ -398,6 +398,10 @@ async fn request_check(state: &AppState, scope: &SelfScope, task: &Task, args: &
             Ok(a) => a,
             Err(e) => return fail(e),
         };
+        // The owner's own check would let it verify its own work: it counts only once the person
+        // approves it, so it waits like any other check that needs approval
+        let own = [&task.owner_kwant_id, &task.suggested_kwant_id].iter().any(|o| o.as_deref() == Some(scope.kwant_id.as_str()));
+        let approved = approved && !own;
         let c = NewCheck {
             task_id: task.id.clone(),
             kind: kind.into(),
@@ -405,6 +409,7 @@ async fn request_check(state: &AppState, scope: &SelfScope, task: &Task, args: &
             required: args["required"].as_bool().unwrap_or(true),
             approved,
             requested_by: scope.kwant_id.clone(),
+            approved_by: None,
         };
         match state.db.add_check(&c).await {
             Ok(c) => {
@@ -458,6 +463,7 @@ async fn review(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) 
         required: true,
         approved: true,
         requested_by: scope.kwant_id.clone(),
+        approved_by: None,
     };
     let check = match state.db.add_check(&c).await {
         Ok(c) => c,

@@ -420,3 +420,62 @@ async fn the_run_hook_starts_one_turn_per_mission_and_releases_an_unfinished_tas
     }
     assert!(released, "the runner releases a task its turn didn't finish");
 }
+
+#[tokio::test]
+async fn the_owners_own_check_waits_for_the_person_before_it_can_verify() {
+    let e = setup().await;
+    let (m, tasks) = mission(&e, 200_000, json!([{"title": "Out", "owner": e.bot.id}])).await;
+    let tid = id(&tasks[0]);
+    std::fs::write(folder(&e, &id(&m)).await.join("out.txt"), "made it").unwrap();
+    let token = turn(&e, &e.bot, "t-own-check").await;
+    ok(&e, &token, "task_claim", json!({"task_id": tid})).await;
+    // A file check is safe to run, but it's the owner's own: it waits like a command would
+    let added = ok(&e, &token, "task_request_check", json!({"task_id": tid, "kind": "file_exists", "spec": {"path": "out.txt"}})).await;
+    let check = added["checks"][0].clone();
+    assert_eq!((check["approved"].as_bool(), check["status"].as_str()), (Some(false), Some("needs_approval")), "{added}");
+    ok(&e, &token, "task_update", json!({"task_id": tid, "status": "review"})).await;
+    let t = task(&e, &tid).await;
+    assert_eq!(t["task"]["state"], "review", "its own file_exists doesn't verify it: {t}");
+    assert_eq!(t["checks"][0]["counts"], false);
+    assert_eq!(t["checks"][0]["approved_by"], Value::Null);
+    assert_eq!(t["task"]["checks_summary"]["needs_approval"], 1);
+    assert_eq!(t["task"]["needs_you"][0]["kind"], "check_approval", "{t}");
+    assert_eq!(t["task"]["needs_you"][0]["id"], check["id"]);
+    let insights = person(&e, "GET", "/api/missions/insights", None).await;
+    assert_eq!(insights["needs_you_now"], 1, "{insights}");
+
+    let approved = person(&e, "POST", &format!("/api/checks/{}/approve", id(&check)), None).await;
+    assert_eq!((approved["approved_by"].as_str(), approved["counts"].as_bool()), (Some("person"), Some(true)), "{approved}");
+    let t = task(&e, &tid).await;
+    assert_eq!(t["task"]["state"], "verified", "approved and passing: {t}");
+    assert_eq!(t["task"]["needs_you"], json!([]));
+}
+
+#[tokio::test]
+async fn every_check_must_pass_one_waiting_for_approval_holds_the_task_in_review() {
+    let e = setup().await;
+    let (m, tasks) = mission(&e, 200_000, json!([{"title": "Page", "owner": e.bot.id,
+        "checks": [{"kind": "file_exists", "spec": {"path": "page.html"}}]}])).await;
+    let tid = id(&tasks[0]);
+    std::fs::write(folder(&e, &id(&m)).await.join("page.html"), "<h1>hi</h1>").unwrap();
+    // A teammate adds a check of a local URL: the person's call
+    let peer = turn(&e, &e.other, "t-peer-http").await;
+    let added = ok(&e, &peer, "task_request_check", json!({"task_id": tid, "kind": "http", "spec": {"url": "http://127.0.0.1:9/"}})).await;
+    assert_eq!(added["checks"][0]["status"], "needs_approval", "{added}");
+    let token = turn(&e, &e.bot, "t-page").await;
+    ok(&e, &token, "task_claim", json!({"task_id": tid})).await;
+    ok(&e, &token, "task_update", json!({"task_id": tid, "status": "review"})).await;
+    let t = task(&e, &tid).await;
+    assert_eq!(t["task"]["state"], "review", "1 of 2 passed is not verified: {t}");
+    let s = &t["task"]["checks_summary"];
+    assert_eq!((s["status"].as_str(), s["passed"].as_u64(), s["needs_approval"].as_u64()), (Some("pending"), Some(1), Some(1)), "{s}");
+    let plan_check = t["checks"].as_array().unwrap().iter().find(|c| c["kind"] == "file_exists").unwrap().clone();
+    assert_eq!((plan_check["approved_by"].as_str(), plan_check["counts"].as_bool()), (Some("person"), Some(true)));
+    assert_eq!(t["task"]["needs_you"][0]["kind"], "check_approval");
+    // Once approved it runs, fails (nothing listens there), and the task goes back to ready
+    let http = t["checks"].as_array().unwrap().iter().find(|c| c["kind"] == "http").unwrap().clone();
+    person(&e, "POST", &format!("/api/checks/{}/approve", id(&http)), None).await;
+    let t = task(&e, &tid).await;
+    assert_eq!(t["task"]["state"], "ready", "{t}");
+    assert_eq!(t["task"]["attempts"], 1);
+}

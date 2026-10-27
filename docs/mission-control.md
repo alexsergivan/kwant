@@ -30,8 +30,8 @@ Task `state` (exactly these strings):
 | `ready` | Ready | Can be claimed. |
 | `working` | Working | A bot holds a live lease (`claim`). |
 | `needs_you` | Needs you | The owner has an open question card, approval card or human step (`needs_you` lists them). |
-| `review` | Review | Owner says done. Waiting for a passing check. `checks_summary.status = "not_checked"` when there's no check yet. |
-| `verified` | Verified | A passing outcome check that isn't the owner's own claim. Terminal. |
+| `review` | Review | Owner says done. Waiting for its checks. `checks_summary.status = "not_checked"` when there's no check yet. A check waiting for the person's approval keeps it here and adds a `check_approval` item to `needs_you`. |
+| `verified` | Verified | Every required check that counts has passed, none waits for approval, and at least one isn't the owner's own (see §4). Terminal. |
 | `blocked` | badge | `blocked_reason` says why (owner/person said so, or `budget`). |
 | `failed` | badge | Checks failed `max_attempts` times. The person can retry. |
 | `cancelled` | hidden by default | The person cancelled it, or its mission. Terminal. |
@@ -61,7 +61,7 @@ not a status.
 
 ```
 missions(id, space_id, title, goal, status, lead_kwant_id, channel_id?, direct_kwant_id?, thread_id?,
-         workspace_path, budget_tokens, spent_tokens, created_by, approved_at?, approved_by?,
+         workspace_path (server only, not in the API), budget_tokens, spent_tokens, created_by, approved_at?, approved_by?,
          created_at, updated_at, finished_at?)
 tasks(id, space_id, mission_id?, title, acceptance, state, priority, owner_kwant_id?,
       suggested_kwant_id?, budget_tokens, spent_tokens, attempts, max_attempts, blocked_reason?,
@@ -74,7 +74,7 @@ agent_claims(id, task_id, kwant_id, turn_id?, claimed_at, expires_at, released_a
 evidence(id, task_id, kind, label, uri?, path?, sha256?, bytes?, excerpt?, captured_by, run_id?,
          captured_at)
 outcome_checks(id, task_id, kind, spec JSON, required, approved, status, output_excerpt?, checked_by?,
-               requested_by, evidence_id?, created_at, started_at?, finished_at?)
+               requested_by, approved_by?, evidence_id?, created_at, started_at?, finished_at?)
 ```
 
 - `priority`: `0` low, `1` normal (default), `2` high, `3` urgent.
@@ -93,7 +93,7 @@ outcome_checks(id, task_id, kind, spec JSON, required, approved, status, output_
 |---|---|---|---|
 | `command` | `{"command": "cargo test -q", "timeout_secs": 300}` | exit code 0. Runs in the mission's folder with `bash -c`. | The person, or a bot in `mission_plan` (approved with the mission). A bot adding one later gets `approved:false`, and it runs only after the person approves it. |
 | `http` | `{"url": "https://…", "expect_status": 200, "contains": "optional text"}` | GET returns the status (default any 2xx) and the text if given | Anyone. A URL on this computer or a private network needs the person's approval (same rule as WebFetch). |
-| `file_exists` | `{"path": "dist/app.dmg"}` | the file exists inside the mission's folder | Anyone |
+| `file_exists` | `{"path": "dist/app.dmg"}` | the file exists inside the mission's folder | Anyone (the task's own bot: see below) |
 | `file_contains` | `{"path": "CHANGELOG.md", "text": "0.1.4"}` | the file contains the text | Anyone |
 | `file_sha256` | `{"path": "out.zip", "sha256": "…"}` | the hash matches | Anyone |
 | `peer_review` | `{"note": "…", "evidence_ids": ["…"]}` | a bot that is **not the owner** gives `pass` and cites at least one evidence item | Recorded by `task_review` |
@@ -107,12 +107,28 @@ outcome_checks(id, task_id, kind, spec JSON, required, approved, status, output_
   command printed them, so commands that print secrets are the person's responsibility.
 - kwant runs `command`, `http` and `file_*` checks itself (`checked_by: "kwant"`) and stores the output
   as evidence (`kind: "check_output"`).
-- `required` (default `true`): verified needs the newest result of every required, approved check to
-  be `passed`. A task with no checks stays in `review` ("not checked") until a peer review or the
-  person verifies it.
+- `approved_by`: who let the check run and count. `"person"` (the person added it, approved it, or
+  made the mission), `"mission"` (part of a bot's `mission_plan` that the person approved), `"auto"` (a
+  safe check a bot other than the owner added), or `null` while `status = "needs_approval"`.
+- **The owner's own checks.** A check the task's owner (or suggested owner) adds with
+  `task_request_check` always starts as `approved: false`, `status: "needs_approval"`, even a
+  `file_*` check, so a bot can't verify itself with "the file I just wrote exists". It runs and counts
+  only after the person approves it (`approved_by: "person"`). A check whose requester later became the
+  owner counts only if `approved_by` is `"person"` or `"mission"`.
+- `counts` (on each Check in the API): whether this check can count toward Verified under those rules.
+- `required` (default `true`): **every** required check must count and its newest result must be
+  `passed`. A required check that is `failed`/`error` sends the task back (`ready`, or `failed` after
+  `max_attempts`). A required check that is `pending`/`running`, or waits for approval, keeps the task
+  in `review`; one waiting for approval also shows as a `check_approval` item in the task's
+  `needs_you` and counts in Insights `needs_you_now`. The person's own Verify (a passed `person`
+  check) doesn't wait for unapproved checks, but approved checks still have to pass. Optional checks
+  (`required: false`) are shown but never hold, fail or verify a task.
+- A task with no checks stays in `review` ("not checked") until a peer review or the person verifies it.
 
 `checks_summary` on each task: `{"status": "not_checked" | "pending" | "passed" | "failed",
-"passed": n, "failed": n, "total": n}`.
+"passed": n, "failed": n, "needs_approval": n, "total": n}`. `passed`/`failed` count checks that
+count; `needs_approval` counts checks waiting for the person. `status` is `passed` only when the task
+could be verified on them, and `pending` while any check waits for approval.
 
 ## 5. Bot tools (MCP self tools; only while `mission_board` is on)
 
@@ -171,6 +187,7 @@ claim conflict), 403 (bot token on a person route).
 {"id","space_id","title","goal","status","lead_kwant_id","lead_name",
  "channel_id","direct_kwant_id","thread_id",
  "budget_tokens","spent_tokens","reserved_tokens","over_budget": false,
+ // no workspace_path: the folder stays on the server (checks and evidence paths are relative to it)
  "created_by","approved_at","approved_by","created_at","updated_at","finished_at",
  "counts": {"backlog":0,"ready":0,"working":0,"needs_you":0,"review":0,"verified":0,"blocked":0,"failed":0,"cancelled":0}}
 
@@ -181,15 +198,17 @@ claim conflict), 403 (bot token on a person route).
  "channel_id","direct_kwant_id","thread_id","created_by","created_at","updated_at","finished_at",
  "depends_on": ["task id"], "waiting_on": ["task id not verified yet"],
  "claim": null | {"kwant_id","claimed_at","expires_at"},
- "needs_you": [{"kind": "question"|"approval"|"human_step", "id", "text"}],
- "checks_summary": {"status","passed","failed","total"}}
+ "needs_you": [{"kind": "question"|"approval"|"human_step"|"check_approval", "id", "text"}],
+ "checks_summary": {"status","passed","failed","needs_approval","total"}}
+// needs_you: question/approval/human_step while working or needs_you; check_approval (id = the
+// check's id, approve it with POST /api/checks/:id/approve) while in review
 
 // TaskDetail = {"task": Task, "checks": [Check], "evidence": [Evidence], "events": [Event]}   (events oldest first, max 500)
 // MissionDetail = {"mission": Mission, "tasks": [Task]}
 
 // Check
-{"id","task_id","kind","spec","required","approved","status","output_excerpt","checked_by","checked_by_name",
- "requested_by","evidence_id","created_at","started_at","finished_at"}
+{"id","task_id","kind","spec","required","approved","approved_by","counts","status","output_excerpt",
+ "checked_by","checked_by_name","requested_by","evidence_id","created_at","started_at","finished_at"}
 
 // Evidence
 {"id","task_id","kind","label","uri","path","sha256","bytes","excerpt","captured_by","run_id","captured_at"}
@@ -239,8 +258,10 @@ doesn't create its own cards.
 While `mission_board` is on, every scheduler tick (and `POST /api/missions/:id/run`) looks at active
 missions. Each mission gets at most one runner turn at a time, server-wide at most 2. The runner picks
 the highest-priority `ready` task, claims it for its owner (or suggested owner, else the lead) and runs
-one hidden turn in the mission's chat with the task, its acceptance criteria and checks. The turn's
-fresh tokens go to the task and the mission. When the turn ends and the task is still `working`, the
+one hidden turn in the mission's chat with the task, its acceptance criteria and checks. At the end
+of every turn its fresh tokens go to the task and the mission: the task the bot holds, or the one it
+claimed or let go of during that turn (`task_update review` releases the claim before the turn ends,
+and the turn still pays for itself). When the turn ends and the task is still `working`, the
 lease is released (`ready`, attempt +1).
 
 Budget: a claim needs `spent + reserved + task budget ≤ mission budget`, where `reserved` is what

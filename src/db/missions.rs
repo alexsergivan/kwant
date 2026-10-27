@@ -131,6 +131,10 @@ pub struct OutcomeCheck {
     pub output_excerpt: Option<String>,
     pub checked_by: Option<String>,
     pub requested_by: String,
+    /// Who let it run and count: `person` (added or approved by the person), `mission` (part of a
+    /// plan the person approved), `auto` (a safe check a bot other than the owner added), or
+    /// `None` while it waits for approval.
+    pub approved_by: Option<String>,
     pub evidence_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
@@ -204,6 +208,8 @@ pub struct NewCheck {
     pub required: bool,
     pub approved: bool,
     pub requested_by: String,
+    /// See [`OutcomeCheck::approved_by`]; ignored unless `approved`.
+    pub approved_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -398,6 +404,7 @@ impl Database {
                 output_excerpt TEXT,
                 checked_by TEXT,
                 requested_by TEXT NOT NULL,
+                approved_by TEXT,
                 evidence_id TEXT,
                 created_at TIMESTAMP NOT NULL,
                 started_at TIMESTAMP,
@@ -803,6 +810,22 @@ impl Database {
         .await?)
     }
 
+    /// Claims of `kwant_id` that a turn's tokens can land on: open ones, plus those taken in
+    /// `turn_id` or released since `since_ms` (the bot finished its task during that turn). Open
+    /// claims first, then system claims, then the most recent.
+    pub async fn spend_claims(&self, kwant_id: &str, turn_id: Option<&str>, since_ms: i64) -> Result<Vec<Claim>, DbError> {
+        Ok(sqlx::query_as::<_, Claim>(
+            "SELECT * FROM agent_claims WHERE kwant_id = ?1 \
+             AND (released_at IS NULL OR released_at >= ?2 OR (?3 IS NOT NULL AND turn_id = ?3)) \
+             ORDER BY released_at IS NOT NULL, system DESC, claimed_at DESC",
+        )
+        .bind(kwant_id)
+        .bind(since_ms)
+        .bind(turn_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// Pushes the task's open claim out to `now + lease_ms` (never shortens it).
     pub async fn renew_claim(&self, task_id: &str, lease_ms: i64) -> Result<bool, DbError> {
         let now = now_ms();
@@ -974,8 +997,8 @@ impl Database {
         let status = if c.approved { "pending" } else { "needs_approval" };
         let mut tx = self.pool.begin().await?;
         let check = sqlx::query_as::<_, OutcomeCheck>(
-            "INSERT INTO outcome_checks (id, task_id, kind, spec, required, approved, status, requested_by, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+            "INSERT INTO outcome_checks (id, task_id, kind, spec, required, approved, status, requested_by, approved_by, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(&c.task_id)
@@ -985,6 +1008,7 @@ impl Database {
         .bind(c.approved)
         .bind(status)
         .bind(&c.requested_by)
+        .bind(c.approved.then(|| c.approved_by.clone().unwrap_or_else(|| "auto".into())))
         .bind(Utc::now())
         .fetch_one(&mut *tx)
         .await?;
@@ -1002,7 +1026,7 @@ impl Database {
     }
 
     pub async fn approve_check(&self, id: &str) -> Result<bool, DbError> {
-        let r = sqlx::query("UPDATE outcome_checks SET approved = 1, status = 'pending' WHERE id = ? AND status = 'needs_approval'")
+        let r = sqlx::query("UPDATE outcome_checks SET approved = 1, approved_by = 'person', status = 'pending' WHERE id = ? AND status = 'needs_approval'")
             .bind(id)
             .execute(&self.pool)
             .await?;

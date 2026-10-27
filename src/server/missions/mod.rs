@@ -275,19 +275,33 @@ fn fresh(c: &OutcomeCheck, since: Option<chrono::DateTime<chrono::Utc>>) -> bool
     }
 }
 
-/// The rule for `review → verified`, on the task's checks.
+/// Whether `c` can count toward verifying `task`: approved, and not the owner's own check unless
+/// the person approved it, on its own or as part of the mission's plan (a bot that becomes the
+/// owner after adding a check doesn't get it free).
+pub fn counts(task: &Task, c: &OutcomeCheck) -> bool {
+    let own = task.owner_kwant_id.as_deref().is_some_and(|o| o == c.requested_by);
+    c.approved && (!own || matches!(c.approved_by.as_deref(), Some("person" | "mission")))
+}
+
+/// The rule for `review → verified`, on the task's checks: every required check that counts has
+/// passed (none failed, pending or waiting for approval) and at least one of them is independent
+/// of the owner. A required check waiting for approval holds the task in review, unless the
+/// person verified it themselves. Optional checks are shown but never gate or verify.
 pub fn verdict(task: &Task, checks: &[OutcomeCheck], since: Option<chrono::DateTime<chrono::Utc>>) -> Verdict {
     let owner = task.owner_kwant_id.as_deref().unwrap_or("");
-    let live: Vec<&OutcomeCheck> = checks.iter().filter(|c| c.approved && fresh(c, since)).collect();
-    if let Some(bad) = live.iter().find(|c| c.required && matches!(c.status.as_str(), "failed" | "error")) {
+    let required: Vec<&OutcomeCheck> = checks.iter().filter(|c| c.required).collect();
+    let live: Vec<&OutcomeCheck> = required.iter().copied().filter(|c| counts(task, c) && fresh(c, since)).collect();
+    if let Some(bad) = live.iter().find(|c| matches!(c.status.as_str(), "failed" | "error")) {
         return Verdict::Fail(format!("{} check {}", bad.kind, bad.status));
     }
-    if live.iter().any(|c| c.required && c.status != "passed") {
+    if live.iter().any(|c| c.status != "passed") {
         return Verdict::Waiting;
     }
-    let independent = live.iter().any(|c| {
-        c.status == "passed" && c.checked_by.as_deref().is_some_and(|by| !by.is_empty() && by != owner)
-    });
+    let by_person = live.iter().any(|c| c.kind == "person");
+    if !by_person && required.iter().any(|c| !c.approved) {
+        return Verdict::Waiting;
+    }
+    let independent = live.iter().any(|c| c.checked_by.as_deref().is_some_and(|by| !by.is_empty() && by != owner));
     if independent {
         Verdict::Pass
     } else {
@@ -324,37 +338,43 @@ pub async fn evaluate(state: &AppState, task_id: &str) -> Option<Task> {
     }
 }
 
-/// `checks_summary` of a task.
-pub fn checks_summary(checks: &[OutcomeCheck]) -> Value {
-    let live: Vec<&OutcomeCheck> = checks.iter().filter(|c| c.approved).collect();
+/// `checks_summary` of a task: `passed` only when [`verdict`] could pass on them. Counts the
+/// checks that count (see [`counts`]); `needs_approval` is how many wait for the person.
+pub fn checks_summary(task: &Task, checks: &[OutcomeCheck]) -> Value {
+    let live: Vec<&OutcomeCheck> = checks.iter().filter(|c| counts(task, c)).collect();
+    let waiting = checks.iter().filter(|c| !c.approved).count();
+    let gating = |c: &&&OutcomeCheck| c.required;
     let passed = live.iter().filter(|c| c.status == "passed").count();
-    let failed = live.iter().filter(|c| matches!(c.status.as_str(), "failed" | "error")).count();
-    let status = if live.is_empty() {
+    let failed = live.iter().filter(gating).filter(|c| matches!(c.status.as_str(), "failed" | "error")).count();
+    let status = if live.is_empty() && waiting == 0 {
         "not_checked"
     } else if failed > 0 {
         "failed"
-    } else if live.iter().any(|c| c.status != "passed") {
+    } else if waiting > 0 || live.iter().filter(gating).any(|c| c.status != "passed") || !live.iter().any(gating) {
         "pending"
     } else {
         "passed"
     };
-    json!({"status": status, "passed": passed, "failed": failed, "total": checks.len()})
+    json!({"status": status, "passed": passed, "failed": failed, "needs_approval": waiting, "total": checks.len()})
 }
 
 // Budget
 
-/// Adds a model call's fresh tokens to the task `kwant_id` works on in `context_id`: a claim kwant
-/// holds for it there (a hand-off, a routine run), else its own claim. Renews that lease, and
+/// Adds a turn's fresh tokens to the task `kwant_id` worked on in `context_id`: a claim kwant
+/// holds for it there (a hand-off, a routine run), else its own claim. A claim taken in `turn_id`
+/// or released since `turn_started_ms` counts too, so a bot that finishes its task inside the turn
+/// (`task_update review` releases the claim) still pays for that turn. Renews an open lease, and
 /// blocks the task when it goes over its own budget.
-pub async fn spend(state: &AppState, kwant_id: &str, context_id: &str, fresh: u64) {
+pub async fn spend(state: &AppState, kwant_id: &str, context_id: &str, turn_id: Option<&str>, turn_started_ms: i64, fresh: u64) {
     if fresh == 0 {
         return;
     }
-    let Ok(claims) = state.db.claims_of(kwant_id).await else { return };
+    let Ok(claims) = state.db.spend_claims(kwant_id, turn_id, turn_started_ms).await else { return };
+    let here = |c: &&crate::db::missions::Claim| c.context_id.as_deref().is_none_or(|x| x == context_id);
     let claim = claims
         .iter()
         .find(|c| c.system && c.context_id.as_deref() == Some(context_id))
-        .or_else(|| claims.iter().find(|c| !c.system && c.context_id.as_deref().is_none_or(|x| x == context_id)));
+        .or_else(|| claims.iter().filter(here).find(|c| !c.system));
     let Some(claim) = claim else { return };
     let tokens = i64::try_from(fresh).unwrap_or(i64::MAX);
     if state.db.spend_on_task(&claim.task_id, tokens).await.is_err() {
@@ -402,6 +422,9 @@ pub(crate) async fn name_of(state: &AppState, id: Option<&str>) -> Option<String
 
 /// The open cards (questions, approvals, human steps) the task's owner waits on the person with.
 pub async fn needs_you(state: &AppState, task: &Task) -> Vec<Value> {
+    if task.state == "review" {
+        return check_approvals(state, task).await;
+    }
     let Some(owner) = &task.owner_kwant_id else { return Vec::new() };
     if !matches!(task.state.as_str(), "working" | "needs_you") {
         return Vec::new();
@@ -413,6 +436,20 @@ pub async fn needs_you(state: &AppState, task: &Task) -> Vec<Value> {
         .into_iter()
         .filter(|(kind, _, _, at)| kind == "approval" || context.is_none() || at.as_deref() == context.as_deref())
         .map(|(kind, id, text, _)| json!({"kind": kind, "id": id, "text": text.chars().take(200).collect::<String>()}))
+        .collect()
+}
+
+/// A task in review waits on the person for each check that needs their approval
+/// (`{"kind": "check_approval", "id": <check id>, "text"}`).
+pub async fn check_approvals(state: &AppState, task: &Task) -> Vec<Value> {
+    let checks = state.db.list_checks(&task.id).await.unwrap_or_default();
+    checks
+        .iter()
+        .filter(|c| !c.approved)
+        .map(|c| {
+            let text = format!("Allow this check: {} {}", c.kind, c.spec_value());
+            json!({"kind": "check_approval", "id": c.id, "text": text.chars().take(200).collect::<String>()})
+        })
         .collect()
 }
 
@@ -437,7 +474,7 @@ pub async fn task_json(state: &AppState, task: &Task) -> Value {
             }),
         );
         obj.insert("needs_you".into(), json!(needs_you(state, task).await));
-        obj.insert("checks_summary".into(), checks_summary(&checks));
+        obj.insert("checks_summary".into(), checks_summary(task, &checks));
     }
     v
 }
@@ -462,19 +499,20 @@ pub async fn mission_json(state: &AppState, m: &Mission) -> Value {
     v
 }
 
-pub fn check_json(c: &OutcomeCheck, checked_by_name: Option<String>) -> Value {
+pub fn check_json(task: &Task, c: &OutcomeCheck, checked_by_name: Option<String>) -> Value {
     let mut v = serde_json::to_value(c).unwrap_or(Value::Null);
     if let Some(obj) = v.as_object_mut() {
         obj.insert("spec".into(), c.spec_value());
         obj.insert("checked_by_name".into(), json!(checked_by_name));
+        obj.insert("counts".into(), json!(counts(task, c)));
     }
     v
 }
 
-pub async fn checks_json(state: &AppState, checks: &[OutcomeCheck]) -> Vec<Value> {
+pub async fn checks_json(state: &AppState, task: &Task, checks: &[OutcomeCheck]) -> Vec<Value> {
     let mut out = Vec::new();
     for c in checks {
-        out.push(check_json(c, name_of(state, c.checked_by.as_deref()).await));
+        out.push(check_json(task, c, name_of(state, c.checked_by.as_deref()).await));
     }
     out
 }
@@ -759,6 +797,8 @@ pub async fn create_plan(
                     required: c.required.unwrap_or(true),
                     approved: *approved,
                     requested_by: by.created_by.into(),
+                    // The person made the plan or approves it before anything runs
+                    approved_by: Some(if by.created_by == "person" { "person" } else { "mission" }.into()),
                 })
                 .await
                 .map_err(|e| e.to_string())?;
@@ -879,6 +919,7 @@ mod tests {
             output_excerpt: None,
             checked_by: by.map(str::to_string),
             requested_by: "person".into(),
+            approved_by: Some("person".into()),
             evidence_id: None,
             created_at: Utc::now(),
             started_at: None,
@@ -906,6 +947,41 @@ mod tests {
     }
 
     #[test]
+    fn the_owners_own_check_counts_only_once_the_person_approves_it() {
+        let t = task("bot-a");
+        let mut own = check("file_exists", "passed", Some("kwant"), true);
+        own.requested_by = "bot-a".into();
+        own.approved_by = Some("auto".into());
+        assert!(!counts(&t, &own));
+        assert_eq!(verdict(&t, &[own.clone()], None), Verdict::Waiting, "its own file_exists doesn't verify it");
+        assert_eq!(checks_summary(&t, &[own.clone()])["status"], "pending");
+        own.approved_by = Some("person".into());
+        assert!(counts(&t, &own));
+        assert_eq!(verdict(&t, &[own.clone()], None), Verdict::Pass);
+        // A teammate's (or the mission's) check counts as usual
+        let mut mate = own.clone();
+        (mate.requested_by, mate.approved_by) = ("bot-b".into(), Some("auto".into()));
+        assert_eq!(verdict(&t, &[mate], None), Verdict::Pass);
+    }
+
+    #[test]
+    fn every_required_check_must_pass_a_waiting_one_holds_the_task() {
+        let t = task("bot-a");
+        let mut waiting = check("http", "needs_approval", None, true);
+        (waiting.approved, waiting.approved_by) = (false, None);
+        let both = [check("file_exists", "passed", Some("kwant"), true), waiting.clone()];
+        assert_eq!(verdict(&t, &both, None), Verdict::Waiting, "1 of 2 passed is not verified");
+        let s = checks_summary(&t, &both);
+        assert_eq!((s["status"].as_str(), s["needs_approval"].as_u64(), s["passed"].as_u64()), (Some("pending"), Some(1), Some(1)));
+        // The person's own Verify is their call
+        let with_person = [both[0].clone(), waiting.clone(), check("person", "passed", Some("person"), true)];
+        assert_eq!(verdict(&t, &with_person, None), Verdict::Pass);
+        // An optional check waiting for approval doesn't hold it
+        waiting.required = false;
+        assert_eq!(verdict(&t, &[both[0].clone(), waiting], None), Verdict::Pass);
+    }
+
+    #[test]
     fn an_old_review_doesnt_count_after_rework() {
         let t = task("bot-a");
         let mut old = check("peer_review", "failed", Some("bot-b"), true);
@@ -917,9 +993,10 @@ mod tests {
 
     #[test]
     fn summary_says_not_checked() {
-        assert_eq!(checks_summary(&[])["status"], "not_checked");
-        assert_eq!(checks_summary(&[check("command", "passed", Some("kwant"), true)])["status"], "passed");
-        assert_eq!(checks_summary(&[check("command", "error", Some("kwant"), true)])["status"], "failed");
+        let t = task("bot-a");
+        assert_eq!(checks_summary(&t, &[])["status"], "not_checked");
+        assert_eq!(checks_summary(&t, &[check("command", "passed", Some("kwant"), true)])["status"], "passed");
+        assert_eq!(checks_summary(&t, &[check("command", "error", Some("kwant"), true)])["status"], "failed");
     }
 
     #[test]

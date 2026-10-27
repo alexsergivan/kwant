@@ -2423,7 +2423,8 @@ async fn run_kwant_turn_inner(
             let fresh = output.usage.map_or(output.tokens_used as u64, |u| u.fresh());
             state.turns.add_job_tokens(&scope.job_id, fresh);
             // …and toward the task the bot holds, if any (see `super::missions`)
-            super::missions::spend(state, &target_kwant.id, &scope.context_id(target_kwant), fresh).await;
+            let turn_started_ms = chrono::Utc::now().timestamp_millis() - turn_start.elapsed().as_millis() as i64;
+            super::missions::spend(state, &target_kwant.id, &scope.context_id(target_kwant), Some(&tag.turn_id), turn_started_ms, fresh).await;
 
             let mut reply_text = output.text.clone();
             let saved = match &opts.discussion {

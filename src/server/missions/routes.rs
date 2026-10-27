@@ -312,7 +312,12 @@ pub async fn insights(State(state): State<AppState>, Scope(space): Scope) -> Res
         }
     }
     let all = state.db.list_tasks(&space, None, None, None, 1000).await.unwrap_or_default();
-    let needs_you = all.iter().filter(|t| t.state == "needs_you").count();
+    let mut needs_you = all.iter().filter(|t| t.state == "needs_you").count();
+    for t in all.iter().filter(|t| t.state == "review") {
+        if !super::check_approvals(&state, t).await.is_empty() {
+            needs_you += 1;
+        }
+    }
     let blocked = all.iter().filter(|t| t.state == "blocked").count();
     let tokens: i64 = all.iter().filter(|t| t.updated_at >= since).map(|t| t.spent_tokens).sum();
     let still_blocked: Vec<&str> = all.iter().filter(|t| t.state == "blocked").map(|t| t.id.as_str()).collect();
@@ -509,6 +514,7 @@ pub async fn create_task(State(state): State<AppState>, Scope(space): Scope, Jso
             required: c.required.unwrap_or(true),
             approved,
             requested_by: "person".into(),
+            approved_by: Some("person".into()),
         };
         if let Err(e) = state.db.add_check(&nc).await {
             return internal(e);
@@ -552,7 +558,7 @@ pub async fn get_task(State(state): State<AppState>, RawQuery(q): RawQuery, Path
     }
     Json(json!({
         "task": task_json(&state, &t).await,
-        "checks": checks_json(&state, &checks).await,
+        "checks": checks_json(&state, &t, &checks).await,
         "evidence": evidence,
         "events": ev,
     }))
@@ -633,6 +639,7 @@ pub async fn verify_task(State(state): State<AppState>, RawQuery(q): RawQuery, P
         required: true,
         approved: true,
         requested_by: "person".into(),
+        approved_by: Some("person".into()),
     };
     let check = match state.db.add_check(&c).await {
         Ok(c) => c,
@@ -651,7 +658,7 @@ pub async fn verify_task(State(state): State<AppState>, RawQuery(q): RawQuery, P
         Some(t) if t.state == "verified" => task_out(&state, &t).await,
         Some(t) => {
             emit_task(&state, &t).await;
-            let summary = super::checks_summary(&state.db.list_checks(&id).await.unwrap_or_default());
+            let summary = super::checks_summary(&t, &state.db.list_checks(&id).await.unwrap_or_default());
             conflict(format!("not verified: its checks are {} (the task is {})", summary["status"].as_str().unwrap_or("?"), t.state))
         }
         None => not_found("task"),
@@ -757,7 +764,7 @@ pub async fn add_task_check(State(state): State<AppState>, RawQuery(q): RawQuery
     if let Err(e) = validate_check(&p.kind, &p.spec, true) {
         return bad(e);
     }
-    let c = NewCheck { task_id: id.clone(), kind: p.kind, spec: p.spec, required: p.required.unwrap_or(true), approved: true, requested_by: "person".into() };
+    let c = NewCheck { task_id: id.clone(), kind: p.kind, spec: p.spec, required: p.required.unwrap_or(true), approved: true, requested_by: "person".into(), approved_by: Some("person".into()) };
     let check = match state.db.add_check(&c).await {
         Ok(c) => c,
         Err(e) => return internal(e),
@@ -766,7 +773,7 @@ pub async fn add_task_check(State(state): State<AppState>, RawQuery(q): RawQuery
     if let Some(t) = evaluate(&state, &id).await {
         emit_task(&state, &t).await;
     }
-    Json(super::check_json(&check, super::name_of(&state, check.checked_by.as_deref()).await)).into_response()
+    Json(super::check_json(&t, &check, super::name_of(&state, check.checked_by.as_deref()).await)).into_response()
 }
 
 pub async fn run_task_checks(State(state): State<AppState>, RawQuery(q): RawQuery, Path(id): Path<String>) -> Response {
@@ -775,7 +782,7 @@ pub async fn run_task_checks(State(state): State<AppState>, RawQuery(q): RawQuer
     }
     let (checks, task) = checks::run_task_checks(&state, &id, None).await;
     let Some(task) = task else { return not_found("task") };
-    Json(json!({"checks": checks_json(&state, &checks).await, "task": task_json(&state, &task).await})).into_response()
+    Json(json!({"checks": checks_json(&state, &task, &checks).await, "task": task_json(&state, &task).await})).into_response()
 }
 
 pub async fn approve_check(State(state): State<AppState>, RawQuery(q): RawQuery, Path(id): Path<String>) -> Response {
@@ -799,7 +806,7 @@ pub async fn approve_check(State(state): State<AppState>, RawQuery(q): RawQuery,
     if let Some(t) = evaluate(&state, &t.id).await {
         emit_task(&state, &t).await;
     }
-    Json(super::check_json(&check, super::name_of(&state, check.checked_by.as_deref()).await)).into_response()
+    Json(super::check_json(&t, &check, super::name_of(&state, check.checked_by.as_deref()).await)).into_response()
 }
 
 #[cfg(test)]
