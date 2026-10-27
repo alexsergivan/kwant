@@ -349,7 +349,11 @@ async fn a_restore_brings_back_the_tasks_files_and_can_itself_be_undone() {
 #[tokio::test]
 async fn a_force_path_the_preview_does_not_list_is_refused_and_writes_nothing() {
     let e = setup().await;
-    let (_mid, tid, dir) = cli_mission(&e).await;
+    let (mid, ids) = mission(&e, &e.bot.id, json!([{"title": "A", "owner": e.bot.id}])).await;
+    let (tid, dir) = (ids[0].clone(), folder(&e, &mid).await);
+    std::fs::write(dir.join("a.txt"), "original").unwrap();
+    std::fs::write(dir.join("keep.txt"), "untouched").unwrap();
+    run(&e, &mid, &tid, &[("a.txt", Some("changed"))]).await;
     let cid = id(of_kind(&checkpoints(&e, &tid).await, "before_run")[0]);
     let p = preview(&e, &tid, &cid).await;
     assert_eq!(p["changes"], json!([{"path": "a.txt", "action": "overwrite"}]), "{p}");
