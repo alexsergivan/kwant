@@ -28,6 +28,8 @@ pub mod asks;
 pub mod away;
 pub mod computer;
 pub mod mcp_suggest;
+pub mod page_source;
+pub mod connection_suggest;
 pub mod bot_actions;
 pub mod hires;
 pub mod import_routes;

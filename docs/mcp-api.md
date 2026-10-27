@@ -188,6 +188,33 @@ fixed_headers` (names only), `inputs[{name, kind: "env"|"header", description, r
 status (pending|installing|installed|dismissed), server_id, last_error`. Changes arrive as SSE `mcp_suggestion_updated
 {suggestion}` and the message meta is updated in place.
 
+## Fallbacks before "not possible"
+
+Two of kwnt's own tools exist so a bot tries the obvious way round, or offers the fix, instead of
+reporting a dead end. The prompt tells every bot with kwnt's tools to use them first
+(`server::continuity::prompt_block`, "Before you call anything impossible").
+
+### `page_source {url, full?}`
+A public page's HTML and the facts an audit reads from it: `title`, `lang`, `meta` (description, robots,
+viewport…), `canonical`, `hreflang`, `social` (`og:*`, `twitter:*`), `h1_count`, `headings`, `images`
+(`total`, `missing_alt`, `empty_alt`, `missing_alt_src`), `links`, `json_ld` types, plus the response's
+`status`, `redirects`, `content_type` and `x_robots_tag`, and the raw `<head>` (12,000 characters; the whole
+HTML up to 60,000 with `full: true`). claude's WebFetch returns a model's summary of a page's text and the
+browser tools return visible text, so neither shows tags or attributes.
+
+It runs without a card, like WebFetch: it reads public addresses only. Every hop, redirects included
+(at most 5), is checked with `fetch_risk::public_only` and fetched from the addresses just checked, so a
+page on this computer or a private network is refused and the bot is told to use WebFetch or a shell
+command, which ask the person. Pages are read up to 2 MB.
+
+### `connection_suggest {app, name, reason}` (chats only)
+Posts a card offering the person a connection to an app the bot can't reach, through Composio (`app` is
+its toolkit slug, e.g. `google_search_console`). It connects nothing. A turn posts each app once and at
+most 3 in all. The card is a message from the bot with `meta.kind = "connection_suggestion"`:
+`kwant_id, provider: "composio", app, name, reason, composio: ready|off|needs_key|not_added, connect`
+(the person-only `POST /api/connections/composio/apps/:slug/connect` that starts the sign-in). Its text
+names the steps, so it reads on its own where the app has no card for it.
+
 ## Agent runtime
 
 - **Tool names** are `mcp__<server>__<tool>`.

@@ -108,7 +108,7 @@ pub fn is_composio_url(url: &str) -> bool {
     })
 }
 
-fn is_composio(server: &McpServer) -> bool {
+pub(super) fn is_composio(server: &McpServer) -> bool {
     server.url.as_deref().is_some_and(is_composio_url)
 }
 
@@ -330,7 +330,7 @@ async fn source_connections(state: &AppState, space: &SpaceId) -> Vec<Connection
 }
 
 /// The Composio API key saved with the connector (its `x-api-key` header), if any.
-fn composio_key(server: &McpServer) -> Option<&str> {
+pub(super) fn composio_key(server: &McpServer) -> Option<&str> {
     server
         .headers
         .iter()
