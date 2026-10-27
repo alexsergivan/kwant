@@ -310,20 +310,39 @@ export function optionalWaitingText(n: number | null | undefined): string | null
 }
 
 /**
- * Whether checks waiting for the person hold the task. Only a required one does, and the server
- * says so with `checks_summary.status == "pending"`; an optional one waiting never blocks Verified.
+ * Whether checks waiting for the person hold the task, from the summary alone (cards only have the
+ * summary). Only a required one does, and then the server says `checks_summary.status == "pending"`;
+ * an optional one waiting never blocks Verified. "pending" also covers a required check that hasn't
+ * finished, so with both at once this errs towards "needs you"; the receipt, which has the checks,
+ * tells them apart (see [`buildReceipt`]).
  */
 export function approvalHolds(s: ChecksSummary): boolean {
   return (s.needs_approval ?? 0) > 0 && s.status === 'pending';
 }
 
-/** The one-line check chip on a card. A task that has never been checked says so, plainly. */
+/**
+ * The one-line check chip on a card. It counts only checks that count (`passed`/`failed`), never
+ * `total`: an optional check waiting for you isn't a check that didn't pass. A task that has never
+ * been checked says so, plainly.
+ */
 export function checksText(s: ChecksSummary): { text: string; tone: Tone } {
-  if (s.needs_approval && s.needs_approval > 0 && approvalHolds(s)) return { text: s.needs_approval === 1 ? '1 check needs your OK' : `${s.needs_approval} checks need your OK`, tone: 'amber' };
-  if (s.total === 0 || s.status === 'not_checked') return { text: 'Not checked', tone: 'zinc' };
-  if (s.status === 'failed') return { text: s.failed === 1 ? '1 check failed' : `${s.failed} checks failed`, tone: 'rose' };
-  if (s.status === 'pending') return { text: `${s.passed} of ${s.total} checks passed`, tone: 'amber' };
-  return { text: s.total === 1 ? 'Check passed' : `${s.passed} of ${s.total} checks passed`, tone: 'emerald' };
+  const n = (k: number, one: string, many: string) => (k === 1 ? one : many.replace('#', String(k)));
+  if (approvalHolds(s)) return { text: n(s.needs_approval ?? 0, '1 check needs your OK', '# checks need your OK'), tone: 'amber' };
+  if (s.status === 'not_checked') return { text: 'Not checked', tone: 'zinc' };
+  if (s.status === 'failed') return { text: n(s.failed, '1 check failed', '# checks failed'), tone: 'rose' };
+  if (s.status === 'pending') return { text: s.passed > 0 ? n(s.passed, '1 check passed, still checking', '# checks passed, still checking') : 'Checking', tone: 'zinc' };
+  return { text: s.passed > 1 ? `${s.passed} checks passed` : 'Check passed', tone: 'emerald' };
+}
+
+/**
+ * The grey note next to the chip for optional checks waiting for you ("1 optional check waiting"),
+ * else null. Only when the summary has passed: then every waiting check is optional, since a required
+ * one waiting makes it "pending".
+ */
+export function optionalChecksNote(s: ChecksSummary): string | null {
+  const k = s.needs_approval ?? 0;
+  if (k <= 0 || s.status !== 'passed') return null;
+  return k === 1 ? '1 optional check waiting' : `${k} optional checks waiting`;
 }
 
 /** "in 12 min", "in 1 h", or "now" once it has passed. */
@@ -446,8 +465,10 @@ export interface Receipt {
   verifiedBy: ReceiptLine | null;
   /** Why a task in Review isn't Verified yet because required checks wait for the person ("Waiting for you to allow 1 check"). */
   waitingOnYou: string | null;
-  /** Optional checks waiting for the person; they don't hold the task ("Optional check waiting for your OK"). */
+  /** Optional checks waiting for the person, in Review or Verified; they don't hold the task ("Optional check waiting for your OK"). */
   optionalWaiting: string | null;
+  /** The task is Verified: a waiting optional check is offered quietly ("Run this optional check"). */
+  settledVerified: boolean;
 }
 
 /** Builds the evidence receipt: every check with its result and output, newest result first per check. */
@@ -475,13 +496,16 @@ export function buildReceipt(d: Pick<TaskDetail, 'task' | 'checks' | 'evidence'>
   const waitingChecks = d.checks.filter((c) => c.status === 'needs_approval');
   const requiredWaiting = waitingChecks.filter((c) => c.required).length;
   const review = d.task.state === 'review';
+  const settled = review || d.task.state === 'verified';
   return {
     lines,
     attachments: d.evidence.filter((e) => e.kind !== 'check_output').sort((a, b) => Date.parse(b.captured_at) - Date.parse(a.captured_at)),
     notChecked: !ran,
     verifiedBy,
-    waitingOnYou: review && approvalHolds(d.task.checks_summary) ? waitingApprovalText(requiredWaiting || d.task.checks_summary.needs_approval) : null,
-    optionalWaiting: review ? optionalWaitingText(waitingChecks.length - requiredWaiting) : null,
+    // From the checks, not the summary: "pending" can mean a required check is still running.
+    waitingOnYou: review ? waitingApprovalText(requiredWaiting) : null,
+    optionalWaiting: settled ? optionalWaitingText(waitingChecks.length - requiredWaiting) : null,
+    settledVerified: d.task.state === 'verified',
   };
 }
 

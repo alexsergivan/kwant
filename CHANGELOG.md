@@ -25,6 +25,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   its turn, the tokens used so far land on the task and mission right away; the rest of the turn is
   added when it ends, so nothing is counted twice. Before, a just-verified task showed 0 tokens for a
   few seconds. Engines that report usage only at the end (Codex, Grok, custom CLIs) still add it then.
+- **Mission board checks read plainly.** A card counts only the checks that count, so a Verified
+  task with an optional check still waiting says "Check passed" and "1 optional check waiting" instead
+  of "1 of 2 checks passed". Once a task is Verified, that check's button is a quieter "Run this
+  optional check".
 - **Deciding for you costs fewer tokens.** Before deciding a choice itself, a bot now hears at most one
   teammate, and only when the choice or an open check names that teammate.
 

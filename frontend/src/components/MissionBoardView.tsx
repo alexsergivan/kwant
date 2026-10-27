@@ -43,6 +43,7 @@ import {
   cardStatus,
   checkKindLabel,
   checksText,
+  optionalChecksNote,
   approvalHolds,
   columnOf,
   costRatio,
@@ -77,6 +78,8 @@ const TONES: Record<Tone, string> = {
 const actionBtn =
   'inline-flex items-center justify-center gap-1.5 min-h-[40px] sm:min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const quietBtn = `${actionBtn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
+/** A secondary action that shouldn't pull the eye: text only, same tap target. */
+const subtleBtn = `${actionBtn} -ml-3 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 underline underline-offset-2 decoration-zinc-600`;
 const mainBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-500`;
 const goodBtn = `${actionBtn} bg-emerald-600 text-white hover:bg-emerald-500`;
 const dangerBtn = `${actionBtn} border border-rose-500/30 text-rose-200 hover:bg-rose-500/10`;
@@ -228,6 +231,7 @@ export const TaskCard: React.FC<{
 }> = ({ task: t, names, now = Date.now(), showMission = true, onOpen }) => {
   const owner = (t.owner_kwant_id && names[t.owner_kwant_id]) || t.owner_name;
   const checks = checksText(t.checks_summary);
+  const optionalNote = optionalChecksNote(t.checks_summary);
   const status = cardStatus(t, names, now);
   const dimmed = t.state === 'backlog';
   return (
@@ -267,6 +271,11 @@ export const TaskCard: React.FC<{
             <span className={`inline-flex items-center gap-1 ${checks.tone === 'emerald' ? 'text-emerald-300' : checks.tone === 'rose' ? 'text-rose-300' : checks.tone === 'amber' ? 'text-amber-200' : 'text-zinc-400'}`}>
               {checks.tone === 'emerald' ? <CheckCircle2 size={11} aria-hidden="true" /> : checks.tone === 'rose' ? <XCircle size={11} aria-hidden="true" /> : <CircleDashed size={11} aria-hidden="true" />}
               {checks.text}
+            </span>
+          )}
+          {optionalNote && (
+            <span className="text-zinc-500" data-optional-note>
+              {optionalNote}
             </span>
           )}
         </span>
@@ -438,7 +447,8 @@ export const EvidenceReceipt: React.FC<{
     )}
     {receipt.optionalWaiting && (
       <p className="px-3 py-2 rounded-lg border border-zinc-800 text-xs text-zinc-400" data-optional-waiting>
-        {receipt.optionalWaiting}. It doesn’t hold the task: it can be verified without it.
+        {receipt.optionalWaiting}.{' '}
+        {receipt.settledVerified ? 'The task is verified without it. You can still run it.' : 'It doesn’t hold the task: it can be verified without it.'}
       </p>
     )}
     {receipt.notChecked && (
@@ -458,14 +468,18 @@ export const EvidenceReceipt: React.FC<{
               <div className="min-w-0 flex-1">
                 <p className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="font-medium text-zinc-100">{checkKindLabel(l.check.kind)}</span>
-                  <Badge tone={l.status.tone}>{l.status.label}</Badge>
+                  {receipt.settledVerified && l.check.status === 'needs_approval' && !l.check.required ? (
+                    <Badge tone="zinc">Not run</Badge>
+                  ) : (
+                    <Badge tone={l.status.tone}>{l.status.label}</Badge>
+                  )}
                   {!l.check.required && <span className="text-[10px] text-zinc-500">Optional</span>}
                 </p>
                 {l.target && <code className="block mt-1 text-[11px] text-zinc-300 break-all whitespace-pre-wrap">{l.target}</code>}
                 <p className="mt-1 text-[10px] text-zinc-500">
                   {[l.by ? `Checked by ${l.by}` : null, l.check.finished_at ? ago(l.check.finished_at) : null].filter(Boolean).join(' · ') || 'Hasn’t run yet'}
                 </p>
-                {l.notCounting && !l.ownClaim && (
+                {l.notCounting && !l.ownClaim && !(receipt.settledVerified && !l.check.required) && (
                   <p className="mt-1 text-[11px] text-amber-200" data-not-counting>
                     {l.notCounting}
                   </p>
@@ -473,7 +487,13 @@ export const EvidenceReceipt: React.FC<{
                 {l.ownClaim && <p className="mt-1 text-[11px] text-amber-200">This is the owner’s own check, so it doesn’t count toward Verified.</p>}
               </div>
             </div>
-            {l.check.status === 'needs_approval' && onApproveCheck && (
+            {l.check.status === 'needs_approval' && onApproveCheck && receipt.settledVerified && !l.check.required ? (
+              <div className="pl-6">
+                <button type="button" disabled={busy} onClick={() => onApproveCheck(l.check)} className={subtleBtn} data-run-optional>
+                  Run this optional check
+                </button>
+              </div>
+            ) : l.check.status === 'needs_approval' && onApproveCheck && (
               <div className="flex flex-wrap items-center gap-2 pl-6">
                 <p className="text-[11px] text-amber-200 flex-1 min-w-[10rem]">{l.notCounting ? '' : 'A bot added this check. It runs only after you OK it.'}</p>
                 <button type="button" disabled={busy} onClick={() => onApproveCheck(l.check)} className={quietBtn}>

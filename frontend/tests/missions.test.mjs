@@ -106,7 +106,9 @@ test('a card shows owner, cost and an honest check chip', () => {
 test('checksText and costText read plainly', () => {
   assert.deepEqual(m.checksText({ status: 'not_checked', passed: 0, failed: 0, total: 0 }), { text: 'Not checked', tone: 'zinc' });
   assert.equal(m.checksText({ status: 'failed', passed: 1, failed: 2, total: 3 }).text, '2 checks failed');
-  assert.equal(m.checksText({ status: 'pending', passed: 1, failed: 0, total: 2 }).text, '1 of 2 checks passed');
+  assert.equal(m.checksText({ status: 'pending', passed: 1, failed: 0, total: 2 }).text, '1 check passed, still checking');
+  assert.equal(m.checksText({ status: 'pending', passed: 0, failed: 0, total: 1 }).text, 'Checking');
+  assert.equal(m.checksText({ status: 'passed', passed: 2, failed: 0, total: 3 }).text, '2 checks passed');
   assert.equal(m.checksText({ status: 'passed', passed: 1, failed: 0, total: 1 }).text, 'Check passed');
   assert.equal(m.costText(12400, 50000), '12.4k of 50k tokens');
   assert.equal(m.costText(2_000_000, 0), '2M tokens');
@@ -237,6 +239,64 @@ test('an optional check waiting for you is not worded as blocking; a required on
   assert.match(hc, /Needs you/);
   assert.match(hc, /Waiting for you to allow 1 check/);
   assert.equal(m.approvalHolds(held.checks_summary), true);
+});
+
+test('a Verified task with an optional check waiting never reads "1 of 2"; it says passed, plus a grey note', () => {
+  // Rigel eval 3 §1: one required check passed, one optional check the owner added waits for you.
+  const passed = check({ approved_by: 'mission', counts: true });
+  const optional = check({ id: 'ch3', required: false, status: 'needs_approval', approved: false, approved_by: null, counts: false, requested_by: 'k_lin', checked_by: null, finished_at: null });
+  const summary = { status: 'passed', passed: 1, failed: 0, needs_approval: 1, total: 2 };
+  const t = task({ state: 'verified', finished_at: '2026-10-27T11:58:00Z', checks_summary: summary });
+  assert.deepEqual(m.checksText(summary), { text: 'Check passed', tone: 'emerald' });
+  assert.equal(m.optionalChecksNote(summary), '1 optional check waiting');
+  assert.equal(m.optionalChecksNote({ ...summary, needs_approval: 2 }), '2 optional checks waiting');
+  assert.equal(m.optionalChecksNote({ ...summary, needs_approval: 0 }), null);
+  assert.equal(m.optionalChecksNote({ ...summary, status: 'pending' }), null, 'pending may be a required check waiting');
+  const c = ui.card({ task: t, names, now: NOW, onOpen: noop });
+  assert.doesNotMatch(c, /of 2/);
+  assert.match(c, /Check passed/);
+  assert.match(c, /data-optional-note[^>]*>1 optional check waiting</);
+  assert.doesNotMatch(c, /Needs you|needs your OK/);
+});
+
+test('once Verified, a waiting optional check is a quiet "Run this optional check"; approving still works', () => {
+  const passed = check({ approved_by: 'mission', counts: true });
+  const optional = check({ id: 'ch3', required: false, status: 'needs_approval', approved: false, approved_by: null, counts: false, requested_by: 'k_lin', checked_by: null, finished_at: null });
+  const t = task({ state: 'verified', finished_at: '2026-10-27T11:58:00Z', checks_summary: { status: 'passed', passed: 1, failed: 0, needs_approval: 1, total: 2 } });
+  const d = { task: t, checks: [passed, optional], evidence: [], events: [] };
+  const r = m.buildReceipt(d, names);
+  assert.equal(r.waitingOnYou, null);
+  assert.equal(r.optionalWaiting, 'Optional check waiting for your OK');
+  assert.equal(r.settledVerified, true);
+  let approved = null;
+  const html = ui.detail({ detail: d, names, now: NOW, onAction: noop, onApproveCheck: (x) => (approved = x), onOpenChat: noop });
+  assert.match(html, /data-run-optional[^>]*>Run this optional check</);
+  assert.doesNotMatch(html, /Allow this check/);
+  assert.doesNotMatch(html, /Needs your OK/, 'no amber badge on a verified task');
+  assert.doesNotMatch(html, /Doesn’t count yet/);
+  assert.match(html, /The task is verified without it\. You can still run it\./);
+  assert.doesNotMatch(html, /Not verified yet/);
+  // The button calls the same approve action (the handler is wired; SSR can't click).
+  const rh = ui.receipt(d, names);
+  assert.match(rh, /Optional check waiting for your OK/);
+  assert.equal(approved, null);
+});
+
+test('a Review task with a required check still running and an optional one waiting: optional wording, not "Needs you" on the receipt', () => {
+  // The server says "pending" here (the required check hasn't finished), so the summary alone can't tell.
+  const running = check({ status: 'pending', approved_by: 'mission', counts: true, checked_by: null, finished_at: null });
+  const optional = check({ id: 'ch3', required: false, status: 'needs_approval', approved: false, approved_by: null, counts: false, requested_by: 'k_lin', checked_by: null, finished_at: null });
+  const t = task({ state: 'review', checks_summary: { status: 'pending', passed: 0, failed: 0, needs_approval: 1, total: 2 }, needs_you: [{ kind: 'check_approval', id: 'ch3', text: 'Allow this check: …' }] });
+  const d = { task: t, checks: [running, optional], evidence: [], events: [] };
+  const r = m.buildReceipt(d, names);
+  assert.equal(r.waitingOnYou, null, 'no required check waits for you');
+  assert.equal(r.optionalWaiting, 'Optional check waiting for your OK');
+  assert.equal(r.settledVerified, false);
+  const html = ui.detail({ detail: d, names, now: NOW, onAction: noop, onApproveCheck: noop, onOpenChat: noop });
+  assert.match(html, /Optional check waiting for your OK\. It doesn’t hold the task/);
+  assert.doesNotMatch(html, /Not verified yet\. Waiting for you/);
+  assert.match(html, /Allow this check/, 'in Review the normal Allow button stays');
+  assert.doesNotMatch(html, /Run this optional check/);
 });
 
 test('only web links open; file paths and other schemes are shown as text', () => {
