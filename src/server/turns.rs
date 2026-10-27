@@ -52,6 +52,15 @@ pub struct ActiveTurn {
 struct Inner {
     jobs: HashMap<String, Job>,
     turns: HashMap<String, ActiveTurn>,
+    /// Usage the engine reported so far in a running turn, by turn id (see [`TurnRegistry::book_usage`]).
+    meters: HashMap<String, Meter>,
+}
+
+/// One turn's fresh tokens: reported by the engine so far, and already booked onto a task.
+#[derive(Default, Clone, Copy)]
+struct Meter {
+    seen: u64,
+    booked: u64,
 }
 
 /// Jobs, their cancel tokens and the turns they run.
@@ -160,7 +169,32 @@ impl TurnRegistry {
     }
 
     pub fn end_turn(&self, turn_id: &str) {
-        self.lock().turns.remove(turn_id);
+        let mut inner = self.lock();
+        inner.turns.remove(turn_id);
+        inner.meters.remove(turn_id);
+    }
+
+    /// Notes the fresh tokens a running turn used so far, as its engine reports them.
+    pub fn saw_usage(&self, turn_id: &str, fresh: u64) {
+        let mut inner = self.lock();
+        let m = inner.meters.entry(turn_id.to_string()).or_default();
+        m.seen = m.seen.max(fresh);
+    }
+
+    /// Fresh tokens of the turn not booked yet, now marked booked: what a task the bot hands in
+    /// mid-turn pays for at that moment.
+    pub fn book_usage(&self, turn_id: &str) -> u64 {
+        let mut inner = self.lock();
+        let Some(m) = inner.meters.get_mut(turn_id) else { return 0 };
+        let due = m.seen.saturating_sub(m.booked);
+        m.booked = m.booked.max(m.seen);
+        due
+    }
+
+    /// Tokens of the turn already booked mid-turn; forgets the turn's meter. At turn end only
+    /// `fresh − booked` is still due, so the turn is counted once.
+    pub fn take_booked(&self, turn_id: &str) -> u64 {
+        self.lock().meters.remove(turn_id).map_or(0, |m| m.booked)
     }
 
     /// Running and waiting turns, oldest first.
@@ -361,6 +395,23 @@ impl Limiter {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn usage_booked_mid_turn_is_counted_once() {
+        let reg = TurnRegistry::default();
+        assert_eq!(reg.book_usage("t"), 0, "nothing reported, nothing booked");
+        reg.saw_usage("t", 100);
+        reg.saw_usage("t", 80); // an older report never shrinks the count
+        assert_eq!(reg.book_usage("t"), 100);
+        assert_eq!(reg.book_usage("t"), 0, "booking twice books nothing new");
+        reg.saw_usage("t", 150);
+        assert_eq!(reg.book_usage("t"), 50, "a second hand-in pays only what came since");
+        assert_eq!(reg.take_booked("t"), 150, "turn end subtracts what was booked");
+        assert_eq!(reg.take_booked("t"), 0, "…and forgets the turn");
+        reg.saw_usage("u", 10);
+        reg.end_turn("u");
+        assert_eq!(reg.book_usage("u"), 0, "an ended turn keeps no meter");
+    }
+
     use super::*;
 
     #[test]

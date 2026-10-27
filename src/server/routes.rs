@@ -2218,6 +2218,8 @@ async fn run_kwant_turn_inner(
                             }
                             // Only resets the stall clock (above)
                             Some(RuntimeEvent::Progress) => {}
+                            // Lets a task handed in during the turn pay for it then (see `super::missions::spend_at_hand_in`)
+                            Some(RuntimeEvent::UsageSoFar { fresh }) => state.turns.saw_usage(&tag.turn_id, fresh),
                             Some(event) => {
                                 if let RuntimeEvent::ToolCallPending { name, args, .. } = &event {
                                     if name == super::questions::NATIVE_ASK_TOOL {
@@ -2424,7 +2426,9 @@ async fn run_kwant_turn_inner(
             state.turns.add_job_tokens(&scope.job_id, fresh);
             // …and toward the task the bot holds, if any (see `super::missions`)
             let turn_started_ms = chrono::Utc::now().timestamp_millis() - turn_start.elapsed().as_millis() as i64;
-            super::missions::spend(state, &target_kwant.id, &scope.context_id(target_kwant), Some(&tag.turn_id), turn_started_ms, fresh).await;
+            // (less what a task the bot handed in mid-turn already paid for)
+            let booked = state.turns.take_booked(&tag.turn_id);
+            super::missions::spend(state, &target_kwant.id, &scope.context_id(target_kwant), Some(&tag.turn_id), turn_started_ms, fresh, booked).await;
 
             let mut reply_text = output.text.clone();
             let saved = match &opts.discussion {

@@ -1,8 +1,10 @@
-//! Mission Control spend through the real end-of-turn path: the mission runner starts a turn on a
-//! fake claude CLI, which calls `task_update review` through the turn's own MCP server (so the
-//! claim is released inside the turn), then reports its usage. The turn's tokens must still land
-//! on the task and the mission, and the mission budget must use that number. Its own test binary:
-//! it changes PATH and listens on a real port the CLI calls back on.
+//! Mission Control spend through the real turn path: the mission runner starts a turn on a fake
+//! claude CLI, which streams its usage so far, writes the task's outcome and calls `task_update
+//! review` through the turn's own MCP server (so the claim is released and the check verifies the
+//! task inside the turn), and only then ends with its final usage. The usage known at hand-in must
+//! be on the task the moment it is Verified, the turn must add up to its final usage exactly (no
+//! double count), and the mission budget must use that number. Its own test binary: it changes
+//! PATH and listens on a real port the CLI calls back on.
 
 use axum::{
     body::{to_bytes, Body},
@@ -23,11 +25,12 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tower::ServiceExt;
 
-/// On a Mission Control prompt, moves the task it holds to review through the kwant tools in its
-/// `--mcp-config`, then reports 12 new input, 8,211 cache-write, 83,544 cache-read and 487 output
-/// tokens: 8,710 fresh.
+/// On a Mission Control prompt: streams one model call's usage so far (12 new input, 8,211
+/// cache-write, 83,544 cache-read, 300 output: 8,523 fresh), writes notes.md, moves the task it
+/// holds to review through the kwant tools in its `--mcp-config`, works on for a while, then
+/// reports the turn's final usage: 487 output, so 8,710 fresh.
 const FAKE_CLAUDE: &str = r#"#!/usr/bin/env python3
-import json, re, sys, urllib.request
+import json, re, sys, time, urllib.request
 args = sys.argv[1:]
 if args[:1] == ["auth"]:
     print('{"loggedIn":true}')
@@ -35,6 +38,13 @@ if args[:1] == ["auth"]:
 prompt = args[-1] if args else ""
 held = re.search(r"You hold task (\S+) of", prompt)
 if held and "--mcp-config" in args:
+    start = {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 12,
+             "cache_creation_input_tokens": 8211, "cache_read_input_tokens": 83544, "output_tokens": 1}}}
+    print(json.dumps({"type": "stream_event", "event": start}), flush=True)
+    print(json.dumps({"type": "stream_event", "event": {"type": "message_delta", "usage": {"output_tokens": 300}}}), flush=True)
+    time.sleep(0.5)
+    with open("notes.md", "w") as f:
+        f.write("done")
     with open(args[args.index("--mcp-config") + 1]) as f:
         servers = json.load(f).get("mcpServers", {})
     for s in servers.values():
@@ -44,6 +54,7 @@ if held and "--mcp-config" in args:
             headers = dict(s.get("headers", {}), **{"content-type": "application/json"})
             req = urllib.request.Request(s["url"], data=json.dumps(call).encode(), headers=headers)
             urllib.request.urlopen(req, timeout=30).read()
+    time.sleep(3)
 print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": "done, sent for review",
                   "total_cost_usd": 0.42,
                   "usage": {"input_tokens": 12, "cache_creation_input_tokens": 8211,
@@ -51,6 +62,8 @@ print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result":
                   "modelUsage": {"claude-opus-5-5": {"outputTokens": 487}}}))
 "#;
 
+/// Fresh tokens the CLI reported before it handed the task in.
+const FRESH_AT_HAND_IN: i64 = 12 + 8_211 + 300;
 const FRESH_PER_TURN: i64 = 12 + 8_211 + 487;
 
 fn fake_cli() {
@@ -86,7 +99,7 @@ async fn ok(app: &Router, method: &str, uri: &str, body: Option<Value>) -> Value
 }
 
 #[tokio::test]
-async fn a_turn_that_finishes_its_task_still_pays_for_itself() {
+async fn a_task_verified_in_turn_pays_at_hand_in_and_the_turn_counts_once() {
     fake_cli();
     let tmp = tempfile::tempdir().unwrap();
     // The CLI reaches its kwant tools over HTTP, so kwant listens for real
@@ -119,7 +132,8 @@ async fn a_turn_that_finishes_its_task_still_pays_for_itself() {
     let channel = ok(&app, "POST", "/api/channels", Some(json!({"name": "desk", "lead_kwant_id": ann, "member_kwants": []}))).await;
     let channel = channel["id"].as_str().unwrap().to_string();
     let body = json!({"title": "Ship it", "goal": "a release", "lead_kwant_id": ann, "budget_tokens": 10_000, "channel_id": channel,
-                      "tasks": [{"title": "A", "owner": ann, "budget_tokens": 9_000},
+                      "tasks": [{"title": "A", "owner": ann, "budget_tokens": 9_000,
+                                 "checks": [{"kind": "file_contains", "spec": {"path": "notes.md", "text": "done"}}]},
                                 {"title": "B", "owner": ann, "budget_tokens": 2_000}]});
     let m = ok(&app, "POST", "/api/missions", Some(body)).await;
     let mid = m["id"].as_str().unwrap().to_string();
@@ -132,18 +146,30 @@ async fn a_turn_that_finishes_its_task_still_pays_for_itself() {
     let other = if started == a { b.clone() } else { a.clone() };
     assert_eq!(started, a, "the runner starts the first task: {run}");
 
-    // The turn moves A to review (releasing its claim) and then ends with its usage
+    // The turn hands A in and its check verifies it, while the turn is still running
     let mut t = Value::Null;
     for _ in 0..300 {
         t = ok(&app, "GET", &format!("/api/tasks/{a}"), None).await;
-        if t["task"]["spent_tokens"].as_i64().unwrap_or(0) > 0 {
+        if t["task"]["state"] == "verified" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(t["task"]["state"], "verified", "the bot handed it in and its check passed inside the turn: {t}");
+    assert!(t["task"]["claim"].is_null(), "review released the claim: {t}");
+    assert_eq!(t["task"]["spent_tokens"], FRESH_AT_HAND_IN, "the usage known at hand-in is on the task the moment it is Verified: {t}");
+    let detail = ok(&app, "GET", &format!("/api/missions/{mid}"), None).await;
+    assert_eq!(detail["mission"]["spent_tokens"], FRESH_AT_HAND_IN, "…and on the mission: {detail}");
+
+    // At turn end only the rest is added: the turn counts exactly once
+    for _ in 0..300 {
+        t = ok(&app, "GET", &format!("/api/tasks/{a}"), None).await;
+        if t["task"]["spent_tokens"] != FRESH_AT_HAND_IN {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(t["task"]["state"], "review", "the bot sent it for review inside the turn: {t}");
-    assert!(t["task"]["claim"].is_null(), "review released the claim: {t}");
-    assert_eq!(t["task"]["spent_tokens"], FRESH_PER_TURN, "the turn's tokens land on the task: {t}");
+    assert_eq!(t["task"]["spent_tokens"], FRESH_PER_TURN, "the turn's final usage, not hand-in plus final: {t}");
     let released = t["events"].as_array().unwrap().iter().any(|ev| ev["to_state"] == "review");
     assert!(released, "{t}");
     let detail = ok(&app, "GET", &format!("/api/missions/{mid}"), None).await;

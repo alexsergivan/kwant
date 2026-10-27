@@ -18,6 +18,11 @@ pub enum RuntimeEvent {
     /// A driver is still working: it printed something that isn't reply text or a tool call.
     /// Only feeds the turn's stall watchdog; it is never broadcast.
     Progress,
+    /// The turn's fresh tokens so far (see `TurnUsage::fresh`), when the engine reports usage
+    /// mid-turn, so a task the bot hands in during the turn can pay for it then. Never broadcast.
+    UsageSoFar {
+        fresh: u64,
+    },
     ApprovalRequired {
         id: String,
         tool_name: String,

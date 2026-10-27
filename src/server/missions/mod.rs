@@ -366,9 +366,13 @@ pub fn checks_summary(task: &Task, checks: &[OutcomeCheck]) -> Value {
 /// holds for it there (a hand-off, a routine run), else its own claim. A claim taken in `turn_id`
 /// or released since `turn_started_ms` counts too, so a bot that finishes its task inside the turn
 /// (`task_update review` releases the claim) still pays for that turn. Renews an open lease, and
-/// blocks the task when it goes over its own budget.
-pub async fn spend(state: &AppState, kwant_id: &str, context_id: &str, turn_id: Option<&str>, turn_started_ms: i64, fresh: u64) {
-    if fresh == 0 {
+/// blocks the task when it goes over its own budget. `booked` of the turn's tokens already landed
+/// when the bot handed its task in ([`spend_at_hand_in`]), so only the rest is added here; when the
+/// engine's mid-turn count ran ahead of its final one, the difference is taken back, so the turn
+/// adds up to exactly `fresh`.
+pub async fn spend(state: &AppState, kwant_id: &str, context_id: &str, turn_id: Option<&str>, turn_started_ms: i64, fresh: u64, booked: u64) {
+    let due = i64::try_from(fresh).unwrap_or(i64::MAX).saturating_sub(i64::try_from(booked).unwrap_or(i64::MAX));
+    if due == 0 {
         return;
     }
     let Ok(claims) = state.db.spend_claims(kwant_id, turn_id, turn_started_ms).await else { return };
@@ -378,8 +382,7 @@ pub async fn spend(state: &AppState, kwant_id: &str, context_id: &str, turn_id: 
         .find(|c| c.system && c.context_id.as_deref() == Some(context_id))
         .or_else(|| claims.iter().filter(here).find(|c| !c.system));
     let Some(claim) = claim else { return };
-    let tokens = i64::try_from(fresh).unwrap_or(i64::MAX);
-    if state.db.spend_on_task(&claim.task_id, tokens).await.is_err() {
+    if state.db.spend_on_task(&claim.task_id, due).await.is_err() {
         return;
     }
     let _ = state.db.renew_claim(&claim.task_id, lease_ms(state).await).await;
@@ -397,6 +400,28 @@ pub async fn spend(state: &AppState, kwant_id: &str, context_id: &str, turn_id: 
     }
     if let Some(m) = &task.mission_id {
         emit_mission(state, m).await;
+    }
+}
+
+/// When the bot hands its task in during a turn (`task_update`), the turn's tokens its engine
+/// reported so far land on the task right away, so a task verified in-turn never shows 0 spend
+/// until the turn ends. [`spend`] adds only the rest at turn end. Engines that report usage only
+/// at the end (codex, grok, custom CLIs) book nothing here.
+pub async fn spend_at_hand_in(state: &AppState, task_id: &str, turn_id: Option<&str>) {
+    let Some(turn_id) = turn_id else { return };
+    let due = state.turns.book_usage(turn_id);
+    if due == 0 {
+        return;
+    }
+    let tokens = i64::try_from(due).unwrap_or(i64::MAX);
+    if state.db.spend_on_task(task_id, tokens).await.is_err() {
+        return;
+    }
+    if let Ok(Some(task)) = state.db.get_task(task_id).await {
+        emit_task(state, &task).await;
+        if let Some(m) = &task.mission_id {
+            emit_mission(state, m).await;
+        }
     }
 }
 

@@ -860,14 +860,15 @@ impl Database {
         Ok(())
     }
 
-    /// Adds `tokens` to the task and its mission.
+    /// Adds `tokens` to the task and its mission. A negative amount takes back an overcount (a
+    /// mid-turn usage report the turn's final one came in under); neither goes below 0.
     pub async fn spend_on_task(&self, task_id: &str, tokens: i64) -> Result<(), DbError> {
-        if tokens <= 0 {
+        if tokens == 0 {
             return Ok(());
         }
         let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE tasks SET spent_tokens = spent_tokens + ? WHERE id = ?").bind(tokens).bind(task_id).execute(&mut *tx).await?;
-        sqlx::query("UPDATE missions SET spent_tokens = spent_tokens + ?, updated_at = ? WHERE id = (SELECT mission_id FROM tasks WHERE id = ?)")
+        sqlx::query("UPDATE tasks SET spent_tokens = MAX(0, spent_tokens + ?) WHERE id = ?").bind(tokens).bind(task_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE missions SET spent_tokens = MAX(0, spent_tokens + ?), updated_at = ? WHERE id = (SELECT mission_id FROM tasks WHERE id = ?)")
             .bind(tokens)
             .bind(Utc::now())
             .bind(task_id)

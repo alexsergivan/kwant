@@ -722,6 +722,13 @@ struct ClaudeStream {
     last_progress: Option<Instant>,
     /// Thinking arrived as partial deltas, so the whole `thinking` blocks repeat it.
     thinking_streamed: bool,
+    /// Usage of each model call so far, by message id: fresh input, cache writes, output (each the
+    /// largest reported, since a message's usage repeats and grows as it streams).
+    calls: std::collections::HashMap<String, [u64; 3]>,
+    /// The message `message_delta` usage belongs to.
+    current_call: Option<String>,
+    /// Fresh tokens last sent as [`RuntimeEvent::UsageSoFar`].
+    fresh_reported: u64,
 }
 
 impl ClaudeStream {
@@ -742,6 +749,15 @@ impl ClaudeStream {
         match v["type"].as_str() {
             Some("result") => self.result_line = Some(line.to_string()),
             Some("stream_event") => {
+                match v["event"]["type"].as_str() {
+                    Some("message_start") => {
+                        let id = v["event"]["message"]["id"].as_str().map(String::from);
+                        self.current_call = id.clone();
+                        events.extend(self.saw_usage(id, &v["event"]["message"]["usage"]));
+                    }
+                    Some("message_delta") => events.extend(self.saw_usage(self.current_call.clone(), &v["event"]["usage"])),
+                    _ => {}
+                }
                 let delta = &v["event"]["delta"];
                 if v["event"]["type"] == "content_block_delta" && delta["type"] == "thinking_delta" {
                     if let Some(text) = delta["thinking"].as_str().filter(|t| !t.is_empty()) {
@@ -751,6 +767,7 @@ impl ClaudeStream {
                 }
             }
             Some("assistant") => {
+                events.extend(self.saw_usage(v["message"]["id"].as_str().map(String::from), &v["message"]["usage"]));
                 if !self.thinking_streamed {
                     for b in blocks.iter().filter(|b| b["type"] == "thinking") {
                         if let Some(text) = b["thinking"].as_str().filter(|t| !t.trim().is_empty()) {
@@ -789,6 +806,22 @@ impl ClaudeStream {
         }
         self.last_progress = Some(now);
         events
+    }
+
+    /// Takes one model call's usage (a `message_start`, `message_delta` or `assistant` line) and
+    /// returns a [`RuntimeEvent::UsageSoFar`] when the turn's fresh total grew.
+    fn saw_usage(&mut self, id: Option<String>, usage: &serde_json::Value) -> Option<RuntimeEvent> {
+        let (id, usage) = (id?, usage.as_object()?);
+        let n = |k: &str| usage.get(k).and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let call = self.calls.entry(id).or_default();
+        for (slot, value) in call.iter_mut().zip([n("input_tokens"), n("cache_creation_input_tokens"), n("output_tokens")]) {
+            *slot = (*slot).max(value);
+        }
+        let fresh: u64 = self.calls.values().flatten().sum();
+        (fresh > self.fresh_reported).then(|| {
+            self.fresh_reported = fresh;
+            RuntimeEvent::UsageSoFar { fresh }
+        })
     }
 
     fn progress(&mut self, now: Instant) -> Vec<RuntimeEvent> {
@@ -1399,6 +1432,25 @@ impl Driver for CliDriver {
 mod tests {
     use super::*;
     use crate::db::models::{Kwant, Message};
+
+    #[test]
+    fn claude_stream_reports_usage_so_far() {
+        let mut stream = ClaudeStream::default();
+        let now = Instant::now();
+        let so_far = |events: Vec<RuntimeEvent>| events.into_iter().find_map(|e| match e {
+            RuntimeEvent::UsageSoFar { fresh } => Some(fresh),
+            _ => None,
+        });
+        let start = r#"{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1","usage":{"input_tokens":5,"cache_creation_input_tokens":100,"cache_read_input_tokens":9000,"output_tokens":1}}}}"#;
+        assert_eq!(so_far(stream.line(start, now)), Some(106), "cache reads don't count");
+        let delta = r#"{"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":40}}}"#;
+        assert_eq!(so_far(stream.line(delta, now)), Some(145));
+        // The whole message repeats its usage: no double count, no new report
+        let whole = r#"{"type":"assistant","message":{"id":"m1","content":[],"usage":{"input_tokens":5,"cache_creation_input_tokens":100,"output_tokens":40}}}"#;
+        assert_eq!(so_far(stream.line(whole, now)), None);
+        let next = r#"{"type":"assistant","message":{"id":"m2","content":[],"usage":{"input_tokens":3,"output_tokens":7}}}"#;
+        assert_eq!(so_far(stream.line(next, now)), Some(155), "a second model call adds up");
+    }
 
     #[test]
     fn claude_result_usage_is_split_into_fresh_and_cached() {

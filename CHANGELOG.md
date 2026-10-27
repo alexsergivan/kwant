@@ -21,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and blocked work. Turn it on in Settings → Mission board. It works on phone and desktop.
 
 ### Changed
+- **A task's spend shows up the moment it is verified.** When a bot hands a task in partway through
+  its turn, the tokens used so far land on the task and mission right away; the rest of the turn is
+  added when it ends, so nothing is counted twice. Before, a just-verified task showed 0 tokens for a
+  few seconds. Engines that report usage only at the end (Codex, Grok, custom CLIs) still add it then.
 - **Deciding for you costs fewer tokens.** Before deciding a choice itself, a bot now hears at most one
   teammate, and only when the choice or an open check names that teammate.
 

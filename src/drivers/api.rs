@@ -761,6 +761,13 @@ struct ChatRequest<'a> {
     turn_usage: std::sync::Mutex<Option<super::TurnUsage>>,
 }
 
+impl ChatRequest<'_> {
+    /// Fresh tokens of the turn's calls so far; `None` until one reports usage.
+    fn fresh_so_far(&self) -> Option<u64> {
+        self.turn_usage.lock().unwrap_or_else(|e| e.into_inner()).map(|u| u.fresh())
+    }
+}
+
 /// The bot and conversation a turn's calls are recorded for (see `crate::db::usage`).
 #[derive(Clone, Copy)]
 struct UsageSink<'a> {
@@ -1114,6 +1121,10 @@ impl ApiDriver {
             }
             let purpose = if round == 0 { crate::db::usage::PURPOSE_REPLY } else { crate::db::usage::PURPOSE_TOOL_ROUND };
             record_call(request, purpose, usage, &body).await;
+            // A tool this round may hand the bot's task in: the turn so far is known now
+            if let Some(fresh) = request.fresh_so_far() {
+                let _ = event_tx.send(RuntimeEvent::UsageSoFar { fresh }).await;
+            }
             if let Some(thinking) = reply_reasoning(&reply) {
                 let _ = event_tx.send(RuntimeEvent::ThinkingDelta(thinking)).await;
             }

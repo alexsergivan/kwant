@@ -313,6 +313,8 @@ async fn update(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) 
         Ok(t) => t,
         Err(e) => return fail(format!("Not moved: {e}.")),
     };
+    // Handed in: the turn so far pays now, before its checks can verify it
+    super::spend_at_hand_in(state, &task.id, scope.turn_id.as_deref()).await;
     if task.state != "review" {
         return ok(json!({"task": brief(&task)}));
     }
