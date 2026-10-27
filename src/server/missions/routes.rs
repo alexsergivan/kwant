@@ -769,7 +769,9 @@ pub async fn add_task_check(State(state): State<AppState>, RawQuery(q): RawQuery
         Ok(c) => c,
         Err(e) => return internal(e),
     };
-    let check = if t.state == "review" { checks::run_check(&state, &t, &check).await } else { check };
+    // In review the check may decide the task. On a verified task it runs for the record only:
+    // `evaluate` leaves a verified task alone, so a failing optional check can't undo it.
+    let check = if matches!(t.state.as_str(), "review" | "verified") { checks::run_check(&state, &t, &check).await } else { check };
     if let Some(t) = evaluate(&state, &id).await {
         emit_task(&state, &t).await;
     }
@@ -802,7 +804,9 @@ pub async fn approve_check(State(state): State<AppState>, RawQuery(q): RawQuery,
     }
     let _ = state.db.log_task_event(&t.id, "check_added", "person", &json!({"check_id": id, "approved": true, "approval": true})).await;
     let check = state.db.get_check(&id).await.ok().flatten().unwrap_or(check);
-    let check = if t.state == "review" { checks::run_check(&state, &t, &check).await } else { check };
+    // In review the check may decide the task. On a verified task it runs for the record only:
+    // `evaluate` leaves a verified task alone, so a failing optional check can't undo it.
+    let check = if matches!(t.state.as_str(), "review" | "verified") { checks::run_check(&state, &t, &check).await } else { check };
     if let Some(t) = evaluate(&state, &t.id).await {
         emit_task(&state, &t).await;
     }

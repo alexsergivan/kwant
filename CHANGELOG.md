@@ -34,6 +34,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Mission API: `checks_summary.required_needs_approval`.** Counts the required checks waiting for
   your OK, so a card can tell "needs you" from "a required check is still running while an optional
   one waits".
+- **"Run this optional check" runs it.** Approving an optional check on a Verified task now runs the
+  check and records whether it passed or failed, with its output. The task stays Verified either way
+  and its spend doesn't change. Before, the check was only approved and never ran.
 
 ## [Mac 0.1.3] - 2026-10-26
 

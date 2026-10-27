@@ -479,3 +479,50 @@ async fn every_check_must_pass_one_waiting_for_approval_holds_the_task_in_review
     assert_eq!(t["task"]["state"], "ready", "{t}");
     assert_eq!(t["task"]["attempts"], 1);
 }
+
+/// A verified task whose owner added an optional check of its own: returns `(task id, check id)`.
+async fn verified_with_optional_check(e: &Env, text: &str) -> (String, String) {
+    let (m, tasks) = mission(e, 200_000, json!([{"title": "Notes", "owner": e.bot.id,
+        "checks": [{"kind": "file_exists", "spec": {"path": "notes.md"}}]}])).await;
+    let tid = id(&tasks[0]);
+    std::fs::write(folder(e, &id(&m)).await.join("notes.md"), "release notes").unwrap();
+    let token = turn(e, &e.bot, &format!("t-optional-{text}")).await;
+    ok(e, &token, "task_claim", json!({"task_id": tid})).await;
+    let added = ok(e, &token, "task_request_check",
+        json!({"task_id": tid, "kind": "file_contains", "spec": {"path": "notes.md", "text": text}, "required": false})).await;
+    let check = added["checks"].as_array().unwrap().iter().find(|c| c["kind"] == "file_contains").unwrap().clone();
+    assert_eq!(check["status"], "needs_approval", "{added}");
+    ok(e, &token, "task_update", json!({"task_id": tid, "status": "review"})).await;
+    assert_eq!(state_of(e, &tid).await, "verified", "an optional waiting check doesn't hold the task");
+    (tid, id(&check))
+}
+
+#[tokio::test]
+async fn approving_an_optional_check_on_a_verified_task_runs_it_and_records_a_pass() {
+    let e = setup().await;
+    let (tid, cid) = verified_with_optional_check(&e, "release").await;
+    let before = task(&e, &tid).await;
+    let approved = person(&e, "POST", &format!("/api/checks/{cid}/approve"), None).await;
+    assert_eq!((approved["status"].as_str(), approved["approved_by"].as_str()), (Some("passed"), Some("person")), "{approved}");
+    assert!(approved["output_excerpt"].as_str().is_some_and(|o| !o.is_empty()), "{approved}");
+    assert_eq!(approved["checked_by"], "kwant");
+    let t = task(&e, &tid).await;
+    assert_eq!(t["task"]["state"], "verified", "{t}");
+    assert_eq!(t["task"]["spent_tokens"], before["task"]["spent_tokens"], "running a check spends nothing");
+    assert!(t["evidence"].as_array().unwrap().iter().any(|v| v["kind"] == "check_output" && v["run_id"] == cid.as_str()), "{t}");
+}
+
+#[tokio::test]
+async fn a_failing_optional_check_on_a_verified_task_is_recorded_and_the_task_stays_verified() {
+    let e = setup().await;
+    let (tid, cid) = verified_with_optional_check(&e, "not in the file").await;
+    let before = task(&e, &tid).await;
+    let approved = person(&e, "POST", &format!("/api/checks/{cid}/approve"), None).await;
+    assert_eq!(approved["status"], "failed", "{approved}");
+    assert!(approved["output_excerpt"].as_str().is_some_and(|o| !o.is_empty()), "{approved}");
+    let t = task(&e, &tid).await;
+    assert_eq!(t["task"]["state"], "verified", "a failing optional check doesn't undo a verified task: {t}");
+    assert_eq!(t["task"]["attempts"], before["task"]["attempts"]);
+    assert_eq!(t["task"]["spent_tokens"], before["task"]["spent_tokens"]);
+    assert_eq!(t["task"]["needs_you"], json!([]));
+}

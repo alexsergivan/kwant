@@ -179,6 +179,8 @@ POST   /api/tasks/:id/cancel                   -> Task
 POST   /api/tasks/:id/checks  {kind, spec, required?}  -> Check   (approved, runs if the task is in review)
 POST   /api/tasks/:id/checks/run               -> {checks: [Check], task: Task}
 POST   /api/checks/:id/approve                 -> Check   (needs_approval -> runs)
+                                                    (runs in review or verified; on a verified task the
+                                                     result is recorded and the state never changes)
 ```
 
 Errors: `{"error": "plain sentence"}` with 400 (bad input), 404, 409 (illegal transition, budget,
