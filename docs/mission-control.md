@@ -16,7 +16,8 @@ with `?space=<id>` (default space when omitted), like the rest of the API.
 |---|---|---|---|
 | `mission_board` | bool | `false` | Shows the board, gives bots the mission tools, auto-creates tasks from hand-offs, routine runs, Loose Ends and work-ahead runs, and runs active missions. Off: routes still answer (read and person actions), bots get no task tools, nothing is auto-created, the runner is idle. |
 | `mission_lease_minutes` | int 5–240 | `30` | How long a claim lives without activity. |
-| `mission_default_budget_tokens` | int 1 000–5 000 000 | `200000` | A mission's budget when none is given. |
+| `mission_default_budget_tokens` | int 0 or 1 000–5 000 000 | `0` | A new mission's budget when none is given. 0 = no limit. |
+| `mission_default_task_budget_tokens` | int 0–5 000 000 | `0` | A new task's budget when none is given (capped at a limited mission's budget). 0 = no limit. |
 
 Changing settings is person-only (as today). Bots can't change these through `settings_update`.
 
@@ -272,8 +273,11 @@ claimed or let go of during that turn (`task_update review` releases the claim b
 and the turn still pays for itself). When the turn ends and the task is still `working`, the
 lease is released (`ready`, attempt +1).
 
-Budget: a claim needs `spent + reserved + task budget ≤ mission budget`, where `reserved` is what
-working tasks may still spend. After every turn the tokens are added. A task over its own budget is
+Budget: `budget_tokens` 0 means no limit, on missions and tasks alike, and is what new ones get
+unless a budget or a Settings default is given (§15). A mission with no limit never refuses a claim.
+In a limited mission a claim needs `spent + reserved + task budget ≤ mission budget`, where `reserved`
+is what working tasks with a limit may still spend; a task with no limit reserves nothing and needs
+only one token left. After every turn the tokens are added. A task over its own budget is
 blocked (`budget`). A mission at or over its budget gets `over_budget: true`, and no new claims start
 until the person raises the budget. One turn already running can overshoot by what that turn uses,
 because kwant counts tokens when a model call returns.
@@ -579,3 +583,27 @@ the turn ended, and the next tick put the task back in `working` with no turn ru
   lowers it; a tier that isn't lower returns `unchanged: true`.
 - Bot tool `tier_status {task_class?}` (read-only, offered with the task board).
 - `task_json` gains `task_class` and `owner_tier` (`null` while Flight School is off).
+
+## 15. Opt-in budgets
+
+Token budgets are opt-in. `budget_tokens` 0 means no limit, for tasks and missions.
+
+- New tasks (person, hand-off, routine, chat, work-ahead) and missions get 0 unless a budget is
+  given or the person set a default (`mission_default_task_budget_tokens`,
+  `mission_default_budget_tokens`, both 0 by default). A plan task gets the task default, capped at a
+  limited mission's budget; a task's own budget must be 0 or at most its mission's.
+- No limit is never enforced: no `budget` block, `over_budget` stays false, nothing reserved, and
+  AutoFix has no recovery cap (`recovery_budget_tokens` is 0, meaning none). The prompt a bot gets for
+  a task leaves out the "Budget: N tokens" line.
+- `PATCH /api/tasks/:id` and `PATCH /api/missions/:id` take `budget_tokens` 0 to remove a limit, or a
+  positive number (tasks 1–5 000 000, missions 1 000–5 000 000). Anything else is 400.
+- **Unblocking a task blocked for its budget** (`state` `blocked`, `blocked_reason` `budget`):
+  `PATCH /api/tasks/:id {"budget_tokens": 0}` (or a higher limit), then `POST /api/tasks/:id/unblock`.
+  The task goes `blocked → backlog → ready` when its dependencies are verified and its mission is
+  active. (Hand-off tasks are not restarted by the board; that is a separate fix.)
+- Migration (once, when the stored table still has `CHECK (budget_tokens > 0)`): `tasks` and
+  `missions` are rebuilt with `CHECK (budget_tokens >= 0)`, keeping every column, index and trigger,
+  and in the same transaction rows still at the old silent defaults lose them:
+  `UPDATE tasks SET budget_tokens = 0 WHERE budget_tokens = 50000` and
+  `UPDATE missions SET budget_tokens = 0 WHERE budget_tokens = 200000`. Task states are not changed.
+- The hand-off loop guard (`chain_token_budget`) is separate and unchanged.

@@ -3273,8 +3273,10 @@ pub struct SettingsResponse {
     pub mission_board: bool,
     /// Minutes a task claim lives without activity (5–240).
     pub mission_lease_minutes: i64,
-    /// A new mission's token budget when none is given.
+    /// A new mission's token budget when none is given; 0 = no limit (the default).
     pub mission_default_budget_tokens: i64,
+    /// A new task's token budget when none is given; 0 = no limit (the default).
+    pub mission_default_task_budget_tokens: i64,
     /// Time Machine: checkpoints before and after each task run (see `super::missions::checkpoints`).
     pub checkpoints: bool,
     /// Largest checkpoint, in MB (10–2000).
@@ -3324,6 +3326,7 @@ pub struct SaveSettingsPayload {
     pub mission_board: Option<bool>,
     pub mission_lease_minutes: Option<i64>,
     pub mission_default_budget_tokens: Option<i64>,
+    pub mission_default_task_budget_tokens: Option<i64>,
     pub checkpoints: Option<bool>,
     pub checkpoint_max_mb: Option<i64>,
     pub checkpoint_keep: Option<i64>,
@@ -3375,6 +3378,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         mission_board: super::missions::enabled(&state).await,
         mission_lease_minutes: super::missions::lease_minutes(&state).await,
         mission_default_budget_tokens: super::missions::default_budget(&state).await,
+        mission_default_task_budget_tokens: super::missions::default_task_budget(&state).await,
         checkpoints: super::missions::checkpoints::enabled(&state).await,
         checkpoint_max_mb: super::missions::checkpoints::max_mb(&state).await,
         checkpoint_keep: super::missions::checkpoints::keep(&state).await,
@@ -3428,7 +3432,7 @@ pub async fn save_settings(
     if payload.work_ahead_daily_cap.is_some_and(|n| !(1..=super::decide::MAX_WORK_AHEAD_CAP).contains(&n)) {
         return bad(format!("work_ahead_daily_cap must be 1–{}", super::decide::MAX_WORK_AHEAD_CAP));
     }
-    if let Some(e) = super::missions::settings_error(payload.mission_lease_minutes, payload.mission_default_budget_tokens) {
+    if let Some(e) = super::missions::settings_error(payload.mission_lease_minutes, payload.mission_default_budget_tokens, payload.mission_default_task_budget_tokens) {
         return bad(e);
     }
     if let Some(e) = super::missions::checkpoints::settings_error(payload.checkpoint_max_mb, payload.checkpoint_keep) {
@@ -3537,6 +3541,9 @@ pub async fn save_settings(
     }
     if let Some(n) = payload.mission_default_budget_tokens {
         let _ = state.db.set_setting(super::missions::BUDGET_SETTING, &n.to_string()).await;
+    }
+    if let Some(n) = payload.mission_default_task_budget_tokens {
+        let _ = state.db.set_setting(super::missions::TASK_BUDGET_SETTING, &n.to_string()).await;
     }
     if let Some(on) = payload.checkpoints {
         let _ = state.db.set_setting(super::missions::checkpoints::SETTING, if on { "true" } else { "false" }).await;

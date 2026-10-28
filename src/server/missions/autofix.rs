@@ -406,7 +406,8 @@ fn used(task: &Task) -> i64 {
     }
 }
 
-/// The recovery budget: `recovery_budget_pct` of the task's budget.
+/// The recovery budget: `recovery_budget_pct` of the task's budget. 0 for a task with no limit,
+/// which means no recovery cap either (see [`limit`]).
 pub fn recovery_budget(task: &Task, pct: i64) -> i64 {
     task.budget_tokens.saturating_mul(pct) / 100
 }
@@ -422,7 +423,7 @@ async fn limit(state: &AppState, task: &Task) -> Option<&'static str> {
     }
     let estimate = task.spent_tokens / task.attempts.max(1);
     let recovery = recovery_budget(task, recovery_pct(state).await);
-    if task.recovery_spent_tokens + estimate > recovery {
+    if task.budget_tokens > super::NO_LIMIT && task.recovery_spent_tokens + estimate > recovery {
         return Some("over_recovery_budget");
     }
     None

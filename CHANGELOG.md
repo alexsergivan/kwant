@@ -12,6 +12,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **kwant.si covers 0.2.0.** The home page has a "New in 0.2.0" strip, the features page has sections
   for the Mission board, Flight School and connecting apps with new screenshots and three short clips
   (Sandbox, AutoFix, Connect), and there are new docs pages for the Mission board and Flight School.
+- **No token limit by default.** New tasks and missions no longer get a hidden 50k (task) or 200k
+  (mission) token budget, so ordinary work stops landing in Needs you as "Out of budget". A budget of
+  0 means no limit; you can still set one on a task or mission, or as a default in Settings
+  (`mission_default_task_budget_tokens`, `mission_default_budget_tokens`). Existing tasks and missions
+  still on the old automatic limit have it removed; limits you set yourself stay. A task already
+  blocked for its budget stays in Needs you until you remove its limit and unblock it.
 
 ## [Mac 0.2.0] - 2026-10-28
 

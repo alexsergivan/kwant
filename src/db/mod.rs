@@ -181,6 +181,8 @@ impl Database {
         }
         // After the spaces migration, which can rebuild `kwants` (and drop its triggers)
         db.migrate_flight_school().await?;
+        // Last: it rebuilds `tasks` and `missions` from their stored SQL, columns and triggers included
+        db.migrate_opt_in_budgets().await?;
         db.pool.close().await;
 
         let pool = SqlitePoolOptions::new()

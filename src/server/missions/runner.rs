@@ -150,7 +150,7 @@ async fn prompt(state: &AppState, m: &Mission, t: &Task) -> String {
          Work on it now. Attach what you produced with task_attach_evidence, then call task_update with \
          task_id {id} and status \"review\": kwant runs the checks and only they (or a teammate's review, \
          or the person) can verify it. If you can't finish, call task_update with status \"blocked\" and a \
-         reason, or \"ready\" to let it go. Never say it is verified yourself. Budget: {budget} tokens.",
+         reason, or \"ready\" to let it go. Never say it is verified yourself.{budget}",
         id = t.id,
         mt = m.title,
         goal = m.goal,
@@ -158,7 +158,7 @@ async fn prompt(state: &AppState, m: &Mission, t: &Task) -> String {
         acc = if t.acceptance.is_empty() { "(none given)" } else { &t.acceptance },
         checks = if list.is_empty() { "- none: a teammate or the person reviews it".into() } else { list.join("\n") },
         deps = if deps.is_empty() { String::new() } else { format!("It builds on tasks {} (verified).\n", deps.iter().map(|d| d.0.as_str()).collect::<Vec<_>>().join(", ")) },
-        budget = t.budget_tokens - t.spent_tokens,
+        budget = if t.budget_tokens > super::NO_LIMIT { format!(" Budget: {} tokens.", t.budget_tokens - t.spent_tokens) } else { String::new() },
     )
 }
 
