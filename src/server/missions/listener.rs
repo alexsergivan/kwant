@@ -99,6 +99,7 @@ async fn start_held(
     place: (Option<String>, Option<String>, Option<String>),
     context_id: &str,
 ) -> Option<Task> {
+    let budget_tokens = super::default_task_budget(state).await;
     let new = |mission_id: Option<String>| NewTask {
         mission_id,
         title: title.chars().take(200).collect(),
@@ -107,7 +108,7 @@ async fn start_held(
         priority: 1,
         owner_kwant_id: None,
         suggested_kwant_id: Some(owner.into()),
-        budget_tokens: super::DEFAULT_TASK_BUDGET,
+        budget_tokens,
         max_attempts: super::DEFAULT_MAX_ATTEMPTS,
         source_kind: source_kind.into(),
         source_id: Some(source_id.into()),
@@ -303,7 +304,7 @@ pub async fn on_work_ahead_posted(state: &AppState, lead: &crate::db::models::Kw
         priority: 1,
         owner_kwant_id: Some(lead.id.clone()),
         suggested_kwant_id: Some(lead.id.clone()),
-        budget_tokens: super::DEFAULT_TASK_BUDGET,
+        budget_tokens: super::default_task_budget(state).await,
         max_attempts: 1,
         source_kind: "work_ahead".into(),
         source_id: Some(run_id.into()),

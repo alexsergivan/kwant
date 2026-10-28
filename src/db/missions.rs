@@ -13,6 +13,13 @@ use serde_json::Value;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+/// The silent budgets every task and mission got before budgets became opt-in
+/// ([`Database::migrate_opt_in_budgets`]).
+pub const OLD_DEFAULT_TASK_BUDGET: i64 = 50_000;
+pub const OLD_DEFAULT_MISSION_BUDGET: i64 = 200_000;
+const OLD_BUDGET_CHECK: &str = "CHECK (budget_tokens > 0)";
+const NEW_BUDGET_CHECK: &str = "CHECK (budget_tokens >= 0)";
+
 pub const TASK_STATES: [&str; 9] = ["backlog", "ready", "working", "needs_you", "review", "verified", "blocked", "failed", "cancelled"];
 pub const MISSION_STATUSES: [&str; 4] = ["draft", "active", "done", "cancelled"];
 pub const SOURCE_KINDS: [&str; 7] = ["mission", "person", "delegation", "routine", "zombie", "work_ahead", "chat"];
@@ -316,7 +323,7 @@ impl Database {
                 direct_kwant_id TEXT,
                 thread_id TEXT,
                 workspace_path TEXT NOT NULL DEFAULT '',
-                budget_tokens INTEGER NOT NULL CHECK (budget_tokens > 0),
+                budget_tokens INTEGER NOT NULL CHECK (budget_tokens >= 0),
                 spent_tokens INTEGER NOT NULL DEFAULT 0,
                 created_by TEXT NOT NULL,
                 approved_at TIMESTAMP,
@@ -336,7 +343,7 @@ impl Database {
                 priority INTEGER NOT NULL DEFAULT 1 CHECK (priority BETWEEN 0 AND 3),
                 owner_kwant_id TEXT,
                 suggested_kwant_id TEXT,
-                budget_tokens INTEGER NOT NULL CHECK (budget_tokens > 0),
+                budget_tokens INTEGER NOT NULL CHECK (budget_tokens >= 0),
                 spent_tokens INTEGER NOT NULL DEFAULT 0,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 max_attempts INTEGER NOT NULL DEFAULT 3,
@@ -432,6 +439,33 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Budgets became opt-in: `budget_tokens` 0 means no limit. Tables made before that only
+    /// allow `> 0`, so they are rebuilt once with `>= 0`, keeping every column, index and trigger,
+    /// and in the same transaction rows still at the old silent defaults ([`OLD_DEFAULT_TASK_BUDGET`]
+    /// on tasks, [`OLD_DEFAULT_MISSION_BUDGET`] on missions) lose them. Budgets anyone set stay.
+    /// Runs last, after every migration that adds a column or trigger to these tables.
+    pub(super) async fn migrate_opt_in_budgets(&self) -> Result<(), DbError> {
+        let mut conn = self.pool.acquire().await?;
+        let mut old = Vec::new();
+        for table in ["missions", "tasks"] {
+            let sql: Option<(String,)> = sqlx::query_as("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+                .bind(table)
+                .fetch_optional(&mut *conn)
+                .await?;
+            if let Some((sql,)) = sql.filter(|(sql,)| sql.contains(OLD_BUDGET_CHECK)) {
+                old.push((table, sql));
+            }
+        }
+        if old.is_empty() {
+            return Ok(());
+        }
+        // Table rebuilds need foreign keys off, and SQLite ignores this pragma inside a transaction
+        sqlx::query("PRAGMA foreign_keys = OFF").execute(&mut *conn).await?;
+        let result = rebuild_budgets(&mut conn, &old).await;
+        sqlx::query("PRAGMA foreign_keys = ON").execute(&mut *conn).await?;
+        result
     }
 
     // Missions
@@ -530,7 +564,7 @@ impl Database {
     pub async fn mission_reserved(&self, mission_id: &str) -> Result<i64, DbError> {
         let (n,): (i64,) = sqlx::query_as(
             "SELECT COALESCE(SUM(MAX(budget_tokens - spent_tokens, 0)), 0) FROM tasks \
-             WHERE mission_id = ? AND state IN ('working', 'needs_you')",
+             WHERE mission_id = ? AND state IN ('working', 'needs_you') AND budget_tokens > 0",
         )
         .bind(mission_id)
         .fetch_one(&self.pool)
@@ -755,16 +789,21 @@ impl Database {
             if m.status != "active" {
                 return Ok(Err(ClaimRefused::MissionNotActive));
             }
-            let (reserved,): (i64,) = sqlx::query_as(
-                "SELECT COALESCE(SUM(MAX(budget_tokens - spent_tokens, 0)), 0) FROM tasks WHERE mission_id = ? AND state IN ('working', 'needs_you')",
-            )
-            .bind(mid)
-            .fetch_one(&mut *tx)
-            .await?;
-            let needed = (task.budget_tokens - task.spent_tokens).max(1);
-            let remaining = m.budget_tokens - m.spent_tokens - reserved;
-            if needed > remaining {
-                return Ok(Err(ClaimRefused::Budget { remaining: remaining.max(0), needed }));
+            // A mission with no limit never refuses; tasks with no limit reserve nothing and need
+            // only that the mission has tokens left
+            if m.budget_tokens > 0 {
+                let (reserved,): (i64,) = sqlx::query_as(
+                    "SELECT COALESCE(SUM(MAX(budget_tokens - spent_tokens, 0)), 0) FROM tasks \
+                     WHERE mission_id = ? AND state IN ('working', 'needs_you') AND budget_tokens > 0",
+                )
+                .bind(mid)
+                .fetch_one(&mut *tx)
+                .await?;
+                let needed = if task.budget_tokens > 0 { (task.budget_tokens - task.spent_tokens).max(1) } else { 1 };
+                let remaining = m.budget_tokens - m.spent_tokens - reserved;
+                if needed > remaining {
+                    return Ok(Err(ClaimRefused::Budget { remaining: remaining.max(0), needed }));
+                }
             }
         }
         // Expired claims of this task (or the bot's own) are let go before the new one
@@ -1197,4 +1236,155 @@ pub(super) async fn insert_event(
         .execute(&mut **tx)
         .await?;
     Ok(())
+}
+
+/// [`Database::migrate_opt_in_budgets`]'s rebuild, in one transaction: SQLite's documented
+/// create-copy-drop-rename, from the table's own stored SQL so columns added by later migrations
+/// come along, then its indexes and triggers (dropped with the old table) are made again.
+async fn rebuild_budgets(conn: &mut sqlx::SqliteConnection, old: &[(&str, String)]) -> Result<(), DbError> {
+    let mut tx = sqlx::Connection::begin(&mut *conn).await?;
+    // Rows that were already dangling don't stop the rebuild; only new ones would
+    let before = fk_violations(&mut tx).await?;
+    // Triggers on any table can name tasks or missions, and SQLite re-checks them all on a
+    // rename, so they come off first and go back once both tables are rebuilt
+    let triggers: Vec<(String, String)> =
+        sqlx::query_as("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND sql IS NOT NULL ORDER BY name").fetch_all(&mut *tx).await?;
+    for (name, _) in &triggers {
+        sqlx::query(&format!("DROP TRIGGER \"{name}\"")).execute(&mut *tx).await?;
+    }
+    for (table, sql) in old {
+        let new_table = format!("{table}__budget_new");
+        let head = format!("CREATE TABLE {table} ");
+        let quoted = format!("CREATE TABLE \"{table}\" ");
+        let body = sql
+            .strip_prefix(&head)
+            .or_else(|| sql.strip_prefix(&quoted))
+            .ok_or_else(|| DbError::Migration(format!("{table}: unexpected table SQL")))?;
+        let create = format!("CREATE TABLE {new_table} {}", body.replace(OLD_BUDGET_CHECK, NEW_BUDGET_CHECK));
+        let indexes: Vec<(String,)> =
+            sqlx::query_as("SELECT sql FROM sqlite_master WHERE tbl_name = ? AND type = 'index' AND sql IS NOT NULL ORDER BY name")
+                .bind(table)
+                .fetch_all(&mut *tx)
+                .await?;
+        sqlx::query(&create).execute(&mut *tx).await?;
+        let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info(?) ORDER BY cid").bind(table).fetch_all(&mut *tx).await?;
+        let list = cols.iter().map(|(c,)| format!("\"{c}\"")).collect::<Vec<_>>().join(", ");
+        // rowid too, so listings without an ORDER BY keep their order
+        let copied = sqlx::query(&format!("INSERT INTO {new_table} (rowid, {list}) SELECT rowid, {list} FROM {table}"))
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        let (count,): (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {table}")).fetch_one(&mut *tx).await?;
+        if copied != count as u64 {
+            return Err(DbError::Migration(format!("{table}: copied {copied} of {count} rows")));
+        }
+        sqlx::query(&format!("DROP TABLE {table}")).execute(&mut *tx).await?;
+        sqlx::query(&format!("ALTER TABLE {new_table} RENAME TO {table}")).execute(&mut *tx).await?;
+        for (stmt,) in &indexes {
+            sqlx::query(stmt).execute(&mut *tx).await?;
+        }
+    }
+    for (_, stmt) in &triggers {
+        sqlx::query(stmt).execute(&mut *tx).await?;
+    }
+    sqlx::query("UPDATE tasks SET budget_tokens = 0 WHERE budget_tokens = ?").bind(OLD_DEFAULT_TASK_BUDGET).execute(&mut *tx).await?;
+    sqlx::query("UPDATE missions SET budget_tokens = 0 WHERE budget_tokens = ?").bind(OLD_DEFAULT_MISSION_BUDGET).execute(&mut *tx).await?;
+    if fk_violations(&mut tx).await? > before {
+        return Err(DbError::Migration("foreign key check failed after the budget rebuild".into()));
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn fk_violations(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<usize, DbError> {
+    let rows: Vec<(String, Option<i64>, String, i64)> = sqlx::query_as("PRAGMA foreign_key_check").fetch_all(&mut **tx).await?;
+    Ok(rows.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mission(budget: i64) -> NewMission {
+        NewMission { title: "M".into(), status: "active".into(), lead_kwant_id: "lead".into(), budget_tokens: budget, created_by: "person".into(), ..Default::default() }
+    }
+
+    fn task(mission_id: Option<&str>, budget: i64, state: &str) -> NewTask {
+        NewTask {
+            mission_id: mission_id.map(Into::into),
+            title: format!("T {budget}"),
+            state: state.into(),
+            priority: 1,
+            budget_tokens: budget,
+            max_attempts: 3,
+            source_kind: "person".into(),
+            created_by: "person".into(),
+            ..Default::default()
+        }
+    }
+
+    async fn schema_of(db: &Database, kind: &str) -> Vec<(String, String)> {
+        sqlx::query_as("SELECT name, sql FROM sqlite_master WHERE tbl_name IN ('tasks', 'missions') AND type = ? AND sql IS NOT NULL ORDER BY name")
+            .bind(kind)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap()
+    }
+
+    /// A database as a release before opt-in budgets leaves it: same tables, the old `> 0` check.
+    async fn old_shape(db: &Database) {
+        let mut conn = db.pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA writable_schema = ON").execute(&mut *conn).await.unwrap();
+        sqlx::query("UPDATE sqlite_master SET sql = replace(sql, ?, ?) WHERE type = 'table' AND name IN ('tasks', 'missions')")
+            .bind(NEW_BUDGET_CHECK)
+            .bind(OLD_BUDGET_CHECK)
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA writable_schema = OFF").execute(&mut *conn).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_migration_takes_off_only_the_old_silent_defaults_and_keeps_the_tables_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let space = SpaceId::default_space();
+        let old_m = db.create_mission(&space, &mission(OLD_DEFAULT_MISSION_BUDGET)).await.unwrap();
+        let set_m = db.create_mission(&space, &mission(300_000)).await.unwrap();
+        let old_t = db.create_task(&space, &task(Some(&old_m.id), OLD_DEFAULT_TASK_BUDGET, "ready")).await.unwrap();
+        let set_t = db.create_task(&space, &task(Some(&old_m.id), 60_000, "ready")).await.unwrap();
+        let blocked = db.create_task(&space, &task(None, OLD_DEFAULT_TASK_BUDGET, "blocked")).await.unwrap();
+        let (indexes, triggers) = (schema_of(&db, "index").await, schema_of(&db, "trigger").await);
+        assert!(!triggers.is_empty());
+        old_shape(&db).await;
+        db.pool.close().await;
+
+        let db = Database::init(tmp.path()).await.unwrap();
+        for table in ["tasks", "missions"] {
+            let (sql,): (String,) = sqlx::query_as("SELECT sql FROM sqlite_master WHERE name = ?").bind(table).fetch_one(&db.pool).await.unwrap();
+            assert!(sql.contains(NEW_BUDGET_CHECK) && !sql.contains(OLD_BUDGET_CHECK), "{sql}");
+        }
+        assert_eq!(db.get_mission(&old_m.id).await.unwrap().unwrap().budget_tokens, 0);
+        assert_eq!(db.get_mission(&set_m.id).await.unwrap().unwrap().budget_tokens, 300_000);
+        assert_eq!(db.get_task(&old_t.id).await.unwrap().unwrap().budget_tokens, 0);
+        assert_eq!(db.get_task(&set_t.id).await.unwrap().unwrap().budget_tokens, 60_000);
+        // States aren't touched: a task blocked for its budget stays for the person to unblock
+        let b = db.get_task(&blocked.id).await.unwrap().unwrap();
+        assert_eq!((b.budget_tokens, b.state.as_str()), (0, "blocked"));
+        assert_eq!(schema_of(&db, "index").await, indexes, "indexes survive the rebuild");
+        assert_eq!(schema_of(&db, "trigger").await, triggers, "triggers survive the rebuild");
+        // ...and still bite
+        let raw = db.exec_raw_for_test(&format!("UPDATE tasks SET state = 'verified' WHERE id = '{}'", set_t.id)).await;
+        assert!(raw.is_err());
+        let fk: Vec<(String, Option<i64>, String, i64)> = sqlx::query_as("PRAGMA foreign_key_check").fetch_all(&db.pool).await.unwrap();
+        assert!(fk.is_empty(), "{fk:?}");
+
+        // Once only: a 50k budget the person sets after the migration stays
+        db.edit_task(&set_t.id, None, None, None, None, Some(OLD_DEFAULT_TASK_BUDGET), "person").await.unwrap();
+        db.pool.close().await;
+        let db = Database::init(tmp.path()).await.unwrap();
+        assert_eq!(db.get_task(&set_t.id).await.unwrap().unwrap().budget_tokens, OLD_DEFAULT_TASK_BUDGET);
+        assert!(db.create_task(&space, &task(None, 0, "ready")).await.is_ok(), "0 is allowed now");
+        assert!(db.create_task(&space, &task(None, -1, "ready")).await.is_err(), "negatives still aren't");
+    }
 }

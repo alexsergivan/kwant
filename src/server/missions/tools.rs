@@ -49,7 +49,7 @@ pub fn tools() -> Vec<Value> {
                 "properties": {
                     "title": {"type": "string"},
                     "goal": {"type": "string", "description": "The outcome, in a sentence or two."},
-                    "budget_tokens": {"type": "integer", "description": "Token budget for the whole mission (optional)."},
+                    "budget_tokens": {"type": "integer", "description": "Token budget for the whole mission (optional; leave out or 0 for no limit)."},
                     "tasks": {
                         "type": "array",
                         "maxItems": super::MAX_PLAN_TASKS,

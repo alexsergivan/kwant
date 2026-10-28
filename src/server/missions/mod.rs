@@ -34,12 +34,17 @@ use serde_json::{json, Value};
 pub const SETTING: &str = "mission_board";
 pub const LEASE_SETTING: &str = "mission_lease_minutes";
 pub const BUDGET_SETTING: &str = "mission_default_budget_tokens";
+pub const TASK_BUDGET_SETTING: &str = "mission_default_task_budget_tokens";
 pub const DEFAULT_LEASE_MINUTES: i64 = 30;
 pub const LEASE_RANGE: (i64, i64) = (5, 240);
-pub const DEFAULT_BUDGET: i64 = 200_000;
+/// `budget_tokens` 0 means no limit, for missions and tasks alike. New ones get none unless the
+/// person sets a default in Settings or a budget on the mission or task.
+pub const NO_LIMIT: i64 = 0;
+pub const DEFAULT_BUDGET: i64 = NO_LIMIT;
+/// A positive mission budget (or a default for new missions) lies in this range.
 pub const BUDGET_RANGE: (i64, i64) = (1_000, 5_000_000);
 /// A task's budget when none is given (capped at its mission's budget).
-pub const DEFAULT_TASK_BUDGET: i64 = 50_000;
+pub const DEFAULT_TASK_BUDGET: i64 = NO_LIMIT;
 pub const MAX_PLAN_TASKS: usize = 30;
 pub const DEFAULT_MAX_ATTEMPTS: i64 = 3;
 /// Longest stored check output.
@@ -69,17 +74,53 @@ pub async fn lease_ms(state: &AppState) -> i64 {
     lease_minutes(state).await * 60_000
 }
 
+/// A mission budget is 0 (no limit) or within [`BUDGET_RANGE`].
+pub fn valid_mission_budget(n: i64) -> bool {
+    n == NO_LIMIT || (BUDGET_RANGE.0..=BUDGET_RANGE.1).contains(&n)
+}
+
+/// A task budget is 0 (no limit) or 1 up to the top of [`BUDGET_RANGE`].
+pub fn valid_task_budget(n: i64) -> bool {
+    (0..=BUDGET_RANGE.1).contains(&n)
+}
+
+/// Whether `spent` tokens went past `budget`; never with no limit.
+pub fn over(spent: i64, budget: i64) -> bool {
+    budget > NO_LIMIT && spent > budget
+}
+
+async fn budget_setting(state: &AppState, key: &str, valid: fn(i64) -> bool, default: i64) -> i64 {
+    state
+        .db
+        .get_setting(key)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|n| valid(*n))
+        .unwrap_or(default)
+}
+
+/// A new mission's budget when none is given: 0 (no limit) unless the person set one.
 pub async fn default_budget(state: &AppState) -> i64 {
-    int_setting(state, BUDGET_SETTING, BUDGET_RANGE, DEFAULT_BUDGET).await
+    budget_setting(state, BUDGET_SETTING, valid_mission_budget, DEFAULT_BUDGET).await
+}
+
+/// A new task's budget when none is given: 0 (no limit) unless the person set one.
+pub async fn default_task_budget(state: &AppState) -> i64 {
+    budget_setting(state, TASK_BUDGET_SETTING, valid_task_budget, DEFAULT_TASK_BUDGET).await
 }
 
 /// Why the mission settings in a `POST /api/settings` are refused, if they are.
-pub fn settings_error(lease: Option<i64>, budget: Option<i64>) -> Option<String> {
+pub fn settings_error(lease: Option<i64>, budget: Option<i64>, task_budget: Option<i64>) -> Option<String> {
     if lease.is_some_and(|m| !(LEASE_RANGE.0..=LEASE_RANGE.1).contains(&m)) {
         return Some(format!("mission_lease_minutes must be {}–{}", LEASE_RANGE.0, LEASE_RANGE.1));
     }
-    if budget.is_some_and(|n| !(BUDGET_RANGE.0..=BUDGET_RANGE.1).contains(&n)) {
-        return Some(format!("mission_default_budget_tokens must be {}–{}", BUDGET_RANGE.0, BUDGET_RANGE.1));
+    if budget.is_some_and(|n| !valid_mission_budget(n)) {
+        return Some(format!("mission_default_budget_tokens must be 0 (no limit) or {}–{}", BUDGET_RANGE.0, BUDGET_RANGE.1));
+    }
+    if task_budget.is_some_and(|n| !valid_task_budget(n)) {
+        return Some(format!("mission_default_task_budget_tokens must be 0 (no limit) or 1–{}", BUDGET_RANGE.1));
     }
     None
 }
@@ -419,7 +460,7 @@ pub async fn spend(state: &AppState, kwant_id: &str, context_id: &str, turn_id: 
     autofix::spend_on_claim(state, &claim.task_id, Some(&claim.id), due).await;
     let _ = state.db.renew_claim(&claim.task_id, lease_ms(state).await).await;
     let Ok(Some(task)) = state.db.get_task(&claim.task_id).await else { return };
-    if task.spent_tokens > task.budget_tokens && matches!(task.state.as_str(), "working" | "needs_you") {
+    if over(task.spent_tokens, task.budget_tokens) && matches!(task.state.as_str(), "working" | "needs_you") {
         let change = TaskChange {
             kind: "budget".into(),
             reason: Some("budget".into()),
@@ -577,7 +618,7 @@ pub async fn mission_json(state: &AppState, m: &Mission) -> Value {
         obj.remove("workspace_path");
         obj.insert("lead_name".into(), json!(name_of(state, Some(&m.lead_kwant_id)).await));
         obj.insert("reserved_tokens".into(), json!(reserved));
-        obj.insert("over_budget".into(), json!(m.spent_tokens >= m.budget_tokens));
+        obj.insert("over_budget".into(), json!(m.budget_tokens > NO_LIMIT && m.spent_tokens >= m.budget_tokens));
         obj.insert("counts".into(), Value::Object(counts));
     }
     v
@@ -780,11 +821,17 @@ pub async fn create_plan(
         return Err(format!("a mission has at most {MAX_PLAN_TASKS} tasks"));
     }
     let budget = match budget {
-        Some(b) if !(BUDGET_RANGE.0..=BUDGET_RANGE.1).contains(&b) => {
-            return Err(format!("budget_tokens must be {}–{}", BUDGET_RANGE.0, BUDGET_RANGE.1))
+        Some(b) if !valid_mission_budget(b) => {
+            return Err(format!("budget_tokens must be 0 (no limit) or {}–{}", BUDGET_RANGE.0, BUDGET_RANGE.1))
         }
         Some(b) => b,
         None => default_budget(state).await,
+    };
+    // A task's own limit fits inside a limited mission's
+    let task_max = if budget > NO_LIMIT { budget } else { BUDGET_RANGE.1 };
+    let task_default = match default_task_budget(state).await {
+        d if budget > NO_LIMIT && d > budget => budget,
+        d => d,
     };
     // Everything is checked before anything is written
     let mut keys = std::collections::HashMap::new();
@@ -801,8 +848,8 @@ pub async fn create_plan(
         if t.priority.is_some_and(|p| !(0..=3).contains(&p)) {
             return Err(format!("task {key}: priority must be 0–3"));
         }
-        if t.budget_tokens.is_some_and(|b| b < 1 || b > budget) {
-            return Err(format!("task {key}: budget_tokens must be 1–{budget}"));
+        if t.budget_tokens.is_some_and(|b| !(0..=task_max).contains(&b)) {
+            return Err(format!("task {key}: budget_tokens must be 0 (no limit) or 1–{task_max}"));
         }
         let owner = match &t.owner {
             Some(o) => Some(bot_in_space(state, space, o).await.ok_or_else(|| format!("task {key}: no bot {o} in this space"))?.id),
@@ -872,7 +919,7 @@ pub async fn create_plan(
                     priority: t.priority.unwrap_or(1),
                     owner_kwant_id: None,
                     suggested_kwant_id: owners[i].clone(),
-                    budget_tokens: t.budget_tokens.unwrap_or(DEFAULT_TASK_BUDGET.min(budget)),
+                    budget_tokens: t.budget_tokens.unwrap_or(task_default),
                     max_attempts: DEFAULT_MAX_ATTEMPTS,
                     source_kind: "mission".into(),
                     source_id: Some(mission.id.clone()),
@@ -1137,8 +1184,15 @@ mod tests {
 
     #[test]
     fn settings_ranges() {
-        assert!(settings_error(Some(4), None).is_some());
-        assert!(settings_error(Some(30), Some(200_000)).is_none());
-        assert!(settings_error(None, Some(999)).is_some());
+        assert!(settings_error(Some(4), None, None).is_some());
+        assert!(settings_error(Some(30), Some(200_000), None).is_none());
+        assert!(settings_error(None, Some(999), None).is_some());
+        // 0 is "no limit" for both defaults; negatives and too-large values are refused
+        assert!(settings_error(None, Some(0), Some(0)).is_none());
+        assert!(settings_error(None, None, Some(50_000)).is_none());
+        assert!(settings_error(None, Some(-1), None).is_some());
+        assert!(settings_error(None, None, Some(-1)).is_some());
+        assert!(settings_error(None, None, Some(5_000_001)).is_some());
+        assert!(settings_error(None, Some(5_000_001), None).is_some());
     }
 }

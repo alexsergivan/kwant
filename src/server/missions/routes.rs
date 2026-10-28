@@ -190,8 +190,8 @@ pub async fn patch_mission(State(state): State<AppState>, RawQuery(q): RawQuery,
         return bad("title must be 1–200 characters");
     }
     let (lo, hi) = super::BUDGET_RANGE;
-    if p.budget_tokens.is_some_and(|b| !(lo..=hi).contains(&b)) {
-        return bad(format!("budget_tokens must be {lo}–{hi}"));
+    if p.budget_tokens.is_some_and(|b| !super::valid_mission_budget(b)) {
+        return bad(format!("budget_tokens must be 0 (no limit) or {lo}–{hi}"));
     }
     if let Err(e) = state.db.edit_mission(&id, title, p.goal.as_deref().map(str::trim), p.budget_tokens).await {
         return internal(e);
@@ -478,9 +478,12 @@ pub async fn create_task(State(state): State<AppState>, Scope(space): Scope, Jso
         },
         None => None,
     };
-    let budget = p.budget_tokens.unwrap_or(super::DEFAULT_TASK_BUDGET);
-    if !(1..=super::BUDGET_RANGE.1).contains(&budget) {
-        return bad(format!("budget_tokens must be 1–{}", super::BUDGET_RANGE.1));
+    let budget = match p.budget_tokens {
+        Some(b) => b,
+        None => super::default_task_budget(&state).await,
+    };
+    if !super::valid_task_budget(budget) {
+        return bad(format!("budget_tokens must be 0 (no limit) or 1–{}", super::BUDGET_RANGE.1));
     }
     let mut approvals = Vec::new();
     for c in &p.checks {
@@ -614,8 +617,8 @@ pub async fn patch_task(State(state): State<AppState>, RawQuery(q): RawQuery, Pa
     if p.priority.is_some_and(|x| !(0..=3).contains(&x)) {
         return bad("priority must be 0–3");
     }
-    if p.budget_tokens.is_some_and(|b| !(1..=super::BUDGET_RANGE.1).contains(&b)) {
-        return bad(format!("budget_tokens must be 1–{}", super::BUDGET_RANGE.1));
+    if p.budget_tokens.is_some_and(|b| !super::valid_task_budget(b)) {
+        return bad(format!("budget_tokens must be 0 (no limit) or 1–{}", super::BUDGET_RANGE.1));
     }
     if p.task_class.as_deref().is_some_and(|c| !crate::db::flight_school::valid_class(c)) {
         return bad("task_class must be 1–40 of a-z, 0-9 and -");
