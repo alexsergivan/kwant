@@ -6,6 +6,7 @@
 
 import { PersonCancelledError, personFetch } from './auth';
 import { relativeTime } from './away';
+import { Capabilities, CapabilityChange, ENGINE_CANT_SANDBOX, TaskTier, Tier } from './flightSchool';
 
 export type TaskState = 'backlog' | 'ready' | 'working' | 'needs_you' | 'review' | 'verified' | 'blocked' | 'failed' | 'cancelled';
 export type MissionStatus = 'draft' | 'active' | 'done' | 'cancelled';
@@ -47,8 +48,10 @@ export interface NeedsYouItem {
    * `POST /api/tasks/:id/flags/:flag_id/resolve`.
    * autofix_suggested: a retry waits for the person (id = the attempt's id); run it with `POST /api/tasks/:id/autofix`.
    * fix_needed: a failure AutoFix never retries (id = the failure's id). workflow_change: a proposed change
-   * (id = the change's id); approve or reject it under /api/workflow-changes. */
-  kind: 'question' | 'approval' | 'human_step' | 'check_approval' | 'may_be_invalid' | 'autofix_suggested' | 'fix_needed' | 'workflow_change';
+   * (id = the change's id); approve or reject it under /api/workflow-changes.
+   * engine_cant_sandbox: Flight School blocked the task because its bot is below Act on an engine kwant
+   * can't hold to a tier (id = the task's id). */
+  kind: 'question' | 'approval' | 'human_step' | 'check_approval' | 'may_be_invalid' | 'autofix_suggested' | 'fix_needed' | 'workflow_change' | 'engine_cant_sandbox';
   id: string;
   text: string;
 }
@@ -70,7 +73,7 @@ export interface ChecksSummary {
   total: number;
 }
 
-export interface Task {
+export interface Task extends TaskTier {
   id: string;
   space_id: string;
   mission_id: string | null;
@@ -458,7 +461,7 @@ export function columnOfTask(t: Pick<Task, 'state' | 'flags' | 'needs_you'>): Co
 }
 
 /** Items that wait for the person whatever the task's state, so its card sits in Needs you. */
-const PERSON_ITEMS = new Set<NeedsYouItem['kind']>(['autofix_suggested', 'fix_needed', 'workflow_change', 'check_approval']);
+const PERSON_ITEMS = new Set<NeedsYouItem['kind']>(['autofix_suggested', 'fix_needed', 'workflow_change', 'check_approval', ENGINE_CANT_SANDBOX]);
 
 /**
  * The "Needs you now" count: the cards the Needs you column holds across all work, so the tile and the
@@ -627,6 +630,7 @@ export function actorName(actor: string, name: string | null | undefined, names:
 export function cardStatus(t: Task, names: Record<string, string> = {}, now: number = Date.now()): string | null {
   switch (t.state) {
     case 'blocked':
+      if (t.needs_you.some((n) => n.kind === ENGINE_CANT_SANDBOX)) return 'Blocked: its engine can’t be held to its tier';
       return t.blocked_reason === 'budget' ? 'Out of budget' : t.blocked_reason ? `Blocked: ${t.blocked_reason}` : 'Blocked';
     case 'failed': {
       const auto = autofixCardText(t, now);
@@ -1314,6 +1318,8 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
       return str(d.status) === 'stale' ? 'A proposed change went out of date, so nothing changed' : `${Who} ${str(d.status) === 'rejected' ? 'rejected' : 'approved'} a proposed change`;
     case 'workflow_change_applied':
       return 'The approved change was applied';
+    case 'class_changed':
+      return `${Who} changed its kind of work${str(d.to) ? ` to ${str(d.to)}` : ''}`;
     default:
       return `${Who}: ${humanize(e.kind)}`;
   }
@@ -1464,6 +1470,8 @@ export const missionsApi = {
   insights: () => call<Insights>('/api/missions/insights'),
   approveMission: (id: string) => call<Mission>(`/api/missions/${enc(id)}/approve`, 'POST', {}),
   cancelMission: (id: string) => call<Mission>(`/api/missions/${enc(id)}/cancel`, 'POST', {}),
+  /** Flight School: the person sets the task's kind of work (a slug). */
+  setTaskClass: (id: string, task_class: string) => call<Task>(`/api/tasks/${enc(id)}`, 'PATCH', { task_class }),
   setBudget: (id: string, budget_tokens: number) => call<Mission>(`/api/missions/${enc(id)}`, 'PATCH', { budget_tokens }),
   tasks: () => call<{ tasks: Task[] }>('/api/tasks?limit=500').then((r) => r.tasks),
   task: (id: string) => call<TaskDetail>(`/api/tasks/${enc(id)}`),
@@ -1506,6 +1514,15 @@ export const missionsApi = {
         return call<Task>(`${base}/${action}`, 'POST', {});
     }
   },
+};
+
+/** Flight School tiers (Phase C3). Reads are open; both writes are person-only on the server. */
+export const capabilitiesApi = {
+  get: (kwantId: string) => call<Capabilities>(`/api/capabilities?kwant_id=${enc(kwantId)}`),
+  /** `task_class` '*' sets the bot's tier for all work without its own. */
+  set: (kwantId: string, task_class: string, tier: Tier) => call<CapabilityChange>('/api/capabilities', 'POST', { kwant_id: kwantId, task_class, tier }),
+  revoke: (kwantId: string, task_class: string, to_tier: Tier) =>
+    call<CapabilityChange>(`/api/capabilities/${enc(kwantId)}/revoke`, 'POST', { task_class, to_tier }),
 };
 
 /** Where a task came from in the app: a channel, a bot's thread, or a bot's direct chat. */

@@ -106,6 +106,7 @@ import {
   upsertMission,
   upsertTask,
 } from '../missions';
+import { DEFAULT_CLASS, ENGINE_CANT_SANDBOX, TIER_HINTS, classLabel, engineCantSandboxText, showsTier, tierLabel, toClass, validClass } from '../flightSchool';
 
 const TONES: Record<Tone, string> = {
   emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
@@ -325,6 +326,11 @@ export const TaskCard: React.FC<{
           )}
           {t.state === 'verified' && flags.length > 0 && <Badge tone="emerald">Verified</Badge>}
           {t.priority >= 2 && <Badge tone={t.priority >= 3 ? 'rose' : 'amber'}>{priorityLabel(t.priority)}</Badge>}
+          {showsTier(t) && t.owner_tier !== 'act' && (
+            <span data-tier-badge={t.owner_tier} title={`Flight School: ${classLabel(t.task_class ?? DEFAULT_CLASS)} work at ${tierLabel(t.owner_tier)}`}>
+              <Badge tone="sky">{tierLabel(t.owner_tier)}</Badge>
+            </span>
+          )}
           {showMission && t.mission_title && <span className="min-w-0 truncate text-[11px] text-zinc-500">{t.mission_title}</span>}
         </span>
         <span className="block text-sm font-medium text-zinc-100 break-words">{t.title}</span>
@@ -1173,6 +1179,41 @@ const Fact: React.FC<{ label: string; children: React.ReactNode }> = ({ label, c
   </div>
 );
 
+/** The task's kind of work (Flight School), which the person can change; its bot's tier for it follows. */
+const TaskClassEditor: React.FC<{ task: Task; disabled: boolean; onSetClass?: (c: string) => void }> = ({ task, disabled, onSetClass }) => {
+  const current = task.task_class ?? DEFAULT_CLASS;
+  const [value, setValue] = useState(current);
+  const id = useId();
+  useEffect(() => setValue(current), [current]);
+  const slug = toClass(value);
+  if (!onSetClass || task.state === 'verified' || task.state === 'cancelled') return <span data-task-class={current}>{classLabel(current)}</span>;
+  return (
+    <form
+      className="flex items-center gap-1.5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (validClass(slug) && slug !== current) onSetClass(slug);
+      }}
+    >
+      <label htmlFor={id} className="sr-only">
+        Kind of work
+      </label>
+      <input
+        id={id}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        data-task-class={current}
+        className="min-w-0 flex-1 bg-zinc-950 border border-zinc-800 rounded px-2 py-1 min-h-[32px] text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+      />
+      {slug !== current && (
+        <button type="submit" disabled={disabled || !validClass(slug)} className="px-2 py-1 min-h-[32px] rounded border border-zinc-700 text-[11px] hover:bg-zinc-800 disabled:opacity-50">
+          Save
+        </button>
+      )}
+    </form>
+  );
+};
+
 export const TaskDetailBody: React.FC<{
   detail: TaskDetail;
   names: Record<string, string>;
@@ -1198,6 +1239,8 @@ export const TaskDetailBody: React.FC<{
   restoreApi?: RestoreApi;
   onRestored?: (r: RestoreResult, rerun: boolean) => void;
   onRestoreError?: (e: unknown) => void;
+  /** Flight School: the person sets the task's kind of work. */
+  onSetClass?: (taskClass: string) => void;
 }> = ({
   detail,
   names,
@@ -1220,6 +1263,7 @@ export const TaskDetailBody: React.FC<{
   restoreApi,
   onRestored,
   onRestoreError,
+  onSetClass,
 }) => {
   const t = detail.task;
   const flags = openFlags(t);
@@ -1438,6 +1482,17 @@ export const TaskDetailBody: React.FC<{
         <Fact label="Tries">
           {t.attempts} of {t.max_attempts}
         </Fact>
+        {showsTier(t) && (
+          <>
+            <Fact label="Kind of work">
+              <TaskClassEditor task={t} disabled={busy} onSetClass={onSetClass} />
+            </Fact>
+            <Fact label="Flight School tier">
+              <span data-owner-tier={t.owner_tier}>{tierLabel(t.owner_tier)}</span>
+              <span className="block text-[11px] text-zinc-500">{TIER_HINTS[t.owner_tier]}</span>
+            </Fact>
+          </>
+        )}
       </dl>
 
       {chat && onOpenChat && (
@@ -1471,9 +1526,18 @@ export const TaskDetailBody: React.FC<{
               <li key={n.id} className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-100">
                 <span className="flex-1 min-w-[10rem] break-words">
                   <span className="font-medium">
-                    {n.kind === 'approval' ? 'Approval' : n.kind === 'human_step' ? 'Step in the browser' : n.kind === 'check_approval' ? 'Check to allow' : 'Question'}:{' '}
+                    {n.kind === 'approval'
+                      ? 'Approval'
+                      : n.kind === 'human_step'
+                        ? 'Step in the browser'
+                        : n.kind === 'check_approval'
+                          ? 'Check to allow'
+                          : n.kind === ENGINE_CANT_SANDBOX
+                            ? 'Engine can’t be sandboxed'
+                            : 'Question'}
+                    :{' '}
                   </span>
-                  {n.text}
+                  {n.kind === ENGINE_CANT_SANDBOX ? <span data-engine-cant-sandbox>{engineCantSandboxText(owner ?? null)}</span> : n.text}
                 </span>
                 {n.kind === 'check_approval' ? (
                   (() => {
@@ -2085,6 +2149,25 @@ export const MissionBoardPage: React.FC<{
     }
   };
 
+  const setClass = async (taskClass: string) => {
+    if (!openId) return;
+    setBusy(true);
+    setDetailNotice(null);
+    try {
+      const t = await missionsApi.setTaskClass(openId, taskClass);
+      if (!alive.current) return;
+      setTasks((list) => (list ? upsertTask(list, t) : list));
+      setDetailNotice({ text: `Its kind of work is now ${taskClass}. Its bot’s tier for that applies from its next action.`, error: false });
+      await loadDetail(openId);
+    } catch (e) {
+      if (!alive.current) return;
+      if (e instanceof MissionError && e.status === 401) setNeedsToken(true);
+      setDetailNotice({ text: failMsg(e), error: true });
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+
   const approveCheck = async (c: Check) => {
     setBusy(true);
     setDetailNotice(null);
@@ -2329,6 +2412,7 @@ export const MissionBoardPage: React.FC<{
               failures={failures}
               changes={changes}
               onRunHeld={runHeld}
+              onSetClass={setClass}
               onRetryAutofix={retryAutofix}
               onSkipAutofix={skipAutofix}
               onDecideChange={decideChange}

@@ -1,7 +1,8 @@
 import React from 'react';
-import { ShieldAlert, Check, CheckCheck, X, Plug, FileText, Terminal, Clock, CreditCard } from 'lucide-react';
+import { ShieldAlert, Check, CheckCheck, X, Plug, FileText, Terminal, Clock, CreditCard, GraduationCap } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import { formatArgs, humanizeToolName, parseMcpToolName } from '../mcp';
+import { tierReason } from '../flightSchool';
 
 export interface PendingApproval {
   id: string;
@@ -126,6 +127,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   const waiting = approval.waiting === true;
   const botName = name ?? mcp?.kwant ?? null;
   const payment = paymentReason(approval);
+  const tier = payment ? null : tierReason(approval.details);
 
   return (
     <div
@@ -157,6 +159,18 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
               <span className="font-semibold">This looks like a payment:</span> {payment}.
             </p>
             <p className="text-[11px] text-zinc-400">Payments always ask you, even with approvals off. Allowing covers this one payment.</p>
+          </div>
+        </div>
+      )}
+
+      {tier && (
+        <div role="note" data-tier-reason className="flex items-start gap-2 mb-2 rounded-lg border border-sky-500/30 bg-sky-950/30 px-3 py-2 text-xs">
+          <GraduationCap size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
+          <div className="min-w-0 space-y-0.5">
+            <p className="text-sky-100 break-words">
+              <span className="font-semibold">Flight School:</span> {tier}.
+            </p>
+            <p className="text-[11px] text-zinc-400">This bot’s tier asks you here, even with approvals off.</p>
           </div>
         </div>
       )}

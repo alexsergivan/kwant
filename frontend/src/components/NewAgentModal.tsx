@@ -14,6 +14,7 @@ import { SkillsPanel } from './SkillsPanel';
 import { UsagePanel } from './UsagePanel';
 import type { Channel, Kwant } from './Sidebar';
 import { BotApprovalsSetting } from './ApprovalsSetting';
+import { FlightSchoolPanel } from './FlightSchoolPanel';
 
 export type EditTab = 'profile' | 'memory' | 'skills' | 'routines' | 'usage';
 const EDIT_TABS: Array<{ id: EditTab; label: string; Icon: typeof Brain }> = [
@@ -454,6 +455,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               }}
             />
           )}
+
+          {isEdit && kwantId && <FlightSchoolPanel kwantId={kwantId} kwantName={initial?.name ?? name} />}
 
           {mcpIds !== undefined && (
             <KwantToolsPicker model={model} selected={mcpIds} onChange={setMcpIds} onManageServers={onManageServers} approvalsOff={toolsRunFree} />

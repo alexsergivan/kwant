@@ -17,6 +17,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   payments still always ask. Lowering a tier applies from the bot's next action. Bots already there keep
   Act; bots hired after you switch it on start at Sandbox. A bot on Codex or a custom engine that is below
   Act doesn't run its task, because kwant can't see its own tools.
+- **Flight School on screen.** Settings has the Flight School switch and the tier new bots start at, and
+  says plainly that bots you already have stay at Act and payments always ask. A bot's settings show its
+  tier for all work and per kind of work, where each tier comes from, the recent changes and a one-click
+  Revoke. With it on, a task shows its kind of work (which you can change) and its bot's tier, an
+  approval card says when the bot's tier asked, and a task whose engine can't be held to its tier sits in
+  Needs you and says what to do. With it off, nothing on screen changes.
 - **kwant can tell when an app finished connecting through Composio.** A new person-only
   `GET /api/connections/composio/apps/:slug/status` answers whether you've signed in to the app, so the
   connection card can show "Connected" once you have.

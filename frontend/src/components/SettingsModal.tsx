@@ -31,6 +31,7 @@ import { LayaStatusRow } from './LayaStatus';
 import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
 import { ProactiveSettings, WORK_AHEAD_CAP_MAX, WORK_AHEAD_CAP_MIN, parseProactiveSettings } from '../decideFirst';
 import { AUTOFIX_MODES, AutofixSettings, MISSION_BOARD_SETTING_EVENT, parseAutofixSettings, parseMissionBoardSetting } from '../missions';
+import { FlightSchoolSettings, TIERS, TIER_HINTS, TIER_LABELS, Tier, parseFlightSchoolSettings } from '../flightSchool';
 
 const RECOVERY_PCTS = [0, 10, 25, 50, 100];
 
@@ -66,6 +67,43 @@ const SwitchRow: React.FC<{ id: string; label: string; hint: string; checked: bo
       </span>
     </button>
   </div>
+);
+
+/** The Flight School switch and the tier new bots start at (Phase C3). */
+export const FlightSchoolSetting: React.FC<{ value: FlightSchoolSettings; onChange: (v: FlightSchoolSettings) => void }> = ({ value, onChange }) => (
+  <SwitchRow
+    id="flight-school"
+    label="Flight School: limit what each bot may do on its own"
+    hint="Give each bot a tier per kind of work: Observe, Sandbox or Act. A tier only adds approval cards, it never removes one. Payments always ask you, whatever the tier."
+    checked={value.flight_school}
+    onToggle={() => onChange({ ...value, flight_school: !value.flight_school })}
+  >
+    {value.flight_school && (
+      <div className="mt-2 space-y-2" data-testid="flight-school-options">
+        <p className="text-[11px] text-zinc-300">
+          Bots you already have stay at Act, so nothing changes until you lower one in its settings.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="flight-school-new-bot" className="text-[11px] text-zinc-300">
+            Bots you add from now on start at
+          </label>
+          <select
+            id="flight-school-new-bot"
+            value={value.flight_school_new_bot_tier}
+            onChange={(e) => onChange({ ...value, flight_school_new_bot_tier: e.target.value as Tier })}
+            className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+          >
+            {TIERS.map((t) => (
+              <option key={t} value={t}>
+                {TIER_LABELS[t]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="text-[11px] text-zinc-500">{TIER_HINTS[value.flight_school_new_bot_tier]}</p>
+      </div>
+    )}
+  </SwitchRow>
 );
 
 interface SettingsData {
@@ -136,6 +174,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   // null: this server has no Mission board, so the switch stays hidden.
   const [missionBoard, setMissionBoard] = useState<boolean | null>(null);
   const [autofix, setAutofix] = useState<AutofixSettings | null>(null);
+  // null on a server without Flight School: the switch stays hidden and out of the save
+  const [flightSchool, setFlightSchool] = useState<FlightSchoolSettings | null>(null);
   // null until loaded, and on a server without these settings
   const [place, setPlace] = useState<{ timezone: string; location: string } | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -201,6 +241,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           setProactive(parseProactiveSettings(data));
           setMissionBoard(parseMissionBoardSetting(data));
           setAutofix(parseAutofixSettings(data));
+          setFlightSchool(parseFlightSchoolSettings(data));
           setPlace(
             typeof data.timezone === 'string'
               ? { timezone: data.timezone || defaultTimeZone(), location: typeof data.location === 'string' ? data.location : '' }
@@ -282,6 +323,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           ...(proactive ?? {}),
           ...(missionBoard !== null ? { mission_board: missionBoard } : {}),
           ...(autofix !== null ? { autofix: autofix.autofix, recovery_budget_pct: autofix.recovery_budget_pct } : {}),
+          ...(flightSchool ?? {}),
           ...(place ? { timezone: place.timezone.trim(), location: place.location.trim() } : {}),
         }),
       });
@@ -753,6 +795,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                   )}
                 </SwitchRow>
               )}
+              {flightSchool !== null && <FlightSchoolSetting value={flightSchool} onChange={setFlightSchool} />}
             </fieldset>
           )}
 
