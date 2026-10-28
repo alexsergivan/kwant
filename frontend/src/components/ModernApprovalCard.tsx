@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldAlert, Check, CheckCheck, X, Plug, FileText, Terminal, Clock } from 'lucide-react';
+import { ShieldAlert, Check, CheckCheck, X, Plug, FileText, Terminal, Clock, CreditCard } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import { formatArgs, humanizeToolName, parseMcpToolName } from '../mcp';
 
@@ -92,6 +92,16 @@ export const builtinView = (approval: PendingApproval) => {
   return { ...base, kind: 'other' as const, command: null, description: null, path: null, change: null, args: formatArgs(args) };
 };
 
+/**
+ * Why the server's payment floor (src/mcp/payment_floor.rs) asked, or null for a card that isn't
+ * a payment. A payment always asks, and allowing it covers that one call.
+ */
+export const paymentReason = (approval: PendingApproval) => {
+  const why = approval.details?.payment_reason;
+  if (typeof why !== 'string') return null;
+  return why.trim().replace(/[.\s]+$/, '') || 'it looks like paying';
+};
+
 /** The line under a still-open card's heading. */
 export const waitingNote = (bot: string | null) =>
   `${bot ?? 'The bot'} stopped waiting for an answer and nothing ran. Allow starts it again to make this call; Deny closes the card.`;
@@ -115,6 +125,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   const perSession = !!builtin || !!summary?.builtin;
   const waiting = approval.waiting === true;
   const botName = name ?? mcp?.kwant ?? null;
+  const payment = paymentReason(approval);
 
   return (
     <div
@@ -134,6 +145,18 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         <div className="flex items-center gap-2 mb-2 text-amber-400 font-semibold text-xs tracking-wide">
           <ShieldAlert size={16} />
           <span>Action Approval Required</span>
+        </div>
+      )}
+
+      {payment && (
+        <div role="note" className="flex items-start gap-2 mb-2 rounded-lg border border-rose-500/30 bg-rose-950/30 px-3 py-2 text-xs">
+          <CreditCard size={14} className="mt-0.5 shrink-0 text-rose-300" aria-hidden="true" />
+          <div className="min-w-0 space-y-0.5">
+            <p className="text-rose-100 break-words">
+              <span className="font-semibold">This looks like a payment:</span> {payment}.
+            </p>
+            <p className="text-[11px] text-zinc-400">Payments always ask you, even with approvals off. Allowing covers this one payment.</p>
+          </div>
         </div>
       )}
 
@@ -263,8 +286,9 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         </button>
 
         {/* Local shell approvals are never remembered, so only offer a one-off answer. A late
-            answer only lets that one call run, so it gets no "always" either. */}
-        {!shell && !waiting && (
+            answer only lets that one call run, and a payment always asks again, so neither gets
+            an "always" either. */}
+        {!shell && !waiting && !payment && (
           <button
             type="button"
             disabled={disabled}
