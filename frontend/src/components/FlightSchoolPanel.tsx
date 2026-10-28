@@ -109,10 +109,16 @@ export const FlightSchoolPanel: React.FC<{
     change(() => api.revoke(kwantId, cls, to), `Revoked: ${classLabel(cls)} is now ${TIER_LABELS[to]}. A running task is held to it from its next action.`);
 
   const slug = toClass(newClass);
-  const addClass = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const addClass = async () => {
     if (!validClass(slug) || busy) return;
     if (await setTier(slug, newTier)) setNewClass('');
+  };
+  // The panel sits inside the Edit bot form, so this row is no form of its own (forms can't nest):
+  // Enter here adds the kind of work and must not submit the Edit form.
+  const onNewClassKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    void addClass();
   };
 
   return (
@@ -146,7 +152,7 @@ export const FlightSchoolPanel: React.FC<{
         ))}
       </ul>
 
-      <form onSubmit={addClass} className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2" data-add-class>
         <label htmlFor={newId} className="sr-only">
           Another kind of work
         </label>
@@ -154,18 +160,20 @@ export const FlightSchoolPanel: React.FC<{
           id={newId}
           value={newClass}
           onChange={(e) => setNewClass(e.target.value)}
+          onKeyDown={onNewClassKey}
           placeholder="Another kind of work, e.g. release"
           className="flex-1 min-w-[10rem] bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1.5 min-h-[36px] text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none"
         />
         <TierSelect label="Tier for the new kind of work" value={newTier} disabled={busy} onChange={setNewTier} />
         <button
-          type="submit"
+          type="button"
+          onClick={() => void addClass()}
           disabled={busy || !validClass(slug)}
           className="px-2.5 py-1 min-h-[36px] rounded-lg bg-zinc-800 text-[11px] font-medium text-zinc-100 hover:bg-zinc-700 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
         >
           Set
         </button>
-      </form>
+      </div>
 
       <p aria-live="polite" className="min-h-[1rem] text-[11px]">
         {busy ? (
