@@ -196,8 +196,13 @@ pub async fn approve_local_shell_in(
     if let Some(v) = &verdict {
         details["smart_reason"] = json!(v.reason());
     }
+    // The payment floor (D8): a command that pays always asks, and "always allow" covers it once
+    let payment = crate::mcp::payment_floor::shell_reason(command);
+    if let Some(why) = &payment {
+        details["payment_reason"] = json!(why);
+    }
     // "Always this session" under smart: per bot and conversation, like claude's tools
-    let remembered = conversation.filter(|_| mode == SMART);
+    let remembered = conversation.filter(|_| mode == SMART && payment.is_none());
     if crate::sandbox::credentials::call_touches_kwnt_secrets(&details["arguments"], Some(cwd)) {
         tracing::warn!(target = %target_id, "refused a shell command that names kwnt's secret files");
         let record = NewApproval {
@@ -216,7 +221,7 @@ pub async fn approve_local_shell_in(
             return true;
         }
     }
-    if mode == OFF || verdict.as_ref().is_some_and(|v| v.is_allowed()) {
+    if payment.is_none() && (mode == OFF || verdict.as_ref().is_some_and(|v| v.is_allowed())) {
         if verdict.is_some() {
             tracing::info!(target = %target_id, "ran a local command without a card: not risky");
         }

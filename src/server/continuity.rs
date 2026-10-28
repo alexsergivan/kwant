@@ -336,6 +336,9 @@ pub fn self_server(base_url: &str, token: &str) -> McpServer {
 pub struct SelfToolsApprover {
     pub inner: Arc<dyn ToolApprover>,
     pub always_ask: bool,
+    /// The turn's own browser (state, sandbox target): the payment floor reads the page's real
+    /// address from it before a `browser_act`.
+    pub browser: Option<(AppState, String)>,
 }
 
 /// The agents' own tools that only read: free even in an always-ask turn.
@@ -364,7 +367,19 @@ impl ToolApprover for SelfToolsApprover {
         self.decide(req).await.allowed()
     }
 
-    async fn decide(&self, req: ToolApprovalRequest) -> crate::mcp::ApprovalOutcome {
+    async fn decide(&self, mut req: ToolApprovalRequest) -> crate::mcp::ApprovalOutcome {
+        // The payment floor (D8): a click or key on a checkout page, a pay-type button or a typed
+        // card number gets a card in every mode. The address comes from the browser, not the bot.
+        if req.server == SELF_SERVER_NAME && req.tool == BROWSER_ACT {
+            let url = match &self.browser {
+                Some((state, target)) => page_url(state, target).await,
+                None => None,
+            };
+            if let Some(why) = crate::mcp::payment_floor::reason(&req, url.as_deref()) {
+                req.payment = Some(why);
+                return self.inner.decide(req).await;
+            }
+        }
         if req.server == SELF_SERVER_NAME && (!self.always_ask || READ_ONLY_SELF_TOOLS.contains(&req.tool.as_str())) {
             self.inner.note(&req, "allowed", None).await;
             return crate::mcp::ApprovalOutcome::Allowed;
@@ -375,6 +390,13 @@ impl ToolApprover for SelfToolsApprover {
     async fn note(&self, req: &ToolApprovalRequest, decision: &'static str, approval_id: Option<&str>) {
         self.inner.note(req, decision, approval_id).await
     }
+}
+
+/// The address the turn's browser shows now, without starting a browser.
+async fn page_url(state: &AppState, target: &str) -> Option<String> {
+    let ctrl = state.browser_controllers.lock().await.get(target).cloned()?;
+    let url = ctrl.current_url.lock().await.clone();
+    url
 }
 
 fn tool_list(scope: &SelfScope, board: bool) -> Value {

@@ -250,6 +250,7 @@ impl McpToolSession {
                         arguments: arguments.clone(),
                         builtin: None,
                         smart: Some(read_only_verdict(t.tool.read_only)),
+                        payment: None,
                     })
                     .await;
                 if !outcome.allowed() {

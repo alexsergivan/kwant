@@ -1167,6 +1167,7 @@ mod tests {
             arguments: args,
             builtin: server.is_empty().then(|| crate::mcp::BuiltinCall { cwd: Some(cwd.into()), outside_folder: false }),
             smart: None,
+            payment: None,
         }
     }
 

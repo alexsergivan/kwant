@@ -22,6 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   its card has a Connect button. It opens the app's sign-in in your browser (in the Mac app too), shows
   "Connected" once the sign-in finishes, and offers to open the sign-in again. Without a usable Composio
   connector, the card says what's missing and opens Connections instead.
+- **Payments always ask.** A bot's tool call that looks like paying now shows an approval card even
+  with approvals off, even when "Ask only when risky" finds it safe, and even after "Always this
+  session". Allowing a payment covers that one call. kwant recognises payment apps and Composio
+  actions (Stripe, PayPal, Square, Wise, Coinbase and others), commands that post to payment
+  services or send crypto, and in its browser pay buttons, any click on a checkout page and typed
+  card numbers. It can't catch everything, such as a plain "Continue" on an unusual checkout page or a
+  card a site already saved: see `docs/payments.md`. Sending, deleting, publishing and signing in still
+  run without asking when approvals are off.
 - **Mission board: AutoFix, change approvals and restore.** A failed task shows why it failed in plain
   words, what AutoFix plans, its tries and what retries cost, with Retry now and Don't retry. Proposed
   changes to a check, the acceptance or a routine appear in Needs you with before and after, and only

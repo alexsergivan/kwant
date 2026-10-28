@@ -180,7 +180,10 @@ impl BrokerApprover {
         // Approvals the person switched off: run, and keep a record of what ran. A setting that
         // can't be read asks, as before.
         let mode = self.db.kwant_approvals(&req.kwant_id).await.ok();
-        let off = !self.always_ask && mode.as_ref().is_some_and(|m| m.is_off());
+        // The payment floor (D8): a call that pays always gets a card, whatever the approvals,
+        // "Ask only when risky" or "always allow" say. Allowing it covers this one call.
+        let payment = req.payment.clone().or_else(|| mcp::payment_floor::reason(&req, None));
+        let off = payment.is_none() && !self.always_ask && mode.as_ref().is_some_and(|m| m.is_off());
         // "Ask only when risky": what the caller made of this call; nothing known asks. A turn that
         // always asks (it read outside text) still lets claude's plain read tools through.
         let smart = mode
@@ -188,7 +191,8 @@ impl BrokerApprover {
             .is_some_and(|m| m.is_smart())
             .then(|| req.smart.clone())
             .flatten()
-            .filter(|_| !self.always_ask || (req.builtin.is_some() && matches!(req.tool.as_str(), "Read" | "Glob" | "Grep")));
+            .filter(|_| !self.always_ask || (req.builtin.is_some() && matches!(req.tool.as_str(), "Read" | "Glob" | "Grep")))
+            .filter(|_| payment.is_none());
         let mut details = match &req.builtin {
             Some(b) => json!({
                 "source": "claude_builtin",
@@ -210,6 +214,9 @@ impl BrokerApprover {
         };
         if let Some(verdict) = &smart {
             details["smart_reason"] = json!(verdict.reason());
+        }
+        if let Some(why) = &payment {
+            details["payment_reason"] = json!(why);
         }
         let record = NewApproval {
             turn_id: req.turn_id.clone(),
@@ -234,7 +241,9 @@ impl BrokerApprover {
             }
             return (ApprovalOutcome::Allowed, "auto_allowed", None);
         }
-        if !off && !self.always_ask && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
+        if payment.is_some() {
+            tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, reason = ?payment, "a payment: asking whatever the approvals say");
+        } else if !off && !self.always_ask && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
             return (ApprovalOutcome::Allowed, "allowed", None);
         }
         if off {
@@ -292,6 +301,8 @@ impl BrokerApprover {
         super::activity::approval_settled(&req.turn_id, &ticket, settled);
         let outcome = match decision {
             Ok(Ok(ApprovalDecision::AllowOnce)) => ApprovalOutcome::Allowed,
+            // A payment's "always allow" covers this one call: nothing is remembered
+            Ok(Ok(ApprovalDecision::AlwaysAllowSession)) if payment.is_some() => ApprovalOutcome::Allowed,
             Ok(Ok(ApprovalDecision::AlwaysAllowSession)) => {
                 self.broker.allow_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await;
                 ApprovalOutcome::Allowed
@@ -377,7 +388,8 @@ pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: A
     let channel_id = chat["channel_id"].as_str().map(str::to_string);
     let conversation = thread_id.clone().or_else(|| channel_id.clone()).or_else(|| chat["direct_kwant_id"].as_str().map(str::to_string)).unwrap_or_else(|| kwant.id.clone());
     state.broker.grant_once(&kwant.id, &conversation, &approval.tool_name, &arguments).await;
-    if decision == ApprovalDecision::AlwaysAllowSession {
+    // A payment's "always allow" covers the one call (the payment floor, D8)
+    if decision == ApprovalDecision::AlwaysAllowSession && details.get("payment_reason").is_none() {
         state.broker.allow_for_session(&kwant.id, &conversation, &approval.tool_name).await;
     }
     let depth = match &thread_id {
@@ -483,6 +495,7 @@ pub async fn prepare_turn_with_opts(
     // Signed-in http servers get their (refreshed) access token as a secret header
     super::mcp_oauth::authorize_servers(state, &mut servers).await;
     let token = uuid::Uuid::new_v4().simple().to_string();
+    let browser = self_scope.as_ref().and_then(|s| s.sandbox_target.clone()).map(|t| (state.clone(), t));
     let self_tools = self_scope.is_some() && !servers.iter().any(|s| s.name.eq_ignore_ascii_case(mcp::SELF_SERVER_NAME));
     if self_tools {
         servers.push(super::continuity::self_server(&local_base_url(state), &token));
@@ -508,7 +521,7 @@ pub async fn prepare_turn_with_opts(
     let ctx = McpTurnContext {
         servers,
         approver: if self_tools {
-            Arc::new(super::continuity::SelfToolsApprover { inner: broker_approver, always_ask: opts.always_ask })
+            Arc::new(super::continuity::SelfToolsApprover { inner: broker_approver, always_ask: opts.always_ask, browser })
         } else {
             broker_approver
         },
@@ -555,6 +568,7 @@ fn noted_request(session: &PermissionSession, tool_name: &str, server: &str, too
         arguments: input.clone(),
         builtin,
         smart: None,
+        payment: None,
     }
 }
 
@@ -632,6 +646,7 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value
         arguments: input.clone(),
         builtin,
         smart: verdict,
+        payment: None,
     });
     // Dropping the approval withdraws its card when the turn ends first
     let outcome = tokio::select! {
