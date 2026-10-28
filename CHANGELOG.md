@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as Google Search Console, it offers you a connection card instead of stopping, and carries on with the
   rest. Bots are told to try the fallback first, such as the PageSpeed website when the API is
   rate-limited.
+- **Connect an app from a bot's card.** When a bot offers a connection (such as Google Search Console),
+  its card has a Connect button. It opens the app's sign-in in your browser (in the Mac app too), shows
+  "Connected" once the sign-in finishes, and offers to open the sign-in again. Without a usable Composio
+  connector, the card says what's missing and opens Connections instead.
 - **Mission board: AutoFix, change approvals and restore.** A failed task shows why it failed in plain
   words, what AutoFix plans, its tries and what retries cost, with Retry now and Don't retry. Proposed
   changes to a check, the acceptance or a routine appear in Needs you with before and after, and only

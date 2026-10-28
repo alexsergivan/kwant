@@ -36,6 +36,7 @@ import { ranOnLabel } from '../engines';
 import { replyTokens } from '../modelUsage';
 import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
+import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSuggestions';
 import { routeReasonText } from '../routeReason';
 import { BudgetPausedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
 import { chainBudgetApi, parseBudgetPaused } from '../chainBudget';
@@ -204,6 +205,8 @@ export interface ChatViewProps {
   renderQuestion?: (msg: ChatMessage, meta: QuestionMeta, flash: boolean) => React.ReactNode;
   /** Draws a bot's tool suggestion card (messages with `mcp_suggestion` meta). */
   renderMcpSuggestion?: (msg: ChatMessage, meta: SuggestionMeta, flash: boolean) => React.ReactNode;
+  /** Draws a bot's offer to connect an app (message meta kind "connection_suggestion"). */
+  renderConnectionSuggestion?: (msg: ChatMessage, meta: ConnectionSuggestionMeta, flash: boolean) => React.ReactNode;
   /** A change a bot made in the app (message meta kind "bot_action"). */
   renderBotAction?: (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => React.ReactNode;
   /** A bot's proposal to hire a new bot (message meta kind "hire_proposal"). */
@@ -414,6 +417,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   renderDelegation,
   renderQuestion,
   renderMcpSuggestion,
+  renderConnectionSuggestion,
   renderBotAction,
   renderHire,
   onOpenAccounts,
@@ -782,6 +786,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (humanStep && renderHumanStep) return <React.Fragment key={msg.id}>{renderHumanStep(msg, humanStep, flashId === msg.id)}</React.Fragment>;
     const suggestion = msg.meta && renderMcpSuggestion ? parseSuggestionMeta(msg.meta) : null;
     if (suggestion && renderMcpSuggestion) return <React.Fragment key={msg.id}>{renderMcpSuggestion(msg, suggestion, flashId === msg.id)}</React.Fragment>;
+    const connection = msg.meta && renderConnectionSuggestion ? parseConnectionMeta(msg.meta) : null;
+    if (connection && renderConnectionSuggestion)
+      return <React.Fragment key={msg.id}>{renderConnectionSuggestion(msg, connection, flashId === msg.id)}</React.Fragment>;
     const botAction = msg.meta && renderBotAction ? parseBotActionMeta(msg.meta) : null;
     if (botAction && renderBotAction) return <React.Fragment key={msg.id}>{renderBotAction(msg, botAction, flashId === msg.id)}</React.Fragment>;
     const hire = msg.meta && renderHire ? parseHireMeta(msg.meta) : null;

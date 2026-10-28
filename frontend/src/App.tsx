@@ -22,6 +22,8 @@ import {
   turnsAwaitingStep,
 } from './humanSteps';
 import { McpSuggestionCard } from './components/McpSuggestionCard';
+import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard';
+import type { ConnectionSuggestionMeta } from './connectionSuggestions';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
 import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, changesBots, decisionError, hiresApi } from './botActions';
 import { BotActionCard, type BotActionDecision } from './components/BotActionCard';
@@ -269,6 +271,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     playSfx('click');
   };
   const openSettings = () => openSpaceSettings('accounts');
+  const openConnections = () => {
+    setShowConnections(true);
+    setShowLoose(false);
+    setShowParallel(false);
+    setShowMissions(false);
+    setShowAway(false);
+    setPhoneView('chat');
+    playSfx('click');
+  };
   const openClaudeSignIn = () => {
     setClaudeSignInFocus(Date.now());
     setSpaceSettingsTab('accounts');
@@ -1784,6 +1795,20 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     );
   };
 
+  const renderConnectionSuggestion = (msg: ChatMessage, meta: ConnectionSuggestionMeta, flash: boolean) => {
+    const name = kwantName(meta.kwant_id ?? undefined);
+    return (
+      <ConnectionSuggestionCard
+        meta={meta}
+        messageId={msg.id}
+        kwantName={name ?? (msg.sender_id && msg.sender_id.length <= 20 ? msg.sender_id : chatTitle)}
+        kwantId={meta.kwant_id ?? undefined}
+        onOpenConnections={openConnections}
+        flash={flash}
+      />
+    );
+  };
+
   // A routine card's Edit or Pause: open Space settings → Routines at that routine.
   const handleOpenRoutine = (id: string, mode: 'edit' | 'pause') => {
     setRoutineFocus({ id, mode, nonce: Date.now() });
@@ -2780,15 +2805,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         playSfx('click');
       }}
       connectionsActive={showConnections}
-      onOpenConnections={() => {
-        setShowConnections(true);
-        setShowLoose(false);
-        setShowParallel(false);
-        setShowMissions(false);
-        setShowAway(false);
-        setPhoneView('chat');
-        playSfx('click');
-      }}
+      onOpenConnections={openConnections}
       missionBoard={missionBoard}
       missionsActive={showMissions}
       onOpenMissions={() => {
@@ -2943,6 +2960,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           renderDelegation={renderDelegation}
           renderQuestion={renderQuestion}
           renderMcpSuggestion={renderMcpSuggestion}
+          renderConnectionSuggestion={renderConnectionSuggestion}
           renderBotAction={renderBotAction}
           renderHire={renderHire}
           awaitingAnswer={awaitingHere}

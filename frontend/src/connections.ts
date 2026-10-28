@@ -115,6 +115,16 @@ export const connectionsApi = {
   /** Starts signing in to one Composio app; the answer is the address to open. */
   connectComposioApp: (slug: string) =>
     call<{ redirect_url: string; warning: string }>(`/api/connections/composio/apps/${enc(slug)}/connect`, 'POST'),
+  /**
+   * Whether one Composio app is connected for the connector's user. A server without this route (or one
+   * that answers something else) is a 404, so callers stop asking instead of polling forever.
+   */
+  composioAppStatus: async (slug: string): Promise<{ connected: boolean }> => {
+    const answer = await call<unknown>(`/api/connections/composio/apps/${enc(slug)}/status`);
+    const connected = answer && typeof answer === 'object' ? (answer as { connected?: unknown }).connected : undefined;
+    if (typeof connected !== 'boolean') throw new ConnectionsError('This server can’t tell whether an app is connected yet.', 404);
+    return { connected };
+  },
   /** "Check now" for an MCP server: the server records the result as its last check. */
   testMcp: (serverId: string) => call<{ ok?: boolean; error?: string }>(`/api/mcp/servers/${enc(serverId)}/test`, 'POST'),
 };
