@@ -118,6 +118,15 @@ section { padding: 104px 0; }
 .more-link:hover { text-decoration: underline; }
 
 /* Moments: small kwant UI scenes built in HTML, with the app's own avatars */
+.new-strip { margin-top: -56px; padding: 0 0 32px; }
+.new-strip .wrap { display: flex; align-items: center; gap: 20px; }
+.new-title { flex: none; margin: 0; color: var(--v5); font-size: 14px; font-weight: 600; font-family: inherit; letter-spacing: 0; }
+.new-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; flex: 1; margin: 0; padding: 0; list-style: none; }
+.new-list a { display: block; height: 100%; padding: 12px 14px; background: #fff; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); text-decoration: none; }
+.new-list a:hover { border-color: var(--line-2); background: var(--v9); }
+.new-list a:focus-visible { outline: 2px solid var(--v5); outline-offset: 2px; }
+.new-list b { display: block; font-size: 15px; }
+.new-list span { display: block; margin-top: 2px; color: var(--muted); font-size: 14px; line-height: 1.4; }
 .moments { padding-top: 24px; padding-bottom: 56px; }
 .moment-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
 .moment { padding: 12px 12px 24px; background: #fff; border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); }
@@ -252,6 +261,7 @@ html:has(.jump-bar) { scroll-padding-top: 76px; }
 .fgroup.alt { background: var(--bg-2); }
 .grid { display: grid; gap: 28px; }
 .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.fgroup .row + .grid, .fgroup .grid + .row { margin-top: 72px; }
 .card { display: flex; flex-direction: column; overflow: hidden; background: #fff; border: 1px solid var(--line); border-radius: 16px; }
 .card .shot { display: block; border-bottom: 1px solid var(--line); background: var(--v9); }
 .card .shot a, .card .shot img { display: block; width: 100%; }
@@ -323,6 +333,8 @@ td code { white-space: nowrap; }
 
 /* Smaller screens */
 @media (max-width: 1000px) {
+  .new-strip .wrap { flex-direction: column; align-items: stretch; gap: 12px; }
+  .new-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hero { padding-top: 48px; }
   .hero-grid, .nf-grid, .outro-panel, .phone-grid { grid-template-columns: minmax(0, 1fr); }
   .hero-crt, .nf-grid .crt { max-width: 640px; }
@@ -351,6 +363,8 @@ td code { white-space: nowrap; }
   .grid.two, .tiles { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
+  .new-list { grid-template-columns: 1fr; gap: 8px; }
+  section.new-strip { margin-top: -24px; padding: 0 0 24px; }
   body { font-size: 16px; }
   .wrap { width: calc(100% - 40px); }
   .docs-nav { margin: 0 -20px; padding: 12px 20px; }

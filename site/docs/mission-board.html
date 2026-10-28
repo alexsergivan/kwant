@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mission board: tasks your bots can prove they finished · kwant</title>
+<meta name="description" content="One board for everything your bots work on. A task counts as Verified only when a check passes. Checkpoints undo a task&#x27;s file changes, and AutoFix retries what is safe to retry.">
+<meta name="theme-color" content="#f4f1ff">
+<meta name="color-scheme" content="light">
+<link rel="canonical" href="https://kwant.si/docs/mission-board">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="kwant">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Mission board: tasks your bots can prove they finished · kwant">
+<meta property="og:description" content="One board for everything your bots work on. A task counts as Verified only when a check passes. Checkpoints undo a task&#x27;s file changes, and AutoFix retries what is safe to retry.">
+<meta property="og:url" content="https://kwant.si/docs/mission-board">
+<meta property="og:image" content="https://kwant.si/assets/og/docs-mission-board.png?v=cb9229cc7c">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Mission board, checkpoints &amp; AutoFix: A task is Verified only when a check passes, never on a bot&#x27;s word.">
+<meta property="article:published_time" content="2026-10-28">
+<meta property="article:modified_time" content="2026-10-28">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mission board: tasks your bots can prove they finished · kwant">
+<meta name="twitter:description" content="One board for everything your bots work on. A task counts as Verified only when a check passes. Checkpoints undo a task&#x27;s file changes, and AutoFix retries what is safe to retry.">
+<meta name="twitter:image" content="https://kwant.si/assets/og/docs-mission-board.png?v=cb9229cc7c">
+<meta name="twitter:image:alt" content="Mission board, checkpoints &amp; AutoFix: A task is Verified only when a check passes, never on a bot&#x27;s word.">
+<link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png?v=ac1a1e97c4" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
+<link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css?v=32dda8597c">
+</head>
+<body class="page-docs">
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a href="../features.html">Features</a>
+      <a href="../docs/quickstart.html" aria-current="page">Docs</a>
+      <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="wrap docs">
+  <nav class="docs-nav" aria-label="Docs">
+    <h2>Docs</h2>
+    <div class="docs-group"><h3>Get started</h3><ul><li><a href="../docs/quickstart.html">Quickstart</a></li><li><a href="../docs/install.html">Install &amp; run</a></li></ul></div>
+    <div class="docs-group"><h3>Using kwant</h3><ul><li><a href="../docs/spaces.html">Spaces</a></li><li><a href="../docs/bots-and-teams.html">Bots &amp; teams</a></li><li><a href="../docs/accounts.html">Accounts &amp; profiles</a></li><li><a href="../docs/models.html">Models &amp; routing</a></li><li><a href="../docs/approvals.html">Approvals &amp; passwords</a></li><li><a href="../docs/flight-school.html">Flight School</a></li></ul></div>
+    <div class="docs-group"><h3>Works on its own</h3><ul><li><a href="../docs/mission-board.html" aria-current="page">Mission board</a></li><li><a href="../docs/routines.html">Routines &amp; bot actions</a></li><li><a href="../docs/memory-skills.html">Memory, skills &amp; search</a></li><li><a href="../docs/loose-ends.html">Loose ends &amp; letters</a></li><li><a href="../docs/parallel-universe.html">Parallel Universe</a></li></ul></div>
+    <div class="docs-group"><h3>Connect</h3><ul><li><a href="../docs/mcp.html">MCP tools</a></li><li><a href="../docs/browser.html">Browser</a></li></ul></div>
+  </nav>
+  <article class="prose">
+<p class="kicker">Docs</p>
+<h1>Mission board</h1>
+<p class="intro">One board for everything your bots work on: planned missions, hand-offs, routine runs and loose ends you take on. A task counts as done only when a check you can see has passed, never because a bot said so.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v3-board-2880.webp?v=7c72422987" data-caption="The Mission board for a launch mission, with Ready, Working, Needs you, Review and Verified columns, and a strip above showing tasks verified this week, false successes, what needs you now and blocked work."><img src="../assets/media/v3-board-1440.webp?v=f326459eea" srcset="../assets/media/v3-board-1440.webp?v=f326459eea 1440w, ../assets/media/v3-board-2880.webp?v=7c72422987 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The Mission board for a launch mission, with Ready, Working, Needs you, Review and Verified columns, and a strip above showing tasks verified this week, false successes, what needs you now and blocked work."></a></div>
+  <figcaption>A mission's tasks on the board. The strip on top counts this week's verified tasks and what needs you now.</figcaption>
+</figure>
+
+<h2 id="on">Turn it on</h2>
+<p>The board is off until you switch it on: <strong>Settings → Mission board → Show the Mission board</strong>. Turning it off hides the board and stops new tasks; nothing is deleted.</p>
+
+<h2 id="columns">The columns</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Column</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td>Ready</td><td>A bot can pick it up. Dimmed tasks are waiting on another task to be verified first.</td></tr>
+    <tr><td>Working</td><td>A bot holds it and is working on it now.</td></tr>
+    <tr><td>Needs you</td><td>Something waits on you: a question, an approval card, a check that needs your OK, a failure to fix, or a proposed change.</td></tr>
+    <tr><td>Review</td><td>The bot says it's done. kwant is running the task's checks, or a teammate or you still have to look.</td></tr>
+    <tr><td>Verified</td><td>Every check that counts has passed.</td></tr>
+  </tbody>
+</table></div>
+<p>The <strong>Needs you now</strong> tile counts the same cards as the Needs you column, so the two always match.</p>
+
+<h2 id="verified">What "Verified" means</h2>
+<p>A task becomes Verified only when its checks pass. A check can be:</p>
+<ul>
+  <li>a command that has to succeed, such as running the tests</li>
+  <li>a web address that has to answer, optionally containing some text</li>
+  <li>a file that has to exist or contain some text</li>
+  <li>a review by a teammate who isn't the task's owner, pointing at evidence</li>
+  <li>you, pressing <strong>Verify</strong></li>
+</ul>
+<p>A bot can't verify its own work. A check a bot adds to its own task waits for your OK before it counts, so "the file I just wrote exists" isn't enough.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v3-task-receipt-2880.webp?v=742286e8bc" data-caption="A verified task&#x27;s panel: the owner, cost, acceptance, and an evidence receipt listing each check with its result and the attached report file."><img src="../assets/media/v3-task-receipt-1440.webp?v=98f5fb5b95" srcset="../assets/media/v3-task-receipt-1440.webp?v=98f5fb5b95 1440w, ../assets/media/v3-task-receipt-2880.webp?v=742286e8bc 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A verified task&#x27;s panel: the owner, cost, acceptance, and an evidence receipt listing each check with its result and the attached report file."></a></div>
+  <figcaption>Each task has a receipt: every check, its result and the evidence attached. "Not checked" means nothing has run yet.</figcaption>
+</figure>
+<p>Optional checks are shown but never hold a task back. A Verified task with an optional check still waiting says "Check passed" and "1 optional check waiting".</p>
+
+<h2 id="missions">Missions and budgets</h2>
+<p>A mission groups tasks toward one goal, with a token budget a bot can't go over. A task waits for the tasks it depends on. When a lead bot plans a mission, it waits for your approval before anything runs.</p>
+
+<h2 id="flags">"May be invalid"</h2>
+<p>If the file a verified task points to changes or disappears, or you redo it, that task and the tasks built on it get a <strong>May be invalid</strong> badge and wait under Needs you. They stay Verified until you pick <strong>Still valid</strong>, <strong>Redo</strong> or <strong>Cancel</strong>. Redo makes a copy that runs again, so the verified history stays as it was. <strong>How tasks connect</strong> shows a mission's tasks step by step, with a <strong>Check files now</strong> button.</p>
+
+<h2 id="checkpoints">Checkpoints and restore</h2>
+<p>kwant takes a checkpoint of a task's folder before and after each run, and whenever you ask for one. From the task's panel you can preview a checkpoint and restore it.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v3-checkpoints-2880.webp?v=cb20c2e1e9" data-caption="A task&#x27;s checkpoints, before and after each run, and the restore preview: two files, store/listing.md and store/whats-new.md, would be put back, with Restore, Restore and run again, and Never mind."><img src="../assets/media/v3-checkpoints-1440.webp?v=0344d53922" srcset="../assets/media/v3-checkpoints-1440.webp?v=0344d53922 1440w, ../assets/media/v3-checkpoints-2880.webp?v=cb20c2e1e9 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A task&#x27;s checkpoints, before and after each run, and the restore preview: two files, store/listing.md and store/whats-new.md, would be put back, with Restore, Restore and run again, and Never mind."></a></div>
+  <figcaption>The preview shows exactly which files change before you restore.</figcaption>
+</figure>
+<ul>
+  <li>Only the files that task's runs changed are written back. Files another task or you changed are listed, and left alone unless you tick them.</li>
+  <li>kwant takes one more checkpoint just before restoring, so you can undo the restore.</li>
+  <li>What the bot did outside its folder, such as commands, web requests or messages, is listed as not undone.</li>
+  <li>A restored task waits on hold until you press <strong>Run</strong>. Pick <strong>Restore and run again</strong> to start it straight away.</li>
+</ul>
+<p>Checkpoints stay on your server.</p>
+
+<h2 id="autofix">AutoFix</h2>
+<p>When a task fails, its panel says why in plain words and what to fix. Turn on AutoFix in <strong>Settings → Mission board → Retry failed tasks with AutoFix</strong> and it plans a retry that fits the failure:</p>
+<ul>
+  <li><strong>A temporary error</strong>, like a timeout or an overloaded service: it waits 1, then 5, then 25 minutes and tries again.</li>
+  <li><strong>A failed check</strong>: it runs the task again and passes along what the check said.</li>
+  <li><strong>A stalled run</strong>: it starts again from the last good checkpoint.</li>
+</ul>
+<figure>
+  <div class="frame"><video data-autoplay controls muted playsinline loop preload="none" poster="../assets/media/clip-autofix-poster.webp?v=7eb1e3334e" width="1280" height="800" aria-label="Demo: a load-test report fails its check because it has no p95 latency. The task panel shows why it failed and AutoFix&#x27;s plan, Retry now is pressed, the bot adds the missing figures and the task ends Verified."><source src="../assets/media/clip-autofix.mp4?v=e4d85a6d7c" type="video/mp4"></video></div>
+  <figcaption>A check fails, AutoFix retries with what the check said, and the task ends Verified.</figcaption>
+</figure>
+<p>A failed task shows its tries, what retries have cost, and <strong>Retry now</strong> and <strong>Don't retry</strong>. Choose <strong>Ask me first</strong> to approve each retry yourself, or <strong>Retry on its own</strong>. Retries stay within the task's attempts and a retry budget, a quarter of the task's budget unless you change it.</p>
+<div class="note"><strong>Some failures always ask you.</strong> A missing sign-in, a used-up usage limit, a spent budget or an action you denied is never retried. The task tells you what to do instead.</div>
+
+<h3 id="changes">Proposed changes</h3>
+<p>A bot can propose changing a task's check or acceptance, or a routine, for example when a check can't pass for a reason outside the task. The proposal appears under Needs you with the before and after, and nothing changes until you approve it.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v3-change-approval-2880.webp?v=a5e617ae04" data-caption="A proposed change in Needs you: the bot explains why, shows the task&#x27;s acceptance before and after, with Approve and apply, and Reject."><img src="../assets/media/v3-change-approval-1440.webp?v=2841b19811" srcset="../assets/media/v3-change-approval-1440.webp?v=2841b19811 1440w, ../assets/media/v3-change-approval-2880.webp?v=a5e617ae04 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A proposed change in Needs you: the bot explains why, shows the task&#x27;s acceptance before and after, with Approve and apply, and Reject."></a></div>
+  <figcaption>Only you can approve a change to how a task is checked.</figcaption>
+</figure>
+
+<h2 id="phone">On a phone</h2>
+<p>The board works on a phone: it shows one column at a time, picked from tabs that show how many tasks each holds.</p>
+
+    <nav class="pager" aria-label="Docs pages"><a class="prev" href="../docs/flight-school.html"><small>Previous</small>Flight School</a><a class="next" href="../docs/routines.html"><small>Next</small>Routines &amp; bot actions</a></nav>
+  </article>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="foot-brand">
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
+    </div>
+    <nav aria-label="Product">
+      <h2>Product</h2>
+      <a href="../features.html">Features</a>
+      <a href="../docs/quickstart.html">Quickstart</a>
+      <a href="../docs/install.html">Install &amp; run</a>
+      <a href="../docs/mcp.html">MCP tools</a>
+    </nav>
+    <nav aria-label="Using kwant">
+      <h2>Using kwant</h2>
+      <a href="../docs/spaces.html">Spaces</a>
+      <a href="../docs/accounts.html">Accounts</a>
+      <a href="../docs/approvals.html">Approvals</a>
+      <a href="../docs/routines.html">Routines</a>
+    </nav>
+    <nav aria-label="Project">
+      <h2>Project</h2>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+      <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Issues</a>
+      <a href="https://github.com/alexsergivan/kwant/blob/main/SECURITY.md" rel="noopener">Security</a>
+    </nav>
+    <nav aria-label="Legal">
+      <h2>Legal</h2>
+      <a href="../privacy.html">Privacy</a>
+      <a href="../terms.html">Terms of use</a>
+      <a href="../terms.html#license">License</a>
+    </nav>
+    <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+  </div>
+</footer>
+<script src="../assets/js/site.js?v=c490c973ba" defer></script>
+<script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/mission-board#article","headline":"Mission board: tasks your bots can prove they finished","description":"One board for everything your bots work on. A task counts as Verified only when a check passes. Checkpoints undo a task's file changes, and AutoFix retries what is safe to retry.","url":"https://kwant.si/docs/mission-board","mainEntityOfPage":"https://kwant.si/docs/mission-board","image":"https://kwant.si/assets/og/docs-mission-board.png?v=cb9229cc7c","inLanguage":"en","datePublished":"2026-10-28","dateModified":"2026-10-28","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Mission board","item":"https://kwant.si/docs/mission-board"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+</body>
+</html>

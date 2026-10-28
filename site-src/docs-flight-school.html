@@ -1,0 +1,66 @@
+title: Flight School: give each bot only the freedom it has earned
+description: Set each bot's tier per kind of work: Observe, Sandbox or Act. A tier only adds approval cards, payments always ask, and you can revoke a tier in one click.
+card_title: Flight School
+path: docs/flight-school.html
+nav: flight-school
+card: Observe, Sandbox or Act, per bot and per kind of work. Payments always ask.
+card_art: avatar:qa
+---
+<p class="kicker">Docs</p>
+<h1>Flight School</h1>
+<p class="intro">A new bot doesn't have to get the same freedom as one you've worked with for months. Flight School lets you set how much each bot may do on its own, per kind of work, and take it back in one click.</p>
+
+<h2 id="tiers">The three tiers</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Tier</th><th>What the bot may do on its own</th></tr></thead>
+  <tbody>
+    <tr><td>Observe</td><td>Plans, reads and reports. Every change asks you first.</td></tr>
+    <tr><td>Sandbox</td><td>Changes files in its task folder when kwant has a checkpoint to undo them. Commands that can change things ask you; reading its own folder doesn't.</td></tr>
+    <tr><td>Act</td><td>Works as it does today, with its usual approvals.</td></tr>
+  </tbody>
+</table></div>
+<p>A tier only ever <strong>adds</strong> approval cards. It never lets a bot skip one, even with approvals off.</p>
+
+<h2 id="on">Turn it on</h2>
+<p>Flight School is off until you switch it on in <strong>Settings → Flight School: limit what each bot may do on its own</strong>. While it is off, nothing on screen changes and no tier applies, whatever you saved.</p>
+<figure>
+  <div class="frame">{{shot:v3-flight-settings|Settings with the Flight School switch on. It says bots you already have stay at Act, and offers the tier that bots you add from now on start at, set to Sandbox.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Bots you already have stay at Act. New bots start at the tier you pick, Sandbox unless you change it.</figcaption>
+</figure>
+<p>Turning it on changes nothing for the bots you already have: they stay at Act until you lower one.</p>
+
+<h2 id="per-bot">A bot's tiers</h2>
+<p>Open a bot's settings to see its tier for all work, and per kind of work, such as <code>release-notes</code> or <code>deploys</code>. Each row says where its tier comes from, and the recent changes are listed underneath.</p>
+<figure>
+  <div class="frame">{{shot:v3-tier-panel|QA's Flight School settings: Sandbox for all work, Observe for deploys (already the lowest tier, so no Revoke), Act for release notes and Sandbox for releases, each with where it comes from and a Revoke button where one applies, plus a field to add another kind of work and the recent tier changes.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Set a tier for all work, then make exceptions per kind of work.</figcaption>
+</figure>
+<ul>
+  <li><strong>Kind of work.</strong> Every task on the <a href="mission-board.html">Mission board</a> has one, <code>general</code> unless you or the planning bot set another. You can change it from the task's panel.</li>
+  <li><strong>Revoke.</strong> One click moves a tier one step down. It applies from the bot's next action; an action already allowed and running finishes.</li>
+  <li><strong>Only you</strong> can change a tier. A bot can see its own, but can't raise it.</li>
+</ul>
+
+<h2 id="sandbox">What Sandbox asks about</h2>
+<p>At Sandbox, a bot works on files in its task folder without asking, because kwant took a checkpoint first and you can <a href="mission-board.html#checkpoints">restore</a> it. Anything that can change something outside that folder asks first, and the card says why:</p>
+<figure>
+  <div class="frame">{{video:clip-sandbox|Demo: a bot at Sandbox wants to run npm run build for a release task. An approval card says "Sandbox: commands that can change things ask", the user clicks Allow Once, the bot finishes and the task ends Verified.}}</div>
+  <figcaption>A Sandbox bot asks before running a build. You allow it, and the task ends Verified.</figcaption>
+</figure>
+<p>Reading and searching files never asks. On Claude, read-only commands in the bot's own folder, such as <code>ls</code> or <code>cat</code>, run without asking; any other command asks below Act. A bot that works through an API key has no shell, so it can't run commands at all. At Observe, file changes ask too, even inside the task folder.</p>
+<p>Tiers apply only while a bot works on a task. Ordinary chat follows your normal approval rules.</p>
+
+<h2 id="payments">Payments always ask</h2>
+<p>Whatever the tier, and even with approvals off, anything that looks like paying shows a card first. The card says why it looks like a payment, and offers only <strong>Allow Once</strong> and <strong>Deny</strong>: allowing a payment covers that one payment, so there's no "Always" button.</p>
+<figure>
+  <div class="frame">{{shot:v3-payment-card|An approval card for a command that posts a payment to Stripe. It says "This looks like a payment" and why, and has only Deny and Allow Once buttons.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A payment card has no Always button.</figcaption>
+</figure>
+<p>kwant recognises payment apps and their actions (Stripe, PayPal, Square, Wise, Coinbase and others), commands that post to payment services or send crypto, and, in its browser, pay buttons, clicks on checkout pages and typed card numbers. It can't catch everything, such as a plain "Continue" on an unusual checkout page or a card a site already saved.</p>
+<p>When you choose <strong>Don't ask</strong> for a space or a bot, kwant first says plainly what bots can then do without asking, such as send messages, delete files, publish and sign in, and that payments still ask. Nothing changes until you press <strong>Turn off approvals</strong>. See <a href="approvals.html#modes">Approvals</a>.</p>
+
+<h2 id="engines">Codex and Custom API accounts</h2>
+<p>kwant can hold Claude and Grok bots to their tier, because it sees each of their tool calls. Codex runs its own shell and file tools, and Custom API accounts run outside kwant's gateway, so kwant can't see every call. So a task for one of those bots below Act doesn't run: it waits under <strong>Needs you</strong> and says what to do. Raise the bot to Act for that kind of work, or give the task to a Claude or Grok bot.</p>
+
+<h2 id="off">Turning it off</h2>
+<p>Switch Flight School off in Settings. Every bot goes back to its usual approvals at once. The tiers you set are kept, so they apply again if you switch it back on. Payments still always ask.</p>

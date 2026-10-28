@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- **kwant.si covers 0.2.0.** The home page has a "New in 0.2.0" strip, the features page has sections
+  for the Mission board, Flight School and connecting apps with new screenshots and three short clips
+  (Sandbox, AutoFix, Connect), and there are new docs pages for the Mission board and Flight School.
+
 ## [Mac 0.2.0] - 2026-10-28
 
 ### Added

@@ -29,7 +29,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=93fe872b0d">
+<link rel="stylesheet" href="assets/css/site.css?v=32dda8597c">
 </head>
 <body class="page-features">
 <a class="skip" href="#main">Skip to content</a>
@@ -57,6 +57,9 @@
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#mission-board">Mission board</a></li>
+        <li><a href="#flight-school">Flight School</a></li>
+        <li><a href="#connect">Connect apps</a></li>
         <li><a href="#teams">Teams &amp; chat</a></li>
         <li><a href="#spaces">Spaces &amp; accounts</a></li>
         <li><a href="#own">Works on its own</a></li>
@@ -68,7 +71,123 @@
   </div>
 </nav>
 
-<section id="teams" class="fgroup">
+<section id="mission-board" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.2.0 · Mission board</p>
+      <h2>Work your bots can prove they finished</h2>
+      <p>One board for every task your bots take on. A task counts as Verified only when a check passes, never on a bot's word.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="board">
+        <span class="shot"><a class="zoom" href="assets/media/v3-board-2880.webp?v=7c72422987" data-caption="The Mission board for a waitlist launch, with Ready, Working, Needs you, Review and Verified columns, and a strip above counting tasks verified this week, false successes and what needs you now."><img src="assets/media/v3-board-1440.webp?v=f326459eea" srcset="assets/media/v3-board-1440.webp?v=f326459eea 1440w, assets/media/v3-board-2880.webp?v=7c72422987 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Mission board for a waitlist launch, with Ready, Working, Needs you, Review and Verified columns, and a strip above counting tasks verified this week, false successes and what needs you now."></a></span>
+        <div class="card-body"><h3>One board, five columns</h3><p>Missions, hand-offs, routine runs and loose ends you take on, from Ready to Verified. <strong>Needs you</strong> collects every question, approval and failure waiting on you.</p></div>
+      </article>
+      <article class="card" id="verified">
+        <span class="shot"><a class="zoom" href="assets/media/v3-task-receipt-2880.webp?v=742286e8bc" data-caption="A verified task&#x27;s panel: owner, cost, acceptance, and a receipt listing each check with its result next to the attached report."><img src="assets/media/v3-task-receipt-1440.webp?v=98f5fb5b95" srcset="assets/media/v3-task-receipt-1440.webp?v=98f5fb5b95 1440w, assets/media/v3-task-receipt-2880.webp?v=742286e8bc 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="A verified task&#x27;s panel: owner, cost, acceptance, and a receipt listing each check with its result next to the attached report."></a></span>
+        <div class="card-body"><h3>Verified outcomes, with evidence</h3><p>A check proves it: a command that passes, a page that answers, a file that holds the right text, a teammate's review or your OK. Each task keeps the receipt.</p></div>
+      </article>
+      <article class="card" id="checkpoints">
+        <span class="shot"><a class="zoom" href="assets/media/v3-checkpoints-2880.webp?v=cb20c2e1e9" data-caption="A task&#x27;s checkpoints before and after each run, and a restore preview listing the files it would write back and what the bot did outside the folder that a restore can&#x27;t undo."><img src="assets/media/v3-checkpoints-1440.webp?v=0344d53922" srcset="assets/media/v3-checkpoints-1440.webp?v=0344d53922 1440w, assets/media/v3-checkpoints-2880.webp?v=cb20c2e1e9 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="A task&#x27;s checkpoints before and after each run, and a restore preview listing the files it would write back and what the bot did outside the folder that a restore can&#x27;t undo."></a></span>
+        <div class="card-body"><h3>Checkpoints and restore</h3><p>kwant snapshots a task's folder before and after every run. Preview a checkpoint and restore it: only that task's files go back, and you can undo the restore.</p></div>
+      </article>
+      <article class="card" id="autofix">
+        <span class="shot"><a class="zoom" href="assets/media/v3-autofix-2880.webp?v=62841dcd0f" data-caption="A failed task&#x27;s panel: why the check failed in plain words, what AutoFix plans next, the tries so far and what retries cost, with Retry now and Don&#x27;t retry."><img src="assets/media/v3-autofix-1440.webp?v=a858a1a29f" srcset="assets/media/v3-autofix-1440.webp?v=a858a1a29f 1440w, assets/media/v3-autofix-2880.webp?v=62841dcd0f 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="A failed task&#x27;s panel: why the check failed in plain words, what AutoFix plans next, the tries so far and what retries cost, with Retry now and Don&#x27;t retry."></a></span>
+        <div class="card-body"><h3>AutoFix</h3><p>A failed task says why and what to fix. AutoFix retries what is safe to retry, within a budget, and asks first if you prefer. Sign-in problems and denied actions always come back to you.</p></div>
+      </article>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>Fails, retries, Verified</h3>
+        <p>A load-test report misses its p95 latency, so the check fails. AutoFix runs it again with what the check said, and the task ends Verified.</p>
+        <a class="more-link" href="docs/mission-board.html#autofix">How AutoFix works →</a>
+      </div>
+      <div class="frame"><video data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-autofix-poster.webp?v=7eb1e3334e" width="1280" height="800" aria-label="Demo: a load-test report fails its check because it has no p95 latency. The task panel shows why and AutoFix&#x27;s plan, Retry now is pressed, the bot adds the missing figures and the task ends Verified."><source src="assets/media/clip-autofix.mp4?v=e4d85a6d7c" type="video/mp4"></video></div>
+    </div>
+    <ul class="flist">
+      <li><h3>Missions with a budget</h3><p>Group tasks toward one goal with a token budget. Tasks wait for the ones they build on.</p></li>
+      <li><h3>No marking its own homework</h3><p>A check a bot adds to its own task waits for your OK before it counts.</p></li>
+      <li><h3>Change approvals</h3><p>A bot can propose changing a check or the acceptance. You see before and after, and nothing changes until you approve.</p></li>
+      <li><h3>"May be invalid"</h3><p>When a file a verified task relied on changes, the task and those built on it are flagged for you to keep or redo.</p></li>
+      <li><h3>Insights</h3><p>Tasks verified this week, false successes, what needs you now, and what AutoFix fixed.</p></li>
+      <li><h3>On a phone</h3><p>One column at a time, with tabs that count the tasks in each.</p></li>
+    </ul>
+    <p class="section-foot"><a class="more-link" href="docs/mission-board.html">Mission board docs →</a></p>
+  </div>
+</section>
+
+<section id="flight-school" class="fgroup alt">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.2.0 · Flight School</p>
+      <h2>Freedom a bot earns, one kind of work at a time</h2>
+      <p>Give each bot a tier per kind of work: Observe, Sandbox or Act. A tier only adds approval cards, and payments always ask.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>A Sandbox bot asks first</h3>
+        <p>QA works at Sandbox on releases. It may change files in its task folder, but a build command asks, and the card says why. You allow it once, and the task ends Verified.</p>
+        <a class="more-link" href="docs/flight-school.html#sandbox">What Sandbox asks about →</a>
+      </div>
+      <div class="frame"><video data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-sandbox-poster.webp?v=c97e71cdb0" width="1280" height="800" aria-label="Demo: a bot at Sandbox wants to run npm run build for a release task. An approval card says &quot;Sandbox: commands that can change things ask&quot;, the user clicks Allow Once, the bot finishes and the task ends Verified."><source src="assets/media/clip-sandbox.mp4?v=f6ce21e3ed" type="video/mp4"></video></div>
+    </div>
+    <div class="grid two">
+      <article class="card" id="tiers">
+        <span class="shot"><a class="zoom" href="assets/media/v3-tier-panel-2880.webp?v=caa148d511" data-caption="A bot&#x27;s Flight School settings: Sandbox for all work, Observe for deploys and Act for release notes, each with where it comes from and a Revoke button, and the recent tier changes."><img src="assets/media/v3-tier-panel-1440.webp?v=9d2541f120" srcset="assets/media/v3-tier-panel-1440.webp?v=9d2541f120 1440w, assets/media/v3-tier-panel-2880.webp?v=caa148d511 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="A bot&#x27;s Flight School settings: Sandbox for all work, Observe for deploys and Act for release notes, each with where it comes from and a Revoke button, and the recent tier changes."></a></span>
+        <div class="card-body"><h3>Tiers per bot and per kind of work</h3><p>Sandbox for everything, Observe for deploys, Act for release notes. Revoke lowers a tier in one click, from the bot's next action.</p></div>
+      </article>
+      <article class="card" id="flight-settings">
+        <span class="shot"><a class="zoom" href="assets/media/v3-flight-settings-2880.webp?v=64d9872749" data-caption="Settings with Flight School switched on. Bots you already have stay at Act, and bots you add from now on start at Sandbox."><img src="assets/media/v3-flight-settings-1440.webp?v=e7a7c07637" srcset="assets/media/v3-flight-settings-1440.webp?v=e7a7c07637 1440w, assets/media/v3-flight-settings-2880.webp?v=64d9872749 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings with Flight School switched on. Bots you already have stay at Act, and bots you add from now on start at Sandbox."></a></span>
+        <div class="card-body"><h3>Off until you want it</h3><p>Switch it on in Settings. Bots you have stay at Act, new bots start at Sandbox, and nothing changes on screen while it's off.</p></div>
+      </article>
+      <article class="card" id="payments">
+        <span class="shot"><a class="zoom" href="assets/media/v3-payment-card-2880.webp?v=10036809e9" data-caption="An approval card for a command that posts a payment to Stripe. It says this looks like a payment and why, with only Deny and Allow Once."><img src="assets/media/v3-payment-card-1440.webp?v=a462ca73d3" srcset="assets/media/v3-payment-card-1440.webp?v=a462ca73d3 1440w, assets/media/v3-payment-card-2880.webp?v=10036809e9 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="An approval card for a command that posts a payment to Stripe. It says this looks like a payment and why, with only Deny and Allow Once."></a></span>
+        <div class="card-body"><h3>Payments always ask</h3><p>Anything that looks like paying shows a card, at every tier and even with approvals off. It says why, and has no Always button.</p></div>
+      </article>
+      <article class="card" id="approvals-off">
+        <span class="shot"><a class="zoom" href="assets/media/v3-approvals-off-2880.webp?v=4f8e497fcd" data-caption="The warning shown before turning off approvals: bots can send messages, delete files, publish and sign in without asking, payments still ask, with Cancel and Turn off approvals."><img src="assets/media/v3-approvals-off-1440.webp?v=c38cd4204f" srcset="assets/media/v3-approvals-off-1440.webp?v=c38cd4204f 1440w, assets/media/v3-approvals-off-2880.webp?v=4f8e497fcd 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The warning shown before turning off approvals: bots can send messages, delete files, publish and sign in without asking, payments still ask, with Cancel and Turn off approvals."></a></span>
+        <div class="card-body"><h3>Risks said before approvals go off</h3><p>Choosing "Don't ask" first says plainly what bots can then do on their own. Nothing changes until you press Turn off approvals.</p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li><h3>Observe</h3><p>Plans, reads and reports. Every change asks you first.</p></li>
+      <li><h3>Sandbox</h3><p>Changes files in its task folder when they can be undone. Commands that can change things ask.</p></li>
+      <li><h3>Act</h3><p>Works as it does today, with its usual approvals.</p></li>
+      <li><h3>Engines it can't watch</h3><p>A bot on Codex or a Custom API account below Act doesn't run its task. It waits in Needs you and says what to do.</p></li>
+    </ul>
+    <p class="section-foot"><a class="more-link" href="docs/flight-school.html">Flight School docs →</a></p>
+  </div>
+</section>
+
+<section id="connect" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.2.0 · Connect apps</p>
+      <h2>Bots find a way round</h2>
+      <p>Before a bot says "not possible", it tries another route, and when it needs an app you haven't connected, it hands you a card.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>Connect an app from a bot's card</h3>
+        <p>Asked about search clicks, TechLead reads the site itself, then offers Google Search Console. Press Connect, sign in on the app's own page, and the card says Connected.</p>
+        <a class="more-link" href="docs/mcp.html">MCP tools &amp; Composio →</a>
+      </div>
+      <div class="frame"><video data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-connect-poster.webp?v=de35f1662e" width="1280" height="800" aria-label="Demo: asked why organic clicks dropped, TechLead reads kwant.si&#x27;s page source, says the page looks healthy and offers a Google Search Console connection card. The user presses Connect, the card waits for the sign-in, then shows Connected."><source src="assets/media/clip-connect.mp4?v=e3145c313d" type="video/mp4"></video></div>
+    </div>
+    <div class="grid two">
+      <article class="card" id="way-round">
+        <span class="shot"><a class="zoom" href="assets/media/v3-page-source-2880.webp?v=a321cb556c" data-caption="TechLead&#x27;s steps after reading kwant.si&#x27;s source: page_source and connection_suggest, both allowed without asking, under its reply that the page has a title, a meta description, a canonical link and one h1."><img src="assets/media/v3-page-source-1440.webp?v=e42a0898e2" srcset="assets/media/v3-page-source-1440.webp?v=e42a0898e2 1440w, assets/media/v3-page-source-2880.webp?v=a321cb556c 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="TechLead&#x27;s steps after reading kwant.si&#x27;s source: page_source and connection_suggest, both allowed without asking, under its reply that the page has a title, a meta description, a canonical link and one h1."></a></span>
+        <div class="card-body"><h3>Reads what a page hides</h3><p>A new <code>page_source</code> tool reads a public page's tags: description, canonical, robots, Open Graph, headings, alt text and structured data.</p></div>
+      </article>
+      <article class="card" id="connect-card">
+        <span class="shot"><a class="zoom" href="assets/media/v3-connect-card-2880.webp?v=27b35189f3" data-caption="A connection card from TechLead suggesting Google Search Console, with the reason, the Connect button and a note that nothing connects until you sign in, above the bot&#x27;s reply."><img src="assets/media/v3-connect-card-1440.webp?v=083d1d53b3" srcset="assets/media/v3-connect-card-1440.webp?v=083d1d53b3 1440w, assets/media/v3-connect-card-2880.webp?v=27b35189f3 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="A connection card from TechLead suggesting Google Search Console, with the reason, the Connect button and a note that nothing connects until you sign in, above the bot&#x27;s reply."></a></span>
+        <div class="card-body"><h3>A card, not a dead end</h3><p>Without access to an app, a bot offers a connection card and carries on with what it can do. Without a ready Composio connector, the card says what's missing.</p></div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="teams" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Teams & chat</p>
@@ -97,7 +216,7 @@
   </div>
 </section>
 
-<section id="spaces" class="fgroup alt">
+<section id="spaces" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Spaces & accounts</p>
@@ -128,7 +247,7 @@
   </div>
 </section>
 
-<section id="own" class="fgroup">
+<section id="own" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Works on its own</p>
@@ -157,7 +276,7 @@
   </div>
 </section>
 
-<section id="safety" class="fgroup alt">
+<section id="safety" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Safety & control</p>
@@ -188,7 +307,7 @@
   </div>
 </section>
 
-<section id="knowledge" class="fgroup">
+<section id="knowledge" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Your bots and knowledge</p>
@@ -215,7 +334,7 @@
   </div>
 </section>
 
-<section id="running" class="fgroup alt">
+<section id="running" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Running it</p>
@@ -304,6 +423,6 @@
 </footer>
 <script src="assets/js/site.js?v=c490c973ba" defer></script>
 <script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-10-25","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-10-28","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
 </body>
 </html>

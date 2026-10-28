@@ -1,0 +1,91 @@
+title: Mission board: tasks your bots can prove they finished
+description: One board for everything your bots work on. A task counts as Verified only when a check passes. Checkpoints undo a task's file changes, and AutoFix retries what is safe to retry.
+card_title: Mission board, checkpoints & AutoFix
+path: docs/mission-board.html
+nav: mission-board
+card: A task is Verified only when a check passes, never on a bot's word.
+card_art: avatar:tech_lead
+---
+<p class="kicker">Docs</p>
+<h1>Mission board</h1>
+<p class="intro">One board for everything your bots work on: planned missions, hand-offs, routine runs and loose ends you take on. A task counts as done only when a check you can see has passed, never because a bot said so.</p>
+<figure>
+  <div class="frame">{{shot:v3-board|The Mission board for a launch mission, with Ready, Working, Needs you, Review and Verified columns, and a strip above showing tasks verified this week, false successes, what needs you now and blocked work.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A mission's tasks on the board. The strip on top counts this week's verified tasks and what needs you now.</figcaption>
+</figure>
+
+<h2 id="on">Turn it on</h2>
+<p>The board is off until you switch it on: <strong>Settings → Mission board → Show the Mission board</strong>. Turning it off hides the board and stops new tasks; nothing is deleted.</p>
+
+<h2 id="columns">The columns</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Column</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td>Ready</td><td>A bot can pick it up. Dimmed tasks are waiting on another task to be verified first.</td></tr>
+    <tr><td>Working</td><td>A bot holds it and is working on it now.</td></tr>
+    <tr><td>Needs you</td><td>Something waits on you: a question, an approval card, a check that needs your OK, a failure to fix, or a proposed change.</td></tr>
+    <tr><td>Review</td><td>The bot says it's done. kwant is running the task's checks, or a teammate or you still have to look.</td></tr>
+    <tr><td>Verified</td><td>Every check that counts has passed.</td></tr>
+  </tbody>
+</table></div>
+<p>The <strong>Needs you now</strong> tile counts the same cards as the Needs you column, so the two always match.</p>
+
+<h2 id="verified">What "Verified" means</h2>
+<p>A task becomes Verified only when its checks pass. A check can be:</p>
+<ul>
+  <li>a command that has to succeed, such as running the tests</li>
+  <li>a web address that has to answer, optionally containing some text</li>
+  <li>a file that has to exist or contain some text</li>
+  <li>a review by a teammate who isn't the task's owner, pointing at evidence</li>
+  <li>you, pressing <strong>Verify</strong></li>
+</ul>
+<p>A bot can't verify its own work. A check a bot adds to its own task waits for your OK before it counts, so "the file I just wrote exists" isn't enough.</p>
+<figure>
+  <div class="frame">{{shot:v3-task-receipt|A verified task's panel: the owner, cost, acceptance, and an evidence receipt listing each check with its result and the attached report file.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Each task has a receipt: every check, its result and the evidence attached. "Not checked" means nothing has run yet.</figcaption>
+</figure>
+<p>Optional checks are shown but never hold a task back. A Verified task with an optional check still waiting says "Check passed" and "1 optional check waiting".</p>
+
+<h2 id="missions">Missions and budgets</h2>
+<p>A mission groups tasks toward one goal, with a token budget a bot can't go over. A task waits for the tasks it depends on. When a lead bot plans a mission, it waits for your approval before anything runs.</p>
+
+<h2 id="flags">"May be invalid"</h2>
+<p>If the file a verified task points to changes or disappears, or you redo it, that task and the tasks built on it get a <strong>May be invalid</strong> badge and wait under Needs you. They stay Verified until you pick <strong>Still valid</strong>, <strong>Redo</strong> or <strong>Cancel</strong>. Redo makes a copy that runs again, so the verified history stays as it was. <strong>How tasks connect</strong> shows a mission's tasks step by step, with a <strong>Check files now</strong> button.</p>
+
+<h2 id="checkpoints">Checkpoints and restore</h2>
+<p>kwant takes a checkpoint of a task's folder before and after each run, and whenever you ask for one. From the task's panel you can preview a checkpoint and restore it.</p>
+<figure>
+  <div class="frame">{{shot:v3-checkpoints|A task's checkpoints, before and after each run, and the restore preview: two files, store/listing.md and store/whats-new.md, would be put back, with Restore, Restore and run again, and Never mind.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The preview shows exactly which files change before you restore.</figcaption>
+</figure>
+<ul>
+  <li>Only the files that task's runs changed are written back. Files another task or you changed are listed, and left alone unless you tick them.</li>
+  <li>kwant takes one more checkpoint just before restoring, so you can undo the restore.</li>
+  <li>What the bot did outside its folder, such as commands, web requests or messages, is listed as not undone.</li>
+  <li>A restored task waits on hold until you press <strong>Run</strong>. Pick <strong>Restore and run again</strong> to start it straight away.</li>
+</ul>
+<p>Checkpoints stay on your server.</p>
+
+<h2 id="autofix">AutoFix</h2>
+<p>When a task fails, its panel says why in plain words and what to fix. Turn on AutoFix in <strong>Settings → Mission board → Retry failed tasks with AutoFix</strong> and it plans a retry that fits the failure:</p>
+<ul>
+  <li><strong>A temporary error</strong>, like a timeout or an overloaded service: it waits 1, then 5, then 25 minutes and tries again.</li>
+  <li><strong>A failed check</strong>: it runs the task again and passes along what the check said.</li>
+  <li><strong>A stalled run</strong>: it starts again from the last good checkpoint.</li>
+</ul>
+<figure>
+  <div class="frame">{{video:clip-autofix|Demo: a load-test report fails its check because it has no p95 latency. The task panel shows why it failed and AutoFix's plan, Retry now is pressed, the bot adds the missing figures and the task ends Verified.}}</div>
+  <figcaption>A check fails, AutoFix retries with what the check said, and the task ends Verified.</figcaption>
+</figure>
+<p>A failed task shows its tries, what retries have cost, and <strong>Retry now</strong> and <strong>Don't retry</strong>. Choose <strong>Ask me first</strong> to approve each retry yourself, or <strong>Retry on its own</strong>. Retries stay within the task's attempts and a retry budget, a quarter of the task's budget unless you change it.</p>
+<div class="note"><strong>Some failures always ask you.</strong> A missing sign-in, a used-up usage limit, a spent budget or an action you denied is never retried. The task tells you what to do instead.</div>
+
+<h3 id="changes">Proposed changes</h3>
+<p>A bot can propose changing a task's check or acceptance, or a routine, for example when a check can't pass for a reason outside the task. The proposal appears under Needs you with the before and after, and nothing changes until you approve it.</p>
+<figure>
+  <div class="frame">{{shot:v3-change-approval|A proposed change in Needs you: the bot explains why, shows the task's acceptance before and after, with Approve and apply, and Reject.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Only you can approve a change to how a task is checked.</figcaption>
+</figure>
+
+<h2 id="phone">On a phone</h2>
+<p>The board works on a phone: it shows one column at a time, picked from tabs that show how many tasks each holds.</p>

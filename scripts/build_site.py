@@ -56,8 +56,10 @@ DOC_GROUPS = [
         ("accounts", "Accounts & profiles"),
         ("models", "Models & routing"),
         ("approvals", "Approvals & passwords"),
+        ("flight-school", "Flight School"),
     ]),
     ("Works on its own", [
+        ("mission-board", "Mission board"),
         ("routines", "Routines & bot actions"),
         ("memory-skills", "Memory, skills & search"),
         ("loose-ends", "Loose ends & letters"),
