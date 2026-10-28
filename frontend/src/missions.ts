@@ -462,7 +462,7 @@ const PERSON_ITEMS = new Set<NeedsYouItem['kind']>(['autofix_suggested', 'fix_ne
 
 /**
  * The "Needs you now" count: the cards the Needs you column holds across all work, so the tile and the
- * column never disagree. The server's `needs_you_now` leaves out tasks only AutoFix items hold.
+ * column never disagree. The server's `needs_you_now` counts the same tasks.
  */
 export function needsYouCount(tasks: Task[]): number {
   return tasks.filter((t) => columnOfTask(t) === 'needs_you').length;

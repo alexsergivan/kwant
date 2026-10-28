@@ -313,9 +313,16 @@ pub async fn insights(State(state): State<AppState>, Scope(space): Scope) -> Res
     }
     let all = state.db.list_tasks(&space, None, None, None, 1000).await.unwrap_or_default();
     let flagged: std::collections::HashSet<String> = state.db.flagged_task_ids(&space).await.unwrap_or_default().into_iter().collect();
+    // The board's Needs-you column: tasks in needs_you, flagged ones, review tasks waiting on a
+    // check approval, and tasks AutoFix holds (fix_needed, autofix_suggested, workflow_change).
+    // Cancelled tasks aren't on the board.
     let mut needs_you = 0;
-    for t in &all {
-        if t.state == "needs_you" || flagged.contains(&t.id) || (t.state == "review" && !super::check_approvals(&state, t).await.is_empty()) {
+    for t in all.iter().filter(|t| t.state != "cancelled") {
+        if t.state == "needs_you"
+            || flagged.contains(&t.id)
+            || (t.state == "review" && !super::check_approvals(&state, t).await.is_empty())
+            || !super::autofix::needs_you(&state, t).await.is_empty()
+        {
             needs_you += 1;
         }
     }
