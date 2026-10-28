@@ -296,6 +296,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     onSpacesChanged();
   };
   const [isMcpOpen, setIsMcpOpen] = useState(false);
+  // Connections' "+ Add connection" opens Tools straight on adding a server.
+  const [mcpStartAdding, setMcpStartAdding] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isRoutinesOpen, setIsRoutinesOpen] = useState(false);
   const [editingChannelInstructions, setEditingChannelInstructions] = useState<Channel | null>(null);
@@ -2848,6 +2850,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     <ConnectionsPage
       onBack={isPhone ? () => { setShowConnections(false); setPhoneView('list'); } : undefined}
       onOpenTools={() => setIsMcpOpen(true)}
+      onAddTool={() => { setMcpStartAdding(true); setIsMcpOpen(true); }}
       onOpenAccounts={openSettings}
       onOpenLooseEnds={() => { setShowConnections(false); setShowLoose(true); }}
     />
@@ -3181,10 +3184,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       <Suspense fallback={null}>
         <McpServersModal
           isOpen={isMcpOpen}
-          onClose={() => setIsMcpOpen(false)}
+          startAdding={mcpStartAdding}
+          onClose={() => { setIsMcpOpen(false); setMcpStartAdding(false); }}
           kwants={kwants}
           onOpenConnections={() => {
             setIsMcpOpen(false);
+            setMcpStartAdding(false);
             setShowConnections(true);
             setShowLoose(false);
             setShowParallel(false);

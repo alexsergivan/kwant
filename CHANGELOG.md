@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Add a connection from the Connections page.** A new **+ Add connection** button in the header offers
+  a tool server (opens Tools straight on adding one), an engine account, or an app through Composio. Empty
+  groups link to adding one there, and the row buttons now say **Manage tools** or **Manage accounts**.
+
 ### Changed
 - **kwant.si covers 0.2.0.** The home page has a "New in 0.2.0" strip, the features page has sections
   for the Mission board, Flight School and connecting apps with new screenshots and three short clips
