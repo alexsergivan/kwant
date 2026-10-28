@@ -41,6 +41,13 @@ Local mode gives up isolation: commands run with your user's access to your file
 
 Install Docker and start Kwnt normally. The first browser request builds the embedded browser image and starts a private container. Neither a desktop session nor a display server is required on the VPS. Subsequent requests reuse Chromium. When an update ships a new browser image tag, the first browser request builds it and replaces kwant's browser container, so the bots' open pages close once. The managed debugging port binds only to 127.0.0.1.
 
+The container never restarts on its own (`--restart no`); kwant starts it on the next browser request. It carries the labels `kwnt.browser=1` and `kwnt.root=<absolute data folder>`. kwant stops it when it shuts down, and a running kwant looks for labelled browser containers at startup and every 10 minutes:
+
+- a container whose data folder no longer exists is removed (each data folder gets its own container, so a deleted test or eval folder would otherwise leave one behind);
+- a running container nobody has used for 30 minutes is stopped. Set `KWNT_BROWSER_IDLE_MINUTES` to change the limit. Use is recorded in `<data folder>/browser-last-used`.
+
+The browser profile lives on the container's tmpfs, so stopping or removing it loses only the open pages; each bot's cookies are kept in `<data folder>/browser-cookies/`. A container made by an older kwant (no labels, `--restart unless-stopped`) is replaced the next time that kwant opens the browser. Containers from data folders no kwant will open again need a manual `docker rm`.
+
 Prebuild images to avoid first-use latency:
 
 ```bash

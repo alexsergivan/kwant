@@ -3916,6 +3916,8 @@ pub async fn get_or_create_browser_controller(
 ) -> Option<crate::sandbox::BrowserController> {
     // follow a mode switch made elsewhere (another kwnt process sharing the data dir)
     super::computer::apply_mode(state).await;
+    // keeps the browser container from being stopped as idle while bots use it
+    state.browser_service.note_use();
     let mut controllers = state.browser_controllers.lock().await;
     if let Some(ctrl) = controllers.get(team_id) {
         if !ctrl.is_managed_session() || ctrl.refresh_location().await.is_ok() { return Some(ctrl.clone()); }

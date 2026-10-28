@@ -33,6 +33,8 @@ pub struct BrowserService {
     state: Mutex<Option<ServiceState>>,
     /// Why the last [`Self::session`] failed, for the error the person sees.
     last_error: std::sync::Mutex<Option<String>>,
+    /// When a bot last used the browser (see [`Self::note_use`]).
+    last_use: std::sync::Mutex<Option<std::time::SystemTime>>,
 }
 
 struct ServiceState {
@@ -47,7 +49,7 @@ impl BrowserService {
         Self {
             root, endpoint, mode: std::sync::RwLock::new(mode),
             local_window: std::sync::atomic::AtomicBool::new(false), state: Mutex::new(None),
-            last_error: std::sync::Mutex::new(None),
+            last_error: std::sync::Mutex::new(None), last_use: std::sync::Mutex::new(None),
         }
     }
 
@@ -192,12 +194,17 @@ impl BrowserService {
 
     async fn managed_endpoint(&self) -> Result<String, BrowserError> {
         let name = managed_container_name(&self.root);
-        let image = Self::docker(&["inspect", "--format", "{{.Config.Image}}", &name], 5).await.ok();
-        // A container made from an older image keeps that image's browser: make a new one
-        if image.as_deref().is_some_and(|i| i != BROWSER_IMAGE) {
+        let found = Self::docker(&["inspect", "--format",
+            &format!("{{{{.Config.Image}}}}|{{{{index .Config.Labels \"{LABEL_BROWSER}\"}}}}"), &name], 5).await.ok();
+        // A container made from an older image keeps that image's browser, and one made before
+        // the labels (by an older kwant) restarts on boot and can't be reaped: make a new one.
+        // Its profile is on tmpfs, so nothing is lost; cookies are kept in the data folder.
+        let current = found.as_deref() == Some(&format!("{BROWSER_IMAGE}|1"));
+        if found.is_some() && !current {
             Self::docker(&["rm", "-f", &name], 30).await?;
         }
-        if image.as_deref() == Some(BROWSER_IMAGE) {
+        self.note_use();
+        if current {
             if !matches!(Self::docker(&["inspect", "--format", "{{.State.Running}}", &name], 5).await.as_deref(), Ok("true")) {
                 Self::docker(&["start", &name], 30).await?;
             }
@@ -211,15 +218,101 @@ impl BrowserService {
                     .map_err(|e| BrowserError::Http(e.to_string()))?;
                 Self::docker(&["build", "-t", BROWSER_IMAGE, &build.to_string_lossy()], 600).await?;
             }
-            Self::docker(&["run", "-d", "--name", &name, "--restart", "unless-stopped",
-                "--init", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--memory=1536m",
-                "--cpus=2", "--pids-limit=512", "--read-only", "--tmpfs", "/tmp:rw,nosuid,size=512m",
-                "-p", "127.0.0.1::9222", BROWSER_IMAGE], 30).await?;
+            let args = managed_run_args(&name, &self.root);
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            Self::docker(&args, 30).await?;
         }
         let binding = Self::docker(&["port", &name, "9222/tcp"], 5).await?;
         let port = binding.lines().next().and_then(|line| line.rsplit(':').next())
             .and_then(|p| p.parse::<u16>().ok()).ok_or_else(|| BrowserError::Protocol("Browser port missing".into()))?;
         Ok(format!("http://127.0.0.1:{port}"))
+    }
+
+    /// Records that a bot used the browser, for the idle reaper (see [`reap_containers`]). The
+    /// time is kept in a file in the data folder so another kwant's reaper sees it too; it is
+    /// written at most once a minute.
+    pub fn note_use(&self) {
+        let now = std::time::SystemTime::now();
+        let mut last = self.last_use.lock().unwrap_or_else(|e| e.into_inner());
+        if last.is_some_and(|t| now.duration_since(t).is_ok_and(|d| d < Duration::from_secs(60))) { return; }
+        *last = Some(now);
+        let _ = std::fs::create_dir_all(&self.root);
+        let _ = std::fs::write(self.root.join(LAST_USE_FILE), b"");
+    }
+
+    /// Stops this kwant's browser container, if it runs one. Called when kwant shuts down; the
+    /// next browser request starts it again. Its pages close; cookies are kept in the data folder.
+    pub async fn shutdown(&self) {
+        let mut lock = self.state.lock().await;
+        *lock = None;
+        if self.endpoint.is_some() { return; }
+        let name = managed_container_name(&self.root);
+        if matches!(Self::docker(&["inspect", "--format", "{{.State.Running}}", &name], 5).await.as_deref(), Ok("true")) {
+            match Self::docker(&["stop", "-t", "5", &name], 20).await {
+                Ok(_) => tracing::info!("Stopped the browser container {name}"),
+                Err(e) => tracing::warn!("Could not stop the browser container {name}: {e}"),
+            }
+        }
+    }
+
+    /// Removes kwant browser containers whose data folder is gone and stops ones nobody has used
+    /// for `idle` (see [`reap_action`]). This kwant's own container is stopped under the state
+    /// lock, so no request is using it; the next one starts it again. Returns (removed, stopped).
+    pub async fn reap_containers(&self, idle: Duration) -> (usize, usize) {
+        let Ok(list) = Self::docker(&["ps", "-a", "--filter", &format!("label={LABEL_BROWSER}=1"),
+            "--format", &format!("{{{{.Names}}}}\t{{{{.State}}}}\t{{{{.Label \"{LABEL_ROOT}\"}}}}")], 10).await
+        else { return (0, 0) };
+        let own = managed_container_name(&self.root);
+        let (mut removed, mut stopped) = (0, 0);
+        for line in list.lines() {
+            let mut parts = line.splitn(3, '\t');
+            let (Some(name), Some(state), Some(root)) = (parts.next(), parts.next(), parts.next()) else { continue };
+            let root = Path::new(root);
+            // a relative or missing label can't be checked from here: never treat it as gone
+            let root_gone = root.is_absolute() && !root.is_dir();
+            let idle_for = std::fs::metadata(root.join(LAST_USE_FILE)).and_then(|m| m.modified()).ok()
+                .and_then(|t| std::time::SystemTime::now().duration_since(t).ok());
+            let action = reap_action(state == "running", root_gone, idle_for, idle);
+            match action {
+                ReapAction::Keep => {}
+                ReapAction::Remove => {
+                    if name == own { *self.state.lock().await = None; }
+                    if Self::docker(&["rm", "-f", name], 30).await.is_ok() { removed += 1; }
+                }
+                ReapAction::Stop => {
+                    // another request may be using our own container: wait for it, then re-check
+                    let guard = if name == own { Some(self.state.lock().await) } else { None };
+                    if name == own {
+                        let fresh = self.last_use.lock().unwrap_or_else(|e| e.into_inner())
+                            .and_then(|t| std::time::SystemTime::now().duration_since(t).ok());
+                        if fresh.is_some_and(|d| d < idle) { continue; }
+                    }
+                    if let Some(mut guard) = guard { *guard = None; }
+                    if Self::docker(&["stop", "-t", "5", name], 20).await.is_ok() { stopped += 1; }
+                }
+            }
+        }
+        (removed, stopped)
+    }
+
+    /// Runs [`Self::reap_containers`] at startup and then every [`REAP_EVERY`] until `cancel`.
+    /// Does nothing when kwant uses an outside browser service and runs no container of its own,
+    /// or when Docker isn't there.
+    pub fn spawn_reaper(self: std::sync::Arc<Self>, cancel: tokio_util::sync::CancellationToken) {
+        if self.endpoint.is_some() { return; }
+        let idle = idle_limit();
+        tokio::spawn(async move {
+            loop {
+                let (removed, stopped) = self.reap_containers(idle).await;
+                if removed + stopped > 0 {
+                    tracing::info!("browser: removed {removed} and stopped {stopped} leftover browser containers");
+                }
+                tokio::select! {
+                    _ = cancel.cancelled() => return,
+                    _ = sleep(REAP_EVERY) => {}
+                }
+            }
+        });
     }
 
     async fn connect(&self) -> Result<ServiceState, BrowserError> {
@@ -362,6 +455,49 @@ impl BrowserService {
     }
 }
 
+/// Labels on every browser container kwant starts: what it is, and whose data folder it serves.
+pub const LABEL_BROWSER: &str = "kwnt.browser";
+pub const LABEL_ROOT: &str = "kwnt.root";
+/// Touched in the data folder whenever a bot uses the browser; its age is the container's idle time.
+pub const LAST_USE_FILE: &str = "browser-last-used";
+/// A browser container nobody has used for this long is stopped (`KWNT_BROWSER_IDLE_MINUTES`).
+pub const DEFAULT_IDLE_MINUTES: u64 = 30;
+/// How often a running kwant looks for leftover browser containers.
+pub const REAP_EVERY: Duration = Duration::from_secs(10 * 60);
+
+/// The idle limit: `KWNT_BROWSER_IDLE_MINUTES` (at least 1), else [`DEFAULT_IDLE_MINUTES`].
+pub fn idle_limit() -> Duration {
+    let minutes = std::env::var("KWNT_BROWSER_IDLE_MINUTES").ok()
+        .and_then(|v| v.trim().parse::<u64>().ok()).filter(|m| *m > 0).unwrap_or(DEFAULT_IDLE_MINUTES);
+    Duration::from_secs(minutes * 60)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReapAction { Keep, Stop, Remove }
+
+/// What the reaper does with one labelled browser container. Its data folder gone: remove it,
+/// running or not, since no kwant can use it again. Running and unused for `limit`, or with no
+/// record of use: stop it; kwant starts it again on the next browser request. Otherwise keep it.
+pub fn reap_action(running: bool, root_gone: bool, idle_for: Option<Duration>, limit: Duration) -> ReapAction {
+    if root_gone { return ReapAction::Remove; }
+    if running && idle_for.is_none_or(|d| d >= limit) { return ReapAction::Stop; }
+    ReapAction::Keep
+}
+
+/// The `docker run` arguments for the browser container of the kwant whose data folder is
+/// `root`. It never restarts on its own (kwant starts it on demand), and it carries labels so a
+/// later kwant can find it, stop it when idle and remove it once its data folder is gone.
+pub fn managed_run_args(name: &str, root: &Path) -> Vec<String> {
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    [
+        "run", "-d", "--name", name, "--restart", "no",
+        "--label", &format!("{LABEL_BROWSER}=1"), "--label", &format!("{LABEL_ROOT}={}", root.display()),
+        "--init", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--memory=1536m",
+        "--cpus=2", "--pids-limit=512", "--read-only", "--tmpfs", "/tmp:rw,nosuid,size=512m",
+        "-p", "127.0.0.1::9222", BROWSER_IMAGE,
+    ].iter().map(|a| a.to_string()).collect()
+}
+
 /// The VM browser container of the kwant whose data folder is `root`: one name per installation
 /// avoids collisions between local kwant instances.
 pub fn managed_container_name(root: &Path) -> String {
@@ -369,6 +505,77 @@ pub fn managed_container_name(root: &Path) -> String {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     root.hash(&mut hash);
     format!("kwnt-browser-{:016x}", hash.finish())
+}
+
+#[cfg(test)]
+mod reaper_tests {
+    use super::*;
+
+    const LIMIT: Duration = Duration::from_secs(30 * 60);
+    const MIN: Duration = Duration::from_secs(60);
+
+    #[test]
+    fn a_container_whose_data_folder_is_gone_is_removed_running_or_not() {
+        for running in [true, false] {
+            for idle in [None, Some(MIN), Some(LIMIT * 2)] {
+                assert_eq!(reap_action(running, true, idle, LIMIT), ReapAction::Remove);
+            }
+        }
+    }
+
+    #[test]
+    fn a_running_container_is_stopped_only_once_idle_past_the_limit() {
+        assert_eq!(reap_action(true, false, Some(MIN), LIMIT), ReapAction::Keep);
+        assert_eq!(reap_action(true, false, Some(LIMIT - MIN), LIMIT), ReapAction::Keep);
+        assert_eq!(reap_action(true, false, Some(LIMIT), LIMIT), ReapAction::Stop);
+        assert_eq!(reap_action(true, false, Some(LIMIT * 10), LIMIT), ReapAction::Stop);
+        // never used since kwant started tracking it: nothing is waiting on it
+        assert_eq!(reap_action(true, false, None, LIMIT), ReapAction::Stop);
+    }
+
+    #[test]
+    fn a_stopped_container_with_its_folder_is_left_for_kwant_to_start_again() {
+        for idle in [None, Some(MIN), Some(LIMIT * 10)] {
+            assert_eq!(reap_action(false, false, idle, LIMIT), ReapAction::Keep);
+        }
+    }
+
+    #[test]
+    fn the_container_never_restarts_on_its_own_and_carries_its_labels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let args = managed_run_args("kwnt-browser-x", tmp.path());
+        let pairs: Vec<(&str, &str)> = args.windows(2).map(|w| (w[0].as_str(), w[1].as_str())).collect();
+        assert!(pairs.contains(&("--restart", "no")), "{args:?}");
+        assert!(!args.iter().any(|a| a.contains("unless-stopped") || a.contains("always")), "{args:?}");
+        assert!(pairs.contains(&("--label", "kwnt.browser=1")), "{args:?}");
+        let root_label = format!("kwnt.root={}", root.display());
+        assert!(pairs.contains(&("--label", root_label.as_str())), "{args:?}");
+        assert!(pairs.contains(&("--name", "kwnt-browser-x")), "{args:?}");
+        assert_eq!(args.last().map(String::as_str), Some(BROWSER_IMAGE));
+        // the published port stays loopback-only
+        assert!(pairs.contains(&("-p", "127.0.0.1::9222")), "{args:?}");
+    }
+
+    #[test]
+    fn a_relative_data_folder_is_labelled_absolute() {
+        let args = managed_run_args("kwnt-browser-x", Path::new("."));
+        let label = args.iter().find(|a| a.starts_with("kwnt.root=")).unwrap();
+        assert!(Path::new(label.trim_start_matches("kwnt.root=")).is_absolute(), "{label}");
+    }
+
+    #[test]
+    fn use_is_recorded_in_the_data_folder_at_most_once_a_minute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = BrowserService::new(tmp.path().to_path_buf(), None);
+        service.note_use();
+        let file = tmp.path().join(LAST_USE_FILE);
+        let first = std::fs::metadata(&file).unwrap().modified().unwrap();
+        std::fs::remove_file(&file).unwrap();
+        service.note_use();
+        assert!(!file.exists(), "a second use within a minute writes nothing");
+        assert!(first <= std::time::SystemTime::now());
+    }
 }
 
 #[cfg(test)]

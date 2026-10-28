@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 pub type ServeError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Runs the server on `config.host:config.port` until `shutdown` resolves, then stops the
-/// background jobs and gives the Laya sidecar up to 5 s to exit.
+/// background jobs, stops kwant's browser container and gives the Laya sidecar up to 5 s to exit.
 pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(), ServeError> {
     let db = Database::init(&config.data_dir).await?;
     restrict_data_dir(&config.data_dir);
@@ -56,6 +56,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     crate::server::engine_routes::spawn_startup_check(state.clone());
     crate::server::parallel_routes::spawn_startup_sweep(state.clone());
     crate::server::app_update_routes::spawn_notifier(state.clone());
+    // browser containers left by this or another kwant: remove orphans, stop idle ones
+    let browser = state.browser_service.clone();
+    browser.clone().spawn_reaper(cancel.clone());
     let api_token = state.api_token.clone();
     let app = create_router(state);
 
@@ -89,6 +92,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
         _ = shutdown => println!("Shutting down…"),
     }
     cancel.cancel();
+    browser.shutdown().await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), sidecar).await;
     Ok(())
 }

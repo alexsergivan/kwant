@@ -135,6 +135,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   action on a task's card, the bot's "done, please review" right after it could be refused as "waiting
   on you", and the task then stayed in Working with nothing running it. Answering a card now moves the
   task back at once, and a bot's hand-in or the end of its turn no longer waits for that.
+- **VM browser containers no longer pile up and come back after a reboot.** Each kwant data folder
+  started its own browser container set to restart with Docker, and nothing removed it, so test and
+  eval instances left dozens running. The container now never restarts on its own and is stopped when
+  kwant shuts down. At startup and every 10 minutes kwant removes browser containers whose data folder
+  is gone and stops ones unused for 30 minutes (`KWNT_BROWSER_IDLE_MINUTES`). It starts again on the
+  next browser request; bots' cookies are kept.
 - **Mission board: "To fix" no longer repeats the failure's name.** A usage-limit failure read "Usage
   limit reached" on its badge and again at the start of "To fix"; "To fix" now starts with what to do.
 - **Mission board: AutoFix hides passwords without hiding command names.** A check's command name or a
