@@ -95,7 +95,7 @@ test('a usage limit reads as "Usage limit reached", is never retried by AutoFix,
   });
   const html = ui.detail(detailProps(t));
   assert.match(html, /data-failure-class="quota"[\s\S]*Usage limit reached/);
-  assert.match(html, /data-fix-needed[^>]*><span[^>]*>To fix: <\/span>Usage limit reached: wait for it to reset or switch account/);
+  assert.match(html, /data-fix-needed[^>]*><span[^>]*>To fix: <\/span>Wait for it to reset or switch account/);
   assert.match(html, /data-autofix-status="skipped"[^>]*>[\s\S]*AutoFix doesn’t retry this kind of failure\./);
   assert.doesNotMatch(html, /data-autofix-retry/, 'no AutoFix Retry now for a usage limit');
   assert.doesNotMatch(html, /data-autofix-skip/);
@@ -125,8 +125,10 @@ test('the failure panel says each fact once, with the older server text and the 
     });
     const html = ui.detail(detailProps(t));
     assert.equal(count(html, 'is out of usage until 21:01 UTC'), 1, `${label}: the summary appears once`);
-    assert.equal(count(html, 'wait for it to reset or switch account'), 1, `${label}: the fix appears once`);
-    assert.match(html, /To fix: <\/span>Usage limit reached: wait for it to reset or switch account, then retry\.</, label);
+    assert.equal(count(html.toLowerCase(), 'wait for it to reset or switch account'), 1, `${label}: the fix appears once`);
+    assert.match(html, /To fix: <\/span>Wait for it to reset or switch account, then retry\.</, label);
+    const panel = html.slice(html.indexOf('data-failure'));
+    assert.equal(count(panel, 'Usage limit reached'), 1, `${label}: the failure panel names the class once`);
     assert.match(html, /data-autofix-status="skipped"[^>]*>[\s\S]*?<span>AutoFix doesn’t retry this kind of failure\.<\/span>/, `${label}: one short line`);
     assert.doesNotMatch(html, /…/, `${label}: nothing cut short`);
   }
@@ -135,6 +137,11 @@ test('the failure panel says each fact once, with the older server text and the 
   assert.equal(m.fixTextShown('Raise the task\'s budget, then retry it.', 'Out of tokens'), 'Raise the task\'s budget, then retry it.');
   assert.equal(m.fixTextShown('Sign in to GitHub again.', null), 'Sign in to GitHub again.');
   assert.equal(m.fixTextShown('bad key', 'bad key'), 'bad key', 'a fix that is only the summary is kept');
+  // The badge already names the failure: "To fix" doesn't start with it again.
+  assert.equal(m.fixTextShown('Usage limit reached: wait for it to reset or switch account, then retry.', null, 'Usage limit reached'), 'Wait for it to reset or switch account, then retry.');
+  assert.equal(m.fixTextShown('Usage limit reached: wait, then retry: is out of usage', 'is out of usage', 'Usage limit reached'), 'Wait, then retry.');
+  assert.equal(m.fixTextShown('Sign in to GitHub again.', null, 'Signed out, or the key was rejected'), 'Sign in to GitHub again.');
+  assert.equal(m.fixTextShown('Usage limit reached', null, 'Usage limit reached'), 'Usage limit reached', 'a fix that is only the heading is kept');
   assert.equal(m.skippedWithFixText(attempt({ status: 'skipped', reason: 'no_attempts_left: the task used all its attempts' })), 'AutoFix didn’t retry: no tries left.');
   assert.equal(m.skippedWithFixText(attempt({ status: 'failed' })), undefined, 'only a skipped attempt is folded');
 });
