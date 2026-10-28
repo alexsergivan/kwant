@@ -26,6 +26,8 @@ export interface AwayItem {
   /** Approvals only, from servers that send them: the tool and the card's details. */
   tool_name?: string;
   details?: Record<string, unknown>;
+  /** Approvals only: set when the payment floor asked, also on servers that send no details. */
+  payment_reason?: string;
 }
 
 export interface AwayCounts {

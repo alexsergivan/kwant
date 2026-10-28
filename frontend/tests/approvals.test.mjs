@@ -99,3 +99,25 @@ test('live and loaded lists merge: answered ones drop, live details beat a summa
   // Two asks at once both show.
   assert.equal(a.upsertApproval([live], fresh).length, 2);
 });
+
+test('a reloaded payment keeps its reason in every form the server sends, so no Always button', () => {
+  const reason = 'POST to a payment host (api.stripe.com)';
+  const forms = [
+    bashItem({ details: { ...bashItem().details, payment_reason: reason } }),
+    bashItem({ tool_name: undefined, details: undefined, payment_reason: reason }),
+  ];
+  for (const item of forms) {
+    const card = a.approvalFromAway(item);
+    assert.equal(card.details.payment_reason, reason);
+    const html = ui.away({
+      data: awayResp([item]), loading: false, error: null, busy: null, notice: null,
+      onRefresh: () => {}, onOpen: () => {}, onAnswer: () => {}, onResolve: () => {},
+    });
+    assert.match(html, /This looks like a payment:<\/span> POST to a payment host \(api.stripe.com\)\./);
+    assert.doesNotMatch(html, /Always this session|Always Allow/);
+  }
+  // An old summary item without a reason is unchanged.
+  const plain = a.approvalFromAway(bashItem({ tool_name: undefined, details: undefined }));
+  assert.equal(plain.details.source, 'summary');
+  assert.equal('payment_reason' in plain.details, false);
+});
