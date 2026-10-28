@@ -118,3 +118,18 @@ test('a still-open payment card keeps the reason and offers no always', () => {
   assert.match(html, /Allow and continue/);
   assert.doesNotMatch(html, /Always/);
 });
+
+test('a payment card in its summary form (after a reload) shows the reason and no always', () => {
+  const html = render({
+    id: 'p3',
+    tool_name: 'Bash',
+    details: { source: 'summary', tool: 'Bash', summary: 'command: stripe charges create', kwant_name: 'Ledger', payment_reason: 'stripe CLI changes something' },
+  });
+  assert.match(html, /Ledger<\/span> wants to use <span[^>]*>Bash<\/span>/);
+  assert.match(html, /This looks like a payment:<\/span> stripe CLI changes something\./);
+  assert.match(html, /Allow Once/);
+  assert.doesNotMatch(html, /Always this session|Always Allow/);
+  // The same summary card without a reason still offers Always this session.
+  const plain = render({ id: 'n4', tool_name: 'Bash', details: { source: 'summary', tool: 'Bash', summary: 'command: ls' } });
+  assert.match(plain, /Always this session/);
+});

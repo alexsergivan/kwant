@@ -29,6 +29,8 @@ export function approvalFromAway(item: AwayItem): ChatApproval {
   const details: Record<string, unknown> = hasDetails
     ? { kwant_name: item.kwant_name, ...item.details }
     : { source: 'summary', tool, summary: item.summary, kwant_id: item.kwant_id, kwant_name: item.kwant_name };
+  // A payment keeps its reason (and so loses its Always button) whichever form the server sent.
+  if (str(item.payment_reason) && details.payment_reason === undefined) details.payment_reason = item.payment_reason;
   const link = item.link && (item.link.thread_id || item.link.channel_id || item.link.direct_kwant_id) ? item.link : null;
   const approval: ChatApproval = { id: item.id, tool_name: tool, details, kwant_id: item.kwant_id || str(details.kwant_id), link };
   if (item.status === 'waiting') approval.waiting = true;
