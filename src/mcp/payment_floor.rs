@@ -525,6 +525,15 @@ mod tests {
     }
 
     #[test]
+    fn claude_builtin_tools() {
+        let checkout = json!({"url": "https://checkout.stripe.com/pay/cs_1", "prompt": "pay now"});
+        assert!(builtin_reason("WebFetch", &checkout).is_none(), "WebFetch only reads");
+        assert!(builtin_reason("Write", &json!({"file_path": "pay.sh", "content": "stripe charges create"})).is_none());
+        assert!(builtin_reason("Bash", &json!({"command": "stripe charges create --amount 1"})).is_some());
+        assert!(builtin_reason("Bash", &json!({"command": "stripe charges list"})).is_none());
+    }
+
+    #[test]
     fn shell_commands() {
         let pays = [
             "curl -X POST https://api.stripe.com/v1/charges -u sk_test_x: -d amount=100",
