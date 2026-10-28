@@ -798,3 +798,27 @@ async fn running_a_held_task_twice_with_one_key_replays_the_first_200() {
     let released = e.state.db.task_events(&tid, 500).await.unwrap().iter().filter(|ev| ev.kind == "released").count();
     assert_eq!(released, 1);
 }
+
+#[tokio::test]
+async fn insights_count_tasks_only_autofix_holds_as_needing_the_person() {
+    let e = setup().await;
+    autofix(&e, "on", 25).await;
+    // A plain ready task waits on nobody
+    let _ready = person_task(&e, json!([])).await;
+    let insights = person(&e, "GET", "/api/missions/insights", None).await;
+    assert_eq!(insights["needs_you_now"], 0, "{insights}");
+    // A failed task held only by a fix_needed item sits in the board's Needs-you column, so it counts
+    let auth = person_task(&e, json!([])).await;
+    let started = Utc::now();
+    claim(&e, &auth).await;
+    runner::after_turn(&e.state, &auth, Some("Not logged in · Please run /login"), started).await;
+    let t = task(&e, &auth).await;
+    assert_eq!(t["state"], "failed", "{t}");
+    assert_eq!(kinds(&t["needs_you"]), vec!["fix_needed".to_string()], "{t}");
+    let insights = person(&e, "GET", "/api/missions/insights", None).await;
+    assert_eq!(insights["needs_you_now"], 1, "{insights}");
+    // Cancelled, it leaves the board and the count
+    e.state.db.exec_raw_for_test(&format!("UPDATE tasks SET state = 'cancelled' WHERE id = '{auth}'")).await.unwrap();
+    let insights = person(&e, "GET", "/api/missions/insights", None).await;
+    assert_eq!(insights["needs_you_now"], 0, "{insights}");
+}
