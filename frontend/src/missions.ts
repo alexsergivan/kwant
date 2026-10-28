@@ -536,10 +536,59 @@ export function formatTokens(n: number): string {
 }
 const trim = (x: number) => (Math.abs(x) >= 100 ? String(Math.round(x)) : x.toFixed(1).replace(/\.0$/, ''));
 
-/** "12.4k of 50k tokens"; just the spend when there's no budget. */
+/** "12.4k of 50k tokens"; "64.9k tokens used" when there's no limit (budget 0). */
 export function costText(spent: number, budget: number): string {
-  return budget > 0 ? `${formatTokens(spent)} of ${formatTokens(budget)} tokens` : `${formatTokens(spent)} tokens`;
+  return budget > 0 ? `${formatTokens(spent)} of ${formatTokens(budget)} tokens` : `${formatTokens(spent)} tokens used`;
 }
+
+// ---------------------------------------------------------------------------
+// Token limits (docs/mission-control.md §15): budget_tokens 0 is "no limit", the default.
+
+export const NO_LIMIT = 0;
+/** Quick picks in the limit editor and Settings. */
+export const LIMIT_PICKS = [50_000, 200_000, 1_000_000] as const;
+/** What the server takes: a task 1–5M, a mission 1000–5M (0 is no limit for both). */
+export const LIMIT_RANGE = { task: [1, 5_000_000], mission: [1_000, 5_000_000] } as const;
+export type LimitScope = keyof typeof LIMIT_RANGE;
+
+/** "50k", "1.5M", "200 000", "200,000" → tokens; null when it isn't a number. */
+export function parseLimit(raw: string): number | null {
+  const s = raw.trim().toLowerCase().replace(/[\s_,]/g, '').replace(/tokens?$/, '');
+  const m = /^(\d+(?:\.\d+)?)([km]?)$/.exec(s);
+  if (!m) return null;
+  const n = Math.round(Number(m[1]) * (m[2] === 'k' ? 1_000 : m[2] === 'm' ? 1_000_000 : 1));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Why a typed limit can't be used, or null. `above` is what's already spent: a lower limit would stop it at once. */
+export function limitError(raw: string, scope: LimitScope, above = 0): string | null {
+  const n = parseLimit(raw);
+  const [lo, hi] = LIMIT_RANGE[scope];
+  if (n === null) return 'Enter a number of tokens, like 300k or 2M.';
+  if (n < lo) return `At least ${formatTokens(lo)} tokens.`;
+  if (n > hi) return `At most ${formatTokens(hi)} tokens.`;
+  if (above > 0 && n <= above) return `It has already used ${formatTokens(above)}, so pick more than that.`;
+  return null;
+}
+
+/** "No limit" or "50k tokens". */
+export const limitLabel = (budget: number): string => (budget > 0 ? `${formatTokens(budget)} tokens` : 'No limit');
+
+/** Settings' default limits for new tasks and missions (0 = none); null on a server without them. */
+export interface DefaultLimits {
+  task: number;
+  mission: number;
+}
+export function parseDefaultLimits(d: { mission_default_task_budget_tokens?: unknown; mission_default_budget_tokens?: unknown }): DefaultLimits | null {
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : null);
+  const task = n(d.mission_default_task_budget_tokens);
+  if (task === null) return null;
+  return { task, mission: n(d.mission_default_budget_tokens) ?? NO_LIMIT };
+}
+export const defaultLimitsBody = (l: DefaultLimits) => ({ mission_default_task_budget_tokens: l.task, mission_default_budget_tokens: l.mission });
+
+/** The task stopped because it used up its own token limit. */
+export const outOfBudget = (t: Pick<Task, 'state' | 'blocked_reason'>): boolean => t.state === 'blocked' && t.blocked_reason === 'budget';
 
 /** 0..1 for a spend bar. */
 export const costRatio = (spent: number, budget: number): number => (budget > 0 ? Math.max(0, Math.min(1, spent / budget)) : 0);
@@ -631,7 +680,7 @@ export function cardStatus(t: Task, names: Record<string, string> = {}, now: num
   switch (t.state) {
     case 'blocked':
       if (t.needs_you.some((n) => n.kind === ENGINE_CANT_SANDBOX)) return 'Blocked: its engine can’t be held to its tier';
-      return t.blocked_reason === 'budget' ? 'Out of budget' : t.blocked_reason ? `Blocked: ${t.blocked_reason}` : 'Blocked';
+      return t.blocked_reason === 'budget' ? 'Reached its token limit' : t.blocked_reason ? `Blocked: ${t.blocked_reason}` : 'Blocked';
     case 'failed': {
       const auto = autofixCardText(t, now);
       if (auto) return auto;
@@ -792,7 +841,7 @@ export const FAILURE_LABELS: Record<FailureClass, { label: string; tone: Tone }>
   bad_spec: { label: 'A check can’t run as written', tone: 'amber' },
   auth: { label: 'Signed out, or the key was rejected', tone: 'rose' },
   quota: { label: 'Usage limit reached', tone: 'amber' },
-  budget: { label: 'Out of budget', tone: 'rose' },
+  budget: { label: 'Reached its token limit', tone: 'rose' },
   denied: { label: 'An action was denied', tone: 'rose' },
   needs_input: { label: 'Waiting for you', tone: 'amber' },
   unknown: { label: 'An unexpected error', tone: 'rose' },
@@ -1280,7 +1329,7 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
     case 'review':
       return `${Who} reviewed it: ${str(d.verdict) === 'pass' ? 'pass' : 'fail'}${note ? `. ${note}` : ''}`;
     case 'budget':
-      return 'It reached its token budget';
+      return 'It reached its token limit';
     case 'edited':
       return `${Who} edited it`;
     case 'flagged':
@@ -1472,7 +1521,15 @@ export const missionsApi = {
   cancelMission: (id: string) => call<Mission>(`/api/missions/${enc(id)}/cancel`, 'POST', {}),
   /** Flight School: the person sets the task's kind of work (a slug). */
   setTaskClass: (id: string, task_class: string) => call<Task>(`/api/tasks/${enc(id)}`, 'PATCH', { task_class }),
+  /** A mission's token limit; 0 removes it. */
   setBudget: (id: string, budget_tokens: number) => call<Mission>(`/api/missions/${enc(id)}`, 'PATCH', { budget_tokens }),
+  /** A task's token limit; 0 removes it. */
+  setTaskBudget: (id: string, budget_tokens: number) => call<Task>(`/api/tasks/${enc(id)}`, 'PATCH', { budget_tokens }),
+  /** A task blocked by its limit: set the new one (0 = none), then unblock it, so it goes back to Ready. */
+  continueWithLimit: async (id: string, budget_tokens: number): Promise<Task> => {
+    await call<Task>(`/api/tasks/${enc(id)}`, 'PATCH', { budget_tokens });
+    return call<Task>(`/api/tasks/${enc(id)}/unblock`, 'POST', {});
+  },
   tasks: () => call<{ tasks: Task[] }>('/api/tasks?limit=500').then((r) => r.tasks),
   task: (id: string) => call<TaskDetail>(`/api/tasks/${enc(id)}`),
   approveCheck: (id: string) => call<Check>(`/api/checks/${enc(id)}/approve`, 'POST', {}),

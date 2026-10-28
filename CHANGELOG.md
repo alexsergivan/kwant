@@ -18,6 +18,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`mission_default_task_budget_tokens`, `mission_default_budget_tokens`). Existing tasks and missions
   still on the old automatic limit have it removed; limits you set yourself stay. A task already
   blocked for its budget stays in Needs you until you remove its limit and unblock it.
+- **Token limits on screen.** With no limit, a task or mission shows plain usage ("64.9k tokens used")
+  and no bar. **Set a limit** next to Cost on a task, and under the mission's cost, offers 50k, 200k,
+  1M or a custom amount; **Change** and **Remove limit** take it from there. A task stopped by its
+  limit gets **Remove limit and continue**, on its board card and in its panel, plus **Raise limit**.
+  Settings → Usage has a **Token limits** group for the default on new tasks and missions, "No limit"
+  unless you pick one.
 
 ## [Mac 0.2.0] - 2026-10-28
 

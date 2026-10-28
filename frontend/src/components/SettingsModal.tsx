@@ -30,7 +30,22 @@ import { useEngines } from '../useEngines';
 import { LayaStatusRow } from './LayaStatus';
 import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
 import { ProactiveSettings, WORK_AHEAD_CAP_MAX, WORK_AHEAD_CAP_MIN, parseProactiveSettings } from '../decideFirst';
-import { AUTOFIX_MODES, AutofixSettings, MISSION_BOARD_SETTING_EVENT, parseAutofixSettings, parseMissionBoardSetting } from '../missions';
+import {
+  AUTOFIX_MODES,
+  AutofixSettings,
+  DefaultLimits,
+  LIMIT_PICKS,
+  LimitScope,
+  MISSION_BOARD_SETTING_EVENT,
+  NO_LIMIT,
+  defaultLimitsBody,
+  formatTokens,
+  limitError as tokenLimitError,
+  parseAutofixSettings,
+  parseDefaultLimits,
+  parseLimit,
+  parseMissionBoardSetting,
+} from '../missions';
 import { FlightSchoolSettings, TIERS, TIER_HINTS, TIER_LABELS, Tier, parseFlightSchoolSettings } from '../flightSchool';
 
 const RECOVERY_PCTS = [0, 10, 25, 50, 100];
@@ -131,11 +146,85 @@ interface SettingsData {
   location?: string;
   /** Fresh tokens per request before hand-offs pause; 0 = off. Missing on older servers. */
   chain_token_budget?: number;
+  /** Default token limits for new tasks and missions; 0 = no limit. Missing on older servers. */
+  mission_default_task_budget_tokens?: number;
+  mission_default_budget_tokens?: number;
   /** Proactive bots; missing on older servers. */
   decide_first?: boolean;
   work_ahead?: boolean;
   work_ahead_daily_cap?: number;
 }
+
+/**
+ * A default token limit: "No limit" or a quick pick, or Custom with a typed amount. `value` is the
+ * typed text while it's custom, so a half-typed amount shows its error; `onChange` gets the text.
+ */
+const DefaultLimitField: React.FC<{ id: string; label: string; scope: LimitScope; value: string; onChange: (v: string) => void }> = ({ id, label, scope, value, onChange }) => {
+  const n = parseLimit(value);
+  const [custom, setCustom] = useState(() => n === null || (n !== NO_LIMIT && !(LIMIT_PICKS as readonly number[]).includes(n)));
+  const err = custom ? tokenLimitError(value, scope) : null;
+  const choice = custom ? 'custom' : String(n ?? NO_LIMIT);
+  return (
+    <div className="space-y-1">
+      <label htmlFor={id} className="block text-[11px] font-medium text-zinc-300">
+        {label}
+      </label>
+      <div className="flex flex-wrap gap-2">
+        <select
+          id={id}
+          value={choice}
+          onChange={(e) => {
+            if (e.target.value === 'custom') {
+              setCustom(true);
+              onChange('');
+            } else {
+              setCustom(false);
+              onChange(e.target.value);
+            }
+          }}
+          className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 min-h-[40px] sm:min-h-[36px] text-xs text-zinc-100 focus:outline-none focus:border-sky-500"
+        >
+          <option value={String(NO_LIMIT)}>No limit</option>
+          {LIMIT_PICKS.map((p) => (
+            <option key={p} value={String(p)}>
+              {formatTokens(p)} tokens
+            </option>
+          ))}
+          <option value="custom">Custom…</option>
+        </select>
+        {custom && (
+          <input
+            aria-label={`${label}, custom amount`}
+            type="text"
+            inputMode="decimal"
+            autoComplete="off"
+            placeholder="e.g. 300k"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            aria-invalid={!!err}
+            aria-describedby={`${id}-err`}
+            className={`w-32 bg-zinc-950 border rounded-lg px-3 py-2 text-xs text-zinc-100 focus:outline-none ${err ? 'border-rose-500/60 focus:border-rose-400' : 'border-zinc-800 focus:border-sky-500'}`}
+          />
+        )}
+      </div>
+      {custom && (
+        <p id={`${id}-err`} className={`text-[11px] ${err ? 'text-rose-300' : 'text-zinc-500'}`}>
+          {err ?? 'Tokens, like 300k or 2M.'}
+        </p>
+      )}
+    </div>
+  );
+};
+
+/** Typed default-limit text → numbers, or null while one can't be saved. */
+const defaultLimitsFrom = (t: { task: string; mission: string }): DefaultLimits | null => {
+  const task = parseLimit(t.task);
+  const mission = parseLimit(t.mission);
+  if (task === null || mission === null) return null;
+  if (task !== NO_LIMIT && tokenLimitError(t.task, 'task')) return null;
+  if (mission !== NO_LIMIT && tokenLimitError(t.mission, 'mission')) return null;
+  return { task, mission };
+};
 
 const LIMIT_FIELDS: { key: TurnLimitKey; label: string; hint: string }[] = [
   { key: 'max_turns_per_agent', label: 'Replies at once per bot', hint: 'More than this and a bot’s next request waits in line.' },
@@ -194,6 +283,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   // Fresh tokens one request's chain may use before hand-offs pause; null on a server without it.
   const [chainBudget, setChainBudget] = useState<string | null>(null);
   const chainBudgetError = chainBudget === null ? null : budgetError(chainBudget);
+  // Default token limits for new tasks and missions, as typed; null on a server without them.
+  const [tokenLimits, setTokenLimits] = useState<{ task: string; mission: string } | null>(null);
+  const tokenLimitsValue = tokenLimits ? defaultLimitsFrom(tokenLimits) : null;
+  const tokenLimitsInvalid = !!tokenLimits && !tokenLimitsValue;
   const limitErrors = Object.fromEntries(
     LIMIT_FIELDS.map(({ key }) => [key, limits ? limitError(key, limits[key]) : null]),
   ) as Record<TurnLimitKey, string | null>;
@@ -237,6 +330,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               : null,
           );
           setChainBudget(typeof data.chain_token_budget === 'number' ? String(data.chain_token_budget) : null);
+          const dl = parseDefaultLimits(data);
+          setTokenLimits(dl ? { task: String(dl.task), mission: String(dl.mission) } : null);
           setAgentTools(typeof data.agent_tools === 'boolean' ? data.agent_tools : null);
           setProactive(parseProactiveSettings(data));
           setMissionBoard(parseMissionBoardSetting(data));
@@ -295,7 +390,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (webhookError || limitsInvalid || chainBudgetError) return;
+    if (webhookError || limitsInvalid || chainBudgetError || tokenLimitsInvalid) return;
     setSaveError(null);
     setSaving(true);
     playSfx('click');
@@ -319,6 +414,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               }
             : {}),
           ...(chainBudget !== null ? { chain_token_budget: budgetValue(chainBudget) } : {}),
+          ...(tokenLimitsValue ? defaultLimitsBody(tokenLimitsValue) : {}),
           ...(agentTools !== null ? { agent_tools: agentTools } : {}),
           ...(proactive ?? {}),
           ...(missionBoard !== null ? { mission_board: missionBoard } : {}),
@@ -629,6 +725,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               <Gauge size={14} className="text-sky-300" aria-hidden="true" />
               <span>Usage</span>
             </legend>
+            {tokenLimits !== null && (
+              <div className="space-y-2" role="group" aria-labelledby="token-limits-h" data-token-limits>
+                <div>
+                  <p id="token-limits-h" className="text-[11px] font-semibold text-zinc-200">
+                    Token limits
+                  </p>
+                  <p className="text-[11px] text-zinc-500">Bots can use as many tokens as they need. Set a limit to cap spending per task.</p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <DefaultLimitField
+                    id="default-task-limit"
+                    label="New tasks"
+                    scope="task"
+                    value={tokenLimits.task}
+                    onChange={(v) => setTokenLimits((p) => (p ? { ...p, task: v } : p))}
+                  />
+                  <DefaultLimitField
+                    id="default-mission-limit"
+                    label="New missions"
+                    scope="mission"
+                    value={tokenLimits.mission}
+                    onChange={(v) => setTokenLimits((p) => (p ? { ...p, mission: v } : p))}
+                  />
+                </div>
+                <p className="text-[11px] text-zinc-500">You can still set or remove a limit on any task or mission from the board.</p>
+              </div>
+            )}
             {chainBudget !== null && (
               <div className="space-y-1">
                 <label htmlFor="chain-token-budget" className="block text-[11px] font-medium text-zinc-300">
@@ -936,7 +1059,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </button>
             <button
               type="submit"
-              disabled={saving || !!webhookError || limitsInvalid}
+              disabled={saving || !!webhookError || limitsInvalid || tokenLimitsInvalid}
               className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50"
             >
               {saving ? 'Saving…' : 'Save'}
