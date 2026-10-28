@@ -331,7 +331,7 @@ pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (S
 fn spawn_run(state: &AppState, d: Delegation, lead: Kwant, specialist: Kwant) {
     let job = state.turns.start_job([d.id.clone(), d.thread_id.clone()]);
     let runner_state = state.clone();
-    tokio::spawn(async move { run(runner_state, job, d, lead, specialist, false, false).await });
+    tokio::spawn(async move { run(runner_state, job, d, lead, specialist, RunAs::default()).await });
 }
 
 /// What a parked task gets of the result it waited for, at most.
@@ -447,21 +447,12 @@ pub(super) fn is_parked(d: &Delegation) -> bool {
 }
 
 /// The background part: the specialist's turn in the thread, then the report in the origin chat.
-/// `retried`: the run after a usage limit reset, which never waits for one again.
-/// The task's prompt says so when a restart cut an earlier run short (`after_restart`): that run
-/// may have done part of the work already.
-async fn run(
-    state: AppState,
-    job: super::turns::JobGuard,
-    d: Delegation,
-    lead: Kwant,
-    specialist: Kwant,
-    retried: bool,
-    after_restart: bool,
-) {
+async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: Kwant, specialist: Kwant, how: RunAs) {
+    let RunAs { retried, after_restart, carry_on } = how;
+    let carried_on = carry_on.is_some();
     let scope = match scope_for(&state, &specialist, None, Some(d.thread_id.clone()), &job, d.depth).await {
         Ok(s) => s,
-        Err(why) => return finish(&state, &d, &specialist, Err(why)).await,
+        Err(why) => return finish(&state, &d, &specialist, Err(why), carried_on).await,
     };
     // Queued until the specialist's turn gets its slot: a busy specialist runs one turn at a time
     let (started_state, started_id) = (state.clone(), d.id.clone());
@@ -472,10 +463,24 @@ async fn run(
             }
         }
     });
+    let opening = match &carry_on {
+        Some(why) => format!(
+            "{lead} delegated this task to you earlier, and it stopped before it was done ({why}). The person sent it \
+            back to you: carry on from where you stopped. Your earlier work is above in this thread, so check what is \
+            already done instead of starting over, and don't repeat a step that can't be undone (sending, posting, deleting, \
+            paying) unless you've confirmed it didn't happen. When you finish, your reply is posted back to {lead} and the chat it \
+            came from, so make it a complete, self-contained answer.",
+            lead = lead.name,
+            why = clip(why, 300),
+        ),
+        None => format!(
+            "{lead} delegated this task to you. Work on it here; when you finish, your reply is posted back to {lead} \
+            and the chat it came from, so make it a complete, self-contained answer.",
+            lead = lead.name,
+        ),
+    };
     let prompt = format!(
-        "{lead} delegated this task to you. Work on it here; when you finish, your reply is posted back to {lead} \
-        and the chat it came from, so make it a complete, self-contained answer.\n\n{task}{origin}{again}",
-        lead = lead.name,
+        "{opening}\n\n{task}{origin}{again}",
         task = crate::drivers::peer_message(&lead.name, &format!("Task: {}\n\n{}", d.title, d.task)),
         origin = origin_brief(&state, &d).await,
         again = if after_restart { RESTARTED_NOTE } else { "" },
@@ -512,7 +517,20 @@ async fn run(
             return;
         }
     }
-    finish(&state, &d, &specialist, outcome).await;
+    finish(&state, &d, &specialist, outcome, carried_on).await;
+}
+
+/// How [`run`] runs a delegation's task.
+#[derive(Default)]
+struct RunAs {
+    /// The run after a usage limit reset, which never waits for one again.
+    retried: bool,
+    /// A restart cut an earlier run short, so it may have done part of the work already (the
+    /// prompt says so).
+    after_restart: bool,
+    /// The person sent an ended task back (unblocked or retried its board card): why it stopped.
+    /// The specialist carries on in its thread, and the lead hears the new result on its own.
+    carry_on: Option<String>,
 }
 
 /// Most of the person's request, and of the origin chat's instructions, a delegated task quotes.
@@ -592,7 +610,9 @@ pub const RESTARTED_NOTE: &str = "\n\n[kwnt restarted while an earlier run of th
 files may already be written, messages sent or settings changed. Check what is already done before redoing anything, \
 and don't repeat a step that can't be undone (sending, posting, deleting, paying) unless you've confirmed it didn't happen.]";
 
-async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: Result<String, String>) {
+/// Ends `d` with `outcome`: the result in the origin chat, then the lead (with its batch, or on
+/// its own when the person sent the task back: `carried_on`).
+async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: Result<String, String>, carried_on: bool) {
     let (status, error) = match &outcome {
         Ok(_) => ("completed", None),
         Err(e) if e == "stopped" => ("cancelled", Some("stopped by the user".to_string())),
@@ -648,7 +668,14 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
     )
     .await;
     release_dependents(state, &done.id).await;
-    report_to_lead(state, &done, None).await;
+    if !carried_on {
+        return report_to_lead(state, &done, None).await;
+    }
+    // Its batch already went to the lead: this result goes on its own (a stop was the person's)
+    if done.continue_lead && status != "cancelled" {
+        let opening = format!("{} carried on with the task you delegated (“{}”) after the person sent it back.", specialist.name, done.title);
+        continue_lead(state, &done, std::slice::from_ref(&done), Some(opening)).await;
+    }
 }
 
 /// Resumes the lead once `d` ended, if it was the last of its batch to end (see
@@ -902,7 +929,7 @@ pub fn handoff_rules() -> String {
     a teammate who just reported, too. Only say you're handing off, asking or waiting for someone when you @mention them \
     with a task in this reply; to merely refer to a teammate, write the name without @. Limits for this user message: each \
     teammate gets at most {per_bot} tasks by mention and all teammates at most {total} in total. Past that the mention is \
-    not sent and a \"Not sent to …\" notice says so; then tell the person what's left instead of claiming a handoff.",
+    not sent yet: a notice asks the person to press Continue, so tell them what's waiting instead of claiming a handoff.",
     per_bot = super::routes::MAX_MENTION_DELEGATIONS_PER_BOT,
     total = super::routes::MAX_DELEGATIONS_PER_REQUEST,
     )
@@ -1083,7 +1110,42 @@ async fn restart(state: &AppState, d: Delegation, retried: bool, after_restart: 
     };
     let job = state.turns.start_job([d.id.clone(), d.thread_id.clone()]);
     tracing::info!(delegation = %d.id, retried, "delegation restarted");
-    tokio::spawn(run(state.clone(), job, d, lead, specialist, retried, after_restart));
+    tokio::spawn(run(state.clone(), job, d, lead, specialist, RunAs { retried, after_restart, carry_on: None }));
+    true
+}
+
+/// The person sent an ended hand-off back from its board card (unblocked or retried it): the
+/// specialist carries on in the delegation's own thread from where it stopped, and the new
+/// result goes to the origin chat and the lead. `false` when it can't: it is still open or
+/// completed (a completed one has its result already), a bot is gone, or another call reopened it
+/// first.
+pub async fn carry_on(state: &AppState, d: &Delegation) -> bool {
+    if d.is_open() || d.status == "completed" {
+        return false;
+    }
+    let (Ok(Some(lead)), Ok(Some(specialist))) =
+        (state.db.get_kwant(&d.lead_kwant_id).await, state.db.get_kwant(&d.specialist_kwant_id).await)
+    else {
+        return false;
+    };
+    let why = d.error.clone().filter(|e| !e.trim().is_empty()).unwrap_or_else(|| format!("it {}", d.status));
+    if !state.db.reopen_delegation(&d.id).await.unwrap_or(false) {
+        return false;
+    }
+    let Ok(Some(open)) = state.db.get_delegation(&d.id).await else { return false };
+    emit_delegation(state, &open);
+    post_to_origin(
+        state,
+        &open,
+        "system",
+        "kwnt",
+        format!("{} is carrying on with “{}”.", specialist.name, open.title),
+        meta("delegation_started", &open, &specialist.name),
+    )
+    .await;
+    let job = state.turns.start_job([open.id.clone(), open.thread_id.clone()]);
+    tracing::info!(delegation = %open.id, "delegation carried on");
+    tokio::spawn(run(state.clone(), job, open, lead, specialist, RunAs { carry_on: Some(why), ..Default::default() }));
     true
 }
 

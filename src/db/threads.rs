@@ -420,6 +420,21 @@ impl Database {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Opens an ended delegation again (failed, cancelled or interrupted) to carry on in its
+    /// thread: back to `queued`, with its restart count and end cleared (and no "still working"
+    /// note for its old follow-up time). `false` if it was open or completed, or someone else
+    /// reopened it first.
+    pub async fn reopen_delegation(&self, id: &str) -> Result<bool, DbError> {
+        let res = sqlx::query(
+            "UPDATE delegations SET status = 'queued', error = NULL, ended_at = NULL, started_at = NULL, retries = 0, followed_up = 1 \
+             WHERE id = ? AND status IN ('failed', 'cancelled', 'interrupted')",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Parks a queued delegation until `after` (another delegation) ends.
     pub async fn set_delegation_after(&self, id: &str, after: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE delegations SET after_delegation_id = ? WHERE id = ? AND status = 'queued'")

@@ -787,10 +787,12 @@ fn team_context(t: &Team) -> crate::drivers::TeamContext {
 const MAX_HANDOFFS: usize = 4;
 /// Delegations a lead's @mentions may start for one user message, follow-up rounds included:
 /// a lead resumed with results can hand on again, but never in an endless loop.
-pub const MAX_DELEGATIONS_PER_REQUEST: usize = 8;
+pub const MAX_DELEGATIONS_PER_REQUEST: usize = 16;
 /// How often one teammate may be handed work by @mention for one user message, so two bots
-/// naming each other stop after a couple of rounds instead of running to the total cap.
-pub const MAX_MENTION_DELEGATIONS_PER_BOT: usize = 2;
+/// naming each other stop after a few rounds instead of running to the total cap. A mention past
+/// either cap leaves a Continue notice ([`super::budget::CAPPED_KIND`]); the chain token budget
+/// still pauses a long chain on its own.
+pub const MAX_MENTION_DELEGATIONS_PER_BOT: usize = 4;
 
 #[allow(clippy::too_many_arguments)]
 fn execute_single_turn(
@@ -926,7 +928,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
     }
     if let [(from, text)] = replies {
         if is_team_channel_lead(scope, from).await {
-            return delegate_mentions(scope, from, text, user_prompt, already_spoken).await;
+            return delegate_mentions(scope, from, text, user_prompt, already_spoken, None).await;
         }
     }
     if scope.teammates.is_empty() {
@@ -1195,9 +1197,19 @@ async fn is_team_channel_lead(scope: &TurnScope, kwant: &Kwant) -> bool {
 /// results it is about): a mention there is a correction or the next step, unless it only credits
 /// them ([`crate::router::only_credited`]). One user message starts at most
 /// [`MAX_DELEGATIONS_PER_REQUEST`], at most [`MAX_MENTION_DELEGATIONS_PER_BOT`] to any one
-/// teammate, which is what ends a loop. Every mention that hands nothing on is said in the channel.
-/// Teammates the lead already delegated to from this channel (with the tool) aren't sent it twice.
-async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_prompt: &str, just_reported: &[String]) {
+/// teammate, which is what ends a loop; mentions past a cap wait on a Continue notice
+/// ([`super::budget::pause_capped`]). Every other mention that hands nothing on is said in the
+/// channel. Teammates the lead already delegated to from this channel (with the tool) aren't sent
+/// it twice. `resumed`: the person pressed Continue on such a notice: only these teammates are
+/// handed the work, with a fresh allowance.
+pub(super) async fn delegate_mentions(
+    scope: &TurnScope,
+    lead: &Kwant,
+    text: &str,
+    user_prompt: &str,
+    just_reported: &[String],
+    resumed: Option<&[String]>,
+) {
     let Some(cid) = scope.channel_id.clone() else { return };
     let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
     let found = crate::router::handoff_mentions(text, &names);
@@ -1224,14 +1236,19 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
     // Delegations this user message already started, counting earlier follow-up rounds
     let messages = scope.state.db.list_messages(&cid, 100).await.unwrap_or_default();
     let since = messages.iter().rev().find(|m| m.sender_role == "user").or(messages.first()).and_then(|m| m.created_at);
-    let this_request: Vec<_> = mine.iter().filter(|d| d.continue_lead && since.is_some_and(|t| d.created_at >= t)).collect();
+    let this_request: Vec<_> = match resumed {
+        Some(_) => Vec::new(),
+        None => mine.iter().filter(|d| d.continue_lead && since.is_some_and(|t| d.created_at >= t)).collect(),
+    };
     let mut room = MAX_DELEGATIONS_PER_REQUEST.saturating_sub(this_request.len());
     let asked = |id: &str| this_request.iter().filter(|d| d.specialist_kwant_id == id).count();
 
     let mut targets: Vec<&Kwant> = Vec::new();
+    // Past a cap: they wait on a Continue notice instead of a dead end
+    let mut capped: Vec<&Kwant> = Vec::new();
     for &i in &found.targets {
         let k = &scope.teammates[i];
-        if k.id == lead.id || targets.iter().any(|t| t.id == k.id) {
+        if k.id == lead.id || targets.iter().any(|t| t.id == k.id) || resumed.is_some_and(|ids| !ids.contains(&k.id)) {
             continue;
         }
         if just_reported.contains(&k.id) && crate::router::only_credited(text, &k.name) {
@@ -1239,10 +1256,7 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
         } else if open.contains(&k.id.as_str()) {
             skipped.push((k.name.clone(), "still working on an earlier task from this chat".to_string()));
         } else if asked(&k.id) >= MAX_MENTION_DELEGATIONS_PER_BOT {
-            skipped.push((
-                k.name.clone(),
-                format!("already asked {MAX_MENTION_DELEGATIONS_PER_BOT} times for this request. Send a new message to go on"),
-            ));
+            capped.push(k);
         } else {
             targets.push(k);
         }
@@ -1272,10 +1286,7 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
             continue;
         }
         if room == 0 {
-            skipped.push((
-                specialist.name.clone(),
-                format!("this request has already gone to {MAX_DELEGATIONS_PER_REQUEST} teammates. Send a new message to go on"),
-            ));
+            capped.push(specialist);
             continue;
         }
         // Waits for a teammate started here, or for one still on an earlier task from this chat
@@ -1314,6 +1325,9 @@ async fn delegate_mentions(scope: &TurnScope, lead: &Kwant, text: &str, user_pro
         }
     }
     report_skipped(scope, skipped).await;
+    if !capped.is_empty() {
+        super::budget::pause_capped(scope, lead, &capped, this_request.len() + started.len(), text, user_prompt).await;
+    }
 }
 
 /// Whether the teammate with `id` is among the @mentioned `targets` (indices into the teammates).

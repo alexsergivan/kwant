@@ -1017,20 +1017,68 @@ fn refusals(msgs: &[kwnt::db::models::Message]) -> Vec<String> {
     msgs.iter().filter(|m| meta_kind(m).as_deref() == Some("handoff_refused")).map(|m| m.text.clone()).collect()
 }
 
+/// The Continue notices mentions past a hand-off cap left.
+fn capped(msgs: &[kwnt::db::models::Message]) -> Vec<kwnt::db::models::Message> {
+    msgs.iter().filter(|m| meta_kind(m).as_deref() == Some(kwnt::server::budget::CAPPED_KIND)).cloned().collect()
+}
+
+/// `n` ended rounds from the lead to `to` in `channel` that count for the current request (dated
+/// ahead, so they are after any message of it). The fake CLI's markers fall out of the lead's
+/// recent history after a few rounds, so rounds up to a cap are seeded rather than run.
+async fn seed_rounds(env: &Env, channel: &str, to: &str, n: usize) {
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", env.tmp.path().join("data/kwnt.db").display())).await.unwrap();
+    for _ in 0..n {
+        let (_, d) = env
+            .state
+            .db
+            .create_delegation(&kwnt::db::threads::NewDelegation {
+                lead_kwant_id: env.lead.clone(),
+                specialist_kwant_id: to.to_string(),
+                origin_channel_id: Some(channel.to_string()),
+                origin_kwant_id: None,
+                origin_thread_id: None,
+                team_id: None,
+                task: "earlier round".into(),
+                title: "Earlier round".into(),
+                continue_lead: true,
+                depth: 1,
+                follow_up_at: None,
+            })
+            .await
+            .unwrap();
+        assert!(env.state.db.finish_delegation(&d.id, "completed", None, None).await.unwrap());
+        sqlx::query("UPDATE delegations SET created_at = ? WHERE id = ?")
+            .bind(chrono::Utc::now() + chrono::Duration::hours(1))
+            .bind(&d.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    pool.close().await;
+}
+
+fn meta_of(m: &kwnt::db::models::Message) -> Value {
+    serde_json::from_str(m.meta.as_deref().unwrap_or("null")).unwrap()
+}
+
 /// Bug 3 (team-Startup, 2026-10-21): the lead's follow-up after results came back said "`@Growth`,
 /// please draft the launch plan" and Growth never ran. The follow-up now hands on like any lead
 /// reply and a name in inline code counts. Mentioning the teammate who just reported back with a
-/// task hands it a second round (2026-10-24); the third is refused in one line.
+/// task hands it another round (2026-10-24), up to the per-teammate cap. Past it (2026-10-28,
+/// "send a new message to go on"??? so it stuck without my message??) a Continue notice waits:
+/// pressing it hands Growth the work again, and the chain still stops at the cap.
 #[tokio::test]
 async fn a_leads_follow_up_after_results_hands_on_to_the_next_teammate() {
     let env = setup().await;
     let growth = add_bot(&env, "Growth").await;
     let channel = team_channel_with(&env, "startup-follow", &[&env.lead, &env.specialist, &growth]).await;
+    // Growth already ran all but two of its rounds for this request
+    seed_rounds(&env, &channel, &growth, per_bot_limit() - 2).await;
     let first = delegate_from(&env, &channel, &env.specialist, "Review the app REPLYTAG:reviewed", "Security review FOLLOWUP:Growth").await;
     wait_for("the review to complete", || async { delegation_status(&env, &first).await == "completed" }).await;
 
     let to_growth = || async {
-        env.state.db.list_delegations(Some(&env.lead), None, 20).await.unwrap().into_iter().find(|d| d.specialist_kwant_id == growth)
+        env.state.db.list_delegations(Some(&env.lead), None, 20).await.unwrap().into_iter().find(|d| d.specialist_kwant_id == growth && d.title != "Earlier round")
     };
     wait_for("the follow-up's delegation to Growth", || async { to_growth().await.is_some() }).await;
     let d = to_growth().await.unwrap();
@@ -1039,18 +1087,37 @@ async fn a_leads_follow_up_after_results_hands_on_to_the_next_teammate() {
     assert!(d.task.contains("`@Growth`"), "Growth gets the lead's words: {}", d.task);
 
     wait_for("Growth's result", || async { delegation_status(&env, &d.id).await == "completed" }).await;
-    // Growth's own follow-up names Growth again with a task: a second round, then the limit
-    wait_for("the limit notice", || async { !refusals(&channel_messages(&env, &channel).await).is_empty() }).await;
+    // Growth's own follow-up names Growth again with a task: more rounds, then the cap
+    wait_for("the Continue notice", || async { !capped(&channel_messages(&env, &channel).await).is_empty() }).await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    let notes = refusals(&channel_messages(&env, &channel).await);
-    assert_eq!(notes, vec![format!("Not sent to Growth: already asked {} times for this request. Send a new message to go on", per_bot_limit())]);
+    let msgs = channel_messages(&env, &channel).await;
+    assert!(refusals(&msgs).is_empty(), "past the cap is not a dead end: {:?}", refusals(&msgs));
+    let notices = capped(&msgs);
+    assert_eq!(notices.len(), 1, "one notice, no flood");
+    let notice = &notices[0];
+    assert!(notice.text.starts_with("Paused after ") && notice.text.contains("Growth not sent yet. Press Continue"), "{}", notice.text);
+    let meta = meta_of(notice);
+    assert_eq!((meta["lead"].as_str(), meta["waiting_ids"].clone(), meta["resumed"].clone()), (Some(env.lead.as_str()), json!([growth]), json!(false)));
+    let to_growth_count = || async {
+        env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap().iter().filter(|d| d.specialist_kwant_id == growth).count()
+    };
     let all = env.state.db.list_delegations(Some(&env.lead), None, 20).await.unwrap();
-    assert_eq!(all.len(), 1 + per_bot_limit(), "the review and Growth's two rounds, no loop: {all:?}");
+    assert_eq!(all.len(), 1 + per_bot_limit(), "the review and Growth's rounds up to the cap, no loop: {all:?}");
     assert!(all.iter().all(|d| d.status == "completed"), "{all:?}");
+
+    // One press carries it on: Growth is handed the work again
+    let (s, body) = call(&env.app, "POST", &format!("/api/chains/{}/continue", notice.id), None).await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    wait_for("Growth's next round", || async { to_growth_count().await > per_bot_limit() }).await;
+    let (s, _) = call(&env.app, "POST", &format!("/api/chains/{}/continue", notice.id), None).await;
+    assert_eq!(s, StatusCode::CONFLICT, "a notice carries on once");
+    // A fresh allowance, still bounded by the cap
+    tokio::time::sleep(Duration::from_millis(3000)).await;
+    assert!(to_growth_count().await <= 2 * per_bot_limit() + 1, "still bounded");
 }
 
-/// Mentions that hand nothing on are said in the channel: a name no teammate has, and a follow-up
-/// after the request already went to the most teammates one message may reach.
+/// Mentions that hand nothing on are said in the channel: a name no teammate has. A follow-up after
+/// the request already went to the most teammates one message may reach leaves a Continue notice.
 #[tokio::test]
 async fn mentions_that_hand_nothing_on_are_said_in_the_channel() {
     let env = setup().await;
@@ -1087,31 +1154,23 @@ async fn mentions_that_hand_nothing_on_are_said_in_the_channel() {
     }
     let last = delegate_from(&env, &channel, &env.specialist, "One more REPLYTAG:more", "Last part FOLLOWUP:Growth").await;
     wait_for("the last part", || async { delegation_status(&env, &last).await == "completed" }).await;
-    let limit_note = || async {
-        refusals(&channel_messages(&env, &channel).await).into_iter().find(|n| n.contains("Growth: "))
-    };
-    for _ in 0..100 {
-        if limit_note().await.is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    let msgs: Vec<String> = channel_messages(&env, &channel).await.iter().map(|m| format!("{}: {}", m.sender_id, m.text)).collect();
-    let note = limit_note().await.unwrap_or_else(|| panic!("no limit notice: {msgs:#?}"));
-    // One line for the reply's refused mentions: the unknown name again, and Growth past the limit
-    assert_eq!(
-        note,
-        format!("Not sent to Marketer: no teammate has that name here; Growth: this request has already gone to {} teammates. Send a new message to go on", routes_limit())
-    );
+    wait_for("the Continue notice", || async { !capped(&channel_messages(&env, &channel).await).is_empty() }).await;
+    let msgs = channel_messages(&env, &channel).await;
+    let notes = refusals(&msgs);
+    // The reply's unknown name is still refused; Growth past the limit waits on Continue
+    assert_eq!(notes.last().map(String::as_str), Some("Not sent to Marketer: no teammate has that name here"), "{notes:?}");
+    assert!(notes.iter().all(|n| !n.contains("Growth")), "{notes:?}");
+    let notice = &capped(&msgs)[0];
+    assert_eq!(notice.text, format!("Paused after {} hand-offs so it doesn't loop: Growth not sent yet. Press Continue or say \"continue\" to hand it on.", routes_limit() + 1));
     let delegated_growth = env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap().iter().any(|d| d.specialist_kwant_id == growth);
     assert!(!delegated_growth, "over the limit, Growth isn't asked");
 }
 
 /// Rigel's ping-pong (2026-10-21): two bots naming each other ran all 8 rounds of a request. One
-/// teammate is now handed work by mention at most twice per user message; the third mention is
-/// said in the channel and starts nothing.
+/// teammate is handed work by mention at most [`per_bot_limit`] times per user message; the next
+/// mention starts nothing and leaves one Continue notice.
 #[tokio::test]
-async fn one_teammate_is_asked_by_mention_at_most_twice_per_request() {
+async fn one_teammate_is_asked_by_mention_at_most_the_cap_per_request() {
     let env = setup().await;
     let lead = name(&env, &env.lead).await;
     let growth = add_bot(&env, "Growth").await;
@@ -1119,7 +1178,7 @@ async fn one_teammate_is_asked_by_mention_at_most_twice_per_request() {
     say_in(&env, &channel, &format!("@{lead} Plan the launch REPLYTAG:plan")).await;
     wait_for("the lead's reply", || async { channel_messages(&env, &channel).await.iter().any(|m| m.text.contains("answer plan")) }).await;
 
-    // Growth already ran twice for this message (earlier rounds, both ended)
+    // Growth already ran up to the cap for this message (earlier rounds, all ended)
     for _ in 0..per_bot_limit() {
         let (_, d) = env
             .state
@@ -1141,23 +1200,24 @@ async fn one_teammate_is_asked_by_mention_at_most_twice_per_request() {
             .unwrap();
         assert!(env.state.db.finish_delegation(&d.id, "completed", None, None).await.unwrap());
     }
-    // The specialist reports back and the lead's follow-up names Growth a third time
+    // The specialist reports back and the lead's follow-up names Growth once more
     let last = delegate_from(&env, &channel, &env.specialist, "Review REPLYTAG:rev", "Review FOLLOWUP:Growth").await;
     wait_for("the review", || async { delegation_status(&env, &last).await == "completed" }).await;
-    let note = || async { refusals(&channel_messages(&env, &channel).await).into_iter().find(|n| n.starts_with("Not sent to Growth")) };
-    wait_for("the per-teammate notice", || async { note().await.is_some() }).await;
-    let note = note().await.unwrap();
-    assert_eq!(note, "Not sent to Growth: already asked 2 times for this request. Send a new message to go on");
+    wait_for("the per-teammate notice", || async { !capped(&channel_messages(&env, &channel).await).is_empty() }).await;
     tokio::time::sleep(Duration::from_millis(1000)).await;
+    let msgs = channel_messages(&env, &channel).await;
+    let notices = capped(&msgs);
+    assert_eq!(notices.len(), 1, "one notice, no flood");
+    assert!(notices[0].text.contains("Growth not sent yet"), "{}", notices[0].text);
+    assert!(refusals(&msgs).is_empty(), "{:?}", refusals(&msgs));
     let to_growth = env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap().iter().filter(|d| d.specialist_kwant_id == growth).count();
-    assert_eq!(to_growth, per_bot_limit(), "no third delegation to Growth");
-    assert_eq!(refusals(&channel_messages(&env, &channel).await).len(), 1, "one notice, no flood");
+    assert_eq!(to_growth, per_bot_limit(), "nothing past the cap until Continue");
 }
 
 /// Oleks's screenshot (2026-10-24): the Marketing lead's follow-up said "Handing off now: @Social …,
 /// @Writer …, @SEO …" and nobody was asked, because all three had just reported. Now a 4-bot team
-/// runs: lead → three teammates → follow-up hands each a correction → they run a second round →
-/// the lead's next follow-up asks again, which is past the per-teammate limit: ONE line names all
+/// runs: lead → three teammates → each follow-up hands each a correction → they run rounds up to
+/// the per-teammate limit → the lead's next follow-up asks again: ONE Continue notice names all
 /// three and nothing loops. Every result is posted in the channel and the lead answers each round.
 #[tokio::test]
 async fn a_follow_up_hands_corrections_back_to_teammates_who_just_reported() {
@@ -1165,31 +1225,38 @@ async fn a_follow_up_hands_corrections_back_to_teammates_who_just_reported() {
     let lead = name(&env, &env.lead).await;
     let ids = [add_bot(&env, "Social").await, add_bot(&env, "Writer").await, add_bot(&env, "SEO").await];
     let channel = team_channel_with(&env, "marketing-rounds", &[&env.lead, &ids[0], &ids[1], &ids[2]]).await;
+    // Each already ran all but two of its rounds for this request
+    for id in &ids {
+        seed_rounds(&env, &channel, id, per_bot_limit() - 2).await;
+    }
     say_in(&env, &channel, &format!("@{lead} Marketing plan ROUNDSMARK REPLYTAG:plan MENTION:Social+Writer+SEO FOLLOWUP:Social+Writer+SEO")).await;
 
-    let notes = || async { refusals(&channel_messages(&env, &channel).await) };
-    wait_for("the limit notice after two rounds", || async { !notes().await.is_empty() }).await;
+    let notes = || async { capped(&channel_messages(&env, &channel).await) };
+    wait_for("the Continue notice after the last round", || async { !notes().await.is_empty() }).await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
+    let notes = notes().await;
+    assert_eq!(notes.len(), 1, "one notice for all three");
+    let (rounds_total, run) = (3 * per_bot_limit(), 6);
     assert_eq!(
-        notes().await,
-        vec![format!("Not sent to Social, Writer, SEO: already asked {} times for this request. Send a new message to go on", per_bot_limit())],
-        "one line for all three"
+        notes[0].text,
+        format!("Paused after {rounds_total} hand-offs so it doesn't loop: Social, Writer, SEO not sent yet. Press Continue or say \"continue\" to hand it on.")
     );
+    assert!(refusals(&channel_messages(&env, &channel).await).is_empty());
     let all = env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap();
     for id in &ids {
         let rounds = all.iter().filter(|d| &d.specialist_kwant_id == id).count();
-        assert_eq!(rounds, per_bot_limit(), "each teammate ran twice: {all:?}");
+        assert_eq!(rounds, per_bot_limit(), "each teammate ran up to the cap: {all:?}");
     }
     assert!(all.iter().all(|d| d.status == "completed" && d.origin_channel_id.as_deref() == Some(channel.as_str())), "{all:?}");
     let second = all.iter().filter(|d| d.task.contains("please revise your part")).count();
-    assert_eq!(second, 3, "the second round carries the lead's correction");
+    assert_eq!(second, 3, "the second round run carries the lead's correction");
 
     let msgs = channel_messages(&env, &channel).await;
     let kinds: Vec<Option<String>> = msgs.iter().map(meta_kind).collect();
-    assert_eq!(kinds.iter().filter(|k| k.as_deref() == Some("delegation_started")).count(), 6, "a Sent-to chip per task");
-    assert_eq!(kinds.iter().filter(|k| k.as_deref() == Some("delegation_result")).count(), 6, "every result in the channel");
+    assert_eq!(kinds.iter().filter(|k| k.as_deref() == Some("delegation_started")).count(), run, "a Sent-to chip per task");
+    assert_eq!(kinds.iter().filter(|k| k.as_deref() == Some("delegation_result")).count(), run, "every result in the channel");
     let lead_replies = msgs.iter().filter(|m| m.sender_role == "kwant" && m.sender_id == lead).count();
-    assert_eq!(lead_replies, 3, "the handoff, the follow-up after round one and the one after round two");
+    assert_eq!(lead_replies, 3, "the handoff and a follow-up after each round run");
     let resumes = prompts_with("ROUNDSMARK").into_iter().filter(|p| p.contains("tasks you delegated have ended")).count();
     assert_eq!(resumes, 2, "the lead is resumed once per round");
     assert!(
@@ -1260,6 +1327,11 @@ async fn the_lead_is_resumed_even_when_the_batch_ends_out_of_order() {
 
 fn per_bot_limit() -> usize {
     kwnt::server::routes::MAX_MENTION_DELEGATIONS_PER_BOT
+}
+
+#[test]
+fn hand_off_caps_leave_room_for_a_team() {
+    assert_eq!((per_bot_limit(), routes_limit()), (4, 16));
 }
 
 fn routes_limit() -> usize {
