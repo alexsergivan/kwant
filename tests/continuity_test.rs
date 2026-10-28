@@ -604,6 +604,7 @@ async fn memory_search_finds_a_note_cut_from_the_prompt() {
     let approver = continuity::SelfToolsApprover {
         inner: std::sync::Arc::new(kwnt::mcp::FixedApprover(false)),
         always_ask: true,
+        browser: None,
     };
     let req = |tool: &str| ToolApprovalRequest {
         kwant_id: k1.id.clone(),
@@ -615,6 +616,7 @@ async fn memory_search_finds_a_note_cut_from_the_prompt() {
         arguments: json!({}),
         builtin: None,
         smart: None,
+        payment: None,
     };
     assert!(kwnt::mcp::ToolApprover::approve(&approver, req("memory_search")).await);
     assert!(!kwnt::mcp::ToolApprover::approve(&approver, req("memory_add")).await);
@@ -944,6 +946,7 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
         arguments: json!({}),
         builtin: None,
         smart: None,
+        payment: None,
     };
     assert!(
         ctx.approver.approve(approve(SELF_SERVER_NAME)).await,

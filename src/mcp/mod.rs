@@ -8,6 +8,7 @@ pub mod composio;
 pub mod echo_server;
 pub mod fetch_risk;
 pub mod oauth;
+pub mod payment_floor;
 pub mod oauth_mock;
 pub mod registry;
 pub mod session;
@@ -266,6 +267,9 @@ pub struct ToolApprovalRequest {
     /// What "Ask only when risky" makes of this call; `None` asks. Only read when the bot's
     /// approvals are `smart`.
     pub smart: Option<SmartVerdict>,
+    /// Why the caller already knows this call pays (kwnt's browser on a checkout page), for the
+    /// payment floor; the approver also checks the call itself ([`payment_floor::reason`]).
+    pub payment: Option<String>,
 }
 
 /// Whether a call may run without a card under "Ask only when risky", and why.

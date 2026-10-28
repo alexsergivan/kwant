@@ -78,6 +78,7 @@ fn request(tool: &str) -> ToolApprovalRequest {
         arguments: json!({"text": "hi"}),
         builtin: None,
         smart: None,
+        payment: None,
     }
 }
 

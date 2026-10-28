@@ -773,6 +773,7 @@ async fn write_as(e: &Env, bot: &Kwant, turn_id: &str, dir: &Path, rel: &str, bo
             arguments: json!({"file_path": rel, "content": body}),
             builtin: Some(kwnt::mcp::BuiltinCall { cwd: Some(dir.to_string_lossy().into_owned()), outside_folder: false }),
             smart: None,
+            payment: None,
         };
         kwnt::server::missions::checkpoints::log_call(&e.state.db, &e.state.config.data_dir, &req, "allowed", None).await;
     }

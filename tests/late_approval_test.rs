@@ -35,6 +35,7 @@ fn request(env: &Env, args: Value) -> ToolApprovalRequest {
         arguments: args,
         builtin: None,
         smart: None,
+        payment: None,
     }
 }
 

@@ -9,12 +9,15 @@ refuse it.
 |---|---|---|
 | `ask` | Ask before running commands | Every tool call outside the bot's folder shows an approval card. |
 | `smart` (default for new spaces) | Ask only when risky | Ordinary work runs without a card; anything risky or unclear shows the card, with the reason. |
-| `off` | Don’t ask | Everything runs. |
+| `off` | Don’t ask | Everything runs, except payments: they always ask (see [payments.md](payments.md)). |
 
 A new space, and a fresh install's Default space, start on `smart`. A space made before that
 default (it has no approvals row) keeps asking after an upgrade, so updating kwnt never loosens
 an install; switch it in Settings when you're ready. While the built-in password store holds
 passwords, a new space starts on `ask` instead (see below). An unknown bot always asks.
+
+Whatever the mode, a call that looks like a payment shows a card, even when `smart` finds it
+safe or "Always this session" was given: see [payments.md](payments.md).
 
 Whatever the mode, a call that names kwnt's own secret files (the vault, its key, the API token)
 is refused and recorded as `denied`. Calls that run without a card are recorded as
@@ -104,9 +107,10 @@ Writes and edits outside the folder and unknown tools still ask. Under every mod
 Under `ask` and `smart`, "Always this session" on a claude tool's card allows that tool (e.g. all
 `Bash`) for that bot and conversation until kwnt restarts. Under `smart`, API drivers'
 `execute_shell` is remembered the same way, per conversation; under `ask` it covers that one
-command only.
+command only. Neither covers a payment, and "Always this session" on a payment's card allows that
+one call.
 
 ## Tests
 
-`cargo test --test smart_approvals_test --test approvals_off_test --test approvals_passwords_test`
+`cargo test --test smart_approvals_test --test approvals_off_test --test approvals_passwords_test --test payment_floor_test`
 and the classifier tables in `src/mcp/shell_risk.rs` (`cargo test --lib shell_risk`).
