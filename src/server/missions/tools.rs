@@ -64,6 +64,7 @@ pub fn tools() -> Vec<Value> {
                                 "depends_on": {"type": "array", "items": {"type": "string"}},
                                 "budget_tokens": {"type": "integer"},
                                 "checks": {"type": "array", "items": check_schema()},
+                                "task_class": {"type": "string", "description": "Kind of work, as a short slug (seo-audit, release…); sets how much freedom its bot gets. Leave it out for tasks you'd run yourself."},
                             },
                             "required": ["title", "acceptance"],
                         },

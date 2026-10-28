@@ -342,7 +342,7 @@ pub struct SelfToolsApprover {
 }
 
 /// The agents' own tools that only read: free even in an always-ask turn.
-const READ_ONLY_SELF_TOOLS: &[&str] = &[
+pub(crate) const READ_ONLY_SELF_TOOLS: &[&str] = &[
     "search_history",
     "memory_search",
     "delegation_status",
@@ -359,6 +359,7 @@ const READ_ONLY_SELF_TOOLS: &[&str] = &[
     super::page_source::TOOL,
     "skill_get",
     "task_list",
+    "tier_status",
 ];
 
 #[async_trait]
@@ -381,6 +382,10 @@ impl ToolApprover for SelfToolsApprover {
             }
         }
         if req.server == SELF_SERVER_NAME && (!self.always_ask || READ_ONLY_SELF_TOOLS.contains(&req.tool.as_str())) {
+            // Flight School: a tier below act cards kwant's own tools that change things
+            if self.inner.tier_gate(&req).await.is_some() {
+                return self.inner.decide(req).await;
+            }
             self.inner.note(&req, "allowed", None).await;
             return crate::mcp::ApprovalOutcome::Allowed;
         }
@@ -389,6 +394,10 @@ impl ToolApprover for SelfToolsApprover {
 
     async fn note(&self, req: &ToolApprovalRequest, decision: &'static str, approval_id: Option<&str>) {
         self.inner.note(req, decision, approval_id).await
+    }
+
+    async fn tier_gate(&self, req: &ToolApprovalRequest) -> Option<String> {
+        self.inner.tier_gate(req).await
     }
 }
 
@@ -404,6 +413,7 @@ fn tool_list(scope: &SelfScope, board: bool) -> Value {
     if let Some(list) = tools.as_array_mut() {
         if board {
             list.extend(super::missions::tools::tools());
+            list.push(super::missions::flight_school::tool());
         }
         list.extend(super::skills::tools());
         list.extend(super::mcp_suggest::tools());
@@ -873,6 +883,7 @@ async fn call_tool(
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
         n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
         n if super::missions::tools::handles(n) => super::missions::tools::call(state, scope, n, args).await,
+        "tier_status" => super::missions::flight_school::call_tool(state, &scope.kwant_id, args).await,
         "list_attachments" if scope.origin.is_some() => super::attachments::tool_list(state, scope).await,
         "share_file" if scope.origin.is_some() => super::attachments::tool_share(state, scope, args).await,
         "delegate" => super::delegation::tool_delegate(state, scope, args).await,

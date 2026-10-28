@@ -172,6 +172,11 @@ impl ToolApprover for BrokerApprover {
     async fn note(&self, req: &ToolApprovalRequest, decision: &'static str, approval_id: Option<&str>) {
         super::missions::checkpoints::log_call(&self.db, &self.data_dir, req, decision, approval_id).await;
     }
+
+    async fn tier_gate(&self, req: &ToolApprovalRequest) -> Option<String> {
+        // Boxed: keeps this future (and every caller's) small
+        Box::pin(super::missions::flight_school::tier_gate(&self.db, &self.data_dir, req)).await
+    }
 }
 
 impl BrokerApprover {
@@ -183,7 +188,14 @@ impl BrokerApprover {
         // The payment floor (D8): a call that pays always gets a card, whatever the approvals,
         // "Ask only when risky" or "always allow" say. Allowing it covers this one call.
         let payment = req.payment.clone().or_else(|| mcp::payment_floor::reason(&req, None));
-        let off = payment.is_none() && !self.always_ask && mode.as_ref().is_some_and(|m| m.is_off());
+        // Flight School (C3): the bot's tier for this task can add a card, never remove one. It
+        // skips approvals off and smart Allow; a session "always allow" still counts (D9).
+        let tier = match payment {
+            Some(_) => None,
+            None => self.tier_gate(&req).await,
+        };
+        let forced = payment.is_some() || tier.is_some();
+        let off = !forced && !self.always_ask && mode.as_ref().is_some_and(|m| m.is_off());
         // "Ask only when risky": what the caller made of this call; nothing known asks. A turn that
         // always asks (it read outside text) still lets claude's plain read tools through.
         let smart = mode
@@ -192,7 +204,7 @@ impl BrokerApprover {
             .then(|| req.smart.clone())
             .flatten()
             .filter(|_| !self.always_ask || (req.builtin.is_some() && matches!(req.tool.as_str(), "Read" | "Glob" | "Grep")))
-            .filter(|_| payment.is_none());
+            .filter(|_| !forced);
         let mut details = match &req.builtin {
             Some(b) => json!({
                 "source": "claude_builtin",
@@ -217,6 +229,9 @@ impl BrokerApprover {
         }
         if let Some(why) = &payment {
             details["payment_reason"] = json!(why);
+        }
+        if let Some(why) = &tier {
+            details["tier_reason"] = json!(why);
         }
         let record = NewApproval {
             turn_id: req.turn_id.clone(),
@@ -620,11 +635,17 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value
             };
             match decision {
                 mcp::builtin_tools::BuiltinDecision::Allow => {
-                    // No card and no approval record, but the task's ledger still gets it
                     let cwd = folder.or_else(|| session.cwd.clone()).map(|f| f.display().to_string());
-                    let req = noted_request(session, tool_name, "", tool_name, &input, Some(mcp::BuiltinCall { cwd, outside_folder: false }));
-                    session.ctx.approver.note(&req, "allowed", None).await;
-                    return json!({"behavior": "allow", "updatedInput": input});
+                    let call = mcp::BuiltinCall { cwd, outside_folder: false };
+                    let req = noted_request(session, tool_name, "", tool_name, &input, Some(call.clone()));
+                    // Flight School: a tier below act sends even an in-folder write to the approver
+                    if session.ctx.approver.tier_gate(&req).await.is_some() {
+                        ("", tool_name, Some(call))
+                    } else {
+                        // No card and no approval record, but the task's ledger still gets it
+                        session.ctx.approver.note(&req, "allowed", None).await;
+                        return json!({"behavior": "allow", "updatedInput": input});
+                    }
                 }
                 mcp::builtin_tools::BuiltinDecision::Ask { outside_folder } => {
                     if smart {

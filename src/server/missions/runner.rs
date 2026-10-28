@@ -84,6 +84,11 @@ pub async fn run_mission(state: &AppState, mission: &Mission, max: usize) -> (Ve
         if picked.iter().any(|(_, k)| k.id == bot.id) {
             continue;
         }
+        // Flight School (D7): a bot below act on an engine kwant can't gate doesn't run the task
+        if super::flight_school::block_if_ungated(state, t, &bot, None).await {
+            reason = Some(super::flight_school::ENGINE_CANT_SANDBOX.into());
+            continue;
+        }
         let context = mission_context(mission, &bot);
         match state.db.claim_task(&t.id, &bot.id, None, Some(&context), lease_ms(state).await, false, "kwant").await {
             Ok(Ok(task)) => {

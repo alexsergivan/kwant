@@ -1863,6 +1863,12 @@ async fn run_kwant_turn_inner(
         let route = crate::router::apply_preferred_model(route, &target_kwant.preferred_model);
 
         let target_model = route.selected_model.clone();
+        // Flight School (D7): a task below act never runs on an engine kwant can't gate
+        if let Some(text) = Box::pin(super::missions::flight_school::refuse_turn(state, target_kwant, &target_model)).await {
+            event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
+            event_broadcast.send(RuntimeEvent::TurnComplete { tokens: 0, duration_ms: 0, kwant_id: Some(target_kwant.id.clone()), profile_id: None });
+            return Err(text);
+        }
         let effort_level = route.effort_level.clone();
         let tier = route.tier.unwrap_or(crate::drivers::engines::Tier::Balanced);
         let pinned_model = route.model.clone();
@@ -3277,6 +3283,10 @@ pub struct SettingsResponse {
     pub autofix: String,
     /// Share of a task's budget its AutoFix retries may spend (0–100).
     pub recovery_budget_pct: i64,
+    /// Flight School: tiers are enforced for task turns (see `super::missions::flight_school`).
+    pub flight_school: bool,
+    /// The tier a bot hired while Flight School is on starts at, for every class.
+    pub flight_school_new_bot_tier: String,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3317,6 +3327,8 @@ pub struct SaveSettingsPayload {
     pub checkpoint_keep: Option<i64>,
     pub autofix: Option<String>,
     pub recovery_budget_pct: Option<i64>,
+    pub flight_school: Option<bool>,
+    pub flight_school_new_bot_tier: Option<String>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3366,6 +3378,8 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         checkpoint_keep: super::missions::checkpoints::keep(&state).await,
         autofix: super::missions::autofix::mode(&state).await.into(),
         recovery_budget_pct: super::missions::autofix::recovery_pct(&state).await,
+        flight_school: super::missions::flight_school::enabled(&state.db).await,
+        flight_school_new_bot_tier: super::missions::flight_school::new_bot_tier(&state.db).await.into(),
     }))
 }
 
@@ -3419,6 +3433,9 @@ pub async fn save_settings(
         return bad(e);
     }
     if let Some(e) = super::missions::autofix::settings_error(payload.autofix.as_deref(), payload.recovery_budget_pct) {
+        return bad(e);
+    }
+    if let Some(e) = super::missions::flight_school::settings_error(payload.flight_school_new_bot_tier.as_deref()) {
         return bad(e);
     }
     if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
@@ -3533,6 +3550,12 @@ pub async fn save_settings(
     }
     if let Some(n) = payload.recovery_budget_pct {
         let _ = state.db.set_setting(super::missions::autofix::PCT_SETTING, &n.to_string()).await;
+    }
+    if let Some(on) = payload.flight_school {
+        let _ = state.db.set_setting(super::missions::flight_school::SETTING, if on { "true" } else { "false" }).await;
+    }
+    if let Some(t) = &payload.flight_school_new_bot_tier {
+        let _ = state.db.set_setting(super::missions::flight_school::NEW_BOT_SETTING, t).await;
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;

@@ -201,6 +201,14 @@ pub async fn approve_local_shell_in(
     if let Some(why) = &payment {
         details["payment_reason"] = json!(why);
     }
+    // Flight School (C3): below act, a command always asks, approvals off or not
+    let tier = match payment {
+        Some(_) => None,
+        None => super::missions::flight_school::shell_gate(&state.db, target_id).await,
+    };
+    if let Some(why) = tier {
+        details["tier_reason"] = json!(why);
+    }
     // "Always this session" under smart: per bot and conversation, like claude's tools
     let remembered = conversation.filter(|_| mode == SMART && payment.is_none());
     if crate::sandbox::credentials::call_touches_kwnt_secrets(&details["arguments"], Some(cwd)) {
@@ -221,7 +229,7 @@ pub async fn approve_local_shell_in(
             return true;
         }
     }
-    if payment.is_none() && (mode == OFF || verdict.as_ref().is_some_and(|v| v.is_allowed())) {
+    if payment.is_none() && tier.is_none() && (mode == OFF || verdict.as_ref().is_some_and(|v| v.is_allowed())) {
         if verdict.is_some() {
             tracing::info!(target = %target_id, "ran a local command without a card: not risky");
         }

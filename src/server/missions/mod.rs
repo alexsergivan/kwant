@@ -15,6 +15,7 @@
 pub mod autofix;
 pub mod checkpoints;
 pub mod checks;
+pub mod flight_school;
 pub mod graph;
 pub mod listener;
 pub mod routes;
@@ -491,6 +492,7 @@ pub async fn needs_you(state: &AppState, task: &Task) -> Vec<Value> {
     let mut items = owner_needs_you(state, task).await;
     items.extend(autofix::needs_you(state, task).await);
     items.extend(graph::flag_items(state, task).await);
+    items.extend(flight_school::needs_you(task));
     items
 }
 
@@ -555,6 +557,8 @@ pub async fn task_json(state: &AppState, task: &Task) -> Value {
         obj.insert("checkpoint_count".into(), json!(count));
         obj.insert("last_checkpoint_at".into(), json!(last));
         autofix::extend_task_json(state, task, obj).await;
+        obj.insert("task_class".into(), json!(state.db.task_class(&task.id).await.unwrap_or_else(|_| crate::db::flight_school::DEFAULT_CLASS.into())));
+        obj.insert("owner_tier".into(), flight_school::owner_tier(state, task).await);
     }
     v
 }
@@ -675,6 +679,8 @@ pub struct PlanTask {
     pub budget_tokens: Option<i64>,
     #[serde(default)]
     pub checks: Vec<PlanCheck>,
+    /// Flight School's class (D10); `general` when left out.
+    pub task_class: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -802,6 +808,16 @@ pub async fn create_plan(
             Some(o) => Some(bot_in_space(state, space, o).await.ok_or_else(|| format!("task {key}: no bot {o} in this space"))?.id),
             None => None,
         };
+        if let Some(class) = &t.task_class {
+            if !crate::db::flight_school::valid_class(class) {
+                return Err(format!("task {key}: task_class must be 1–40 of a-z, 0-9 and -"));
+            }
+            // A bot never picks the class (and so the tier) of a task it would run itself
+            let runner = owner.as_deref().unwrap_or(lead.id.as_str());
+            if by.created_by != "person" && runner == by.created_by {
+                return Err(format!("task {key}: you can't set the class of a task you'd run yourself; leave task_class out"));
+            }
+        }
         owners.push(owner);
         let mut ok = Vec::new();
         for c in &t.checks {
@@ -868,6 +884,9 @@ pub async fn create_plan(
             )
             .await
             .map_err(|e| e.to_string())?;
+        if let Some(class) = t.task_class.as_deref().filter(|c| *c != crate::db::flight_school::DEFAULT_CLASS) {
+            state.db.set_task_class(&row.id, class, by.created_by).await.map_err(|e| e.to_string())?;
+        }
         for (c, approved) in t.checks.iter().zip(&approvals[i]) {
             state
                 .db

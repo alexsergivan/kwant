@@ -272,8 +272,8 @@ impl Database {
         }
         let fork = sqlx::query_as::<_, Task>(
             "INSERT INTO tasks (id, space_id, mission_id, title, acceptance, state, priority, suggested_kwant_id, budget_tokens, max_attempts, \
-             source_kind, source_id, channel_id, direct_kwant_id, thread_id, created_by, created_at, updated_at, forked_from) \
-             VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'person', ?, ?, ?) RETURNING *",
+             source_kind, source_id, channel_id, direct_kwant_id, thread_id, created_by, created_at, updated_at, forked_from, task_class) \
+             VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'person', ?, ?, ?, (SELECT task_class FROM tasks WHERE id = ?)) RETURNING *",
         )
         .bind(&fork_id)
         .bind(&orig.space_id)
@@ -290,6 +290,7 @@ impl Database {
         .bind(&orig.thread_id)
         .bind(now)
         .bind(now)
+        .bind(&orig.id)
         .bind(&orig.id)
         .fetch_one(&mut *tx)
         .await?;

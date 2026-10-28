@@ -427,6 +427,8 @@ pub struct CreateTask {
     checks: Vec<PlanCheck>,
     source_kind: Option<String>,
     source_id: Option<String>,
+    /// Flight School's class (D10); `general` when left out.
+    task_class: Option<String>,
 }
 
 pub async fn create_task(State(state): State<AppState>, Scope(space): Scope, Json(p): Json<CreateTask>) -> Response {
@@ -450,6 +452,9 @@ pub async fn create_task(State(state): State<AppState>, Scope(space): Scope, Jso
     }
     if p.priority.is_some_and(|x| !(0..=3).contains(&x)) {
         return bad("priority must be 0–3");
+    }
+    if p.task_class.as_deref().is_some_and(|c| !crate::db::flight_school::valid_class(c)) {
+        return bad("task_class must be 1–40 of a-z, 0-9 and -");
     }
     let mission = match &p.mission_id {
         Some(id) => match state.db.get_mission(id).await {
@@ -517,6 +522,11 @@ pub async fn create_task(State(state): State<AppState>, Scope(space): Scope, Jso
         Ok(t) => t,
         Err(e) => return internal(e),
     };
+    if let Some(class) = p.task_class.as_deref().filter(|c| *c != crate::db::flight_school::DEFAULT_CLASS) {
+        if let Err(e) = state.db.set_task_class(&task.id, class, "person").await {
+            return internal(e);
+        }
+    }
     for (c, approved) in p.checks.iter().zip(approvals) {
         let nc = NewCheck {
             task_id: task.id.clone(),
@@ -583,6 +593,8 @@ pub struct PatchTask {
     priority: Option<i64>,
     owner_kwant_id: Option<String>,
     budget_tokens: Option<i64>,
+    /// Only the person changes a class (this route is person-only for bot tokens).
+    task_class: Option<String>,
 }
 
 pub async fn patch_task(State(state): State<AppState>, RawQuery(q): RawQuery, Path(id): Path<String>, Json(p): Json<PatchTask>) -> Response {
@@ -603,6 +615,9 @@ pub async fn patch_task(State(state): State<AppState>, RawQuery(q): RawQuery, Pa
     if p.budget_tokens.is_some_and(|b| !(1..=super::BUDGET_RANGE.1).contains(&b)) {
         return bad(format!("budget_tokens must be 1–{}", super::BUDGET_RANGE.1));
     }
+    if p.task_class.as_deref().is_some_and(|c| !crate::db::flight_school::valid_class(c)) {
+        return bad("task_class must be 1–40 of a-z, 0-9 and -");
+    }
     let owner = match &p.owner_kwant_id {
         Some(o) => match super::bot_in_space(&state, &SpaceId::new(&t.space_id), o).await {
             Some(k) => Some(k.id),
@@ -612,6 +627,11 @@ pub async fn patch_task(State(state): State<AppState>, RawQuery(q): RawQuery, Pa
     };
     if let Err(e) = state.db.edit_task(&id, title, p.acceptance.as_deref().map(str::trim), p.priority, owner.as_deref(), p.budget_tokens, "person").await {
         return internal(e);
+    }
+    if let Some(class) = &p.task_class {
+        if let Err(e) = state.db.set_task_class(&id, class, "person").await {
+            return internal(e);
+        }
     }
     match state.db.get_task(&id).await {
         Ok(Some(t)) => {

@@ -340,6 +340,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // AutoFix's proposed changes to routines, checks and tasks: only the person reads, approves
         // or rejects them; bots only propose (the `workflow_propose` tool)
         ["", "api", "workflow-changes", ..] => true,
+        // Flight School: only the person gives or takes a bot's freedom (C3); reads stay open
+        ["", "api", "capabilities", ..] => *method != Method::GET && *method != Method::HEAD,
         // App-wide settings, including where notifications go (`notify_webhook_url`), and the
         // sub-routes such as `/computer` (which machine the bots run on) and `/computer/window`:
         // bots change the allowed ones through their `settings_update` action, never these routes

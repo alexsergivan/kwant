@@ -28,6 +28,7 @@ pub mod missions;
 pub mod mission_graph;
 pub mod checkpoints;
 pub mod autofix;
+pub mod flight_school;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -178,6 +179,8 @@ impl Database {
             db.repair_team_channels().await?;
             db.migrate_approval_modes(fresh, data_dir).await?;
         }
+        // After the spaces migration, which can rebuild `kwants` (and drop its triggers)
+        db.migrate_flight_school().await?;
         db.pool.close().await;
 
         let pool = SqlitePoolOptions::new()

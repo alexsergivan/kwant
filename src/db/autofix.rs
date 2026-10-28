@@ -337,13 +337,18 @@ impl Database {
     /// used one), and its claim is the attempt's, so its spend is recovery.
     pub async fn link_retry_task(&self, task_id: &str, failed: &Task, attempt_id: &str) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE tasks SET forked_from = ?, attempts = ?, max_attempts = ? WHERE id = ? AND forked_from IS NULL")
-            .bind(&failed.id)
-            .bind(failed.attempts + 1)
-            .bind(failed.max_attempts)
-            .bind(task_id)
-            .execute(&mut *tx)
-            .await?;
+        // It keeps the failed task's Flight School class (and so its tier)
+        sqlx::query(
+            "UPDATE tasks SET forked_from = ?, attempts = ?, max_attempts = ?, task_class = (SELECT task_class FROM tasks WHERE id = ?) \
+             WHERE id = ? AND forked_from IS NULL",
+        )
+        .bind(&failed.id)
+        .bind(failed.attempts + 1)
+        .bind(failed.max_attempts)
+        .bind(&failed.id)
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
         sqlx::query("UPDATE agent_claims SET autofix_id = ? WHERE task_id = ? AND released_at IS NULL").bind(attempt_id).bind(task_id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())

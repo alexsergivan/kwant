@@ -386,6 +386,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tasks/:id/autofix", post(missions::autofix::run_autofix))
         .route("/api/tasks/:id/autofix/:aid/cancel", post(missions::autofix::cancel_autofix))
         .route("/api/workflow-changes", get(missions::autofix::list_changes))
+        .route("/api/capabilities", get(missions::flight_school::get_capabilities).post(missions::flight_school::set_capability))
+        .route("/api/capabilities/:kwant_id/revoke", post(missions::flight_school::revoke_capability))
         .route("/api/workflow-changes/:id/approve", post(missions::autofix::approve_change))
         .route("/api/workflow-changes/:id/reject", post(missions::autofix::reject_change))
         .route("/api/tasks/:id/flags/:flag_id/resolve", post(missions::graph::resolve_flag))

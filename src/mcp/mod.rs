@@ -320,6 +320,12 @@ pub trait ToolApprover: Send + Sync {
     /// `auto_allowed`, `approved` or `denied`. Called for the calls the permission hook lets
     /// through on its own too. Default: nothing is recorded.
     async fn note(&self, _request: &ToolApprovalRequest, _decision: &'static str, _approval_id: Option<&str>) {}
+
+    /// Flight School's gate (C3): `Some(reason)` when this call must get a card even where the
+    /// permission hook would let it through on its own. Default: no gate.
+    async fn tier_gate(&self, _request: &ToolApprovalRequest) -> Option<String> {
+        None
+    }
 }
 
 /// What became of a call that may have needed a card.

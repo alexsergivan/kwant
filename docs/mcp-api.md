@@ -287,6 +287,9 @@ bot's approvals are `off`, or `smart` and the server marks the tool `readOnlyHin
 2. The UI resolves it with the existing `POST /api/approvals/:id/resolve`
    `{"decision": "allow_once" | "always_allow" | "deny"}`.
    `always_allow` allows that tool for that kwant until kwnt restarts.
+   With Flight School on (`flight_school`), a bot below `act` for the task it works gets a card for calls
+   its tier doesn't allow even with approvals `off` or a smart Allow, with `details.tier_reason`; see
+   [mission-control.md](mission-control.md) §14.
 3. Unanswered tickets are denied after 300 s, or when the turn ends or is cancelled; kwnt then
    emits `{"type":"ApprovalWithdrawn","data":{"id":"<ticket>"}}` so the UI can drop the card.
    Resolving a withdrawn (or unknown) ticket returns `409` and changes nothing: its tool never

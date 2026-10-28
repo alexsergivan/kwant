@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
+- **Flight School: give each bot only as much freedom as it has earned.** With the new `flight_school`
+  setting on (off by default), you can set a bot's tier per kind of task: Observe (every change asks),
+  Sandbox (it may change files in its task folder when kwant took a checkpoint it can undo; every command
+  asks) or Act (its normal approvals). A tier only adds approval cards, even with approvals off, and
+  payments still always ask. Lowering a tier applies from the bot's next action. Bots already there keep
+  Act; bots hired after you switch it on start at Sandbox. A bot on Codex or a custom engine that is below
+  Act doesn't run its task, because kwant can't see its own tools.
 - **kwant can tell when an app finished connecting through Composio.** A new person-only
   `GET /api/connections/composio/apps/:slug/status` answers whether you've signed in to the app, so the
   connection card can show "Connected" once you have.

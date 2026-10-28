@@ -490,3 +490,77 @@ acceptance, a routine) is only ever proposed; it applies when the person approve
 - `task_json` gains `recovery_spent_tokens`, `recovery_budget_tokens`, `last_failure: {class, summary, created_at}|null` and `autofix: attempt|null` and `autofix_attempts` (retries AutoFix started: running, succeeded or failed). Needs-you kinds: `autofix_suggested`, `fix_needed`, `workflow_change`.
 - Insights gain `autofix_7d: {attempts, succeeded, tokens}` and `failures_by_class_7d`, for the space.
 - Task events: `failure`, `autofix_scheduled`, `autofix_started`, `autofix_finished`, `workflow_change_proposed`, `workflow_change_decided`, `workflow_change_applied`.
+
+## 14. Flight School (Phase C3)
+
+Design and decisions: `/home/maus/shared/ship-software-safely/mission-control/phase-c/contract.md` §3
+and §9 (D4, D7, D8, D9, D10). A bot's tier for a class of tasks is a **ceiling** on top of its approval
+mode: it can add a card, never remove one. Scorecards and tier proposals are C4, not here.
+
+### Settings
+
+- `flight_school` (bool, default `false`). Off, nothing is gated, whatever tiers are saved: every call
+  takes exactly today's path. On, tiers apply to turns that work a task (a chat turn of a bot with no open
+  claim is never gated).
+- `flight_school_new_bot_tier` (`observe`, `sandbox` or `act`, default `sandbox`): the `'*'` tier a bot hired
+  while Flight School is on starts at (a trigger on `kwants`). Bots that were there before have no row,
+  which is `act` (D4), so switching the feature on changes nothing until the person lowers a bot.
+
+### Tables
+
+- `tasks.task_class` (`TEXT NOT NULL DEFAULT 'general'`, slug `[a-z0-9-]{1,40}`). Set by the person
+  (`POST /api/tasks`, `PATCH /api/tasks/:id`, `POST /api/missions`) or a lead's `mission_plan`, never for a
+  task the planning bot would run itself (owner, or no owner and it leads). Forks inherit it. A change
+  writes a `class_changed` task event.
+- `capability_policies`: `id`, `kwant_id`, `task_class` (a class or `'*'`), `tier`, `granted_by`
+  (`CHECK = 'person'`), `granted_at`, `revoked_at`, `note`. One live row per bot and class
+  (`capability_live`). Rows are never deleted or edited; the only update sets `revoked_at` once (triggers).
+- `capability_events` (append-only): `kwant_id`, `task_class`, `kind` (`granted`, `revoked`,
+  `new_bot_default`), `tier`, `actor`, `detail`, `created_at`.
+- Rollback: `kwnt::db::flight_school::FLIGHT_SCHOOL_DOWN` drops the tables and triggers and the column
+  (tested).
+
+### The gate
+
+`flight_school::tier_gate(db, data_dir, req)` is the one function, asked at four points:
+`BrokerApprover::classified` (MCP tools and claude's tools that ask), the built-in Allow of claude's
+permission prompt (an allowed in-folder write falls through to the approver instead), `SelfToolsApprover`
+(kwant's own tools) and `approve_local_shell_in` (the API drivers' `execute_shell`). It reads the policy on
+every call. In order:
+
+1. The payment floor (`payment_floor::reason`). No tier skips it; at `act` a payment still cards.
+2. Flight School off, or the turn works no task → no gate.
+3. The tier for the task's class: the bot's row for that class, else its `'*'` row, else `act`. A policy
+   that can't be read counts as `observe` (fails closed).
+4. The call's effect: `checkpoints::effect` (the ledger's), with kwant's `memory_*`, `fact_*`, `task_*`,
+   `mission_plan`, `tier_status`, `ask_user` and read-only self tools as `none`.
+
+| effect | `observe` | `sandbox` | `act` |
+|---|---|---|---|
+| `none` | today's path | today's path | today's path |
+| `workspace` (file tool in the task folder) | card | runs if this run has a `before_run` checkpoint, else card | today's path |
+| `external` (`Bash`, MCP tools, outside files, other self tools) | card | card | today's path |
+
+A forced card carries `details.tier_reason` ("Sandbox: commands always ask", "Observe: every change
+asks", …). Approvals `off`, smart Allow and `always_ask` don't skip it; a session "always allow" for that
+tool in that chat does (D9), except on a payment.
+
+### Revoke and engines
+
+- `POST /api/capabilities/:kwant_id/revoke` writes the lower tier in one transaction; the running turn's
+  next call is gated by it. A call already allowed and running finishes.
+- The engine guard (D7): a task whose bot is below `act` on Codex or a custom engine (whose own tools kwant
+  can't see) is moved to `blocked` with the reason "This engine can't be held to its tier…" and the
+  Needs-you item `engine_cant_sandbox`: in the runner before the claim (pinned engines), and at turn start
+  once the route is known (an `auto` bot routed there). Claude and Grok run.
+
+### Routes
+
+- `GET /api/capabilities?kwant_id=&space=` (open): `{flight_school, kwant_id, default_tier, policies,
+  effective: [{task_class, tier, from: class|any_class|default|unreadable}], events}`.
+- `POST /api/capabilities` `{kwant_id, task_class, tier, note?}` (person only): sets the tier; the same tier
+  again returns `unchanged: true`.
+- `POST /api/capabilities/:kwant_id/revoke` `{task_class, to_tier: observe|sandbox, note?}` (person only):
+  lowers it; a tier that isn't lower returns `unchanged: true`.
+- Bot tool `tier_status {task_class?}` (read-only, offered with the task board).
+- `task_json` gains `task_class` and `owner_tier` (`null` while Flight School is off).
