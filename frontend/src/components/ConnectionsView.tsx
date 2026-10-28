@@ -46,13 +46,15 @@ const field =
 /** Where each kind is changed in the app. */
 export interface ManageLinks {
   onOpenTools?: () => void;
+  /** Opens Tools straight on adding a server; falls back to onOpenTools. */
+  onAddTool?: () => void;
   onOpenAccounts?: () => void;
   onOpenLooseEnds?: () => void;
 }
 
 const manageFor = (kind: string, links: ManageLinks): { label: string; run: () => void } | null => {
-  if (kind === 'mcp' && links.onOpenTools) return { label: 'Manage', run: links.onOpenTools };
-  if (kind === 'account' && links.onOpenAccounts) return { label: 'Manage', run: links.onOpenAccounts };
+  if (kind === 'mcp' && links.onOpenTools) return { label: 'Manage tools', run: links.onOpenTools };
+  if (kind === 'account' && links.onOpenAccounts) return { label: 'Manage accounts', run: links.onOpenAccounts };
   if ((kind === 'email' || kind === 'github') && links.onOpenLooseEnds) return { label: 'Open Loose ends', run: links.onOpenLooseEnds };
   return null;
 };
@@ -269,12 +271,24 @@ export interface ComposioCardProps {
   /** Tests: the search box's API and starting results. */
   searchApi?: ComposioSearchApi;
   initialApps?: ComposioApp[];
+  /** Goes up by one each time "+ Add connection" picks Composio: scroll here and open the form. */
+  openRequest?: number;
 }
 
 /** The optional Composio connector: what it is, where it keeps sign-ins, and the add form. */
-export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen = false, onAdd, onOpenTools, searchApi, initialApps }) => {
+export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen = false, onAdd, onOpenTools, searchApi, initialApps, openRequest = 0 }) => {
   const id = useId();
   const [open, setOpen] = useState(initialOpen);
+  const cardRef = useRef<HTMLLIElement>(null);
+
+  useEffect(() => {
+    if (!openRequest) return;
+    if (!entry.added) setOpen(true);
+    const card = cardRef.current;
+    card?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // An added card has no form: focus its first control, usually "Find an app".
+    if (entry.added) card?.querySelector<HTMLElement>('input, button')?.focus({ preventScroll: true });
+  }, [openRequest, entry.added]);
   const [url, setUrl] = useState('');
   const [key, setKey] = useState('');
   const [enabled, setEnabled] = useState(false);
@@ -294,7 +308,7 @@ export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen =
   };
 
   return (
-    <li className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 sm:p-4 space-y-3" aria-labelledby={`${id}-n`} data-catalog={entry.id}>
+    <li ref={cardRef} className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 sm:p-4 space-y-3 scroll-mt-4" aria-labelledby={`${id}-n`} data-catalog={entry.id}>
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1 basis-56">
           <div className="flex flex-wrap items-center gap-2">
@@ -385,6 +399,107 @@ export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen =
   );
 };
 
+/** One way to add something, as offered by "+ Add connection" and the empty groups. */
+export interface AddChoice {
+  key: 'mcp' | 'account' | 'composio' | 'sources';
+  label: string;
+  hint: string;
+  run: () => void;
+}
+
+/** The ways to add a connection that this page can actually open, in menu order. */
+export const addChoices = (links: ManageLinks, onComposio?: () => void): AddChoice[] => {
+  const out: AddChoice[] = [];
+  const tool = links.onAddTool ?? links.onOpenTools;
+  if (tool) out.push({ key: 'mcp', label: 'Tool server (MCP)', hint: 'A command on this computer or a server URL', run: tool });
+  if (links.onOpenAccounts) out.push({ key: 'account', label: 'Engine account', hint: 'Claude, Codex, Copilot and other engines', run: links.onOpenAccounts });
+  if (onComposio) out.push({ key: 'composio', label: 'App via Composio', hint: 'Gmail, Notion, Slack and hundreds more', run: onComposio });
+  return out;
+};
+
+const ADD_ICON: Record<AddChoice['key'], React.ReactNode> = {
+  mcp: <Server size={14} aria-hidden="true" />,
+  account: <UserRound size={14} aria-hidden="true" />,
+  composio: <Plug size={14} aria-hidden="true" />,
+  sources: <Mail size={14} aria-hidden="true" />,
+};
+
+/** "+ Add connection" in the header: a small list of what can be added. */
+export const AddConnectionMenu: React.FC<{ choices: AddChoice[]; disabled?: boolean; initialOpen?: boolean }> = ({ choices, disabled = false, initialOpen = false }) => {
+  const id = useId();
+  const [open, setOpen] = useState(initialOpen);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    wrapRef.current?.querySelector<HTMLButtonElement>('[data-add-choice]')?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
+    const onDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', onDown);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onDown);
+    };
+  }, [open]);
+
+  if (choices.length === 0) return null;
+  return (
+    <div ref={wrapRef} className="relative shrink-0">
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        disabled={disabled}
+        aria-expanded={open}
+        aria-controls={`${id}-list`}
+        className="inline-flex items-center gap-1.5 min-h-[32px] px-2.5 py-1 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-60 shadow-sm whitespace-nowrap focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+      >
+        <Plus size={14} aria-hidden="true" />
+        Add connection
+      </button>
+      {open && (
+        <div
+          id={`${id}-list`}
+          role="group"
+          aria-label="Add a connection"
+          className="absolute right-0 top-full mt-2 z-30 w-72 max-w-[calc(100vw-1rem)] rounded-xl border border-zinc-700 bg-zinc-900 p-1.5 shadow-xl shadow-black/40"
+        >
+          <ul className="space-y-0.5">
+            {choices.map((c) => (
+              <li key={c.key}>
+                <button
+                  type="button"
+                  data-add-choice={c.key}
+                  onClick={() => {
+                    setOpen(false);
+                    c.run();
+                  }}
+                  className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-zinc-800 focus-visible:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+                >
+                  <span className="mt-0.5 shrink-0 text-zinc-400">{ADD_ICON[c.key]}</span>
+                  <span className="min-w-0">
+                    <span className="block text-xs font-medium text-zinc-100">{c.label}</span>
+                    <span className="block text-[11px] text-zinc-400">{c.hint}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export interface ConnectionsViewProps extends ManageLinks {
   data: ConnectionsList | null;
   loading: boolean;
@@ -400,6 +515,8 @@ export interface ConnectionsViewProps extends ManageLinks {
   onBack?: () => void;
   /** Tests open the Composio form. */
   composioOpen?: boolean;
+  /** Tests and screenshots open the "+ Add connection" list. */
+  addMenuOpen?: boolean;
 }
 
 export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
@@ -416,10 +533,20 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   onAddComposio,
   onBack,
   composioOpen = false,
+  addMenuOpen = false,
   ...links
 }) => {
   const groups = data ? groupConnections(data.connections) : [];
   const vault = data?.vault;
+  const [composioRequest, setComposioRequest] = useState(0);
+  const hasComposio = !!data?.catalog.some((e) => e.id === 'composio');
+  const choices = addChoices(links, hasComposio ? () => setComposioRequest((n) => n + 1) : undefined);
+  // An empty group links to the same place "+ Add connection" goes.
+  const emptyAdd: Record<string, AddChoice | undefined> = {
+    mcp: choices.find((c) => c.key === 'mcp'),
+    account: choices.find((c) => c.key === 'account'),
+    sources: links.onOpenLooseEnds ? { key: 'sources', label: 'Loose ends', hint: '', run: links.onOpenLooseEnds } : undefined,
+  };
   return (
     <div className="flex-1 flex flex-col h-full bg-zinc-950 overflow-hidden">
       <div className={`h-14 border-b border-zinc-800/80 ${onBack ? 'px-2' : 'px-4'} sm:px-6 flex items-center justify-between gap-3 bg-zinc-900/30 backdrop-blur-sm select-none`}>
@@ -441,11 +568,13 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
           type="button"
           onClick={onRefresh}
           disabled={loading || needsToken}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-zinc-300 border border-zinc-700/60 hover:bg-zinc-800 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+          aria-label="Refresh"
+          className="shrink-0 inline-flex items-center gap-1.5 min-h-[32px] px-2.5 py-1 rounded-lg text-xs text-zinc-300 border border-zinc-700/60 hover:bg-zinc-800 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
         >
           <RefreshCw size={12} className={loading ? 'animate-spin motion-reduce:animate-none' : ''} aria-hidden="true" />
-          Refresh
+          <span className="hidden sm:inline">Refresh</span>
         </button>
+        <AddConnectionMenu choices={choices} disabled={needsToken} initialOpen={addMenuOpen} />
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 sm:p-6" aria-busy={loading}>
@@ -511,8 +640,20 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                       ))}
                     </ul>
                   ) : (
-                    <p className="px-3 py-3 rounded-xl border border-dashed border-zinc-800 text-xs text-zinc-400" data-empty={g.key}>
-                      {lockedLogins ? 'Hidden while Bitwarden is locked.' : g.empty}
+                    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-3 rounded-xl border border-dashed border-zinc-800 text-xs text-zinc-400" data-empty={g.key}>
+                      <span>{lockedLogins ? 'Hidden while Bitwarden is locked.' : g.empty}</span>
+                      {!lockedLogins && emptyAdd[g.key] && (
+                        <button
+                          type="button"
+                          onClick={emptyAdd[g.key]!.run}
+                          data-empty-add={g.key}
+                          className="inline-flex items-center gap-1 min-h-[28px] font-medium text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+                        >
+                          <Plus size={12} aria-hidden="true" />
+                          {g.key === 'sources' ? 'Add one in Loose ends' : 'Add one'}
+                          {g.key !== 'sources' && <span className="sr-only"> {g.label.toLowerCase()}</span>}
+                        </button>
+                      )}
                     </p>
                   )}
                 </section>
@@ -526,7 +667,14 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               </h3>
               <ul className="space-y-2">
                 {data.catalog.map((entry) => (
-                  <ComposioCard key={entry.id} entry={entry} initialOpen={composioOpen} onAdd={onAddComposio} onOpenTools={links.onOpenTools} />
+                  <ComposioCard
+                    key={entry.id}
+                    entry={entry}
+                    initialOpen={composioOpen}
+                    onAdd={onAddComposio}
+                    onOpenTools={links.onOpenTools}
+                    openRequest={entry.id === 'composio' ? composioRequest : 0}
+                  />
                 ))}
               </ul>
             </section>

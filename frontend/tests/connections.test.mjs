@@ -12,6 +12,7 @@ const ui = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
   import { ConnectionsView, ConnectionRow, ComposioCard } from './src/components/ConnectionsView';
+  export { addChoices } from './src/components/ConnectionsView';
   export const view = (props) => renderToStaticMarkup(React.createElement(ConnectionsView, props));
   export const row = (props) => renderToStaticMarkup(React.createElement('ul', null, React.createElement(ConnectionRow, props)));
   export const composio = (props) => renderToStaticMarkup(React.createElement('ul', null, React.createElement(ComposioCard, props)));
@@ -208,4 +209,63 @@ test('the server catalog lists Gmail as "via Composio" and explains why, with th
   // The open card must not stretch to the item's full height, or the note spills over the next section.
   const card = open.slice(open.lastIndexOf('<button', open.indexOf('aria-expanded="true"')), open.indexOf('data-composio-note="gmail"'));
   assert.ok(!/class="[^"]*\bh-full\b/.test(card.slice(0, card.indexOf('>'))), 'open Composio card is not h-full');
+});
+
+// Oleks (2026-10-28): "why is there no way to connect new tools here?" The header gets "+ Add
+// connection" with a short list of what can be added, empty groups link to the same place, and the
+// row buttons say where they go.
+
+const buttonTexts = (html) =>
+  [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((x) => x[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+
+test('the header always offers "+ Add connection", even with nothing connected', () => {
+  for (const data of [list(), list({ connections: [], catalog: [] })]) {
+    const html = ui.view(viewProps({ data, onOpenTools: noop, onOpenAccounts: noop }));
+    assert.ok(buttonTexts(html).includes('Add connection'));
+    assert.match(html, /aria-expanded="false"[^>]*>(?:(?!<\/button>)[\s\S])*Add connection/, 'starts closed');
+  }
+  const locked = ui.view(viewProps({ data: null, needsToken: true, onOpenTools: noop }));
+  assert.match(locked, /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Add connection/, 'off until the person confirms it is them');
+});
+
+test('the add list offers tool server, engine account and Composio, each only when it can be opened', () => {
+  const html = ui.view(viewProps({ onOpenTools: noop, onOpenAccounts: noop, addMenuOpen: true }));
+  assert.match(html, /aria-expanded="true"/);
+  assert.ok(html.includes('aria-label="Add a connection"'));
+  for (const key of ['mcp', 'account', 'composio']) assert.ok(html.includes(`data-add-choice="${key}"`), key);
+  for (const t of ['Tool server (MCP)', 'Engine account', 'App via Composio']) assert.ok(html.includes(t), t);
+
+  const keys = (links, composio) => ui.addChoices(links, composio).map((c) => c.key);
+  assert.deepEqual(keys({ onOpenTools: noop, onOpenAccounts: noop }, noop), ['mcp', 'account', 'composio']);
+  assert.deepEqual(keys({ onOpenAccounts: noop }), ['account'], 'no Tools handler, no tool-server choice; no catalog, no Composio');
+  assert.deepEqual(keys({}), []);
+  assert.ok(!buttonTexts(ui.view(viewProps({ data: list({ catalog: [] }) }))).includes('Add connection'), 'nothing to add, no button');
+  const noCatalog = ui.view(viewProps({ data: list({ catalog: [] }), onOpenTools: noop, addMenuOpen: true }));
+  assert.ok(!noCatalog.includes('data-add-choice="composio"'));
+});
+
+test('the tool-server choice opens Tools on adding a server, and falls back to Tools itself', () => {
+  const calls = [];
+  const add = ui.addChoices({ onOpenTools: () => calls.push('tools'), onAddTool: () => calls.push('add'), onOpenAccounts: () => calls.push('accounts') }, () => calls.push('composio'));
+  add.forEach((c) => c.run());
+  assert.deepEqual(calls, ['add', 'accounts', 'composio']);
+  calls.length = 0;
+  ui.addChoices({ onOpenTools: () => calls.push('tools') })[0].run();
+  assert.deepEqual(calls, ['tools']);
+});
+
+test('empty groups link to adding one there, and row buttons say where they go', () => {
+  const html = ui.view(viewProps({ data: list({ connections: [] }), onOpenTools: noop, onOpenAccounts: noop, onOpenLooseEnds: noop }));
+  for (const key of ['mcp', 'account', 'sources']) assert.ok(html.includes(`data-empty-add="${key}"`), key);
+  assert.ok(!html.includes('data-empty-add="browser_login"'), 'saved logins are added by bots, not here');
+  assert.ok(html.includes('Add one in Loose ends'));
+  assert.ok(html.includes('Add one<span class="sr-only"> tool servers (mcp)</span>'));
+  const bare = ui.view(viewProps({ data: list({ connections: [] }) }));
+  assert.ok(!bare.includes('data-empty-add'), 'no link without a place to go');
+  const locked = ui.view(viewProps({ data: list({ connections: [], vault: { status: 'locked' } }), onOpenTools: noop }));
+  assert.ok(locked.includes('Hidden while Bitwarden is locked.'));
+
+  const rows = buttonTexts(ui.view(viewProps({ onOpenTools: noop, onOpenAccounts: noop, onOpenLooseEnds: noop })));
+  assert.ok(rows.includes('Manage tools') && rows.includes('Manage accounts') && rows.includes('Open Loose ends'));
+  assert.ok(!rows.includes('Manage'), 'no bare "Manage" left');
 });

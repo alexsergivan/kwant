@@ -66,6 +66,8 @@ interface McpServersModalProps {
   kwants?: Array<{ id: string; name: string }>;
   /** Opens the Connections page, where Composio is added (for apps that go through it). */
   onOpenConnections?: () => void;
+  /** Opens straight on "Add a tool server" instead of the list. */
+  startAdding?: boolean;
 }
 
 const inputCls =
@@ -360,7 +362,7 @@ export const PresetCatalog: React.FC<{
   );
 };
 
-export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClose, kwants = [], onOpenConnections }) => {
+export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClose, kwants = [], onOpenConnections, startAdding = false }) => {
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, StoredStatus>>({});
@@ -445,7 +447,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   useEffect(() => {
     if (!isOpen) return;
     setEditing(null);
-    setPicking(false);
+    setPicking(startAdding);
     setQuery('');
     setConfirmDelete(null);
     setConfirmDisconnect(null);
@@ -454,7 +456,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     setStatuses(loadStatuses());
     // Also catches a sign-in finished elsewhere, like the same-tab fallback when popups are blocked.
     refresh().then(() => checkNewSignIns());
-  }, [isOpen, refresh, checkNewSignIns]);
+  }, [isOpen, startAdding, refresh, checkNewSignIns]);
 
   // If a provider cuts the popup's link back to this window, no message arrives: coming back to
   // this window is the cue to look again.
