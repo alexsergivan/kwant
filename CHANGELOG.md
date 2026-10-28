@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.2.0] - 2026-10-28
+
 ### Added
 - **Flight School: give each bot only as much freedom as it has earned.** With the new `flight_school`
   setting on (off by default), you can set a bot's tier per kind of task: Observe (every change asks),
@@ -303,6 +305,7 @@ First public release of kwant for Mac: one universal app for Apple silicon and I
 later) that runs the kwant server and its interface, with a menu-bar icon. It uses the same data folder
 as `kwnt serve` (`~/.kwnt`).
 
+[Mac 0.2.0]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.2.0
 [Mac 0.1.3]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.3
 [Mac 0.1.2]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.2
 [Mac 0.1.1]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.1
