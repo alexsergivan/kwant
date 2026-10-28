@@ -837,15 +837,22 @@ export function autofixStatusText(a: Pick<AutofixAttempt, 'status' | 'strategy' 
 
 /**
  * The "To fix" text without the failure summary an older server appends after it ("…then retry: <summary>",
- * often cut short with "…"): the panel shows the summary once, on the failure line above.
+ * often cut short with "…"): the panel shows the summary once, on the failure line above. A leading
+ * `heading` (the failure's badge, e.g. "Usage limit reached: wait…") is dropped too.
  */
-export function fixTextShown(fix: string, summary?: string | null): string {
+export function fixTextShown(fix: string, summary?: string | null, heading?: string | null): string {
   const s = (summary ?? '').trim();
-  if (!s) return fix;
-  const at = fix.indexOf(s.slice(0, Math.min(40, s.length)));
-  if (at <= 0) return fix;
-  const head = fix.slice(0, at).replace(/[\s:;,.\u2013\u2014-]+$/, '');
-  return head ? `${head}.` : fix;
+  const at = s ? fix.indexOf(s.slice(0, Math.min(40, s.length))) : -1;
+  const head = at > 0 ? fix.slice(0, at).replace(/[\s:;,.\u2013\u2014-]+$/, '') : '';
+  return dropHeading(head ? `${head}.` : fix, heading);
+}
+
+/** `text` without a leading "<heading>:" the failure's badge already shows; kept whole when nothing follows. */
+function dropHeading(text: string, heading?: string | null): string {
+  const h = (heading ?? '').trim();
+  if (!h || text.slice(0, h.length).toLowerCase() !== h.toLowerCase()) return text;
+  const rest = text.slice(h.length).replace(/^[\s:;,.\u2013\u2014-]+/, '');
+  return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : text;
 }
 
 /**

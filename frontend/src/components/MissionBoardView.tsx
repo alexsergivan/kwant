@@ -723,7 +723,7 @@ export const FailureBox: React.FC<{
   const recovery = recoveryText(task);
   if (!f && !a) return null;
   const tone = f ? failureTone(f.class) : 'violet';
-  const fix = fixText ? fixTextShown(fixText, f?.summary) : null;
+  const fix = fixText ? fixTextShown(fixText, f?.summary, f ? failureClassLabel(f.class) : null) : null;
   // With a "To fix", a skipped retry gets one short line (or none), not the reason again.
   const folded = fix && a ? skippedWithFixText(a) : undefined;
   const status = folded !== undefined ? folded : a ? autofixStatusText(a, now) : null;

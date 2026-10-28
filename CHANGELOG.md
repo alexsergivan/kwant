@@ -83,6 +83,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and its spend doesn't change. Before, the check was only approved and never ran.
 
 ### Fixed
+- **Mission board: "To fix" no longer repeats the failure's name.** A usage-limit failure read "Usage
+  limit reached" on its badge and again at the start of "To fix"; "To fix" now starts with what to do.
 - **Mission board: AutoFix hides passwords without hiding command names.** A check's command name or a
   file path is no longer shown as `[redacted]`, short passwords after a flag like `--key` or `-p` (for
   mysql, sshpass, redis-cli) are hidden, and a stray `]` no longer appears. A sign-in or usage-limit
