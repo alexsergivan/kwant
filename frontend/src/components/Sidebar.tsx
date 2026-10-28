@@ -274,7 +274,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={onOpenSpaceSettings}
-            title="Bots here run commands, file writes and tools without asking. Change it in Space settings."
+            title="Bots here act without asking, including deletions, publishing and sign-ins. Payments still ask you. Change it in Space settings."
             className="mt-1 w-full flex items-center gap-1.5 px-2 py-1 rounded-md border border-amber-500/30 bg-amber-500/10 text-[11px] font-medium text-amber-200 hover:bg-amber-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400"
           >
             <ShieldOff size={12} aria-hidden="true" className="shrink-0" />
@@ -722,7 +722,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           Needs you{needsYou[k.id] > 1 ? ` · ${needsYou[k.id]}` : ''}
                         </span>
                       )}
-                      {approvalsOff(k) && <ApprovalsOffBadge compact title={`${k.name} runs commands, file writes and tools without asking.`} />}
+                      {approvalsOff(k) && <ApprovalsOffBadge compact title={`${k.name} acts without asking. Payments still ask you.`} />}
                       {onEditKwant && !phone && (
                         <button
                           type="button"

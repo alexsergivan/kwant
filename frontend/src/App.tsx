@@ -2507,7 +2507,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const pendingSkillCounts = pendingByKwant(pendingSkills);
   const pendingHere = currentKwant ? pendingSkillCounts[currentKwant.id] ?? 0 : 0;
   const approvalsBadge = approvalsOff(currentKwant) ? (
-    <ApprovalsOffBadge onClick={() => currentKwant && openAgentSettings(currentKwant)} title={`${currentKwant?.name} runs commands, file writes and tools without asking. Open its settings to change it.`} />
+    <ApprovalsOffBadge onClick={() => currentKwant && openAgentSettings(currentKwant)} title={`${currentKwant?.name} acts without asking, including deletions, publishing and sign-ins. Payments still ask you. Open its settings to change it.`} />
   ) : null;
   const skillsBadge =
     currentKwant && pendingHere > 0 ? (

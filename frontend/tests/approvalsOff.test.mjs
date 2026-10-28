@@ -231,3 +231,18 @@ test('sidebar: space off shows the header line; nothing at all while every bot a
   const older = m.sidebar({ space: space(undefined), kwants: [bot('k1', 'Dev', undefined, undefined)] });
   assert.doesNotMatch(text(older), /Approvals off/);
 });
+
+test('every approvals-off hover hint says payments still ask: badge, sidebar rows and header, chat header', async () => {
+  assert.match(m.badge({}), /title="[^"]*Payments still ask you\.[^"]*"/);
+  const html = m.sidebar({ space: space('off'), kwants: [bot('k1', 'Dev', 'inherit', 'off')] });
+  const tips = [...html.matchAll(/title="([^"]*without asking[^"]*)"/g)].map((x) => x[1]);
+  assert.equal(tips.length, 2, 'the space header line and the bot row');
+  for (const t of tips) assert.match(t, /Payments still ask you\./);
+  assert.match(m.spaceSetting({ value: 'off' }), /title="Approvals are off in Work\. Payments still ask you\."/);
+  // The chat header badge lives in App.tsx, which doesn't render here: check every title passed to the marker.
+  const { readFile } = await import('node:fs/promises');
+  for (const f of ['src/App.tsx', 'src/components/Sidebar.tsx', 'src/components/ApprovalsSetting.tsx']) {
+    const src = await readFile(new URL(`../${f}`, import.meta.url), 'utf8');
+    for (const [, tip] of src.matchAll(/<ApprovalsOffBadge[^>]*\btitle=\{`([^`]*)`\}/g)) assert.match(tip, /Payments still ask you\./, `${f}: ${tip}`);
+  }
+});

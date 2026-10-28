@@ -198,7 +198,7 @@ export const SpaceApprovalsSetting: React.FC<{
       <p className="flex items-center gap-2 text-xs font-medium text-zinc-200">
         {current === 'off' ? <ShieldOff size={14} className="text-amber-300" aria-hidden="true" /> : <ShieldCheck size={14} className="text-zinc-400" aria-hidden="true" />}
         Approvals
-        {current === 'off' && <ApprovalsOffBadge title={`Approvals are off in ${spaceName}.`} />}
+        {current === 'off' && <ApprovalsOffBadge title={`Approvals are off in ${spaceName}. Payments still ask you.`} />}
       </p>
       <ExposedBanner
         store={passwords}
