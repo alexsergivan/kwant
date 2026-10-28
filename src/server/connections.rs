@@ -555,6 +555,37 @@ pub async fn connect_composio_app(
     }
 }
 
+/// `GET /api/connections/composio/apps/:slug/status?space=`: whether the user in the connector's
+/// URL (`user_id`) has finished signing in to the app on Composio: `{"connected": bool}`. The
+/// connection card polls it after Connect. 409 when Composio can't be used for this.
+pub async fn composio_app_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Scope(space): Scope,
+    axum::extract::Path(slug): axum::extract::Path<String>,
+) -> Response {
+    if let Err(r) = refuse_agent_tokens(&state, &headers, REFUSAL).await {
+        return r;
+    }
+    if !composio::valid_slug(&slug) {
+        return error(StatusCode::BAD_REQUEST, "not a Composio app name");
+    }
+    let (server, key) = match composio_with_key(&state, &space).await {
+        Ok(found) => found,
+        Err(r) => return r,
+    };
+    let Some(user_id) = server.url.as_deref().and_then(composio::user_id_of) else {
+        return error(
+            StatusCode::CONFLICT,
+            "Your Composio URL has no user_id, so kwant can't tell which Composio user to check. Check the app on composio.dev instead",
+        );
+    };
+    match state.composio_api.is_connected(&key, &user_id, &slug).await {
+        Ok(connected) => Json(json!({"connected": connected})).into_response(),
+        Err(e) => composio_failed(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

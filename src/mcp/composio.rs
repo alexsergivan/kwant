@@ -4,7 +4,8 @@
 //!
 //! Sources: <https://docs.composio.dev/reference/api-reference/toolkits/getToolkits>,
 //! <https://docs.composio.dev/reference/api-reference/tool-router/postToolRouterSession> and
-//! <https://docs.composio.dev/reference/api-reference/tool-router/postToolRouterSessionBySessionIdLink>.
+//! <https://docs.composio.dev/reference/api-reference/tool-router/postToolRouterSessionBySessionIdLink> and
+//! <https://docs.composio.dev/reference/api-reference/connected-accounts/getConnectedAccounts>.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -119,6 +120,21 @@ pub fn parse_apps(body: &Value) -> Vec<ComposioApp> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Whether a `GET /api/v3.1/connected_accounts` answer holds a working account of `user_id` for the
+/// app `slug`. Composio filters by user, app and status already; this checks again, so a wider
+/// answer never reads as connected. Composio is dropping `user_id` from the answer, so a missing
+/// one is fine but a different one isn't.
+pub fn has_active_account(body: &Value, user_id: &str, slug: &str) -> bool {
+    body["items"].as_array().is_some_and(|items| {
+        items.iter().any(|a| {
+            a["status"] == "ACTIVE"
+                && a["toolkit"]["slug"] == slug
+                && a["is_disabled"] != json!(true)
+                && a["user_id"].as_str().is_none_or(|u| u == user_id)
+        })
+    })
 }
 
 impl ComposioApi {
@@ -245,6 +261,23 @@ impl ComposioApi {
             ComposioError::Upstream(201, "no https redirect_url in the answer".into())
         })
     }
+
+    /// Whether `user_id` has a working (ACTIVE) connection to the app `slug` on Composio.
+    pub async fn is_connected(
+        &self,
+        api_key: &str,
+        user_id: &str,
+        slug: &str,
+    ) -> Result<bool, ComposioError> {
+        let mut url = self.url(&["api", "v3.1", "connected_accounts"])?;
+        url.query_pairs_mut()
+            .append_pair("user_ids", user_id)
+            .append_pair("toolkit_slugs", slug)
+            .append_pair("statuses", "ACTIVE")
+            .append_pair("limit", &PAGE.to_string());
+        let body = self.send(self.client.get(url), api_key).await?;
+        Ok(has_active_account(&body, user_id, slug))
+    }
 }
 
 #[cfg(test)]
@@ -298,5 +331,33 @@ mod tests {
         assert_eq!(apps[0].tools_count, Some(23));
         assert_eq!(apps[1].logo, None, "only https logos");
         assert!(parse_apps(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn only_an_active_enabled_account_of_this_user_and_app_counts() {
+        let account = |status: &str, slug: &str, extra: Value| {
+            let mut a = json!({"id": "ca_1", "status": status, "toolkit": {"slug": slug}});
+            for (k, v) in extra.as_object().unwrap() {
+                a[k] = v.clone();
+            }
+            json!({"items": [a], "next_cursor": null})
+        };
+        assert!(has_active_account(&account("ACTIVE", "gmail", json!({})), "u-1", "gmail"));
+        assert!(has_active_account(
+            &account("ACTIVE", "gmail", json!({"user_id": "u-1", "is_disabled": false})),
+            "u-1",
+            "gmail"
+        ));
+        for (body, why) in [
+            (account("INITIATED", "gmail", json!({})), "not finished"),
+            (account("EXPIRED", "gmail", json!({})), "expired"),
+            (account("ACTIVE", "slack", json!({})), "another app"),
+            (account("ACTIVE", "gmail", json!({"user_id": "u-2"})), "another user"),
+            (account("ACTIVE", "gmail", json!({"is_disabled": true})), "disabled"),
+            (json!({"items": []}), "none"),
+            (Value::Null, "no answer"),
+        ] {
+            assert!(!has_active_account(&body, "u-1", "gmail"), "{why}");
+        }
     }
 }

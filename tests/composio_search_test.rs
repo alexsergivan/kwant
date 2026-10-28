@@ -63,6 +63,27 @@ async fn fake_composio() -> (String, Seen) {
                 (StatusCode::CREATED, Json(json!({"redirect_url": "https://connect.composio.dev/link/ln_1", "link_token": "ln_1"})))
             }),
         )
+        .route(
+            "/api/v3.1/connected_accounts",
+            get(|State(seen): State<Seen>, h: HeaderMap, Query(q): Query<HashMap<String, String>>| async move {
+                let mut pairs: Vec<_> = q.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                pairs.sort();
+                seen.lock().unwrap().push(("GET".into(), format!("/api/v3.1/connected_accounts?{}", pairs.join("&")), key_of(&h), Value::Null));
+                let app = q.get("toolkit_slugs").cloned().unwrap_or_default();
+                match app.as_str() {
+                    "gmail" => (StatusCode::OK, Json(json!({"items": [
+                        {"id": "ca_1", "status": "ACTIVE", "toolkit": {"slug": "gmail"}, "is_disabled": false}
+                    ], "next_cursor": null}))),
+                    // Composio ignoring a filter must not read as connected.
+                    "slack" => (StatusCode::OK, Json(json!({"items": [
+                        {"id": "ca_2", "status": "INITIATED", "toolkit": {"slug": "slack"}},
+                        {"id": "ca_3", "status": "ACTIVE", "toolkit": {"slug": "gmail"}}
+                    ], "next_cursor": null}))),
+                    "broken" => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": {"message": "boom"}}))),
+                    _ => (StatusCode::OK, Json(json!({"items": [], "next_cursor": null}))),
+                }
+            }),
+        )
         .with_state(seen.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -378,4 +399,90 @@ async fn finding_apps_is_person_only() {
         seen.lock().unwrap().is_empty(),
         "a bot's token never reaches Composio"
     );
+}
+
+#[tokio::test]
+async fn app_status_tells_whether_the_sign_in_finished() {
+    let (env, seen) = env_with_fake().await;
+
+    // Not added, then added without a key: 409 and nothing sent.
+    let status = |slug: &str| format!("/api/connections/composio/apps/{slug}/status");
+    let (s, v) = call(&env.app, "GET", &status("gmail"), None).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("Add the Composio connector first"), "{v}");
+    add_composio(&env, "https://backend.composio.dev/v3/mcp/abc/mcp?user_id=u-1", None).await;
+    let (s, v) = call(&env.app, "GET", &status("gmail"), None).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("x-api-key"), "{v}");
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn app_status_asks_composio_for_this_user_and_app_only() {
+    let (env, seen) = env_with_fake().await;
+    add_composio(&env, "https://backend.composio.dev/v3/mcp/abc/mcp?user_id=u-1", Some("ck-secret-1")).await;
+    let status = |slug: &str| format!("/api/connections/composio/apps/{slug}/status");
+
+    for slug in ["Gmail", "a.b"] {
+        let (s, _) = call(&env.app, "GET", &status(slug), None).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{slug}");
+    }
+    assert!(seen.lock().unwrap().is_empty(), "a bad name never reaches Composio");
+
+    let (s, v) = call(&env.app, "GET", &status("gmail"), None).await;
+    assert_eq!((s, v.clone()), (StatusCode::OK, json!({"connected": true})), "{v}");
+    let (s, v) = call(&env.app, "GET", &status("notion"), None).await;
+    assert_eq!((s, v.clone()), (StatusCode::OK, json!({"connected": false})), "{v}");
+    let (s, v) = call(&env.app, "GET", &status("slack"), None).await;
+    assert_eq!(v, json!({"connected": false}), "an unfinished sign-in or another app's account isn't this one: {s} {v}");
+    let (s, v) = call(&env.app, "GET", &status("broken"), None).await;
+    assert_eq!(s, StatusCode::BAD_GATEWAY, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("boom"), "{v}");
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 4, "{seen:?}");
+    assert!(seen.iter().all(|(_, _, key, _)| key == "ck-secret-1"));
+    assert_eq!(
+        seen[0].1,
+        "/api/v3.1/connected_accounts?limit=20&statuses=ACTIVE&toolkit_slugs=gmail&user_ids=u-1"
+    );
+}
+
+#[tokio::test]
+async fn app_status_explains_a_refused_key_or_missing_user() {
+    let (env, seen) = env_with_fake().await;
+    add_composio(&env, "https://backend.composio.dev/v3/mcp/abc/mcp", Some("ck-1")).await;
+    let (s, v) = call(&env.app, "GET", "/api/connections/composio/apps/gmail/status", None).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("no user_id"), "{v}");
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn app_status_is_person_only() {
+    let (env, seen) = env_with_fake().await;
+    add_composio(&env, "https://backend.composio.dev/v3/mcp/abc/mcp?user_id=u-1", Some("ck-secret-1")).await;
+    let path = "/api/connections/composio/apps/gmail/status";
+    assert_eq!(call_remote(&env.app, "GET", path).await, StatusCode::UNAUTHORIZED);
+
+    let bot = env.state.db.get_kwant(&env.a).await.unwrap().unwrap();
+    let scope = SelfScope {
+        kwant_id: bot.id.clone(),
+        kwant_name: bot.name.clone(),
+        ..Default::default()
+    };
+    let folder = tempfile::tempdir().unwrap();
+    let (_, token) = mcp_runtime::prepare_turn_with_self(
+        &env.state,
+        &bot,
+        None,
+        Some(folder.path().to_path_buf()),
+        Some(scope),
+    )
+    .await
+    .unwrap();
+    let bearer = format!("Bearer {token}");
+    let (s, v) = call_with(&env.app, "GET", path, None, &[("authorization", &bearer)]).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert!(seen.lock().unwrap().is_empty(), "a bot's token never reaches Composio");
 }

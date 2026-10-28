@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
+- **kwant can tell when an app finished connecting through Composio.** A new person-only
+  `GET /api/connections/composio/apps/:slug/status` answers whether you've signed in to the app, so the
+  connection card can show "Connected" once you have.
 - **Bots try the way round before saying "not possible".** Bots can now read a public page's HTML with a
   new `page_source` tool: meta description, canonical, robots, Open Graph tags, headings, image alt text
   and structured data, which reading a page normally leaves out. When a bot lacks access to an app such

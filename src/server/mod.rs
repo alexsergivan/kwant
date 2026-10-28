@@ -299,6 +299,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/connections/composio", post(connections::add_composio))
         .route("/api/connections/composio/apps", get(connections::search_composio_apps))
         .route("/api/connections/composio/apps/:slug/connect", post(connections::connect_composio_app))
+        .route("/api/connections/composio/apps/:slug/status", get(connections::composio_app_status))
         .route("/api/mcp/servers", get(mcp_routes::list_servers).post(mcp_routes::create_server))
         .route(
             "/api/mcp/servers/:id",

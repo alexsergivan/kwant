@@ -217,6 +217,12 @@ most 3 in all. The card is a message from the bot with `meta.kind = "connection_
 (the person-only `POST /api/connections/composio/apps/:slug/connect` that starts the sign-in). Its text
 names the steps, so it reads on its own where the app has no card for it.
 
+After Connect, the card polls the person-only `GET /api/connections/composio/apps/:slug/status?space=`,
+which answers `{"connected": bool}`: true once the connector's `user_id` has an `ACTIVE`, not disabled
+account for that app on Composio (`GET /api/v3.1/connected_accounts`, with the person's key). 400 for a
+bad app name; 409 when Composio isn't added, has no key, the key is refused, or the URL has no
+`user_id`; 502 when Composio fails or can't be reached. A bot's token gets 403.
+
 ## Agent runtime
 
 - **Tool names** are `mcp__<server>__<tool>`.
