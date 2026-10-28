@@ -325,3 +325,90 @@ async fn self_tools_have_no_money_words() {
     mcp_runtime::finish_turn(&e.state, &token).await;
     e.state.turns.end_turn(&turn_id);
 }
+
+/// The card's `details.payment_reason` (what hides "Always allow" on the card) is in every form
+/// the server sends it: the live event, a reload's `GET /api/away` (pending, then still waiting
+/// after the turn stopped) and `GET /api/approvals`, for broker and local-shell cards alike.
+#[tokio::test]
+async fn a_reloaded_payment_card_still_carries_its_reason() {
+    let e = setup().await;
+    set_approvals(&e, "off").await;
+    let mut events = e.state.event_sender.subscribe();
+    let next_card = |events: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>| {
+        let mut events = events.resubscribe();
+        async move {
+            loop {
+                if let RuntimeEvent::ApprovalRequired { id, details, .. } = events.recv().await.unwrap() {
+                    break (id, details);
+                }
+            }
+        }
+    };
+    let away_card = |id: String| {
+        let app = e.app.clone();
+        async move {
+            let (s, v) = call(&app, "GET", "/api/away", None, None).await;
+            assert_eq!(s, StatusCode::OK, "{v}");
+            v["waiting"].as_array().unwrap().iter().find(|i| i["id"] == json!(id)).cloned().unwrap_or_else(|| panic!("{id} not in {v}"))
+        }
+    };
+    let listed = |id: String| {
+        let app = e.app.clone();
+        async move {
+            let (_, rows) = call(&app, "GET", "/api/approvals", None, None).await;
+            rows.as_array().unwrap().iter().find(|r| r["id"] == json!(id)).cloned().unwrap_or_else(|| panic!("{id} not in {rows}"))
+        }
+    };
+
+    // A Composio payment through the broker, still pending
+    let a = Arc::new(approver(&e, Duration::from_millis(1500)));
+    let req = request(&e, "composio", "COMPOSIO_MULTI_EXECUTE_TOOL", json!({"tools": [{"tool_slug": "STRIPE_CREATE_PAYMENT_INTENT", "arguments": {"amount": 500}}]}));
+    let card = next_card(&mut events);
+    let pending = {
+        let a = a.clone();
+        tokio::spawn(async move { a.decide(req).await })
+    };
+    let (id, live) = card.await;
+    let reason = live["payment_reason"].as_str().expect("the live card names the payment").to_string();
+    let item = away_card(id.clone()).await;
+    assert_eq!(item["status"], "pending", "{item}");
+    assert_eq!(item["tool_name"], "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL", "{item}");
+    assert_eq!(item["details"]["payment_reason"], json!(reason), "a reload while it's pending: {item}");
+    assert_eq!(listed(id.clone()).await["details"]["payment_reason"], json!(reason));
+
+    // The turn stops waiting: the card stays up as `waiting`, with the same reason
+    assert_eq!(pending.await.unwrap(), ApprovalOutcome::Unanswered);
+    let item = away_card(id.clone()).await;
+    assert_eq!(item["status"], "waiting", "{item}");
+    assert_eq!(item["details"]["payment_reason"], json!(reason), "a reload after the turn stopped: {item}");
+    assert_eq!(listed(id).await["details"]["payment_reason"], json!(reason));
+
+    // A local shell payment (approve_local_shell's own card)
+    let folder = tempdir().unwrap();
+    let card = next_card(&mut events);
+    let shell = {
+        let (state, bot, path) = (e.state.clone(), e.bot.id.clone(), folder.path().to_path_buf());
+        tokio::spawn(async move { kwnt::server::computer::approve_local_shell(&state, &bot, STRIPE_POST, &path).await })
+    };
+    let (id, live) = card.await;
+    let reason = live["payment_reason"].as_str().expect("the live shell card names the payment").to_string();
+    assert!(reason.contains("stripe.com"), "{reason}");
+    assert_eq!(away_card(id.clone()).await["details"]["payment_reason"], json!(reason));
+    assert_eq!(listed(id.clone()).await["details"]["payment_reason"], json!(reason));
+    assert!(e.state.broker.resolve(&id, ApprovalDecision::Deny).await);
+    assert!(!shell.await.unwrap());
+
+    // An ordinary card carries no reason, so it keeps "Always allow"
+    set_approvals(&e, "ask").await;
+    let card = next_card(&mut events);
+    let plain = {
+        let a = a.clone();
+        let req = bash(&e, "touch x");
+        tokio::spawn(async move { a.decide(req).await })
+    };
+    let (id, live) = card.await;
+    assert!(live.get("payment_reason").is_none(), "{live}");
+    assert!(away_card(id.clone()).await["details"].get("payment_reason").is_none());
+    assert!(e.state.broker.resolve(&id, ApprovalDecision::Deny).await);
+    assert_eq!(plain.await.unwrap(), ApprovalOutcome::Denied);
+}
