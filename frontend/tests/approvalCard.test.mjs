@@ -54,3 +54,67 @@ test('a normal ticket keeps the raw details and Always Allow', () => {
   assert.match(html, /Always Allow/);
   assert.doesNotMatch(html, /run a command on your computer/);
 });
+
+// Shaped like BrokerApprover::classified and approve_local_shell_in with the payment floor (#110).
+const stripeTicket = (extra = {}) => ({
+  id: 'p1',
+  tool_name: 'mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL',
+  details: {
+    source: 'mcp',
+    server: 'composio',
+    tool: 'COMPOSIO_MULTI_EXECUTE_TOOL',
+    kwant_name: 'Ledger',
+    arguments: { tools: [{ tool_slug: 'STRIPE_CREATE_PAYMENT_INTENT', arguments: { amount: 1200 } }] },
+    payment_reason: 'composio STRIPE_CREATE_PAYMENT_INTENT is a write action of Stripe, a money app',
+    ...extra,
+  },
+});
+
+test('a payment card says why it is a payment and offers only Allow Once and Deny', () => {
+  const html = render(stripeTicket());
+  assert.match(html, /This looks like a payment:<\/span> composio STRIPE_CREATE_PAYMENT_INTENT is a write action of Stripe, a money app\./);
+  assert.match(html, /Payments always ask you, even with approvals off/);
+  assert.match(html, /Allow Once/);
+  assert.match(html, /Deny/);
+  assert.doesNotMatch(html, /Always Allow|Always this session/);
+  assert.match(html, /role="note"/);
+});
+
+test('a payment shown as a Claude tool card also drops Always this session', () => {
+  const html = render({
+    id: 'p2',
+    tool_name: 'Bash',
+    details: { source: 'claude_builtin', tool: 'Bash', arguments: { command: 'stripe charges create --amount 1' }, payment_reason: 'stripe CLI changes something.' },
+  });
+  assert.match(html, /This looks like a payment:<\/span> stripe CLI changes something\./, 'one full stop, not two');
+  assert.doesNotMatch(html, /Always this session|Always Allow/);
+});
+
+test('a payment by local shell keeps its command and shows the reason', () => {
+  const t = shellTicket('curl -X POST https://api.stripe.com/v1/charges');
+  t.details.payment_reason = 'POST to a payment host (api.stripe.com)';
+  const html = render(t);
+  assert.match(html, /This looks like a payment:<\/span> POST to a payment host \(api.stripe.com\)\./);
+  assert.match(html, /run a command on your computer/);
+  assert.doesNotMatch(html, /Always Allow/);
+});
+
+test('cards without payment_reason are unchanged: no payment line, Always buttons as before', () => {
+  for (const t of [
+    { id: 'n2', tool_name: 'write_file', details: { path: '/tmp/a.txt' } },
+    { id: 'n3', tool_name: 'Bash', details: { source: 'claude_builtin', tool: 'Bash', arguments: { command: 'ls' } } },
+    stripeTicket({ payment_reason: undefined }),
+    stripeTicket({ payment_reason: 42 }),
+  ]) {
+    const html = render(t);
+    assert.doesNotMatch(html, /looks like a payment|role="note"/, t.id);
+    assert.match(html, /Always Allow|Always this session/, t.id);
+  }
+});
+
+test('a still-open payment card keeps the reason and offers no always', () => {
+  const html = render({ ...stripeTicket(), waiting: true });
+  assert.match(html, /This looks like a payment/);
+  assert.match(html, /Allow and continue/);
+  assert.doesNotMatch(html, /Always/);
+});

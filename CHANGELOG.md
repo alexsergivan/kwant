@@ -21,6 +21,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   money or accounts are better kept on "Ask" or "Ask only when risky". Nothing changes until you press
   Turn off approvals; Cancel (or Escape) keeps the current setting. While approvals are off, a note next
   to the setting keeps saying so.
+- **Approvals: payment cards say why.** A card for something that looks like a payment says so and
+  why ("This looks like a payment: …"), and offers only Allow Once and Deny: allowing a payment covers
+  that one payment, so there is no "Always" button on it. Other cards are unchanged.
 - **Mission board: AutoFix, change approvals and restore.** A failed task shows why it failed in plain
   words, what AutoFix plans, its tries and what retries cost, with Retry now and Don't retry. Proposed
   changes to a check, the acceptance or a routine appear in Needs you with before and after, and only
