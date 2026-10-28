@@ -83,7 +83,7 @@ test('the board renders every column, with Blocked and Failed as badges', () => 
   assert.doesNotMatch(html, /data-column="blocked"|data-column="failed"/);
   assert.match(html, />Blocked</);
   assert.match(html, />Failed</);
-  assert.match(html, /Out of budget/);
+  assert.match(html, /Reached its token limit/);
   assert.match(html, /Checks failed 3 of 3 times/);
   // Phone: tabs with counts drive one column at a time.
   assert.match(html, /role="tablist"/);
@@ -111,7 +111,7 @@ test('checksText and costText read plainly', () => {
   assert.equal(m.checksText({ status: 'passed', passed: 2, failed: 0, total: 3 }).text, '2 checks passed');
   assert.equal(m.checksText({ status: 'passed', passed: 1, failed: 0, total: 1 }).text, 'Check passed');
   assert.equal(m.costText(12400, 50000), '12.4k of 50k tokens');
-  assert.equal(m.costText(2_000_000, 0), '2M tokens');
+  assert.equal(m.costText(2_000_000, 0), '2M tokens used');
   assert.equal(m.costRatio(80, 50), 1);
 });
 
@@ -431,8 +431,8 @@ test('a draft mission waits for the person; over budget says what it means', () 
   assert.match(html, /Nothing runs until you approve it/);
   assert.match(html, /Approve mission/);
   const over = ui.mission({ mission: missionRow({ over_budget: true, spent_tokens: 210000 }), busy: false, onApprove: noop, onCancel: noop });
-  assert.match(over, /Over budget/);
-  assert.match(over, /raise the budget/);
+  assert.match(over, /Over its limit/);
+  assert.match(over, /raise or remove the mission’s token limit/);
   // The board lists drafts on "All work".
   assert.match(ui.view(viewProps({ missions: [missionRow({ status: 'draft' })] })), /Approve mission/);
 });

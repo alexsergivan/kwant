@@ -87,8 +87,15 @@ import {
   openFlags,
   resolveOptions,
   resolvedText,
+  LIMIT_PICKS,
+  LIMIT_RANGE,
+  LimitScope,
+  NO_LIMIT,
   costRatio,
   costText,
+  limitError,
+  outOfBudget,
+  parseLimit,
   durationText,
   eventText,
   formatBytes,
@@ -155,6 +162,146 @@ const SpendBar: React.FC<{ spent: number; budget: number; label: string }> = ({ 
       className="h-1.5 rounded-full bg-zinc-800 overflow-hidden"
     >
       <div className={`h-full rounded-full ${r >= 1 ? 'bg-rose-500' : r >= 0.8 ? 'bg-amber-500' : 'bg-sky-500'}`} style={{ width: `${Math.round(r * 100)}%` }} />
+    </div>
+  );
+};
+
+/**
+ * A token limit, set in place: quick picks, a custom amount, or none. Closed, it's a "Set a limit"
+ * link (no limit) or "Change" / "Remove limit". `spent` hides picks a new limit would already be under.
+ */
+export const LimitEditor: React.FC<{
+  budget: number;
+  spent: number;
+  scope: LimitScope;
+  disabled?: boolean;
+  /** Opened from the start, e.g. by "Raise limit". */
+  startOpen?: boolean;
+  /** Text on the custom field's save button. */
+  saveLabel?: string;
+  /** Hide "No limit" (it has its own button nearby). */
+  hideNone?: boolean;
+  onSet: (budget: number) => void;
+  onClose?: () => void;
+}> = ({ budget, spent, scope, disabled = false, startOpen = false, saveLabel = 'Save', hideNone = false, onSet, onClose }) => {
+  const [open, setOpen] = useState(startOpen);
+  const [custom, setCustom] = useState<string | null>(null);
+  const fieldId = useId();
+  const hintId = useId();
+  const above = budget > 0 || startOpen ? spent : 0;
+  const err = custom === null ? null : limitError(custom, scope, above);
+  const picks = LIMIT_PICKS.filter((n) => n > above && n >= LIMIT_RANGE[scope][0]);
+  const close = () => {
+    setOpen(false);
+    setCustom(null);
+    onClose?.();
+  };
+  const set = (n: number) => {
+    onSet(n);
+    close();
+  };
+  const link = `inline-flex items-center min-h-[32px] rounded text-[11px] text-sky-300 hover:text-sky-200 hover:underline underline-offset-2 disabled:opacity-50 ${focusRing}`;
+  if (!open) {
+    return (
+      <span className="flex flex-wrap items-center gap-x-3" data-limit-editor="closed">
+        {budget > 0 ? (
+          <>
+            <button type="button" disabled={disabled} onClick={() => setOpen(true)} className={link} data-limit-change>
+              Change
+            </button>
+            <button type="button" disabled={disabled} onClick={() => onSet(NO_LIMIT)} className={link} data-limit-remove>
+              Remove limit
+            </button>
+          </>
+        ) : (
+          <button type="button" disabled={disabled} onClick={() => setOpen(true)} className={link} data-limit-set>
+            Set a limit
+          </button>
+        )}
+      </span>
+    );
+  }
+  const chip = (on: boolean) =>
+    `min-h-[40px] sm:min-h-[32px] px-2.5 rounded-lg border text-xs tabular-nums disabled:opacity-50 ${focusRing} ${
+      on ? 'border-sky-500 bg-sky-500/15 text-sky-100' : 'border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800'
+    }`;
+  return (
+    <div role="group" aria-label={`${scope === 'mission' ? 'Mission' : 'Task'} token limit`} className="mt-1.5 space-y-2" data-limit-editor="open">
+      <div className="flex flex-wrap gap-1.5">
+        {!hideNone && (
+          <button type="button" disabled={disabled} aria-pressed={budget === NO_LIMIT} onClick={() => set(NO_LIMIT)} className={chip(budget === NO_LIMIT)} data-limit-pick={0}>
+            No limit
+          </button>
+        )}
+        {picks.map((n) => (
+          <button key={n} type="button" disabled={disabled} aria-pressed={budget === n} onClick={() => set(n)} className={chip(budget === n)} data-limit-pick={n}>
+            {formatTokens(n)}
+          </button>
+        ))}
+        <button type="button" disabled={disabled} aria-pressed={custom !== null} onClick={() => setCustom((c) => (c === null ? '' : c))} className={chip(custom !== null)} data-limit-custom>
+          Custom
+        </button>
+      </div>
+      {custom !== null && (
+        <form
+          className="flex flex-wrap items-start gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const n = parseLimit(custom);
+            if (!err && n !== null) set(n);
+          }}
+        >
+          <label htmlFor={fieldId} className="sr-only">
+            Token limit
+          </label>
+          <input
+            id={fieldId}
+            autoFocus
+            inputMode="decimal"
+            autoComplete="off"
+            placeholder="e.g. 300k"
+            value={custom}
+            onChange={(e) => setCustom(e.target.value)}
+            aria-invalid={!!(custom.trim() && err)}
+            aria-describedby={hintId}
+            className={`${field} w-32 flex-none`}
+          />
+          <button type="submit" disabled={disabled || !!err} className={quietBtn}>
+            {saveLabel}
+          </button>
+          <p id={hintId} className={`basis-full text-[11px] ${custom.trim() && err ? 'text-rose-300' : 'text-zinc-500'}`}>
+            {custom.trim() && err ? err : 'Tokens, like 300k or 2M.'}
+          </p>
+        </form>
+      )}
+      <button type="button" onClick={close} className={link}>
+        Cancel
+      </button>
+    </div>
+  );
+};
+
+/** A task stopped by its token limit: the way on is to remove the limit, or raise it past what it used. */
+const LimitReachedBox: React.FC<{ task: Task; busy: boolean; onContinue?: (budget: number) => void }> = ({ task: t, busy, onContinue }) => {
+  const [raising, setRaising] = useState(false);
+  return (
+    <div className="px-3 py-2.5 rounded-lg border border-rose-500/30 bg-rose-500/10 space-y-2" data-limit-reached>
+      <p className="text-xs text-rose-200">
+        It stopped at its {formatTokens(t.budget_tokens)} token limit after using {formatTokens(t.spent_tokens)}. Remove the limit to let it finish, or raise it.
+      </p>
+      {onContinue && !raising && (
+        <div className="flex flex-wrap gap-2">
+          <button type="button" disabled={busy} onClick={() => onContinue(NO_LIMIT)} className={mainBtn} data-remove-limit-continue>
+            Remove limit and continue
+          </button>
+          <button type="button" disabled={busy} onClick={() => setRaising(true)} className={quietBtn} data-raise-limit>
+            Raise limit
+          </button>
+        </div>
+      )}
+      {onContinue && raising && (
+        <LimitEditor budget={t.budget_tokens} spent={t.spent_tokens} scope="task" disabled={busy} startOpen hideNone saveLabel="Raise and continue" onSet={onContinue} onClose={() => setRaising(false)} />
+      )}
     </div>
   );
 };
@@ -239,7 +386,9 @@ export const MissionSummary: React.FC<{
   busy: boolean;
   onApprove: () => void;
   onCancel: () => void;
-}> = ({ mission: m, busy, onApprove, onCancel }) => {
+  /** Set or remove the mission's token limit (0 = none). */
+  onSetBudget?: (budget: number) => void;
+}> = ({ mission: m, busy, onApprove, onCancel, onSetBudget }) => {
   const st = missionStatusLabel(m.status);
   const total = Object.entries(m.counts)
     .filter(([k]) => k !== 'cancelled')
@@ -253,7 +402,7 @@ export const MissionSummary: React.FC<{
           {m.goal && <p className="mt-0.5 text-xs text-zinc-400 break-words">{m.goal}</p>}
         </div>
         <Badge tone={st.tone}>{st.label}</Badge>
-        {m.over_budget && <Badge tone="rose">Over budget</Badge>}
+        {m.over_budget && <Badge tone="rose">Over its limit</Badge>}
       </div>
       <div className="space-y-1">
         <div className="flex flex-wrap justify-between gap-x-3 text-[11px] text-zinc-400">
@@ -261,11 +410,18 @@ export const MissionSummary: React.FC<{
             {m.counts.verified} of {total} task{total === 1 ? '' : 's'} verified
             {m.lead_name ? ` · Led by ${m.lead_name}` : ''}
           </span>
-          <span className="tabular-nums">{costText(m.spent_tokens, m.budget_tokens)}</span>
+          <span className="tabular-nums" data-mission-cost>
+            {costText(m.spent_tokens, m.budget_tokens)}
+          </span>
         </div>
-        <SpendBar spent={m.spent_tokens} budget={m.budget_tokens} label="Mission budget used" />
+        {m.budget_tokens > 0 && <SpendBar spent={m.spent_tokens} budget={m.budget_tokens} label="Mission token limit used" />}
+        {onSetBudget && m.status !== 'done' && m.status !== 'cancelled' && (
+          <div className="flex justify-end">
+            <LimitEditor budget={m.budget_tokens} spent={m.spent_tokens} scope="mission" disabled={busy} onSet={onSetBudget} />
+          </div>
+        )}
       </div>
-      {m.over_budget && <p className="text-[11px] text-rose-300">No new task starts until you raise the budget.</p>}
+      {m.over_budget && <p className="text-[11px] text-rose-300">No new task starts until you raise or remove the mission’s token limit.</p>}
       {m.status === 'draft' && (
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <p className="text-xs text-amber-200 flex-1 min-w-[12rem]">{m.lead_name ?? 'A bot'} planned this. Nothing runs until you approve it.</p>
@@ -289,7 +445,10 @@ export const TaskCard: React.FC<{
   now?: number;
   showMission?: boolean;
   onOpen: (t: Task) => void;
-}> = ({ task: t, names, now = Date.now(), showMission = true, onOpen }) => {
+  /** Out of budget: remove its limit and put it back in Ready, from the card. */
+  onRemoveLimit?: (t: Task) => void;
+  busy?: boolean;
+}> = ({ task: t, names, now = Date.now(), showMission = true, onOpen, onRemoveLimit, busy = false }) => {
   const owner = (t.owner_kwant_id && names[t.owner_kwant_id]) || t.owner_name;
   const checks = checksText(t.checks_summary);
   const optionalNote = optionalChecksNote(t.checks_summary);
@@ -374,6 +533,11 @@ export const TaskCard: React.FC<{
           )}
         </span>
       </button>
+      {onRemoveLimit && outOfBudget(t) && (
+        <button type="button" disabled={busy} onClick={() => onRemoveLimit(t)} className={`${mainBtn} mt-1.5 w-full`} data-card-remove-limit>
+          Remove limit and continue
+        </button>
+      )}
     </li>
   );
 };
@@ -388,7 +552,9 @@ export const Board: React.FC<{
   showMission?: boolean;
   onColumn: (c: Column) => void;
   onOpen: (t: Task) => void;
-}> = ({ tasks, names, column, now, showMission, onColumn, onOpen }) => {
+  onRemoveLimit?: (t: Task) => void;
+  busy?: boolean;
+}> = ({ tasks, names, column, now, showMission, onColumn, onOpen, onRemoveLimit, busy }) => {
   const grouped = useMemo(() => groupByColumn(tasks), [tasks]);
   const tabsId = useId();
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -406,7 +572,7 @@ export const Board: React.FC<{
     return items.length ? (
       <ul className="space-y-2">
         {items.map((t) => (
-          <TaskCard key={t.id} task={t} names={names} now={now} showMission={showMission} onOpen={onOpen} />
+          <TaskCard key={t.id} task={t} names={names} now={now} showMission={showMission} onOpen={onOpen} onRemoveLimit={onRemoveLimit} busy={busy} />
         ))}
       </ul>
     ) : (
@@ -1241,6 +1407,10 @@ export const TaskDetailBody: React.FC<{
   onRestoreError?: (e: unknown) => void;
   /** Flight School: the person sets the task's kind of work. */
   onSetClass?: (taskClass: string) => void;
+  /** Set or remove the task's token limit (0 = none). */
+  onSetBudget?: (budget: number) => void;
+  /** Out of budget: set the new limit (0 = none) and put it back in Ready. */
+  onContinueWithLimit?: (budget: number) => void;
 }> = ({
   detail,
   names,
@@ -1264,8 +1434,11 @@ export const TaskDetailBody: React.FC<{
   onRestored,
   onRestoreError,
   onSetClass,
+  onSetBudget,
+  onContinueWithLimit,
 }) => {
   const t = detail.task;
+  const limitHit = outOfBudget(t);
   const flags = openFlags(t);
   const others = t.needs_you.filter((n) => !OWN_SECTION.has(n.kind));
   const changeItems = t.needs_you.filter((n) => n.kind === 'workflow_change');
@@ -1282,7 +1455,8 @@ export const TaskDetailBody: React.FC<{
   const reasonId = useId();
   const owner = (t.owner_kwant_id && names[t.owner_kwant_id]) || t.owner_name;
   const st = stateLabel(t.state);
-  const actions = actionsFor(t);
+  // Unblocking without a new limit would stop it again at once.
+  const actions = actionsFor(t).filter((a) => !(limitHit && a === 'unblock'));
   const chat = sourceChat(t);
   const [showAll, setShowAll] = useState(false);
   const events = showAll ? detail.events : detail.events.slice(-12);
@@ -1310,7 +1484,8 @@ export const TaskDetailBody: React.FC<{
           {t.priority >= 2 && <Badge tone={t.priority >= 3 ? 'rose' : 'amber'}>{priorityLabel(t.priority)}</Badge>}
           {t.mission_title && <span className="text-[11px] text-zinc-500 break-words">{t.mission_title}</span>}
         </div>
-        {(t.state === 'blocked' || t.state === 'failed') && (
+        {limitHit && <LimitReachedBox task={t} busy={busy} onContinue={onContinueWithLimit} />}
+        {((t.state === 'blocked' && !limitHit) || t.state === 'failed') && (
           <p className="px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-xs text-rose-200">{cardStatus(t, names, now)}</p>
         )}
         {notice && <Notice text={notice.text} error={notice.error} />}
@@ -1472,11 +1647,16 @@ export const TaskDetailBody: React.FC<{
         <Fact label="Owner">{owner ?? <span className="text-zinc-500">No owner yet</span>}</Fact>
         <Fact label="From">{sourceLabel(t.source_kind)}</Fact>
         <Fact label="Cost">
-          <span className="tabular-nums">{costText(t.spent_tokens, t.budget_tokens)}</span>
+          <span className="tabular-nums" data-task-cost>
+            {costText(t.spent_tokens, t.budget_tokens)}
+          </span>
           {t.budget_tokens > 0 && (
             <span className="block mt-1">
-              <SpendBar spent={t.spent_tokens} budget={t.budget_tokens} label="Task budget used" />
+              <SpendBar spent={t.spent_tokens} budget={t.budget_tokens} label="Task token limit used" />
             </span>
+          )}
+          {onSetBudget && !limitHit && t.state !== 'verified' && t.state !== 'cancelled' && (
+            <LimitEditor budget={t.budget_tokens} spent={t.spent_tokens} scope="task" disabled={busy} onSet={onSetBudget} />
           )}
         </Fact>
         <Fact label="Tries">
@@ -1783,6 +1963,12 @@ export interface MissionBoardViewProps {
   onOpenTask: (t: Task) => void;
   onApproveMission: (m: Mission) => void;
   onCancelMission: (m: Mission) => void;
+  /** Set or remove a mission's token limit (0 = none). */
+  onSetMissionBudget?: (m: Mission, budget: number) => void;
+  /** An out-of-budget card's one-click way on: remove its limit and put it back in Ready. */
+  onRemoveLimit?: (t: Task) => void;
+  /** A card action is running. */
+  busyCard?: boolean;
   onRefresh: () => void;
   onBack?: () => void;
   /** With a mission picked: the board, or how its tasks connect. */
@@ -1814,6 +2000,9 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
   onOpenTask,
   onApproveMission,
   onCancelMission,
+  onSetMissionBudget,
+  onRemoveLimit,
+  busyCard = false,
   onRefresh,
   onBack,
   view = 'board',
@@ -1914,7 +2103,15 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
                 </div>
               )}
 
-              {mission && <MissionSummary mission={mission} busy={busyMission} onApprove={() => onApproveMission(mission)} onCancel={() => onCancelMission(mission)} />}
+              {mission && (
+                <MissionSummary
+                  mission={mission}
+                  busy={busyMission}
+                  onApprove={() => onApproveMission(mission)}
+                  onCancel={() => onCancelMission(mission)}
+                  onSetBudget={onSetMissionBudget ? (n) => onSetMissionBudget(mission, n) : undefined}
+                />
+              )}
               {mission && onView && (
                 <div role="group" aria-label="Show as" className="inline-flex rounded-lg border border-zinc-800 p-0.5" data-view-toggle>
                   {(['board', 'graph'] as const).map((v) => (
@@ -1931,7 +2128,14 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
                 </div>
               )}
               {drafts.map((m) => (
-                <MissionSummary key={m.id} mission={m} busy={busyMission} onApprove={() => onApproveMission(m)} onCancel={() => onCancelMission(m)} />
+                <MissionSummary
+                  key={m.id}
+                  mission={m}
+                  busy={busyMission}
+                  onApprove={() => onApproveMission(m)}
+                  onCancel={() => onCancelMission(m)}
+                  onSetBudget={onSetMissionBudget ? (n) => onSetMissionBudget(m, n) : undefined}
+                />
               ))}
 
               {showGraph ? (
@@ -1958,7 +2162,17 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
                   </p>
                 </div>
               ) : (
-                <Board tasks={shown} names={names} column={column} now={now} showMission={!missionId} onColumn={onColumn} onOpen={onOpenTask} />
+                <Board
+                  tasks={shown}
+                  names={names}
+                  column={column}
+                  now={now}
+                  showMission={!missionId}
+                  onColumn={onColumn}
+                  onOpen={onOpenTask}
+                  onRemoveLimit={onRemoveLimit}
+                  busy={busyCard}
+                />
               )}
             </>
           )}
@@ -1985,6 +2199,7 @@ export const MissionBoardPage: React.FC<{
   const [needsToken, setNeedsToken] = useState(false);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const [busyMission, setBusyMission] = useState(false);
+  const [busyCard, setBusyCard] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -2165,6 +2380,74 @@ export const MissionBoardPage: React.FC<{
       setDetailNotice({ text: failMsg(e), error: true });
     } finally {
       if (alive.current) setBusy(false);
+    }
+  };
+
+  const limitDone = (n: number) => (n > 0 ? `Its limit is now ${formatTokens(n)} tokens.` : 'No limit now. It can use as many tokens as it needs.');
+
+  const setTaskBudget = async (budget: number) => {
+    if (!openId) return;
+    setBusy(true);
+    setDetailNotice(null);
+    try {
+      const t = await missionsApi.setTaskBudget(openId, budget);
+      if (!alive.current) return;
+      setTasks((list) => (list ? upsertTask(list, t) : list));
+      setDetailNotice({ text: limitDone(budget), error: false });
+      await loadDetail(openId);
+    } catch (e) {
+      if (!alive.current) return;
+      if (e instanceof MissionError && e.status === 401) setNeedsToken(true);
+      setDetailNotice({ text: failMsg(e), error: true });
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+
+  /** Out of budget: the new limit (0 = none), then Unblock. From the open task, or a card on the board. */
+  const continueWithLimit = async (taskId: string, budget: number, fromCard: boolean) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    if (fromCard) setBusyCard(true);
+    else setBusy(true);
+    if (!fromCard) setDetailNotice(null);
+    try {
+      const t = await missionsApi.continueWithLimit(taskId, budget);
+      if (!alive.current) return;
+      setTasks((list) => (list ? upsertTask(list, t) : list));
+      const text = `${budget > 0 ? `Its limit is now ${formatTokens(budget)} tokens` : 'Limit removed'}. “${t.title}” is back in Ready.`;
+      if (fromCard) setNotice({ text, error: false });
+      else setDetailNotice({ text, error: false });
+      playSfx('click');
+      if (openIdRef.current === taskId) await loadDetail(taskId);
+    } catch (e) {
+      if (!alive.current) return;
+      if (e instanceof MissionError && e.status === 401) setNeedsToken(true);
+      if (fromCard) setNotice({ text: failMsg(e), error: true });
+      else setDetailNotice({ text: failMsg(e), error: true });
+    } finally {
+      inFlight.current = false;
+      if (alive.current) {
+        setBusy(false);
+        setBusyCard(false);
+      }
+    }
+  };
+
+  const setMissionBudget = async (m: Mission, budget: number) => {
+    setBusyMission(true);
+    setNotice(null);
+    try {
+      const next = await missionsApi.setBudget(m.id, budget);
+      if (!alive.current) return;
+      setMissions((list) => upsertMission(list, next));
+      setNotice({ text: budget > 0 ? `“${m.title}” can use up to ${formatTokens(budget)} tokens.` : `“${m.title}” has no token limit now.`, error: false });
+    } catch (e) {
+      if (!alive.current) return;
+      if (e instanceof MissionError && e.status === 401) setNeedsToken(true);
+      else setNotice({ text: failMsg(e), error: true });
+    } finally {
+      if (alive.current) setBusyMission(false);
     }
   };
 
@@ -2382,6 +2665,9 @@ export const MissionBoardPage: React.FC<{
         onOpenTask={(t) => openTask(t.id)}
         onApproveMission={(m) => missionAction(m, true)}
         onCancelMission={(m) => missionAction(m, false)}
+        onSetMissionBudget={setMissionBudget}
+        onRemoveLimit={(t) => continueWithLimit(t.id, NO_LIMIT, true)}
+        busyCard={busyCard}
         onRefresh={() => {
           load();
           if (view === 'graph' && missionId) loadGraph(missionId);
@@ -2413,6 +2699,8 @@ export const MissionBoardPage: React.FC<{
               changes={changes}
               onRunHeld={runHeld}
               onSetClass={setClass}
+              onSetBudget={setTaskBudget}
+              onContinueWithLimit={(n) => continueWithLimit(detail.task.id, n, false)}
               onRetryAutofix={retryAutofix}
               onSkipAutofix={skipAutofix}
               onDecideChange={decideChange}
