@@ -42,6 +42,7 @@ import { BudgetPausedNotice, InterruptedNotice, SystemNotice } from './SystemNot
 import { chainBudgetApi, parseBudgetPaused } from '../chainBudget';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
 import { consultedNames, parseDecisions, parseWorkAhead } from '../decideFirst';
+import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 
 /** A swipeable chip row whose right fade edge (phones only, see .kw-scroll-row) goes away once
@@ -567,10 +568,56 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   // Follow new tokens only while the reader is at the bottom; scrolling up to read stays put.
   const stickRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
+  const pinToBottom = (el: HTMLDivElement) => {
+    el.scrollTop = el.scrollHeight;
+    lastScrollTopRef.current = el.scrollTop;
+  };
+  // A waiting card whose buttons are off screen while the person reads further up.
+  const [approvalOffscreen, setApprovalOffscreen] = useState(false);
+  const approvalKey = pendingApprovals.map((a) => a.id).join(',');
+  const checkApprovalVisible = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const view = el.getBoundingClientRect();
+    const rows = Array.from(el.querySelectorAll<HTMLElement>('[data-approval-actions]'));
+    const action = approvalScrollAction({
+      waiting: rows.length,
+      following: stickRef.current,
+      buttonsVisible: rows.some((r) => fullyVisible(r.getBoundingClientRect(), view)),
+    });
+    setApprovalOffscreen(action === 'notify');
+  };
   const onScroll = () => {
     const el = scrollRef.current;
-    if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (el) {
+      stickRef.current = nextFollowing(stickRef.current, { nearBottom: isNearBottom(el), scrollTop: el.scrollTop, lastScrollTop: lastScrollTopRef.current });
+      lastScrollTopRef.current = el.scrollTop;
+    }
+    checkApprovalVisible();
   };
+  const showApproval = () => {
+    const cards = scrollRef.current?.querySelectorAll<HTMLElement>('[data-approval-card]');
+    const card = cards?.[cards.length - 1];
+    if (!card) return;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    card.scrollIntoView({ block: 'end', behavior: reduce ? 'auto' : 'smooth' });
+    setApprovalOffscreen(false);
+  };
+  // Cards are last in the stream. While the person follows the chat, keep the bottom pinned when a
+  // card grows after it appears (its details arrive from the server) or the composer grows and
+  // shrinks the stream, so Deny / Allow never sit below the composer.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (stickRef.current) pinToBottom(el);
+      checkApprovalVisible();
+    });
+    ro.observe(el);
+    el.querySelectorAll('[data-approval-card]').forEach((c) => ro.observe(c));
+    return () => ro.disconnect();
+  }, [approvalKey]);
   useEffect(() => {
     stickRef.current = true;
   }, [contextKey]);
@@ -579,10 +626,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!viewingHistory) stickRef.current = true;
   }, [viewingHistory]);
   useEffect(() => {
-    if (scrollRef.current && stickRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages, streamingText, streamingThinking, pendingApprovals.length, routingState, queued, contextKey]);
+    if (scrollRef.current && stickRef.current) pinToBottom(scrollRef.current);
+    checkApprovalVisible();
+  }, [messages, streamingText, streamingThinking, approvalKey, routingState, queued, contextKey]);
 
   // Jump to a search hit: open its folded discussion if needed, then centre and flash it.
   // Runs after the auto-scroll above, so it wins.
@@ -1344,6 +1390,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
               </button>
             )}
           </ScrollRow>
+        )}
+
+        {approvalOffscreen && pendingApprovals.length > 0 && (
+          <div role="status" className="max-w-4xl mx-auto mb-2 flex justify-center">
+            <button
+              type="button"
+              onClick={() => {
+                playSfx('click');
+                showApproval();
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-full border border-amber-500/40 bg-amber-950/70 text-xs font-medium text-amber-200 hover:bg-amber-900/70 shadow-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+            >
+              <ArrowDown size={12} aria-hidden="true" />
+              {pendingApprovals.length === 1 ? 'Approval waiting' : `${pendingApprovals.length} approvals waiting`}
+            </button>
+          </div>
         )}
 
         {viewingHistory && (

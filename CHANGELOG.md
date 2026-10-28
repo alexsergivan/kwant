@@ -118,6 +118,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and its spend doesn't change. Before, the check was only approved and never ran.
 
 ### Fixed
+- **A waiting approval card's Deny / Allow buttons no longer hide under the message box.** When a
+  card's details arrived a moment after it appeared, or the message box grew, the chat didn't scroll
+  with it, so on a phone the buttons sat below the box until you scrolled. While you follow the chat it
+  now stays pinned to the bottom. If you've scrolled up to read, it stays where you are and shows an
+  "Approval waiting" button above the message box that takes you to the card.
 - **Mission board: "To fix" no longer repeats the failure's name.** A usage-limit failure read "Usage
   limit reached" on its badge and again at the start of "To fix"; "To fix" now starts with what to do.
 - **Mission board: AutoFix hides passwords without hiding command names.** A check's command name or a

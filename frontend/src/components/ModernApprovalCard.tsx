@@ -129,6 +129,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
 
   return (
     <div
+      data-approval-card={approval.id}
       className={`my-3 border rounded-xl p-3 sm:p-4 text-zinc-100 max-w-2xl shadow-lg backdrop-blur-sm ${
         waiting ? 'border-sky-500/30 bg-sky-950/20' : 'border-amber-500/30 bg-amber-950/20'
       }`}
@@ -264,7 +265,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      <div data-approval-actions className="flex flex-wrap items-center justify-end gap-2">
         <button
           type="button"
           disabled={disabled}
