@@ -58,6 +58,14 @@ pub async fn reconcile(state: &AppState) {
     if !super::enabled(state).await {
         return;
     }
+    // A hand-off card the person (or AutoFix) put back in Ready, whose hand-off had ended
+    for t in state.db.tasks_in_state("ready").await.unwrap_or_default() {
+        if t.source_kind == "delegation" && t.held_at.is_none() {
+            if let Some(id) = t.source_id.as_deref() {
+                on_delegation(state, id).await;
+            }
+        }
+    }
     for t in state.db.system_held().await.unwrap_or_default() {
         match (t.source_kind.as_str(), t.source_id.as_deref()) {
             ("delegation", Some(id)) => on_delegation(state, id).await,
@@ -172,6 +180,18 @@ async fn finish(state: &AppState, task: &Task, to: &str, why: &str) -> bool {
     moved
 }
 
+/// A hand-off card just went to Ready: the board's runner never starts hand-offs, so the
+/// hand-off goes on (or the card to review) without waiting for the next tick. In the
+/// background: the caller may hold [`SERIAL`].
+pub fn kick_handoff(state: &AppState, task: &Task) {
+    if task.source_kind != "delegation" || task.held_at.is_some() {
+        return;
+    }
+    let Some(id) = task.source_id.clone() else { return };
+    let state = state.clone();
+    tokio::spawn(async move { on_delegation(&state, &id).await });
+}
+
 pub async fn on_delegation(state: &AppState, delegation_id: &str) {
     if !super::enabled(state).await {
         return;
@@ -189,9 +209,47 @@ pub async fn on_delegation(state: &AppState, delegation_id: &str) {
             start_held(state, &space, mission, &title, &d.task, &d.specialist_kwant_id, "delegation", &d.id, place, &d.thread_id).await;
         }
         (Some(t), _) if live && t.state == "ready" => hold(state, &t, &d.specialist_kwant_id, &d.thread_id).await,
+        // Sent back to Ready after the hand-off ended (the person unblocked or retried the card,
+        // or AutoFix retried it): the board never runs hand-offs itself, so it goes on here
+        (Some(t), status) if t.state == "ready" => {
+            if t.held_at.is_some() {
+                return;
+            }
+            if super::over(t.spent_tokens, t.budget_tokens) {
+                // Unblocked over its token limit (kwant couldn't take it back): blocked again, so
+                // the person raises or removes the limit instead of the card sitting in Ready
+                let change = TaskChange {
+                    kind: "budget".into(),
+                    reason: Some("budget".into()),
+                    detail: Some(serde_json::json!({"spent_tokens": t.spent_tokens, "budget_tokens": t.budget_tokens})),
+                    ..Default::default()
+                };
+                let _ = transition(state, &t.id, "ready", "blocked", Actor::Kwant, "kwant", change).await;
+                return;
+            }
+            if status == "completed" {
+                // It finished while the card was blocked: its result is in, so it goes to review
+                hold(state, &t, &d.specialist_kwant_id, &d.thread_id).await;
+                if let Ok(Some(t)) = state.db.get_task(&t.id).await {
+                    finish(state, &t, "review", "the hand-off had finished").await;
+                }
+            } else if !crate::server::delegation::carry_on(state, &d).await {
+                let change = TaskChange { reason: Some(CANT_CARRY_ON.into()), ..Default::default() };
+                let _ = transition(state, &t.id, "ready", "blocked", Actor::Kwant, "kwant", change).await;
+            }
+        }
         (Some(t), _) if live => {
             // Still going: keep kwant's lease on it
             let _ = state.db.refresh_claim(&t.id, lease_ms(state).await).await;
+        }
+        // It ended while its card was blocked (over its token limit, or by the person): the
+        // card says so, and unblocking it goes on from there (see the `ready` arm)
+        (Some(t), status) if t.state == "blocked" => {
+            let note = if status == "completed" { "the hand-off finished; unblock to review its result" } else { "the hand-off stopped; unblock to carry on" };
+            if !ended_noted(state, &t.id, status).await {
+                let _ = state.db.log_task_event(&t.id, "handoff_ended", "kwant", &serde_json::json!({"status": status, "note": note})).await;
+                super::emit_task(state, &t).await;
+            }
         }
         (Some(t), "completed") => {
             finish(state, &t, "review", "the hand-off finished").await;
@@ -205,11 +263,26 @@ pub async fn on_delegation(state: &AppState, delegation_id: &str) {
         (Some(t), "cancelled") => {
             finish(state, &t, "cancelled", "the hand-off was cancelled").await;
         }
+        // Cut short by two restarts: failed, so the card offers Retry (a Ready card would wait for
+        // nobody)
         (Some(t), "interrupted") => {
-            finish(state, &t, "ready", "a restart interrupted the hand-off").await;
+            let why = "kwnt restarted twice while the hand-off ran";
+            if finish(state, &t, "failed", why).await {
+                super::autofix::record(state, &t.id, "handoff", "error", why, why).await;
+            }
         }
         _ => {}
     }
+}
+
+/// Why a hand-off card sent back to Ready can't go on, so it is blocked for the person instead.
+pub const CANT_CARRY_ON: &str = "the hand-off can't carry on (a bot is gone or it was restarted elsewhere): ask the lead again";
+
+/// Whether the hand-off's end (`status`) was already noted on a blocked task.
+async fn ended_noted(state: &AppState, task_id: &str, status: &str) -> bool {
+    let events = state.db.task_events(task_id, 50).await.unwrap_or_default();
+    let since_block = events.iter().rposition(|e| e.to_state.as_deref() == Some("blocked")).unwrap_or(0);
+    events[since_block..].iter().any(|e| e.kind == "handoff_ended" && e.detail.contains(&format!("\"status\":\"{status}\"")))
 }
 
 pub async fn on_routine_run(state: &AppState, routine_id: &str, run_id: &str, status: &str) {

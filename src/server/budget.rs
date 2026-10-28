@@ -21,6 +21,10 @@ pub const DEFAULT: u64 = 200_000;
 pub const MAX: u64 = 100_000_000;
 /// Message meta kind of the notice.
 pub const KIND: &str = "budget_paused";
+/// Message meta kind of the notice a lead's @mentions leave past the hand-off caps
+/// ([`super::routes::MAX_MENTION_DELEGATIONS_PER_BOT`], [`super::routes::MAX_DELEGATIONS_PER_REQUEST`]).
+/// Carried on like a paused chain: Continue on it, or "continue" typed after it.
+pub const CAPPED_KIND: &str = "handoff_capped";
 
 /// The budget in fresh tokens; 0 when the guard is off.
 pub async fn limit(state: &AppState) -> u64 {
@@ -88,13 +92,38 @@ pub(super) async fn pause_if_over(scope: &TurnScope, spoken: &[String], replies:
     true
 }
 
-/// The newest paused-chain notice in a channel that hasn't been carried on, if it's the newest
-/// message from a bot or kwant (a later reply means the chat moved on).
+/// A lead's @mentions went past a hand-off cap: saves one notice naming the teammates `capped`
+/// (`sent` hand-offs so far for this request), which the person carries on with one press.
+pub(super) async fn pause_capped(scope: &TurnScope, lead: &Kwant, capped: &[&Kwant], sent: usize, text: &str, user_prompt: &str) {
+    let names: Vec<String> = capped.iter().map(|k| k.name.clone()).collect();
+    tracing::info!(lead = %lead.id, sent, waiting = ?names, "hand-off caps reached: waiting for Continue");
+    let line = format!(
+        "Paused after {sent} hand-offs so it doesn't loop: {} not sent yet. Press Continue or say \"continue\" to hand it on.",
+        names.join(", "),
+    );
+    let meta = json!({
+        "kind": CAPPED_KIND,
+        "lead": lead.id,
+        "waiting": names,
+        "waiting_ids": capped.iter().map(|k| k.id.clone()).collect::<Vec<_>>(),
+        "sent": sent,
+        "text": text,
+        "user_prompt": user_prompt,
+        "resumed": false,
+    });
+    if let Some(saved) = scope.save(&scope.message("system", "kwnt", line), Some(meta)).await {
+        let _ = scope.state.event_sender.send(crate::drivers::events::RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or_default() });
+    }
+}
+
+/// The newest notice in a channel that can be carried on (a paused chain or capped hand-offs) and
+/// hasn't been, if it's the newest message from a bot or kwant (a later reply means the chat
+/// moved on).
 async fn open_pause(state: &AppState, channel_id: &str) -> Option<crate::db::models::Message> {
     let recent = state.db.list_messages(channel_id, 10).await.ok()?;
     let last = recent.into_iter().rev().find(|m| m.sender_role != "user")?;
     let meta: serde_json::Value = serde_json::from_str(last.meta.as_deref()?).ok()?;
-    (meta["kind"] == KIND && meta["resumed"] != true).then_some(last)
+    ((meta["kind"] == KIND || meta["kind"] == CAPPED_KIND) && meta["resumed"] != true).then_some(last)
 }
 
 /// Carries a paused chain on from its notice: marks it resumed and hands the turn to the bots
@@ -103,13 +132,16 @@ async fn resume(state: &AppState, notice_id: &str) -> Result<(), (StatusCode, &'
     let notice = state.db.get_message(notice_id).await.ok().flatten().ok_or((StatusCode::NOT_FOUND, "no such message"))?;
     let mut meta: serde_json::Value =
         notice.meta.as_deref().and_then(|m| serde_json::from_str(m).ok()).ok_or((StatusCode::BAD_REQUEST, "not a paused chain"))?;
-    if meta["kind"] != KIND {
+    if meta["kind"] != KIND && meta["kind"] != CAPPED_KIND {
         return Err((StatusCode::BAD_REQUEST, "not a paused chain"));
     }
     if meta["resumed"] == true {
         return Err((StatusCode::CONFLICT, "this chain was already continued"));
     }
     let channel_id = notice.channel_id.clone().ok_or((StatusCode::BAD_REQUEST, "not a channel message"))?;
+    if meta["kind"] == CAPPED_KIND {
+        return resume_capped(state, notice_id, meta, channel_id).await;
+    }
     let channel = state.db.get_channel(&channel_id).await.ok().flatten().ok_or((StatusCode::NOT_FOUND, "the channel is gone"))?;
     let space = crate::db::spaces::SpaceId::new(&channel.space_id);
     let all: Vec<Kwant> = state.db.list_kwants(&space).await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "could not load the bots"))?;
@@ -137,6 +169,28 @@ async fn resume(state: &AppState, notice_id: &str) -> Result<(), (StatusCode, &'
     tokio::spawn(async move {
         let _job = job;
         super::routes::run_handoffs_boxed(&scope, &spoken, &replies, &user_prompt).await;
+    });
+    Ok(())
+}
+
+/// Carries capped hand-offs on: the lead hands the waiting teammates their work, with a fresh
+/// allowance of hand-offs.
+async fn resume_capped(state: &AppState, notice_id: &str, mut meta: serde_json::Value, channel_id: String) -> Result<(), (StatusCode, &'static str)> {
+    let lead_id = meta["lead"].as_str().unwrap_or_default().to_string();
+    let lead = state.db.get_kwant(&lead_id).await.ok().flatten().ok_or((StatusCode::GONE, "the lead of this chat is gone"))?;
+    let waiting: Vec<String> = meta["waiting_ids"].as_array().into_iter().flatten().filter_map(|s| s.as_str().map(str::to_string)).collect();
+    let text = meta["text"].as_str().unwrap_or_default().to_string();
+    let user_prompt = meta["user_prompt"].as_str().unwrap_or_default().to_string();
+    meta["resumed"] = json!(true);
+    let _ = state.db.set_message_meta(notice_id, &meta).await;
+
+    let job = state.turns.start_job([channel_id.clone(), notice_id.to_string()]);
+    let scope = super::routes::scope_for(state, &lead, Some(channel_id), None, &job, 0)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "could not set up the chat"))?;
+    tokio::spawn(async move {
+        let _job = job;
+        super::routes::delegate_mentions(&scope, &lead, &text, &user_prompt, &[], Some(&waiting)).await;
     });
     Ok(())
 }

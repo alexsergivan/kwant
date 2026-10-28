@@ -24,6 +24,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   limit gets **Remove limit and continue**, on its board card and in its panel, plus **Raise limit**.
   Settings → Usage has a **Token limits** group for the default on new tasks and missions, "No limit"
   unless you pick one.
+- **Unblocking or retrying a hand-off card carries the work on.** A hand-off card sent back to Ready
+  used to sit there because nothing runs hand-offs from the board. Now the teammate picks it up again in
+  the hand-off's own thread ("carry on from where you stopped") and the card is back to working, or it
+  goes to review if the hand-off had already finished while the card was blocked. A hand-off cut short
+  by two restarts now fails its card so it offers Retry, and a card that can't carry on is blocked with
+  the reason. Cards already stuck in Ready are picked up automatically.
+- **Teams can hand on more before kwant pauses them.** One teammate can now be asked by mention up to 4
+  times per message (was 2), and one message can start up to 16 hand-offs (was 8). Past that, instead of
+  "Send a new message to go on", the chat shows a notice with a Continue button (or say "continue").
 
 ## [Mac 0.2.0] - 2026-10-28
 

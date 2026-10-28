@@ -600,10 +600,52 @@ Token budgets are opt-in. `budget_tokens` 0 means no limit, for tasks and missio
 - **Unblocking a task blocked for its budget** (`state` `blocked`, `blocked_reason` `budget`):
   `PATCH /api/tasks/:id {"budget_tokens": 0}` (or a higher limit), then `POST /api/tasks/:id/unblock`.
   The task goes `blocked → backlog → ready` when its dependencies are verified and its mission is
-  active. (Hand-off tasks are not restarted by the board; that is a separate fix.)
+  active. A hand-off task then carries on (§16).
 - Migration (once, when the stored table still has `CHECK (budget_tokens > 0)`): `tasks` and
   `missions` are rebuilt with `CHECK (budget_tokens >= 0)`, keeping every column, index and trigger,
   and in the same transaction rows still at the old silent defaults lose them:
   `UPDATE tasks SET budget_tokens = 0 WHERE budget_tokens = 50000` and
   `UPDATE missions SET budget_tokens = 0 WHERE budget_tokens = 200000`. Task states are not changed.
 - The hand-off loop guard (`chain_token_budget`) is separate and unchanged.
+
+## 16. Hand-off cards that go on
+
+A hand-off task (`source_kind` `delegation`, `source_id` the delegation) is held by kwant with a
+system claim whose context is the hand-off's thread. The mission runner never starts hand-offs, so
+the listener (`missions::listener`) does it when such a card reaches `ready` (unblock, person retry,
+AutoFix retry; also the scheduler's reconcile, for cards left in Ready earlier) and isn't held by a
+restore (`held_at`):
+
+| Hand-off status | What happens |
+| --- | --- |
+| `queued` / `running` | kwant takes the card again → `working` |
+| `completed` | → `working` → `review` (its result was already delivered; the work isn't run again) |
+| `failed` / `cancelled` / `interrupted` | the delegation is reopened (`queued`, error and times cleared) and the teammate gets a carry-on turn in the same thread ("carry on from where you stopped", with why it stopped); the card goes back to `working`; the new result is posted to the origin chat and the lead is resumed with it alone |
+| can't carry on (a bot is gone, or another call reopened it first) | `ready → blocked`, reason `listener::CANT_CARRY_ON` |
+
+A card still over its own token limit is blocked again (`blocked_reason` `budget`) instead.
+
+- A budget block lands at turn end, so it never stops the live hand-off: the hand-off finishes (or
+  fails) and its result reaches the lead as usual. While the card is blocked, its end is logged once
+  as a `handoff_ended` task event (`{"status", "note"}`); unblocking then follows the table.
+- A hand-off cut short by two restarts (`interrupted`) fails its card (AutoFix records it as a
+  `handoff` error) instead of returning it to Ready.
+
+### Capped hand-offs: the Continue notice
+
+One person message starts at most `routes::MAX_DELEGATIONS_PER_REQUEST` (16) hand-offs by mention,
+at most `routes::MAX_MENTION_DELEGATIONS_PER_BOT` (4) to one teammate; `chain_token_budget` still
+stops real loops. Mentions past a cap are not dropped: kwant saves one system message in the channel
+with meta
+
+```json
+{"kind": "handoff_capped", "lead": "<lead id>", "waiting": ["<name>"], "waiting_ids": ["<id>"],
+ "sent": 16, "text": "<the lead's reply>", "user_prompt": "<the person's message>", "resumed": false}
+```
+
+and text "Paused after N hand-offs so it doesn't loop: A, B not sent yet. Press Continue or say
+"continue" to hand it on." It works like the `budget_paused` notice: `POST
+/api/chains/:message_id/continue` (person only; 409 once continued, 410 if the lead is gone), or the
+person typing "continue" while it's the newest bot message. Continuing sets `resumed` true and hands
+only the waiting teammates the lead's reply, with a fresh allowance.
+

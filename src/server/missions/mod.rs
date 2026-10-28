@@ -233,6 +233,9 @@ pub async fn transition(
 }
 
 async fn after_move(state: &AppState, task: &Task, to: &str) {
+    if to == "ready" {
+        listener::kick_handoff(state, task);
+    }
     autofix::settle(state, task, to).await;
     // A task parked for AutoFix isn't done failing: no "failed" line until it is
     let to = if to == "failed" && autofix::parked(state, task).await { "parked" } else { to };
@@ -273,6 +276,9 @@ async fn to_ready(state: &AppState, task_id: &str) {
     let change = TaskChange { reason: Some("nothing it waits on is open".into()), ..Default::default() };
     if state.db.move_task(task_id, "backlog", "ready", "kwant", &change).await.unwrap_or(false) {
         emit_task_id(state, task_id).await;
+        if let Ok(Some(t)) = state.db.get_task(task_id).await {
+            listener::kick_handoff(state, &t);
+        }
     }
 }
 
