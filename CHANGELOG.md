@@ -15,6 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as Google Search Console, it offers you a connection card instead of stopping, and carries on with the
   rest. Bots are told to try the fallback first, such as the PageSpeed website when the API is
   rate-limited.
+- **Approvals: the risks are said before they turn off.** Choosing "Don't ask" for a space or a bot
+  now says plainly that bots can then send messages and emails, delete files or data, publish and sign
+  in to your accounts without asking, that payments still ask you first, and that bots with access to
+  money or accounts are better kept on "Ask" or "Ask only when risky". Nothing changes until you press
+  Turn off approvals; Cancel (or Escape) keeps the current setting. While approvals are off, a note next
+  to the setting keeps saying so.
 - **Mission board: AutoFix, change approvals and restore.** A failed task shows why it failed in plain
   words, what AutoFix plans, its tries and what retries cost, with Retry now and Don't retry. Proposed
   changes to a check, the acceptance or a routine appear in Needs you with before and after, and only
