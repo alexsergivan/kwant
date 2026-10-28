@@ -3219,6 +3219,8 @@ pub async fn resolve_approval(
         };
     }
     let _ = state.db.update_approval_status(&ticket_id, status_str).await;
+    // The card is answered: a task that waited on it is working again (Mission Control)
+    super::missions::listener::refresh_needs_you(&state).await;
 
     Ok(Json(json!({
         "ticket_id": ticket_id,

@@ -11,8 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **Flight School: give each bot only as much freedom as it has earned.** With the new `flight_school`
   setting on (off by default), you can set a bot's tier per kind of task: Observe (every change asks),
-  Sandbox (it may change files in its task folder when kwant took a checkpoint it can undo; every command
-  asks) or Act (its normal approvals). A tier only adds approval cards, even with approvals off, and
+  Sandbox (it may change files in its task folder when kwant took a checkpoint it can undo; commands that
+  can change things ask, while read-only ones in its own folder, such as `ls` or `cat`, run without
+  asking) or Act (its normal approvals). A tier only adds approval cards, even with approvals off, and
   payments still always ask. Lowering a tier applies from the bot's next action. Bots already there keep
   Act; bots hired after you switch it on start at Sandbox. A bot on Codex or a custom engine that is below
   Act doesn't run its task, because kwant can't see its own tools.
@@ -130,6 +131,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   with it, so on a phone the buttons sat below the box until you scrolled. While you follow the chat it
   now stays pinned to the bottom. If you've scrolled up to read, it stays where you are and shows an
   "Approval waiting" button above the message box that takes you to the card.
+- **A task no longer sits in "Working" with no bot on it after you answer a card.** When you allowed an
+  action on a task's card, the bot's "done, please review" right after it could be refused as "waiting
+  on you", and the task then stayed in Working with nothing running it. Answering a card now moves the
+  task back at once, and a bot's hand-in or the end of its turn no longer waits for that.
 - **Mission board: "To fix" no longer repeats the failure's name.** A usage-limit failure read "Usage
   limit reached" on its badge and again at the start of "To fix"; "To fix" now starts with what to do.
 - **Mission board: AutoFix hides passwords without hiding command names.** A check's command name or a

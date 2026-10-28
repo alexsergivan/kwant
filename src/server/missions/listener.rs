@@ -270,6 +270,23 @@ pub async fn refresh_needs_you(state: &AppState) {
     }
 }
 
+/// `task_id` as it stands, after moving it back to `working` if it waits in `needs_you` on
+/// nothing: a card answered in time sends no event, so a bot's hand-in or the turn's end can
+/// come before [`refresh_needs_you`] has run.
+pub async fn settle_needs_you(state: &AppState, task_id: &str) -> Option<Task> {
+    let _serial = SERIAL.lock().await;
+    let t = state.db.get_task(task_id).await.ok().flatten()?;
+    if t.state != "needs_you" || !super::needs_you(state, &t).await.is_empty() {
+        return Some(t);
+    }
+    let _ = state.db.refresh_claim(&t.id, lease_ms(state).await).await;
+    let change = TaskChange { reason: Some("the person answered".into()), ..Default::default() };
+    match transition(state, &t.id, "needs_you", "working", Actor::Kwant, "kwant", change).await {
+        Ok(t) => Some(t),
+        Err(_) => state.db.get_task(task_id).await.ok().flatten(),
+    }
+}
+
 /// A work-ahead run posted `text`: a task in `review` owned by the lead, so the person sees it on
 /// the board and verifies it (or a teammate reviews it).
 pub async fn on_work_ahead_posted(state: &AppState, lead: &crate::db::models::Kwant, place: (Option<String>, Option<String>, Option<String>), run_id: &str, text: &str) {

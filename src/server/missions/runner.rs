@@ -191,7 +191,8 @@ async fn run_one(state: &AppState, m: &Mission, task: &Task, bot: &crate::db::mo
 /// `failed` for it (§13), and the failure is recorded: the turn's error, a denied action since
 /// `started`, or a stall; a task left waiting on the person records `needs_input`.
 pub async fn after_turn(state: &AppState, task_id: &str, err: Option<&str>, started: chrono::DateTime<chrono::Utc>) {
-    let Ok(Some(t)) = state.db.get_task(task_id).await else { return };
+    // Waiting on nothing (its cards were answered or withdrawn) is still working: release it
+    let Some(t) = super::listener::settle_needs_you(state, task_id).await else { return };
     if t.state == "needs_you" {
         super::autofix::record(state, &t.id, "turn", "needs_input", "", "the bot is waiting on the person").await;
         return;

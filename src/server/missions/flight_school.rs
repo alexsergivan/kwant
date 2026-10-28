@@ -80,7 +80,7 @@ pub fn decide(tier: &str, effect: &str, bash: bool, checkpoint: bool) -> Option<
         ("act", _) | (_, "none") => None,
         ("sandbox", "workspace") if checkpoint => None,
         ("sandbox", "workspace") => Some("Sandbox: this run has no checkpoint to undo file changes, so they ask"),
-        ("sandbox", _) if bash => Some("Sandbox: commands always ask"),
+        ("sandbox", _) if bash => Some("Sandbox: commands that can change things ask"),
         ("sandbox", _) => Some("Sandbox: only files in the task folder change without asking"),
         _ => Some("Observe: every change asks"),
     }
@@ -349,7 +349,7 @@ mod tests {
         ] {
             assert_eq!(decide(tier, effect, bash, cp).is_some(), card, "{tier} {effect} bash={bash} cp={cp}");
         }
-        assert_eq!(decide("sandbox", "external", true, true), Some("Sandbox: commands always ask"));
+        assert_eq!(decide("sandbox", "external", true, true), Some("Sandbox: commands that can change things ask"));
     }
 
     #[test]

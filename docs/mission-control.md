@@ -541,9 +541,24 @@ every call. In order:
 | `workspace` (file tool in the task folder) | card | runs if this run has a `before_run` checkpoint, else card | today's path |
 | `external` (`Bash`, MCP tools, outside files, other self tools) | card | card | today's path |
 
-A forced card carries `details.tier_reason` ("Sandbox: commands always ask", "Observe: every change
+A forced card carries `details.tier_reason` ("Sandbox: commands that can change things ask", "Observe: every change
 asks", …). Approvals `off`, smart Allow and `always_ask` don't skip it; a session "always allow" for that
 tool in that chat does (D9), except on a payment.
+
+**Known gap (waived): read-only commands in the bot's own folder.** The Claude CLI runs with
+`--permission-mode default`, and its own allow-list runs read-only commands such as `ls`, `cat`, `pwd`
+and `date` inside the turn's folder without asking kwnt. They never reach the gate, with Flight School
+on or off, and no ledger row is written. A command that changes something, or that reads outside the
+folder, still asks, so at `sandbox` "commands that can change things ask" is what holds, not "every
+command". The API drivers' `execute_shell` goes through `approve_local_shell_in`, so there every
+command asks below `act`. Accepted 2026-10-28 (Rigel's C3 check, Ada's decision): nothing can be written
+this way, and the bot can read only its own folder.
+
+**A card answered in time** sends no event of its own. `POST /api/approvals/:id/resolve` re-runs
+`listener::refresh_needs_you`, and `task_update` and the runner's `after_turn` first move a task that
+waits in `needs_you` on nothing back to `working` (`listener::settle_needs_you`). Before this, a bot's
+`task_update review` right after an answered card was refused ("the task is waiting on the person"),
+the turn ended, and the next tick put the task back in `working` with no turn running it.
 
 ### Revoke and engines
 

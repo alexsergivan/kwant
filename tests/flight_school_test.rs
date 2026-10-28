@@ -21,6 +21,7 @@ use kwnt::{
     server::{
         continuity::{SelfScope, SelfToolsApprover, TurnOrigin},
         create_router, mcp_runtime,
+        missions::{listener, runner},
         turns::ActiveTurn,
         AppState,
     },
@@ -297,7 +298,7 @@ async fn sandbox_cards_every_command_and_outside_write_and_needs_a_checkpoint_fo
     assert_eq!(claude_asks(&e, &dir, "Read", json!({"file_path": dir.join("notes.md").display().to_string()})).await, Ok("allow".into()));
     for command in ["touch x", "ls", "echo hi"] {
         let Err(d) = claude_asks(&e, &dir, "Bash", json!({"command": command})).await else { panic!("sandbox: {command} must ask") };
-        assert_eq!(reason(&d), "Sandbox: commands always ask");
+        assert_eq!(reason(&d), "Sandbox: commands that can change things ask");
     }
     let Err(d) = claude_asks(&e, &dir, "Write", json!({"file_path": "/tmp/fs-outside.txt", "content": "x"})).await else { panic!("outside write") };
     assert!(reason(&d).starts_with("Sandbox"), "{d}");
@@ -386,7 +387,7 @@ async fn revoke_mid_turn_gates_the_very_next_call() {
     assert_eq!(r["unchanged"], false, "{r}");
     // Same turn, next call
     let Err(d) = ask_in(&e, &token, "Bash", json!({"command": "touch b"})).await else { panic!("revoked: the next call asks") };
-    assert_eq!(reason(&d), "Sandbox: commands always ask");
+    assert_eq!(reason(&d), "Sandbox: commands that can change things ask");
     // Revoking again (or to a higher tier) changes nothing
     let again = person(&e, "POST", &format!("/api/capabilities/{}/revoke", e.bot.id), json!({"task_class": "*", "to_tier": "sandbox"})).await;
     assert_eq!(again["unchanged"], true);
@@ -468,4 +469,90 @@ async fn a_codex_bot_below_act_blocks_its_task_instead_of_running_it() {
     person(&e, "POST", "/api/capabilities", json!({"kwant_id": cody, "task_class": "*", "tier": "act"})).await;
     let caps = person(&e, "GET", &format!("/api/capabilities?kwant_id={cody}"), json!(null)).await;
     assert_eq!(caps["default_tier"], "act", "{caps}");
+}
+
+/// A Bash card in the turn behind `token`, left open: (its id, the permission prompt still waiting).
+async fn open_card(e: &Env, token: &str, command: &str) -> (String, tokio::task::JoinHandle<(StatusCode, Value)>) {
+    let mut events = e.state.event_sender.subscribe();
+    let ask = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "approve",
+        "arguments": {"tool_name": "Bash", "input": {"command": command}, "tool_use_id": "tu_1"}}});
+    let app = e.app.clone();
+    let path = format!("/api/mcp/permission/{token}");
+    let prompt = tokio::spawn(async move { call(&app, "POST", &path, None, Some(ask)).await });
+    let card = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(RuntimeEvent::ApprovalRequired { id, .. }) = events.recv().await {
+                break id;
+            }
+        }
+    });
+    (card.await.expect("a card"), prompt)
+}
+
+async fn state_of(e: &Env, task_id: &str) -> String {
+    e.state.db.get_task(task_id).await.unwrap().unwrap().state
+}
+
+/// Answers a card the way the resolve route does, minus its board refresh: a bot whose next call
+/// comes before the listener has moved the task back from needs_you.
+async fn answer_quietly(e: &Env, card: &str, prompt: tokio::task::JoinHandle<(StatusCode, Value)>) {
+    assert!(e.state.broker.resolve(card, ApprovalDecision::AllowOnce).await);
+    e.state.db.update_approval_status(card, "allowed_once").await.unwrap();
+    let (status, _) = prompt.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// Rigel's stuck run: a card put the task in needs_you, the person answered it in time (no event),
+/// the bot's `task_update review` was refused as "waiting on the person", the turn ended, and the
+/// next tick moved the task back to working with no turn running it.
+#[tokio::test]
+async fn a_card_answered_in_time_lets_the_bot_hand_in() {
+    let e = setup().await;
+    set_approvals(&e, "off").await;
+    flight_school(&e, true).await;
+    set_tier(&e, "*", "sandbox").await;
+    let (tid, dir) = claimed_task(&e, "general", true).await;
+    let (turn_id, token) = turn(&e, &dir).await;
+    // Answered on the card: the resolve route moves the board back at once
+    let (card, prompt) = open_card(&e, &token, "touch c.txt").await;
+    listener::refresh_needs_you(&e.state).await;
+    assert_eq!(state_of(&e, &tid).await, "needs_you");
+    person(&e, "POST", &format!("/api/approvals/{card}/resolve"), json!({"decision": "allow_once"})).await;
+    prompt.await.unwrap();
+    assert_eq!(state_of(&e, &tid).await, "working");
+    // The bot is faster than the refresh: its hand-in still goes through
+    let (card, prompt) = open_card(&e, &token, "touch d.txt").await;
+    listener::refresh_needs_you(&e.state).await;
+    answer_quietly(&e, &card, prompt).await;
+    assert_eq!(state_of(&e, &tid).await, "needs_you");
+    let (err, text) = self_tool(&e, &token, "task_update", json!({"task_id": tid, "status": "review", "note": "done"})).await;
+    assert!(!err, "{text}");
+    assert_eq!(state_of(&e, &tid).await, "review");
+    end(&e, &turn_id, &token).await;
+}
+
+#[tokio::test]
+async fn a_turn_that_ends_with_its_card_answered_releases_the_task() {
+    let e = setup().await;
+    set_approvals(&e, "off").await;
+    flight_school(&e, true).await;
+    set_tier(&e, "*", "sandbox").await;
+    let (tid, dir) = claimed_task(&e, "general", true).await;
+    let started = Utc::now();
+    let (turn_id, token) = turn(&e, &dir).await;
+    let (card, prompt) = open_card(&e, &token, "touch c.txt").await;
+    listener::refresh_needs_you(&e.state).await;
+    answer_quietly(&e, &card, prompt).await;
+    end(&e, &turn_id, &token).await;
+    runner::after_turn(&e.state, &tid, None, started).await;
+    // Not left in needs_you to come back as working with nothing running it
+    assert_eq!(state_of(&e, &tid).await, "ready");
+    // A card still open at the turn's end keeps it waiting on the person
+    let (tid2, dir2) = claimed_task(&e, "general", true).await;
+    let (turn2, token2) = turn(&e, &dir2).await;
+    let (_card, _prompt) = open_card(&e, &token2, "touch e.txt").await;
+    listener::refresh_needs_you(&e.state).await;
+    runner::after_turn(&e.state, &tid2, None, started).await;
+    assert_eq!(state_of(&e, &tid2).await, "needs_you");
+    end(&e, &turn2, &token2).await;
 }

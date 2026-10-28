@@ -201,7 +201,7 @@ pub async fn approve_local_shell_in(
     if let Some(why) = &payment {
         details["payment_reason"] = json!(why);
     }
-    // Flight School (C3): below act, a command always asks, approvals off or not
+    // Flight School (C3): below act, a command kwant runs always asks, approvals off or not
     let tier = match payment {
         Some(_) => None,
         None => super::missions::flight_school::shell_gate(&state.db, target_id).await,

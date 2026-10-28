@@ -315,6 +315,9 @@ async fn holds(state: &AppState, scope: &SelfScope, task: &Task) -> bool {
 }
 
 async fn update(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) -> ToolResult {
+    // A card answered a moment ago may not have moved the task back from needs_you yet
+    let settled = super::listener::settle_needs_you(state, &task.id).await;
+    let task = settled.as_ref().unwrap_or(task);
     if !holds(state, scope, task).await {
         return fail("You don't hold this task (claim it first, or your lease ran out).");
     }
