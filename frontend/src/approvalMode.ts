@@ -46,7 +46,7 @@ export const SPACE_OPTIONS: Array<{ value: SpaceApprovals; label: string; hint: 
     label: 'Ask only when risky',
     hint: 'Ordinary work in the bot’s folder runs on its own; a card asks before network calls, git fetch and push, publishing, anything outside the folder or anything unclear. Not a sandbox: scripts, make and npm install inside the folder run without a card, and can do anything you can.',
   },
-  { value: 'off', label: 'Don’t ask', hint: 'Bots run everything without approval.' },
+  { value: 'off', label: 'Don’t ask', hint: 'Bots act without asking, including sending, deleting, publishing and signing in. Payments still ask you.' },
 ];
 
 /** The per-bot choices; "Same as space" names what the space is set to. */
@@ -59,13 +59,22 @@ export function botOptions(space: SpaceApprovals): Array<{ value: BotApprovals; 
   ];
 }
 
-/** What turning approvals off means, said plainly on the confirm. */
+/** What turning approvals off means, said plainly on the confirm (Oleks, 2026-10-27: off means off, with the risks said first). */
 export const OFF_CONSEQUENCES = [
-  'Shell commands run without asking you.',
-  'Files can be written or deleted anywhere the computer allows, not just in the bot’s folder.',
-  'Tools (MCP servers, browser, web) run without asking.',
-  'No approval cards appear. Everything that runs is still recorded.',
+  'Bots can send messages and emails, delete files or data, publish, and sign in to your accounts without asking you.',
+  'Shell commands, file writes anywhere the computer allows, and tools (MCP servers, browser, web) run without a card.',
+  'Payments still ask you first, though a payment made by filling in a card form on a website may not be caught.',
+  'Everything that runs is still recorded.',
 ];
+
+/** Under the list: who shouldn't be on "Don't ask". */
+export const OFF_ADVICE = 'For bots with access to money or your accounts, keep approvals on or choose “Ask only when risky”.';
+
+/** Next to the setting for as long as it's off. */
+export const OFF_HINT = 'Approvals are off: bots act without asking, including deletions, publishing and sign-ins. Payments still ask you.';
+
+/** True when a change newly turns approvals off, so the confirm comes before the save. Takes effective values. */
+export const needsOffConfirm = (current: SpaceApprovals, next: SpaceApprovals): boolean => next === 'off' && current !== 'off';
 
 /** The same, with the saved-passwords sentence for where passwords are kept. */
 export const offConsequences = (store: StoreStatus | null | undefined): string[] => [...OFF_CONSEQUENCES, autofillGapNote(store)];

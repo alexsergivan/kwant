@@ -186,22 +186,22 @@ test('confirm with passwords here: "off" isn\'t offered; it says why and offers 
   const t = text(html);
   assert.match(html, /data-off-needs-bitwarden/);
   assert.match(t, /3 saved passwords are kept on this server\. Under “Ask only when risky” or “Don't ask”, any bot that can run commands could read them, so move them to Bitwarden first\./);
-  assert.deepEqual(buttons(html), ['Move 3 saved passwords to Bitwarden first', 'Keep asking']);
-  assert.doesNotMatch(t, /Turn approvals off/);
+  assert.deepEqual(buttons(html), ['Move 3 saved passwords to Bitwarden first', 'Cancel']);
+  assert.ok(!buttons(html).includes('Turn off approvals'));
   // The paragraph says it; the note isn't repeated above it.
   assert.ok(!t.includes(LOCAL_NOTE));
   // Bitwarden with leftovers here, and Bitwarden locked with some here: the same.
-  assert.deepEqual(buttons(m.confirm(BW_LEFTOVER)), ['Move 2 saved passwords to Bitwarden first', 'Keep asking']);
-  assert.deepEqual(buttons(m.confirm(BW_LOCKED)), ['Move 3 saved passwords to Bitwarden first', 'Keep asking']);
+  assert.deepEqual(buttons(m.confirm(BW_LEFTOVER)), ['Move 2 saved passwords to Bitwarden first', 'Cancel']);
+  assert.deepEqual(buttons(m.confirm(BW_LOCKED)), ['Move 3 saved passwords to Bitwarden first', 'Cancel']);
 });
 
 test('confirm with nothing here: "off" is offered, with the sentence for that store', () => {
   const b = m.confirm(BW);
-  assert.deepEqual(buttons(b), ['Keep asking', 'Turn approvals off']);
+  assert.deepEqual(buttons(b), ['Cancel', 'Turn off approvals']);
   assert.ok(text(b).includes(BW_NOTE));
   assert.ok(!text(b).includes(LOCAL_NOTE));
   const l = m.confirm(LOCAL0);
-  assert.deepEqual(buttons(l), ['Keep asking', 'Turn approvals off']);
+  assert.deepEqual(buttons(l), ['Cancel', 'Turn off approvals']);
   assert.ok(text(l).includes(LOCAL_NOTE), 'nothing saved yet, and saving here will be refused');
 });
 
@@ -209,20 +209,20 @@ test('confirm while the store is still loading: "off" waits; with no store info 
   const html = m.confirm(null);
   assert.match(text(html), /Checking saved passwords…|Checking saved passwords\.\.\./);
   assert.match(html, /<button[^>]*disabled=""[^>]*>[\s\S]*Checking saved passwords/);
-  assert.deepEqual(buttons(m.confirm(undefined)), ['Keep asking', 'Turn approvals off']);
+  assert.deepEqual(buttons(m.confirm(undefined)), ['Cancel', 'Turn off approvals']);
   const failed = m.confirm(undefined, { passwords: { status: null, problem: 'error', reload() {}, set() {} } });
-  assert.deepEqual(buttons(failed), ['Keep asking', 'Turn approvals off'], 'store unreadable: the server\'s 409 is the backstop');
+  assert.deepEqual(buttons(failed), ['Cancel', 'Turn off approvals'], 'store unreadable: the server\'s 409 is the backstop');
 });
 
 test('space and bot settings use it: move first with passwords here, off with none', () => {
   assert.match(text(m.spaceSetting({ initialConfirm: true, initialPasswords: LOCAL3 })), /Move 3 saved passwords to Bitwarden first/);
-  assert.doesNotMatch(text(m.spaceSetting({ initialConfirm: true, initialPasswords: LOCAL3 })), /Turn approvals off/);
+  assert.ok(!buttons(m.spaceSetting({ initialConfirm: true, initialPasswords: LOCAL3 })).includes('Turn off approvals'));
   const state = { kwant_id: 'k1', approvals: 'inherit', approvals_effective: 'ask', space_approvals: 'ask' };
   const bot = m.botSetting({ initial: state, initialPending: 'off', initialPasswords: LOCAL3 });
   assert.match(text(bot), /Let Dev run everything without approval\?/);
   assert.match(text(bot), /Move 3 saved passwords to Bitwarden first/);
-  assert.doesNotMatch(text(bot), /Turn approvals off/);
-  assert.match(text(m.botSetting({ initial: state, initialPending: 'off', initialPasswords: BW })), /Turn approvals off/);
+  assert.ok(!buttons(bot).includes('Turn off approvals'));
+  assert.ok(buttons(m.botSetting({ initial: state, initialPending: 'off', initialPasswords: BW })).includes('Turn off approvals'));
 });
 
 test('move first: connect when there is no Bitwarden, unlock when it is locked, both in place', () => {

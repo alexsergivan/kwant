@@ -121,25 +121,30 @@ test('space control: Ask is the default and checked, Don\'t ask explains itself,
   const t = text(html);
   assert.match(html, /role="radiogroup" aria-label="Approvals in Work"/);
   assert.match(t, /Ask before running commands \(default\)/);
-  assert.match(t, /Don't ask Bots run everything without approval\./);
+  assert.match(t, /Don't ask Bots act without asking, including sending, deleting, publishing and signing in\. Payments still ask you\./);
+  assert.doesNotMatch(html, /data-approvals-off-hint/, 'no standing hint while asking');
   assert.match(html, /checked="" value="ask"/);
   assert.doesNotMatch(html, /checked="" value="off"/);
   assert.doesNotMatch(html, /alertdialog/);
   assert.doesNotMatch(t, /Approvals off/, 'no marker while asking');
 });
 
-test('space control: the confirm says plainly what off means, and Keep asking is the safe default focus', () => {
+test('space control: the confirm says plainly what off means, and Cancel is the safe default focus', () => {
   const html = m.spaceSetting({ initialConfirm: true, initialPasswords: { store: 'local', locked: false, local_count: 0, bitwarden: null, approvals_off: false, exposed: false } });
   const t = text(html);
   assert.match(html, /role="alertdialog"/);
   assert.match(t, /Turn off approvals for every bot in Work\?/);
-  assert.match(t, /Shell commands run without asking you\./);
-  assert.match(t, /written or deleted anywhere/);
-  assert.match(t, /Tools \(MCP servers, browser, web\) run without asking\./);
-  assert.match(t, /No approval cards appear\. Everything that runs is still recorded\./);
+  // Oleks (2026-10-27): off is off, but the risks are said first; only payments still ask.
+  assert.match(t, /Bots can send messages and emails, delete files or data, publish, and sign in to your accounts without asking you\./);
+  assert.match(t, /Shell commands, file writes anywhere the computer allows, and tools \(MCP servers, browser, web\) run without a card\./);
+  assert.match(t, /Payments still ask you first, though a payment made by filling in a card form on a website may not be caught\./);
+  assert.match(t, /Everything that runs is still recorded\./);
+  assert.match(t, /For bots with access to money or your accounts, keep approvals on or choose “Ask only when risky”\./);
+  assert.match(t, /any bot that can run commands could read passwords saved on this server/, 'the saved-passwords sentence for this store');
+  assert.doesNotMatch(html, /data-approvals-off-hint/, 'the hint waits until it is really off');
   assert.match(t, /Bots can't change this\./);
-  assert.deepEqual(buttons(html).slice(-2), ['Keep asking', 'Turn approvals off']);
-  assert.match(html, /<button type="button"[^>]*autofocus=""[^>]*>Keep asking/i);
+  assert.deepEqual(buttons(html).slice(-2), ['Cancel', 'Turn off approvals']);
+  assert.match(html, /<button type="button"[^>]*autofocus=""[^>]*>Cancel/i);
 });
 
 test('space control when off: Don\'t ask is checked, the marker shows, and bots that still ask are named', () => {
@@ -148,6 +153,32 @@ test('space control when off: Don\'t ask is checked, the marker shows, and bots 
   assert.match(html, /checked="" value="off"/);
   assert.match(t, /Approvals off/);
   assert.match(t, /Still asks, set on the bot: Reviewer\./);
+  assert.match(html, /data-approvals-off-hint/);
+  assert.match(t, /Approvals are off: bots act without asking, including deletions, publishing and sign-ins\. Payments still ask you\./);
+});
+
+test('the switch: only a change that newly turns approvals off needs the confirm', () => {
+  assert.equal(m.needsOffConfirm('ask', 'off'), true);
+  assert.equal(m.needsOffConfirm('smart', 'off'), true);
+  assert.equal(m.needsOffConfirm('off', 'off'), false, 'already off (a bot moving to "Same as space" with the space off)');
+  assert.equal(m.needsOffConfirm('off', 'ask'), false, 'turning approvals on saves at once');
+  assert.equal(m.needsOffConfirm('ask', 'smart'), false);
+  // A bot choosing "Same as space" while the space is off is turning off: it confirms.
+  assert.equal(m.needsOffConfirm('ask', m.effectiveApprovals('inherit', 'off')), true);
+});
+
+test('bot override: the confirm while a choice waits, the hint once it is off, none while asking', () => {
+  const asking = { kwant_id: 'k1', approvals: 'ask', approvals_effective: 'ask', space_approvals: 'ask' };
+  const pending = m.botSetting({ initial: asking, initialPending: 'off', initialPasswords: { store: 'local', locked: false, local_count: 0, bitwarden: null, approvals_off: false, exposed: false } });
+  assert.match(pending, /role="alertdialog"/);
+  assert.match(text(pending), /Let Dev run everything without approval\?/);
+  assert.match(text(pending), /Payments still ask you first/);
+  assert.deepEqual(buttons(pending).slice(-2), ['Cancel', 'Turn off approvals']);
+  assert.doesNotMatch(pending, /data-approvals-off-hint/);
+  assert.doesNotMatch(m.botSetting({ initial: asking }), /data-approvals-off-hint/);
+  const off = m.botSetting({ initial: { ...asking, approvals: 'off', approvals_effective: 'off' } });
+  assert.match(off, /data-approvals-off-hint/);
+  assert.match(text(off), /Approvals are off: bots act without asking/);
 });
 
 // ---------------------------------------------------------------- the bot override

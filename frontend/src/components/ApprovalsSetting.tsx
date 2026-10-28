@@ -13,7 +13,10 @@ import {
   botOptions,
   effectiveApprovals,
   offConfirmTitle,
+  needsOffConfirm,
+  OFF_ADVICE,
   OFF_CONSEQUENCES,
+  OFF_HINT,
   offConsequences,
 } from '../approvalMode';
 import { StoreStatus, moveFirstLabel, moveFirstText } from '../passwordStore';
@@ -21,7 +24,7 @@ import { ExposedBanner, MoveToBitwardenFirst, PasswordStoreState, usePasswordSto
 
 /** "Approvals off": in a chat header (full) or a sidebar row (icon, with the words for screen readers). */
 export const ApprovalsOffBadge: React.FC<{ compact?: boolean; onClick?: () => void; title?: string }> = ({ compact, onClick, title }) => {
-  const tip = title ?? 'Approvals are off: this bot runs commands, file writes and tools without asking.';
+  const tip = title ?? 'Approvals are off: this bot acts without asking. Payments still ask you.';
   if (compact) {
     return (
       <span className="shrink-0 inline-flex items-center text-amber-300" title={tip}>
@@ -49,6 +52,14 @@ export const ApprovalsOffBadge: React.FC<{ compact?: boolean; onClick?: () => vo
   );
 };
 
+/** The standing reminder next to the setting while approvals are off. */
+export const OffHint: React.FC = () => (
+  <p data-approvals-off-hint className="flex items-start gap-1.5 text-[11px] leading-snug text-amber-200/90">
+    <ShieldOff size={12} className="mt-px shrink-0" aria-hidden="true" />
+    {OFF_HINT}
+  </p>
+);
+
 /**
  * The plain-words confirm before anything runs without asking. With passwords still saved on this
  * server, "off" isn't offered: they move to Bitwarden first (the server refuses otherwise, F-10).
@@ -67,7 +78,18 @@ export const OffConfirm: React.FC<{
   // Still finding out: don't offer "off" for the moment it takes.
   const checking = !!passwords && !status && !passwords.problem;
   return (
-    <div role="alertdialog" aria-labelledby={`${id}-t`} aria-describedby={`${id}-d`} className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-2.5">
+    <div
+      role="alertdialog"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && !busy) {
+          e.stopPropagation();
+          onCancel();
+        }
+      }}
+      aria-labelledby={`${id}-t`}
+      aria-describedby={`${id}-d`}
+      className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-2.5"
+    >
       <p id={`${id}-t`} className="flex items-center gap-2 text-xs font-semibold text-amber-100">
         <AlertTriangle size={14} aria-hidden="true" /> {title}
       </p>
@@ -83,7 +105,10 @@ export const OffConfirm: React.FC<{
           <MoveToBitwardenFirst store={passwords!} label={moveFirstLabel(status!.local_count)} />
         </div>
       ) : (
-        <p className="text-[11px] text-amber-100/80">Bots can’t change this. You can turn approvals back on here at any time.</p>
+        <>
+          <p className="text-[11px] font-medium text-amber-100">{OFF_ADVICE}</p>
+          <p className="text-[11px] text-amber-100/80">Bots can’t change this. You can turn approvals back on here at any time.</p>
+        </>
       )}
       <div className="flex flex-wrap gap-2">
         <button
@@ -92,7 +117,7 @@ export const OffConfirm: React.FC<{
           autoFocus
           className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-200 border border-zinc-700/60 bg-zinc-800/60 hover:bg-zinc-700/70"
         >
-          Keep asking
+          Cancel
         </button>
         {!mustMove && (
           <button
@@ -102,7 +127,7 @@ export const OffConfirm: React.FC<{
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-500 disabled:opacity-50"
           >
             {(busy || checking) && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
-            {checking ? 'Checking saved passwords…' : 'Turn approvals off'}
+            {checking ? 'Checking saved passwords…' : 'Turn off approvals'}
           </button>
         )}
       </div>
@@ -163,7 +188,7 @@ export const SpaceApprovalsSetting: React.FC<{
   };
   const pick = (v: SpaceApprovals) => {
     if (v === current || busy) return;
-    if (v === 'off') setConfirming(true);
+    if (needsOffConfirm(current, v)) setConfirming(true);
     else save(v);
   };
   const exceptions = current === 'off' ? overrides?.ask ?? [] : overrides?.off ?? [];
@@ -207,6 +232,7 @@ export const SpaceApprovalsSetting: React.FC<{
       {confirming && (
         <OffConfirm title={offConfirmTitle({ space: spaceName })} busy={busy} passwords={passwords} onCancel={() => setConfirming(false)} onConfirm={() => save('off')} />
       )}
+      {current === 'off' && !confirming && <OffHint />}
       {exceptions.length > 0 && !confirming && (
         <p className="text-[11px] text-zinc-500">
           {current === 'off' ? 'Still asks, set on the bot: ' : 'Runs without asking, set on the bot: '}
@@ -279,7 +305,8 @@ export const BotApprovalsSetting: React.FC<{
   };
   const pick = (v: BotApprovals) => {
     if (v === state.approvals || busy) return;
-    if (effectiveApprovals(v, state.space_approvals) === 'off' && state.approvals_effective !== 'off') setPending(v);
+    // "Same as space" counts as off when the space is: that needs the confirm too.
+    if (needsOffConfirm(state.approvals_effective, effectiveApprovals(v, state.space_approvals))) setPending(v);
     else save(v);
   };
 
@@ -289,7 +316,7 @@ export const BotApprovalsSetting: React.FC<{
         <label htmlFor={selectId} className="text-xs font-medium text-zinc-400">
           Approvals
         </label>
-        {state.approvals_effective === 'off' && <ApprovalsOffBadge title={`${kwantName} runs commands, file writes and tools without asking.`} />}
+        {state.approvals_effective === 'off' && <ApprovalsOffBadge title={`${kwantName} acts without asking. Payments still ask you.`} />}
       </div>
       <select
         id={selectId}
@@ -305,6 +332,7 @@ export const BotApprovalsSetting: React.FC<{
         ))}
       </select>
       <p className="text-[11px] text-zinc-500">Saved as soon as you change it.</p>
+      {state.approvals_effective === 'off' && !pending && <OffHint />}
       <ExposedBanner
         store={passwords}
         onApprovalsOn={() =>
