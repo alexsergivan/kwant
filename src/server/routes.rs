@@ -831,7 +831,8 @@ fn execute_single_turn(
     tokio::spawn(async move {
         // Ends the job (its cancel keys) when the turn and its handoffs are done
         let _job = job;
-        let opts = TurnOpts { routing, ..TurnOpts::default() };
+        // A full link in the person's own message may open the bot browser first
+        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), ..TurnOpts::default() };
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
             run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
             // Several bots asked the person something: one list of it all (when the chain is over)
@@ -1393,7 +1394,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
         let opts = TurnOpts {
             label: Some(discussion::turn_label(turn, &team.name)),
             // Only the opening turn may navigate the bot browser for a URL in the user's message
-            nav_prompt: Some(if opening { user_prompt.to_string() } else { String::new() }),
+            nav_prompt: opening.then(|| user_prompt.to_string()),
             discussion: Some(opening.then(|| discussion::question_label(&kwant.name, &team.name))),
             routing: None,
             on_started: None,
@@ -1447,7 +1448,6 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
         });
         let opts = TurnOpts {
             label: Some(discussion::summary_label(&team.name, &contributors)),
-            nav_prompt: Some(String::new()),
             discussion: None,
             routing: None,
             on_started: None,
@@ -1464,7 +1464,9 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
 pub(super) struct TurnOpts {
     /// Saved as the message's `reasoning_content` instead of the driver's reasoning.
     pub(super) label: Option<String>,
-    /// Text checked for a URL to open in the bot browser; defaults to the prompt.
+    /// The person's own message, checked for a full link to open in the bot browser before the
+    /// turn. `None` (hand-offs, routines, follow-ups and other prompts kwnt or a bot wrote) never
+    /// moves the browser.
     nav_prompt: Option<String>,
     /// Discussion reply handling: `[PASS]` replies aren't saved; `Some(label)` lets an `[ASK_USER]`
     /// reply be saved as a question for the user under that label.
@@ -1513,6 +1515,12 @@ impl TurnOpts {
     /// something asks (see [`TurnOpts::always_ask`]).
     pub(super) fn always_asking(label: &str) -> Self {
         TurnOpts { label: Some(label.to_string()), always_ask: true, ..Default::default() }
+    }
+
+    /// The link to open in the bot browser before the turn: only a full link in the person's own
+    /// message, never one in a prompt kwnt or a bot wrote.
+    fn nav_target(&self) -> Option<String> {
+        self.nav_prompt.as_deref().and_then(detect_url_in_prompt)
     }
 }
 
@@ -1930,9 +1938,8 @@ async fn run_kwant_turn_inner(
         };
 
         let mut final_prompt = prompt.clone();
-        let nav_prompt = opts.nav_prompt.as_deref().unwrap_or(&prompt);
         // A replay opens no page: the bot's browser isn't its scratch folder
-        let target_url_opt = if opts.rehearse.is_some() { None } else { detect_url_with_context(nav_prompt, active_browser_url.as_deref()) };
+        let target_url_opt = if opts.rehearse.is_some() { None } else { opts.nav_target() };
 
         if let Some(target_url) = target_url_opt {
             event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
@@ -2435,30 +2442,8 @@ async fn run_kwant_turn_inner(
             let _ = db
                 .drop_parked_for_chat(&target_kwant.id, scope.channel_id.as_deref(), scope.kwant_id.as_deref(), scope.thread_id.as_deref())
                 .await;
-            // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM
-            if let Some(bot_url) = extract_url_from_text(&output.text) {
-                if let Some(ctrl) = get_or_create_browser_controller(state, &sandbox_target).await {
-                    let curr = ctrl.current_url.lock().await.clone().unwrap_or_default();
-                    if curr != bot_url && !bot_url.contains("localhost") && !bot_url.contains("127.0.0.1") {
-                        if let Ok(nav) = ctrl.navigate(&bot_url).await {
-                            event_broadcast.send(RuntimeEvent::BrowserNavigated {
-                                team_id: sandbox_target.clone(),
-                                url: nav.url.clone(),
-                                title: nav.title.clone(),
-                                status_code: nav.status_code,
-                            });
-                            if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
-                                event_broadcast.send(RuntimeEvent::BrowserScreenshot {
-                                    team_id: sandbox_target.clone(),
-                                    url: nav.url.clone(),
-                                    image_base64: b64,
-                                    timestamp: chrono::Utc::now().to_rfc3339(),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
+            // A bot reply never moves the browser: the first domain-like word in it (e.g. Docker's
+            // registry-1.docker.io) opened as a 404. The bot opens pages itself with its browser tools.
 
             // Counts toward the chain's token budget (see `super::budget`)
             let fresh = output.usage.map_or(output.tokens_used as u64, |u| u.fresh());
@@ -3198,11 +3183,12 @@ async fn send_to_thread(
 
     let job = state.turns.start_job([saved.id.clone(), thread.id.clone()]);
     let scope = scope_for(&state, &kwant, None, Some(thread.id.clone()), &job, depth).await.map_err(|_| StatusCode::NOT_FOUND)?;
+    let opts = TurnOpts { nav_prompt: Some(payload.prompt.clone()), ..TurnOpts::default() };
     let prompt = payload.prompt + &note;
     let target = kwant.clone();
     tokio::spawn(async move {
         let _job = job;
-        run_kwant_turn(&scope, &target, prompt, TurnOpts::default()).await;
+        run_kwant_turn(&scope, &target, prompt, opts).await;
     });
     Ok(Json(json!({
         "status": "dispatched",
@@ -3922,110 +3908,19 @@ pub async fn resolve_sandbox_target_info(state: &AppState, target_id: &str) -> O
     }
 }
 
-const EXCLUDED_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "json", "toml", "yaml", "yml", "md",
-    "txt", "log", "lock", "png", "jpg", "jpeg", "gif", "svg", "css", "html",
-    "sh", "py", "go", "c", "cpp", "h", "java", "kt", "rb", "php", "sql",
-];
-
-pub fn extract_url_from_text(text: &str) -> Option<String> {
-    for word in text.split_whitespace() {
-        let clean = word.trim_matches(|c: char| {
-            !c.is_alphanumeric() && c != '.' && c != '/' && c != ':' && c != '-' && c != '_' && c != '?' && c != '=' && c != '&' && c != '#'
-        });
-        if clean.starts_with("http://") || clean.starts_with("https://") {
-            return Some(clean.to_string());
-        }
-        if !clean.contains('@') && clean.contains('.') && !clean.starts_with('.') && !clean.ends_with('.') {
-            let host_part = clean.split('/').next().unwrap_or("");
-            let parts: Vec<&str> = host_part.split('.').collect();
-            if parts.len() >= 2 {
-                let tld = parts.last().unwrap_or(&"");
-                let tld_lower = tld.to_lowercase();
-                if tld.len() >= 2
-                    && tld.len() <= 12
-                    && tld.chars().all(|c| c.is_ascii_alphabetic())
-                    && !EXCLUDED_EXTENSIONS.contains(&tld_lower.as_str())
-                {
-                    let valid_labels = parts.iter().all(|label| {
-                        !label.is_empty()
-                            && !label.starts_with('-')
-                            && !label.ends_with('-')
-                            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-                    });
-                    if valid_labels {
-                        return Some(format!("https://{}", clean));
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-pub fn detect_url_with_context(prompt: &str, current_url: Option<&str>) -> Option<String> {
-    let lower = prompt.to_lowercase();
-    let is_browser_request = lower.contains("browser")
-        || lower.contains("open ")
-        || lower.contains("navigate")
-        || lower.contains("go to ")
-        || lower.contains("browse ")
-        || lower.contains("visit ")
-        || lower.contains("search for ")
-        || lower.contains("look up ")
-        || lower.contains("http://")
-        || lower.contains("https://");
-
-    if let Some(direct_url) = extract_url_from_text(prompt) {
-        if is_browser_request || prompt.split_whitespace().count() <= 3 {
-            return Some(direct_url);
-        }
-    }
-
-    if !is_browser_request {
-        return None;
-    }
-
-    // Relative navigation if active current_url exists
-    if let Some(curr) = current_url {
-        let curr = curr.trim();
-        if (curr.starts_with("http://") || curr.starts_with("https://")) && !curr.contains("about:blank") && !curr.contains("example.com") {
-            let origin = if let Some(idx) = curr[8..].find('/') {
-                &curr[..8 + idx]
-            } else {
-                curr
-            };
-
-            for word in prompt.split_whitespace() {
-                let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '/');
-                if clean.starts_with('/') && clean.len() > 1 {
-                    return Some(format!("{}{}", origin, clean));
-                }
-            }
-
-            if lower.contains("playlist") {
-                return Some(format!("{}/playlists", origin));
-            } else if lower.contains("explore") {
-                return Some(format!("{}/explore", origin));
-            } else if lower.contains("search") && !lower.contains("google") {
-                return Some(format!("{}/search", origin));
-            } else if lower.contains("login") || lower.contains("sign in") {
-                return Some(format!("{}/login", origin));
-            } else if lower.contains("settings") {
-                return Some(format!("{}/settings", origin));
-            } else if lower.contains("about") {
-                return Some(format!("{}/about", origin));
-            } else if lower.contains("home") {
-                return Some(origin.to_string());
-            }
-        }
-    }
-
-    None
-}
-
+/// The page to open before a bot starts: the first full `http://` or `https://` link in the
+/// message, nothing else. kwant used to guess here (bare domains, a `/word` joined to the page
+/// already open, "settings"/"home"/"search" pages), which sent a Mac folder path
+/// `/Users/…` to `github.com/Users/…`. Anything else the bot opens itself with its browser tools.
 pub fn detect_url_in_prompt(prompt: &str) -> Option<String> {
-    detect_url_with_context(prompt, None)
+    prompt.split_whitespace().find_map(|word| {
+        let start = word.find("http://").or_else(|| word.find("https://"))?;
+        let link = word[start..].trim_end_matches(|c: char| {
+            matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '>' | '"' | '\'' | '`' | '*')
+        });
+        let parsed = reqwest::Url::parse(link).ok()?;
+        (matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some()).then(|| link.to_string())
+    })
 }
 
 pub async fn get_or_create_browser_controller(
@@ -4077,6 +3972,7 @@ fn browser_unavailable(state: &AppState) -> (StatusCode, Json<serde_json::Value>
 
 fn browser_request_failed(error: crate::sandbox::BrowserError) -> (StatusCode, Json<serde_json::Value>) {
     if matches!(error, crate::sandbox::BrowserError::HumanControl) { return (StatusCode::CONFLICT, Json(json!({"error": error.to_string()}))); }
+    if matches!(error, crate::sandbox::BrowserError::NotWebAddress(_)) { return (StatusCode::BAD_REQUEST, Json(json!({"error": error.to_string()}))); }
     if let crate::sandbox::BrowserError::Navigation(reason) = &error {
         return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
             "error": format!("The site could not be reached ({}). The browser is working; check the address.", reason)
@@ -4469,6 +4365,19 @@ pub async fn execute_tool(
 #[cfg(test)]
 mod tests {
     use super::{scrub_urls, turn_failed_text};
+
+    #[test]
+    fn only_the_persons_own_message_can_open_a_link_before_a_turn() {
+        use super::TurnOpts;
+        // hand-offs, routines and follow-ups pass no nav prompt, even when theirs has a full link
+        assert_eq!(TurnOpts::default().nav_target(), None);
+        assert_eq!(TurnOpts::always_asking("x").nav_target(), None);
+        let person = |text: &str| TurnOpts { nav_prompt: Some(text.into()), ..TurnOpts::default() };
+        assert_eq!(person("open https://example.org please").nav_target(), Some("https://example.org".into()));
+        // Oleks's two cases stay put even in the person's own message
+        assert_eq!(person("open the browser at /Users/oleksandr.ivanchenko/dev/KORB").nav_target(), None);
+        assert_eq!(person("pulling from registry-1.docker.io failed").nav_target(), None);
+    }
 
     #[test]
     fn a_saved_turn_failure_hides_secrets_and_home_folders() {
