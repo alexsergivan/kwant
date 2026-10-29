@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.4.0] - 2026-10-29
+
 ### Added
 - **Performance Market (report-only).** kwant now records how each finished task went: who did it, on
   which model, how long it took, its tokens and cost, whether it ended verified, and how often you had
@@ -455,6 +457,7 @@ First public release of kwant for Mac: one universal app for Apple silicon and I
 later) that runs the kwant server and its interface, with a menu-bar icon. It uses the same data folder
 as `kwnt serve` (`~/.kwnt`).
 
+[Mac 0.4.0]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.4.0
 [Mac 0.3.0]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.3.0
 [Mac 0.2.0]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.2.0
 [Mac 0.1.3]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.3
