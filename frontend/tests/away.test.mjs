@@ -94,6 +94,18 @@ test('a lapsed request reads "This request expired"', () => {
   assert.equal(a.actionErrorText(500, 'Couldn’t send it'), 'Couldn’t send it');
 });
 
+test("an expired card's 409 shows the server's sentence as a plain notice, not an error", () => {
+  const msg = 'This card expired: the bot is no longer waiting for it. Ask the bot again.';
+  assert.deepEqual(a.actionFailureNotice(409, msg, 'Use send (mail)'), { text: `${msg} (“Use send (mail)”)`, error: false, info: true });
+  // Other failures stay errors, with the old wording.
+  assert.deepEqual(a.actionFailureNotice(409, 'Already answered', 'X'), { text: 'This request expired: “X”', error: true });
+  assert.deepEqual(a.actionFailureNotice(500, 'Boom', 'X'), { text: "Couldn't send it: Boom: “X”", error: true });
+  const html = ui.render({ data: resp(), loading: false, error: null, busy: null, notice: a.actionFailureNotice(409, msg, 'X'), onRefresh() {}, onOpen() {}, onAnswer() {}, onResolve() {} });
+  assert.match(html, /This card expired/);
+  assert.match(html, /bg-slate-500\/10/);
+  assert.doesNotMatch(html, /bg-amber-500\/10 text-amber-200[^>]*>This card expired/);
+});
+
 const noop = () => {};
 const view = (over = {}) => ui.render({ data: resp(), loading: false, error: null, now: NOW, onRefresh: noop, onOpen: noop, onAnswer: noop, onResolve: noop, ...over });
 

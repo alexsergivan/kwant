@@ -137,6 +137,22 @@ export function withoutItem(r: AwayResponse, section: AwaySection, id: string): 
 export const actionErrorText = (status: number, fallback: string): string =>
   status === 409 || status === 404 ? 'This request expired' : fallback;
 
+/** Outcome of a one-tap action; `info` is neither a success nor a failure (a card that expired). */
+export interface AwayNotice {
+  text: string;
+  error: boolean;
+  info?: boolean;
+}
+
+/**
+ * The notice for a failed one-tap action. A card that expired before it was answered is not an error:
+ * the server's own sentence ("This card expired: … Ask the bot again.") is shown as a plain notice.
+ */
+export function actionFailureNotice(status: number, serverMessage: string, title: string): AwayNotice {
+  if (status === 409 && /^This card expired\b/.test(serverMessage)) return { text: `${serverMessage} (“${title}”)`, error: false, info: true };
+  return { text: `${actionErrorText(status, `Couldn't send it: ${serverMessage}`)}: “${title}”`, error: true };
+}
+
 export class AwayError extends Error {
   constructor(public status: number, message: string) {
     super(message);

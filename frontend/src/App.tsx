@@ -33,6 +33,7 @@ import { AwayPage } from './components/AwayView';
 import { LooseEndsPage } from './components/LooseEndsView';
 import { MissionBoardPage } from './components/MissionBoardView';
 import { MISSION_BOARD_SETTING_EVENT, emitMission, parseMissionBoardSetting, sourceChat } from './missions';
+import { type ChatTarget, planOpenTarget } from './chatTarget';
 import { ParallelPage } from './components/ParallelUniverseView';
 import { ConnectionsPage } from './components/ConnectionsView';
 import { AlertTriangle, Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
@@ -339,7 +340,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const openQuestionRef = useRef<(kwantId: string) => boolean>(() => false);
   // Opens the chat of a bot's newest open browser step; false when it has none.
   const openHumanStepRef = useRef<(kwantId: string) => boolean>(() => false);
-  const openTargetRef = useRef<(t: { channel_id: string | null; kwant_id: string | null }) => boolean>(() => false);
+  const openTargetRef = useRef<(t: ChatTarget) => boolean>(() => false);
   const showNotification = (n: NotifyEvent) => {
     // Another space's news is the shell's to show, with a way to switch there.
     if (n.space_id && n.space_id !== space.id) return;
@@ -1465,17 +1466,28 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     playSfx('click');
   };
 
+  /** Closes the page on top of the chat (board, Loose ends, Away…) and shows the chat pane. */
+  const revealChat = () => {
+    setShowAway(false);
+    setShowLoose(false);
+    setShowConnections(false);
+    setShowParallel(false);
+    setShowMissions(false);
+    setPhoneView('chat');
+  };
+
   /** Opens a channel, or the direct chat with a bot when there's no channel. False if it's gone. */
-  const openTarget = (t: { channel_id: string | null; kwant_id: string | null }): boolean => {
-    if (t.channel_id) {
-      const channel = channels.find((c) => c.id === t.channel_id);
-      if (!channel) return false;
-      if (selectedIdRef.current !== channel.id) handleSelectChannel(channel);
-      return true;
-    }
-    const kwant = kwants.find((k) => k.id === t.kwant_id);
-    if (!kwant) return false;
-    if (selectedIdRef.current !== kwant.id || openThreadId) handleSelectKwant(kwant);
+  const openTarget = (t: ChatTarget): boolean => {
+    const plan = planOpenTarget(
+      t,
+      { selectedId: selectedIdRef.current, isChannel: isChannelRef.current, openThreadId },
+      { channel: (id) => channels.some((c) => c.id === id), kwant: (id) => kwants.some((k) => k.id === id) },
+    );
+    if (plan === 'gone') return false;
+    // Already the selected chat: the board or Loose ends may still cover it.
+    if (plan === 'reveal') revealChat();
+    else if (t.channel_id) handleSelectChannel(channels.find((c) => c.id === t.channel_id)!);
+    else handleSelectKwant(kwants.find((k) => k.id === t.kwant_id)!);
     return true;
   };
   openTargetRef.current = openTarget;
