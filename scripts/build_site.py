@@ -20,6 +20,8 @@ Every local asset URL in the pages and in site.css gets a `?v=<content hash>` qu
 with a browser's cached old CSS, JS, fonts or images.
 
 Pages also get their social tags (Open Graph, Twitter), JSON-LD structured data and a sitemap with lastmod dates.
+The build also writes llms.txt (https://llmstxt.org): a short summary of kwant for AI assistants, listing every page with
+its title and description, so new pages show up there without extra work.
 Each page's og:image is its own card from scripts/build_og.py (site/assets/og/), so run that first when titles or cards change.
 lastmod and the docs' dateModified come from the last git commit that changed the page body (today if it's uncommitted).
 
@@ -557,14 +559,42 @@ def write_favicons():
     (OUT / "apple-touch-icon.png").write_bytes(png_bytes(favicon_pixels(180, 8, 0)))
 
 
+LLMS_INTRO = """# kwant
+
+> kwant is an open-source, self-hosted team of AI agents in one Rust binary (`kwnt`). Bots share chats, hand work to each
+> other with @mentions and get it done on their own, on a schedule or while you're away. It runs on a laptop, a VPS or
+> Docker, with the Claude, Codex or Grok CLI logins you already have, API keys, local Ollama or any OpenAI-compatible server.
+
+Key facts:
+
+- License: AGPL-3.0, with commercial licenses available (contact@kwant.si).
+- Source: https://github.com/alexsergivan/kwant
+- Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
+- The program you install and run is called `kwnt` (`kwnt serve`).
+- No telemetry: kwant sends nothing to its developers.
+- Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.
+"""
+
+
+def llms_txt(pages):
+    """llms.txt: the intro above, then every page as a markdown link with its description, docs in nav order."""
+    line = lambda path: f"- [{pages[path]['title']}]({page_url(path)}): {pages[path]['description']}"
+    docs = [f"docs/{d}.html" for d, _ in DOCS if f"docs/{d}.html" in pages]
+    main = sorted((p for p in pages if p not in docs and p not in ("privacy.html", "terms.html", "404.html")), key=lambda p: p != "index.html")
+    legal = [p for p in ("privacy.html", "terms.html") if p in pages]
+    out = [LLMS_INTRO, "## Site", *map(line, main), "", "## Docs", *map(line, docs), "", "## Optional", *map(line, legal)]
+    return "\n".join(out) + "\n"
+
+
 def main():
     write_favicons()
     version_css()
-    written, lastmod = [], {}
+    written, lastmod, metas = [], {}, {}
     for src in sorted(SRC.glob("*.html")):
         meta, body = parse(src)
         dates = git_dates(src)
         lastmod[meta["path"]] = dates[1]
+        metas[meta["path"]] = meta
         out = OUT / meta["path"]
         # The 404 page is served for any missing path, so it needs root-absolute links.
         root = "/" if meta["path"] == "404.html" else "../" * meta["path"].count("/")
@@ -580,6 +610,7 @@ def main():
         sitemap.append(f"  <url><loc>{page_url(p)}</loc><lastmod>{lastmod[p]}</lastmod></url>")
     sitemap.append("</urlset>")
     (OUT / "sitemap.xml").write_text("\n".join(sitemap) + "\n")
+    (OUT / "llms.txt").write_text(llms_txt(metas))
     (OUT / "robots.txt").write_text(f"User-agent: *\nAllow: /\n\nSitemap: {SITE_URL}/sitemap.xml\n")
     print("wrote", ", ".join(written), file=sys.stderr)
 
