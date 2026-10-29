@@ -39,6 +39,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   model.
 
 ### Fixed
+- **No raw `[DECISIONS]` text in older channel replies.** Replies saved in a team channel could end with
+  the bot's raw `[DECISIONS] … [/DECISIONS]` block. The chat now hides it and shows its choices as
+  read-only chips (a line it can't read is dropped, never shown); a block being typed live is hidden too.
 - **A restart no longer leaves an audit running.** An audit cut off mid-turn by a restart ends
   `interrupted` and says so in the task's history; one still waiting to start runs after the restart
   (or is skipped if the auditor was turned off).

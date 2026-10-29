@@ -41,7 +41,7 @@ import { routeReasonText } from '../routeReason';
 import { BudgetPausedNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
 import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
-import { consultedNames, parseDecisions, parseWorkAhead } from '../decideFirst';
+import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhead } from '../decideFirst';
 import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 
@@ -889,7 +889,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const tokens = isUser ? null : replyTokens(msg.tokens_used, msg.meta);
     // Any auto-routed channel, not only #general: the server attaches `routing` wherever it picked the bot.
     const routed = isUser ? null : parseRoutingMeta(msg.meta);
-    const decisions = isUser ? [] : parseDecisions(msg.meta);
+    // Older channel replies still hold a raw [DECISIONS] block: hidden here, its lines shown as chips
+    const shownDecisions = isUser ? null : messageDecisions(msg.text, msg.meta);
+    const decisions = shownDecisions?.decisions ?? [];
+    const text = shownDecisions ? shownDecisions.text : msg.text;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
 
@@ -969,7 +972,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
 
           {/* Message Body Bubble */}
-          {!filesOnly && (msg.text.trim() || !files.length) && (
+          {!filesOnly && (text.trim() || !files.length) && (
           <div
             className={`px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full ${
               isUser
@@ -983,9 +986,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
             {isUser ? (
               <div className="whitespace-pre-wrap break-words">{renderFormattedText(msg.text)}</div>
             ) : workAhead ? (
-              <WorkAheadBody messageId={msg.id} text={msg.text} />
+              <WorkAheadBody messageId={msg.id} text={text} />
             ) : (
-              <MarkdownRenderer content={msg.text} />
+              <MarkdownRenderer content={text} />
             )}
           </div>
           )}
@@ -996,7 +999,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               messageId={msg.id}
               decisions={decisions}
               consulted={consultedNames(msg.meta)}
-              onChange={onChangeDecision ? (index, picked) => onChangeDecision(msg, index, picked) : undefined}
+              onChange={onChangeDecision && !shownDecisions?.readOnly ? (index, picked) => onChangeDecision(msg, index, picked) : undefined}
             />
           )}
 
@@ -1007,7 +1010,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <div className="mt-1.5 flex items-center gap-2 text-zinc-500 text-xs max-w-full min-w-0">
               <button
                 type="button"
-                onClick={() => handleCopy(msg.text, msg.id)}
+                onClick={() => handleCopy(text, msg.id)}
                 className="px-2 py-1 rounded-md hover:bg-zinc-900 hover:text-zinc-300 transition-colors flex items-center gap-1.5 text-[11px] cursor-pointer"
                 title="Copy response"
               >
@@ -1322,7 +1325,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       : `${queued.speaker} is busy with other work; this starts as soon as one of those finishes.`}
                   </p>
                 ) : streamingText ? (
-                  <MarkdownRenderer content={stripDiscussionMarkers(streamingText)} isStreaming={true} />
+                  <MarkdownRenderer content={hideStreamingDecisions(stripDiscussionMarkers(streamingText))} isStreaming={true} />
                 ) : awaitingAnswer ? (
                   <p className="text-zinc-400" role="status">
                     {awaitingBrowser
