@@ -2853,11 +2853,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     />
   );
   const missionNames = Object.fromEntries(kwants.map((k) => [k.id, k.name]));
+  const missionAvatars = Object.fromEntries(kwants.map((k) => [k.id, k.avatar_sprite ?? '']));
   const missionsPage = (
     <MissionBoardPage
       key={space.id}
       spaceId={space.id}
       names={missionNames}
+      avatars={missionAvatars}
       onBack={isPhone ? () => { setShowMissions(false); setPhoneView('list'); } : undefined}
       onOpenChat={(t, place) => {
         const c = place ?? sourceChat(t);
