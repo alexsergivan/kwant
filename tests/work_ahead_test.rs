@@ -25,6 +25,7 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 /// - a work-ahead run in a chat that says QUIETNOTHING: `[NOTHING]`;
+/// - one that says QUIETDECIDE: a report ending in a `[DECISIONS]` block on one line;
 /// - any other work-ahead run: a short report with a prediction;
 /// - anything else: "answer".
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
@@ -36,6 +37,7 @@ case "$last" in
   *"[Work ahead]"*)
     case "$last" in
       *QUIETNOTHING*) out='[NOTHING]' ;;
+      *QUIETDECIDE*) out='I updated the daily overview with a leave-by line.\n\n[DECISIONS] question: Arrival buffer | options: 5 min; 10 min; 15 min | picked: 10 min | why: time to park question: Traffic on days off | options: Run Maps anyway; One-line note | picked: One-line note | why: noise [/DECISIONS]' ;;
       *) out='While you were away I ran the pricing page link check: all 14 links work.\nNext I expect you will want the press note draft.' ;;
     esac ;;
   *) out="answer" ;;
@@ -195,6 +197,21 @@ async fn a_quiet_chat_gets_one_run_and_one_message_with_a_prediction() {
     // Not again before the person writes, even on a later scan
     assert!(env.run_now().await.is_empty());
     assert_eq!(env.work_ahead_in(&env.channel).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_work_ahead_post_keeps_its_choices_as_chips_not_text() {
+    let env = setup().await;
+    env.quiet_channel("Plan the school run. QUIETDECIDE").await;
+    assert_eq!(env.run_now().await.len(), 1);
+    env.settle().await;
+    let posted = env.work_ahead_in(&env.channel).await;
+    assert_eq!(posted.len(), 1);
+    assert_eq!(posted[0].text, "I updated the daily overview with a leave-by line.");
+    let d = &meta(&posted[0])["decisions"];
+    assert_eq!(d.as_array().map(Vec::len), Some(2), "{d}");
+    assert_eq!((d[0]["picked"].as_str(), d[1]["picked"].as_str()), (Some("10 min"), Some("One-line note")));
+    assert_eq!(meta(&posted[0])["kind"], "work_ahead");
 }
 
 #[tokio::test]

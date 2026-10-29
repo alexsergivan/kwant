@@ -431,20 +431,44 @@ fn parse_line(line: &str) -> Option<(String, Vec<String>, String, String)> {
     Some((question, options, picked, why))
 }
 
+/// A line split where another `question:` starts mid-line, so two choices run together on one
+/// line still parse as two.
+fn entries(line: &str) -> Vec<&str> {
+    let lower = line.to_ascii_lowercase();
+    let mut cuts: Vec<usize> = lower
+        .match_indices("question:")
+        .map(|(i, _)| i)
+        .filter(|&i| i > 0 && lower[..i].ends_with(|c: char| c.is_whitespace() || c == '|'))
+        .collect();
+    cuts.insert(0, 0);
+    cuts.push(line.len());
+    cuts.windows(2).map(|w| &line[w[0]..w[1]]).collect()
+}
+
+/// Whether a line is only markdown wrapping the block: a code fence or bold/italic marks.
+fn wrapper_line(line: &str) -> bool {
+    let t = line.trim();
+    !t.is_empty() && (t.starts_with("```") || t.chars().all(|c| matches!(c, '*' | '_' | '`')))
+}
+
 /// Takes a `[DECISIONS] … [/DECISIONS]` block off the end of a reply: the reply without it, and
 /// its valid lines (`question: … | options: A; B | picked: B | why: …`). A reply without the
-/// block comes back as it was.
+/// block comes back as it was. The whole block always comes off, even when none of its lines
+/// parse, the closing tag is missing, the tags are lowercase or it sits in a code fence.
 pub fn take_decisions(text: &str) -> (String, Vec<Decision>) {
-    let Some(start) = text.rfind(OPEN) else {
+    // ASCII lowercasing keeps byte offsets, so they index `text` too
+    let lower = text.to_ascii_lowercase();
+    let Some(start) = lower.rfind(&OPEN.to_ascii_lowercase()) else {
         return (text.to_string(), Vec::new());
     };
     let body_start = start + OPEN.len();
-    let (body, rest) = match text[body_start..].find(CLOSE) {
+    let (body, rest) = match lower[body_start..].find(&CLOSE.to_ascii_lowercase()) {
         Some(end) => (&text[body_start..body_start + end], &text[body_start + end + CLOSE.len()..]),
         None => (&text[body_start..], ""),
     };
     let decisions = body
         .lines()
+        .flat_map(entries)
         .filter_map(parse_line)
         .take(MAX_DECISIONS)
         .enumerate()
@@ -458,8 +482,19 @@ pub fn take_decisions(text: &str) -> (String, Vec<Decision>) {
             changed_to: None,
         })
         .collect();
-    let stripped = format!("{}{}", text[..start].trim_end(), if rest.trim().is_empty() { "" } else { "\n\n" });
-    (format!("{stripped}{}", rest.trim()).trim_end().to_string(), decisions)
+    let mut before = text[..start].trim_end();
+    let (head, last) = before.rsplit_once('\n').unwrap_or(("", before));
+    if wrapper_line(last) {
+        before = head.trim_end();
+    }
+    let mut after = rest.trim_start();
+    let (first, tail) = after.split_once('\n').unwrap_or((after, ""));
+    if wrapper_line(first) {
+        after = tail;
+    }
+    let after = after.trim();
+    let sep = if before.is_empty() || after.is_empty() { "" } else { "\n\n" };
+    (format!("{before}{sep}{after}").trim().to_string(), decisions)
 }
 
 /// `meta` with `decisions` set (when there are any).
@@ -1003,6 +1038,38 @@ mod tests {
         assert_eq!(ds[0].options.len(), 3);
         assert_eq!((ds[1].index, ds[1].picked.as_str(), ds[1].status.as_str()), (1, "plain", "decided"));
         assert_eq!(take_decisions("no block").0, "no block");
+    }
+
+    #[test]
+    fn a_garbled_decisions_block_still_comes_off_whole() {
+        // The screenshot: the block starts on the tag's line and two choices run together
+        let text = "Leave by 07:47.\n\n[DECISIONS] question: Arrival buffer | options: 5 min; 10 min; 15 min | picked: 10 min | \
+            why: time to park question: Traffic | options: Run Maps anyway; One-line note | picked: One-line note | why: noise [/DECISIONS]";
+        let (stripped, ds) = take_decisions(text);
+        assert_eq!(stripped, "Leave by 07:47.");
+        assert_eq!(ds.iter().map(|d| (d.question.as_str(), d.picked.as_str(), d.why.as_str())).collect::<Vec<_>>(), [
+            ("Arrival buffer", "10 min", "time to park"),
+            ("Traffic", "One-line note", "noise")
+        ]);
+        assert_eq!((ds[0].index, ds[1].index), (0, 1));
+
+        // Nothing parses, lowercase tags, no closing tag: still no raw text
+        for text in [
+            "Done.\n\n[DECISIONS]\nI picked the blue one because it reads best\n[/DECISIONS]",
+            "Done.\n[decisions]\nquestion: x | options: only | picked: only\n[/decisions]",
+            "Done.\n\n[DECISIONS]\nquestion: Which? | options: A; B | picked: A | why: cut off mid",
+            "Done.\n\n```\n[DECISIONS]\nquestion: Which? | options: A; B | picked: C\n[/DECISIONS]\n```",
+            "Done.\n\n**[DECISIONS]**\nquestion: Which? | options: A; B | picked: Z\n**[/DECISIONS]**",
+        ] {
+            let (stripped, _) = take_decisions(text);
+            assert_eq!(stripped, "Done.", "{text}");
+        }
+        // Text after the block stays, and a "question:" inside other words isn't a cut
+        let (stripped, ds) =
+            take_decisions("Before.\n[DECISIONS]\nquestion: Q? | options: A; B | picked: B | why: the subquestion: none\n[/DECISIONS]\nAfter.");
+        assert_eq!(stripped, "Before.\n\nAfter.");
+        assert_eq!(ds[0].why, "the subquestion: none");
+        assert_eq!(take_decisions("[DECISIONS]\n[/DECISIONS]").0, "");
     }
 
     #[test]
