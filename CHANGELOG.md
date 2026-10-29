@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Performance Market (report-only).** kwant now records how each finished task went: who did it, on
+  which model, how long it took, its tokens and cost, whether it ended verified, and how often you had
+  to step in. Earlier finished tasks are filled in once on upgrade. `GET /api/performance` groups this
+  by task class and bot (and model) with a 95% confidence range on the verified rate and flags groups
+  with fewer than 5 tasks. It doesn't change who gets work: Laya still routes. No screen for it yet.
+
 ### Fixed
 - **"Answer in chat" works when that chat is already open.** On the Mission board, "Answer in chat" and
   "Open the chat it came from" now close the board and show the chat even when it's the one already

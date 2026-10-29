@@ -340,6 +340,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // AutoFix's proposed changes to routines, checks and tasks: only the person reads, approves
         // or rejects them; bots only propose (the `workflow_propose` tool)
         ["", "api", "workflow-changes", ..] => true,
+        // The Performance Market's scoreboard is the person's report: bots never read it, so it
+        // can't feed a bot's own routing or be played for (Phase D1)
+        ["", "api", "performance", ..] => true,
         // Flight School: only the person gives or takes a bot's freedom (C3); reads stay open
         ["", "api", "capabilities", ..] => *method != Method::GET && *method != Method::HEAD,
         // App-wide settings, including where notifications go (`notify_webhook_url`), and the
@@ -881,6 +884,7 @@ mod tests {
         assert!(!person_only(&get, "/api/tasks/t1/flags"));
         assert!(!person_only(&get, "/api/tasks"));
         assert!(!person_only(&get, "/api/missions/insights"));
+        assert!(person_only(&get, "/api/performance"));
         assert!(person_only(&post, "/api/passwords/bitwarden/unlock"));
         assert!(person_only(&del, "/api/passwords/bitwarden"));
         assert!(person_only(&post, "/api/passwords/migrate"));

@@ -361,6 +361,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/work-ahead/run", post(work_ahead::run_now))
         .route("/api/missions", get(missions::routes::list_missions).post(missions::routes::create_mission))
         .route("/api/missions/insights", get(missions::routes::insights))
+        .route("/api/performance", get(missions::performance::report))
         .route("/api/missions/:id", get(missions::routes::get_mission).patch(missions::routes::patch_mission))
         .route("/api/missions/:id/approve", post(missions::routes::approve_mission))
         .route("/api/missions/:id/cancel", post(missions::routes::cancel_mission))
