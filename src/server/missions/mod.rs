@@ -632,8 +632,19 @@ pub async fn task_json(state: &AppState, task: &Task) -> Value {
         autofix::extend_task_json(state, task, obj).await;
         obj.insert("task_class".into(), json!(state.db.task_class(&task.id).await.unwrap_or_else(|_| crate::db::flight_school::DEFAULT_CLASS.into())));
         obj.insert("owner_tier".into(), flight_school::owner_tier(state, task).await);
+        obj.insert("reviewer".into(), reviewer(state, task).await);
     }
     v
+}
+
+/// Who reviews a task whose result came in without checks: the bot that handed out a hand-off.
+async fn reviewer(state: &AppState, task: &Task) -> Value {
+    if task.source_kind != "delegation" {
+        return Value::Null;
+    }
+    let Some(id) = task.source_id.as_deref() else { return Value::Null };
+    let Ok(Some(d)) = state.db.get_delegation(id).await else { return Value::Null };
+    json!({"kwant_id": d.lead_kwant_id, "name": name_of(state, Some(&d.lead_kwant_id)).await})
 }
 
 pub async fn mission_json(state: &AppState, m: &Mission) -> Value {

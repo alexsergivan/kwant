@@ -39,6 +39,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   model.
 
 ### Fixed
+- **Hand-off cards no longer pile up in Review.** When a teammate finishes a hand-off, the bot that
+  handed it out reviews the result in its next reply: a pass verifies the card, a fail sends the work
+  back to the teammate with the reason. Only that bot's review counts (the teammate still can't approve
+  its own work), and until it reviews, the card says "Waiting for <bot> to review". Each hand-off's card
+  is named after what was asked of that teammate, not after your message, so two hand-offs to one bot
+  no longer look like duplicates.
 - **A restart no longer leaves an audit running.** An audit cut off mid-turn by a restart ends
   `interrupted` and says so in the task's history; one still waiting to start runs after the restart
   (or is skipped if the auditor was turned off).

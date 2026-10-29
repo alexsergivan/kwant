@@ -1309,7 +1309,7 @@ pub(super) async fn delegate_mentions(
             lead: lead.clone(),
             specialist: specialist.clone(),
             task: task.clone(),
-            title: Some(title.clone()),
+            title: Some(handoff_title(text, &specialist.name).unwrap_or_else(|| title.clone())),
             origin: super::delegation::Origin { channel_id: Some(cid.clone()), ..Default::default() },
             continue_lead: true,
             origin_depth: scope.delegation_depth,
@@ -1328,6 +1328,36 @@ pub(super) async fn delegate_mentions(
     if !capped.is_empty() {
         super::budget::pause_capped(scope, lead, &capped, this_request.len() + started.len(), text, user_prompt).await;
     }
+}
+
+/// A hand-off's title from what the lead asked `name` for: the first sentence of the line that
+/// @mentions them, without the mention. Two hand-offs from one message then read differently on
+/// the board (Oleks, 2026-10-29: four cards all named after his message). `None` when the line
+/// says nothing past the mention, or when it @mentions others too (the same words for each).
+pub fn handoff_title(text: &str, name: &str) -> Option<String> {
+    let mention = format!("@{}", name.to_lowercase());
+    let line = text.lines().find(|l| l.to_lowercase().contains(&mention))?;
+    if line.match_indices('@').filter(|&(i, _)| line[i + 1..].starts_with(char::is_alphanumeric)).count() > 1 {
+        return None;
+    }
+    let lower = line.to_lowercase();
+    // Offsets of the lowercased line match the original only when lowercasing kept every length
+    if lower.len() != line.len() {
+        return None;
+    }
+    let rest = &line[lower.find(&mention)? + mention.len()..];
+    let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ':' | '-' | '–' | '—' | '*' | '_' | '.'));
+    let end = rest
+        .char_indices()
+        .find(|&(i, c)| matches!(c, '.' | '!' | '?') && rest[i + c.len_utf8()..].starts_with(char::is_whitespace))
+        .map(|(i, c)| i + c.len_utf8());
+    let sentence = rest[..end.unwrap_or(rest.len())].trim().trim_end_matches(['*', '_']).trim();
+    if sentence.chars().filter(|c| c.is_alphanumeric()).count() < 3 {
+        return None;
+    }
+    let mut chars = sentence.chars();
+    let title: String = chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default();
+    Some(truncate_chars(&title, 80).to_string())
 }
 
 /// Whether the teammate with `id` is among the @mentioned `targets` (indices into the teammates).

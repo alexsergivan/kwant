@@ -97,6 +97,10 @@ test('a card shows owner, cost and an honest check chip', () => {
   assert.match(html, /12\.4k of 50k tokens/);
   assert.match(html, /Not checked/);
   assert.match(html, /Bot says done\. Not checked yet/);
+  // A hand-off's card names the bot that handed it out, which reviews it
+  const handoff = ui.card({ task: task({ state: 'review', source_kind: 'delegation', reviewer: { kwant_id: 'k_ada', name: 'Architect' } }), names, now: NOW, onOpen: noop });
+  assert.match(handoff, /Waiting for Architect to review/);
+  assert.doesNotMatch(handoff, /Not checked yet/);
   const working = ui.card({ task: task({ state: 'working', claim: { kwant_id: 'k_lin', claimed_at: '2026-10-27T11:50:00Z', expires_at: '2026-10-27T12:20:00Z' } }), names, now: NOW, onOpen: noop });
   assert.match(working, /Lin started 10 min ago/);
   const asks = ui.card({ task: task({ state: 'needs_you', needs_you: [{ kind: 'approval', id: 'a1', text: 'OK to publish the page?' }] }), names, now: NOW, onOpen: noop });

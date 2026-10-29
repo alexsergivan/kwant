@@ -435,6 +435,18 @@ impl Database {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Opens a completed delegation again because its lead's review sent it back.
+    pub async fn reopen_reviewed_delegation(&self, id: &str) -> Result<bool, DbError> {
+        let res = sqlx::query(
+            "UPDATE delegations SET status = 'queued', error = NULL, result_message_id = NULL, ended_at = NULL, started_at = NULL, retries = 0, followed_up = 1 \
+             WHERE id = ? AND status = 'completed'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Parks a queued delegation until `after` (another delegation) ends.
     pub async fn set_delegation_after(&self, id: &str, after: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE delegations SET after_delegation_id = ? WHERE id = ? AND status = 'queued'")

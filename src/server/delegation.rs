@@ -448,8 +448,8 @@ pub(super) fn is_parked(d: &Delegation) -> bool {
 
 /// The background part: the specialist's turn in the thread, then the report in the origin chat.
 async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: Kwant, specialist: Kwant, how: RunAs) {
-    let RunAs { retried, after_restart, carry_on } = how;
-    let carried_on = carry_on.is_some();
+    let RunAs { retried, after_restart, carry_on, sent_back } = how;
+    let carried_on = carry_on.is_some() || sent_back.is_some();
     let scope = match scope_for(&state, &specialist, None, Some(d.thread_id.clone()), &job, d.depth).await {
         Ok(s) => s,
         Err(why) => return finish(&state, &d, &specialist, Err(why), carried_on).await,
@@ -463,8 +463,16 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
             }
         }
     });
-    let opening = match &carry_on {
-        Some(why) => format!(
+    let opening = match (&carry_on, &sent_back) {
+        (_, Some(note)) => format!(
+            "{lead} reviewed the result you gave for this task and sent it back: {note}\n\nFix exactly that. Your earlier \
+            work is above in this thread, so build on it instead of starting over, and don't repeat a step that can't be undone \
+            (sending, posting, deleting, paying). When you finish, your reply is posted back to {lead} and the chat it came \
+            from, so make it a complete, self-contained answer.",
+            lead = lead.name,
+            note = clip(note, 1000),
+        ),
+        (Some(why), _) => format!(
             "{lead} delegated this task to you earlier, and it stopped before it was done ({why}). The person sent it \
             back to you: carry on from where you stopped. Your earlier work is above in this thread, so check what is \
             already done instead of starting over, and don't repeat a step that can't be undone (sending, posting, deleting, \
@@ -473,7 +481,7 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
             lead = lead.name,
             why = clip(why, 300),
         ),
-        None => format!(
+        (None, None) => format!(
             "{lead} delegated this task to you. Work on it here; when you finish, your reply is posted back to {lead} \
             and the chat it came from, so make it a complete, self-contained answer.",
             lead = lead.name,
@@ -531,6 +539,8 @@ struct RunAs {
     /// The person sent an ended task back (unblocked or retried its board card): why it stopped.
     /// The specialist carries on in its thread, and the lead hears the new result on its own.
     carry_on: Option<String>,
+    /// The lead's review sent the finished task back: its note. Reported like a carry-on.
+    sent_back: Option<String>,
 }
 
 /// Most of the person's request, and of the origin chat's instructions, a delegated task quotes.
@@ -673,7 +683,7 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
     }
     // Its batch already went to the lead: this result goes on its own (a stop was the person's)
     if done.continue_lead && status != "cancelled" {
-        let opening = format!("{} carried on with the task you delegated (“{}”) after the person sent it back.", specialist.name, done.title);
+        let opening = format!("{} carried on with the task you delegated (“{}”) after it was sent back.", specialist.name, done.title);
         continue_lead(state, &done, std::slice::from_ref(&done), Some(opening)).await;
     }
 }
@@ -862,6 +872,10 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
                 person the question is waiting in that thread. When they answer, {who} continues and you get its result.)\n",
                 clip(&q.question, 200)
             ));
+        }
+        if let Some(review) = super::missions::listener::lead_review_note(state, b, &who).await {
+            results.push_str(&review);
+            results.push('\n');
         }
         if let Some(next) = status_guidance(&b.status) {
             results.push_str(next);
@@ -1110,7 +1124,7 @@ async fn restart(state: &AppState, d: Delegation, retried: bool, after_restart: 
     };
     let job = state.turns.start_job([d.id.clone(), d.thread_id.clone()]);
     tracing::info!(delegation = %d.id, retried, "delegation restarted");
-    tokio::spawn(run(state.clone(), job, d, lead, specialist, RunAs { retried, after_restart, carry_on: None }));
+    tokio::spawn(run(state.clone(), job, d, lead, specialist, RunAs { retried, after_restart, ..Default::default() }));
     true
 }
 
@@ -1146,6 +1160,39 @@ pub async fn carry_on(state: &AppState, d: &Delegation) -> bool {
     let job = state.turns.start_job([open.id.clone(), open.thread_id.clone()]);
     tracing::info!(delegation = %open.id, "delegation carried on");
     tokio::spawn(run(state.clone(), job, open, lead, specialist, RunAs { carry_on: Some(why), ..Default::default() }));
+    true
+}
+
+/// The lead's review failed a finished hand-off (its card went from review back to Ready): the
+/// specialist fixes it in the hand-off's own thread with the review's `note`, and the new result
+/// goes to the origin chat and the lead, whose review comes again. `false` when it can't (a bot
+/// is gone, or another call reopened it first).
+pub async fn send_back(state: &AppState, d: &Delegation, note: &str) -> bool {
+    if d.status != "completed" {
+        return false;
+    }
+    let (Ok(Some(lead)), Ok(Some(specialist))) =
+        (state.db.get_kwant(&d.lead_kwant_id).await, state.db.get_kwant(&d.specialist_kwant_id).await)
+    else {
+        return false;
+    };
+    if !state.db.reopen_reviewed_delegation(&d.id).await.unwrap_or(false) {
+        return false;
+    }
+    let Ok(Some(open)) = state.db.get_delegation(&d.id).await else { return false };
+    emit_delegation(state, &open);
+    post_to_origin(
+        state,
+        &open,
+        "system",
+        "kwnt",
+        format!("{} sent “{}” back to {}: {}", lead.name, open.title, specialist.name, clip(note, 300)),
+        meta("delegation_started", &open, &specialist.name),
+    )
+    .await;
+    let job = state.turns.start_job([open.id.clone(), open.thread_id.clone()]);
+    tracing::info!(delegation = %open.id, "delegation sent back by its review");
+    tokio::spawn(run(state.clone(), job, open, lead, specialist, RunAs { sent_back: Some(note.to_string()), ..Default::default() }));
     true
 }
 

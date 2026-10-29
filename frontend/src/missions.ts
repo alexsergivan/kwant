@@ -110,6 +110,8 @@ export interface Task extends TaskTier {
   checks_summary: ChecksSummary;
   /** The task this one redoes (a fork); older servers leave it out. */
   forked_from?: string | null;
+  /** Who reviews a hand-off's result: the bot that handed it out. Older servers leave it out. */
+  reviewer?: { kwant_id: string; name: string | null } | null;
   /** Set when a restore held the task: nothing claims it until `POST /api/tasks/:id/run`
    *  (the person's Run). Older servers leave it out. */
   held_at?: string | null;
@@ -701,7 +703,9 @@ export function cardStatus(t: Task, names: Record<string, string> = {}, now: num
       return t.needs_you[0]?.text ?? 'A bot is waiting for you';
     case 'review':
       if (approvalHolds(t.checks_summary)) return waitingApprovalText(t.checks_summary.required_needs_approval);
-      if (t.checks_summary.status === 'not_checked') return 'Bot says done. Not checked yet';
+      if (t.checks_summary.status === 'not_checked') {
+        return t.reviewer?.name ? `Waiting for ${t.reviewer.name} to review` : 'Bot says done. Not checked yet';
+      }
       // While a required check runs the card reads as checking; the grey note covers optional ones.
       if (t.checks_summary.status === 'pending') return 'Bot says done. Checking';
       return optionalWaitingText(optionalWaitingCount(t.checks_summary)) ?? 'Bot says done. Checking';
