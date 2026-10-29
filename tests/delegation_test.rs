@@ -1416,3 +1416,71 @@ async fn a_stop_resumes_the_lead_only_for_the_rest_of_its_batch() {
     let p = resumed().pop().unwrap();
     assert!(p.contains("answer keepme") && p.contains("It was stopped"), "{p}");
 }
+
+/// Oleks (2026-10-29, "seems like not all mentions got notified"): QA's result said "@Frontend could
+/// switch to …", the lead didn't relay it and Frontend never ran. A teammate's result now hands on
+/// its own mentions of other teammates: Growth gets a task from Social's result, its title is the
+/// line that asked, and the lead is resumed once with both results.
+#[tokio::test]
+async fn a_teammates_result_that_mentions_another_teammate_starts_its_task() {
+    let env = setup().await;
+    let social = add_bot(&env, "Social").await;
+    let growth = add_bot(&env, "Growth").await;
+    let channel = team_channel_with(&env, "relay", &[&env.lead, &social, &growth]).await;
+    let first = delegate_from(&env, &channel, &social, "Draft the posts REPLYTAG:relayone MENTION:Growth", "Draft posts").await;
+    // The link is written right after the task is created, before Growth runs
+    wait_for("the relayed task", || async {
+        env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap().iter().any(|d| d.specialist_kwant_id == growth && d.relayed_from_delegation_id.is_some())
+    })
+    .await;
+    let relayed = env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap().into_iter().find(|d| d.specialist_kwant_id == growth).unwrap();
+    assert_eq!(relayed.relayed_from_delegation_id.as_deref(), Some(first.as_str()));
+    assert!(relayed.task.contains("Social mentioned you in its result"), "{}", relayed.task);
+    assert!(relayed.title.contains("answer relayone"), "{}", relayed.title);
+    wait_for("Growth's result", || async { delegation_status(&env, &relayed.id).await == "completed" }).await;
+    wait_for("the lead's one follow-up", || async { !prompts_with("Growth got this task because Social's result").is_empty() }).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let resumes = prompts_with("Growth got this task because Social's result");
+    assert_eq!(resumes.len(), 1, "the lead is resumed once with both results");
+    assert!(resumes[0].contains("relayone"), "{}", resumes[0]);
+    assert!(refusals(&channel_messages(&env, &channel).await).is_empty());
+}
+
+/// A relayed teammate whose result mentions a teammate earlier in the same chain is refused with a
+/// notice instead of handing the work back and forth.
+#[tokio::test]
+async fn a_relayed_result_cannot_hand_work_back_up_its_chain() {
+    let env = setup().await;
+    let social = add_bot(&env, "Social").await;
+    let growth = add_bot(&env, "Growth").await;
+    let channel = team_channel_with(&env, "relay-pingpong", &[&env.lead, &social, &growth]).await;
+    // Social's result mentions Growth; Growth's (it sees the same request) mentions Social back
+    delegate_from(&env, &channel, &social, "Plan REPLYTAG:pp MENTION:Growth+Social", "Plan").await;
+    wait_for("the ping-pong notice", || async { !refusals(&channel_messages(&env, &channel).await).is_empty() }).await;
+    let refused = refusals(&channel_messages(&env, &channel).await);
+    assert!(refused.iter().any(|r| r.contains("Social") && r.contains("already worked on this chain")), "{refused:?}");
+    let ds = env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap();
+    assert_eq!(ds.iter().filter(|d| d.specialist_kwant_id == social && d.relayed_from_delegation_id.is_some()).count(), 0);
+    assert_eq!(ds.iter().filter(|d| d.specialist_kwant_id == growth).count(), 1);
+}
+
+/// A result's mention of a teammate already asked up to the per-teammate cap leaves the Continue
+/// notice, like the lead's own mentions.
+#[tokio::test]
+async fn a_relayed_mention_past_the_cap_waits_for_continue() {
+    let env = setup().await;
+    let lead = name(&env, &env.lead).await;
+    let social = add_bot(&env, "Social").await;
+    let growth = add_bot(&env, "Growth").await;
+    let channel = team_channel_with(&env, "relay-cap", &[&env.lead, &social, &growth]).await;
+    say_in(&env, &channel, &format!("@{lead} Plan the launch REPLYTAG:capplan")).await;
+    wait_for("the lead's reply", || async { channel_messages(&env, &channel).await.iter().any(|m| m.text.contains("answer capplan")) }).await;
+    seed_rounds(&env, &channel, &growth, per_bot_limit()).await;
+    let d = delegate_from(&env, &channel, &social, "Review REPLYTAG:capped MENTION:Growth", "Review").await;
+    wait_for("the review", || async { delegation_status(&env, &d).await == "completed" }).await;
+    wait_for("the per-teammate notice", || async { !capped(&channel_messages(&env, &channel).await).is_empty() }).await;
+    let notices = capped(&channel_messages(&env, &channel).await);
+    assert!(notices[0].text.contains("Growth not sent yet"), "{}", notices[0].text);
+    let to_growth = env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap().iter().filter(|d| d.specialist_kwant_id == growth).count();
+    assert_eq!(to_growth, per_bot_limit(), "nothing past the cap until Continue");
+}
