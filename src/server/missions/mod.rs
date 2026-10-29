@@ -12,6 +12,7 @@
 //! - nothing here widens a bot's permissions: the bot tools only touch the board, `command` checks
 //!   a bot adds run only after the person approves them, and person actions are person-only routes.
 
+pub mod auditor;
 pub mod autofix;
 pub mod checkpoints;
 pub mod checks;
@@ -240,6 +241,10 @@ async fn after_move(state: &AppState, task: &Task, to: &str) {
     }
     if to == "ready" {
         listener::kick_handoff(state, task);
+    }
+    // The Swarm Auditor challenges a high-impact or low-confidence task in review (off by default, D2)
+    if to == "review" {
+        auditor::on_review(state, task);
     }
     autofix::settle(state, task, to).await;
     // A task parked for AutoFix isn't done failing: no "failed" line until it is

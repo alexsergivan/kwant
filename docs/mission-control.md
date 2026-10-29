@@ -681,3 +681,51 @@ with the same rules and inserted as `source = 'backfill'`; rows that exist are n
 `verified_rate`, `verified_ci95` (Wilson score interval, z = 1.96), `median_latency_ms`,
 `median_fresh_tokens`, `cost_usd` and `cost_per_task_usd` (over rows with a cost),
 `interventions_per_task` and `low_confidence` (n < 5). Groups sort by class, then n descending.
+
+## 18. Swarm Auditor (Phase D2)
+
+For high-impact or low-confidence tasks, one teammate challenges with evidence, the owner answers once,
+and the risks left unresolved are listed on the task. **An audit never changes verification**: it
+never moves a task, never adds or runs a check and never writes a peer review; "no risks raised" is not
+a pass. Design note: `phase-d/auditor.md`.
+
+**Settings** (app-wide, like the other Mission Control settings): `auditor` = `off` (default) | `on`;
+`auditor_daily_cap` 1–50 (default 5) audits started per UTC day.
+
+**Trigger.** A task entering `review` with an owner, while `auditor` is on, when its priority is high or
+urgent (`high_impact`) or no check that counts and isn't the owner's will judge it (`low_confidence`,
+`checks_summary.status = not_checked`). The person can start one with `POST /api/tasks/:id/audit`
+(`manual`). One audit per task attempt; one audit runs at a time server-wide. A skipped audit (cap,
+no challenger) logs `audit_skipped`.
+
+**Challenger.** A bot of the task's space other than the owner, the mission's lead and the lead that
+handed the task off. Ranked by verified tasks of the task's class (Performance Market), then fewest
+challenges in the last 7 days, then name and id.
+
+**Exchange.** Two hidden turns, each `always_ask` (any call that could change something asks the
+person; payments ask in every mode, D8), each capped at 20 minutes:
+
+1. The challenger calls `audit_challenge {audit_id, risks: [{risk, evidence, evidence_ids?}]}` once:
+   at most 5 risks, each with evidence (≤1000 chars); `evidence_ids` must be the task's. An empty list
+   ends the audit `done` with "no risks raised". No call → the audit ends `failed`.
+2. With risks, the owner calls `audit_rebut {audit_id, answers: [{risk_id, stance, answer, evidence?}]}`
+   once; `disputed` needs evidence. Unanswered risks stay `open`.
+
+While an audit of a task is `queued`, `challenge` or `rebuttal`, its challenger and owner can't use
+`task_claim`, `task_update`, `task_attach_evidence`, `task_request_check` or `task_review` on it.
+
+**Risks** end `open` or `disputed`; both are unresolved. Only the person closes one: `resolved` or
+`dismissed`. Tokens of each turn (`model_usage` in the turn's window) are stored per stage.
+
+**Ledger** (`task_events`): `audit_started`, `audit_challenge`, `audit_rebuttal`, `audit_done`,
+`audit_skipped`, `risk_resolved`. Audits left running at a restart become `interrupted`.
+
+**API**
+
+- `GET /api/tasks/:id/risks` → `{audits: [{…, risks: [...]}], open_risks}`.
+- `GET /api/risks?space=` → `{risks}`: unresolved risks of the space, newest first.
+- `POST /api/tasks/:id/audit` (person only) → 202 with the audit; 409 when the auditor is off, the task
+  isn't in review or verified, has no owner, its attempt was audited, the cap is reached or nobody can
+  challenge.
+- `POST /api/tasks/:id/risks/:risk_id/resolve {resolution: "resolved" | "dismissed", note?}` (person
+  only); 409 when already closed.

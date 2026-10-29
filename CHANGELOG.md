@@ -14,6 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   to step in. Earlier finished tasks are filled in once on upgrade. `GET /api/performance` groups this
   by task class and bot (and model) with a 95% confidence range on the verified rate and flags groups
   with fewer than 5 tasks. It doesn't change who gets work: Laya still routes. No screen for it yet.
+- **Swarm Auditor (off by default).** With `auditor` on in Settings, a high-priority task, or one no
+  outside check will judge, gets one challenge when it reaches review: a teammate outside the owner's
+  lead loop lists concrete risks with evidence, the owner answers once, and what stays unresolved is
+  listed on the task until you close it. An audit never verifies, fails or moves a task, and "no risks
+  raised" isn't a pass. Both turns ask before changing anything; at most 5 audits a day by default.
+  `GET /api/tasks/:id/risks`, `GET /api/risks`, `POST /api/tasks/:id/audit`, and
+  `POST /api/tasks/:id/risks/:risk_id/resolve`. No screen for it yet.
 
 ### Fixed
 - **"Answer in chat" works when that chat is already open.** On the Mission board, "Answer in chat" and
