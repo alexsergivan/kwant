@@ -1,6 +1,6 @@
 [package]
 name = "kwant"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "kwant for Mac: the kwant server and its UI in one app, with a menu-bar icon"
 license = "AGPL-3.0-only"

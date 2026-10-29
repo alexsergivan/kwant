@@ -184,7 +184,7 @@ fn fix_text(class: &str) -> Option<&'static str> {
     match class {
         "auth" => Some("Sign in to the bot's engine again, then retry."),
         "quota" => Some("Usage limit reached: wait for it to reset or switch account, then retry."),
-        "budget" => Some("Raise the task's budget, then retry it."),
+        "budget" => Some("Remove or raise the task's token limit, then retry it."),
         "denied" => Some("An action was denied during the run. Decide whether it may run, then retry."),
         _ => None,
     }

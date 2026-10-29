@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.3.0] - 2026-10-29
+
 ### Added
 - **Add a connection from the Connections page.** A new **+ Add connection** button in the header offers
   a tool server (opens Tools straight on adding one), an engine account, or an app through Composio. Empty
@@ -56,6 +58,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Cards survive a restart.** An approval card still waiting when kwant restarted used to give an
   error when you answered it. Now Allow resumes the work in the chat that asked, and a card more than
   a day old says it expired so you can ask the bot again. Payments still ask every time.
+- **"What went wrong" names the token limit.** When a task stops at its token limit, the box now says
+  "Remove or raise the task's token limit, then retry it." instead of "Raise the task's budget".
 
 ## [Mac 0.2.0] - 2026-10-28
 
@@ -354,6 +358,7 @@ First public release of kwant for Mac: one universal app for Apple silicon and I
 later) that runs the kwant server and its interface, with a menu-bar icon. It uses the same data folder
 as `kwnt serve` (`~/.kwnt`).
 
+[Mac 0.3.0]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.3.0
 [Mac 0.2.0]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.2.0
 [Mac 0.1.3]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.3
 [Mac 0.1.2]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.1.2
