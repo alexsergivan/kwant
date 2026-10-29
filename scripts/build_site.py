@@ -6,7 +6,8 @@ Run `python3 scripts/build_site.py` after editing anything in site-src/.
 
 Each page source starts with a header block of `key: value` lines, then `---`, then HTML.
 Keys: title, description, path (output path under site/), nav (docs nav id, docs pages only),
-active (header link to mark current on non-docs pages), and card, card_title, card_art for the
+active (header link to mark current on non-docs pages), faq (yes: FAQPage JSON-LD from the page's
+<section class="faq">, each <h3> question and the <p> after it), and card, card_title, card_art for the
 social card (see scripts/build_og.py).
 Shortcodes in the HTML:
   {{root}}                                relative path back to site/
@@ -358,7 +359,17 @@ ORG_ID, SITE_ID, APP_ID = f"{SITE_URL}/#org", f"{SITE_URL}/#website", f"{SITE_UR
 LICENSES = [f"{GITHUB}/blob/main/LICENSE"]
 
 
-def structured_data(meta, url, title, image, dates):
+def faq_items(body):
+    """(question, answer) pairs from the page's <section class="faq">: each <h3> and the <p> right after it, as plain text,
+    so the FAQPage JSON-LD always says exactly what the page shows."""
+    section = re.search(r'<section class="faq"[^>]*>(.*?)</section>', body, re.S)
+    if not section:
+        sys.exit("faq: yes, but the page has no <section class=\"faq\">")
+    text = lambda h: html.unescape(re.sub(r"<[^>]+>", "", h)).strip()
+    return [(text(q), text(a)) for q, a in re.findall(r"<h3[^>]*>(.*?)</h3>\s*<p>(.*?)</p>", section[1], re.S)]
+
+
+def structured_data(meta, url, title, image, dates, body=""):
     """JSON-LD for the page: the app, site and project on the home page, an article with breadcrumbs on docs pages."""
     path = meta["path"]
     org = {"@type": "Organization", "@id": ORG_ID, "name": "kwant", "url": SITE_URL + "/",
@@ -395,6 +406,9 @@ def structured_data(meta, url, title, image, dates):
              "inLanguage": "en", "dateModified": dates[1], "about": {"@id": APP_ID}, "isPartOf": {"@id": SITE_ID}},
             crumbs([("kwant", SITE_URL + "/"), (title.split(":")[0], url)]),
         ]
+    if meta.get("faq") == "yes":
+        graph.append({"@type": "FAQPage", "@id": url + "#faq", "url": url, "mainEntity": [
+            {"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": a}} for q, a in faq_items(body)]})
     data = json.dumps({"@context": "https://schema.org", "@graph": graph}, ensure_ascii=False, separators=(",", ":"))
     # JSON-LD is a data block, not a script, so the CSP's script-src doesn't apply to it. It goes at the end of <body>
     # so the head and the first screen of text still fit in the first TCP round trip.
@@ -455,7 +469,7 @@ def page(meta, body, root, dates):
 {body}
 </main>
 {footer(root)}
-{structured_data(meta, url, title, image, dates)}</body>
+{structured_data(meta, url, title, image, dates, body)}</body>
 </html>
 """
 
@@ -580,9 +594,13 @@ def llms_txt(pages):
     """llms.txt: the intro above, then every page as a markdown link with its description, docs in nav order."""
     line = lambda path: f"- [{pages[path]['title']}]({page_url(path)}): {pages[path]['description']}"
     docs = [f"docs/{d}.html" for d, _ in DOCS if f"docs/{d}.html" in pages]
-    main = sorted((p for p in pages if p not in docs and p not in ("privacy.html", "terms.html", "404.html")), key=lambda p: p != "index.html")
+    alternatives = sorted(p for p in pages if p.startswith("alternatives/"))
+    main = sorted((p for p in pages if p not in docs + alternatives and p not in ("privacy.html", "terms.html", "404.html")), key=lambda p: p != "index.html")
     legal = [p for p in ("privacy.html", "terms.html") if p in pages]
-    out = [LLMS_INTRO, "## Site", *map(line, main), "", "## Docs", *map(line, docs), "", "## Optional", *map(line, legal)]
+    out = [LLMS_INTRO, "## Site", *map(line, main), "", "## Docs", *map(line, docs), ""]
+    if alternatives:
+        out += ["## Alternatives", *map(line, alternatives), ""]
+    out += ["## Optional", *map(line, legal)]
     return "\n".join(out) + "\n"
 
 

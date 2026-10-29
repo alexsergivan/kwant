@@ -34,6 +34,9 @@ Key facts:
 - [MCP tools for AI agents: a self-hosted client](https://kwant.si/docs/mcp): Connect Model Context Protocol servers to your kwant bots, with per-bot access, masked secrets, OAuth sign-in and approval before risky tool calls.
 - [AI agent browser: your Chrome or Docker](https://kwant.si/docs/browser): Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.
 
+## Alternatives
+- [Grok Bot Alternative: Open-Source & Self-Hosted](https://kwant.si/alternatives/grok-bot): kwant is an open-source, self-hosted alternative to Grok Bot. Run a team of AI bots on your own machine and import your Grok Bot in minutes.
+
 ## Optional
 - [Privacy policy](https://kwant.si/privacy): What kwant.si and the self-hosted kwant software send where. The website sets no cookies and has no analytics; the software has no telemetry.
 - [Terms of use](https://kwant.si/terms): kwant is free software under the GNU AGPL-3.0, provided as is. You run it yourself and are responsible for your accounts, your bots and their costs.
