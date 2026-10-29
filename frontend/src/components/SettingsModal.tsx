@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AuditorSettings, DAILY_CAPS, SETTING_HINT as AUDITOR_HINT, parseAuditorSettings } from '../auditor';
+import { AuditorSettings, DAILY_CAPS, SETTING_HINT as AUDITOR_HINT, isAuditorModelError, MODEL_ERROR_TEXT as AUDITOR_MODEL_ERROR, parseAuditorSettings } from '../auditor';
+import { AuditorModelSetting } from './AuditorModelSetting';
 import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import { budgetError, budgetValue } from '../chainBudget';
@@ -257,6 +258,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // A 400 about the audit model shows next to that picker, not only at the bottom.
+  const modelError = isAuditorModelError(saveError);
   // null until loaded (or from a server without the setting), and then left out of the save
   const [agentTools, setAgentTools] = useState<boolean | null>(null);
   // Deciding and working ahead on their own; null on a server without these settings
@@ -953,6 +956,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                       </select>
                       <span className="text-[11px] text-zinc-300">{auditor.auditor_daily_cap === 1 ? 'audit' : 'audits'} a day</span>
                     </div>
+                  )}
+                  {(auditor.auditor === 'on' || modelError) && auditor.auditor_model !== undefined && (
+                    <AuditorModelSetting
+                      value={auditor.auditor_model}
+                      error={modelError ? AUDITOR_MODEL_ERROR : null}
+                      onChange={(m) => {
+                        setSaveError(null);
+                        setAuditor((x) => (x ? { ...x, auditor_model: m } : x));
+                      }}
+                    />
                   )}
                 </SwitchRow>
               )}

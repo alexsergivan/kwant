@@ -102,10 +102,10 @@ test('a bot’s tiers: each kind of work, where its tier comes from, one-click R
   // Sandbox's hint matches the gate: read-only commands in the bot's own folder may run without a card.
   assert.match(t, /Commands that can change things ask you; reading its own folder doesn’t\./);
   assert.doesNotMatch(t, /everything else ask/);
-  assert.match(t, /release Set for this kind of work/);
+  assert.match(t, /Release Set for this kind of work/);
   // Revoke steps one tier down and says where to; Observe has nothing lower.
   assert.match(html, /aria-label="Revoke all work to Observe"/);
-  assert.match(html, /data-class="docs"[\s\S]*?aria-label="Revoke docs to Sandbox"/);
+  assert.match(html, /data-class="docs"[\s\S]*?aria-label="Revoke Docs to Sandbox"/);
   assert.doesNotMatch(html, /Revoke release/);
   assert.match(t, /You revoked release to Observe/);
   assert.match(t, /pushed a tag/);

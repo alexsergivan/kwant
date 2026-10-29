@@ -143,7 +143,7 @@ test('filters reload with by, class, bot and since; choices stay listed after fi
   const { host, root } = await mount(load);
   assert.deepEqual(calls[0], { by: 'bot', since: '30d', class: undefined, bot: undefined });
   const [cls, , since] = host.querySelectorAll('select');
-  assert.deepEqual([...cls.options].map((o) => o.textContent), ['All kinds of work', 'General', 'research']);
+  assert.deepEqual([...cls.options].map((o) => o.textContent), ['All kinds of work', 'General', 'Research']);
   const change = async (el, v) => {
     el.value = v;
     el.dispatchEvent(new window.Event('change', { bubbles: true }));
