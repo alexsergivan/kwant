@@ -34,6 +34,7 @@ import hashlib
 import html
 import json
 import pathlib
+import posixpath
 import re
 import struct
 import subprocess
@@ -372,7 +373,7 @@ def faq_items(body):
 def structured_data(meta, url, title, image, dates, body=""):
     """JSON-LD for the page: the app, site and project on the home page, an article with breadcrumbs on docs pages."""
     path = meta["path"]
-    org = {"@type": "Organization", "@id": ORG_ID, "name": "kwant", "url": SITE_URL + "/",
+    org = {"@type": "Organization", "@id": ORG_ID, "name": "kwant", "alternateName": "kwnt", "url": SITE_URL + "/",
            "logo": f"{SITE_URL}/apple-touch-icon.png", "sameAs": [GITHUB]}
     crumbs = lambda items: {"@type": "BreadcrumbList", "itemListElement": [
         {"@type": "ListItem", "position": i + 1, "name": n, "item": u} for i, (n, u) in enumerate(items)]}
@@ -380,7 +381,7 @@ def structured_data(meta, url, title, image, dates, body=""):
         graph = [
             org,
             {"@type": "WebSite", "@id": SITE_ID, "name": "kwant", "url": SITE_URL + "/", "inLanguage": "en", "publisher": {"@id": ORG_ID}},
-            {"@type": "SoftwareApplication", "@id": APP_ID, "name": "kwant", "url": SITE_URL + "/", "description": meta["description"],
+            {"@type": "SoftwareApplication", "@id": APP_ID, "name": "kwant", "alternateName": "kwnt", "url": SITE_URL + "/", "description": meta["description"],
              "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux", "image": image,
              "screenshot": f"{SITE_URL}/assets/media/desktop-team-discussion-1440.webp",
              "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
@@ -587,6 +588,7 @@ Key facts:
 - The program you install and run is called `kwnt` (`kwnt serve`).
 - No telemetry: kwant sends nothing to its developers.
 - Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.
+- Not to be confused with the Kwant quantum-transport Python package (kwant-project.org) or other products named Kwant; this kwant is an AI agent app.
 """
 
 
@@ -602,6 +604,18 @@ def llms_txt(pages):
         out += ["## Alternatives", *map(line, alternatives), ""]
     out += ["## Optional", *map(line, legal)]
     return "\n".join(out) + "\n"
+
+
+def clean_links(page_html, path):
+    """Points every internal page link at its clean, root-relative URL (/docs/install, not ../docs/install.html), the form
+    Pages serves without a 308 redirect and the sitemap and canonicals use."""
+    def clean(m):
+        target, frag = m[2], m[3] or ""
+        if not target.startswith("/"):
+            target = posixpath.normpath(posixpath.join(posixpath.dirname("/" + path), target))
+        target = re.sub(r"(^|/)index\.html$", r"\1", target).removesuffix(".html")
+        return f'{m[1]}{target}{frag}"'
+    return re.sub(r'(<a\b[^>]*?\bhref=")((?![a-z]+:|#)[^"#?]*\.html)(#[^"]*)?"', clean, page_html)
 
 
 def main():
@@ -620,7 +634,7 @@ def main():
         if meta.get("nav"):
             body = docs_shell(root, meta["nav"], body)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(version_urls(page(meta, body, root, dates)))
+        out.write_text(clean_links(version_urls(page(meta, body, root, dates)), meta["path"]))
         written.append(meta["path"])
     urls = [p for p in written if p != "404.html"]
     sitemap = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']

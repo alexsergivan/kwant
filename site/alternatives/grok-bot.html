@@ -37,8 +37,8 @@
   <div class="wrap">
     <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
     <nav class="nav" aria-label="Main">
-      <a href="../features.html">Features</a>
-      <a href="../docs/quickstart.html">Docs</a>
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart">Docs</a>
       <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
     </nav>
   </div>
@@ -50,7 +50,7 @@
     <h1>A Grok Bot alternative you run yourself</h1>
     <p class="lede">kwant is an open-source, self-hosted team of AI bots in one binary. It runs on your laptop, a VPS or Docker, and it can import your Grok Bot export.</p>
     <div class="cta">
-      <a class="btn btn-violet" href="../docs/install.html">Install kwant</a>
+      <a class="btn btn-violet" href="/docs/install">Install kwant</a>
       <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">View on GitHub</a>
     </div>
   </div>
@@ -72,7 +72,7 @@
 <p>None of this makes Grok Bot a bad product. These are the cases where a self-hosted setup fits better.</p>
 
 <h2 id="kwant">kwant in one paragraph</h2>
-<p>kwant is a <a href="../index.html">self-hosted AI agent team</a>: bots share chats and hand work to each other with @mentions. Bots can work on a schedule or while you are away, using routines and cron rules that run on your own machine. You add the logins you already have, several per engine if you like, with failover when one runs out of usage. The program you install is called <code>kwnt</code> (start it with <code>kwnt serve</code>). kwant sends no telemetry to its developers. See all <a href="../features.html">features</a>.</p>
+<p>kwant is a <a href="/">self-hosted AI agent team</a>: bots share chats and hand work to each other with @mentions. Bots can work on a schedule or while you are away, using routines and cron rules that run on your own machine. You add the logins you already have, several per engine if you like, with failover when one runs out of usage. The program you install is called <code>kwnt</code> (start it with <code>kwnt serve</code>). kwant sends no telemetry to its developers. See all <a href="/features">features</a>.</p>
 
 <h2 id="compare">Grok Bot vs kwant</h2>
 <p>We only list what we can show from kwant's own docs. Where we have not verified a Grok Bot detail, we point you to xAI's site rather than guess.</p>
@@ -98,31 +98,31 @@
   <li>its scheduled routines</li>
   <li>its list of plugins</li>
 </ul>
-<p>Plugins arrive as setup notes, not working connections. You reconnect the tools you want yourself, for example through kwant's <a href="../docs/mcp.html">MCP tools</a>.</p>
+<p>Plugins arrive as setup notes, not working connections. You reconnect the tools you want yourself, for example through kwant's <a href="/docs/mcp">MCP tools</a>.</p>
 <p>If the export holds only the bot's details, kwant warns you that the instructions may be missing, so check the result before you rely on it.</p>
 <p>There is also a paste-in route. Under <strong>Bring a bot from…</strong>, pick Grok, and kwant gives you a prompt to send to your existing Grok bot. Paste the bot's reply back into kwant and it builds the bot from that.</p>
 <p>That is everything the import does. Review the imported bot, then give it a task.</p>
 
 <h2 id="after">What you get in kwant after you move</h2>
 <ul>
-  <li><strong>Teams and handoffs.</strong> Group bots into teams with a lead and let them pass work with @mentions. See <a href="../docs/bots-and-teams.html">teams and handoffs</a>.</li>
-  <li><strong>Routines.</strong> Schedule bot work with routines, cron rules and follow-ups. See <a href="../docs/routines.html">routines</a>.</li>
-  <li><strong>Approvals.</strong> Three <a href="../docs/approvals.html">approval</a> modes per space or bot, and <a href="../docs/flight-school.html">Flight School</a> tiers (Observe, Sandbox, Act) that set how much freedom each bot has earned. Payments always ask.</li>
-  <li><strong>A mission board.</strong> A task counts as Verified only when a check passes, and checkpoints let you undo a task's file changes. See the <a href="../docs/mission-board.html">mission board</a>.</li>
-  <li><strong>Your models, your accounts.</strong> Add <a href="../docs/accounts.html">multiple Claude, Codex and Grok accounts</a> or API keys with failover. See <a href="../docs/models.html">models and routing</a>.</li>
-  <li><strong>Tools through MCP.</strong> Connect Model Context Protocol servers with per-bot access and approval before risky calls. See <a href="../docs/mcp.html">MCP tools</a>.</li>
-  <li><strong>Spaces.</strong> Keep work and home apart, each with its own bots, routines and approval rules. See <a href="../docs/spaces.html">spaces</a>.</li>
+  <li><strong>Teams and handoffs.</strong> Group bots into teams with a lead and let them pass work with @mentions. See <a href="/docs/bots-and-teams">teams and handoffs</a>.</li>
+  <li><strong>Routines.</strong> Schedule bot work with routines, cron rules and follow-ups. See <a href="/docs/routines">routines</a>.</li>
+  <li><strong>Approvals.</strong> Three <a href="/docs/approvals">approval</a> modes per space or bot, and <a href="/docs/flight-school">Flight School</a> tiers (Observe, Sandbox, Act) that set how much freedom each bot has earned. Payments always ask.</li>
+  <li><strong>A mission board.</strong> A task counts as Verified only when a check passes, and checkpoints let you undo a task's file changes. See the <a href="/docs/mission-board">mission board</a>.</li>
+  <li><strong>Your models, your accounts.</strong> Add <a href="/docs/accounts">multiple Claude, Codex and Grok accounts</a> or API keys with failover. See <a href="/docs/models">models and routing</a>.</li>
+  <li><strong>Tools through MCP.</strong> Connect Model Context Protocol servers with per-bot access and approval before risky calls. See <a href="/docs/mcp">MCP tools</a>.</li>
+  <li><strong>Spaces.</strong> Keep work and home apart, each with its own bots, routines and approval rules. See <a href="/docs/spaces">spaces</a>.</li>
 </ul>
 
 <h2 id="stay">When Grok Bot is still the better fit</h2>
-<p>kwant runs on a machine you look after. If you would rather not run any server or computer yourself, a hosted product is simpler. And if your bots live only on a laptop that is switched off, scheduled routines wait until it is back on. A small VPS with the systemd setup in <a href="../docs/install.html">Install &amp; run</a> avoids that.</p>
+<p>kwant runs on a machine you look after. If you would rather not run any server or computer yourself, a hosted product is simpler. And if your bots live only on a laptop that is switched off, scheduled routines wait until it is back on. A small VPS with the systemd setup in <a href="/docs/install">Install &amp; run</a> avoids that.</p>
 
 <h2 id="start">Get started</h2>
 <p>Install <code>kwnt</code> on a laptop, a VPS or with Docker, add a login, and import your bot.</p>
 <div class="install" data-tabs><div class="install-top"><span class="install-k" aria-hidden="true">Install</span><div class="tabs" role="tablist" aria-label="Install with"><button type="button" role="tab" id="grok-t-src" aria-controls="grok-p-src" aria-selected="true">macOS · Linux</button><button type="button" role="tab" id="grok-t-docker" aria-controls="grok-p-docker" aria-selected="false" tabindex="-1">Docker</button></div></div><div class="cmd" role="tabpanel" id="grok-p-src" aria-labelledby="grok-t-src"><span class="p" aria-hidden="true">$</span><code>git clone https://github.com/alexsergivan/kwant &amp;&amp; cd kwant &amp;&amp; make run</code><button type="button" class="copy-cmd" aria-label="Copy the macOS · Linux install command">copy</button></div><div class="cmd" role="tabpanel" id="grok-p-docker" aria-labelledby="grok-t-docker" hidden><span class="p" aria-hidden="true">$</span><code>git clone https://github.com/alexsergivan/kwant &amp;&amp; cd kwant &amp;&amp; docker compose up -d --build</code><button type="button" class="copy-cmd" aria-label="Copy the Docker install command">copy</button></div></div>
 <ul>
-  <li><a href="../docs/install.html">Install kwnt</a></li>
-  <li><a href="../docs/quickstart.html">Quickstart</a></li>
+  <li><a href="/docs/install">Install kwnt</a></li>
+  <li><a href="/docs/quickstart">Quickstart</a></li>
   <li><a href="https://github.com/alexsergivan/kwant" rel="noopener">Source and releases on GitHub</a></li>
 </ul>
 
@@ -153,17 +153,17 @@
     </div>
     <nav aria-label="Product">
       <h2>Product</h2>
-      <a href="../features.html">Features</a>
-      <a href="../docs/quickstart.html">Quickstart</a>
-      <a href="../docs/install.html">Install &amp; run</a>
-      <a href="../docs/mcp.html">MCP tools</a>
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart">Quickstart</a>
+      <a href="/docs/install">Install &amp; run</a>
+      <a href="/docs/mcp">MCP tools</a>
     </nav>
     <nav aria-label="Using kwant">
       <h2>Using kwant</h2>
-      <a href="../docs/spaces.html">Spaces</a>
-      <a href="../docs/accounts.html">Accounts</a>
-      <a href="../docs/approvals.html">Approvals</a>
-      <a href="../docs/routines.html">Routines</a>
+      <a href="/docs/spaces">Spaces</a>
+      <a href="/docs/accounts">Accounts</a>
+      <a href="/docs/approvals">Approvals</a>
+      <a href="/docs/routines">Routines</a>
     </nav>
     <nav aria-label="Project">
       <h2>Project</h2>
@@ -173,9 +173,9 @@
     </nav>
     <nav aria-label="Legal">
       <h2>Legal</h2>
-      <a href="../privacy.html">Privacy</a>
-      <a href="../terms.html">Terms of use</a>
-      <a href="../terms.html#license">License</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms of use</a>
+      <a href="/terms#license">License</a>
     </nav>
     <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
   </div>
