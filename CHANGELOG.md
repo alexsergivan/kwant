@@ -31,6 +31,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Board cards show how many risks are still open. While an audit waits on one of your approval cards,
   the task says "Audit waiting for your answer" with a link to it. Settings has the Auditor switch and
   its daily limit.
+- **Skill Foundry (off by default).** With `skill_foundry` on in Settings, when a bot has 3 or more
+  verified tasks of one kind of work (70% of them verified, in 60 days), it drafts a skill from them:
+  the steps, the inputs, checks that judge the result, the example tasks and the tools it uses. Each
+  draft is replayed as a dry run on up to 3 of its examples in a scratch copy of their folder, where
+  nothing outside that folder runs, and the report sits on the draft for you to enable, edit or reject.
+  Listed tools are shown, never granted. Versions of a skill can be rolled back.
+  `GET /api/skills/foundry`, `POST /api/skills/foundry/:cluster/draft`, `POST /api/skills/:id/replay`,
+  `POST /api/skills/:id/rollback`, `GET /api/skills/:id/foundry`. At most 2 drafts a day by default.
 
 ### Changed
 - **Audits run on the fast model by default.** The Swarm Auditor's challenge and rebuttal turns now use

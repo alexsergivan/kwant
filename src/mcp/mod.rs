@@ -336,6 +336,9 @@ pub enum ApprovalOutcome {
     /// Nobody answered before the wait ran out. The card stays open, and a late Allow starts a
     /// new turn to continue.
     Unanswered,
+    /// A Skill Foundry replay (a dry run): the call didn't run and was recorded as what the bot
+    /// would have done.
+    Rehearsed,
 }
 
 /// What the bot is told when the person refused a call.
@@ -344,6 +347,11 @@ pub const DENIED_TEXT: &str = "The user denied this tool call.";
 pub const UNANSWERED_TEXT: &str = "No one has answered the approval card for this call yet, so it did not run. \
 The card stays open: if the person allows it later, you will be started again to make this same call and continue. \
 Don't retry it now. Finish what you can without it, then end your turn saying what you were about to do and why.";
+/// What the bot is told in a Skill Foundry replay when a call could change something.
+pub const REHEARSED_TEXT: &str = "This is a dry run on a scratch copy of an earlier task: calls that could change \
+anything outside the scratch folder (send, publish, sign in, pay, run commands, write elsewhere, other servers' tools) \
+don't run. kwant recorded this one as what you would have done. Don't retry it; carry on with what you can do in \
+the scratch folder, then end your turn saying what you would have done.";
 
 impl ApprovalOutcome {
     pub fn allowed(self) -> bool {
@@ -354,6 +362,7 @@ impl ApprovalOutcome {
     pub fn refusal_text(self) -> &'static str {
         match self {
             ApprovalOutcome::Unanswered => UNANSWERED_TEXT,
+            ApprovalOutcome::Rehearsed => REHEARSED_TEXT,
             _ => DENIED_TEXT,
         }
     }
@@ -364,6 +373,7 @@ impl ApprovalOutcome {
             ApprovalOutcome::Allowed => "allowed",
             ApprovalOutcome::Denied => "denied",
             ApprovalOutcome::Unanswered => "unanswered",
+            ApprovalOutcome::Rehearsed => "rehearsed",
         }
     }
 }

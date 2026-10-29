@@ -31,6 +31,15 @@ const READ_TOOLS: &[&str] = &["Read", "Glob", "Grep", "LS", "NotebookRead"];
 /// Tools that write files: free inside the working folder.
 const WRITE_TOOLS: &[&str] = &["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
+/// Whether `tool` is a built-in tool kwnt knows (a Skill Foundry draft may list only those).
+pub fn known(tool: &str) -> bool {
+    LOOKUP_TOOLS.contains(&tool) || READ_TOOLS.contains(&tool) || WRITE_TOOLS.contains(&tool) || matches!(tool, "Bash" | "KillShell")
+}
+
+/// Built-ins that start another agent: a Skill Foundry replay refuses them, as their own calls
+/// aren't checked against the replay's scratch folder.
+pub const SUBAGENT_TOOLS: &[&str] = &["Task", "Agent"];
+
 /// The policy for `tool` with `input`, for a bot working in `folder` (canonical, or `None`).
 pub fn decide(tool: &str, input: &Value, folder: Option<&Path>) -> BuiltinDecision {
     if tool == "WebFetch" && fetches_kwnt(input) {
