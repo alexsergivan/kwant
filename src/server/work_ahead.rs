@@ -194,12 +194,18 @@ pub async fn run(state: &AppState, c: Candidate, row: WorkAheadRun) -> Option<Me
         let _ = state.db.finish_work_ahead_run(&row.id, "failed", None, tokens).await;
         return None;
     };
+    // The post's own choices come off its text into meta.decisions, as in any other reply
+    let (reply, decisions) = super::decide::take_decisions(&reply);
     let Some(text) = message_text(&reply) else {
         let _ = state.db.finish_work_ahead_run(&row.id, "nothing", None, tokens).await;
         return None;
     };
     let meta = json!({"kind": "work_ahead", "date": day, "run_id": row.id});
-    let saved = scope.save(&scope.message("kwant", &c.lead.name, text), Some(meta)).await;
+    let meta = super::decide::with_decisions(Some(meta), &decisions);
+    let saved = scope.save(&scope.message("kwant", &c.lead.name, text), meta).await;
+    if let (Some(m), false) = (&saved, decisions.is_empty()) {
+        super::decide::note_bot_decisions(state, &c.lead, m).await;
+    }
     let _ = state.db.finish_work_ahead_run(&row.id, if saved.is_some() { "posted" } else { "failed" }, saved.as_ref().map(|m| m.id.as_str()), tokens).await;
     let saved = saved?;
     let place = (scope.channel_id.clone(), scope.kwant_id.clone(), scope.thread_id.clone());

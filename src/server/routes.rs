@@ -2486,11 +2486,9 @@ async fn run_kwant_turn_inner(
                 },
             };
             if let Some((text, reasoning_content)) = saved {
-                // A reply's own choices come off its text into meta.decisions
-                let (text, decisions) = match opts.discussion {
-                    None => super::decide::take_decisions(&text),
-                    Some(_) => (text, Vec::new()),
-                };
+                // A reply's own choices come off its text into meta.decisions, in channel rounds too
+                // (a discussion's raw reply still goes back to the round, which reads its markers)
+                let (text, decisions) = super::decide::take_decisions(&text);
                 if opts.discussion.is_none() {
                     reply_text = text.clone();
                 }
