@@ -9,6 +9,7 @@ use crate::db::auditor::{audit_json, Answer, Audit, NewRisk};
 use crate::db::missions::{OutcomeCheck, Task};
 use crate::db::models::Kwant;
 use crate::db::spaces::SpaceId;
+use crate::drivers::engines::Tier;
 use crate::server::continuity::SelfScope;
 use crate::server::routes::{scope_for, turn_once, TurnOpts};
 use crate::server::spaces::Scope;
@@ -29,6 +30,11 @@ pub const MODES: [&str; 2] = ["off", "on"];
 pub const CAP_SETTING: &str = "auditor_daily_cap";
 pub const DEFAULT_CAP: i64 = 5;
 pub const CAP_RANGE: (i64, i64) = (1, 50);
+/// The model tier audit turns run on: the engine's `fast` model by default, or `bot` for the
+/// model the bot would use anyway.
+pub const MODEL_SETTING: &str = "auditor_model";
+pub const MODEL_MODES: [&str; 4] = ["fast", "balanced", "deep", "bot"];
+pub const DEFAULT_MODEL: &str = "fast";
 pub const MAX_RISKS: usize = 5;
 const MAX_RISK_CHARS: usize = 500;
 const MAX_EVIDENCE_CHARS: usize = 1000;
@@ -49,12 +55,30 @@ pub async fn daily_cap(state: &AppState) -> i64 {
     super::int_setting(state, CAP_SETTING, CAP_RANGE, DEFAULT_CAP).await
 }
 
-pub fn settings_error(mode: Option<&str>, cap: Option<i64>) -> Option<String> {
+pub async fn model_mode(state: &AppState) -> &'static str {
+    let saved = state.db.get_setting(MODEL_SETTING).await.ok().flatten();
+    MODEL_MODES.into_iter().find(|m| Some(*m) == saved.as_deref().map(str::trim)).unwrap_or(DEFAULT_MODEL)
+}
+
+/// The tier an audit turn runs on for `mode`; `None` (`bot`) leaves it to the usual routing.
+pub fn tier_of(mode: &str) -> Option<Tier> {
+    match mode {
+        "bot" => None,
+        "balanced" => Some(Tier::Balanced),
+        "deep" => Some(Tier::Deep),
+        _ => Some(Tier::Fast),
+    }
+}
+
+pub fn settings_error(mode: Option<&str>, cap: Option<i64>, model: Option<&str>) -> Option<String> {
     if let Some(m) = mode.filter(|m| !MODES.contains(m)) {
         return Some(format!("auditor must be off or on (got {m})"));
     }
     if let Some(n) = cap.filter(|n| !(CAP_RANGE.0..=CAP_RANGE.1).contains(n)) {
         return Some(format!("auditor_daily_cap must be {}–{} (got {n})", CAP_RANGE.0, CAP_RANGE.1));
+    }
+    if let Some(m) = model.filter(|m| !MODEL_MODES.contains(m)) {
+        return Some(format!("auditor_model must be fast, balanced, deep or bot (got {m})"));
     }
     None
 }
@@ -160,13 +184,15 @@ pub async fn start(state: &AppState, task: &Task, trigger: &str) -> Result<Audit
         Ok(None) => return Err("this attempt of the task was already audited".into()),
         Err(e) => return Err(e.to_string()),
     };
-    event(state, &task.id, "audit_started", "kwant", json!({"audit_id": audit.id, "trigger": trigger, "challenger": challenger.id})).await;
+    let model = model_mode(state).await;
+    event(state, &task.id, "audit_started", "kwant", json!({"audit_id": audit.id, "trigger": trigger, "challenger": challenger.id, "model": model})).await;
     Ok(audit)
 }
 
 /// Runs an audit: the challenge turn, then the rebuttal turn if there are risks. Never moves the
 /// task. Each stage that ends without its tool call ends the audit with a reason.
 pub async fn drive(state: &AppState, audit: &Audit) {
+    let _unstick = Unstick(state.clone(), audit.id.clone());
     let _one = ONE.lock().await;
     let task = match state.db.get_task(&audit.task_id).await {
         Ok(Some(t)) if matches!(t.state.as_str(), "review" | "verified") => t,
@@ -197,6 +223,50 @@ pub async fn drive(state: &AppState, audit: &Audit) {
         }
     }
     finish(state, audit).await;
+}
+
+/// Ends the audit failed if its driver stops while it is still live (a panic, a dropped task),
+/// so an audit never stays running; a normal end leaves a final status and this does nothing.
+struct Unstick(AppState, String);
+
+impl Drop for Unstick {
+    fn drop(&mut self) {
+        let (state, id) = (self.0.clone(), std::mem::take(&mut self.1));
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move { end_if_live(&state, &id, "the audit stopped before it finished").await });
+        }
+    }
+}
+
+/// Ends audit `id` as `failed` with `reason` when it is still queued or in a stage, and logs its
+/// end on the task. False when it had already ended.
+pub async fn end_if_live(state: &AppState, id: &str, reason: &str) -> bool {
+    let Ok(Some(a)) = state.db.get_audit(id).await else { return false };
+    if !matches!(a.status.as_str(), "queued" | "challenge" | "rebuttal") {
+        return false;
+    }
+    if !state.db.move_audit(id, &a.status, "failed", Some(reason)).await.unwrap_or(false) {
+        return false;
+    }
+    tracing::warn!(audit_id = id, task_id = %a.task_id, reason, "audit ended");
+    finish(state, &a).await;
+    true
+}
+
+/// At startup, after the database marked the audits a restart cut off mid-turn `interrupted`:
+/// the ones still `queued` (no turn had started) run now, or are skipped if the auditor was
+/// turned off.
+pub async fn resume_after_restart(state: &AppState) {
+    let queued = state.db.audits_in("queued").await.unwrap_or_default();
+    let on = enabled(state).await;
+    for a in queued {
+        if on {
+            let s = state.clone();
+            tokio::spawn(async move { drive(&s, &a).await });
+        } else if state.db.move_audit(&a.id, "queued", "skipped", Some("the auditor was turned off")).await.unwrap_or(false) {
+            event(state, &a.task_id, "audit_skipped", "kwant", json!({"audit_id": a.id, "reason": "auditor_off"})).await;
+        }
+    }
 }
 
 fn ended_without(stage: &str, err: Option<&str>) -> String {
@@ -232,6 +302,7 @@ async fn run_stage(state: &AppState, audit: &Audit, bot: &Kwant, stage: &str, pr
         Ok(scope) => {
             let mut opts = TurnOpts::always_asking("Audit");
             (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(PURPOSE.into()));
+            opts.tier = tier_of(model_mode(state).await);
             match tokio::time::timeout(TURN_TIMEOUT, turn_once(&scope, bot, prompt, opts)).await {
                 Ok(r) => r,
                 Err(_) => Err("the audit turn took longer than 20 minutes".into()),
@@ -605,10 +676,20 @@ mod tests {
 
     #[test]
     fn settings_are_checked() {
-        assert!(settings_error(Some("on"), Some(5)).is_none());
-        assert!(settings_error(Some("suggest"), None).is_some());
-        assert!(settings_error(None, Some(0)).is_some());
-        assert!(settings_error(None, Some(51)).is_some());
+        assert!(settings_error(Some("on"), Some(5), Some("fast")).is_none());
+        assert!(settings_error(Some("suggest"), None, None).is_some());
+        assert!(settings_error(None, Some(0), None).is_some());
+        assert!(settings_error(None, Some(51), None).is_some());
+        assert!(settings_error(None, None, Some("bot")).is_none());
+        assert!(settings_error(None, None, Some("haiku")).is_some());
+    }
+
+    #[test]
+    fn audit_turns_run_on_the_fast_tier_unless_told_otherwise() {
+        assert_eq!(tier_of(DEFAULT_MODEL), Some(Tier::Fast));
+        assert_eq!(tier_of("balanced"), Some(Tier::Balanced));
+        assert_eq!(tier_of("deep"), Some(Tier::Deep));
+        assert_eq!(tier_of("bot"), None);
     }
 
     #[test]

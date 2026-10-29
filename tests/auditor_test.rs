@@ -11,7 +11,7 @@ use kwnt::{
     broker::PermissionBroker,
     config::Config,
     db::{
-        missions::{NewCheck, NewMission, NewTask, Task},
+        missions::{NewCheck, NewMission, NewTask, Task, TaskChange},
         models::{Kwant, NewKwant},
         performance::NewObservation,
         spaces::{SpaceId, DEFAULT_SPACE_ID},
@@ -577,7 +577,15 @@ async fn a_failed_audit_turn_leaves_the_task_alone() {
     assert!(done.reason.as_deref().unwrap_or("").contains("without a challenge"), "{done:?}");
     assert_eq!(verification(&e, &t.id).await, before, "an audit never moves or checks the task");
     assert!(e.state.db.risks_of_audit(&a.id).await.unwrap().is_empty());
-    let kinds = events(&e, &t.id).await;
+    // Its end is logged just after the status changes
+    let mut kinds = events(&e, &t.id).await;
+    for _ in 0..100 {
+        if kinds.iter().any(|k| k == "audit_done") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        kinds = events(&e, &t.id).await;
+    }
     assert!(kinds.contains(&"audit_done".to_string()), "{kinds:?}");
     assert!(!kinds.iter().any(|k| k == "verified" || k == "failed" || k == "peer_review"), "{kinds:?}");
 }
@@ -600,4 +608,113 @@ async fn a_queued_audit_of_a_task_sent_back_holds_nothing() {
     assert!(auditor::held(&e.state, &owner.id, "task_claim", &t).await.is_some());
     e.state.db.move_audit(&a.id, "challenge", "failed", Some("test")).await.unwrap();
     assert!(auditor::held(&e.state, &owner.id, "task_claim", &t).await.is_none());
+}
+
+#[tokio::test]
+async fn audit_turns_run_on_the_fast_tier_by_default() {
+    let e = setup().await;
+    let s = person(&e, "GET", "/api/settings", None).await;
+    assert_eq!(s["auditor_model"], "fast", "{s}");
+    let (status, v) = call(&e.app, "POST", "/api/settings", None, Some(json!({"auditor_model": "haiku"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "only a tier or bot: {v}");
+    person(&e, "POST", "/api/settings", Some(json!({"auditor_model": "bot"}))).await;
+    assert_eq!(person(&e, "GET", "/api/settings", None).await["auditor_model"], "bot");
+    assert_eq!(auditor::tier_of(auditor::model_mode(&e.state).await), None, "bot: the usual routing");
+
+    // The audit's start says which it ran on
+    person(&e, "POST", "/api/settings", Some(json!({"auditor_model": "balanced"}))).await;
+    auditor_on(&e, 5).await;
+    let (owner, _other) = (bot(&e, "Owner").await, bot(&e, "Other").await);
+    let t = task(&e, Some(&owner), 2, "review").await;
+    auditor::start(&e.state, &t, "manual").await.unwrap();
+    let started = e.state.db.task_events(&t.id, 50).await.unwrap().into_iter().find(|ev| ev.kind == "audit_started").unwrap();
+    assert!(started.detail.contains("\"model\":\"balanced\""), "{}", started.detail);
+}
+
+/// Opens the same data folder again, as a restarted kwant does, and runs its startup step.
+async fn restart(e: &Env) -> AppState {
+    let data = e._tmp.path().join("data");
+    let db = Database::init(&data).await.unwrap();
+    let config = Config { data_dir: data.clone(), laya_url: "http://127.0.0.1:9".into(), ..Config::default() };
+    let state = AppState::new(config.clone(), db, ToolRunner::new(data.join("workspace")), PermissionBroker::new(), LayaRouter::new(config.laya_url.clone()));
+    auditor::resume_after_restart(&state).await;
+    state
+}
+
+async fn ended(state: &AppState, id: &str) -> kwnt::db::auditor::Audit {
+    for _ in 0..100 {
+        let a = state.db.get_audit(id).await.unwrap().unwrap();
+        if !matches!(a.status.as_str(), "queued" | "challenge" | "rebuttal") {
+            return a;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("audit {id} is still running");
+}
+
+#[tokio::test]
+async fn a_restart_never_leaves_an_audit_running() {
+    let e = setup().await;
+    let (owner, other) = (bot(&e, "Owner").await, bot(&e, "Other").await);
+    auditor_on(&e, 10).await;
+    // Cut off mid-challenge
+    let t1 = task(&e, Some(&owner), 2, "review").await;
+    let a1 = open_audit(&e, &t1).await;
+    // Cut off waiting for the owner's answer, with a risk raised
+    let t2 = task(&e, Some(&owner), 2, "review").await;
+    let a2 = open_audit(&e, &t2).await;
+    let risk = kwnt::db::auditor::NewRisk { risk: "The file may be empty".into(), evidence: "saw 0 bytes".into(), evidence_ids: vec![] };
+    e.state.db.record_challenge(&a2.id, &[risk]).await.unwrap().unwrap();
+    assert_eq!(e.state.db.get_audit(&a2.id).await.unwrap().unwrap().status, "rebuttal");
+    // Still queued, its task sent back meanwhile
+    let t3 = task(&e, Some(&owner), 2, "review").await;
+    let a3 = auditor::start(&e.state, &t3, "manual").await.unwrap();
+    assert!(e.state.db.move_task(&t3.id, "review", "ready", "person", &TaskChange::default()).await.unwrap());
+    let before = (verification(&e, &t1.id).await, verification(&e, &t2.id).await);
+
+    let state = restart(&e).await;
+    let a1 = ended(&state, &a1.id).await;
+    assert_eq!((a1.status.as_str(), a1.reason.as_deref()), ("interrupted", Some("kwant restarted during the audit")));
+    let a2 = ended(&state, &a2.id).await;
+    assert_eq!(a2.status, "interrupted");
+    let risks = state.db.risks_of_audit(&a2.id).await.unwrap();
+    assert!(risks.len() == 1 && risks[0].unresolved(), "a raised risk stays listed: {risks:?}");
+    // The queued one ran after the restart and saw its task had moved on
+    let a3 = ended(&state, &a3.id).await;
+    assert_eq!(a3.status, "skipped", "{a3:?}");
+
+    // Each task's history says so; nothing else changed and nothing is held any more
+    for t in [&t1, &t2] {
+        let evs = state.db.task_events(&t.id, 50).await.unwrap();
+        assert!(evs.iter().any(|ev| ev.kind == "audit_done" && ev.detail.contains("interrupted")), "{:?}", evs.iter().map(|e| &e.kind).collect::<Vec<_>>());
+        assert!(auditor::held(&state, &owner.id, "task_review", t).await.is_none());
+        assert!(auditor::held(&state, &other.id, "task_review", t).await.is_none());
+    }
+    assert_eq!((verification(&e, &t1.id).await, verification(&e, &t2.id).await), before, "a restart never moves or checks the task");
+    assert!(auditor::live_audit(&state, &t3.id).await.is_none());
+
+    // Queued while the auditor was turned off: skipped at the next start, never run
+    let t4 = task(&e, Some(&owner), 2, "review").await;
+    let a4 = auditor::start(&e.state, &t4, "manual").await.unwrap();
+    person(&e, "POST", "/api/settings", Some(json!({"auditor": "off"}))).await;
+    let state = restart(&e).await;
+    let a4 = state.db.get_audit(&a4.id).await.unwrap().unwrap();
+    assert_eq!((a4.status.as_str(), a4.reason.as_deref()), ("skipped", Some("the auditor was turned off")));
+}
+
+#[tokio::test]
+async fn an_audit_whose_driver_stopped_ends_failed() {
+    let e = setup().await;
+    let (owner, _other) = (bot(&e, "Owner").await, bot(&e, "Other").await);
+    auditor_on(&e, 5).await;
+    let t = task(&e, Some(&owner), 2, "review").await;
+    let a = open_audit(&e, &t).await;
+    let before = verification(&e, &t.id).await;
+    assert!(auditor::end_if_live(&e.state, &a.id, "the audit stopped before it finished").await);
+    let a = e.state.db.get_audit(&a.id).await.unwrap().unwrap();
+    assert_eq!((a.status.as_str(), a.finished_at.is_some()), ("failed", true));
+    assert!(!auditor::end_if_live(&e.state, &a.id, "again").await, "an ended audit stays as it ended");
+    assert!(events(&e, &t.id).await.contains(&"audit_done".to_string()));
+    assert_eq!(verification(&e, &t.id).await, before);
+    assert!(auditor::held(&e.state, &owner.id, "task_update", &t).await.is_none());
 }

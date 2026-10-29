@@ -690,7 +690,10 @@ never moves a task, never adds or runs a check and never writes a peer review; "
 a pass. Design note: `phase-d/auditor.md`.
 
 **Settings** (app-wide, like the other Mission Control settings): `auditor` = `off` (default) | `on`;
-`auditor_daily_cap` 1–50 (default 5) audits started per UTC day.
+`auditor_daily_cap` 1–50 (default 5) audits started per UTC day; `auditor_model` = `fast` (default) |
+`balanced` | `deep` | `bot`: the model tier both audit turns run on. A tier keeps the engine Laya picks
+and uses that engine's model of the tier (a pinned model of another known tier gives way; effort is at
+most medium below `deep`); where the engine has none, its default model. `bot` routes as usual.
 
 **Trigger.** A task entering `review` with an owner, while `auditor` is on, when its priority is high or
 urgent (`high_impact`) or no check that counts and isn't the owner's will judge it (`low_confidence`,
@@ -718,7 +721,12 @@ While an audit of a task is `queued`, `challenge` or `rebuttal`, its challenger 
 `dismissed`. Tokens of each turn (`model_usage` in the turn's window) are stored per stage.
 
 **Ledger** (`task_events`): `audit_started`, `audit_challenge`, `audit_rebuttal`, `audit_done`,
-`audit_skipped`, `risk_resolved`. Audits left running at a restart become `interrupted`.
+`audit_skipped`, `risk_resolved`.
+
+**Restarts.** An audit is never left running. At startup, one in `challenge` or `rebuttal` becomes
+`interrupted` ("kwant restarted during the audit", logged as `audit_done`; risks already raised stay
+listed); a `queued` one runs now, or is `skipped` ("the auditor was turned off") when the auditor is
+off. A driver that stops early (a panic) ends its audit `failed`.
 
 **API**
 

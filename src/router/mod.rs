@@ -117,6 +117,22 @@ pub fn apply_preferred_model(mut route: RouteDecision, preferred_model: &str) ->
     route
 }
 
+/// A turn kwant runs on a set tier (an audit on the fast tier): the tier picks the engine's model.
+/// A pinned model gives way only when its own tier is known and differs, so a custom or Ollama
+/// model stays the bot's own. Below the deep tier, effort is capped at medium.
+pub fn with_tier(mut route: RouteDecision, tier: crate::drivers::engines::Tier) -> RouteDecision {
+    use crate::drivers::engines::{tier_from_name, Tier};
+    route.tier = Some(tier);
+    if route.model.as_deref().and_then(tier_from_name).is_some_and(|t| t != tier) {
+        route.model = None;
+    }
+    if tier != Tier::Deep && !matches!(route.effort_level.as_str(), "low" | "medium") {
+        route.effort_level = "medium".into();
+    }
+    route.reasoning = format!("{} · {} tier for this turn", route.reasoning, tier.as_str());
+    route
+}
+
 /// Parses a successful response from Laya /v1/systemone into a RouteDecision
 pub fn parse_laya_response(data: &serde_json::Value) -> Option<RouteDecision> {
     let answers = data.get("answers")?;
