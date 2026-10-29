@@ -560,6 +560,39 @@ pub struct BrowserController {
     pointer_held: Arc<std::sync::Mutex<Option<(f64, f64)>>>,
     /// VM mode: this bot's cookies, saved outside the throwaway browser context.
     cookie_jar: Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
+    /// The fixed viewport set for a windowless browser, restored after a bot's sized screenshot.
+    /// `None`: the page follows its real window.
+    viewport: Arc<std::sync::Mutex<Option<(u32, u32)>>>,
+}
+
+/// Widest screenshot a bot gets, in pixels, and the narrowest width it may ask for.
+pub const AGENT_SHOT_MAX_WIDTH: u32 = 1280;
+pub const AGENT_SHOT_MIN_WIDTH: u32 = 320;
+/// Tallest viewport a bot's screenshot uses, so a tall window doesn't make a huge image.
+const AGENT_SHOT_MAX_HEIGHT: u32 = 1600;
+
+/// A screenshot taken for a bot: base64 JPEG and its size in pixels.
+#[derive(Debug, Clone)]
+pub struct AgentShot {
+    pub data: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The viewport a bot's screenshot is taken at: `None` keeps the page as it is (already at most
+/// [`AGENT_SHOT_MAX_WIDTH`] wide at scale 1), else a temporary `(width, height, mobile)`.
+pub fn agent_shot_viewport(asked: Option<u32>, now: (u32, u32), scale: f64) -> Option<(u32, u32, bool)> {
+    let (w, h) = now;
+    match asked {
+        Some(asked) => {
+            let width = asked.clamp(AGENT_SHOT_MIN_WIDTH, AGENT_SHOT_MAX_WIDTH);
+            let mobile = width <= 600;
+            let height = if mobile { 844 } else { 800 };
+            Some((width, height, mobile))
+        }
+        None if w <= AGENT_SHOT_MAX_WIDTH && h <= AGENT_SHOT_MAX_HEIGHT && (scale - 1.0).abs() < 0.01 => None,
+        None => Some((w.clamp(1, AGENT_SHOT_MAX_WIDTH), h.clamp(1, AGENT_SHOT_MAX_HEIGHT), false)),
+    }
 }
 
 impl std::fmt::Debug for BrowserController {
@@ -589,7 +622,20 @@ impl BrowserController {
             held_for_person: Arc::default(),
             pointer_held: Arc::default(),
             cookie_jar: Arc::default(),
+            viewport: Arc::default(),
         }
+    }
+
+    /// Sets the fixed viewport of a windowless browser, and remembers it so a sized screenshot
+    /// can put it back.
+    pub async fn set_viewport(&self, width: u32, height: u32) -> Result<(), BrowserError> {
+        self.send_cdp_command(
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width": width, "height": height, "deviceScaleFactor": 1, "mobile": false}),
+        )
+        .await?;
+        *self.viewport.lock().unwrap_or_else(|e| e.into_inner()) = Some((width, height));
+        Ok(())
     }
 
     /// Fills and captures passwords for `owner` from `store`.
@@ -938,6 +984,61 @@ impl BrowserController {
         Ok(b64)
     }
 
+    /// A screenshot for a bot to look at, optionally at a given page width (390 for a phone, 1280
+    /// for a desktop). The viewport is put back afterwards, and the live panel's picture is left
+    /// alone. Refused while the person has the browser.
+    pub async fn capture_for_agent(&self, width: Option<u32>) -> Result<AgentShot, BrowserError> {
+        let _permit = self.control.try_read().map_err(|_| BrowserError::HumanControl)?;
+        let res = self
+            .send_cdp_command(
+                "Runtime.evaluate",
+                json!({"expression": "[innerWidth, innerHeight, devicePixelRatio]", "returnByValue": true}),
+            )
+            .await?;
+        let v = &res["result"]["value"];
+        let num = |i: usize, d: f64| v[i].as_f64().filter(|n| n.is_finite() && *n > 0.0).unwrap_or(d);
+        let now = (num(0, 1280.0).round() as u32, num(1, 800.0).round() as u32);
+        let scale = num(2, 1.0);
+        let Some((w, h, mobile)) = agent_shot_viewport(width, now, scale) else {
+            let data = self.jpeg().await?;
+            return Ok(AgentShot { data, width: now.0, height: now.1 });
+        };
+        self.send_cdp_command(
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width": w, "height": h, "deviceScaleFactor": 1, "mobile": mobile}),
+        )
+        .await?;
+        // Let responsive layouts settle at the new width
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let shot = self.jpeg().await;
+        let fixed = *self.viewport.lock().unwrap_or_else(|e| e.into_inner());
+        let restored = match fixed {
+            Some((fw, fh)) => {
+                self.send_cdp_command(
+                    "Emulation.setDeviceMetricsOverride",
+                    json!({"width": fw, "height": fh, "deviceScaleFactor": 1, "mobile": false}),
+                )
+                .await
+            }
+            None => self.send_cdp_command("Emulation.clearDeviceMetricsOverride", json!({})).await,
+        };
+        if let Err(e) = restored {
+            tracing::warn!(error = %e, "couldn't restore the browser viewport after a screenshot");
+        }
+        Ok(AgentShot { data: shot?, width: w, height: h })
+    }
+
+    async fn jpeg(&self) -> Result<String, BrowserError> {
+        let res = self
+            .send_cdp_command("Page.captureScreenshot", json!({"format": "jpeg", "quality": 70}))
+            .await?;
+        res["data"]
+            .as_str()
+            .filter(|d| !d.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| BrowserError::Protocol("Screenshot data missing".into()))
+    }
+
     pub async fn extract_content(&self) -> Result<String, BrowserError> {
         let expression = r#"
             (function() {
@@ -1281,5 +1382,23 @@ mod tests {
         assert_eq!(host("ws://[::1]:9222/devtools/page/x"), "[::1]:9222");
         assert_eq!(host("ws://localhost:9222/devtools/page/x"), "localhost:9222");
         assert_eq!(host("wss://cdp.example.com/devtools/browser/x"), "cdp.example.com");
+    }
+}
+
+#[cfg(test)]
+mod agent_shot_tests {
+    use super::agent_shot_viewport;
+
+    #[test]
+    fn a_bots_screenshot_is_at_most_1280_wide_at_scale_1() {
+        assert_eq!(agent_shot_viewport(None, (1280, 800), 1.0), None);
+        assert_eq!(agent_shot_viewport(None, (1024, 700), 1.0), None);
+        assert_eq!(agent_shot_viewport(None, (1512, 860), 2.0), Some((1280, 860, false)));
+        assert_eq!(agent_shot_viewport(None, (1000, 700), 2.0), Some((1000, 700, false)));
+        assert_eq!(agent_shot_viewport(None, (1280, 4000), 1.0), Some((1280, 1600, false)));
+        assert_eq!(agent_shot_viewport(Some(390), (1280, 800), 1.0), Some((390, 844, true)));
+        assert_eq!(agent_shot_viewport(Some(1280), (1280, 800), 1.0), Some((1280, 800, false)));
+        assert_eq!(agent_shot_viewport(Some(10), (1280, 800), 1.0), Some((320, 844, true)));
+        assert_eq!(agent_shot_viewport(Some(9000), (1280, 800), 1.0), Some((1280, 800, false)));
     }
 }
