@@ -39,6 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   model.
 
 ### Fixed
+- **One approval card per audit challenge.** When the auditor's call was allowed but then refused for
+  its input (usually the task's own id given as evidence), the bot's corrected call asked again, so one
+  challenge could need two cards. The corrected call now goes through on the first card (at most two
+  corrections per stage), and the task's own id is no longer refused as evidence.
 - **A restart no longer leaves an audit running.** An audit cut off mid-turn by a restart ends
   `interrupted` and says so in the task's history; one still waiting to start runs after the restart
   (or is skipped if the auditor was turned off).

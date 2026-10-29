@@ -381,7 +381,12 @@ impl ToolApprover for SelfToolsApprover {
                 return self.inner.decide(req).await;
             }
         }
-        if req.server == SELF_SERVER_NAME && (!self.always_ask || READ_ONLY_SELF_TOOLS.contains(&req.tool.as_str())) {
+        // The corrected retry of an audit call the person allowed and the tool refused: one card
+        // for one challenge (see `auditor::take_retry`)
+        let free = !self.always_ask
+            || READ_ONLY_SELF_TOOLS.contains(&req.tool.as_str())
+            || super::missions::auditor::take_retry(&req.kwant_id, &req.tool, &req.arguments);
+        if req.server == SELF_SERVER_NAME && free {
             // Flight School: a tier below act cards kwant's own tools that change things
             if self.inner.tier_gate(&req).await.is_some() {
                 return self.inner.decide(req).await;

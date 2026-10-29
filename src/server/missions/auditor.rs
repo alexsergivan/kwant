@@ -23,6 +23,7 @@ use axum::{
 use chrono::{Duration, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 pub const SETTING: &str = "auditor";
@@ -278,6 +279,7 @@ fn ended_without(stage: &str, err: Option<&str>) -> String {
 }
 
 async fn finish(state: &AppState, audit: &Audit) {
+    drop_retries(&audit.id);
     let Ok(Some(a)) = state.db.get_audit(&audit.id).await else { return };
     let risks = state.db.risks_of_audit(&a.id).await.unwrap_or_default();
     let unresolved = risks.iter().filter(|r| r.unresolved()).count();
@@ -345,7 +347,7 @@ async fn challenge_prompt(state: &AppState, audit: &Audit, task: &Task, owner: &
          Look for concrete reasons it may not meet its acceptance: wrong, missing, unsafe or unverifiable. \
          Read what you need, but change nothing. Then call audit_challenge once with audit_id {aid} and at \
          most {max} risks. Each risk needs `evidence`: what you looked at and what you saw (put ids from the \
-         list above in evidence_ids when they apply). If you find no real risk, call it with an empty risks \
+         evidence list above in evidence_ids when they apply; the task's own id is not an evidence id). If you find no real risk, call it with an empty risks \
          list. Don't invent risks to have something to say.",
         tid = task.id,
         title = task.title,
@@ -405,7 +407,7 @@ pub fn tools() -> Vec<Value> {
                             "properties": {
                                 "risk": {"type": "string", "description": "What may be wrong, in a sentence."},
                                 "evidence": {"type": "string", "description": "What you looked at and what you saw."},
-                                "evidence_ids": {"type": "array", "items": {"type": "string"}, "description": "Ids of the task's evidence this rests on."},
+                                "evidence_ids": {"type": "array", "items": {"type": "string"}, "description": "Ids from the task's evidence list this rests on (not the task id). Leave it out when none apply."},
                             },
                             "required": ["risk", "evidence"],
                         },
@@ -481,11 +483,75 @@ pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value)
     }) else {
         return fail("No such audit.");
     };
-    match name {
+    let res = match name {
         "audit_challenge" => challenge(state, scope, &audit, args).await,
         "audit_rebut" => rebut(state, scope, &audit, args).await,
         _ => fail(format!("Unknown tool {name}.")),
+    };
+    if res.1 {
+        tracing::info!(audit_id = %audit.id, kwant = %scope.kwant_id, tool = name, reason = %res.0, "audit call refused");
+        // Refused input from the stage's own bot: its corrected call doesn't ask again
+        if let Ok(Some(a)) = state.db.get_audit(&audit.id).await {
+            if waits_on(&a, name, &scope.kwant_id) {
+                arm_retry(&scope.kwant_id, &a.id, name);
+            }
+        }
     }
+    res
+}
+
+/// Whether `audit` is waiting for `tool` from `kwant_id`.
+fn waits_on(audit: &Audit, tool: &str, kwant_id: &str) -> bool {
+    match tool {
+        "audit_challenge" => audit.status == "challenge" && audit.challenger_kwant_id == kwant_id,
+        "audit_rebut" => audit.status == "rebuttal" && audit.owner_kwant_id == kwant_id,
+        _ => false,
+    }
+}
+
+/// How many corrected calls a stage may make without a new card.
+const RETRIES: u8 = 2;
+
+#[derive(Default)]
+struct Retry {
+    armed: bool,
+    left: u8,
+}
+
+/// One challenge, one card: the person allows the audit call, and if the tool then refuses its
+/// input (an evidence id that isn't the task's, a risk too long), the bot's corrected call goes
+/// through without a second card. At most [`RETRIES`] per stage; the tool checks the call again
+/// as usual. Keyed by (bot, audit, tool); dropped when the audit ends.
+static RETRY_PASSES: LazyLock<std::sync::Mutex<HashMap<RetryKey, Retry>>> = LazyLock::new(Default::default);
+
+/// (bot, audit, tool).
+type RetryKey = (String, String, String);
+
+fn arm_retry(kwant_id: &str, audit_id: &str, tool: &str) {
+    let mut passes = RETRY_PASSES.lock().unwrap_or_else(|e| e.into_inner());
+    let r = passes.entry((kwant_id.into(), audit_id.into(), tool.into())).or_insert(Retry { armed: false, left: RETRIES });
+    r.armed = r.left > 0;
+}
+
+/// Uses the retry pass for this call, if a refused call of the same audit stage left one.
+pub fn take_retry(kwant_id: &str, tool: &str, args: &Value) -> bool {
+    let Some(audit_id) = args["audit_id"].as_str() else { return false };
+    if !TOOL_NAMES.contains(&tool) {
+        return false;
+    }
+    let mut passes = RETRY_PASSES.lock().unwrap_or_else(|e| e.into_inner());
+    match passes.get_mut(&(kwant_id.to_string(), audit_id.to_string(), tool.to_string())) {
+        Some(r) if r.armed => {
+            r.armed = false;
+            r.left -= 1;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn drop_retries(audit_id: &str) {
+    RETRY_PASSES.lock().unwrap_or_else(|e| e.into_inner()).retain(|(_, a, _), _| a != audit_id);
 }
 
 async fn challenge(state: &AppState, scope: &SelfScope, audit: &Audit, args: &Value) -> ToolResult {
@@ -511,9 +577,13 @@ async fn challenge(state: &AppState, scope: &SelfScope, audit: &Audit, args: &Va
             Ok(s) => s,
             Err(e) => return fail(format!("risk {n}: evidence {e}; say what you looked at and what you saw.")),
         };
-        let ids: Vec<String> = r["evidence_ids"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+        // The task's own id names no evidence: dropped rather than refused
+        let ids: Vec<String> = r["evidence_ids"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).filter(|id| *id != audit.task_id).collect())
+            .unwrap_or_default();
         if let Some(bad) = ids.iter().find(|id| !on_task.contains(id)) {
-            return fail(format!("risk {n}: evidence id {bad} isn't on this task."));
+            return fail(format!("risk {n}: evidence id {bad} isn't one of the task's evidence ids; leave it out or use an id from the evidence list."));
         }
         risks.push(NewRisk { risk, evidence, evidence_ids: ids });
     }
