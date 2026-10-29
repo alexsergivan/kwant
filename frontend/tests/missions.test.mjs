@@ -97,6 +97,10 @@ test('a card shows owner, cost and an honest check chip', () => {
   assert.match(html, /12\.4k of 50k tokens/);
   assert.match(html, /Not checked/);
   assert.match(html, /Bot says done\. Not checked yet/);
+  // A hand-off's card names the bot that handed it out, which reviews it
+  const handoff = ui.card({ task: task({ state: 'review', source_kind: 'delegation', reviewer: { kwant_id: 'k_ada', name: 'Architect' } }), names, now: NOW, onOpen: noop });
+  assert.match(handoff, /Waiting for Architect to review/);
+  assert.doesNotMatch(handoff, /Not checked yet/);
   const working = ui.card({ task: task({ state: 'working', claim: { kwant_id: 'k_lin', claimed_at: '2026-10-27T11:50:00Z', expires_at: '2026-10-27T12:20:00Z' } }), names, now: NOW, onOpen: noop });
   assert.match(working, /Lin started 10 min ago/);
   const asks = ui.card({ task: task({ state: 'needs_you', needs_you: [{ kind: 'approval', id: 'a1', text: 'OK to publish the page?' }] }), names, now: NOW, onOpen: noop });
@@ -496,4 +500,13 @@ test('errors read plainly', () => {
   assert.match(m.errorFrom(403, null).message, /Only you can change tasks/);
   assert.match(m.errorFrom(404, null).message, /doesn’t have the Mission board/);
   assert.equal(m.errorFrom(400, { error: 'reason is required' }).message, 'Reason is required.');
+});
+
+test('a one-way hand-off closed without review reads as Closed, not Cancelled', () => {
+  assert.deepEqual(m.taskStateLabel({ state: 'cancelled', closed_note: m.NOTICE_CLOSED_NOTE }), { label: 'Closed', tone: 'zinc' });
+  assert.equal(m.taskStateLabel({ state: 'cancelled' }).label, 'Cancelled');
+  assert.equal(m.taskStateLabel({ state: 'review', closed_note: null }).label, 'Review');
+  const ev = (reason) => ({ id: 1, task_id: 't1', mission_id: null, kind: 'state', actor: 'kwant', actor_name: null, from_state: 'working', to_state: 'cancelled', detail: { reason }, created_at: '' });
+  assert.equal(m.eventText(ev('Notice, no review needed')), 'Kwant closed it: Notice, no review needed');
+  assert.match(m.eventText(ev('the person stopped it')), /moved it to Cancelled: the person stopped it/);
 });
