@@ -25,6 +25,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   times per message (was 2), and one message can start up to 16 hand-offs (was 8). Past that, instead of
   "Send a new message to go on", the chat shows a notice with a Continue button (or say "continue").
 
+### Fixed
+- **"Answer in chat" on a task opens the right chat.** It used to open the chat the task came from
+  (usually the lead's), not the chat where the task's owner asked; on a hand-off task it was missing.
+  Now it opens the owner's hand-off thread or chat where the card is.
+- **Cards survive a restart.** An approval card still waiting when kwant restarted used to give an
+  error when you answered it. Now Allow resumes the work in the chat that asked, and a card more than
+  a day old says it expired so you can ask the bot again. Payments still ask every time.
+
 ## [Mac 0.2.0] - 2026-10-28
 
 ### Added

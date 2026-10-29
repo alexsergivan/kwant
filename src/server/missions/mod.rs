@@ -556,9 +556,25 @@ async fn owner_needs_you(state: &AppState, task: &Task) -> Vec<Value> {
     let cards = state.db.open_cards_of(owner).await.unwrap_or_default();
     cards
         .into_iter()
-        .filter(|(kind, _, _, at)| kind == "approval" || context.is_none() || at.as_deref() == context.as_deref())
-        .map(|(kind, id, text, _)| json!({"kind": kind, "id": id, "text": text.chars().take(200).collect::<String>()}))
+        .filter(|c| c.kind == "approval" || context.is_none() || c.context.as_deref() == context.as_deref())
+        .map(|c| {
+            let chat = card_chat(&c, owner);
+            json!({"kind": c.kind, "id": c.id, "text": c.text.chars().take(200).collect::<String>(), "chat": chat})
+        })
         .collect()
+}
+
+/// Where the person answers a card: `{"channel_id", "kwant_id", "thread_id"}` of the chat it is
+/// in (the owner's hand-off thread, a channel, or a direct chat), which is not always the chat
+/// the task came from. A card whose chat isn't known is in the owner's direct chat.
+fn card_chat(c: &crate::db::missions::OpenCard, owner: &str) -> Value {
+    if let Some(thread) = &c.thread_id {
+        return json!({"channel_id": null, "kwant_id": c.thread_kwant_id.as_deref().unwrap_or(owner), "thread_id": thread});
+    }
+    if let Some(channel) = &c.channel_id {
+        return json!({"channel_id": channel, "kwant_id": null, "thread_id": null});
+    }
+    json!({"channel_id": null, "kwant_id": c.direct_kwant_id.as_deref().unwrap_or(owner), "thread_id": null})
 }
 
 /// A task in review waits on the person for each required check that needs their approval

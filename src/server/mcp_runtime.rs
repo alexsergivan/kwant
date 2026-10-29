@@ -283,6 +283,10 @@ impl BrokerApprover {
                 return (ApprovalOutcome::Denied, "denied", None);
             }
         };
+        // Its chat is known from the start: the board links to it, and a card that outlives a
+        // restart still resumes there (see `keep_cards_after_restart`)
+        let chat = self.chat.clone().unwrap_or_else(|| json!({"direct_kwant_id": req.kwant_id}));
+        let _ = self.db.set_approval_chat(&ticket, &chat).await;
         let rx = self
             .broker
             .request_approval(ApprovalRequest {
@@ -329,7 +333,6 @@ impl BrokerApprover {
                 if !self.broker.cancel(&ticket).await {
                     return (ApprovalOutcome::Denied, "denied", Some(ticket));
                 }
-                let chat = self.chat.clone().unwrap_or_else(|| json!({"direct_kwant_id": req.kwant_id}));
                 match self.db.park_approval(&ticket, &chat).await {
                     Ok(true) => ApprovalOutcome::Unanswered,
                     _ => {
@@ -377,6 +380,25 @@ async fn turn_chat(state: &AppState, turn_id: &str) -> Option<Value> {
         }
         None => json!({"direct_kwant_id": turn.context_id}),
     })
+}
+
+/// At startup, before any turn runs: the cards the last run of kwant was still waiting on are
+/// kept as `waiting`, like a card whose turn stopped waiting, so answering one never fails. Allow
+/// starts a turn in the card's chat that makes the call again; a payment's Allow still covers
+/// only that one call (D8). Must run before [`super::routes::interrupt_running_turns`], which
+/// clears the turns a card's chat may be looked up in.
+pub async fn keep_cards_after_restart(state: &AppState) -> u64 {
+    match state.db.park_orphaned_approvals().await {
+        Ok(0) => 0,
+        Ok(n) => {
+            tracing::info!(count = n, "kept approval cards from before the restart answerable");
+            n
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "could not keep approval cards from before the restart");
+            0
+        }
+    }
 }
 
 /// A late answer to a card whose turn stopped waiting (`waiting`). Deny just closes it. Allow

@@ -1154,13 +1154,25 @@ impl Database {
 
     /// The bot's open question, human-step and approval cards as (kind, id, text, where): `where`
     /// is the chat (thread, channel or direct) for questions and steps, the turn for approvals.
-    pub async fn open_cards_of(&self, kwant_id: &str) -> Result<Vec<(String, String, String, Option<String>)>, DbError> {
+    pub async fn open_cards_of(&self, kwant_id: &str) -> Result<Vec<OpenCard>, DbError> {
+        // A card's chat: its thread (with the bot whose thread it is), else its channel, else the
+        // direct chat. An approval keeps its chat in `resume`; a `waiting` one (its turn stopped
+        // waiting, or kwant restarted) is still answerable for WAITING_APPROVAL_HOURS.
+        let window = format!("-{} hours", super::approval_modes::WAITING_APPROVAL_HOURS);
         Ok(sqlx::query_as(
-            "SELECT 'question', id, question, COALESCE(thread_id, channel_id, direct_kwant_id) FROM questions WHERE kwant_id = ?1 AND status = 'open' \
-             UNION ALL SELECT 'human_step', id, reason, COALESCE(thread_id, channel_id, direct_kwant_id) FROM human_steps WHERE kwant_id = ?1 AND status = 'open' \
-             UNION ALL SELECT 'approval', id, tool_name, turn_id FROM approvals WHERE kwant_id = ?1 AND status = 'pending'",
+            "SELECT 'question' AS kind, q.id, q.question AS text, COALESCE(q.thread_id, q.channel_id, q.direct_kwant_id) AS context, \
+                    q.channel_id, q.direct_kwant_id, q.thread_id, t.kwant_id AS thread_kwant_id \
+             FROM questions q LEFT JOIN threads t ON t.id = q.thread_id WHERE q.kwant_id = ?1 AND q.status = 'open' \
+             UNION ALL SELECT 'human_step', h.id, h.reason, COALESCE(h.thread_id, h.channel_id, h.direct_kwant_id), \
+                    h.channel_id, h.direct_kwant_id, h.thread_id, t.kwant_id \
+             FROM human_steps h LEFT JOIN threads t ON t.id = h.thread_id WHERE h.kwant_id = ?1 AND h.status = 'open' \
+             UNION ALL SELECT 'approval', a.id, a.tool_name, a.turn_id, \
+                    json_extract(a.resume, '$.channel_id'), json_extract(a.resume, '$.direct_kwant_id'), json_extract(a.resume, '$.thread_id'), t.kwant_id \
+             FROM approvals a LEFT JOIN threads t ON t.id = json_extract(a.resume, '$.thread_id') \
+             WHERE a.kwant_id = ?1 AND (a.status = 'pending' OR (a.status = 'waiting' AND a.created_at > datetime('now', ?2)))",
         )
         .bind(kwant_id)
+        .bind(window)
         .fetch_all(&self.pool)
         .await?)
     }
@@ -1181,6 +1193,22 @@ impl Database {
     pub async fn exec_raw_for_test(&self, sql: &str) -> Result<u64, DbError> {
         Ok(sqlx::query(sql).execute(&self.pool).await?.rows_affected())
     }
+}
+
+/// An open card of a bot (see [`Database::open_cards_of`]): a question, human step or approval,
+/// and the chat it is in.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct OpenCard {
+    pub kind: String,
+    pub id: String,
+    pub text: String,
+    /// The conversation it came from (a question's thread or chat; an approval's turn).
+    pub context: Option<String>,
+    pub channel_id: Option<String>,
+    pub direct_kwant_id: Option<String>,
+    pub thread_id: Option<String>,
+    /// The bot whose thread `thread_id` is.
+    pub thread_kwant_id: Option<String>,
 }
 
 /// What else a state move changes.
