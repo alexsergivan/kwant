@@ -68,6 +68,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   opened it on its own. Before a turn the browser now opens only a full `http://` or `https://` link in
   the message, and a reply never moves it. A file path or `file://` address given to the browser is
   refused with a note to read local files with file tools.
+- **Hand-off cards no longer pile up in Review.** When a teammate finishes a hand-off, the bot that
+  handed it out reviews the result in its next reply: a pass verifies the card, a fail sends the work
+  back to the teammate with the reason. Only that bot's review counts (the teammate still can't approve
+  its own work), and until it reviews, the card says "Waiting for <bot> to review". A bot that doesn't
+  review gets one reminder (one for all the cards of a batch); a card it never got to see (one blocked when the hand-off finished, or one
+  caught by a restart) gets its own review turn. A one-way hand-off, whose result nobody is asked about,
+  is closed ("Notice, no review needed", shown as Closed, not Verified) instead of waiting in Review. Each hand-off's card
+  is named after what was asked of that teammate, not after your message, so two hand-offs to one bot
+  no longer look like duplicates.
 - **A restart no longer leaves an audit running.** An audit cut off mid-turn by a restart ends
   `interrupted` and says so in the task's history; one still waiting to start runs after the restart
   (or is skipped if the auditor was turned off).

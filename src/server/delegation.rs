@@ -448,8 +448,8 @@ pub(super) fn is_parked(d: &Delegation) -> bool {
 
 /// The background part: the specialist's turn in the thread, then the report in the origin chat.
 async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: Kwant, specialist: Kwant, how: RunAs) {
-    let RunAs { retried, after_restart, carry_on } = how;
-    let carried_on = carry_on.is_some();
+    let RunAs { retried, after_restart, carry_on, sent_back } = how;
+    let carried_on = carry_on.is_some() || sent_back.is_some();
     let scope = match scope_for(&state, &specialist, None, Some(d.thread_id.clone()), &job, d.depth).await {
         Ok(s) => s,
         Err(why) => return finish(&state, &d, &specialist, Err(why), carried_on).await,
@@ -463,8 +463,16 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
             }
         }
     });
-    let opening = match &carry_on {
-        Some(why) => format!(
+    let opening = match (&carry_on, &sent_back) {
+        (_, Some(note)) => format!(
+            "{lead} reviewed the result you gave for this task and sent it back: {note}\n\nFix exactly that. Your earlier \
+            work is above in this thread, so build on it instead of starting over, and don't repeat a step that can't be undone \
+            (sending, posting, deleting, paying). When you finish, your reply is posted back to {lead} and the chat it came \
+            from, so make it a complete, self-contained answer.",
+            lead = lead.name,
+            note = clip(note, 1000),
+        ),
+        (Some(why), _) => format!(
             "{lead} delegated this task to you earlier, and it stopped before it was done ({why}). The person sent it \
             back to you: carry on from where you stopped. Your earlier work is above in this thread, so check what is \
             already done instead of starting over, and don't repeat a step that can't be undone (sending, posting, deleting, \
@@ -473,7 +481,7 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
             lead = lead.name,
             why = clip(why, 300),
         ),
-        None => format!(
+        (None, None) => format!(
             "{lead} delegated this task to you. Work on it here; when you finish, your reply is posted back to {lead} \
             and the chat it came from, so make it a complete, self-contained answer.",
             lead = lead.name,
@@ -531,6 +539,8 @@ struct RunAs {
     /// The person sent an ended task back (unblocked or retried its board card): why it stopped.
     /// The specialist carries on in its thread, and the lead hears the new result on its own.
     carry_on: Option<String>,
+    /// The lead's review sent the finished task back: its note. Reported like a carry-on.
+    sent_back: Option<String>,
 }
 
 /// Most of the person's request, and of the origin chat's instructions, a delegated task quotes.
@@ -673,7 +683,7 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
     }
     // Its batch already went to the lead: this result goes on its own (a stop was the person's)
     if done.continue_lead && status != "cancelled" {
-        let opening = format!("{} carried on with the task you delegated (“{}”) after the person sent it back.", specialist.name, done.title);
+        let opening = format!("{} carried on with the task you delegated (“{}”) after it was sent back.", specialist.name, done.title);
         continue_lead(state, &done, std::slice::from_ref(&done), Some(opening)).await;
     }
 }
@@ -843,7 +853,8 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
         return;
     };
     let context = d.origin_context().unwrap_or(&lead.id).to_string();
-    let job = state.turns.start_job([context, d.id.clone()]);
+    // Every hand-off of the batch is busy while its lead looks at it (see `sweep_unreviewed`)
+    let job = state.turns.start_job(std::iter::once(context).chain(batch.iter().map(|b| b.id.clone())).chain([d.id.clone()]));
     let Ok(scope) = scope_for(state, &lead, d.origin_channel_id.clone(), d.origin_thread_id.clone(), &job, d.depth - 1).await else {
         return;
     };
@@ -862,6 +873,10 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
                 person the question is waiting in that thread. When they answer, {who} continues and you get its result.)\n",
                 clip(&q.question, 200)
             ));
+        }
+        if let Some(review) = super::missions::listener::lead_review_note(state, b, &who).await {
+            results.push_str(&review);
+            results.push('\n');
         }
         if let Some(next) = status_guidance(&b.status) {
             results.push_str(next);
@@ -901,7 +916,10 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     // The follow-up may hand on by @mention, like any lead reply: to the next teammate, or back to
     // one that just reported with a correction (not a mention that only credits it), within the
     // usual limits.
-    if let Ok(reply) = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await {
+    let outcome = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await;
+    // Cards the lead was asked to review and didn't: one reminder for all of them (a failed turn counts too)
+    remind_review(state, batch).await;
+    if let Ok(reply) = outcome {
         let mut spoken = vec![lead.id.clone()];
         spoken.extend(batch.iter().map(|b| b.specialist_kwant_id.clone()));
         let user_prompt = state
@@ -917,6 +935,93 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
         super::routes::run_handoffs_boxed(&scope, &spoken, &[(lead.clone(), reply)], &user_prompt).await;
         // The chain may be over now: several open questions for the person become one list
         super::asks::consolidate(&scope).await;
+    }
+}
+
+/// Whether another hand-off of `d`'s batch (same lead and chat, reporting back) is still open:
+/// the lead then hears about `d` with the whole batch, so nothing asks it about `d` alone.
+pub async fn batch_running(state: &AppState, d: &Delegation) -> bool {
+    state
+        .db
+        .list_delegations(Some(&d.lead_kwant_id), None, 50)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .any(|s| s.id != d.id && s.continue_lead && s.origin_context() == d.origin_context() && !is_parked(s) && s.is_open())
+}
+
+/// After the lead's results turn: the cards of `batch` still in Review that the lead was asked
+/// about only once get one reminder turn now, together. Past that a card waits for the lead or
+/// the person.
+async fn remind_review(state: &AppState, batch: &[Delegation]) {
+    let mut due = Vec::new();
+    for d in batch.iter().filter(|d| d.status == "completed") {
+        let Ok(Some(t)) = state.db.task_by_source("delegation", &d.id).await else { continue };
+        let (asks, _) = super::missions::listener::review_asks(state, &t.id).await;
+        if asks > 0 && super::missions::listener::wants_lead_review(state, &t).await {
+            tracing::info!(delegation = %d.id, task_id = %t.id, "the lead didn't review a hand-off card: reminding it once");
+            due.push(d.clone());
+        }
+    }
+    if !due.is_empty() {
+        review_turn(state, &due, true).await;
+    }
+}
+
+/// [`review_turn`] in the background. The job is registered first, so a sweep in between sees
+/// the hand-off as busy and doesn't start a second one.
+pub fn spawn_review_turn(state: &AppState, d: &Delegation, reminder: bool) {
+    let state = state.clone();
+    let d = d.clone();
+    let job = state.turns.start_job([format!("review:{}", d.id), d.id.clone()]);
+    tokio::spawn(async move {
+        let one = std::slice::from_ref(&d);
+        review_turn(&state, one, reminder).await;
+        if !reminder {
+            remind_review(&state, one).await;
+        }
+        drop(job);
+    });
+}
+
+/// A turn for the lead of `batch` (hand-offs of one lead and chat) in the chat they came from,
+/// only to review their cards, all in one prompt: for a card whose lead wasn't resumed with the
+/// result (the card was blocked when the batch reported, or kwnt restarted before the lead's
+/// turn), and as the one reminder. Cards no longer waiting in Review are left out; nothing runs
+/// when none is.
+pub async fn review_turn(state: &AppState, batch: &[Delegation], reminder: bool) {
+    let Some(d) = batch.first() else { return };
+    let Ok(Some(lead)) = state.db.get_kwant(&d.lead_kwant_id).await else { return };
+    let context = d.origin_context().unwrap_or(&lead.id).to_string();
+    let job = state.turns.start_job(std::iter::once(context).chain(batch.iter().map(|b| b.id.clone())));
+    let Ok(scope) = scope_for(state, &lead, d.origin_channel_id.clone(), d.origin_thread_id.clone(), &job, d.depth - 1).await else {
+        return;
+    };
+    let mut cards = String::new();
+    let mut titles = Vec::new();
+    for b in batch {
+        let who = name_of(state, &b.specialist_kwant_id).await;
+        // Logs the ask, so it counts towards the limit even if the turn below fails
+        let Some(note) = super::missions::listener::lead_review_note(state, b, &who).await else { continue };
+        let result = clip(&result_of(state, b).await, 3000);
+        cards.push_str(&format!("{who}'s result on “{}”:\n\n{}\n\n{note}\n\n", b.title, crate::drivers::peer_message(&who, &result)));
+        titles.push(format!("“{}”", b.title));
+    }
+    if titles.is_empty() {
+        return;
+    }
+    let opening = match (reminder, titles.len()) {
+        (true, 1) => format!("Reminder: the result on {} is still waiting for your review on the board.", titles[0]),
+        (true, _) => format!("Reminder: these {} results are still waiting for your review on the board.", titles.len()),
+        (false, 1) => format!("A task you handed out ({}) is finished, and its card is waiting for your review.", titles[0]),
+        (false, _) => format!("{} tasks you handed out are finished, and their cards are waiting for your review.", titles.len()),
+    };
+    let prompt = format!(
+        "{opening}\n\n{cards}Review each one now with task_review. Then reply with one short line for the chat: what you \
+        decided and why. Don't hand anything on by @mention in this reply."
+    );
+    if let Err(e) = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await {
+        tracing::info!(delegation = %d.id, error = %e, "a lead review turn failed");
     }
 }
 
@@ -1110,7 +1215,7 @@ async fn restart(state: &AppState, d: Delegation, retried: bool, after_restart: 
     };
     let job = state.turns.start_job([d.id.clone(), d.thread_id.clone()]);
     tracing::info!(delegation = %d.id, retried, "delegation restarted");
-    tokio::spawn(run(state.clone(), job, d, lead, specialist, RunAs { retried, after_restart, carry_on: None }));
+    tokio::spawn(run(state.clone(), job, d, lead, specialist, RunAs { retried, after_restart, ..Default::default() }));
     true
 }
 
@@ -1146,6 +1251,39 @@ pub async fn carry_on(state: &AppState, d: &Delegation) -> bool {
     let job = state.turns.start_job([open.id.clone(), open.thread_id.clone()]);
     tracing::info!(delegation = %open.id, "delegation carried on");
     tokio::spawn(run(state.clone(), job, open, lead, specialist, RunAs { carry_on: Some(why), ..Default::default() }));
+    true
+}
+
+/// The lead's review failed a finished hand-off (its card went from review back to Ready): the
+/// specialist fixes it in the hand-off's own thread with the review's `note`, and the new result
+/// goes to the origin chat and the lead, whose review comes again. `false` when it can't (a bot
+/// is gone, or another call reopened it first).
+pub async fn send_back(state: &AppState, d: &Delegation, note: &str) -> bool {
+    if d.status != "completed" {
+        return false;
+    }
+    let (Ok(Some(lead)), Ok(Some(specialist))) =
+        (state.db.get_kwant(&d.lead_kwant_id).await, state.db.get_kwant(&d.specialist_kwant_id).await)
+    else {
+        return false;
+    };
+    if !state.db.reopen_reviewed_delegation(&d.id).await.unwrap_or(false) {
+        return false;
+    }
+    let Ok(Some(open)) = state.db.get_delegation(&d.id).await else { return false };
+    emit_delegation(state, &open);
+    post_to_origin(
+        state,
+        &open,
+        "system",
+        "kwnt",
+        format!("{} sent “{}” back to {}: {}", lead.name, open.title, specialist.name, clip(note, 300)),
+        meta("delegation_started", &open, &specialist.name),
+    )
+    .await;
+    let job = state.turns.start_job([open.id.clone(), open.thread_id.clone()]);
+    tracing::info!(delegation = %open.id, "delegation sent back by its review");
+    tokio::spawn(run(state.clone(), job, open, lead, specialist, RunAs { sent_back: Some(note.to_string()), ..Default::default() }));
     true
 }
 

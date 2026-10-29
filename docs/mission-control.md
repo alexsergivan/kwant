@@ -633,6 +633,22 @@ A card still over its own token limit is blocked again (`blocked_reason` `budget
 - A hand-off cut short by two restarts (`interrupted`) fails its card (AutoFix records it as a
   `handoff` error) instead of returning it to Ready.
 
+### Every card in Review gets a lead review
+
+A finished hand-off's card goes to `review` with the result as evidence, and only its lead's
+`task_review` (or the person) settles it. Each time the lead is asked, a `lead_review_asked` task
+event is logged; per stay in Review it's asked at most `listener::MAX_REVIEW_ASKS` (2) times:
+
+| Path | How the lead is asked |
+| --- | --- |
+| batch results turn (also carry-ons, review send-backs, late answers, channel @mention hand-offs) | its results prompt names every card of the batch; if the turn ends with cards still unreviewed, one reminder turn lists all of them |
+| the card was blocked when the hand-off finished, then unblocked | `delegation::spawn_review_turn` right after it moves to `review`, plus the one reminder |
+| kwnt restarted before or during the lead's turn, or a turn was lost | `listener::sweep_unreviewed` (from reconcile): a card quiet for `REVIEW_GRACE` (2 min) with no turn or batch running gets a review turn |
+| `continue_lead: false` (a one-way notice; nobody is resumed with its result) | never put in Review: the card is closed (`cancelled`, never `verified`) with reason `listener::NOTICE_CLOSED` ("Notice, no review needed"); `task_json` gives it as `closed_note`, and the board labels it "Closed" |
+
+After both asks the card waits, "Waiting for <lead> to review", for the lead or the person. Cards
+from before this change (no result evidence) and cards whose lead was deleted are left for the person.
+
 ### Capped hand-offs: the Continue notice
 
 One person message starts at most `routes::MAX_DELEGATIONS_PER_REQUEST` (16) hand-offs by mention,

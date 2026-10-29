@@ -499,6 +499,17 @@ async fn review(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) 
     if task.owner_kwant_id.as_deref() == Some(scope.kwant_id.as_str()) {
         return fail("You can't review your own task; a teammate or the person does.");
     }
+    // A hand-off's card is reviewed by the bot that handed it out, not by any other teammate
+    if task.source_kind == "delegation" {
+        let lead = match task.source_id.as_deref() {
+            Some(id) => state.db.get_delegation(id).await.ok().flatten().map(|d| d.lead_kwant_id),
+            None => None,
+        };
+        if let Some(lead) = lead.filter(|l| *l != scope.kwant_id) {
+            let name = state.db.get_kwant(&lead).await.ok().flatten().map(|k| k.name).unwrap_or_else(|| "the lead".into());
+            return fail(format!("Only {name}, who handed this task out, reviews it; the person can also verify it."));
+        }
+    }
     if task.state != "review" {
         return fail(format!("The task is {}, not in review.", task.state));
     }
