@@ -39,6 +39,63 @@ async fn test_browser_controller_connection_failure() {
     }
 }
 
+/// Oleks's Mac: a bot gave the browser /Users/…/dev/KORB/… while it was on github.com and
+/// landed on github.com/Users/… (404). A path never reaches Chrome: nothing listens on 65530, so
+/// any attempt to talk to it would come back as Http instead.
+#[tokio::test]
+async fn a_file_path_is_refused_before_the_browser_is_asked() {
+    let controller = BrowserController::new(65530);
+    for path in [
+        "/Users/oleksandr.ivanchenko/dev/KORB/docker-compose.yml",
+        " /home/kwnt/notes.md",
+        "~/dev/KORB",
+        "./web/src/styles/global.css",
+        "../README.md",
+        "C:\\Users\\me\\file.txt",
+        "c:/Users/me/file.txt",
+        "\\\\server\\share",
+        "file:///Users/me/secret.txt",
+        "FILE:///etc/passwd",
+    ] {
+        match controller.navigate(path).await {
+            Err(BrowserError::NotWebAddress(msg)) => {
+                assert!(msg.contains("file tools"), "{path}: {msg}");
+                assert!(msg.contains("http://"), "{path}: {msg}");
+            }
+            other => panic!("{path}: expected NotWebAddress, got {other:?}"),
+        }
+        assert!(matches!(controller.navigate_unlocked(path).await, Err(BrowserError::NotWebAddress(_))), "{path}");
+    }
+    assert_eq!(controller.current_url.lock().await.as_deref(), None);
+}
+
+#[test]
+fn web_addresses_still_pass_the_file_path_check() {
+    use kwnt::sandbox::refuse_file_path;
+    for url in [
+        "https://github.com/alexsergivan/kwant",
+        "http://localhost:5174/search",
+        "https://example.com/Users/profile",
+        "about:blank",
+        "data:text/html,<p>hi</p>",
+    ] {
+        assert!(refuse_file_path(url).is_ok(), "{url}");
+    }
+}
+
+#[tokio::test]
+async fn the_browser_tool_tells_the_bot_to_use_file_tools_for_a_path() {
+    let controller = BrowserController::new(65530);
+    let err = kwnt::tools::sandbox::browser_navigate_with_controller(
+        Some(&controller),
+        &json!({"url": "/Users/oleksandr.ivanchenko/dev/KORB/web"}),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("not a web address") && err.contains("file tools"), "{err}");
+}
+
 #[tokio::test]
 async fn test_mock_cdp_controller_lifecycle() {
     let http_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
