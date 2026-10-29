@@ -586,6 +586,8 @@ Key facts:
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - The program you install and run is called `kwnt` (`kwnt serve`).
 - No telemetry: kwant sends nothing to its developers.
+- Optional Mission board: a task counts as Verified only when a check passes, and the bot that handed out work reviews
+  the result. No token limits by default; hand-off caps (4 per bot, 16 per request, with Continue) stop loops.
 - Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.
 """
 

@@ -11,6 +11,8 @@ Key facts:
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - The program you install and run is called `kwnt` (`kwnt serve`).
 - No telemetry: kwant sends nothing to its developers.
+- Optional Mission board: a task counts as Verified only when a check passes, and the bot that handed out work reviews
+  the result. No token limits by default; hand-off caps (4 per bot, 16 per request, with Continue) stop loops.
 - Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.
 
 ## Site
@@ -26,7 +28,7 @@ Key facts:
 - [Models & routing: Claude, Codex, Grok, Ollama](https://kwant.si/docs/models): Run bots on the Claude, Codex or Grok CLIs, API keys, local Ollama or any OpenAI-compatible server. The Laya router picks who answers, and which model.
 - [Human approval for AI agent actions](https://kwant.si/docs/approvals): kwant asks before bots run commands or edit outside their folder. Three approval modes per space or bot, plus saved passwords in a vault or Bitwarden.
 - [Flight School: give each bot only the freedom it has earned](https://kwant.si/docs/flight-school): Set each bot's tier per kind of work: Observe, Sandbox or Act. A tier only adds approval cards, payments always ask, and you can revoke a tier in one click.
-- [Mission board: tasks your bots can prove they finished](https://kwant.si/docs/mission-board): One board for everything your bots work on. A task counts as Verified only when a check passes. Checkpoints undo a task's file changes, and AutoFix retries what is safe to retry.
+- [Mission board: tasks your bots can prove they finished](https://kwant.si/docs/mission-board): One board for everything your bots work on. A task counts as Verified only when a check passes, leads review hand-offs, AutoFix retries what is safe, and Performance shows who does what well.
 - [Scheduled AI agents: routines & cron](https://kwant.si/docs/routines): Schedule bot work with routines, cron rules and follow-ups that run on your own machine, with an Undo on every change bots make.
 - [AI agent memory, skills & chat search](https://kwant.si/docs/memory-skills): What kwant bots remember and how you edit it, skills bots propose and you approve, and search across every chat in a space.
 - [Loose ends: AI that finds unfinished follow-ups](https://kwant.si/docs/loose-ends): kwant finds threads you never finished in chats, email and GitHub, and reads letters you photograph. It drafts the next step and never sends anything.

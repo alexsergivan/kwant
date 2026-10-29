@@ -33,6 +33,16 @@ card_art: avatar:research
   <li>A skill can be up to 8,000 characters, and a bot can have up to 20 waiting for review.</li>
 </ul>
 
+<h3 id="foundry">Skill Foundry</h3>
+<p>The Skill Foundry turns work a bot has done well into a skill draft for you to review. It's off by default, and it needs the <a href="mission-board.html">Mission board</a>, because it learns from verified tasks.</p>
+<ul>
+  <li><strong>When it drafts:</strong> a bot with 3 or more verified tasks of one kind of work in the last 60 days, 70% of them verified, writes down the steps, the inputs, checks that judge the result, the example tasks and the tools it used. At most 2 drafts a day by default.</li>
+  <li><strong>Dry-run replays:</strong> each draft is tried on up to 3 of its example tasks, in a scratch copy of their folder. File changes inside that copy run; anything else, like commands, other folders or the browser, is refused and listed as what the bot would have done. Replays run on Claude bots only.</li>
+  <li><strong>You decide:</strong> the draft waits in the bot's Skills tab like any proposed skill: Approve, Edit then approve, or Reject. The tools it lists are shown, never granted. The replay report is in the API for now (<code>GET /api/skills/&lt;id&gt;/foundry</code>), not yet on screen.</li>
+  <li><strong>Versions:</strong> a new draft for the same kind of work becomes the skill's next version, and an older version can be rolled back.</li>
+</ul>
+<p>There's no switch for it in the app yet. Turn it on through kwant's API with the <code>skill_foundry</code> setting (<code>POST /api/settings</code> with <code>{"skill_foundry": "on"}</code>).</p>
+
 <h2 id="search">Search</h2>
 <p>Press <code>Ctrl K</code> (<code>⌘K</code> on a Mac) to search every channel and direct chat in the space you have open. Use the arrow keys and <code>Enter</code> to jump to a result.</p>
 <figure>

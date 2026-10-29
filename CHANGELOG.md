@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- **kwant.si covers 0.4.0.** The home page says "New in 0.4.0" (screenshots for bots, leads reviewing
+  hand-offs, @mentions in results handing work on, no default token limits). The features page has
+  sections for these and for Performance, the Swarm Auditor with open risks and the Skill Foundry. The
+  Mission board, Bots & teams, Browser and Skills docs cover them, with the hand-off caps and Settings →
+  Usage → Hand-offs per request. The site also gains /llms.txt and the Grok Bot comparison page.
+
 ## [Mac 0.4.0] - 2026-10-29
 
 ### Added

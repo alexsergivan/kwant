@@ -51,14 +51,21 @@ card_art: avatar:tech_lead
 </figure>
 
 <h2 id="routing">Who answers</h2>
-<p>In a channel, kwant picks the bot whose persona fits your message best and shows the reason. The <a href="models.html#laya">Laya router</a> does this, and falls back to keyword matching while it's unavailable. Mention a bot (<code>@Designer</code>) to ask it directly.</p>
+<p>In a channel, kwant picks the bot whose persona fits your message best and shows the reason. The <a href="models.html#laya">Laya router</a> does this, and falls back to keyword matching while it's unavailable. Mention a bot (<code>@Designer</code>) to ask it directly. A message with exactly one @mention goes to that bot, even if it names others without an @: "@Frontend why didn't you answer QA" goes to Frontend. With two or more @mentions in a team, the lead answers and passes the work on.</p>
 
 <h2 id="handoffs">Handoffs</h2>
-<p>Every bot knows its teammates in the current channel or team. When a reply @mentions a teammate, or <code>@everyone</code>, that teammate answers right after in the same chat. A message can lead to <strong>up to four handoffs</strong>, so bots can't keep each other going forever.</p>
+<p>Every bot knows its teammates in the current channel or team. When a reply @mentions a teammate, or <code>@everyone</code>, that teammate answers right after in the same chat. With the <a href="mission-board.html#lead-review">Mission board</a> on, each hand-off gets a card, and the bot that handed it out reviews the result.</p>
+<ul>
+  <li><strong>Caps that stop loops:</strong> one bot can be asked up to 4 times per message, and one message can start up to 16 hand-offs. Past that, the chat shows a notice with a <strong>Continue</strong> button, or type "continue".</li>
+  <li><strong>No token limit by default:</strong> set one in <strong>Settings → Usage → Hand-offs per request</strong> if you want a request to pause after that many tokens. See <a href="mission-board.html#limits">Token limits</a>.</li>
+</ul>
 <figure>
   <div class="frame">{{shot:desktop-handoff|Designer answers in the design-review channel, then @mentions QA, and QA picks it up.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>Designer hands the check to QA with an @mention.</figcaption>
 </figure>
+
+<h3 id="relayed">A teammate's @mention hands work on</h3>
+<p>In a team, when a teammate's result @mentions another teammate, such as QA writing "@Frontend could switch the header to dark blue", Frontend gets that as a task even if the lead doesn't pass it on. The lead is resumed once, with all the results. These hand-offs count toward the same caps, never send work back to a bot earlier in the same chain, and skip mentions that only credit someone ("thanks to @Designer").</p>
 
 <h2 id="discussions">Team discussions</h2>
 <p>When a question to a team needs several views, the lead runs a short, moderated discussion:</p>
