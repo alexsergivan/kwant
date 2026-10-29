@@ -1125,9 +1125,21 @@ impl Database {
     // Events
 
     pub async fn log_task_event(&self, task_id: &str, kind: &str, actor: &str, detail: &Value) -> Result<(), DbError> {
-        let mut tx = self.pool.begin().await?;
-        insert_event(&mut tx, task_id, None, kind, actor, None, None, detail).await?;
-        tx.commit().await?;
+        // One statement that writes, so it takes SQLite's write lock up front (waiting on
+        // busy_timeout): a transaction that read the mission first failed at once with "database
+        // is locked" when another write landed in between, and the event was lost
+        sqlx::query(
+            "INSERT INTO task_events (task_id, mission_id, kind, actor, from_state, to_state, detail, created_at) \
+             VALUES (?, (SELECT mission_id FROM tasks WHERE id = ?), ?, ?, NULL, NULL, ?, ?)",
+        )
+        .bind(task_id)
+        .bind(task_id)
+        .bind(kind)
+        .bind(actor)
+        .bind(detail.to_string())
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

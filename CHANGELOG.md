@@ -34,6 +34,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   times per message (was 2), and one message can start up to 16 hand-offs (was 8). Past that, instead of
   "Send a new message to go on", the chat shows a notice with a Continue button (or say "continue").
 
+### Fixed
+- **Board notes aren't lost when kwant is busy.** A task's notes (such as "the hand-off finished;
+  unblock to review its result") could be dropped with "database is locked" while other work was
+  saving at the same moment. A hand-off that fails before the board sees it start now gets its card
+  too, failed so it offers Retry.
+
 ## [Mac 0.2.0] - 2026-10-28
 
 ### Added

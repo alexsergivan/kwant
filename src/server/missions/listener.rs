@@ -198,16 +198,25 @@ pub async fn on_delegation(state: &AppState, delegation_id: &str) {
     }
     let _serial = SERIAL.lock().await;
     let Ok(Some(d)) = state.db.get_delegation(delegation_id).await else { return };
-    let task = state.db.task_by_source("delegation", &d.id).await.ok().flatten();
+    let mut task = state.db.task_by_source("delegation", &d.id).await.ok().flatten();
     let live = matches!(d.status.as_str(), "queued" | "running");
-    match (task, d.status.as_str()) {
-        (None, _) if live => {
-            let Ok(Some(space)) = state.db.space_of_kwant(&d.specialist_kwant_id).await else { return };
-            let mission = mission_of_holder(state, &d.lead_kwant_id).await;
-            let title = if d.title.trim().is_empty() { d.task.lines().next().unwrap_or("Hand-off").to_string() } else { d.title.clone() };
-            let place = (None, None, Some(d.thread_id.clone()));
-            start_held(state, &space, mission, &title, &d.task, &d.specialist_kwant_id, "delegation", &d.id, place, &d.thread_id).await;
+    if task.is_none() {
+        // A hand-off that ended before its first update got here (it failed at once) still gets
+        // its card, which then takes the end below
+        if !live && !matches!(d.status.as_str(), "completed" | "failed" | "cancelled" | "interrupted") {
+            return;
         }
+        let Ok(Some(space)) = state.db.space_of_kwant(&d.specialist_kwant_id).await else { return };
+        let mission = mission_of_holder(state, &d.lead_kwant_id).await;
+        let title = if d.title.trim().is_empty() { d.task.lines().next().unwrap_or("Hand-off").to_string() } else { d.title.clone() };
+        let place = (None, None, Some(d.thread_id.clone()));
+        task = start_held(state, &space, mission, &title, &d.task, &d.specialist_kwant_id, "delegation", &d.id, place, &d.thread_id).await;
+        if live || task.is_none() {
+            return;
+        }
+    }
+    match (task, d.status.as_str()) {
+        (None, _) => {}
         (Some(t), _) if live && t.state == "ready" => hold(state, &t, &d.specialist_kwant_id, &d.thread_id).await,
         // Sent back to Ready after the hand-off ended (the person unblocked or retried the card,
         // or AutoFix retried it): the board never runs hand-offs itself, so it goes on here

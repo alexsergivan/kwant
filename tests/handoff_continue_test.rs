@@ -316,3 +316,32 @@ async fn a_stuck_ready_hand_off_card_is_carried_on_or_blocked_with_a_reason() {
     let t = card(&env, &gone.id).await.unwrap();
     assert_eq!((t.state.as_str(), t.blocked_reason.as_deref()), ("blocked", Some(missions::listener::CANT_CARRY_ON)));
 }
+
+/// A hand-off that fails before the board sees it running (a fast failure under load) still
+/// gets its card, failed so it offers Retry.
+#[tokio::test]
+async fn a_hand_off_that_failed_before_the_board_saw_it_gets_a_failed_card() {
+    let env = setup().await;
+    let new = kwnt::db::threads::NewDelegation {
+        lead_kwant_id: env.lead.clone(),
+        specialist_kwant_id: env.specialist.clone(),
+        origin_channel_id: None,
+        origin_kwant_id: Some(env.lead.clone()),
+        origin_thread_id: None,
+        team_id: None,
+        task: "Audit the pricing page".into(),
+        title: "Pricing audit".into(),
+        continue_lead: true,
+        depth: 1,
+        follow_up_at: None,
+    };
+    let (_, d) = env.state.db.create_delegation(&new).await.unwrap();
+    assert!(env.state.db.finish_delegation(&d.id, "failed", Some("the CLI exited"), None).await.unwrap());
+    missions::listener::on_delegation(&env.state, &d.id).await;
+    let first = card(&env, &d.id).await.expect("a card");
+    assert_eq!(first.state, "failed");
+    // Seen again (a late duplicate update): the same card, no second one
+    missions::listener::on_delegation(&env.state, &d.id).await;
+    let again = card(&env, &d.id).await.unwrap();
+    assert_eq!((again.id.as_str(), again.state.as_str()), (first.id.as_str(), "failed"));
+}
