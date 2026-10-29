@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { ModernAvatar } from './ModernAvatar';
+import { PerformancePanel } from './PerformancePanel';
 import { playSfx } from '../audio/chiptune';
 import {
   ACTION_DONE,
@@ -2021,6 +2022,10 @@ export interface MissionBoardViewProps {
   scanning?: boolean;
   onScan?: () => void;
   onRetryGraph?: () => void;
+  /** Insights → Performance under the board on "All work" (it loads its own numbers). */
+  showPerformance?: boolean;
+  /** Bumps with each board refresh so Performance reloads too. */
+  refreshCount?: number;
 }
 
 export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
@@ -2054,6 +2059,8 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
   scanning = false,
   onScan,
   onRetryGraph,
+  showPerformance = false,
+  refreshCount = 0,
 }) => {
   const selectId = useId();
   const visibleMissions = missions.filter((m) => m.status !== 'cancelled');
@@ -2215,6 +2222,8 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
                   busy={busyCard}
                 />
               )}
+
+              {showPerformance && !mission && !needsToken && <PerformancePanel names={names} refreshKey={refreshCount} />}
             </>
           )}
         </div>
@@ -2235,6 +2244,7 @@ export const MissionBoardPage: React.FC<{
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [insights, setInsights] = useState<Insights | null>(null);
+  const [refreshCount, setRefreshCount] = useState(0);
   const [missionId, setMissionId] = useState<string | null>(null);
   const [column, setColumn] = useState<Column>('ready');
   const [loading, setLoading] = useState(true);
@@ -2713,6 +2723,7 @@ export const MissionBoardPage: React.FC<{
         busyCard={busyCard}
         onRefresh={() => {
           load();
+          setRefreshCount((n) => n + 1);
           if (view === 'graph' && missionId) loadGraph(missionId);
         }}
         onBack={onBack}
@@ -2724,6 +2735,8 @@ export const MissionBoardPage: React.FC<{
         scanning={scanning}
         onScan={scan}
         onRetryGraph={() => missionId && loadGraph(missionId)}
+        showPerformance
+        refreshCount={refreshCount}
       />
       {openId && (
         <TaskPanel title={detail?.task.title ?? listed?.title ?? 'Task'} onClose={closeTask}>
