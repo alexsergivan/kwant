@@ -20,13 +20,14 @@ use kwnt::{
     },
     router::LayaRouter,
     server::{
-        continuity::{SelfScope, TurnOrigin},
+        continuity::{SelfScope, SelfToolsApprover, TurnOrigin},
         create_router, mcp_runtime,
         missions::auditor,
         AppState,
     },
     tools::ToolRunner,
 };
+use kwnt::mcp::{FixedApprover, ToolApprovalRequest, ToolApprover, SELF_SERVER_NAME};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tempfile::{tempdir, TempDir};
@@ -413,7 +414,7 @@ async fn a_challenge_needs_evidence_and_only_the_challenger_gives_it() {
     assert!(err && text.contains("At most 5"), "{text}");
     let foreign = json!({"audit_id": a.id, "risks": [{"risk": "r", "evidence": "e", "evidence_ids": ["nope"]}]});
     let (_, err, text) = tool(&e, &challenger, "audit_challenge", foreign).await;
-    assert!(err && text.contains("isn't on this task"), "{text}");
+    assert!(err && text.contains("isn't one of the task's evidence ids"), "{text}");
 
     // Mid-audit, neither side can review, update or add checks to the task
     for (who, name, args) in [
@@ -717,4 +718,94 @@ async fn an_audit_whose_driver_stopped_ends_failed() {
     assert!(events(&e, &t.id).await.contains(&"audit_done".to_string()));
     assert_eq!(verification(&e, &t.id).await, before);
     assert!(auditor::held(&e.state, &owner.id, "task_update", &t).await.is_none());
+}
+
+/// Whether an always-ask audit turn lets `bot`'s call through without a card (the inner approver
+/// stands for the card and says no).
+async fn free_in_audit_turn(bot: &Kwant, tool: &str, args: Value) -> bool {
+    let approver = SelfToolsApprover { inner: std::sync::Arc::new(FixedApprover(false)), always_ask: true, browser: None };
+    let req = ToolApprovalRequest {
+        kwant_id: bot.id.clone(),
+        kwant_name: bot.name.clone(),
+        turn_id: "t".into(),
+        tool_name: format!("mcp__{SELF_SERVER_NAME}__{tool}"),
+        server: SELF_SERVER_NAME.into(),
+        tool: tool.into(),
+        arguments: args,
+        builtin: None,
+        smart: None,
+        payment: None,
+    };
+    approver.approve(req).await
+}
+
+#[tokio::test]
+async fn one_challenge_is_one_card() {
+    let e = setup().await;
+    let owner = bot(&e, "Owner").await;
+    auditor_on(&e, 5).await;
+    let t = task(&e, Some(&owner), 2, "review").await;
+    person_check(&e, &t).await;
+    let a = open_audit(&e, &t).await;
+    let challenger = e.state.db.get_kwant(&a.challenger_kwant_id).await.unwrap().unwrap();
+    let call_args = json!({"audit_id": a.id, "risks": []});
+
+    // The first call asks the person
+    assert!(!free_in_audit_turn(&challenger, "audit_challenge", call_args.clone()).await);
+
+    // Allowed, then refused for its input (live: the task's id given as an evidence id): the
+    // corrected call doesn't ask again, once per refusal
+    let bad = json!({"audit_id": a.id, "risks": [{"risk": "r", "evidence": "e", "evidence_ids": ["nope"]}]});
+    let (_, err, _) = tool(&e, &challenger, "audit_challenge", bad.clone()).await;
+    assert!(err);
+    for (who, name, args) in [
+        (&owner, "audit_challenge", call_args.clone()),
+        (&challenger, "audit_rebut", json!({"audit_id": a.id, "answers": []})),
+        (&challenger, "audit_challenge", json!({"audit_id": "other", "risks": []})),
+        (&challenger, "memory_add", json!({"audit_id": a.id, "text": "x"})),
+    ] {
+        assert!(!free_in_audit_turn(who, name, args).await, "{name} by {} still asks", who.name);
+    }
+    assert!(free_in_audit_turn(&challenger, "audit_challenge", call_args.clone()).await);
+    assert!(!free_in_audit_turn(&challenger, "audit_challenge", call_args.clone()).await, "one pass per refusal");
+
+    // At most two corrections without a card in a stage
+    let (_, err, _) = tool(&e, &challenger, "audit_challenge", bad.clone()).await;
+    assert!(err);
+    assert!(free_in_audit_turn(&challenger, "audit_challenge", call_args.clone()).await);
+    let (_, err, _) = tool(&e, &challenger, "audit_challenge", bad).await;
+    assert!(err);
+    assert!(!free_in_audit_turn(&challenger, "audit_challenge", call_args.clone()).await, "a third try asks");
+
+    // A refusal by someone the audit isn't waiting on leaves nothing behind
+    let (_, err, _) = tool(&e, &owner, "audit_challenge", call_args.clone()).await;
+    assert!(err);
+    assert!(!free_in_audit_turn(&owner, "audit_challenge", call_args).await);
+
+    // The task's own id among the evidence ids is dropped, not refused
+    let own = json!({"audit_id": a.id, "risks": [{"risk": "No export attached", "evidence": "The brief lists no evidence.", "evidence_ids": [t.id]}]});
+    let (v, err, text) = tool(&e, &challenger, "audit_challenge", own).await;
+    assert!(!err, "{text}");
+    assert_eq!(v["risks"].as_array().unwrap().len(), 1);
+    let risks = e.state.db.risks_of_audit(&a.id).await.unwrap();
+    assert!(risks[0].evidence_ids().is_empty());
+
+    // The owner's rebuttal: same rule
+    let rebut = json!({"audit_id": a.id, "answers": []});
+    assert!(!free_in_audit_turn(&owner, "audit_rebut", rebut.clone()).await);
+    let (_, err, _) = tool(&e, &owner, "audit_rebut", json!({"audit_id": a.id, "answers": [{"risk_id": "nope", "stance": "accepted", "answer": "ok"}]})).await;
+    assert!(err);
+    assert!(free_in_audit_turn(&owner, "audit_rebut", rebut).await);
+}
+
+#[tokio::test]
+async fn a_person_assigned_owner_is_a_suggestion_until_the_claim() {
+    let e = setup().await;
+    let owner = bot(&e, "Owner").await;
+    auditor_on(&e, 5).await;
+    let t = person(&e, "POST", "/api/tasks", Some(json!({"title": "Export orders", "owner_kwant_id": owner.id, "priority": 2}))).await;
+    assert_eq!((t["owner_kwant_id"].as_str(), t["suggested_kwant_id"].as_str()), (None, Some(owner.id.as_str())), "{t}");
+    // No owner yet, so nobody to answer an audit
+    let task = e.state.db.get_task(t["id"].as_str().unwrap()).await.unwrap().unwrap();
+    assert!(auditor::start(&e.state, &task, "manual").await.is_err());
 }
