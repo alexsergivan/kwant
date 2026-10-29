@@ -250,6 +250,11 @@ async fn cli_run(e: &Env, mid: &str, tid: &str) {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    let after_runs = |e: &Env| {
+        let (db, tid) = (e.state.db.clone(), tid.to_string());
+        async move { db.checkpoints_of(&tid).await.unwrap().iter().filter(|c| c.kind == "after_run").count() }
+    };
+    let had = after_runs(e).await;
     let r = person(e, "POST", &format!("/api/missions/{mid}/run"), Some(json!({"max_tasks": 1}))).await;
     assert_eq!(r["started"][0]["task_id"], tid, "{r}");
     for _ in 0..300 {
@@ -259,13 +264,15 @@ async fn cli_run(e: &Env, mid: &str, tid: &str) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(state_of(e, tid).await, "review", "{}", task(e, tid).await);
-    // The after_run checkpoint is taken in the move to review; the turn may still be ending
-    for _ in 0..100 {
-        if e.state.db.open_claim(tid).await.unwrap().is_none() {
+    // The after_run checkpoint is taken after the move to review commits (the claim is already
+    // released by then), so wait for the snapshot itself: under load it lands well after "review"
+    for _ in 0..200 {
+        if e.state.db.open_claim(tid).await.unwrap().is_none() && after_runs(e).await > had {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    assert_eq!(after_runs(e).await, had + 1, "the run's after_run checkpoint");
 }
 
 fn sha(bytes: &[u8]) -> String {
