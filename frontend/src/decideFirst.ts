@@ -42,6 +42,84 @@ export function parseDecisions(raw: unknown): Decision[] {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// A raw [DECISIONS] block left in a reply's text
+
+// Messages saved before the server took the block off every reply (channel rounds skipped it)
+// still carry it in their text. The chat hides it and, when meta has no decisions, shows the
+// block's lines as read-only chips. Same line format as src/server/decide.rs parse_line.
+
+const OPEN_RE = /\[DECISIONS\]/gi;
+const CLOSE_RE = /\[\/DECISIONS\]/i;
+const MAX_DECISIONS = 6;
+
+function field(part: string, name: string): string | null {
+  const i = part.indexOf(':');
+  if (i < 0) return null;
+  return part.slice(0, i).trim().toLowerCase() === name ? part.slice(i + 1).trim() : null;
+}
+
+function parseBlockLine(line: string): Omit<Decision, 'index'> | null {
+  const parts = line.trim().replace(/^[-*•\s]+/, '').split('|');
+  const get = (name: string) => parts.map((p) => field(p, name)).find((v) => v !== null) ?? null;
+  const question = get('question');
+  const optionsRaw = get('options');
+  const pickedRaw = get('picked');
+  if (!question || optionsRaw === null || pickedRaw === null) return null;
+  const options = optionsRaw.split(';').map((o) => o.trim()).filter(Boolean);
+  if (options.length < 2 || options.length > 6) return null;
+  const norm = (s: string) => s.trim().replace(/^["“”.]+|["“”.]+$/g, '').toLowerCase();
+  const picked = options.find((o) => norm(o) === norm(pickedRaw));
+  if (!picked) return null;
+  return { question, options, picked, why: get('why') ?? '', status: 'decided', changed_to: null };
+}
+
+/**
+ * Takes the last `[DECISIONS] … [/DECISIONS]` block (or an unclosed one at the end) out of a
+ * reply: the text without it, and its valid lines. Lines that don't parse are dropped, never
+ * shown; two decisions run together on one line are split at "question:".
+ */
+export function takeDecisionsBlock(text: string): { text: string; decisions: Decision[] } {
+  let start = -1;
+  let tagLen = 0;
+  for (const m of text.matchAll(OPEN_RE)) {
+    start = m.index ?? -1;
+    tagLen = m[0].length;
+  }
+  if (start < 0) return { text, decisions: [] };
+  const after = text.slice(start + tagLen);
+  const close = CLOSE_RE.exec(after);
+  const body = close ? after.slice(0, close.index) : after;
+  const rest = close ? after.slice(close.index + close[0].length).trim() : '';
+  const decisions: Decision[] = [];
+  for (const line of body.split('\n').flatMap((l) => l.split(/\s+(?=question\s*:)/i))) {
+    const d = parseBlockLine(line);
+    if (d && decisions.length < MAX_DECISIONS) decisions.push({ index: decisions.length, ...d });
+  }
+  const head = text.slice(0, start).trimEnd();
+  return { text: (rest ? `${head}\n\n${rest}` : head).trim(), decisions };
+}
+
+/** While a reply streams in: hides a block being written, including a half-typed opening tag. */
+export function hideStreamingDecisions(text: string): string {
+  const shown = takeDecisionsBlock(text).text;
+  if (shown !== text) return shown;
+  const tail = /\[[A-Za-z]{0,9}$/.exec(text);
+  return tail && '[DECISIONS'.startsWith(tail[0].toUpperCase()) ? text.slice(0, tail.index).trimEnd() : text;
+}
+
+/**
+ * What a bot message shows: its text without a raw block, and its decisions. Decisions saved on
+ * the message win and can be changed; ones read from the text are read-only (the Change route
+ * only knows saved ones).
+ */
+export function messageDecisions(text: string, meta: unknown): { text: string; decisions: Decision[]; readOnly: boolean } {
+  const saved = parseDecisions(meta);
+  const taken = takeDecisionsBlock(text);
+  if (saved.length) return { text: taken.text, decisions: saved, readOnly: false };
+  return { text: taken.text, decisions: taken.decisions, readOnly: true };
+}
+
 /** What the chip says: the current choice. */
 export const decisionLabel = (d: Decision): string => (d.status === 'changed' ? `You chose: ${d.changed_to}` : `Decided: ${d.picked}`);
 
