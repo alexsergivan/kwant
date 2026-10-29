@@ -831,7 +831,8 @@ fn execute_single_turn(
     tokio::spawn(async move {
         // Ends the job (its cancel keys) when the turn and its handoffs are done
         let _job = job;
-        let opts = TurnOpts { routing, ..TurnOpts::default() };
+        // A full link in the person's own message may open the bot browser first
+        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), ..TurnOpts::default() };
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
             run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
             // Several bots asked the person something: one list of it all (when the chain is over)
@@ -1393,7 +1394,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
         let opts = TurnOpts {
             label: Some(discussion::turn_label(turn, &team.name)),
             // Only the opening turn may navigate the bot browser for a URL in the user's message
-            nav_prompt: Some(if opening { user_prompt.to_string() } else { String::new() }),
+            nav_prompt: opening.then(|| user_prompt.to_string()),
             discussion: Some(opening.then(|| discussion::question_label(&kwant.name, &team.name))),
             routing: None,
             on_started: None,
@@ -1447,7 +1448,6 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
         });
         let opts = TurnOpts {
             label: Some(discussion::summary_label(&team.name, &contributors)),
-            nav_prompt: Some(String::new()),
             discussion: None,
             routing: None,
             on_started: None,
@@ -1464,7 +1464,9 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
 pub(super) struct TurnOpts {
     /// Saved as the message's `reasoning_content` instead of the driver's reasoning.
     pub(super) label: Option<String>,
-    /// Text checked for a URL to open in the bot browser; defaults to the prompt.
+    /// The person's own message, checked for a full link to open in the bot browser before the
+    /// turn. `None` (hand-offs, routines, follow-ups and other prompts kwnt or a bot wrote) never
+    /// moves the browser.
     nav_prompt: Option<String>,
     /// Discussion reply handling: `[PASS]` replies aren't saved; `Some(label)` lets an `[ASK_USER]`
     /// reply be saved as a question for the user under that label.
@@ -1510,6 +1512,12 @@ impl TurnOpts {
     /// something asks (see [`TurnOpts::always_ask`]).
     pub(super) fn always_asking(label: &str) -> Self {
         TurnOpts { label: Some(label.to_string()), always_ask: true, ..Default::default() }
+    }
+
+    /// The link to open in the bot browser before the turn: only a full link in the person's own
+    /// message, never one in a prompt kwnt or a bot wrote.
+    fn nav_target(&self) -> Option<String> {
+        self.nav_prompt.as_deref().and_then(detect_url_in_prompt)
     }
 }
 
@@ -1927,8 +1935,7 @@ async fn run_kwant_turn_inner(
         };
 
         let mut final_prompt = prompt.clone();
-        let nav_prompt = opts.nav_prompt.as_deref().unwrap_or(&prompt);
-        let target_url_opt = detect_url_in_prompt(nav_prompt);
+        let target_url_opt = opts.nav_target();
 
         if let Some(target_url) = target_url_opt {
             event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
@@ -3165,11 +3172,12 @@ async fn send_to_thread(
 
     let job = state.turns.start_job([saved.id.clone(), thread.id.clone()]);
     let scope = scope_for(&state, &kwant, None, Some(thread.id.clone()), &job, depth).await.map_err(|_| StatusCode::NOT_FOUND)?;
+    let opts = TurnOpts { nav_prompt: Some(payload.prompt.clone()), ..TurnOpts::default() };
     let prompt = payload.prompt + &note;
     let target = kwant.clone();
     tokio::spawn(async move {
         let _job = job;
-        run_kwant_turn(&scope, &target, prompt, TurnOpts::default()).await;
+        run_kwant_turn(&scope, &target, prompt, opts).await;
     });
     Ok(Json(json!({
         "status": "dispatched",
@@ -4303,6 +4311,19 @@ pub async fn execute_tool(
 #[cfg(test)]
 mod tests {
     use super::{scrub_urls, turn_failed_text};
+
+    #[test]
+    fn only_the_persons_own_message_can_open_a_link_before_a_turn() {
+        use super::TurnOpts;
+        // hand-offs, routines and follow-ups pass no nav prompt, even when theirs has a full link
+        assert_eq!(TurnOpts::default().nav_target(), None);
+        assert_eq!(TurnOpts::always_asking("x").nav_target(), None);
+        let person = |text: &str| TurnOpts { nav_prompt: Some(text.into()), ..TurnOpts::default() };
+        assert_eq!(person("open https://example.org please").nav_target(), Some("https://example.org".into()));
+        // Oleks's two cases stay put even in the person's own message
+        assert_eq!(person("open the browser at /Users/oleksandr.ivanchenko/dev/KORB").nav_target(), None);
+        assert_eq!(person("pulling from registry-1.docker.io failed").nav_target(), None);
+    }
 
     #[test]
     fn a_saved_turn_failure_hides_secrets_and_home_folders() {
