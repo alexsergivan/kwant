@@ -39,12 +39,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Listed tools are shown, never granted. Versions of a skill can be rolled back.
   `GET /api/skills/foundry`, `POST /api/skills/foundry/:cluster/draft`, `POST /api/skills/:id/replay`,
   `POST /api/skills/:id/rollback`, `GET /api/skills/:id/foundry`. At most 2 drafts a day by default.
+- **Audit model in Settings.** With the auditor on, an **Audit model** picker sets which model audits
+  use: Fast (the default and cheapest), Balanced, Deep, or the same model as the bot. A value the
+  server rejects is flagged next to the picker in plain words.
 
 ### Changed
 - **Audits run on the fast model by default.** The Swarm Auditor's challenge and rebuttal turns now use
   the engine's cheap, fast model (for Claude, Haiku at medium effort) instead of the bot's default. The
   new `auditor_model` setting picks `fast` (default), `balanced`, `deep`, or `bot` for the bot's usual
   model.
+- **Kinds of work read as words.** The Performance section and Flight School show a task class such as
+  `code-review` as "Code review" instead of its raw name.
 
 ### Fixed
 - **One approval card per audit challenge.** When the auditor's call was allowed but then refused for

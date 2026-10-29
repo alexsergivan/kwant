@@ -72,11 +72,17 @@ export function fromText(from: string): string {
   }
 }
 
-export const classLabel = (c: string): string => (c === ANY_CLASS ? 'All work' : c === DEFAULT_CLASS ? 'General' : c);
+/** A task class as people read it: "code-review" → "Code review". */
+export const classLabel = (c: string): string => {
+  if (c === ANY_CLASS) return 'All work';
+  if (c === DEFAULT_CLASS) return 'General';
+  const words = c.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : c;
+};
 
 /** One line for a tier change in the bot's history. */
 export function capabilityEventText(e: Pick<CapabilityEvent, 'kind' | 'tier' | 'task_class'>): string {
-  const where = e.task_class === ANY_CLASS ? 'all work' : classLabel(e.task_class);
+  const where = e.task_class === ANY_CLASS ? 'all work' : classLabel(e.task_class).toLowerCase();
   const tier = tierLabel(e.tier);
   switch (e.kind) {
     case 'granted':

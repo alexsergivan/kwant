@@ -157,22 +157,47 @@ export function auditCardPlace(w: AuditWaiting): { channelId: string | null; kwa
   return { channelId: null, kwantId: l.direct_kwant_id ?? w.kwant_id, threadId: l.thread_id };
 }
 
+export type AuditorModel = 'fast' | 'balanced' | 'deep' | 'bot';
+
 export interface AuditorSettings {
   auditor: 'on' | 'off';
   auditor_daily_cap: number;
+  /** Absent on a server from before the setting: then it is neither shown nor saved. */
+  auditor_model?: AuditorModel;
 }
 export const DAILY_CAP_MIN = 1;
 export const DAILY_CAP_MAX = 50;
 export const DAILY_CAPS = [1, 2, 3, 5, 10, 20, 50];
 
-/** `auditor` and `auditor_daily_cap` from GET /api/settings; null on a server without the Auditor. */
+/** The model audit turns run on (`auditor_model`, §18). `fast` is the server default. */
+export const AUDITOR_MODELS: Array<{ value: AuditorModel; label: string }> = [
+  { value: 'fast', label: 'Fast' },
+  { value: 'balanced', label: 'Balanced' },
+  { value: 'deep', label: 'Deep' },
+  { value: 'bot', label: 'Same as the bot' },
+];
+export const MODEL_HINT = 'Fast is cheapest; audits never mark work passed or failed.';
+export const isAuditorModel = (v: unknown): v is AuditorModel => AUDITOR_MODELS.some((o) => o.value === v);
+
+/** A save error that is about the audit model, so it can show next to that control. */
+export const isAuditorModelError = (err: string | null | undefined): boolean => !!err && err.includes('auditor_model');
+/** What the picker says after that 400, instead of the server's field name. */
+export const MODEL_ERROR_TEXT = 'The server didn’t accept that audit model. Pick Fast, Balanced, Deep or Same as the bot.';
+
+/** `auditor`, `auditor_daily_cap` and `auditor_model` from GET /api/settings; null on a server without the Auditor. */
 export function parseAuditorSettings(data: unknown): AuditorSettings | null {
   if (!data || typeof data !== 'object') return null;
   const d = data as Record<string, unknown>;
   if (d.auditor !== 'on' && d.auditor !== 'off') return null;
   const cap = typeof d.auditor_daily_cap === 'number' ? Math.max(DAILY_CAP_MIN, Math.min(DAILY_CAP_MAX, Math.round(d.auditor_daily_cap))) : 5;
-  return { auditor: d.auditor, auditor_daily_cap: cap };
+  const out: AuditorSettings = { auditor: d.auditor, auditor_daily_cap: cap };
+  // An unknown value is kept as is: the picker shows it, and saving it back gets the server's 400.
+  if (typeof d.auditor_model === 'string' && d.auditor_model) out.auditor_model = d.auditor_model as AuditorModel;
+  return out;
 }
+
+/** Label for a saved audit model, including one this app doesn't know. */
+export const auditorModelLabel = (m: string): string => AUDITOR_MODELS.find((o) => o.value === m)?.label ?? m;
 
 /** What a resolve press says afterwards. */
 export const riskResolvedText = (r: RiskResolution) => (r === 'resolved' ? 'Marked resolved. The task’s state doesn’t change.' : 'Dismissed. The task’s state doesn’t change.');
