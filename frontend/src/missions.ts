@@ -551,8 +551,8 @@ export function costText(spent: number, budget: number): string {
 export const NO_LIMIT = 0;
 /** Quick picks in the limit editor and Settings. */
 export const LIMIT_PICKS = [50_000, 200_000, 1_000_000] as const;
-/** What the server takes: a task 1–5M, a mission 1000–5M (0 is no limit for both). */
-export const LIMIT_RANGE = { task: [1, 5_000_000], mission: [1_000, 5_000_000] } as const;
+/** What the server takes: a task 1–5M, a mission 1000–5M, one request's hand-offs 1–100M (0 is no limit for all). */
+export const LIMIT_RANGE = { task: [1, 5_000_000], mission: [1_000, 5_000_000], request: [1, 100_000_000] } as const;
 export type LimitScope = keyof typeof LIMIT_RANGE;
 
 /** "50k", "1.5M", "200 000", "200,000" → tokens; null when it isn't a number. */
@@ -588,6 +588,12 @@ export function parseDefaultLimits(d: { mission_default_task_budget_tokens?: unk
   const task = n(d.mission_default_task_budget_tokens);
   if (task === null) return null;
   return { task, mission: n(d.mission_default_budget_tokens) ?? NO_LIMIT };
+}
+/** Settings' hand-off token limit per request (`chain_token_budget`) as typed: 0 is no limit, the default; null while it can't be saved. */
+export function requestLimitFrom(raw: string): number | null {
+  const n = parseLimit(raw);
+  if (n === null) return null;
+  return n === NO_LIMIT || !limitError(raw, 'request') ? n : null;
 }
 export const defaultLimitsBody = (l: DefaultLimits) => ({ mission_default_task_budget_tokens: l.task, mission_default_budget_tokens: l.mission });
 

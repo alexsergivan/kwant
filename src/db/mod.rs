@@ -36,6 +36,8 @@ pub mod auditor;
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
 /// Default's #general description before the "kwant bots" wording; replaced only if unchanged.
 const OLD_GENERAL_DESCRIPTION: &str = "Main collaboration hub for all agents";
+/// Set once [`Database::migrate_chain_budget_default`] has run.
+const CHAIN_BUDGET_OPT_IN_DONE: &str = "chain_token_budget_opt_in_v1";
 
 use models::*;
 use spaces::SpaceId;
@@ -185,6 +187,7 @@ impl Database {
         db.migrate_flight_school().await?;
         // Last: it rebuilds `tasks` and `missions` from their stored SQL, columns and triggers included
         db.migrate_opt_in_budgets().await?;
+        db.migrate_chain_budget_default().await?;
         // After it: observes finished tasks once (their class comes from Flight School)
         db.migrate_performance().await?;
         // Phase D2: audits and their risks (add-only)
@@ -520,6 +523,21 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// The chain token budget became opt-in. Settings saved before that wrote the old default
+    /// back on every save, so a stored [`crate::server::budget::OLD_DEFAULT`] is cleared to 0
+    /// (off), once; any other number the person set stays. Later saves of that number are kept.
+    pub async fn migrate_chain_budget_default(&self) -> Result<(), DbError> {
+        if self.get_setting(CHAIN_BUDGET_OPT_IN_DONE).await?.is_some() {
+            return Ok(());
+        }
+        sqlx::query("UPDATE settings SET value = '0' WHERE key = ? AND trim(value) = ?")
+            .bind(crate::server::budget::SETTING)
+            .bind(crate::server::budget::OLD_DEFAULT.to_string())
+            .execute(&self.pool)
+            .await?;
+        self.set_setting(CHAIN_BUDGET_OPT_IN_DONE, &chrono::Utc::now().to_rfc3339()).await
     }
 
     // Settings CRUD

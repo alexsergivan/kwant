@@ -17,7 +17,12 @@ use serde_json::json;
 
 /// Setting key: fresh tokens one chain may use before hand-offs pause; 0 turns the guard off.
 pub const SETTING: &str = "chain_token_budget";
-pub const DEFAULT: u64 = 200_000;
+/// Off unless the person sets a budget, like task and mission limits (docs/mission-control.md §15).
+/// The hand-off count caps still stop a chain that loops.
+pub const DEFAULT: u64 = 0;
+/// The budget every install had before it became opt-in; a stored value equal to it is cleared
+/// once ([`crate::db::Database::migrate_chain_budget_default`]).
+pub const OLD_DEFAULT: u64 = 200_000;
 pub const MAX: u64 = 100_000_000;
 /// Message meta kind of the notice.
 pub const KIND: &str = "budget_paused";
