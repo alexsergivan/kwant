@@ -1928,7 +1928,7 @@ async fn run_kwant_turn_inner(
 
         let mut final_prompt = prompt.clone();
         let nav_prompt = opts.nav_prompt.as_deref().unwrap_or(&prompt);
-        let target_url_opt = detect_url_with_context(nav_prompt, active_browser_url.as_deref());
+        let target_url_opt = detect_url_in_prompt(nav_prompt);
 
         if let Some(target_url) = target_url_opt {
             event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
@@ -2422,30 +2422,8 @@ async fn run_kwant_turn_inner(
             let _ = db
                 .drop_parked_for_chat(&target_kwant.id, scope.channel_id.as_deref(), scope.kwant_id.as_deref(), scope.thread_id.as_deref())
                 .await;
-            // Post-turn sync: If bot response outputs a URL, sync navigation so the user sees it in Sandbox VM
-            if let Some(bot_url) = extract_url_from_text(&output.text) {
-                if let Some(ctrl) = get_or_create_browser_controller(state, &sandbox_target).await {
-                    let curr = ctrl.current_url.lock().await.clone().unwrap_or_default();
-                    if curr != bot_url && !bot_url.contains("localhost") && !bot_url.contains("127.0.0.1") {
-                        if let Ok(nav) = ctrl.navigate(&bot_url).await {
-                            event_broadcast.send(RuntimeEvent::BrowserNavigated {
-                                team_id: sandbox_target.clone(),
-                                url: nav.url.clone(),
-                                title: nav.title.clone(),
-                                status_code: nav.status_code,
-                            });
-                            if let Some(b64) = ctrl.last_screenshot.lock().await.clone() {
-                                event_broadcast.send(RuntimeEvent::BrowserScreenshot {
-                                    team_id: sandbox_target.clone(),
-                                    url: nav.url.clone(),
-                                    image_base64: b64,
-                                    timestamp: chrono::Utc::now().to_rfc3339(),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
+            // A bot reply never moves the browser: the first domain-like word in it (e.g. Docker's
+            // registry-1.docker.io) opened as a 404. The bot opens pages itself with its browser tools.
 
             // Counts toward the chain's token budget (see `super::budget`)
             let fresh = output.usage.map_or(output.tokens_used as u64, |u| u.fresh());
@@ -3868,110 +3846,19 @@ pub async fn resolve_sandbox_target_info(state: &AppState, target_id: &str) -> O
     }
 }
 
-const EXCLUDED_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "json", "toml", "yaml", "yml", "md",
-    "txt", "log", "lock", "png", "jpg", "jpeg", "gif", "svg", "css", "html",
-    "sh", "py", "go", "c", "cpp", "h", "java", "kt", "rb", "php", "sql",
-];
-
-pub fn extract_url_from_text(text: &str) -> Option<String> {
-    for word in text.split_whitespace() {
-        let clean = word.trim_matches(|c: char| {
-            !c.is_alphanumeric() && c != '.' && c != '/' && c != ':' && c != '-' && c != '_' && c != '?' && c != '=' && c != '&' && c != '#'
-        });
-        if clean.starts_with("http://") || clean.starts_with("https://") {
-            return Some(clean.to_string());
-        }
-        if !clean.contains('@') && clean.contains('.') && !clean.starts_with('.') && !clean.ends_with('.') {
-            let host_part = clean.split('/').next().unwrap_or("");
-            let parts: Vec<&str> = host_part.split('.').collect();
-            if parts.len() >= 2 {
-                let tld = parts.last().unwrap_or(&"");
-                let tld_lower = tld.to_lowercase();
-                if tld.len() >= 2
-                    && tld.len() <= 12
-                    && tld.chars().all(|c| c.is_ascii_alphabetic())
-                    && !EXCLUDED_EXTENSIONS.contains(&tld_lower.as_str())
-                {
-                    let valid_labels = parts.iter().all(|label| {
-                        !label.is_empty()
-                            && !label.starts_with('-')
-                            && !label.ends_with('-')
-                            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-                    });
-                    if valid_labels {
-                        return Some(format!("https://{}", clean));
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-pub fn detect_url_with_context(prompt: &str, current_url: Option<&str>) -> Option<String> {
-    let lower = prompt.to_lowercase();
-    let is_browser_request = lower.contains("browser")
-        || lower.contains("open ")
-        || lower.contains("navigate")
-        || lower.contains("go to ")
-        || lower.contains("browse ")
-        || lower.contains("visit ")
-        || lower.contains("search for ")
-        || lower.contains("look up ")
-        || lower.contains("http://")
-        || lower.contains("https://");
-
-    if let Some(direct_url) = extract_url_from_text(prompt) {
-        if is_browser_request || prompt.split_whitespace().count() <= 3 {
-            return Some(direct_url);
-        }
-    }
-
-    if !is_browser_request {
-        return None;
-    }
-
-    // Relative navigation if active current_url exists
-    if let Some(curr) = current_url {
-        let curr = curr.trim();
-        if (curr.starts_with("http://") || curr.starts_with("https://")) && !curr.contains("about:blank") && !curr.contains("example.com") {
-            let origin = if let Some(idx) = curr[8..].find('/') {
-                &curr[..8 + idx]
-            } else {
-                curr
-            };
-
-            for word in prompt.split_whitespace() {
-                let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '/');
-                if clean.starts_with('/') && clean.len() > 1 {
-                    return Some(format!("{}{}", origin, clean));
-                }
-            }
-
-            if lower.contains("playlist") {
-                return Some(format!("{}/playlists", origin));
-            } else if lower.contains("explore") {
-                return Some(format!("{}/explore", origin));
-            } else if lower.contains("search") && !lower.contains("google") {
-                return Some(format!("{}/search", origin));
-            } else if lower.contains("login") || lower.contains("sign in") {
-                return Some(format!("{}/login", origin));
-            } else if lower.contains("settings") {
-                return Some(format!("{}/settings", origin));
-            } else if lower.contains("about") {
-                return Some(format!("{}/about", origin));
-            } else if lower.contains("home") {
-                return Some(origin.to_string());
-            }
-        }
-    }
-
-    None
-}
-
+/// The page to open before a bot starts: the first full `http://` or `https://` link in the
+/// message, nothing else. kwant used to guess here (bare domains, a `/word` joined to the page
+/// already open, "settings"/"home"/"search" pages), which sent a Mac folder path
+/// `/Users/…` to `github.com/Users/…`. Anything else the bot opens itself with its browser tools.
 pub fn detect_url_in_prompt(prompt: &str) -> Option<String> {
-    detect_url_with_context(prompt, None)
+    prompt.split_whitespace().find_map(|word| {
+        let start = word.find("http://").or_else(|| word.find("https://"))?;
+        let link = word[start..].trim_end_matches(|c: char| {
+            matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '>' | '"' | '\'' | '`' | '*')
+        });
+        let parsed = reqwest::Url::parse(link).ok()?;
+        (matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some()).then(|| link.to_string())
+    })
 }
 
 pub async fn get_or_create_browser_controller(
@@ -4023,6 +3910,7 @@ fn browser_unavailable(state: &AppState) -> (StatusCode, Json<serde_json::Value>
 
 fn browser_request_failed(error: crate::sandbox::BrowserError) -> (StatusCode, Json<serde_json::Value>) {
     if matches!(error, crate::sandbox::BrowserError::HumanControl) { return (StatusCode::CONFLICT, Json(json!({"error": error.to_string()}))); }
+    if matches!(error, crate::sandbox::BrowserError::NotWebAddress(_)) { return (StatusCode::BAD_REQUEST, Json(json!({"error": error.to_string()}))); }
     if let crate::sandbox::BrowserError::Navigation(reason) = &error {
         return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
             "error": format!("The site could not be reached ({}). The browser is working; check the address.", reason)

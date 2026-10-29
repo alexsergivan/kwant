@@ -122,6 +122,34 @@ pub enum BrowserError {
     /// The browser works, but the page itself could not be loaded (DNS, TLS, refused, ...).
     #[error("Page could not be loaded: {0}")]
     Navigation(String),
+    /// A file path (or file:// address) handed to the browser; see [`refuse_file_path`].
+    #[error("{0}")]
+    NotWebAddress(String),
+}
+
+/// Refuses an address that is a file on the computer before it reaches Chrome, so it is never
+/// read as a page on the site already open. file:// is refused in every mode: in Local mode it
+/// would show the bot any file on the person's computer, past the folders and approvals its
+/// file tools keep to.
+pub fn refuse_file_path(target: &str) -> Result<(), BrowserError> {
+    let t = target.trim();
+    if t.get(..5).is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:")) {
+        return Err(BrowserError::NotWebAddress(format!(
+            "{t} is a file:// address, which the browser doesn't open. Read local files with your file tools \
+             (Read, or cat in the shell); the browser opens http:// and https:// pages."
+        )));
+    }
+    let b = t.as_bytes();
+    let drive = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/');
+    let path = drive || ["/", "~", "\\", "./", "../", ".\\", "..\\"].iter().any(|p| t.starts_with(p));
+    if path {
+        return Err(BrowserError::NotWebAddress(format!(
+            "{t} is a file path on the computer, not a web address, so the browser didn't open it. \
+             Read local files with your file tools (Read, or cat in the shell); the browser opens \
+             http:// and https:// pages."
+        )));
+    }
+    Ok(())
 }
 
 /// Recognises CAPTCHA / anti-bot interstitials that replace the requested content.
@@ -855,6 +883,7 @@ impl BrowserController {
     }
 
     pub async fn navigate_unlocked(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
+        refuse_file_path(target_url)?;
         let _ = self.collect_captured_credentials().await;
         let _ = self.send_cdp_command("Page.enable", json!({})).await;
         let res = self

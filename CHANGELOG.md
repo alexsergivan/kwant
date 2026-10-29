@@ -39,6 +39,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   model.
 
 ### Fixed
+- **The bot browser no longer opens addresses it guessed.** A message with "open" or "browser" and a
+  folder path like `/Users/…/dev/KORB` sent the browser to that path on the site already open
+  (`github.com/Users/…`, a 404), and a bot reply that mentioned a server like `registry-1.docker.io`
+  opened it on its own. Before a turn the browser now opens only a full `http://` or `https://` link in
+  the message, and a reply never moves it. A file path or `file://` address given to the browser is
+  refused with a note to read local files with file tools.
 - **A restart no longer leaves an audit running.** An audit cut off mid-turn by a restart ends
   `interrupted` and says so in the task's history; one still waiting to start runs after the restart
   (or is skipped if the auditor was turned off).

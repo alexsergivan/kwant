@@ -675,43 +675,33 @@ async fn test_sandbox_interaction_errors_are_not_reported_as_success() {
     }
 }
 
-#[tokio::test]
-async fn test_url_extraction_and_relative_navigation() {
-    use kwnt::server::routes::{detect_url_in_prompt, detect_url_with_context, extract_url_from_text};
+/// The bot browser opens a page on its own only for a full http(s) link in the message. It used
+/// to guess: a `/Users/…` folder path was joined to the open github.com page, and "settings" or
+/// "home" became pages on the open site.
+#[test]
+fn only_a_full_link_opens_the_browser_before_a_turn() {
+    use kwnt::server::routes::detect_url_in_prompt;
 
-    // 1. Modern TLD (.ing) extraction
-    let url = extract_url_from_text("please open example.org for me");
-    assert_eq!(url, Some("https://example.org".to_string()));
+    assert_eq!(detect_url_in_prompt("open https://example.org/a?b=1 for me"), Some("https://example.org/a?b=1".into()));
+    assert_eq!(detect_url_in_prompt("see (https://example.org/x)."), Some("https://example.org/x".into()));
+    assert_eq!(detect_url_in_prompt("browse http://localhost:5174/search, please"), Some("http://localhost:5174/search".into()));
 
-    // 2. Code extensions must not be treated as URLs
-    assert_eq!(extract_url_from_text("read src/main.rs"), None);
-    assert_eq!(extract_url_from_text("check file.json"), None);
-
-    // 3. Direct URL in prompt detection
+    // Oleks's case: a folder path with "open"/"browser" in the message
     assert_eq!(
-        detect_url_in_prompt("open example.org"),
-        Some("https://example.org".to_string())
+        detect_url_in_prompt("open the browser and check /Users/oleksandr.ivanchenko/dev/KORB/web/src/styles/global.css"),
+        None
     );
-
-    // 4. Relative navigation with active browser context
-    let rel_playlist = detect_url_with_context(
-        "open some playlist page",
-        Some("https://example.org"),
-    );
-    assert_eq!(rel_playlist, Some("https://example.org/playlists".to_string()));
-
-    let rel_path = detect_url_with_context(
-        "navigate to /explore",
-        Some("https://example.org"),
-    );
-    assert_eq!(rel_path, Some("https://example.org/explore".to_string()));
-
-    // 5. Explicit navigation to another site overrides active browser context
-    let override_url = detect_url_with_context(
-        "open youtube.com",
-        Some("https://example.org"),
-    );
-    assert_eq!(override_url, Some("https://youtube.com".to_string()));
+    assert_eq!(detect_url_in_prompt("navigate to /explore"), None);
+    assert_eq!(detect_url_in_prompt("open some playlist page"), None);
+    assert_eq!(detect_url_in_prompt("open the settings"), None);
+    assert_eq!(detect_url_in_prompt("go to home"), None);
+    // Bare domains and file names are no longer guessed at
+    assert_eq!(detect_url_in_prompt("open example.org"), None);
+    assert_eq!(detect_url_in_prompt("pulled from registry-1.docker.io"), None);
+    assert_eq!(detect_url_in_prompt("read src/main.rs"), None);
+    // file:// and other schemes are never opened
+    assert_eq!(detect_url_in_prompt("open file:///Users/me/a.txt"), None);
+    assert_eq!(detect_url_in_prompt("open https://"), None);
 }
 
 #[tokio::test]
