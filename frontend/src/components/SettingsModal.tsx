@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { AuditorSettings, DAILY_CAPS, SETTING_HINT as AUDITOR_HINT, parseAuditorSettings } from '../auditor';
 import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import { budgetError, budgetValue } from '../chainBudget';
@@ -263,6 +264,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   // null: this server has no Mission board, so the switch stays hidden.
   const [missionBoard, setMissionBoard] = useState<boolean | null>(null);
   const [autofix, setAutofix] = useState<AutofixSettings | null>(null);
+  // null on a server without the Swarm Auditor: the switch stays hidden and out of the save
+  const [auditor, setAuditor] = useState<AuditorSettings | null>(null);
   // null on a server without Flight School: the switch stays hidden and out of the save
   const [flightSchool, setFlightSchool] = useState<FlightSchoolSettings | null>(null);
   // null until loaded, and on a server without these settings
@@ -336,6 +339,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           setProactive(parseProactiveSettings(data));
           setMissionBoard(parseMissionBoardSetting(data));
           setAutofix(parseAutofixSettings(data));
+          setAuditor(parseAuditorSettings(data));
           setFlightSchool(parseFlightSchoolSettings(data));
           setPlace(
             typeof data.timezone === 'string'
@@ -420,6 +424,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           ...(missionBoard !== null ? { mission_board: missionBoard } : {}),
           ...(autofix !== null ? { autofix: autofix.autofix, recovery_budget_pct: autofix.recovery_budget_pct } : {}),
           ...(flightSchool ?? {}),
+          ...(auditor ?? {}),
           ...(place ? { timezone: place.timezone.trim(), location: place.location.trim() } : {}),
         }),
       });
@@ -919,6 +924,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                 </SwitchRow>
               )}
               {flightSchool !== null && <FlightSchoolSetting value={flightSchool} onChange={setFlightSchool} />}
+              {auditor !== null && (
+                <SwitchRow
+                  id="auditor"
+                  label="Challenge important work with an audit"
+                  hint={AUDITOR_HINT}
+                  checked={auditor.auditor === 'on'}
+                  onToggle={() => setAuditor((a) => (a ? { ...a, auditor: a.auditor === 'on' ? 'off' : 'on' } : a))}
+                >
+                  {auditor.auditor === 'on' && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2" data-testid="auditor-options">
+                      <label htmlFor="auditor-cap" className="text-[11px] text-zinc-300">
+                        At most
+                      </label>
+                      <select
+                        id="auditor-cap"
+                        value={auditor.auditor_daily_cap}
+                        onChange={(e) => setAuditor((a) => (a ? { ...a, auditor_daily_cap: Number(e.target.value) } : a))}
+                        className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+                      >
+                        {[...new Set([...DAILY_CAPS, auditor.auditor_daily_cap])]
+                          .sort((x, y) => x - y)
+                          .map((n) => (
+                            <option key={n} value={n}>
+                              {n}
+                            </option>
+                          ))}
+                      </select>
+                      <span className="text-[11px] text-zinc-300">{auditor.auditor_daily_cap === 1 ? 'audit' : 'audits'} a day</span>
+                    </div>
+                  )}
+                </SwitchRow>
+              )}
             </fieldset>
           )}
 

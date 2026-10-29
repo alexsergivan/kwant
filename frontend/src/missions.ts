@@ -7,6 +7,7 @@
 import { PersonCancelledError, personFetch } from './auth';
 import { relativeTime } from './away';
 import { Capabilities, CapabilityChange, ENGINE_CANT_SANDBOX, TaskTier, Tier } from './flightSchool';
+import type { Risk, RiskResolution, TaskRisks } from './auditor';
 
 export type TaskState = 'backlog' | 'ready' | 'working' | 'needs_you' | 'review' | 'verified' | 'blocked' | 'failed' | 'cancelled';
 export type MissionStatus = 'draft' | 'active' | 'done' | 'cancelled';
@@ -1370,6 +1371,18 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
       return str(d.status) === 'stale' ? 'A proposed change went out of date, so nothing changed' : `${Who} ${str(d.status) === 'rejected' ? 'rejected' : 'approved'} a proposed change`;
     case 'workflow_change_applied':
       return 'The approved change was applied';
+    case 'audit_started':
+      return `An audit started: ${actorName(str(d.challenger) ?? '', null, names)} challenges the work`;
+    case 'audit_challenge':
+      return `${Who} raised ${typeof d.risks === 'number' ? (d.risks === 1 ? '1 risk' : `${d.risks} risks`) : 'risks'} in the audit`;
+    case 'audit_rebuttal':
+      return `${Who} answered the audit`;
+    case 'audit_done':
+      return str(d.status) === 'done' ? 'The audit finished. It doesn’t change whether the task passed' : `The audit ended: ${str(d.status) ?? 'stopped'}`;
+    case 'audit_skipped':
+      return `No audit: ${str(d.reason) === 'daily_cap' ? 'today’s limit was reached' : str(d.reason) === 'no_challenger' ? 'no other bot could challenge it' : str(d.reason) === 'task_moved' ? 'the task moved on' : 'skipped'}`;
+    case 'risk_resolved':
+      return `${Who} ${str(d.resolution) === 'dismissed' ? 'dismissed' : 'resolved'} a risk`;
     case 'class_changed':
       return `${Who} changed its kind of work${str(d.to) ? ` to ${str(d.to)}` : ''}`;
     default:
@@ -1557,6 +1570,13 @@ export const missionsApi = {
   cancelAutofix: (id: string, aid: string) => call<AutofixAttempt>(`/api/tasks/${enc(id)}/autofix/${enc(aid)}/cancel`, 'POST', {}),
   workflowChanges: (status: WorkflowChangeStatus = 'proposed', taskId?: string) =>
     call<WorkflowChange[]>(`/api/workflow-changes?status=${status}${taskId ? `&task_id=${enc(taskId)}` : ''}`),
+  /** Swarm Auditor: the task's audits and their risks. */
+  risks: (id: string) => call<TaskRisks>(`/api/tasks/${enc(id)}/risks`),
+  /** The space's unresolved risks, for the board's badges. */
+  spaceRisks: () => call<{ risks: Risk[] }>('/api/risks').then((r) => r.risks),
+  /** Close a risk (person only). The task's state doesn't change. */
+  resolveRisk: (id: string, riskId: string, resolution: RiskResolution, note?: string) =>
+    call<{ risk: Risk; unresolved: boolean }>(`/api/tasks/${enc(id)}/risks/${enc(riskId)}/resolve`, 'POST', note ? { resolution, note } : { resolution }),
   decideChange: (id: string, approve: boolean) => call<WorkflowChange>(`/api/workflow-changes/${enc(id)}/${approve ? 'approve' : 'reject'}`, 'POST', {}),
   /** One person action on a task. `run_checks` answers `{checks, task}`, the others the Task. */
   act: async (id: string, action: TaskAction, reason?: string): Promise<Task> => {

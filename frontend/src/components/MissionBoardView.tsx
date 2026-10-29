@@ -29,6 +29,9 @@ import {
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { ModernAvatar } from './ModernAvatar';
 import { PerformancePanel } from './PerformancePanel';
+import { RisksSection } from './RisksSection';
+import { AuditWaiting, Risk, RiskResolution, TaskRisks, auditCardPlace, auditLive, auditWaiting, openRiskCounts, riskBadgeText, riskResolvedText } from '../auditor';
+import { awayApi } from '../away';
 import { playSfx } from '../audio/chiptune';
 import {
   ACTION_DONE,
@@ -478,7 +481,9 @@ export const TaskCard: React.FC<{
   /** Out of budget: remove its limit and put it back in Ready, from the card. */
   onRemoveLimit?: (t: Task) => void;
   busy?: boolean;
-}> = ({ task: t, names, now = Date.now(), showMission = true, onOpen, onRemoveLimit, busy = false }) => {
+  /** Unresolved Auditor risks on this task. */
+  openRisks?: number;
+}> = ({ task: t, names, now = Date.now(), showMission = true, onOpen, onRemoveLimit, busy = false, openRisks = 0 }) => {
   const owner = (t.owner_kwant_id && names[t.owner_kwant_id]) || t.owner_name;
   const checks = checksText(t.checks_summary);
   const optionalNote = optionalChecksNote(t.checks_summary);
@@ -511,6 +516,11 @@ export const TaskCard: React.FC<{
           {flags.length > 0 && (
             <span data-flag-badge>
               <Badge tone="amber">May be invalid</Badge>
+            </span>
+          )}
+          {openRisks > 0 && (
+            <span data-risk-badge={openRisks}>
+              <Badge tone="amber">{riskBadgeText(openRisks)}</Badge>
             </span>
           )}
           {t.state === 'verified' && flags.length > 0 && <Badge tone="emerald">Verified</Badge>}
@@ -582,7 +592,9 @@ export const Board: React.FC<{
   onOpen: (t: Task) => void;
   onRemoveLimit?: (t: Task) => void;
   busy?: boolean;
-}> = ({ tasks, names, column, now, showMission, onColumn, onOpen, onRemoveLimit, busy }) => {
+  /** Task id → unresolved Auditor risks. */
+  openRisks?: Record<string, number>;
+}> = ({ tasks, names, column, now, showMission, onColumn, onOpen, onRemoveLimit, busy, openRisks = {} }) => {
   const grouped = useMemo(() => groupByColumn(tasks), [tasks]);
   const tabsId = useId();
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -600,7 +612,7 @@ export const Board: React.FC<{
     return items.length ? (
       <ul className="space-y-2">
         {items.map((t) => (
-          <TaskCard key={t.id} task={t} names={names} now={now} showMission={showMission} onOpen={onOpen} onRemoveLimit={onRemoveLimit} busy={busy} />
+          <TaskCard key={t.id} task={t} names={names} now={now} showMission={showMission} onOpen={onOpen} onRemoveLimit={onRemoveLimit} busy={busy} openRisks={openRisks[t.id] ?? 0} />
         ))}
       </ul>
     ) : (
@@ -1439,6 +1451,14 @@ export const TaskDetailBody: React.FC<{
   onSetBudget?: (budget: number) => void;
   /** Out of budget: set the new limit (0 = none) and put it back in Ready. */
   onContinueWithLimit?: (budget: number) => void;
+  /** Swarm Auditor: the task's audits and risks (null on a server without them). */
+  risks?: TaskRisks | null;
+  /** A live audit stalled on one of the person's approval cards. */
+  auditWaiting?: AuditWaiting | null;
+  /** False after the server said 403: Resolve and Dismiss go. */
+  canResolveRisks?: boolean;
+  onResolveRisk?: (r: Risk, resolution: RiskResolution) => void;
+  onOpenAuditCard?: (w: AuditWaiting) => void;
 }> = ({
   detail,
   names,
@@ -1464,6 +1484,11 @@ export const TaskDetailBody: React.FC<{
   onSetClass,
   onSetBudget,
   onContinueWithLimit,
+  risks = null,
+  auditWaiting: waitingCard = null,
+  canResolveRisks = true,
+  onResolveRisk,
+  onOpenAuditCard,
 }) => {
   const t = detail.task;
   const limitHit = outOfBudget(t);
@@ -1776,6 +1801,16 @@ export const TaskDetailBody: React.FC<{
         </section>
       )}
 
+      <RisksSection
+        data={risks}
+        names={names}
+        canResolve={canResolveRisks}
+        busy={busy}
+        waiting={waitingCard}
+        onResolve={onResolveRisk}
+        onOpenWaiting={onOpenAuditCard}
+      />
+
       {t.waiting_on.length > 0 && (
         <section aria-labelledby="wait-h" className="space-y-1">
           <h4 id="wait-h" className="text-xs font-semibold text-zinc-200">
@@ -2026,6 +2061,8 @@ export interface MissionBoardViewProps {
   showPerformance?: boolean;
   /** Bumps with each board refresh so Performance reloads too. */
   refreshCount?: number;
+  /** Task id → unresolved Auditor risks, for the card badges. */
+  openRisks?: Record<string, number>;
 }
 
 export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
@@ -2061,6 +2098,7 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
   onRetryGraph,
   showPerformance = false,
   refreshCount = 0,
+  openRisks,
 }) => {
   const selectId = useId();
   const visibleMissions = missions.filter((m) => m.status !== 'cancelled');
@@ -2220,6 +2258,7 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
                   onOpen={onOpenTask}
                   onRemoveLimit={onRemoveLimit}
                   busy={busyCard}
+                  openRisks={openRisks}
                 />
               )}
 
@@ -2265,6 +2304,11 @@ export const MissionBoardPage: React.FC<{
   const [graphLoading, setGraphLoading] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  // Swarm Auditor: the open task's audits, the card it waits on, and the board's badge counts.
+  const [risks, setRisks] = useState<TaskRisks | null>(null);
+  const [waitingCard, setWaitingCard] = useState<AuditWaiting | null>(null);
+  const [riskCounts, setRiskCounts] = useState<Record<string, number>>({});
+  const [canResolveRisks, setCanResolveRisks] = useState(true);
   // One key per intent: a repeat of the same press (double click, retry after a dropped answer) reuses it.
   const pendingKey = useRef<{ what: string; key: string } | null>(null);
   const inFlight = useRef(false);
@@ -2280,8 +2324,17 @@ export const MissionBoardPage: React.FC<{
 
   const failMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 
+  // Never blocks the board; a server without the Auditor answers 404 and shows no badges.
+  const loadRiskCounts = useCallback(() => {
+    missionsApi.spaceRisks().then(
+      (rs) => alive.current && setRiskCounts(openRiskCounts(rs)),
+      () => {},
+    );
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
+    loadRiskCounts();
     try {
       const [t, m] = await Promise.all([missionsApi.tasks(), missionsApi.missions()]);
       if (!alive.current) return;
@@ -2296,6 +2349,25 @@ export const MissionBoardPage: React.FC<{
       else setError(failMsg(e));
     } finally {
       if (alive.current) setLoading(false);
+    }
+  }, [loadRiskCounts]);
+
+  /** The open task's audits, and while one runs, the approval card it may be stalled on. */
+  const loadRisks = useCallback(async (id: string) => {
+    try {
+      const r = await missionsApi.risks(id);
+      if (!alive.current || openIdRef.current !== id) return;
+      setRisks(r);
+      setRiskCounts((c) => ({ ...c, [id]: r.open_risks }));
+      if (r.audits.some(auditLive)) {
+        const away = await awayApi.get().catch(() => null);
+        if (alive.current && openIdRef.current === id) setWaitingCard(away ? auditWaiting(r.audits, away.waiting) : null);
+      } else setWaitingCard(null);
+    } catch {
+      if (alive.current && openIdRef.current === id) {
+        setRisks(null);
+        setWaitingCard(null);
+      }
     }
   }, []);
 
@@ -2313,10 +2385,20 @@ export const MissionBoardPage: React.FC<{
       if (t.needs_you.some((n) => n.kind === 'workflow_change')) {
         missionsApi.workflowChanges('proposed', id).then((cs) => alive.current && openIdRef.current === id && setChanges(cs), () => {});
       } else setChanges([]);
+      loadRisks(id);
     } catch (e) {
       if (alive.current && openIdRef.current === id) setDetailError(failMsg(e));
     }
-  }, []);
+  }, [loadRisks]);
+
+  // A live audit stalls on the person's cards: look again every 15 s while the task is open.
+  const auditRunning = !!risks?.audits.some(auditLive);
+  useEffect(() => {
+    if (!openId || !auditRunning) return;
+    const id = openId;
+    const timer = window.setInterval(() => loadRisks(id), 15_000);
+    return () => window.clearInterval(timer);
+  }, [openId, auditRunning, loadRisks]);
 
   useEffect(() => {
     alive.current = true;
@@ -2360,7 +2442,10 @@ export const MissionBoardPage: React.FC<{
     };
     const refreshInsights = () => {
       if (insightsTimer.current) window.clearTimeout(insightsTimer.current);
-      insightsTimer.current = window.setTimeout(() => missionsApi.insights().then((i) => alive.current && setInsights(i), () => {}), 1500);
+      insightsTimer.current = window.setTimeout(() => {
+        missionsApi.insights().then((i) => alive.current && setInsights(i), () => {});
+        loadRiskCounts();
+      }, 1500);
     };
     const offTask = onMission('task_updated', ({ task }) => {
       if (!task || task.space_id !== spaceId) return;
@@ -2379,13 +2464,15 @@ export const MissionBoardPage: React.FC<{
       if (insightsTimer.current) window.clearTimeout(insightsTimer.current);
       if (graphTimer.current) window.clearTimeout(graphTimer.current);
     };
-  }, [spaceId, loadDetail, loadGraph]);
+  }, [spaceId, loadDetail, loadGraph, loadRiskCounts]);
 
   const openTask = (id: string) => {
     setOpenId(id);
     setDetail(null);
     setFailures([]);
     setChanges([]);
+    setRisks(null);
+    setWaitingCard(null);
     setDetailError(null);
     setDetailNotice(null);
     loadDetail(id);
@@ -2638,6 +2725,32 @@ export const MissionBoardPage: React.FC<{
       },
       autofixErrorText,
     );
+  const resolveRisk = async (r: Risk, resolution: RiskResolution) => {
+    if (!openId || inFlight.current) return;
+    const taskId = openId;
+    inFlight.current = true;
+    setBusy(true);
+    setDetailNotice(null);
+    try {
+      await missionsApi.resolveRisk(taskId, r.id, resolution);
+      if (!alive.current) return;
+      setDetailNotice({ text: riskResolvedText(resolution), error: false });
+      playSfx('click');
+    } catch (e) {
+      if (!alive.current) return;
+      if (e instanceof MissionError && e.status === 401) setNeedsToken(true);
+      if (e instanceof MissionError && e.status === 403) setCanResolveRisks(false);
+      setDetailNotice({
+        text: e instanceof MissionError && e.status === 403 ? 'Only you can close a risk.' : e instanceof MissionError && e.status === 409 ? 'This risk is already closed.' : failMsg(e),
+        error: !(e instanceof MissionError && e.status === 409),
+      });
+    } finally {
+      inFlight.current = false;
+      if (alive.current) setBusy(false);
+      if (alive.current && openIdRef.current === taskId) await loadRisks(taskId);
+    }
+  };
+
   const decideChange = (cid: string, approve: boolean) =>
     personAction(
       `change:${cid}:${approve}`,
@@ -2737,6 +2850,7 @@ export const MissionBoardPage: React.FC<{
         onRetryGraph={() => missionId && loadGraph(missionId)}
         showPerformance
         refreshCount={refreshCount}
+        openRisks={riskCounts}
       />
       {openId && (
         <TaskPanel title={detail?.task.title ?? listed?.title ?? 'Task'} onClose={closeTask}>
@@ -2762,6 +2876,19 @@ export const MissionBoardPage: React.FC<{
               onDecideChange={decideChange}
               onRestored={restored}
               onRestoreError={restoreError}
+              risks={risks}
+              auditWaiting={waitingCard}
+              canResolveRisks={canResolveRisks}
+              onResolveRisk={resolveRisk}
+              onOpenAuditCard={
+                onOpenChat
+                  ? (w) => {
+                      const t = detail.task;
+                      closeTask();
+                      onOpenChat(t, auditCardPlace(w));
+                    }
+                  : undefined
+              }
               onOpenChat={
                 onOpenChat
                   ? (t, place) => {

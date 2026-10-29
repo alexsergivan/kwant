@@ -25,7 +25,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   listed on the task until you close it. An audit never verifies, fails or moves a task, and "no risks
   raised" isn't a pass. Both turns ask before changing anything; at most 5 audits a day by default.
   `GET /api/tasks/:id/risks`, `GET /api/risks`, `POST /api/tasks/:id/audit`, and
-  `POST /api/tasks/:id/risks/:risk_id/resolve`. No screen for it yet.
+  `POST /api/tasks/:id/risks/:risk_id/resolve`.
+- **Open risks on tasks.** An audited task's panel lists each audit (who challenged, how far it got,
+  its tokens) and each risk with its evidence and the owner's answer, with Resolve and Dismiss for you.
+  Board cards show how many risks are still open. While an audit waits on one of your approval cards,
+  the task says "Audit waiting for your answer" with a link to it. Settings has the Auditor switch and
+  its daily limit.
 
 ### Fixed
 - **"Answer in chat" works when that chat is already open.** On the Mission board, "Answer in chat" and
