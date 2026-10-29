@@ -373,6 +373,32 @@ async fn an_uncertain_deadline_waits_for_the_person_and_schedules_nothing() {
     assert_eq!(v["case"]["deadline"].as_str().unwrap().get(..10), Some("2026-11-30"));
 }
 
+/// The view never shows a letter read with its case still "reading…": the reader writes the case
+/// before the status, so the view reads the status first. Polled flat out while letters are read
+/// (the flake: `case.title` "Letter (reading…)" next to `status: read`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_letter_shown_read_always_has_its_case_updated() {
+    let e = setup_with(Stub::new(Ok(water_bill_answer().to_string()))).await;
+    for n in 0..15u8 {
+        let photo = e.upload("slip.png", &png(100 + n)).await;
+        let (s, v) = e.create(&[&photo]).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+        let case_id = v["case_id"].as_str().unwrap().to_string();
+        let mut done = false;
+        for _ in 0..20_000 {
+            let (s, v) = e.person("GET", &format!("/api/documents/{case_id}"), None).await;
+            assert_eq!(s, StatusCode::OK, "{v}");
+            if v["extraction"]["status"] != "running" {
+                assert_ne!(v["case"]["title"], "Letter (reading…)", "letter {n}: {v}");
+                done = true;
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(done, "letter {n} was never read");
+    }
+}
+
 #[tokio::test]
 async fn a_text_pdf_and_a_photo_are_read_in_one_model_call() {
     let logs = Logs::global();

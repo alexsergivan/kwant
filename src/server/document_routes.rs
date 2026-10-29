@@ -89,10 +89,14 @@ pub struct DocumentView {
 }
 
 async fn document_view(state: &AppState, case_id: &str) -> Res {
+    // The extraction first: the reader writes the case and reminders before the extraction's
+    // status, so a view that sees the letter read also sees the case it updated. Read the other
+    // way round, a poll landing between those writes got "read" with the case still "reading…"
+    let extraction = state.db.document_extraction(case_id).await.map_err(db_error)?;
     let Some(c) = state.db.zombie_case(case_id).await.map_err(db_error)?.filter(|c| !c.redacted && c.source == "document") else {
         return Err(error(StatusCode::NOT_FOUND, "no such letter"));
     };
-    let extraction = match state.db.document_extraction(case_id).await.map_err(db_error)? {
+    let extraction = match extraction {
         Some(e) => Some(extraction_view(state, e).await),
         None => None,
     };

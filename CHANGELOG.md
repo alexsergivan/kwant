@@ -37,6 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **A restart no longer leaves an audit running.** An audit cut off mid-turn by a restart ends
   `interrupted` and says so in the task's history; one still waiting to start runs after the restart
   (or is skipped if the auditor was turned off).
+- **A read letter always shows its updated case.** Opening a document right as it finished reading
+  could show the case still titled "Letter (reading…)".
 - **"Answer in chat" works when that chat is already open.** On the Mission board, "Answer in chat" and
   "Open the chat it came from" now close the board and show the chat even when it's the one already
   selected underneath; before, nothing visible happened.
