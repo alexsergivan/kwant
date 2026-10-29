@@ -3204,7 +3204,7 @@ pub async fn resolve_approval(
     State(state): State<AppState>,
     Path(ticket_id): Path<String>,
     Json(payload): Json<ResolveApprovalPayload>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Response, StatusCode> {
     let decision = match payload.decision.as_str() {
         "allow_once" => ApprovalDecision::AllowOnce,
         "always_allow" => ApprovalDecision::AlwaysAllowSession,
@@ -3221,15 +3221,27 @@ pub async fn resolve_approval(
     // keeps its status and its tool never runs
     let resolved = state.broker.resolve(&ticket_id, decision.clone()).await;
     if !resolved {
-        // A card whose turn stopped waiting: a late answer, and Allow resumes the work
-        return match super::mcp_runtime::resume_late_approval(&state, &ticket_id, decision, status_str).await {
+        // A card whose turn stopped waiting (or that kwant kept over a restart): a late answer,
+        // and Allow resumes the work
+        let reply = super::mcp_runtime::resume_late_approval(&state, &ticket_id, decision, status_str).await;
+        super::missions::listener::refresh_needs_you(&state).await;
+        return match reply {
             Some(mut reply) => {
                 reply["ticket_id"] = json!(ticket_id);
                 reply["resolved"] = json!(true);
                 reply["status"] = json!(status_str);
-                Ok(Json(reply))
+                Ok(Json(reply).into_response())
             }
-            None => Err(StatusCode::CONFLICT),
+            None => Ok((
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "ticket_id": ticket_id,
+                    "resolved": false,
+                    "status": "expired",
+                    "error": "This card expired: the bot is no longer waiting for it. Ask the bot again.",
+                })),
+            )
+                .into_response()),
         };
     }
     let _ = state.db.update_approval_status(&ticket_id, status_str).await;
@@ -3240,7 +3252,8 @@ pub async fn resolve_approval(
         "ticket_id": ticket_id,
         "resolved": resolved,
         "status": status_str
-    })))
+    }))
+    .into_response())
 }
 
 #[derive(Serialize)]

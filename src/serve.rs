@@ -50,7 +50,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     // Saved passwords left in a bot's folder by older versions move into the vault
     crate::server::passwords::migrate_all(&state).await;
     crate::server::passwords::warn_if_exposed(&state).await;
-    // Before anything can start a turn: say which replies the last run cut off
+    // Before anything can start a turn: cards the last run waited on stay answerable, and the
+    // chats say which replies it cut off
+    crate::server::mcp_runtime::keep_cards_after_restart(&state).await;
     crate::server::routes::interrupt_running_turns(&state).await;
     crate::server::scheduler::spawn_background(state.clone(), cancel.clone());
     crate::server::engine_routes::spawn_startup_check(state.clone());

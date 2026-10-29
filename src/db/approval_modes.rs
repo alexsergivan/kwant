@@ -209,6 +209,36 @@ impl Database {
         Ok(done.rows_affected() == 1)
     }
 
+    /// Records the chat a pending card is in (`{"channel_id"|"thread_id"|"direct_kwant_id": …}`),
+    /// the same one [`Self::park_approval`] keeps.
+    pub async fn set_approval_chat(&self, id: &str, chat: &serde_json::Value) -> Result<(), DbError> {
+        sqlx::query("UPDATE approvals SET resume = ? WHERE id = ? AND status = 'pending'")
+            .bind(chat.to_string())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Cards left `pending` by an earlier run of kwant: nothing waits on them any more, so they
+    /// become `waiting` (answerable, a late Allow resumes the work). A card stored before its chat
+    /// was recorded gets the chat of the turn that asked, else the bot's direct chat. Returns how
+    /// many. Only for startup, while no turn is running.
+    pub async fn park_orphaned_approvals(&self) -> Result<u64, DbError> {
+        let done = sqlx::query(
+            "UPDATE approvals SET status = 'waiting', resume = COALESCE(resume, \
+                (SELECT CASE WHEN r.thread_id IS NOT NULL THEN json_object('thread_id', r.thread_id) \
+                             WHEN r.channel_id IS NOT NULL THEN json_object('channel_id', r.channel_id) \
+                             ELSE json_object('direct_kwant_id', COALESCE(r.direct_kwant_id, approvals.kwant_id)) END \
+                 FROM running_turns r WHERE r.turn_id = approvals.turn_id), \
+                json_object('direct_kwant_id', kwant_id)) \
+             WHERE status = 'pending'",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected())
+    }
+
     /// Answers a `waiting` card once: sets `status` and returns the ticket with its chat. `None`
     /// when it isn't waiting (answered, or never parked) or is older than [`WAITING_APPROVAL_HOURS`],
     /// which is then marked `expired`. Two answers at once: only one gets the ticket.

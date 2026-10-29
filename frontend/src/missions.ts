@@ -54,6 +54,9 @@ export interface NeedsYouItem {
   kind: 'question' | 'approval' | 'human_step' | 'check_approval' | 'may_be_invalid' | 'autofix_suggested' | 'fix_needed' | 'workflow_change' | 'engine_cant_sandbox';
   id: string;
   text: string;
+  /** question, approval, human_step: the chat the card is in (the owner's hand-off thread, a
+   * channel or a direct chat), which may not be the chat the task came from. */
+  chat?: { channel_id: string | null; kwant_id: string | null; thread_id: string | null };
 }
 
 export interface Claim {
@@ -1583,6 +1586,15 @@ export const capabilitiesApi = {
 };
 
 /** Where a task came from in the app: a channel, a bot's thread, or a bot's direct chat. */
+/** Where to answer a Needs-you card: the chat the card is in, else the chat the task came from. */
+export function answerChat(t: Pick<Task, 'channel_id' | 'direct_kwant_id' | 'thread_id'>, n: Pick<NeedsYouItem, 'chat'>): ChatPlace | null {
+  const c = n.chat;
+  if (c && (c.channel_id || c.kwant_id)) return { channelId: c.channel_id, kwantId: c.channel_id ? null : c.kwant_id, threadId: c.thread_id };
+  return sourceChat(t);
+}
+
+export type ChatPlace = { channelId: string | null; kwantId: string | null; threadId: string | null };
+
 export function sourceChat(t: Pick<Task, 'channel_id' | 'direct_kwant_id' | 'thread_id'>): { channelId: string | null; kwantId: string | null; threadId: string | null } | null {
   if (t.channel_id) return { channelId: t.channel_id, kwantId: null, threadId: t.thread_id };
   if (t.direct_kwant_id) return { channelId: null, kwantId: t.direct_kwant_id, threadId: t.thread_id };

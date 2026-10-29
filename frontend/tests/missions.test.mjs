@@ -398,6 +398,18 @@ test('sourceChat points at the channel, thread or direct chat', () => {
   assert.equal(m.sourceChat(task({ channel_id: null })), null);
 });
 
+test("answerChat opens the chat the card is in, not the chat the task came from", () => {
+  const handOff = { kind: 'question', id: 'q1', text: 'Which colour?', chat: { channel_id: null, kwant_id: 'k_lin', thread_id: 'th9' } };
+  assert.deepEqual(m.answerChat(task(), handOff), { channelId: null, kwantId: 'k_lin', threadId: 'th9' });
+  const inChannel = { kind: 'approval', id: 'a1', text: 'Bash', chat: { channel_id: 'c2', kwant_id: null, thread_id: null } };
+  assert.deepEqual(m.answerChat(task(), inChannel), { channelId: 'c2', kwantId: null, threadId: null });
+  // A delegation task has no chat of its own; its card's chat still answers it
+  assert.deepEqual(m.answerChat(task({ channel_id: null }), handOff), { channelId: null, kwantId: 'k_lin', threadId: 'th9' });
+  // An older server without the card's chat: the task's own chat, as before
+  assert.deepEqual(m.answerChat(task(), { kind: 'question', id: 'q2', text: '?' }), { channelId: 'c1', kwantId: null, threadId: null });
+  assert.equal(m.answerChat(task({ channel_id: null }), { kind: 'question', id: 'q2', text: '?' }), null);
+});
+
 test('insights strip: verified this week, false successes, blocked', () => {
   const html = ui.insights({ insights: insightsRow });
   assert.match(html, /Verified this week/);

@@ -107,6 +107,8 @@ import {
   priorityLabel,
   safeHttps,
   sourceChat,
+  answerChat,
+  type ChatPlace,
   sourceLabel,
   stateLabel,
   untilText,
@@ -1389,7 +1391,7 @@ export const TaskDetailBody: React.FC<{
   notice?: { text: string; error: boolean } | null;
   onAction: (a: TaskAction, reason?: string) => void;
   onApproveCheck: (c: Check) => void;
-  onOpenChat?: (t: Task) => void;
+  onOpenChat?: (t: Task, place?: ChatPlace | null) => void;
   onOpenTask?: (id: string) => void;
   onResolveFlag?: (f: OpenFlag, choice: ResolveChoice) => void;
   /** Copy a verified task to redo it, with the reason typed. */
@@ -1728,8 +1730,8 @@ export const TaskDetailBody: React.FC<{
                       </button>
                     ) : null;
                   })()
-                ) : chat && onOpenChat && (
-                  <button type="button" onClick={() => onOpenChat(t)} className="px-2 py-1 rounded border border-amber-500/40 hover:bg-amber-500/10 min-h-[32px]">
+                ) : onOpenChat && answerChat(t, n) && (
+                  <button type="button" onClick={() => onOpenChat(t, answerChat(t, n))} className="px-2 py-1 rounded border border-amber-500/40 hover:bg-amber-500/10 min-h-[32px]" data-answer-in-chat>
                     Answer in chat
                   </button>
                 )}
@@ -2187,7 +2189,7 @@ export const MissionBoardPage: React.FC<{
   spaceId: string;
   names: Record<string, string>;
   onBack?: () => void;
-  onOpenChat?: (t: Task) => void;
+  onOpenChat?: (t: Task, place?: ChatPlace | null) => void;
 }> = ({ spaceId, names, onBack, onOpenChat }) => {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [missions, setMissions] = useState<Mission[]>([]);
@@ -2708,9 +2710,9 @@ export const MissionBoardPage: React.FC<{
               onRestoreError={restoreError}
               onOpenChat={
                 onOpenChat
-                  ? (t) => {
+                  ? (t, place) => {
                       closeTask();
-                      onOpenChat(t);
+                      onOpenChat(t, place);
                     }
                   : undefined
               }

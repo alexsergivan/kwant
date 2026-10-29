@@ -2859,8 +2859,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       spaceId={space.id}
       names={missionNames}
       onBack={isPhone ? () => { setShowMissions(false); setPhoneView('list'); } : undefined}
-      onOpenChat={(t) => {
-        const c = sourceChat(t);
+      onOpenChat={(t, place) => {
+        const c = place ?? sourceChat(t);
         if (!c) return;
         if (c.kwantId && c.threadId) return openThread(c.kwantId, c.threadId);
         if (!openTarget({ channel_id: c.channelId, kwant_id: c.kwantId })) pushToast('That chat no longer exists.');
