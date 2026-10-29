@@ -173,6 +173,8 @@ POST   /api/tasks          {title, acceptance?, mission_id?, owner_kwant_id?, pr
                             checks?, source_kind?: "person"|"zombie", source_id?}  -> Task
 GET    /api/tasks/:id                          -> TaskDetail
 PATCH  /api/tasks/:id      {title?, acceptance?, priority?, owner_kwant_id?, budget_tokens?}
+                           (`owner_kwant_id` on POST and PATCH is who should do it: it is stored as
+                            `suggested_kwant_id`; the task's `owner_kwant_id` stays empty until that bot claims it)
 POST   /api/tasks/:id/verify  {note?}          -> Task  (review -> verified, a `person` check)
 POST   /api/tasks/:id/reject  {reason}         -> Task  (review -> ready)
 POST   /api/tasks/:id/block   {reason}         -> Task
@@ -709,10 +711,16 @@ challenges in the last 7 days, then name and id.
 person; payments ask in every mode, D8), each capped at 20 minutes:
 
 1. The challenger calls `audit_challenge {audit_id, risks: [{risk, evidence, evidence_ids?}]}` once:
-   at most 5 risks, each with evidence (≤1000 chars); `evidence_ids` must be the task's. An empty list
+   at most 5 risks, each with evidence (≤1000 chars); `evidence_ids` must be ids of the task's evidence. An empty list
    ends the audit `done` with "no risks raised". No call → the audit ends `failed`.
 2. With risks, the owner calls `audit_rebut {audit_id, answers: [{risk_id, stance, answer, evidence?}]}`
    once; `disputed` needs evidence. Unanswered risks stay `open`.
+
+**One card per call.** Each audit call asks the person once. If the person allows it and the tool then
+refuses its input (an evidence id that isn't the task's, a risk too long), the same bot's corrected
+call for that audit stage goes through without a new card, at most twice per stage; the tool checks it
+again as usual. The task's own id in `evidence_ids` is dropped rather than refused. Refused audit calls
+are logged with their reason.
 
 While an audit of a task is `queued`, `challenge` or `rebuttal`, its challenger and owner can't use
 `task_claim`, `task_update`, `task_attach_evidence`, `task_request_check` or `task_review` on it.
