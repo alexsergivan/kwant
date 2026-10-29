@@ -1438,11 +1438,13 @@ async fn a_teammates_result_that_mentions_another_teammate_starts_its_task() {
     assert!(relayed.task.contains("Social mentioned you in its result"), "{}", relayed.task);
     assert!(relayed.title.contains("answer relayone"), "{}", relayed.title);
     wait_for("Growth's result", || async { delegation_status(&env, &relayed.id).await == "completed" }).await;
-    wait_for("the lead's one follow-up", || async { !prompts_with("Growth got this task because Social's result").is_empty() }).await;
+    // Prompts are shared by every test in this binary, and the ping-pong test below relays from
+    // Social to Growth too: only this chain's ("relayone") follow-ups count
+    let resumes = || prompts_with("Growth got this task because Social's result").into_iter().filter(|p| p.contains("relayone")).collect::<Vec<_>>();
+    wait_for("the lead's one follow-up", || async { !resumes().is_empty() }).await;
     tokio::time::sleep(Duration::from_millis(1000)).await;
-    let resumes = prompts_with("Growth got this task because Social's result");
-    assert_eq!(resumes.len(), 1, "the lead is resumed once with both results");
-    assert!(resumes[0].contains("relayone"), "{}", resumes[0]);
+    let resumes = resumes();
+    assert_eq!(resumes.len(), 1, "the lead is resumed once with both results: {resumes:#?}");
     assert!(refusals(&channel_messages(&env, &channel).await).is_empty());
 }
 
