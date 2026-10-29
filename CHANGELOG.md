@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- **"Answer in chat" works when that chat is already open.** On the Mission board, "Answer in chat" and
+  "Open the chat it came from" now close the board and show the chat even when it's the one already
+  selected underneath; before, nothing visible happened.
+- **An expired card on the Away page is a plain notice.** Answering a card the bot stopped waiting for
+  shows the server's "This card expired: … Ask the bot again." as a neutral notice instead of an error.
+
 ## [Mac 0.3.0] - 2026-10-29
 
 ### Added

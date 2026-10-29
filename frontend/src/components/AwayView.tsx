@@ -9,9 +9,10 @@ import {
   AwayError,
   AwayItem,
   AwayResponse,
+  AwayNotice,
   AwaySection,
   Tone,
-  actionErrorText,
+  actionFailureNotice,
   awayApi,
   isAwayEmpty,
   itemLabel,
@@ -39,7 +40,7 @@ export interface AwayViewProps {
   loading: boolean;
   error: string | null;
   /** Outcome of the last one-tap action (e.g. "This request expired"); the item may be gone by now. */
-  notice?: { text: string; error: boolean } | null;
+  notice?: AwayNotice | null;
   /** Item id being acted on. */
   busy?: string | null;
   now?: number;
@@ -165,7 +166,11 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
             {notice && (
               <p
                 className={`px-3 py-2 rounded-lg border text-xs ${
-                  notice.error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                  notice.error
+                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+                    : notice.info
+                      ? 'border-slate-500/30 bg-slate-500/10 text-slate-200'
+                      : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
                 }`}
               >
                 {notice.text}
@@ -227,7 +232,7 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const [notice, setNotice] = useState<AwayNotice | null>(null);
   // Refreshes keep the first load's window, so marking it seen doesn't empty the page.
   const sinceRef = useRef<string | null>(since);
   const onCountsRef = useRef(onCounts);
@@ -281,8 +286,7 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
       setNotice({ text: `${done} “${item.title}”`, error: false });
     } catch (err) {
       const status = err instanceof AwayError ? err.status : 0;
-      const text = actionErrorText(status, `Couldn't send it: ${err instanceof Error ? err.message : 'Something went wrong.'}`);
-      setNotice({ text: `${text}: “${item.title}”`, error: true });
+      setNotice(actionFailureNotice(status, err instanceof Error ? err.message : 'Something went wrong.', item.title));
     } finally {
       setBusy(null);
     }
