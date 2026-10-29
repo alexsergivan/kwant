@@ -134,14 +134,27 @@ impl Database {
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
-        // Audits a restart cut off never finish: say so instead of leaving them running
-        sqlx::query(
-            "UPDATE task_audits SET status = 'interrupted', reason = 'kwant restarted during the audit', finished_at = ? \
-             WHERE status IN ('queued', 'challenge', 'rebuttal')",
-        )
-        .bind(Utc::now())
-        .execute(&self.pool)
-        .await?;
+        // A restart cuts off the turn of an audit in a stage: it never finishes, so say so (on the
+        // task too) instead of leaving it running. Its risks stay listed. Queued audits had no
+        // turn yet: the server runs them again (`auditor::resume_after_restart`).
+        let cut: Vec<(String, String, String)> =
+            sqlx::query_as("SELECT id, task_id, status FROM task_audits WHERE status IN ('challenge', 'rebuttal')").fetch_all(&self.pool).await?;
+        for (id, task_id, stage) in cut {
+            let moved = sqlx::query(
+                "UPDATE task_audits SET status = 'interrupted', reason = 'kwant restarted during the audit', finished_at = ? WHERE id = ? AND status = ?",
+            )
+            .bind(Utc::now())
+            .bind(&id)
+            .bind(&stage)
+            .execute(&self.pool)
+            .await?;
+            if moved.rows_affected() == 1 {
+                let detail = serde_json::json!({"audit_id": id, "status": "interrupted", "stage": stage, "reason": "kwant restarted during the audit"});
+                if let Err(e) = self.log_task_event(&task_id, "audit_done", "kwant", &detail).await {
+                    tracing::warn!(task_id, error = %e, "interrupted audit not logged");
+                }
+            }
+        }
         Ok(())
     }
 
@@ -180,6 +193,11 @@ impl Database {
 
     pub async fn audits_of(&self, task_id: &str) -> Result<Vec<Audit>, DbError> {
         Ok(sqlx::query_as::<_, Audit>("SELECT * FROM task_audits WHERE task_id = ? ORDER BY created_at, rowid").bind(task_id).fetch_all(&self.pool).await?)
+    }
+
+    /// Audits in `status`, oldest first.
+    pub async fn audits_in(&self, status: &str) -> Result<Vec<Audit>, DbError> {
+        Ok(sqlx::query_as::<_, Audit>("SELECT * FROM task_audits WHERE status = ? ORDER BY created_at, rowid").bind(status).fetch_all(&self.pool).await?)
     }
 
     pub async fn audit_of_attempt(&self, task_id: &str, attempt: i64) -> Result<Option<Audit>, DbError> {
@@ -384,13 +402,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_restart_marks_running_audits_interrupted() {
+    async fn a_restart_marks_audits_in_a_stage_interrupted_and_keeps_queued_ones() {
         let (db, _t) = db().await;
         let a = db.create_audit("t1", "spc_default", 0, "manual", "a", "b").await.unwrap().unwrap();
         assert!(db.move_audit(&a.id, "queued", "challenge", None).await.unwrap());
+        let q = db.create_audit("t2", "spc_default", 0, "manual", "a", "b").await.unwrap().unwrap();
         db.migrate_auditor().await.unwrap();
         let a = db.get_audit(&a.id).await.unwrap().unwrap();
         assert_eq!((a.status.as_str(), a.finished_at.is_some()), ("interrupted", true));
+        assert_eq!(db.get_audit(&q.id).await.unwrap().unwrap().status, "queued");
     }
 
     #[tokio::test]

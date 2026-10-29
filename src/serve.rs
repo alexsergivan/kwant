@@ -54,6 +54,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     // chats say which replies it cut off
     crate::server::mcp_runtime::keep_cards_after_restart(&state).await;
     crate::server::routes::interrupt_running_turns(&state).await;
+    // Audits that were waiting their turn when kwant stopped run now (the cut-off ones ended)
+    crate::server::missions::auditor::resume_after_restart(&state).await;
     crate::server::scheduler::spawn_background(state.clone(), cancel.clone());
     crate::server::engine_routes::spawn_startup_check(state.clone());
     crate::server::parallel_routes::spawn_startup_sweep(state.clone());

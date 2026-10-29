@@ -27,7 +27,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `GET /api/tasks/:id/risks`, `GET /api/risks`, `POST /api/tasks/:id/audit`, and
   `POST /api/tasks/:id/risks/:risk_id/resolve`. No screen for it yet.
 
+### Changed
+- **Audits run on the fast model by default.** The Swarm Auditor's challenge and rebuttal turns now use
+  the engine's cheap, fast model (for Claude, Haiku at medium effort) instead of the bot's default. The
+  new `auditor_model` setting picks `fast` (default), `balanced`, `deep`, or `bot` for the bot's usual
+  model.
+
 ### Fixed
+- **A restart no longer leaves an audit running.** An audit cut off mid-turn by a restart ends
+  `interrupted` and says so in the task's history; one still waiting to start runs after the restart
+  (or is skipped if the auditor was turned off).
 - **"Answer in chat" works when that chat is already open.** On the Mission board, "Answer in chat" and
   "Open the chat it came from" now close the board and show the chat even when it's the one already
   selected underneath; before, nothing visible happened.

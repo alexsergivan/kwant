@@ -872,3 +872,42 @@ fn short_follow_up_with_attachment_does_not_get_the_deep_tier() {
     let long = "please go through every line of this and compare it with last month and tell me where we are off ".repeat(2);
     assert_eq!(cap(&format!("{long}{files}"), "high"), None);
 }
+
+#[test]
+fn a_set_tier_picks_the_engines_model_of_that_tier() {
+    use kwnt::drivers::engines::{choose_model, claude_cli_models, Tier};
+    use kwnt::router::{apply_preferred_model, with_tier, RouteDecision};
+    let laya = || RouteDecision {
+        selected_model: "claude".into(),
+        effort_level: "high".into(),
+        confidence: 0.7,
+        provider_endpoint: None,
+        is_fallback: false,
+        tier: None,
+        model: None,
+        reasoning: "laya".into(),
+    };
+    let claude = claude_cli_models();
+    let model = |r: &RouteDecision| choose_model(&claude, r.model.as_deref(), r.tier.unwrap()).map(|c| c.id);
+
+    // Laya's high effort would run Opus; the fast tier runs Haiku at medium effort
+    let usual = apply_preferred_model(laya(), "auto");
+    assert_eq!(model(&usual).as_deref(), Some("opus"));
+    let fast = with_tier(apply_preferred_model(laya(), "auto"), Tier::Fast);
+    assert_eq!((model(&fast).as_deref(), fast.effort_level.as_str()), (Some("haiku"), "medium"));
+
+    // A pinned model of a known other tier gives way; one of the same tier stays
+    let pinned = with_tier(apply_preferred_model(laya(), "claude/opus"), Tier::Fast);
+    assert_eq!((pinned.selected_model.as_str(), model(&pinned).as_deref()), ("claude", Some("haiku")));
+    let same = with_tier(apply_preferred_model(laya(), "claude/haiku"), Tier::Fast);
+    assert_eq!(same.model.as_deref(), Some("haiku"));
+
+    // A model whose tier isn't known (a custom or local one) stays the bot's own
+    let custom = with_tier(apply_preferred_model(laya(), "custom/gpt-4.1"), Tier::Fast);
+    assert_eq!(custom.model.as_deref(), Some("gpt-4.1"));
+
+    // The deep tier keeps the effort Laya asked for; low effort is never raised
+    assert_eq!(with_tier(apply_preferred_model(laya(), "auto"), Tier::Deep).effort_level, "high");
+    let low = RouteDecision { effort_level: "low".into(), ..laya() };
+    assert_eq!(with_tier(apply_preferred_model(low, "auto"), Tier::Fast).effort_level, "low");
+}

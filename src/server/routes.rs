@@ -1495,6 +1495,8 @@ pub(super) struct TurnOpts {
     pub(super) quiet_failure: bool,
     /// Shown as the turn's `purpose` in `GET /api/turns` (`turns[]`).
     pub(super) purpose: Option<String>,
+    /// The model tier this turn runs on whatever Laya's effort says (see [`crate::router::with_tier`]).
+    pub(super) tier: Option<crate::drivers::engines::Tier>,
 }
 
 impl TurnOpts {
@@ -1875,6 +1877,10 @@ async fn run_kwant_turn_inner(
             }
         }
         let route = crate::router::apply_preferred_model(route, &target_kwant.preferred_model);
+        let route = match opts.tier {
+            Some(t) => crate::router::with_tier(route, t),
+            None => route,
+        };
 
         let target_model = route.selected_model.clone();
         // Flight School (D7): a task below act never runs on an engine kwant can't gate
@@ -3322,6 +3328,8 @@ pub struct SettingsResponse {
     pub auditor: String,
     /// Audits started per UTC day (1–50).
     pub auditor_daily_cap: i64,
+    /// The model tier of audit turns: `fast` (default), `balanced`, `deep` or `bot` (its usual one).
+    pub auditor_model: String,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3367,6 +3375,7 @@ pub struct SaveSettingsPayload {
     pub flight_school_new_bot_tier: Option<String>,
     pub auditor: Option<String>,
     pub auditor_daily_cap: Option<i64>,
+    pub auditor_model: Option<String>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3421,6 +3430,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         flight_school_new_bot_tier: super::missions::flight_school::new_bot_tier(&state.db).await.into(),
         auditor: if super::missions::auditor::enabled(&state).await { "on" } else { "off" }.into(),
         auditor_daily_cap: super::missions::auditor::daily_cap(&state).await,
+        auditor_model: super::missions::auditor::model_mode(&state).await.into(),
     }))
 }
 
@@ -3479,7 +3489,7 @@ pub async fn save_settings(
     if let Some(e) = super::missions::flight_school::settings_error(payload.flight_school_new_bot_tier.as_deref()) {
         return bad(e);
     }
-    if let Some(e) = super::missions::auditor::settings_error(payload.auditor.as_deref(), payload.auditor_daily_cap) {
+    if let Some(e) = super::missions::auditor::settings_error(payload.auditor.as_deref(), payload.auditor_daily_cap, payload.auditor_model.as_deref()) {
         return bad(e);
     }
     if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
@@ -3609,6 +3619,9 @@ pub async fn save_settings(
     }
     if let Some(n) = payload.auditor_daily_cap {
         let _ = state.db.set_setting(super::missions::auditor::CAP_SETTING, &n.to_string()).await;
+    }
+    if let Some(m) = &payload.auditor_model {
+        let _ = state.db.set_setting(super::missions::auditor::MODEL_SETTING, m).await;
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;
