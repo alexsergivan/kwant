@@ -181,6 +181,19 @@ impl TurnRegistry {
         m.seen = m.seen.max(fresh);
     }
 
+    /// Fresh tokens `kwant_id`'s running turns with `purpose` reported so far (a Skill Foundry
+    /// replay's cap watches this mid-turn).
+    pub fn usage_of(&self, kwant_id: &str, purpose: &str) -> u64 {
+        let inner = self.lock();
+        inner
+            .turns
+            .values()
+            .filter(|t| t.kwant_id == kwant_id && t.purpose.as_deref() == Some(purpose))
+            .filter_map(|t| inner.meters.get(&t.turn_id))
+            .map(|m| m.seen)
+            .sum()
+    }
+
     /// Fresh tokens of the turn not booked yet, now marked booked: what a task the bot hands in
     /// mid-turn pays for at that moment.
     pub fn book_usage(&self, turn_id: &str) -> u64 {
@@ -395,6 +408,29 @@ impl Limiter {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn usage_of_sums_a_bots_running_turns_with_a_purpose() {
+        let reg = super::TurnRegistry::default();
+        let turn = |id: &str, kwant: &str, purpose: Option<&str>| super::ActiveTurn {
+            turn_id: id.into(),
+            kwant_id: kwant.into(),
+            context_id: "c".into(),
+            thread_id: None,
+            state: "running".into(),
+            since: chrono::Utc::now(),
+            purpose: purpose.map(String::from),
+        };
+        reg.set_turn(turn("a", "k", Some("foundry")));
+        reg.set_turn(turn("b", "k", None));
+        reg.set_turn(turn("c", "other", Some("foundry")));
+        for (id, n) in [("a", 70), ("b", 1000), ("c", 1000)] {
+            reg.saw_usage(id, n);
+        }
+        assert_eq!(reg.usage_of("k", "foundry"), 70);
+        reg.end_turn("a");
+        assert_eq!(reg.usage_of("k", "foundry"), 0);
+    }
+
     #[test]
     fn usage_booked_mid_turn_is_counted_once() {
         let reg = TurnRegistry::default();

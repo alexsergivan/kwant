@@ -369,6 +369,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "kwants", _, "memories", ..] => *method != Method::GET && *method != Method::HEAD,
         // Skills go into prompts. A skill made or switched on here is live at once, and approving
         // or rejecting one is the person's call: bots only propose (`skill_propose`)
+        // Skill Foundry clusters and drafts: the person's review queue, read too
+        ["", "api", "skills", "foundry", ..] | ["", "api", "skills", _, "foundry"] => true,
         ["", "api", "skills", ..] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "bot-actions" | "imports", _, "undo"] => *method == Method::POST,
         _ => false,
@@ -859,6 +861,12 @@ mod tests {
         assert!(person_only(&get, "/api/passwords/store"));
         assert!(person_only(&post, "/api/messages/m1/decisions/0/change"));
         assert!(person_only(&post, "/api/work-ahead/run"));
+        assert!(person_only(&get, "/api/skills/foundry"));
+        assert!(person_only(&post, "/api/skills/foundry/k1~release/draft"));
+        assert!(person_only(&get, "/api/skills/s1/foundry"));
+        assert!(person_only(&post, "/api/skills/s1/rollback"));
+        assert!(person_only(&post, "/api/skills/s1/replay"));
+        assert!(!person_only(&get, "/api/skills/s1"));
         assert!(person_only(&post, "/api/missions"));
         assert!(person_only(&post, "/api/missions/m1/approve"));
         assert!(person_only(&post, "/api/missions/m1/run"));

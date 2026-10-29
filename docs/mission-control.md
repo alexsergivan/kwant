@@ -745,3 +745,80 @@ off. A driver that stops early (a panic) ends its audit `failed`.
   challenge.
 - `POST /api/tasks/:id/risks/:risk_id/resolve {resolution: "resolved" | "dismissed", note?}` (person
   only); 409 when already closed.
+
+## 19. Skill Foundry (Phase D3)
+
+When a bot has finished the same class of work well several times, kwant asks that bot to write the
+procedure down as a skill draft, replays the draft as a dry run on a few of those tasks, and shows both
+to the person, who enables, edits or rejects it. **A Foundry skill is text only, like every skill**: the
+tools it lists are shown, never granted, and enabling it changes no tool, server or approval. Design
+note: `phase-d/skill-foundry.md`.
+
+**Settings** (app-wide): `skill_foundry` = `off` (default) | `on`; `skill_foundry_model` = `balanced`
+(default) | `fast` | `deep` | `bot` (as `auditor_model`); `skill_foundry_daily_drafts` 1–20 (default
+2) draft runs started per UTC day; `skill_foundry_replays` 0–5 (default 3) examples each draft is
+replayed on (0: no replays); `skill_foundry_replay_tokens` 5,000–500,000 (default 60,000) fresh tokens
+one replay turn may use.
+
+**Clusters** (the miner, hourly while on): one space, one bot, one `task_class` other than `general`,
+from Performance Market rows of the last 60 days, with ≥ 3 ended `verified` (Verified Outcomes: only a
+check that counts and isn't the owner's verifies) and ≥ 70% of the class's rows verified. A cluster gets
+no draft while one waits for review (`has_draft`), while the bot has a live Foundry skill for the class
+(`has_skill`; the person can still ask for a new version), for 30 days after one was rejected
+(`rejected`), or for 7 days after its last draft run (`cooling_off`).
+
+**Draft.** One hidden turn of the owner bot, `always_ask`, capped at 20 minutes, with up to 5 verified
+and 2 failed tasks of the cluster (title, acceptance, checks with secrets redacted, evidence, the
+side-effect ledger's actions). The bot calls `skill_draft {run_id, name, description, body, inputs?,
+checks?, examples, tools?}` once; the tool is listed only while that bot has a draft run open, and needs
+no card (it only stores a pending skill). Server-side: name, description and body as `skill_propose`;
+≤ 8 inputs `{name, description, example?}` (≤ 300 chars each); ≤ 5 checks that pass the task-check
+validator (no `person` checks); 2–5 distinct examples, each a verified task of the cluster; ≤ 30 tools,
+each a built-in tool, one of kwant's own tools the bot is offered, or `mcp__<server>__<tool>` of one of
+the bot's active servers (only the server is checked: kwant can't list a server's tools without starting
+it). The draft is a `pending` skill (`source = agent`) with a `skill_meta` row (class, inputs, checks,
+examples, tools, replay report, `version`, `lineage_id`). When the bot has a live skill for the class,
+the draft is its next version (`replaces_id`). A turn without a draft ends the run `failed`.
+
+**Replay** (after each draft, or `POST /api/skills/:id/replay`): for up to `skill_foundry_replays`
+examples, one hidden turn of the owner with the draft in its prompt, in a private scratch folder
+(`<data>/foundry/<run>/<n>`, 0700) holding a copy of the task's first checkpoint (empty without one).
+The turn's approvals are a dry run: in-folder file tools and web reads run, kwant's read-only tools run,
+and every other call that reaches the approver (Bash, files outside the folder, other servers' tools,
+kwant tools that change something, the browser) is refused with "dry run" and recorded as what the bot
+would have done; subagents are refused. Only Claude's permission hook holds every call to this, so on
+another engine the replay is refused before any model runs. Each turn is capped at 15 minutes and is
+stopped once it reports more fresh tokens than `skill_foundry_replay_tokens`. After the turn, the
+draft's file checks run on the scratch folder; `command` and `http` checks are `not_replayable`, never
+passed. The scratch folder is then deleted. Per example the report has the verdict (`passed`: every
+replayable check passed; `failed`; `not_checked`: nothing replayable; `error`: the turn didn't run), the
+checks, the "would have…" lines next to what the original task did, tokens and seconds. A replay is
+evidence, not a gate, and never changes the draft's status.
+
+**Versions and rollback.** Enabling, editing and rejecting are the usual skill routes. `POST
+/api/skills/:id/rollback` (person only; works with the Foundry off) makes a `superseded` version live
+again and the lineage's live version `superseded`, in one transaction; 409 for a version that isn't
+superseded or whose name clashes with another live skill, 404 for a skill without Foundry history.
+
+**Ledger.** Skill events: `skill_drafted`, `skill_replayed`, `skill_rolled_back`. Task events:
+`skill_drafted_from` on each example.
+
+**Restarts.** Runs (`foundry_runs`: `queued | drafting | replaying | done | failed | interrupted`) are
+never left running: at startup a `drafting` or `replaying` one becomes `interrupted`; a `queued` one
+runs now, or fails ("the Skill Foundry was turned off") when the Foundry is off. A driver that stops
+early ends its run `failed`. One Foundry turn runs at a time server-wide.
+
+**API** (all person only)
+
+- `GET /api/skills/foundry?space=` → `{enabled, settings, drafts_today, clusters: [{id, kwant_id,
+  task_class, verified, total, block}], skills: [skill + foundry meta], runs}`.
+- `POST /api/skills/foundry/:cluster/draft` (`:cluster` = `<bot id>~<class>`) → 202 with the run; 409
+  when off, at the cap, a draft waits for review or one is being written; 404 when the cluster doesn't
+  pass the thresholds.
+- `POST /api/skills/:id/replay` → 202; 409 when off, replays are 0, the draft isn't pending or a replay
+  of it runs.
+- `POST /api/skills/:id/rollback` → the skill.
+- `GET /api/skills/:id/foundry` → `{skill, versions, events, runs}`.
+
+Not built yet: recording `skill_id@version` on a task's claim, and warning when a bot lost a listed
+tool.
