@@ -1497,6 +1497,9 @@ pub(super) struct TurnOpts {
     pub(super) purpose: Option<String>,
     /// The model tier this turn runs on whatever Laya's effort says (see [`crate::router::with_tier`]).
     pub(super) tier: Option<crate::drivers::engines::Tier>,
+    /// A Skill Foundry replay (a dry run, see [`super::mcp_runtime::RehearseApprover`]): runs only
+    /// on Claude with kwant's permission hook, opens no page, and logs refused calls here.
+    pub(super) rehearse: Option<super::mcp_runtime::RehearseLog>,
 }
 
 impl TurnOpts {
@@ -1928,7 +1931,8 @@ async fn run_kwant_turn_inner(
 
         let mut final_prompt = prompt.clone();
         let nav_prompt = opts.nav_prompt.as_deref().unwrap_or(&prompt);
-        let target_url_opt = detect_url_with_context(nav_prompt, active_browser_url.as_deref());
+        // A replay opens no page: the bot's browser isn't its scratch folder
+        let target_url_opt = if opts.rehearse.is_some() { None } else { detect_url_with_context(nav_prompt, active_browser_url.as_deref()) };
 
         if let Some(target_url) = target_url_opt {
             event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
@@ -2043,6 +2047,7 @@ async fn run_kwant_turn_inner(
         let card_opts = super::mcp_runtime::TurnApprovalOpts {
             routed: Some((target_model.clone(), effort_level.clone())),
             always_ask: opts.always_ask,
+            rehearse: opts.rehearse.clone(),
         };
         let mcp_turn = super::mcp_runtime::prepare_turn_with_opts(
             state,
@@ -2109,12 +2114,20 @@ async fn run_kwant_turn_inner(
         // Saved with the gave-up reply, so a client can offer Retry without reading its wording
         let mut gave_up_meta: Option<serde_json::Value> = None;
         let mut ran_on: Option<RanOn> = None;
+        // Only Claude's permission hook holds every call of a replay to the scratch folder
+        let rehearse_blocked = opts.rehearse.is_some()
+            && (engine != Some(crate::profiles::Engine::Claude) || mcp_turn.is_none());
+        let attempts = if rehearse_blocked { Vec::new() } else { attempts };
         if attempts.is_empty() {
-            let text = format!(
-                "⚠️ [{}] This machine is off in this space and no other {} account is on.",
-                target_kwant.name,
-                engine.map(|e| e.as_str()).unwrap_or("model")
-            );
+            let text = if rehearse_blocked {
+                format!("⚠️ [{}] A skill replay runs only on Claude, with kwant's tool checks on.", target_kwant.name)
+            } else {
+                format!(
+                    "⚠️ [{}] This machine is off in this space and no other {} account is on.",
+                    target_kwant.name,
+                    engine.map(|e| e.as_str()).unwrap_or("model")
+                )
+            };
             event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
             event_broadcast.send(RuntimeEvent::TurnComplete {
                 tokens: 0,
@@ -3330,6 +3343,16 @@ pub struct SettingsResponse {
     pub auditor_daily_cap: i64,
     /// The model tier of audit turns: `fast` (default), `balanced`, `deep` or `bot` (its usual one).
     pub auditor_model: String,
+    /// Skill Foundry: `off` (default) or `on` (see `super::missions::foundry`).
+    pub skill_foundry: String,
+    /// The model tier of Foundry draft and replay turns: `balanced` (default), `fast`, `deep` or `bot`.
+    pub skill_foundry_model: String,
+    /// Drafts started per UTC day (1–20).
+    pub skill_foundry_daily_drafts: i64,
+    /// Past examples each draft is replayed on (0–5; 0 turns replays off).
+    pub skill_foundry_replays: i64,
+    /// Fresh tokens one replay turn may use before it is stopped (5,000–500,000).
+    pub skill_foundry_replay_tokens: i64,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3376,6 +3399,11 @@ pub struct SaveSettingsPayload {
     pub auditor: Option<String>,
     pub auditor_daily_cap: Option<i64>,
     pub auditor_model: Option<String>,
+    pub skill_foundry: Option<String>,
+    pub skill_foundry_model: Option<String>,
+    pub skill_foundry_daily_drafts: Option<i64>,
+    pub skill_foundry_replays: Option<i64>,
+    pub skill_foundry_replay_tokens: Option<i64>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3431,6 +3459,11 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         auditor: if super::missions::auditor::enabled(&state).await { "on" } else { "off" }.into(),
         auditor_daily_cap: super::missions::auditor::daily_cap(&state).await,
         auditor_model: super::missions::auditor::model_mode(&state).await.into(),
+        skill_foundry: if super::missions::foundry::enabled(&state).await { "on" } else { "off" }.into(),
+        skill_foundry_model: super::missions::foundry::model_mode(&state).await.into(),
+        skill_foundry_daily_drafts: super::missions::foundry::daily_drafts(&state).await,
+        skill_foundry_replays: super::missions::foundry::replays(&state).await,
+        skill_foundry_replay_tokens: super::missions::foundry::replay_tokens(&state).await,
     }))
 }
 
@@ -3490,6 +3523,15 @@ pub async fn save_settings(
         return bad(e);
     }
     if let Some(e) = super::missions::auditor::settings_error(payload.auditor.as_deref(), payload.auditor_daily_cap, payload.auditor_model.as_deref()) {
+        return bad(e);
+    }
+    if let Some(e) = super::missions::foundry::settings_error(
+        payload.skill_foundry.as_deref(),
+        payload.skill_foundry_model.as_deref(),
+        payload.skill_foundry_daily_drafts,
+        payload.skill_foundry_replays,
+        payload.skill_foundry_replay_tokens,
+    ) {
         return bad(e);
     }
     if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
@@ -3622,6 +3664,20 @@ pub async fn save_settings(
     }
     if let Some(m) = &payload.auditor_model {
         let _ = state.db.set_setting(super::missions::auditor::MODEL_SETTING, m).await;
+    }
+    {
+        use super::missions::foundry as f;
+        if let Some(m) = &payload.skill_foundry {
+            let _ = state.db.set_setting(f::SETTING, m).await;
+        }
+        if let Some(m) = &payload.skill_foundry_model {
+            let _ = state.db.set_setting(f::MODEL_SETTING, m).await;
+        }
+        for (key, value) in [(f::DRAFTS_SETTING, payload.skill_foundry_daily_drafts), (f::REPLAYS_SETTING, payload.skill_foundry_replays), (f::REPLAY_TOKENS_SETTING, payload.skill_foundry_replay_tokens)] {
+            if let Some(n) = value {
+                let _ = state.db.set_setting(key, &n.to_string()).await;
+            }
+        }
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;

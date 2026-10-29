@@ -684,5 +684,6 @@ pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     crate::zombie::hunt::spawn(state.clone(), shutdown.clone());
     crate::documents::reminders::spawn(state.clone(), shutdown.clone());
     super::missions::listener::spawn(state.clone(), shutdown.clone());
+    super::missions::foundry::spawn(state.clone(), shutdown.clone());
     spawn(state, shutdown);
 }

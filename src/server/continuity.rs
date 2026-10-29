@@ -381,6 +381,12 @@ impl ToolApprover for SelfToolsApprover {
                 return self.inner.decide(req).await;
             }
         }
+        // Skill Foundry: a draft only stores a pending skill for the person to review, and is
+        // offered only in kwant's own draft turn, so it never needs its own card
+        if req.server == SELF_SERVER_NAME && req.tool == super::missions::foundry::TOOL {
+            self.inner.note(&req, "allowed", None).await;
+            return crate::mcp::ApprovalOutcome::Allowed;
+        }
         // The corrected retry of an audit call the person allowed and the tool refused: one card
         // for one challenge (see `auditor::take_retry`)
         let free = !self.always_ask
@@ -411,6 +417,24 @@ async fn page_url(state: &AppState, target: &str) -> Option<String> {
     let ctrl = state.browser_controllers.lock().await.get(target).cloned()?;
     let url = ctrl.current_url.lock().await.clone();
     url
+}
+
+/// The tools a turn's kwant server lists: `skill_draft` only while the bot has a Skill Foundry
+/// draft run open.
+async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
+    let mut tools = tool_list(scope, super::missions::enabled(state).await);
+    if super::missions::foundry::enabled(state).await && matches!(state.db.drafting_run_of(&scope.kwant_id).await, Ok(Some(_))) {
+        if let Some(list) = tools.as_array_mut() {
+            list.push(super::missions::foundry::tool());
+        }
+    }
+    tools
+}
+
+/// The names of the kwant tools `scope`'s turns are offered (without `skill_draft`).
+pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<String> {
+    let tools = tool_list(scope, super::missions::enabled(state).await);
+    tools.as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default()
 }
 
 fn tool_list(scope: &SelfScope, board: bool) -> Value {
@@ -731,7 +755,7 @@ pub async fn self_endpoint(
             }),
         ),
         "ping" => rpc_result(id, json!({})),
-        "tools/list" => rpc_result(id, json!({ "tools": tool_list(&scope, super::missions::enabled(&state).await) })),
+        "tools/list" => rpc_result(id, json!({ "tools": offered_tools(&state, &scope).await })),
         "tools/call" => {
             let args = &msg["params"]["arguments"];
             let name = msg["params"]["name"].as_str().unwrap_or("");
@@ -878,6 +902,7 @@ async fn call_tool(
             None => (format!("Unknown tool {name}."), true),
         },
         "skill_propose" => super::skills::tool_propose(state, scope, args).await,
+        super::missions::foundry::TOOL => super::missions::foundry::call(state, scope, args).await,
         "skill_get" => super::skills::tool_get(state, scope, args).await,
         "ask_user" => super::questions::tool_ask(state, scope, args).await,
         super::human_steps::TOOL => super::human_steps::tool_request(state, scope, args).await,

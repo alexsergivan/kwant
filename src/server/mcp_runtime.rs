@@ -506,6 +506,50 @@ pub struct TurnApprovalOpts {
     /// Every call that could change something asks, approvals off or not (see
     /// [`BrokerApprover::always_ask`]).
     pub always_ask: bool,
+    /// A Skill Foundry replay: nothing that could change anything outside the scratch folder
+    /// runs, and every such call is logged here as what the bot would have done (see
+    /// [`RehearseApprover`]).
+    pub rehearse: Option<RehearseLog>,
+}
+
+/// The "would have…" lines of a replay turn.
+pub type RehearseLog = Arc<std::sync::Mutex<Vec<Value>>>;
+
+/// A Skill Foundry replay's approver: no cards and no grants. kwant's own read-only tools and
+/// in-folder file tools run (the permission hook allows those on its own); every other call is
+/// refused as [`ApprovalOutcome::Rehearsed`] and logged.
+pub struct RehearseApprover {
+    pub log: RehearseLog,
+}
+
+#[async_trait]
+impl ToolApprover for RehearseApprover {
+    async fn approve(&self, req: ToolApprovalRequest) -> bool {
+        self.decide(req).await.allowed()
+    }
+
+    async fn decide(&self, req: ToolApprovalRequest) -> ApprovalOutcome {
+        if req.server == mcp::SELF_SERVER_NAME && super::continuity::READ_ONLY_SELF_TOOLS.contains(&req.tool.as_str()) {
+            return ApprovalOutcome::Allowed;
+        }
+        let line = json!({
+            "tool": req.tool_name,
+            "would_have": super::missions::checkpoints::summary(&req.tool_name, &req.arguments),
+            "outside_folder": req.builtin.as_ref().is_some_and(|b| b.outside_folder),
+        });
+        if let Ok(mut log) = self.log.lock() {
+            // A runaway turn can't grow it without bound
+            if log.len() < 200 {
+                log.push(line);
+            }
+        }
+        ApprovalOutcome::Rehearsed
+    }
+
+    /// Subagents are refused too: their own calls aren't held to the scratch folder.
+    async fn tier_gate(&self, req: &ToolApprovalRequest) -> Option<String> {
+        mcp::builtin_tools::SUBAGENT_TOOLS.contains(&req.tool_name.as_str()).then(|| "a replay starts no subagents".into())
+    }
 }
 
 /// [`prepare_turn_with_self`] with [`TurnApprovalOpts`].
@@ -557,7 +601,9 @@ pub async fn prepare_turn_with_opts(
     });
     let ctx = McpTurnContext {
         servers,
-        approver: if self_tools {
+        approver: if let Some(log) = opts.rehearse.clone() {
+            Arc::new(RehearseApprover { log })
+        } else if self_tools {
             Arc::new(super::continuity::SelfToolsApprover { inner: broker_approver, always_ask: opts.always_ask, browser })
         } else {
             broker_approver

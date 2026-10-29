@@ -317,6 +317,35 @@ fn write_manifest(dir: &FsPath, id: &str, m: &Manifest) -> std::io::Result<(Path
     Ok((path, hex(&<sha2::Sha256 as sha2::Digest>::digest(&body))))
 }
 
+/// Writes `task_id`'s first checkpoint (its folder before its first run) into `dest`, an empty
+/// scratch folder, for a Skill Foundry replay. `Ok(0)` when the task has no usable checkpoint.
+/// Never touches the task's own folder.
+pub async fn materialize_first(state: &AppState, task_id: &str, dest: &FsPath) -> Result<usize, String> {
+    let first = state.db.checkpoints_of(task_id).await.map_err(|e| e.to_string())?.into_iter().find(|c| !c.failed());
+    let Some(first) = first else { return Ok(0) };
+    let _store = STORE.lock().await;
+    let (blobs, dest) = (root(state).join("blobs"), dest.to_path_buf());
+    tokio::task::spawn_blocking(move || {
+        let manifest = read_manifest(&first).ok_or("the checkpoint's manifest is gone")?;
+        private_dir(&dest).map_err(|e| e.to_string())?;
+        let mut n = 0;
+        for e in manifest.files.iter().filter(|e| safe_rel(&e.path)) {
+            let to = dest.join(&e.path);
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            // A missing blob is skipped: the replay sees less, never something else
+            if std::fs::copy(blobs.join(&e.sha256), &to).is_ok() {
+                let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode((e.mode & 0o700) | 0o600));
+                n += 1;
+            }
+        }
+        Ok(n)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The manifest of `c`, if it is still on disk.
 pub fn read_manifest(c: &Checkpoint) -> Option<Manifest> {
     if c.failed() || c.manifest_path.is_empty() {
