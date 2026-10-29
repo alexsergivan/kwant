@@ -27,6 +27,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
+import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import {
   ACTION_DONE,
@@ -167,6 +168,32 @@ const initials = (name: string) =>
     .slice(0, 2)
     .map((w) => w[0]!.toUpperCase())
     .join('') || '?';
+
+/** Bot id → avatar sprite, so owner chips show the same creature as the sidebar and chat. */
+const NO_AVATARS: Record<string, string> = {};
+export const AvatarsContext = React.createContext<Record<string, string>>(NO_AVATARS);
+
+/** The owner's avatar: the bot's own creature, or their initials when the bot isn't known (removed, or no id). */
+export const OwnerAvatar: React.FC<{ kwantId?: string | null; name: string; size?: number }> = ({ kwantId, name, size = 16 }) => {
+  const avatars = React.useContext(AvatarsContext);
+  const sprite = kwantId ? avatars[kwantId] : undefined;
+  if (kwantId && sprite !== undefined)
+    return (
+      <span aria-hidden="true" className="shrink-0 inline-flex" data-owner-avatar={kwantId}>
+        <ModernAvatar role={sprite || undefined} name={name} size={size} kwantId={kwantId} />
+      </span>
+    );
+  return (
+    <span
+      aria-hidden="true"
+      data-owner-initials
+      className="shrink-0 rounded-full bg-zinc-700 font-semibold text-zinc-100 grid place-items-center"
+      style={{ width: size, height: size, fontSize: Math.max(8, Math.round(size / 2)) }}
+    >
+      {initials(name)}
+    </span>
+  );
+};
 
 // ---------- Insights ----------
 
@@ -352,9 +379,7 @@ export const TaskCard: React.FC<{
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-400">
           {owner ? (
             <span className="inline-flex items-center gap-1 min-w-0">
-              <span aria-hidden="true" className="shrink-0 w-4 h-4 rounded-full bg-zinc-700 text-[8px] font-semibold text-zinc-100 grid place-items-center">
-                {initials(owner)}
-              </span>
+              <OwnerAvatar kwantId={t.owner_kwant_id} name={owner} />
               <span className="truncate">{owner}</span>
             </span>
           ) : (
@@ -1469,7 +1494,16 @@ export const TaskDetailBody: React.FC<{
       </section>
 
       <dl className="grid grid-cols-2 gap-3">
-        <Fact label="Owner">{owner ?? <span className="text-zinc-500">No owner yet</span>}</Fact>
+        <Fact label="Owner">
+          {owner ? (
+            <span className="inline-flex items-center gap-1.5 min-w-0" data-panel-owner>
+              <OwnerAvatar kwantId={t.owner_kwant_id} name={owner} size={20} />
+              <span className="truncate">{owner}</span>
+            </span>
+          ) : (
+            <span className="text-zinc-500">No owner yet</span>
+          )}
+        </Fact>
         <Fact label="From">{sourceLabel(t.source_kind)}</Fact>
         <Fact label="Cost">
           <span className="tabular-nums">{costText(t.spent_tokens, t.budget_tokens)}</span>
@@ -1749,7 +1783,12 @@ export const WorkGraphView: React.FC<{
                             {notFlaggedText}
                           </span>
                         )}
-                        {owner && <span className="block text-[11px] text-zinc-500 truncate">{owner}</span>}
+                        {owner && (
+                          <span className="flex items-center gap-1 min-w-0 text-[11px] text-zinc-500">
+                            <OwnerAvatar kwantId={n.owner_kwant_id} name={owner} size={14} />
+                            <span className="truncate">{owner}</span>
+                          </span>
+                        )}
                       </button>
                     </li>
                   );
@@ -1972,9 +2011,11 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
 export const MissionBoardPage: React.FC<{
   spaceId: string;
   names: Record<string, string>;
+  /** Bot id → avatar sprite; owners not in it show their initials. */
+  avatars?: Record<string, string>;
   onBack?: () => void;
   onOpenChat?: (t: Task) => void;
-}> = ({ spaceId, names, onBack, onOpenChat }) => {
+}> = ({ spaceId, names, avatars, onBack, onOpenChat }) => {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [insights, setInsights] = useState<Insights | null>(null);
@@ -2364,7 +2405,7 @@ export const MissionBoardPage: React.FC<{
   const listed = openId ? tasksById[openId] : undefined;
 
   return (
-    <>
+    <AvatarsContext.Provider value={avatars ?? NO_AVATARS}>
       <MissionBoardView
         tasks={tasks}
         missions={missions}
@@ -2452,6 +2493,6 @@ export const MissionBoardPage: React.FC<{
           )}
         </TaskPanel>
       )}
-    </>
+    </AvatarsContext.Provider>
   );
 };

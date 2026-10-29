@@ -24,6 +24,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Teams can hand on more before kwant pauses them.** One teammate can now be asked by mention up to 4
   times per message (was 2), and one message can start up to 16 hand-offs (was 8). Past that, instead of
   "Send a new message to go on", the chat shows a notice with a Continue button (or say "continue").
+- **The pause notice reads plainly and continues in one click.** It now says "Paused after 16 hand-offs
+  so it doesn't loop. Continue?", lists who's waiting, and its **Continue** button hands the turn on
+  straight away. Once continued (by the button or by typing "continue") it says who it went to.
+- **Mission board owners show their avatar.** Board cards, the task panel and "How tasks connect" show
+  the owner's bot avatar, the same one as in the sidebar and chat, instead of a letter circle. A bot
+  that no longer exists still shows its initials.
 
 ## [Mac 0.2.0] - 2026-10-28
 

@@ -38,8 +38,8 @@ import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
 import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSuggestions';
 import { routeReasonText } from '../routeReason';
-import { BudgetPausedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
-import { chainBudgetApi, parseBudgetPaused } from '../chainBudget';
+import { BudgetPausedNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
+import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
 import { consultedNames, parseDecisions, parseWorkAhead } from '../decideFirst';
 import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
@@ -861,6 +861,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
           messageId={msg.id}
           text={msg.text}
           meta={paused}
+          onContinue={canRun === false ? undefined : chainBudgetApi.continue}
+          flash={flashId === msg.id}
+        />
+      );
+    const capped = parseHandoffCapped(msg.meta);
+    if (capped)
+      return (
+        <HandoffCappedNotice
+          key={msg.id}
+          messageId={msg.id}
+          meta={capped}
           onContinue={canRun === false ? undefined : chainBudgetApi.continue}
           flash={flashId === msg.id}
         />

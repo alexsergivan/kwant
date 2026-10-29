@@ -367,7 +367,8 @@ export async function request<T>(method: string, url: string, body?: unknown): P
     } catch {
       // no JSON body
     }
-    throw new Error(message);
+    // The status rides along so callers can tell a 409 or 410 apart without matching wording.
+    throw Object.assign(new Error(message), { status: res.status });
   }
   if (res.status === 204) return undefined as T;
   return res.json();

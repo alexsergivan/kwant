@@ -1,6 +1,6 @@
-import React, { useRef, useState } from 'react';
-import { AlertTriangle, Check, Gauge, Info, Loader2, Play, RotateCcw } from 'lucide-react';
-import { BudgetPausedMeta } from '../chainBudget';
+import React, { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, Check, Gauge, Info, Loader2, PauseCircle, Play, RotateCcw } from 'lucide-react';
+import { BudgetPausedMeta, HandoffCappedMeta, handoffCappedText, isAlreadyContinued, isChainGone } from '../chainBudget';
 import { compactTokens } from '../modelUsage';
 import { Interruption, RetryState, RetryTarget, interruptionText, runRetryOnce } from '../interruptions';
 
@@ -144,6 +144,95 @@ export const BudgetPausedNotice: React.FC<BudgetPausedNoticeProps> = ({ messageI
               <Play size={13} aria-hidden="true" />
             )}
             <span>{state === 'sending' ? 'Continuing…' : done ? 'Continued' : 'Continue'}</span>
+          </button>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="mt-2 pl-[23px] text-[11px] text-rose-300">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+};
+
+export interface HandoffCappedNoticeProps {
+  messageId: string;
+  meta: HandoffCappedMeta;
+  /** Hands the turn to the waiting teammates; without it (a read-only view) there's no button. */
+  onContinue?: (noticeId: string) => Promise<unknown>;
+  flash?: boolean;
+}
+
+/** The team paused at the hand-off cap: one line and a one-click Continue, so nobody has to type a new message. */
+export const HandoffCappedNotice: React.FC<HandoffCappedNoticeProps> = ({ messageId, meta, onContinue, flash }) => {
+  // sent: continued here or on load; already: a 409, someone else got there first; gone: a 410, the lead was removed.
+  const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'already' | 'gone' | 'error'>(meta.resumed ? 'sent' : 'idle');
+  const [error, setError] = useState<string | null>(null);
+  const lock = useRef(false);
+  const headingId = `capped-${messageId}`;
+  // A typed "continue" resumes it too; the refreshed message then arrives with resumed set.
+  useEffect(() => {
+    if (meta.resumed) setState((s) => (s === 'already' ? s : 'sent'));
+  }, [meta.resumed]);
+  const done = state === 'sent' || state === 'already';
+  const stopped = done || state === 'gone';
+  const text = handoffCappedText({ ...meta, resumed: stopped });
+  const headline = text.headline;
+  const detail = state === 'already' ? 'Already continued.' : state === 'gone' ? null : text.detail;
+  const run = async () => {
+    if (!onContinue || lock.current) return;
+    lock.current = true;
+    setState('sending');
+    setError(null);
+    try {
+      await onContinue(messageId);
+      setState('sent');
+    } catch (e) {
+      // Typing "continue" (or another tab) got there first: that's the outcome the button wanted.
+      if (isAlreadyContinued(e)) return setState('already');
+      if (isChainGone(e)) {
+        setState('gone');
+        return setError("Can't continue: the lead of this chat was removed. Send a new message to start again.");
+      }
+      lock.current = false;
+      setState('error');
+      const why = e instanceof Error && e.message ? e.message : 'Could not continue.';
+      setError(why.charAt(0).toUpperCase() + why.slice(1));
+    }
+  };
+  return (
+    <section
+      data-message-id={messageId}
+      data-handoff-capped
+      data-resumed={done || undefined}
+      data-state={state}
+      aria-labelledby={headingId}
+      className={`w-full max-w-5xl rounded-xl border px-3.5 py-2.5 sm:px-4 ${done ? 'border-zinc-800 bg-zinc-900/40' : 'border-sky-500/30 bg-sky-950/20'} ${flash ? 'kw-flash' : ''}`}
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="min-w-0 flex-1 basis-56">
+          <p id={headingId} className={`flex items-start gap-2 text-sm break-words ${done ? 'text-zinc-400' : 'text-sky-100'}`}>
+            {done ? (
+              <Check size={15} className="mt-0.5 shrink-0 text-emerald-400" aria-hidden="true" />
+            ) : (
+              <PauseCircle size={15} className="mt-0.5 shrink-0 text-sky-400" aria-hidden="true" />
+            )}
+            <span className="min-w-0">{headline}</span>
+          </p>
+          {detail && <p className="mt-1 pl-[23px] text-[11px] text-zinc-400 break-words">{detail}</p>}
+        </div>
+        {onContinue && !stopped && (
+          <button
+            type="button"
+            onClick={run}
+            disabled={state === 'sending'}
+            aria-describedby={headingId}
+            data-handoff-continue
+            className="shrink-0 inline-flex items-center justify-center gap-1.5 min-h-[40px] sm:min-h-[36px] px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:cursor-default text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-70 disabled:hover:bg-sky-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+          >
+            {state === 'sending' ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Play size={13} aria-hidden="true" />}
+            <span>{state === 'sending' ? 'Continuing…' : 'Continue'}</span>
           </button>
         )}
       </div>
