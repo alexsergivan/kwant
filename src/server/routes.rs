@@ -929,7 +929,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
     }
     if let [(from, text)] = replies {
         if is_team_channel_lead(scope, from).await {
-            return delegate_mentions(scope, from, text, user_prompt, already_spoken, None).await;
+            return delegate_mentions(scope, from, text, user_prompt, already_spoken, None, None).await;
         }
     }
     if scope.teammates.is_empty() {
@@ -1125,6 +1125,8 @@ where
     }
 }
 
+/// A teammate's result @mentioned one already in this chain of relays.
+const RELAY_PING_PONG: &str = "it already worked on this chain of hand-offs, so a teammate's result can't hand it back. Ask the lead to send it";
 const IN_CODE_BLOCK: &str = "the mention was inside code. Write the name as plain text to ask them";
 /// A follow-up that only credited a teammate who just reported ("As @SEO found, …").
 const CREDIT_ONLY: &str = "the mention only credited their result. To hand them more work, @mention them with the task";
@@ -1191,6 +1193,21 @@ async fn is_team_channel_lead(scope: &TurnScope, kwant: &Kwant) -> bool {
     }
 }
 
+/// A teammate's delegation result that @mentions other teammates: [`delegate_mentions`] hands
+/// the work on for the lead, as if the lead had asked, and links each new task to `source` so the
+/// lead hears every result in one batch.
+pub(super) struct Relay<'a> {
+    /// The teammate whose result it is.
+    pub from: &'a Kwant,
+    /// Its ended delegation.
+    pub source: &'a crate::db::threads::Delegation,
+    /// Teammates already in this chain of relays, `from` included: never handed the work back.
+    pub chain: Vec<String>,
+    /// Teammates the lead has working alongside it (open, or ran at the same time): the lead's one
+    /// follow-up sees their results next to this one, so they aren't handed it again.
+    pub alongside: Vec<String>,
+}
+
 /// A team lead's @mentions in its team channel hand work on as delegations, not handoff turns:
 /// each teammate gets the task in its own thread (Sent-to chip, queue, the same guards as the
 /// delegate tool), and when the last one ends the lead is resumed once with every result to give
@@ -1210,6 +1227,7 @@ pub(super) async fn delegate_mentions(
     user_prompt: &str,
     just_reported: &[String],
     resumed: Option<&[String]>,
+    relay: Option<&Relay<'_>>,
 ) {
     let Some(cid) = scope.channel_id.clone() else { return };
     let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
@@ -1221,7 +1239,10 @@ pub(super) async fn delegate_mentions(
         .collect();
     let mut skipped: Vec<(String, String)> = found.unknown.into_iter().map(|n| (n, String::new())).collect();
     skipped.extend(found.in_code_block.iter().map(|&i| (scope.teammates[i].name.clone(), IN_CODE_BLOCK.to_string())));
-    if found.targets.iter().all(|&i| scope.teammates[i].id == lead.id) {
+    // The lead hears a relayed result anyway, and a bot can't hand work to itself
+    let speaker = relay.map_or(lead.id.as_str(), |r| r.from.id.as_str());
+    let not_a_handoff = |id: &str| id == lead.id || id == speaker;
+    if found.targets.iter().all(|&i| not_a_handoff(&scope.teammates[i].id)) {
         return report_skipped(scope, skipped).await;
     }
     let mine: Vec<_> = scope
@@ -1249,10 +1270,18 @@ pub(super) async fn delegate_mentions(
     let mut capped: Vec<&Kwant> = Vec::new();
     for &i in &found.targets {
         let k = &scope.teammates[i];
-        if k.id == lead.id || targets.iter().any(|t| t.id == k.id) || resumed.is_some_and(|ids| !ids.contains(&k.id)) {
+        if not_a_handoff(&k.id) || targets.iter().any(|t| t.id == k.id) || resumed.is_some_and(|ids| !ids.contains(&k.id)) {
             continue;
         }
-        if just_reported.contains(&k.id) && crate::router::only_credited(text, &k.name) {
+        if relay.is_some() && crate::router::only_credited(text, &k.name) {
+            // "As @SEO found, …" in a result asks nothing of SEO
+            continue;
+        }
+        if relay.is_some_and(|r| r.chain.contains(&k.id)) {
+            skipped.push((k.name.clone(), RELAY_PING_PONG.to_string()));
+        } else if relay.is_some_and(|r| r.alongside.contains(&k.id)) {
+            continue;
+        } else if just_reported.contains(&k.id) && crate::router::only_credited(text, &k.name) {
             skipped.push((k.name.clone(), CREDIT_ONLY.to_string()));
         } else if open.contains(&k.id.as_str()) {
             skipped.push((k.name.clone(), "still working on an earlier task from this chat".to_string()));
@@ -1274,12 +1303,28 @@ pub(super) async fn delegate_mentions(
     }
     let mut started: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let user = truncate_chars(user_prompt.trim(), 3000);
-    let task = format!(
-        "The user asked in the team channel:\n{user}\n\n{lead} mentioned you:\n{text}",
-        lead = lead.name,
-        text = truncate_chars(text.trim(), 4000),
-    );
-    let title = truncate_chars(user.lines().find(|l| !l.trim().is_empty()).unwrap_or("Task").trim(), 80).to_string();
+    let task = match relay {
+        None => format!(
+            "The user asked in the team channel:\n{user}\n\n{lead} mentioned you:\n{text}",
+            lead = lead.name,
+            text = truncate_chars(text.trim(), 4000),
+        ),
+        Some(r) => format!(
+            "The user asked in the team channel:\n{user}\n\n{from} mentioned you in its result for {lead}'s task “{title}”. \
+            Do what it asks of you; your result goes to {lead}.\n{text}",
+            from = r.from.name,
+            lead = lead.name,
+            title = r.source.title,
+            text = crate::drivers::peer_message(&r.from.name, truncate_chars(text.trim(), 4000)),
+        ),
+    };
+    let first_line = |t: &str| truncate_chars(t.lines().find(|l| !l.trim().is_empty()).unwrap_or("Task").trim(), 80).to_string();
+    let title = first_line(user);
+    // A relayed task is named after what the result asked of that teammate
+    let title_for = |k: &Kwant| match relay {
+        Some(_) => mention_line(text, &k.name).map(|l| first_line(&l)).unwrap_or_else(|| title.clone()),
+        None => title.clone(),
+    };
     let allowed: Vec<String> = scope.teammates.iter().map(|k| k.id.clone()).collect();
     for (n, specialist) in targets.into_iter().enumerate() {
         if n >= MAX_HANDOFFS {
@@ -1310,12 +1355,13 @@ pub(super) async fn delegate_mentions(
             lead: lead.clone(),
             specialist: specialist.clone(),
             task: task.clone(),
-            title: Some(handoff_title(text, &specialist.name).unwrap_or_else(|| title.clone())),
+            title: Some(handoff_title(text, &specialist.name).unwrap_or_else(|| title_for(specialist))),
             origin: super::delegation::Origin { channel_id: Some(cid.clone()), ..Default::default() },
             continue_lead: true,
             origin_depth: scope.delegation_depth,
             allowed: Some(allowed.clone()),
             after,
+            relayed_from: relay.map(|r| r.source.id.clone()),
         };
         match super::delegation::start(&scope.state, req).await {
             Ok(d) => {
@@ -1359,6 +1405,14 @@ pub fn handoff_title(text: &str, name: &str) -> Option<String> {
     let mut chars = sentence.chars();
     let title: String = chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default();
     Some(truncate_chars(&title, 80).to_string())
+}
+
+/// The first line of `text` that @mentions `name`, without its list marker, for a relayed task's title.
+fn mention_line(text: &str, name: &str) -> Option<String> {
+    let tag = format!("@{}", name.to_lowercase());
+    text.lines().find(|l| l.to_lowercase().contains(&tag)).map(|l| {
+        l.trim().trim_start_matches(['-', '*', '•', '>', ' ']).replace(['*', '`'], "").trim().to_string()
+    })
 }
 
 /// Whether the teammate with `id` is among the @mentioned `targets` (indices into the teammates).
