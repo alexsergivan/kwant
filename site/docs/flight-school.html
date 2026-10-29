@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Flight School: Observe, Sandbox or Act, per bot and per kind of work. Payments always ask.">
 <meta property="article:published_time" content="2026-10-28">
-<meta property="article:modified_time" content="2026-10-28">
+<meta property="article:modified_time" content="2026-10-29">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Flight School: give each bot only the freedom it has earned · kwant">
 <meta name="twitter:description" content="Set each bot&#x27;s tier per kind of work: Observe, Sandbox or Act. A tier only adds approval cards, payments always ask, and you can revoke a tier in one click.">
@@ -96,7 +96,7 @@
   <div class="frame"><video data-autoplay controls muted playsinline loop preload="none" poster="../assets/media/clip-sandbox-poster.webp?v=c97e71cdb0" width="1280" height="800" aria-label="Demo: a bot at Sandbox wants to run npm run build for a release task. An approval card says &quot;Sandbox: commands that can change things ask&quot;, the user clicks Allow Once, the bot finishes and the task ends Verified."><source src="../assets/media/clip-sandbox.mp4?v=f6ce21e3ed" type="video/mp4"></video></div>
   <figcaption>A Sandbox bot asks before running a build. You allow it, and the task ends Verified.</figcaption>
 </figure>
-<p>Reading and searching files never asks. On Claude, read-only commands in the bot's own folder, such as <code>ls</code> or <code>cat</code>, run without asking; any other command asks below Act. A bot that works through an API key has no shell, so it can't run commands at all. At Observe, file changes ask too, even inside the task folder.</p>
+<p>Reading and searching files never asks. On Claude, read-only commands in the bot's own folder, such as <code>ls</code> or <code>cat</code>, run without asking; any other command asks below Act. A bot that works through an API key runs commands through kwant's own shell tool, and below Act every command it runs asks, even read-only ones. At Observe, file changes ask too, even inside the task folder.</p>
 <p>Tiers apply only while a bot works on a task. Ordinary chat follows your normal approval rules.</p>
 
 <h2 id="payments">Payments always ask</h2>
@@ -155,6 +155,6 @@
 </footer>
 <script src="../assets/js/site.js?v=c490c973ba" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/flight-school#article","headline":"Flight School: give each bot only the freedom it has earned","description":"Set each bot's tier per kind of work: Observe, Sandbox or Act. A tier only adds approval cards, payments always ask, and you can revoke a tier in one click.","url":"https://kwant.si/docs/flight-school","mainEntityOfPage":"https://kwant.si/docs/flight-school","image":"https://kwant.si/assets/og/docs-flight-school.png?v=3182073a3c","inLanguage":"en","datePublished":"2026-10-28","dateModified":"2026-10-28","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Flight School","item":"https://kwant.si/docs/flight-school"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/flight-school#article","headline":"Flight School: give each bot only the freedom it has earned","description":"Set each bot's tier per kind of work: Observe, Sandbox or Act. A tier only adds approval cards, payments always ask, and you can revoke a tier in one click.","url":"https://kwant.si/docs/flight-school","mainEntityOfPage":"https://kwant.si/docs/flight-school","image":"https://kwant.si/assets/og/docs-flight-school.png?v=3182073a3c","inLanguage":"en","datePublished":"2026-10-28","dateModified":"2026-10-29","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Flight School","item":"https://kwant.si/docs/flight-school"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 </body>
 </html>

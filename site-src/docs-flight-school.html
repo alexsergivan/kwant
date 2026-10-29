@@ -47,7 +47,7 @@ card_art: avatar:qa
   <div class="frame">{{video:clip-sandbox|Demo: a bot at Sandbox wants to run npm run build for a release task. An approval card says "Sandbox: commands that can change things ask", the user clicks Allow Once, the bot finishes and the task ends Verified.}}</div>
   <figcaption>A Sandbox bot asks before running a build. You allow it, and the task ends Verified.</figcaption>
 </figure>
-<p>Reading and searching files never asks. On Claude, read-only commands in the bot's own folder, such as <code>ls</code> or <code>cat</code>, run without asking; any other command asks below Act. A bot that works through an API key has no shell, so it can't run commands at all. At Observe, file changes ask too, even inside the task folder.</p>
+<p>Reading and searching files never asks. On Claude, read-only commands in the bot's own folder, such as <code>ls</code> or <code>cat</code>, run without asking; any other command asks below Act. A bot that works through an API key runs commands through kwant's own shell tool, and below Act every command it runs asks, even read-only ones. At Observe, file changes ask too, even inside the task folder.</p>
 <p>Tiers apply only while a bot works on a task. Ordinary chat follows your normal approval rules.</p>
 
 <h2 id="payments">Payments always ask</h2>
