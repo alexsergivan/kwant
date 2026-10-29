@@ -774,3 +774,86 @@ async fn a_capture_is_filed_under_the_real_origin_and_waits() {
     *url.lock().await = "file:///etc/passwd".into();
     assert!(ctrl.collect_captured_credentials().await.is_none());
 }
+
+/// A fake CDP browser that records every command; `[innerWidth, innerHeight, devicePixelRatio]`
+/// answers with `size`.
+async fn recording_browser(size: Value) -> (BrowserController, Arc<tokio::sync::Mutex<Vec<(String, Value)>>>) {
+    let http_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let http_port = http_listener.local_addr().unwrap().port();
+    let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_port = ws_listener.local_addr().unwrap().port();
+    let log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = http_listener.accept().await {
+            let mut buf = vec![0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let body = json!({"webSocketDebuggerUrl": format!("ws://127.0.0.1:{ws_port}/devtools/page/test")}).to_string();
+            let reply = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = stream.write_all(reply.as_bytes()).await;
+        }
+    });
+    let rec = log.clone();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = ws_listener.accept().await {
+            let (rec, size) = (rec.clone(), size.clone());
+            tokio::spawn(async move {
+                let Ok(mut ws) = accept_async(stream).await else { return };
+                while let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(txt))) = ws.next().await {
+                    let msg: Value = serde_json::from_str(&txt).unwrap();
+                    let method = msg["method"].as_str().unwrap().to_string();
+                    rec.lock().await.push((method.clone(), msg["params"].clone()));
+                    let result = match method.as_str() {
+                        "Page.captureScreenshot" => json!({"data": "/9j/4AAQ"}),
+                        "Runtime.evaluate" => json!({"result": {"value": size}}),
+                        _ => json!({}),
+                    };
+                    let reply = json!({"id": msg["id"], "result": result}).to_string();
+                    let _ = ws.send(tokio_tungstenite::tungstenite::Message::Text(reply)).await;
+                }
+            });
+        }
+    });
+    (BrowserController::new(http_port), log)
+}
+
+fn overrides(log: &[(String, Value)]) -> Vec<String> {
+    log.iter()
+        .filter(|(m, _)| m.starts_with("Emulation.") || m == "Page.captureScreenshot")
+        .map(|(m, p)| match m.as_str() {
+            "Emulation.setDeviceMetricsOverride" => format!("set {}x{} mobile={}", p["width"], p["height"], p["mobile"]),
+            "Emulation.clearDeviceMetricsOverride" => "clear".into(),
+            _ => "shot".into(),
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_bots_sized_screenshot_puts_the_viewport_back_as_it_was() {
+    // A windowless browser at kwnt's fixed 1280×800: a phone shot, then 1280×800 again
+    let (ctrl, log) = recording_browser(json!([1280, 800, 1])).await;
+    ctrl.set_viewport(1280, 800).await.unwrap();
+    let shot = ctrl.capture_for_agent(Some(390)).await.unwrap();
+    assert_eq!((shot.width, shot.height, shot.data.as_str()), (390, 844, "/9j/4AAQ"));
+    assert_eq!(overrides(&log.lock().await), ["set 1280x800 mobile=false", "set 390x844 mobile=true", "shot", "set 1280x800 mobile=false"]);
+    assert!(ctrl.last_screenshot.lock().await.is_none(), "the live panel's picture is left alone");
+
+    // At its own size, nothing is changed
+    log.lock().await.clear();
+    let shot = ctrl.capture_for_agent(None).await.unwrap();
+    assert_eq!((shot.width, shot.height), (1280, 800));
+    assert_eq!(overrides(&log.lock().await), ["shot"]);
+
+    // A real window (local mode on a Mac, Retina): shot at most 1280 wide at scale 1, and the
+    // page goes back to following its window
+    let (ctrl, log) = recording_browser(json!([1512, 860, 2])).await;
+    let shot = ctrl.capture_for_agent(None).await.unwrap();
+    assert_eq!((shot.width, shot.height), (1280, 860));
+    assert_eq!(overrides(&log.lock().await), ["set 1280x860 mobile=false", "shot", "clear"]);
+
+    // The person has the browser: nothing is sent
+    log.lock().await.clear();
+    let control = ctrl.take_control().await.unwrap();
+    assert!(matches!(ctrl.capture_for_agent(Some(390)).await, Err(BrowserError::HumanControl)));
+    drop(control);
+    assert!(log.lock().await.is_empty());
+}

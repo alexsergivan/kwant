@@ -438,6 +438,7 @@ impl TurnInput {
                 - `browser_open` (url): open a page.\n\
                 - `browser_page`: read the page (url, title, text, clickable labels).\n\
                 - `browser_act` (action click_text + text, type + text, key + key, scroll + delta_y): click a button/link/field by its visible label, type into the focused field, press a key, scroll.\n\
+                - `browser_screenshot` (optional width, e.g. 390 phone / 1280 desktop): see the page as a picture, for layout, colours and spacing.\n\
                 Every call returns the updated page, so you rarely need a separate read. \
                 The current page state and its clickable labels are usually already in the request; act on them directly.\n\
                 {control_rules}",

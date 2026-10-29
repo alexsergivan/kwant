@@ -131,7 +131,7 @@ async fn claude_turn_gets_browser_tools_that_drive_its_own_panel() {
         .await
         .unwrap();
     let names = tool_names(&app, &token).await;
-    for tool in ["browser_open", "browser_page", "browser_act", "memory_add"] {
+    for tool in ["browser_open", "browser_page", "browser_act", "browser_screenshot", "memory_add"] {
         assert!(names.iter().any(|n| n == tool), "{tool} missing from {names:?}");
     }
     // Without a sandbox (e.g. a turn that shows no panel) they aren't offered or callable
@@ -144,6 +144,7 @@ async fn claude_turn_gets_browser_tools_that_drive_its_own_panel() {
     assert_eq!(claude_asks(&app, &token, "WebFetch").await, "allow");
     assert_eq!(claude_asks(&app, &token, &format!("mcp__{SELF_SERVER_NAME}__browser_open")).await, "allow");
     assert_eq!(claude_asks(&app, &token, &format!("mcp__{SELF_SERVER_NAME}__browser_act")).await, "allow");
+    assert_eq!(claude_asks(&app, &token, &format!("mcp__{SELF_SERVER_NAME}__browser_screenshot")).await, "allow");
     assert!(state.broker.pending_ids().await.is_empty(), "no approval card for the bot's own browser");
 
     // The prompt tells a tools turn to use them, not curl through a shell it doesn't have

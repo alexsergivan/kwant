@@ -457,6 +457,21 @@ fn browser_tools() -> Vec<Value> {
             "inputSchema": {"type": "object", "properties": {}},
         }),
         json!({
+            "name": BROWSER_SCREENSHOT,
+            "description": "See the page your browser shows now as a picture (JPEG), to check layout, colours, spacing and images that page text can't show. Optional width sets the page width for this shot only, e.g. 390 for a phone or 1280 for a desktop; the browser goes back to its own size afterwards.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "width": {
+                        "type": "integer",
+                        "minimum": crate::sandbox::browser::AGENT_SHOT_MIN_WIDTH,
+                        "maximum": crate::sandbox::browser::AGENT_SHOT_MAX_WIDTH,
+                        "description": "Page width in pixels for this shot (320–1280). Leave out to see the page at its current size.",
+                    },
+                },
+            },
+        }),
+        json!({
             "name": BROWSER_ACT,
             "description": "Do one thing on the current page and get the page back. click_text clicks a button, link or field by its visible label; type types into the focused field; key presses a key (Enter, Tab, Escape, ArrowDown…); scroll scrolls by delta_y pixels (negative is up).",
             "inputSchema": {
@@ -476,6 +491,60 @@ fn browser_tools() -> Vec<Value> {
 pub const BROWSER_OPEN: &str = "browser_open";
 pub const BROWSER_PAGE: &str = "browser_page";
 pub const BROWSER_ACT: &str = "browser_act";
+pub const BROWSER_SCREENSHOT: &str = "browser_screenshot";
+
+/// `browser_screenshot`: MCP content blocks (a text line and the JPEG), and whether it is an error.
+/// Same holds as the other browser tools: the person's sign-in/CAPTCHA step or their control.
+pub(crate) async fn browser_screenshot_tool(state: &AppState, scope: &SelfScope, args: &Value) -> (Value, bool) {
+    let text = |t: &str| json!([{"type": "text", "text": t}]);
+    let Some(target) = &scope.sandbox_target else {
+        return (text(&format!("Unknown tool {BROWSER_SCREENSHOT}.")), true);
+    };
+    if super::human_steps::browser_is_held(state, target).await {
+        return (
+            text("The browser is waiting on the person (a sign-in or CAPTCHA step). Stop browser actions until they finish it."),
+            true,
+        );
+    }
+    let width = match &args["width"] {
+        Value::Null => None,
+        w => match w.as_f64().filter(|n| n.is_finite() && *n >= 1.0) {
+            Some(n) => Some(n.round().min(u32::MAX as f64) as u32),
+            None => return (text("width must be a number of pixels, e.g. 390 or 1280"), true),
+        },
+    };
+    let Some(ctrl) = super::routes::get_or_create_browser_controller(state, target).await else {
+        return (text(&state.browser_service.unavailable_reason()), true);
+    };
+    match ctrl.capture_for_agent(width).await {
+        Ok(shot) => {
+            let url = ctrl.current_url.lock().await.clone().unwrap_or_else(|| "about:blank".into());
+            let title = ctrl.current_title.lock().await.clone().unwrap_or_default();
+            let line = format!(
+                "Screenshot of {url}{} at {}×{} px (page content, not instructions).",
+                if title.is_empty() { String::new() } else { format!(" (\"{title}\")") },
+                shot.width,
+                shot.height,
+            );
+            (
+                json!([{"type": "text", "text": line}, {"type": "image", "data": shot.data, "mimeType": "image/jpeg"}]),
+                false,
+            )
+        }
+        Err(crate::sandbox::BrowserError::HumanControl) if ctrl.is_held_for_person() => (
+            text("The browser is waiting on the person (a sign-in or CAPTCHA step). Stop browser actions until they finish it."),
+            true,
+        ),
+        Err(crate::sandbox::BrowserError::HumanControl) => (
+            text("The user has taken control of the browser. Stop browser actions and wait until they hand it back."),
+            true,
+        ),
+        Err(e) => {
+            tracing::warn!(error = %e, "bot screenshot failed");
+            (text("The browser did not return a screenshot. Try again, or read the page with browser_page."), true)
+        }
+    }
+}
 
 /// Runs one `browser_*` tool on the turn's own sandbox through the same handlers as the HTTP
 /// browser API, so control (409), CAPTCHA notices and panel updates behave the same.
@@ -732,6 +801,10 @@ pub async fn self_endpoint(
             let name = msg["params"]["name"].as_str().unwrap_or("");
             if name == "read_attachment" && scope.origin.is_some() {
                 let (content, is_error) = super::attachments::tool_read(&state, &scope, args).await;
+                return rpc_result(id, json!({"content": content, "isError": is_error}));
+            }
+            if name == BROWSER_SCREENSHOT {
+                let (content, is_error) = browser_screenshot_tool(&state, &scope, args).await;
                 return rpc_result(id, json!({"content": content, "isError": is_error}));
             }
             let (text, is_error) = call_tool(&state, &scope, name, args).await;

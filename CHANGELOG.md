@@ -39,6 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   model.
 
 ### Fixed
+- **Bots can see the page, not just read it.** Bots now have a `browser_screenshot` tool that returns
+  the browser page as a picture, so a designer bot can check layout, colours and spacing. It can take
+  the shot at a set width (390 for a phone, 1280 for a desktop) and puts the browser back to its own size
+  afterwards. Like the other browser tools, it waits while you sign in, solve a CAPTCHA or have control.
 - **A restart no longer leaves an audit running.** An audit cut off mid-turn by a restart ends
   `interrupted` and says so in the task's history; one still waiting to start runs after the restart
   (or is skipped if the auditor was turned off).
