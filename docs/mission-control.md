@@ -608,7 +608,11 @@ Token budgets are opt-in. `budget_tokens` 0 means no limit, for tasks and missio
   and in the same transaction rows still at the old silent defaults lose them:
   `UPDATE tasks SET budget_tokens = 0 WHERE budget_tokens = 50000` and
   `UPDATE missions SET budget_tokens = 0 WHERE budget_tokens = 200000`. Task states are not changed.
-- The hand-off loop guard (`chain_token_budget`) is separate and unchanged.
+- The hand-off token limit per request (`chain_token_budget`, fresh tokens) is separate and is
+  opt-in too: 0 (no limit) is the default. A person who sets a number gets the `budget_paused` notice
+  and Continue as before. Migration (once, flag setting `chain_token_budget_opt_in_v1`): a stored
+  `chain_token_budget` of exactly `200000`, the old default that Settings wrote back on every save,
+  becomes `0`; any other stored number stays, and so does `200000` saved after the migration ran.
 
 ## 16. Hand-off cards that go on
 
@@ -652,8 +656,8 @@ from before this change (no result evidence) and cards whose lead was deleted ar
 ### Capped hand-offs: the Continue notice
 
 One person message starts at most `routes::MAX_DELEGATIONS_PER_REQUEST` (16) hand-offs by mention,
-at most `routes::MAX_MENTION_DELEGATIONS_PER_BOT` (4) to one teammate; `chain_token_budget` still
-stops real loops. Mentions past a cap are not dropped: kwant saves one system message in the channel
+at most `routes::MAX_MENTION_DELEGATIONS_PER_BOT` (4) to one teammate. These caps are what stop
+loops by default; `chain_token_budget` adds a token limit only when the person sets one (§15). Mentions past a cap are not dropped: kwant saves one system message in the channel
 with meta
 
 ```json

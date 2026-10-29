@@ -44,6 +44,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   server rejects is flagged next to the picker in plain words.
 
 ### Changed
+- **The hand-off token limit is now off by default.** A request no longer pauses after 200k fresh
+  tokens of bots handing work to each other; the hand-off count caps (4 per bot, 16 per request, with
+  Continue) still stop loops. Set a limit in Settings → Usage → Hand-offs per request (No limit, a quick
+  pick or Custom) and it pauses and offers Continue as before. On upgrade, a stored limit still at the
+  old 200k default is switched off once; any other number you set stays.
 - **Audits run on the fast model by default.** The Swarm Auditor's challenge and rebuttal turns now use
   the engine's cheap, fast model (for Claude, Haiku at medium effort) instead of the bot's default. The
   new `auditor_model` setting picks `fast` (default), `balanced`, `deep`, or `bot` for the bot's usual

@@ -211,3 +211,14 @@ test('Out of budget: Remove limit and continue sends 0; Raise limit only offers 
     v.done();
   }
 });
+
+test('Settings hand-off limit per request: no limit is 0, a pick or "300k" is kept, out of range is refused', () => {
+  assert.equal(m.requestLimitFrom('0'), 0);
+  assert.equal(m.requestLimitFrom('200000'), 200_000);
+  assert.equal(m.requestLimitFrom('300k'), 300_000);
+  assert.equal(m.requestLimitFrom('100M'), 100_000_000);
+  assert.equal(m.requestLimitFrom('101M'), null);
+  assert.equal(m.requestLimitFrom(''), null, 'Custom with nothing typed yet');
+  assert.equal(m.requestLimitFrom('lots'), null);
+  assert.equal(m.limitLabel(0), 'No limit');
+});
