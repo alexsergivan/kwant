@@ -555,7 +555,10 @@ async fn a_replay_off_claude_is_reported_as_an_error_and_leaves_no_scratch_copy(
     let report: Value = serde_json::from_str(&e.state.db.skill_meta(&s.id).await.unwrap().unwrap().replay.unwrap()).unwrap();
     assert_eq!(report["examples"].as_array().unwrap().len(), 2, "{report}");
     assert_eq!(report["errors"], 2, "{report}");
-    assert!(report["examples"][0]["error"].as_str().unwrap().contains("only on Claude"), "{report}");
+    // Refused before any model ran: "only on Claude" here, or "no account" on a host without one
+    let ex0 = &report["examples"][0];
+    assert_eq!((ex0["verdict"].as_str(), ex0["tokens"].as_u64()), (Some("error"), Some(0)), "{report}");
+    assert!(!ex0["error"].as_str().unwrap_or("").is_empty(), "{report}");
     // The draft is untouched, and its scratch copies are gone
     assert_eq!(e.state.db.get_skill(&s.id).await.unwrap().unwrap().status, "pending");
     assert!(!e.state.config.data_dir.join("foundry").join(&run.id).exists());
