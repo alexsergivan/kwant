@@ -1,6 +1,6 @@
 //! The task-board self tools: `mission_plan`, `task_list`, `task_claim`, `task_update`,
-//! `task_attach_evidence`, `task_request_check`, `task_review`. Offered only while `mission_board`
-//! is on. None of them can set `verified`: only a passing check that isn't the owner's does.
+//! `task_attach_evidence`, `task_request_check`, `task_review`, and the auditor's `audit_challenge`,
+//! `audit_rebut` (§18). Offered only while `mission_board` is on. None of them can set `verified`: only a passing check that isn't the owner's does.
 
 use super::checks::{hex, inside, run_task_checks};
 use super::{evaluate, task_folder, transition, validate_check, Actor, PlanBy, PlanPlace, PlanTask};
@@ -24,7 +24,7 @@ fn ok(v: Value) -> ToolResult {
 const NAMES: [&str; 8] = ["mission_plan", "task_list", "task_claim", "task_update", "task_attach_evidence", "task_request_check", "task_review", "workflow_propose"];
 
 pub fn handles(name: &str) -> bool {
-    NAMES.contains(&name)
+    NAMES.contains(&name) || super::auditor::TOOL_NAMES.contains(&name)
 }
 
 fn check_schema() -> Value {
@@ -165,6 +165,9 @@ pub fn tools() -> Vec<Value> {
             },
         }),
     ]
+    .into_iter()
+    .chain(super::auditor::tools())
+    .collect()
 }
 
 pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value) -> ToolResult {
@@ -175,6 +178,16 @@ pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value)
         Ok(Some(s)) => s,
         _ => return fail("Could not find your space."),
     };
+    if super::auditor::TOOL_NAMES.contains(&name) {
+        let in_space = match args["audit_id"].as_str() {
+            Some(id) => matches!(state.db.get_audit(id).await, Ok(Some(a)) if a.space_id == space.as_str()),
+            None => false,
+        };
+        if !in_space {
+            return fail("No such audit in your space.");
+        }
+        return super::auditor::call(state, scope, name, args).await;
+    }
     if name == "mission_plan" {
         return plan(state, scope, &space, args).await;
     }
@@ -204,6 +217,9 @@ pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value)
         Ok(Some(t)) if t.space_id == space.as_str() => t,
         _ => return fail("No such task in your space."),
     };
+    if let Some(why) = super::auditor::held(state, &scope.kwant_id, name, &task).await {
+        return fail(why);
+    }
     match name {
         "task_claim" => claim(state, scope, &task).await,
         "task_update" => update(state, scope, &task, args).await,

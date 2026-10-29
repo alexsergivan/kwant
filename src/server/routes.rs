@@ -3318,6 +3318,10 @@ pub struct SettingsResponse {
     pub flight_school: bool,
     /// The tier a bot hired while Flight School is on starts at, for every class.
     pub flight_school_new_bot_tier: String,
+    /// Swarm Auditor: `off` or `on` (see `super::missions::auditor`).
+    pub auditor: String,
+    /// Audits started per UTC day (1–50).
+    pub auditor_daily_cap: i64,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3361,6 +3365,8 @@ pub struct SaveSettingsPayload {
     pub recovery_budget_pct: Option<i64>,
     pub flight_school: Option<bool>,
     pub flight_school_new_bot_tier: Option<String>,
+    pub auditor: Option<String>,
+    pub auditor_daily_cap: Option<i64>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3413,6 +3419,8 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         recovery_budget_pct: super::missions::autofix::recovery_pct(&state).await,
         flight_school: super::missions::flight_school::enabled(&state.db).await,
         flight_school_new_bot_tier: super::missions::flight_school::new_bot_tier(&state.db).await.into(),
+        auditor: if super::missions::auditor::enabled(&state).await { "on" } else { "off" }.into(),
+        auditor_daily_cap: super::missions::auditor::daily_cap(&state).await,
     }))
 }
 
@@ -3469,6 +3477,9 @@ pub async fn save_settings(
         return bad(e);
     }
     if let Some(e) = super::missions::flight_school::settings_error(payload.flight_school_new_bot_tier.as_deref()) {
+        return bad(e);
+    }
+    if let Some(e) = super::missions::auditor::settings_error(payload.auditor.as_deref(), payload.auditor_daily_cap) {
         return bad(e);
     }
     if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
@@ -3592,6 +3603,12 @@ pub async fn save_settings(
     }
     if let Some(t) = &payload.flight_school_new_bot_tier {
         let _ = state.db.set_setting(super::missions::flight_school::NEW_BOT_SETTING, t).await;
+    }
+    if let Some(m) = &payload.auditor {
+        let _ = state.db.set_setting(super::missions::auditor::SETTING, m).await;
+    }
+    if let Some(n) = payload.auditor_daily_cap {
+        let _ = state.db.set_setting(super::missions::auditor::CAP_SETTING, &n.to_string()).await;
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;

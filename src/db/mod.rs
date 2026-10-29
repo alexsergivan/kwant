@@ -30,6 +30,7 @@ pub mod checkpoints;
 pub mod autofix;
 pub mod flight_school;
 pub mod performance;
+pub mod auditor;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -186,6 +187,8 @@ impl Database {
         db.migrate_opt_in_budgets().await?;
         // After it: observes finished tasks once (their class comes from Flight School)
         db.migrate_performance().await?;
+        // Phase D2: audits and their risks (add-only)
+        db.migrate_auditor().await?;
         db.pool.close().await;
 
         let pool = SqlitePoolOptions::new()
