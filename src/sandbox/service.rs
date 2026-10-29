@@ -420,9 +420,7 @@ impl BrowserService {
         }
         // A real window keeps its own size; a windowless browser gets the viewer's fixed viewport.
         if !local || !self.local_window() {
-            ctrl.send_cdp_command("Emulation.setDeviceMetricsOverride", json!({
-                "width": 1280, "height": 800, "deviceScaleFactor": 1, "mobile": false
-            })).await?;
+            ctrl.set_viewport(1280, 800).await?;
         }
         ctrl.refresh_location().await?;
         Ok(ctrl)
