@@ -526,7 +526,7 @@ export const TaskCard: React.FC<{
           {t.state === 'verified' && flags.length > 0 && <Badge tone="emerald">Verified</Badge>}
           {t.priority >= 2 && <Badge tone={t.priority >= 3 ? 'rose' : 'amber'}>{priorityLabel(t.priority)}</Badge>}
           {showsTier(t) && t.owner_tier !== 'act' && (
-            <span data-tier-badge={t.owner_tier} title={`Flight School: ${classLabel(t.task_class ?? DEFAULT_CLASS)} work at ${tierLabel(t.owner_tier)}`}>
+            <span data-tier-badge={t.owner_tier} title={`Flight School: ${classLabel(t.task_class ?? DEFAULT_CLASS).toLowerCase()} work at ${tierLabel(t.owner_tier)}`}>
               <Badge tone="sky">{tierLabel(t.owner_tier)}</Badge>
             </span>
           )}

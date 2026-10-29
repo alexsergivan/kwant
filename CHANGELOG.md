@@ -31,12 +31,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Board cards show how many risks are still open. While an audit waits on one of your approval cards,
   the task says "Audit waiting for your answer" with a link to it. Settings has the Auditor switch and
   its daily limit.
+- **Audit model in Settings.** With the auditor on, an **Audit model** picker sets which model audits
+  use: Fast (the default and cheapest), Balanced, Deep, or the same model as the bot. A value the
+  server rejects is flagged next to the picker in plain words.
 
 ### Changed
 - **Audits run on the fast model by default.** The Swarm Auditor's challenge and rebuttal turns now use
   the engine's cheap, fast model (for Claude, Haiku at medium effort) instead of the bot's default. The
   new `auditor_model` setting picks `fast` (default), `balanced`, `deep`, or `bot` for the bot's usual
   model.
+- **Kinds of work read as words.** The Performance section and Flight School show a task class such as
+  `code-review` as "Code review" instead of its raw name.
 
 ### Fixed
 - **A restart no longer leaves an audit running.** An audit cut off mid-turn by a restart ends
