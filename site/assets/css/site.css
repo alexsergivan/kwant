@@ -309,6 +309,9 @@ dialog.lightbox button { min-height: 40px; padding: 0 16px; border: 0; border-ra
 .legal .prose { padding-left: 0; }
 .prose .updated { margin-top: 10px; color: var(--dim); font-size: 14px; }
 .prose .placeholder { background: #fff3c4; color: #5c3d00; padding: 0 4px; border-radius: 3px; }
+.prose.solo { padding: 8px 0 96px; }
+.prose.solo .install { max-width: none; }
+.faq h3 { margin-top: 28px; }
 .prose figcaption { margin-top: 10px; color: var(--dim); font-size: 14px; }
 pre { position: relative; margin: 20px 0 0; padding: 18px 20px; overflow-x: auto; background: var(--panel); color: #f1edff; border-radius: 12px; font-size: 14px; line-height: 1.6; }
 pre code { font-size: 14px; }

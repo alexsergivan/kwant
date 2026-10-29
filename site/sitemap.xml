@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://kwant.si/alternatives/grok-bot</loc><lastmod>2026-10-29</lastmod></url>
   <url><loc>https://kwant.si/docs/accounts</loc><lastmod>2026-10-22</lastmod></url>
   <url><loc>https://kwant.si/docs/approvals</loc><lastmod>2026-10-28</lastmod></url>
   <url><loc>https://kwant.si/docs/bots-and-teams</loc><lastmod>2026-10-22</lastmod></url>
@@ -12,11 +13,11 @@
   <url><loc>https://kwant.si/docs/mission-board</loc><lastmod>2026-10-28</lastmod></url>
   <url><loc>https://kwant.si/docs/models</loc><lastmod>2026-10-24</lastmod></url>
   <url><loc>https://kwant.si/docs/parallel-universe</loc><lastmod>2026-10-22</lastmod></url>
-  <url><loc>https://kwant.si/docs/quickstart</loc><lastmod>2026-10-22</lastmod></url>
+  <url><loc>https://kwant.si/docs/quickstart</loc><lastmod>2026-10-29</lastmod></url>
   <url><loc>https://kwant.si/docs/routines</loc><lastmod>2026-10-25</lastmod></url>
   <url><loc>https://kwant.si/docs/spaces</loc><lastmod>2026-10-24</lastmod></url>
   <url><loc>https://kwant.si/features</loc><lastmod>2026-10-28</lastmod></url>
-  <url><loc>https://kwant.si/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://kwant.si/</loc><lastmod>2026-10-29</lastmod></url>
   <url><loc>https://kwant.si/privacy</loc><lastmod>2026-10-25</lastmod></url>
   <url><loc>https://kwant.si/terms</loc><lastmod>2026-10-25</lastmod></url>
 </urlset>

@@ -1,0 +1,42 @@
+# kwant
+
+> kwant is an open-source, self-hosted team of AI agents in one Rust binary (`kwnt`). Bots share chats, hand work to each
+> other with @mentions and get it done on their own, on a schedule or while you're away. It runs on a laptop, a VPS or
+> Docker, with the Claude, Codex or Grok CLI logins you already have, API keys, local Ollama or any OpenAI-compatible server.
+
+Key facts:
+
+- License: AGPL-3.0, with commercial licenses available (contact@kwant.si).
+- Source: https://github.com/alexsergivan/kwant
+- Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
+- The program you install and run is called `kwnt` (`kwnt serve`).
+- No telemetry: kwant sends nothing to its developers.
+- Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.
+
+## Site
+- [Self-hosted AI agent team in one binary](https://kwant.si/): Open-source, self-hosted AI agents that share chats, hand off work and get it done on their own, on a schedule or while you're away. One Rust binary for your laptop or a VPS.
+- [Features: self-hosted AI agent orchestration](https://kwant.si/features): Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.
+
+## Docs
+- [Quickstart: run a team of AI agents locally](https://kwant.si/docs/quickstart): Build kwant from a fresh clone, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.
+- [Self-host AI agents on a VPS or Docker](https://kwant.si/docs/install): Build the kwnt binary and run your AI bots on your own computer, on a VPS with systemd, or with Docker Compose behind an HTTPS reverse proxy.
+- [Spaces: separate AI agents for work and home](https://kwant.si/docs/spaces): Keep work, side projects and home apart. Each space has its own bots, teams, channels, routines, skills, tool servers, accounts and approval rules.
+- [AI agent teams: bots, leads & handoffs](https://kwant.si/docs/bots-and-teams): Create bots from persona presets, give each a soul and a model, group them into teams with a lead, and let them hand work to each other with @mentions.
+- [Multiple Claude, Codex & Grok accounts](https://kwant.si/docs/accounts): Add several logins or API keys per engine, plus OpenAI- or Anthropic-compatible servers, with a priority order and failover when one runs out of usage.
+- [Models & routing: Claude, Codex, Grok, Ollama](https://kwant.si/docs/models): Run bots on the Claude, Codex or Grok CLIs, API keys, local Ollama or any OpenAI-compatible server. The Laya router picks who answers, and which model.
+- [Human approval for AI agent actions](https://kwant.si/docs/approvals): kwant asks before bots run commands or edit outside their folder. Three approval modes per space or bot, plus saved passwords in a vault or Bitwarden.
+- [Flight School: give each bot only the freedom it has earned](https://kwant.si/docs/flight-school): Set each bot's tier per kind of work: Observe, Sandbox or Act. A tier only adds approval cards, payments always ask, and you can revoke a tier in one click.
+- [Mission board: tasks your bots can prove they finished](https://kwant.si/docs/mission-board): One board for everything your bots work on. A task counts as Verified only when a check passes. Checkpoints undo a task's file changes, and AutoFix retries what is safe to retry.
+- [Scheduled AI agents: routines & cron](https://kwant.si/docs/routines): Schedule bot work with routines, cron rules and follow-ups that run on your own machine, with an Undo on every change bots make.
+- [AI agent memory, skills & chat search](https://kwant.si/docs/memory-skills): What kwant bots remember and how you edit it, skills bots propose and you approve, and search across every chat in a space.
+- [Loose ends: AI that finds unfinished follow-ups](https://kwant.si/docs/loose-ends): kwant finds threads you never finished in chats, email and GitHub, and reads letters you photograph. It drafts the next step and never sends anything.
+- [Parallel Universe: compare deployment options](https://kwant.si/docs/parallel-universe): Load-test up to three ways to deploy an app in sealed Docker containers, next to a dated price estimate. No cloud account and no spending.
+- [MCP tools for AI agents: a self-hosted client](https://kwant.si/docs/mcp): Connect Model Context Protocol servers to your kwant bots, with per-bot access, masked secrets, OAuth sign-in and approval before risky tool calls.
+- [AI agent browser: your Chrome or Docker](https://kwant.si/docs/browser): Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.
+
+## Alternatives
+- [Grok Bot Alternative: Open-Source & Self-Hosted](https://kwant.si/alternatives/grok-bot): kwant is an open-source, self-hosted alternative to Grok Bot. Run a team of AI bots on your own machine and import your Grok Bot in minutes.
+
+## Optional
+- [Privacy policy](https://kwant.si/privacy): What kwant.si and the self-hosted kwant software send where. The website sets no cookies and has no analytics; the software has no telemetry.
+- [Terms of use](https://kwant.si/terms): kwant is free software under the GNU AGPL-3.0, provided as is. You run it yourself and are responsible for your accounts, your bots and their costs.
