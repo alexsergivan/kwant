@@ -1,0 +1,115 @@
+title: Self-Hosted AI Agent Team: Run One Yourself
+description: What a self-hosted AI agent team is, what it takes to run one, and what stays on your machine. How kwant does it: one binary, your own logins.
+path: self-hosted-ai-agents.html
+active: guide
+faq: yes
+card_title: Self-hosted AI agents
+card: What you need, what stays on your machine and where the risks are.
+card_art: avatar:brand
+---
+<section class="page-head">
+  <div class="wrap">
+    <p class="kicker">Guide · Self-hosting</p>
+    <h1>Self-hosted AI agents: run a team on your own machine</h1>
+    <p class="lede">What a self-hosted AI agent team is, what you need to run one, what stays on your machine and where the risks are, with kwant as the worked example.</p>
+    <div class="cta">
+      <a class="btn btn-violet" href="docs/install.html">Install kwant</a>
+      <a class="btn btn-soft" href="docs/quickstart.html">Read the quickstart</a>
+    </div>
+  </div>
+</section>
+
+<div class="wrap">
+  <article class="prose solo">
+<p>A self-hosted AI agent team is a group of AI bots that you run on hardware you control, such as a laptop, a home server or a VPS, instead of in someone else's cloud. The bots share chats, hand work to each other and can keep going on a schedule while you are away. You hold the data, the logins and the settings.</p>
+<p><a href="index.html">kwant</a> is an open-source (AGPL-3.0) version of that idea. It ships as one Rust binary called <code>kwnt</code>. This page explains what running a team like that involves, using kwant as the worked example, so you can judge whether it suits you.</p>
+
+<h2 id="what-you-get">What self-hosting gets you, and what it does not</h2>
+<p>What you get:</p>
+<ul>
+  <li><strong>Your data in one place.</strong> kwant's web app and its database are built into the binary, and your data lives in one folder (<code>~/.kwnt</code> by default).</li>
+  <li><strong>Your own accounts.</strong> You add the logins you already use (Claude, Codex or Grok CLIs), provider API keys or your own server, and you can add <a href="docs/accounts.html">several accounts per engine</a>.</li>
+  <li><strong>Source you can read.</strong> The code is public on <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a> under the AGPL-3.0, and commercial licenses are available.</li>
+  <li><strong>No telemetry.</strong> kwant sends nothing to its developers.</li>
+</ul>
+<p>What it does not change: a bot that runs on a Claude, Codex or Grok login or an API key still sends its prompts to that provider, because that is where the model runs. To keep a conversation on your own machine, run a model through local Ollama or your own OpenAI-compatible server. kwant can route a message that asks to stay private to Ollama when Ollama is ready. See <a href="docs/models.html">models and routing</a>.</p>
+
+<h2 id="requirements">What you need to run one</h2>
+<p>Here is what kwant asks for, from its <a href="docs/install.html">install docs</a>:</p>
+<ul>
+  <li><strong>A machine that stays on.</strong> A laptop works. If you want routines to run overnight, a small VPS is the better home. Routines run on your own machine or server, so they run while that machine is on.</li>
+  <li><strong>Rust and Node.js to build it</strong>, then <code>make build</code> and <code>./target/release/kwnt serve</code>. The binary embeds the web app, so the machine that runs it needs no Node.js. On a Mac you can download the app instead.</li>
+  <li><strong>Docker only if you want VM mode or the bots' shared browser.</strong> A Docker Compose route also exists.</li>
+  <li><strong>At least one AI account or key</strong>, or a local Ollama with a model pulled.</li>
+  <li><strong>Room for the router.</strong> On first start, kwant sets up its Laya router, a small Python service that picks which bot answers, and downloads its routing model (about 420 MB). <code>kwnt serve</code> manages it. Until Laya is ready, bots are picked by keyword.</li>
+  <li><strong>On a server, an HTTPS reverse proxy</strong>, so you can reach the web app safely and install it on a phone or in its own window.</li>
+</ul>
+
+<h2 id="day-to-day">How a team runs day to day</h2>
+<ul>
+  <li><strong>Bots and teams.</strong> A bot is a persona with its own voice, model and folder. You group bots into teams with a lead and a shared channel. See <a href="docs/bots-and-teams.html">bots and teams</a>.</li>
+  <li><strong>Handoffs.</strong> When a reply @mentions a teammate, that teammate answers right after in the same chat. A message can lead to up to four handoffs, so bots can't keep each other going forever.</li>
+  <li><strong>Routines.</strong> A routine sends a prompt to a bot on a schedule (once, daily, weekly, monthly, every few minutes or a cron rule) and posts the answer in a chat. You can also ask a bot to set one up. See <a href="docs/routines.html">routines</a>.</li>
+  <li><strong>Several accounts.</strong> When one account runs out of usage, kwant can move the turn to the next account in your priority order, up to three attempts, and the chat says so. See <a href="docs/accounts.html">multiple Claude, Codex and Grok accounts</a>.</li>
+  <li><strong>Spaces.</strong> Keep work, a side project and home in separate spaces, each with its own bots, routines, tools and accounts. See <a href="docs/spaces.html">spaces</a>.</li>
+  <li><strong>Tools.</strong> Connect Model Context Protocol servers and choose which bots may use each one. See <a href="docs/mcp.html">MCP tools</a>.</li>
+  <li><strong>From a phone.</strong> The web app works on a phone, so you can read a summary or answer an approval away from your desk.</li>
+</ul>
+
+<h2 id="safety">Keeping it safe</h2>
+<p>Running agents yourself means you decide what they may do. kwant's defaults are built around that:</p>
+<ul>
+  <li><strong>Approval cards.</strong> When a bot wants to run a command, edit a file outside its folder or call a tool, you see a card with the exact command or arguments. You choose Allow once, Always allow or Deny. Only you can answer a card.</li>
+  <li><strong>Three modes.</strong> Each space has an approval mode: ask before running commands, ask only when risky (the default for new spaces) or don't ask. A bot can override its space. See <a href="docs/approvals.html">approvals</a>.</li>
+  <li><strong>Payments always ask.</strong> Anything that looks like a payment shows a card in every mode.</li>
+  <li><strong>Secrets are off limits.</strong> A call that names kwant's own secret files (the vault, its key, the API token) is refused and recorded.</li>
+  <li><strong>Per-bot tool access.</strong> A bot only sees the MCP servers assigned to it, and secret values always come back masked.</li>
+  <li><strong>Earned freedom.</strong> <a href="docs/flight-school.html">Flight School</a> sets a tier per bot and kind of work: Observe, Sandbox or Act.</li>
+  <li><strong>Safe imports.</strong> Imported bots start with no tools, imported skills wait for your approval and imported routines start paused.</li>
+</ul>
+<p class="note warn"><strong>Know the limit.</strong> kwant's own docs say the "ask only when risky" mode guards against accidents and isn't a sandbox: scripts in a bot's folder, <code>make</code> and <code>npm run</code> run without a card and can do anything the bot's user can do. Use the stricter ask mode for bots or folders you don't trust.</p>
+<p>On a server, <code>kwnt serve</code> prints a one-time sign-in link that works once, for 15 minutes. On your own computer, requests from the same machine need no token.</p>
+
+<h2 id="questions">Questions to ask about any self-hosted agent app</h2>
+<p>Use this list when you compare tools, kwant included.</p>
+<ol>
+  <li>Where does the data live, and can you copy or back up one folder?</li>
+  <li>Which model accounts does it support, and what happens when one runs out of usage?</li>
+  <li>What can a bot do before you are asked, and can you see exactly what it will do first?</li>
+  <li>Does anything leave your machine apart from the model calls? Is there telemetry?</li>
+  <li>Can you undo what a bot changed?</li>
+  <li>What is the license, and can you read the code?</li>
+  <li>What does it need running next to it (build tools, Docker, a Python service), and how much disk does that take?</li>
+  <li>What happens to scheduled work when your machine is off?</li>
+</ol>
+
+<h2 id="fit">Who it fits, and who should pick something else</h2>
+<p>kwant fits if you are comfortable building from source or running a binary on a VPS, want several bots with different roles that hand work to each other, and want approvals before risky steps. It is a poorer fit if you want no machine to look after: you run it yourself, the Mac app isn't notarized by Apple yet (macOS asks you to open it once under System Settings), and routines only run while your machine is on.</p>
+<p>Coming from Grok Bot? See <a href="alternatives/grok-bot.html">the Grok Bot alternative</a> page for how the import works.</p>
+
+<h2 id="start">Get started</h2>
+<p>Build <code>kwnt</code>, add one login or key, and ask your team a question.</p>
+<ul>
+  <li><a href="docs/install.html">Install kwnt</a> on a laptop, a VPS or with Docker</li>
+  <li><a href="docs/quickstart.html">Quickstart</a></li>
+  <li>See <a href="features.html">all features</a></li>
+  <li><a href="https://github.com/alexsergivan/kwant" rel="noopener">Source and releases on GitHub</a></li>
+</ul>
+
+<section class="faq" id="faq" aria-labelledby="faq-title">
+<h2 id="faq-title">FAQ</h2>
+<h3>What is a self-hosted AI agent team?</h3>
+<p>It is a group of AI bots that you run on your own laptop, home server or VPS rather than in a vendor's cloud. The bots share chats, hand work to each other and can run on a schedule. kwant is an open-source (AGPL-3.0) example: one binary, <code>kwnt</code>, with the web app and database built in.</p>
+<h3>Does self-hosting mean my data never leaves my machine?</h3>
+<p>No. kwant keeps its chats, settings and data in a folder on your machine and sends no telemetry to its developers. But a bot on a Claude, Codex or Grok login or an API key still sends its prompts to that provider. To keep a model on your own hardware, use local Ollama or your own OpenAI-compatible server.</p>
+<h3>What do I need to run kwant?</h3>
+<p>A computer or VPS that stays on, Rust and Node.js to build it, and at least one AI login, API key or a local Ollama model. Once built, the <code>kwnt</code> binary needs no Node.js. Docker is only needed for VM mode and the bots' shared browser. kwant also sets up a small Python service called Laya to pick which bot answers.</p>
+<h3>Can the bots run while I am away?</h3>
+<p>Yes. Routines run a prompt on a schedule, such as daily, weekly or a cron rule, and post the answer in a chat. They run on your own machine, so they run while that machine is on. A small VPS keeps them going around the clock.</p>
+<h3>How do I stop a bot doing something I did not want?</h3>
+<p>kwant shows an approval card with the exact command or arguments before risky steps. You can allow once, always allow or deny. Payments always ask. The default "ask only when risky" mode guards against accidents but is not a sandbox, so use the stricter ask mode for bots or folders you do not trust.</p>
+<h3>Is kwant free?</h3>
+<p>The software is free under the AGPL-3.0, and commercial licenses are available. You pay for whatever model accounts or API keys you connect. A local Ollama model needs no account or key.</p>
+</section>
+  </article>
+</div>

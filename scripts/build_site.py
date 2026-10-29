@@ -263,6 +263,7 @@ def footer(root):
       <a href="{root}features.html">Features</a>
       <a href="{root}docs/quickstart.html">Quickstart</a>
       <a href="{root}docs/install.html">Install &amp; run</a>
+      <a href="{root}self-hosted-ai-agents.html">Self-hosted AI agents</a>
       <a href="{root}docs/mcp.html">MCP tools</a>
     </nav>
     <nav aria-label="Using kwant">

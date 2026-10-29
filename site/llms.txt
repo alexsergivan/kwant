@@ -17,6 +17,7 @@ Key facts:
 ## Site
 - [kwant (kwnt): self-hosted AI agent team in one binary](https://kwant.si/): Open-source, self-hosted AI agents that share chats, hand off work and run on a schedule. One Rust binary (kwnt) for your laptop or a VPS.
 - [Features: self-hosted AI agent orchestration](https://kwant.si/features): Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.
+- [Self-Hosted AI Agent Team: Run One Yourself](https://kwant.si/self-hosted-ai-agents): What a self-hosted AI agent team is, what it takes to run one, and what stays on your machine. How kwant does it: one binary, your own logins.
 
 ## Docs
 - [Quickstart: run a team of AI agents locally](https://kwant.si/docs/quickstart): Build kwant from a fresh clone, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.
