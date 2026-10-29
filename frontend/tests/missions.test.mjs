@@ -501,3 +501,12 @@ test('errors read plainly', () => {
   assert.match(m.errorFrom(404, null).message, /doesn’t have the Mission board/);
   assert.equal(m.errorFrom(400, { error: 'reason is required' }).message, 'Reason is required.');
 });
+
+test('a one-way hand-off closed without review reads as Closed, not Cancelled', () => {
+  assert.deepEqual(m.taskStateLabel({ state: 'cancelled', closed_note: m.NOTICE_CLOSED_NOTE }), { label: 'Closed', tone: 'zinc' });
+  assert.equal(m.taskStateLabel({ state: 'cancelled' }).label, 'Cancelled');
+  assert.equal(m.taskStateLabel({ state: 'review', closed_note: null }).label, 'Review');
+  const ev = (reason) => ({ id: 1, task_id: 't1', mission_id: null, kind: 'state', actor: 'kwant', actor_name: null, from_state: 'working', to_state: 'cancelled', detail: { reason }, created_at: '' });
+  assert.equal(m.eventText(ev('Notice, no review needed')), 'Kwant closed it: Notice, no review needed');
+  assert.match(m.eventText(ev('the person stopped it')), /moved it to Cancelled: the person stopped it/);
+});

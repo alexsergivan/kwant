@@ -310,7 +310,8 @@ async fn a_one_way_hand_off_is_closed_instead_of_left_in_review() {
     let t = card(&env, &did).await.unwrap();
     assert!(!moves(&env, &t.id).await.iter().any(|m| m.ends_with(">review")), "it never went to review");
     let events = env.state.db.task_events(&t.id, 200).await.unwrap();
-    assert!(events.iter().any(|e| e.detail.contains("one-way hand-off")), "the close says why");
+    assert!(events.iter().any(|e| e.detail.contains("Notice, no review needed")), "the close says why");
+    assert_eq!(missions::task_json(&env.state, &t).await["closed_note"], json!("Notice, no review needed"), "it reads as Closed");
     settle().await;
     assert_eq!(review_asks_for(&t.id), 0, "nobody is asked to review a notice");
 }
@@ -393,4 +394,94 @@ fn a_hand_off_is_named_after_what_its_teammate_was_asked() {
     assert_eq!(handoff_title("Thanks @QA.", "QA"), None, "nothing asked: the message's title is kept");
     assert_eq!(handoff_title("no mention here", "QA"), None);
     assert_eq!(handoff_title("@Social @Writer draft the launch post", "Social"), None, "one line for several teammates names none of them apart");
+}
+
+/// A lead that answers the reminder by reviewing: its pass verifies the card, and nothing asks
+/// it again. (The fake CLI can't call tools, so the test makes the lead's task_review call once
+/// the reminder has gone out, as the lead would in that turn.)
+#[tokio::test]
+async fn a_lead_that_reviews_after_the_reminder_verifies_the_card() {
+    let env = setup().await;
+    let (did, task) = finished(&env, "Check the cron entry ONREMINDMARK", "Cron check").await;
+    wait_for("the reminder", || async {
+        !prompts_with(&["Reminder:", "Cron check", &task.id]).is_empty()
+    })
+    .await;
+    wait_for("both asks logged", || async {
+        asks_logged(&env, &task.id).await == 2
+    })
+    .await;
+    let ev = result_evidence(&env, &task.id).await;
+    let (out, err) = review(
+        &env,
+        &env.lead,
+        &task.id,
+        "pass",
+        &ev,
+        "The cron entry is right",
+    )
+    .await;
+    assert!(!err, "{out}");
+    assert_eq!(card_state(&env, &did).await, "verified");
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
+    settle().await;
+    assert_eq!(
+        review_asks_for(&task.id),
+        2,
+        "a verified card is never asked about again"
+    );
+}
+
+/// Two hand-offs of one lead that finish together: one results prompt names both cards, and the
+/// one reminder covers both, in a single turn.
+#[tokio::test]
+async fn a_batch_of_two_cards_gets_one_prompt_and_one_reminder() {
+    let env = setup().await;
+    let release = tempfile::tempdir().unwrap().keep().join("release");
+    let mut dids = Vec::new();
+    for (who, title) in [(&env.specialist, "Batch alpha"), (&env.other, "Batch beta")] {
+        let body = json!({"lead_kwant_id": env.lead, "specialist_kwant_id": who, "title": title, "kwant_id": env.lead,
+            "task": format!("Part of the batch BATCHMARK LONGTASK:{}", release.display())});
+        let (s, d) = call(&env.app, "POST", "/api/delegations", Some(body)).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{d}");
+        dids.push(id(&d));
+    }
+    std::fs::write(&release, "go").unwrap();
+    let mut ids = Vec::new();
+    for did in &dids {
+        wait_for("the card to reach review", || async {
+            card_state(&env, did).await == "review"
+        })
+        .await;
+        ids.push(card(&env, did).await.unwrap().id);
+    }
+    let both = [
+        format!("task_id \"{}\"", ids[0]),
+        format!("task_id \"{}\"", ids[1]),
+    ];
+    let both: Vec<&str> = both.iter().map(String::as_str).collect();
+    wait_for("the reminder", || async {
+        !prompts_with(&[&["Reminder:"][..], &both].concat()).is_empty()
+    })
+    .await;
+    for t in &ids {
+        wait_for("both asks logged", || async {
+            asks_logged(&env, t).await == 2
+        })
+        .await;
+    }
+    settle().await;
+    assert_eq!(
+        prompts_with(&both).len(),
+        2,
+        "one results prompt and one reminder, each naming both cards"
+    );
+    assert_eq!(
+        prompts_with(&[&["Reminder:"][..], &both].concat()).len(),
+        1,
+        "one reminder for the batch"
+    );
+    for t in &ids {
+        assert_eq!(review_asks_for(t), 2, "no card was asked about on its own");
+    }
 }

@@ -112,6 +112,9 @@ export interface Task extends TaskTier {
   forked_from?: string | null;
   /** Who reviews a hand-off's result: the bot that handed it out. Older servers leave it out. */
   reviewer?: { kwant_id: string; name: string | null } | null;
+  /** Set when a one-way hand-off's card was closed without review ("Notice, no review needed"):
+   *  it reads as Closed, not Cancelled. Older servers leave it out. */
+  closed_note?: string | null;
   /** Set when a restore held the task: nothing claims it until `POST /api/tasks/:id/run`
    *  (the person's Run). Older servers leave it out. */
   held_at?: string | null;
@@ -504,6 +507,14 @@ export const STATE_LABELS: Record<TaskState, { label: string; tone: Tone }> = {
 };
 
 export const stateLabel = (s: string): { label: string; tone: Tone } => STATE_LABELS[s as TaskState] ?? { label: humanize(s), tone: 'zinc' };
+
+/** The note a one-way hand-off's card is closed with: nothing to review, so not Cancelled but Closed. */
+export const NOTICE_CLOSED_NOTE = 'Notice, no review needed';
+const CLOSED = { label: 'Closed', tone: 'zinc' as Tone };
+
+/** A task's state label: a closed notice reads "Closed", everything else as its state. */
+export const taskStateLabel = (t: Pick<Task, 'state' | 'closed_note'>): { label: string; tone: Tone } =>
+  t.state === 'cancelled' && t.closed_note ? CLOSED : stateLabel(t.state);
 
 export const PRIORITY_LABELS = ['Low', 'Normal', 'High', 'Urgent'];
 export const priorityLabel = (p: number): string => PRIORITY_LABELS[Math.max(0, Math.min(3, Math.round(p)))] ?? 'Normal';
@@ -1316,6 +1327,7 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
     case 'created':
       return `${Who} added this task`;
     case 'state':
+      if (e.to_state === 'cancelled' && note === NOTICE_CLOSED_NOTE) return `${Who} closed it: ${note}`;
       return `${Who} moved it to ${stateLabel(e.to_state ?? '').label}${note ? `: ${note}` : ''}`;
     case 'claimed':
       return `${Who} took it on`;

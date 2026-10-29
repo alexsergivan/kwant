@@ -633,6 +633,7 @@ pub async fn task_json(state: &AppState, task: &Task) -> Value {
         obj.insert("task_class".into(), json!(state.db.task_class(&task.id).await.unwrap_or_else(|_| crate::db::flight_school::DEFAULT_CLASS.into())));
         obj.insert("owner_tier".into(), flight_school::owner_tier(state, task).await);
         obj.insert("reviewer".into(), reviewer(state, task).await);
+        obj.insert("closed_note".into(), closed_note(state, task).await);
     }
     v
 }
@@ -645,6 +646,20 @@ async fn reviewer(state: &AppState, task: &Task) -> Value {
     let Some(id) = task.source_id.as_deref() else { return Value::Null };
     let Ok(Some(d)) = state.db.get_delegation(id).await else { return Value::Null };
     json!({"kwant_id": d.lead_kwant_id, "name": name_of(state, Some(&d.lead_kwant_id)).await})
+}
+
+/// A one-way hand-off's card closed without review: its note, so the board reads it as "Closed"
+/// rather than "Cancelled".
+async fn closed_note(state: &AppState, task: &Task) -> Value {
+    if task.state != "cancelled" || task.source_kind != "delegation" {
+        return Value::Null;
+    }
+    let events = state.db.task_events(&task.id, 500).await.unwrap_or_default();
+    let Some(last) = events.iter().rev().find(|e| e.to_state.is_some()) else { return Value::Null };
+    match last.detail_value().get("reason").and_then(Value::as_str) {
+        Some(why) if last.to_state.as_deref() == Some("cancelled") && why == listener::NOTICE_CLOSED => json!(why),
+        _ => Value::Null,
+    }
 }
 
 pub async fn mission_json(state: &AppState, m: &Mission) -> Value {

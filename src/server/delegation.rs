@@ -917,10 +917,8 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     // one that just reported with a correction (not a mention that only credits it), within the
     // usual limits.
     let outcome = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await;
-    // A card the lead was asked to review and didn't: one reminder (a failed turn counts too)
-    for b in batch {
-        remind_review(state, b).await;
-    }
+    // Cards the lead was asked to review and didn't: one reminder for all of them (a failed turn counts too)
+    remind_review(state, batch).await;
     if let Ok(reply) = outcome {
         let mut spoken = vec![lead.id.clone()];
         spoken.extend(batch.iter().map(|b| b.specialist_kwant_id.clone()));
@@ -952,19 +950,22 @@ pub async fn batch_running(state: &AppState, d: &Delegation) -> bool {
         .any(|s| s.id != d.id && s.continue_lead && s.origin_context() == d.origin_context() && !is_parked(s) && s.is_open())
 }
 
-/// After the lead's results turn: if `d`'s card is still in Review and the lead was asked only
-/// once, it gets one reminder turn now. Past that the card waits for the lead or the person.
-async fn remind_review(state: &AppState, d: &Delegation) {
-    if d.status != "completed" {
-        return;
+/// After the lead's results turn: the cards of `batch` still in Review that the lead was asked
+/// about only once get one reminder turn now, together. Past that a card waits for the lead or
+/// the person.
+async fn remind_review(state: &AppState, batch: &[Delegation]) {
+    let mut due = Vec::new();
+    for d in batch.iter().filter(|d| d.status == "completed") {
+        let Ok(Some(t)) = state.db.task_by_source("delegation", &d.id).await else { continue };
+        let (asks, _) = super::missions::listener::review_asks(state, &t.id).await;
+        if asks > 0 && super::missions::listener::wants_lead_review(state, &t).await {
+            tracing::info!(delegation = %d.id, task_id = %t.id, "the lead didn't review a hand-off card: reminding it once");
+            due.push(d.clone());
+        }
     }
-    let Ok(Some(t)) = state.db.task_by_source("delegation", &d.id).await else { return };
-    let (asks, _) = super::missions::listener::review_asks(state, &t.id).await;
-    if asks == 0 || !super::missions::listener::wants_lead_review(state, &t).await {
-        return;
+    if !due.is_empty() {
+        review_turn(state, &due, true).await;
     }
-    tracing::info!(delegation = %d.id, task_id = %t.id, "the lead didn't review a hand-off card: reminding it once");
-    review_turn(state, d, true).await;
 }
 
 /// [`review_turn`] in the background. The job is registered first, so a sweep in between sees
@@ -974,38 +975,50 @@ pub fn spawn_review_turn(state: &AppState, d: &Delegation, reminder: bool) {
     let d = d.clone();
     let job = state.turns.start_job([format!("review:{}", d.id), d.id.clone()]);
     tokio::spawn(async move {
-        review_turn(&state, &d, reminder).await;
+        let one = std::slice::from_ref(&d);
+        review_turn(&state, one, reminder).await;
         if !reminder {
-            remind_review(&state, &d).await;
+            remind_review(&state, one).await;
         }
         drop(job);
     });
 }
 
-/// A turn for `d`'s lead in the chat the hand-off came from, only to review its card: for a
-/// card whose lead wasn't resumed with the result (the card was blocked when the batch reported,
-/// or kwnt restarted before the lead's turn), and as the one reminder. Nothing when the card
-/// isn't waiting in Review any more.
-pub async fn review_turn(state: &AppState, d: &Delegation, reminder: bool) {
+/// A turn for the lead of `batch` (hand-offs of one lead and chat) in the chat they came from,
+/// only to review their cards, all in one prompt: for a card whose lead wasn't resumed with the
+/// result (the card was blocked when the batch reported, or kwnt restarted before the lead's
+/// turn), and as the one reminder. Cards no longer waiting in Review are left out; nothing runs
+/// when none is.
+pub async fn review_turn(state: &AppState, batch: &[Delegation], reminder: bool) {
+    let Some(d) = batch.first() else { return };
     let Ok(Some(lead)) = state.db.get_kwant(&d.lead_kwant_id).await else { return };
-    let who = name_of(state, &d.specialist_kwant_id).await;
     let context = d.origin_context().unwrap_or(&lead.id).to_string();
-    let job = state.turns.start_job([context, d.id.clone()]);
+    let job = state.turns.start_job(std::iter::once(context).chain(batch.iter().map(|b| b.id.clone())));
     let Ok(scope) = scope_for(state, &lead, d.origin_channel_id.clone(), d.origin_thread_id.clone(), &job, d.depth - 1).await else {
         return;
     };
-    // Logs the ask, so it counts towards the limit even if the turn below fails
-    let Some(note) = super::missions::listener::lead_review_note(state, d, &who).await else { return };
-    let opening = if reminder {
-        format!("Reminder: {who}'s result on “{}” is still waiting for your review on the board.", d.title)
-    } else {
-        format!("{who} finished the task you handed out (“{}”), and its card is waiting for your review.", d.title)
+    let mut cards = String::new();
+    let mut titles = Vec::new();
+    for b in batch {
+        let who = name_of(state, &b.specialist_kwant_id).await;
+        // Logs the ask, so it counts towards the limit even if the turn below fails
+        let Some(note) = super::missions::listener::lead_review_note(state, b, &who).await else { continue };
+        let result = clip(&result_of(state, b).await, 3000);
+        cards.push_str(&format!("{who}'s result on “{}”:\n\n{}\n\n{note}\n\n", b.title, crate::drivers::peer_message(&who, &result)));
+        titles.push(format!("“{}”", b.title));
+    }
+    if titles.is_empty() {
+        return;
+    }
+    let opening = match (reminder, titles.len()) {
+        (true, 1) => format!("Reminder: the result on {} is still waiting for your review on the board.", titles[0]),
+        (true, _) => format!("Reminder: these {} results are still waiting for your review on the board.", titles.len()),
+        (false, 1) => format!("A task you handed out ({}) is finished, and its card is waiting for your review.", titles[0]),
+        (false, _) => format!("{} tasks you handed out are finished, and their cards are waiting for your review.", titles.len()),
     };
-    let result = clip(&result_of(state, d).await, 3000);
     let prompt = format!(
-        "{opening} The result:\n\n{body}\n\n{note}\n\nReview it now with task_review. Then reply with one short line \
-        for the chat: what you decided and why. Don't hand anything on by @mention in this reply.",
-        body = crate::drivers::peer_message(&who, &result),
+        "{opening}\n\n{cards}Review each one now with task_review. Then reply with one short line for the chat: what you \
+        decided and why. Don't hand anything on by @mention in this reply."
     );
     if let Err(e) = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await {
         tracing::info!(delegation = %d.id, error = %e, "a lead review turn failed");

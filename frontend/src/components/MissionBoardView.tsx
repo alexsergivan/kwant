@@ -116,6 +116,7 @@ import {
   type ChatPlace,
   sourceLabel,
   stateLabel,
+  taskStateLabel,
   untilText,
   upsertMission,
   upsertTask,
@@ -1507,7 +1508,7 @@ export const TaskDetailBody: React.FC<{
   const [reason, setReason] = useState('');
   const reasonId = useId();
   const owner = (t.owner_kwant_id && names[t.owner_kwant_id]) || t.owner_name;
-  const st = stateLabel(t.state);
+  const st = taskStateLabel(t);
   // Unblocking without a new limit would stop it again at once.
   const actions = actionsFor(t).filter((a) => !(limitHit && a === 'unblock'));
   const chat = sourceChat(t);

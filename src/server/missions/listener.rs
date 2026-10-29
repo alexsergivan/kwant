@@ -398,9 +398,10 @@ pub const REVIEW_ASKED: &str = "lead_review_asked";
 /// that the card waits ("Waiting for <lead> to review") for the lead or the person.
 pub const MAX_REVIEW_ASKS: usize = 2;
 
-/// Why a finished one-way hand-off (the lead isn't resumed with its result) is closed instead of
-/// going to Review, where nobody would look at it.
-pub const NOTICE_CLOSED: &str = "one-way hand-off: its result was posted to the chat, and nobody was asked to review it";
+/// The note on a finished one-way hand-off's card (the lead isn't resumed with its result): it is
+/// closed instead of going to Review, where nobody would look at it. It is closed, not verified;
+/// the board reads it as "Closed" (`closed_note` in the task's JSON).
+pub const NOTICE_CLOSED: &str = "Notice, no review needed";
 
 /// How long a hand-off card may sit in Review with no lead review running before
 /// [`sweep_unreviewed`] asks the lead (again): long enough for the lead's batch turn to start.
