@@ -3,7 +3,6 @@ import { AuditorSettings, DAILY_CAPS, SETTING_HINT as AUDITOR_HINT, isAuditorMod
 import { AuditorModelSetting } from './AuditorModelSetting';
 import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
-import { budgetError, budgetValue } from '../chainBudget';
 import { DailyUsagePanel } from './DailyUsage';
 import {
   BROWSER_NOTIFY_KEY,
@@ -47,6 +46,7 @@ import {
   parseDefaultLimits,
   parseLimit,
   parseMissionBoardSetting,
+  requestLimitFrom,
 } from '../missions';
 import { FlightSchoolSettings, TIERS, TIER_HINTS, TIER_LABELS, Tier, parseFlightSchoolSettings } from '../flightSchool';
 
@@ -286,9 +286,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const webhookError = webhookUrlError(webhookUrl);
   // Kept as typed text so a half-typed value can be shown with its error; null until loaded.
   const [limits, setLimits] = useState<Record<TurnLimitKey, string> | null>(null);
-  // Fresh tokens one request's chain may use before hand-offs pause; null on a server without it.
+  // Fresh tokens one request's hand-offs may use before they pause (0 = no limit), as typed; null on a server without it.
   const [chainBudget, setChainBudget] = useState<string | null>(null);
-  const chainBudgetError = chainBudget === null ? null : budgetError(chainBudget);
+  const chainBudgetValue = chainBudget === null ? null : requestLimitFrom(chainBudget);
+  const chainBudgetError = chainBudget !== null && chainBudgetValue === null;
   // Default token limits for new tasks and missions, as typed; null on a server without them.
   const [tokenLimits, setTokenLimits] = useState<{ task: string; mission: string } | null>(null);
   const tokenLimitsValue = tokenLimits ? defaultLimitsFrom(tokenLimits) : null;
@@ -420,7 +421,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                 delegation_follow_up_minutes: Number(limits.delegation_follow_up_minutes),
               }
             : {}),
-          ...(chainBudget !== null ? { chain_token_budget: budgetValue(chainBudget) } : {}),
+          ...(chainBudgetValue !== null ? { chain_token_budget: chainBudgetValue } : {}),
           ...(tokenLimitsValue ? defaultLimitsBody(tokenLimitsValue) : {}),
           ...(agentTools !== null ? { agent_tools: agentTools } : {}),
           ...(proactive ?? {}),
@@ -761,26 +762,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               </div>
             )}
             {chainBudget !== null && (
-              <div className="space-y-1">
-                <label htmlFor="chain-token-budget" className="block text-[11px] font-medium text-zinc-300">
-                  Token budget per request (fresh tokens)
-                </label>
-                <input
-                  id="chain-token-budget"
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  value={chainBudget}
-                  onChange={(e) => setChainBudget(e.target.value)}
-                  aria-invalid={!!chainBudgetError}
-                  aria-describedby="chain-token-budget-hint"
-                  className={`w-full sm:w-48 bg-zinc-950 border rounded-lg px-3 py-2 text-xs font-mono text-zinc-100 focus:outline-none transition-colors ${
-                    chainBudgetError ? 'border-rose-500/60 focus:border-rose-400' : 'border-zinc-800 focus:border-sky-500'
-                  }`}
-                />
-                <p id="chain-token-budget-hint" className={`text-[11px] ${chainBudgetError ? 'text-rose-300' : 'text-zinc-500'}`}>
-                  {chainBudgetError ??
-                    'When bots handing work to each other go over this for one of your messages, they pause and ask you before going on. 0 turns it off.'}
+              <div className="space-y-1" data-chain-token-budget>
+                <DefaultLimitField id="chain-token-budget" label="Hand-offs per request" scope="request" value={chainBudget} onChange={setChainBudget} />
+                <p className="text-[11px] text-zinc-500">
+                  With no limit, bots hand work to each other until they're done. Set one and they pause and ask you before going over it for one of
+                  your messages.
                 </p>
               </div>
             )}

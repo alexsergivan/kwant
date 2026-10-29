@@ -242,3 +242,56 @@ async fn a_budget_of_zero_never_pauses() {
     env.settle().await;
     assert!(env.notices().await.is_empty());
 }
+
+#[tokio::test]
+async fn a_fresh_install_has_no_token_limit_on_hand_offs() {
+    let env = setup().await;
+    assert_eq!(kwnt::server::budget::DEFAULT, 0);
+    assert_eq!(ok(&env.app, "GET", "/api/settings", None).await["chain_token_budget"].as_u64(), Some(0));
+    assert_eq!(kwnt::server::budget::limit(&env.state).await, 0);
+    env.say("@Ann look at this MENTION:Bob").await;
+    env.wait_for("Bob's turn", || async { env.replies_from("Bob").await == 1 }).await;
+    env.settle().await;
+    assert!(env.notices().await.is_empty(), "nothing pauses without a limit");
+}
+
+/// Runs a statement on the database file directly, as an older kwnt would have left it.
+async fn raw(dir: &std::path::Path, sql: &str) {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", dir.join("kwnt.db").display()))
+        .await
+        .unwrap();
+    sqlx::query(sql).execute(&pool).await.unwrap();
+    pool.close().await;
+}
+
+/// The value after an upgrade from before the limit was opt-in, when `stored` was saved.
+async fn upgraded(stored: &str) -> Option<String> {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    db.set_setting(kwnt::server::budget::SETTING, stored).await.unwrap();
+    drop(db);
+    // Before the upgrade the migration had never run
+    raw(tmp.path(), "DELETE FROM settings WHERE key = 'chain_token_budget_opt_in_v1'").await;
+    let db = Database::init(tmp.path()).await.unwrap();
+    db.get_setting(kwnt::server::budget::SETTING).await.unwrap()
+}
+
+#[tokio::test]
+async fn an_upgrade_turns_off_the_old_default_and_keeps_a_limit_the_person_chose() {
+    assert_eq!(upgraded("200000").await.as_deref(), Some("0"), "the old default Settings saved back is switched off");
+    assert_eq!(upgraded("50000").await.as_deref(), Some("50000"), "a chosen limit stays");
+    assert_eq!(upgraded("0").await.as_deref(), Some("0"));
+}
+
+#[tokio::test]
+async fn a_200k_limit_set_after_the_upgrade_is_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    db.set_setting(kwnt::server::budget::SETTING, "200000").await.unwrap();
+    drop(db);
+    // The migration runs once: opening again doesn't clear a 200k the person picked since
+    let db = Database::init(tmp.path()).await.unwrap();
+    assert_eq!(db.get_setting(kwnt::server::budget::SETTING).await.unwrap().as_deref(), Some("200000"));
+}
