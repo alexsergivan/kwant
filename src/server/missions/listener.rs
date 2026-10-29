@@ -78,6 +78,7 @@ pub async fn reconcile(state: &AppState) {
         }
     }
     refresh_needs_you(state).await;
+    sweep_unreviewed(state, REVIEW_GRACE).await;
 }
 
 /// The mission a bot's own open claim is in, so a hand-off it starts joins that mission.
@@ -248,8 +249,15 @@ pub async fn on_delegation(state: &AppState, delegation_id: &str) {
                 // It finished while the card was blocked: its result is in, so it goes to review
                 hold(state, &t, &d.specialist_kwant_id, &d.thread_id).await;
                 if let Ok(Some(t)) = state.db.get_task(&t.id).await {
+                    if !d.continue_lead {
+                        finish(state, &t, "cancelled", NOTICE_CLOSED).await;
+                        return;
+                    }
                     attach_result(state, &t, &d).await;
-                    finish(state, &t, "review", "the hand-off had finished").await;
+                    // The lead's results turn ran while the card was blocked, so it never saw the card
+                    if finish(state, &t, "review", "the hand-off had finished").await {
+                        crate::server::delegation::spawn_review_turn(state, &d, false);
+                    }
                 }
             } else if !crate::server::delegation::carry_on(state, &d).await {
                 let change = TaskChange { reason: Some(CANT_CARRY_ON.into()), ..Default::default() };
@@ -268,6 +276,10 @@ pub async fn on_delegation(state: &AppState, delegation_id: &str) {
                 let _ = state.db.log_task_event(&t.id, "handoff_ended", "kwant", &serde_json::json!({"status": status, "note": note})).await;
                 super::emit_task(state, &t).await;
             }
+        }
+        // A one-way hand-off: nobody is resumed with its result, so nobody would review it
+        (Some(t), "completed") if !d.continue_lead => {
+            finish(state, &t, "cancelled", NOTICE_CLOSED).await;
         }
         (Some(t), "completed") => {
             attach_result(state, &t, &d).await;
@@ -364,6 +376,10 @@ pub async fn lead_review_note(state: &AppState, d: &crate::db::threads::Delegati
         return None;
     }
     let ev = state.db.list_evidence(&t.id).await.ok()?.into_iter().filter(|e| e.label == RESULT_LABEL).max_by_key(|e| e.captured_at)?;
+    let detail = serde_json::json!({"delegation_id": d.id, "lead_kwant_id": d.lead_kwant_id});
+    if let Err(e) = state.db.log_task_event(&t.id, REVIEW_ASKED, "kwant", &detail).await {
+        tracing::warn!(error = %e, task_id = %t.id, "could not log a lead review ask");
+    }
     Some(format!(
         "(Board card {task} is in Review and you, who handed it out, review it: {who} can't approve its own work. Call \
         task_review with task_id \"{task}\": verdict \"pass\" with evidence_ids [\"{ev}\"] (its result) when it does what you \
@@ -372,6 +388,65 @@ pub async fn lead_review_note(state: &AppState, d: &crate::db::threads::Delegati
         task = t.id,
         ev = ev.id,
     ))
+}
+
+/// Task event logged each time the lead is asked to review a hand-off card (its results turn,
+/// a review turn or the reminder).
+pub const REVIEW_ASKED: &str = "lead_review_asked";
+
+/// How often the lead is asked per stay in Review: its results turn and one reminder. After
+/// that the card waits ("Waiting for <lead> to review") for the lead or the person.
+pub const MAX_REVIEW_ASKS: usize = 2;
+
+/// Why a finished one-way hand-off (the lead isn't resumed with its result) is closed instead of
+/// going to Review, where nobody would look at it.
+pub const NOTICE_CLOSED: &str = "one-way hand-off: its result was posted to the chat, and nobody was asked to review it";
+
+/// How long a hand-off card may sit in Review with no lead review running before
+/// [`sweep_unreviewed`] asks the lead (again): long enough for the lead's batch turn to start.
+pub const REVIEW_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How often the lead was asked to review `task_id` since it last went to Review, and when last.
+pub async fn review_asks(state: &AppState, task_id: &str) -> (usize, Option<chrono::DateTime<chrono::Utc>>) {
+    let since = super::review_since(state, task_id).await;
+    let events = state.db.task_events(task_id, 500).await.unwrap_or_default();
+    let asks: Vec<_> = events.iter().filter(|e| e.kind == REVIEW_ASKED && since.is_none_or(|s| e.created_at >= s)).collect();
+    (asks.len(), asks.last().map(|e| e.created_at))
+}
+
+/// Whether `task` is a hand-off card in Review that its lead should still be asked about:
+/// its result is on the card (older cards, from before leads reviewed, are left alone) and the
+/// lead hasn't been asked [`MAX_REVIEW_ASKS`] times this stay.
+pub async fn wants_lead_review(state: &AppState, task: &Task) -> bool {
+    if task.state != "review" || task.source_kind != "delegation" {
+        return false;
+    }
+    let has_result = state.db.list_evidence(&task.id).await.unwrap_or_default().iter().any(|e| e.label == RESULT_LABEL);
+    has_result && review_asks(state, &task.id).await.0 < MAX_REVIEW_ASKS
+}
+
+/// Hand-off cards in Review whose lead review never came: kwnt restarted before or during the
+/// lead's turn, or the reminder was lost. Each gets a review turn once nothing has asked for
+/// `grace` and no turn for its hand-off is running; one whose batch still runs waits for it.
+/// Called from [`reconcile`] with [`REVIEW_GRACE`].
+pub async fn sweep_unreviewed(state: &AppState, grace: std::time::Duration) {
+    let now = chrono::Utc::now();
+    for t in state.db.tasks_in_state("review").await.unwrap_or_default() {
+        let Some(id) = t.source_id.as_deref().filter(|_| t.source_kind == "delegation") else { continue };
+        let Ok(Some(d)) = state.db.get_delegation(id).await else { continue };
+        if d.status != "completed" || !d.continue_lead || state.turns.has_job(&d.id) {
+            continue;
+        }
+        if !wants_lead_review(state, &t).await || crate::server::delegation::batch_running(state, &d).await {
+            continue;
+        }
+        let (asks, last) = review_asks(state, &t.id).await;
+        let quiet_since = last.or(super::review_since(state, &t.id).await).unwrap_or(t.updated_at);
+        if (now - quiet_since).to_std().unwrap_or_default() < grace {
+            continue;
+        }
+        crate::server::delegation::spawn_review_turn(state, &d, asks > 0);
+    }
 }
 
 /// Why a hand-off card sent back to Ready can't go on, so it is blocked for the person instead.

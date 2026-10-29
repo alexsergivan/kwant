@@ -2,7 +2,10 @@
 //! is going to check them??"). A finished hand-off's result is evidence on its card, the lead's
 //! results turn names the card and how to review it, and only the lead's review counts: a pass
 //! verifies the card, a fail sends the work back to the teammate with the note, on the same card.
-//! A fake claude CLI on PATH answers every turn with "done". Its own test binary: it changes PATH.
+//! Every card in Review gets a lead review turn, or isn't put there: a lead that doesn't review is
+//! reminded once, a card the batch turn missed (blocked at the time, or a restart) gets its own
+//! turn, and a one-way hand-off is closed. A fake claude CLI on PATH answers every turn with
+//! "done" (so a lead never calls task_review). Its own test binary: it changes PATH.
 
 use axum::{
     body::{to_bytes, Body},
@@ -258,6 +261,125 @@ async fn only_the_lead_reviews_a_hand_off_card() {
     assert!(err && out.to_string().contains("who handed this task out"), "{out}");
     assert_eq!(card_state(&env, &did).await, "review");
     assert!(env.state.db.list_checks(&task.id).await.unwrap().is_empty(), "no review was recorded");
+}
+
+/// Prompts that asked the lead to review card `task_id` (results turn, review turn or reminder).
+fn review_asks_for(task_id: &str) -> usize {
+    prompts_with(&[&format!("task_id \"{task_id}\"")]).len()
+}
+
+async fn asks_logged(env: &Env, task_id: &str) -> usize {
+    missions::listener::review_asks(&env.state, task_id).await.0
+}
+
+/// Lets background turns that would wrongly start show up before a test counts prompts.
+async fn settle() {
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+}
+
+/// The results turn asks the lead to review; a lead that doesn't gets exactly one reminder,
+/// then the card waits, named for its reviewer, and a sweep doesn't ask again.
+#[tokio::test]
+async fn a_lead_that_doesnt_review_is_reminded_once_and_then_the_card_waits() {
+    let env = setup().await;
+    let (did, task) = finished(&env, "Tidy the logs REMINDMARK", "Log tidy").await;
+    wait_for("the reminder", || async { !prompts_with(&["Reminder:", "Log tidy", &task.id]).is_empty() }).await;
+    wait_for("both asks logged", || async { asks_logged(&env, &task.id).await == 2 }).await;
+    settle().await;
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
+    settle().await;
+    assert_eq!(review_asks_for(&task.id), 2, "the results turn and one reminder, nothing more");
+    assert_eq!(asks_logged(&env, &task.id).await, 2);
+    assert_eq!(card_state(&env, &did).await, "review");
+    let t = card(&env, &did).await.unwrap();
+    let lead_name = env.state.db.get_kwant(&env.lead).await.unwrap().unwrap().name;
+    assert_eq!(missions::task_json(&env.state, &t).await["reviewer"]["name"], json!(lead_name));
+}
+
+/// A hand-off that doesn't report back to its lead is a one-way notice: nobody is resumed with
+/// its result, so its card is closed with a note instead of waiting in Review.
+#[tokio::test]
+async fn a_one_way_hand_off_is_closed_instead_of_left_in_review() {
+    let env = setup().await;
+    let body = json!({"lead_kwant_id": env.lead, "specialist_kwant_id": env.specialist, "task": "FYI the deploy moved NOTICEMARK",
+        "title": "Deploy notice", "kwant_id": env.lead, "continue_lead": false});
+    let (s, d) = call(&env.app, "POST", "/api/delegations", Some(body)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{d}");
+    let did = id(&d);
+    wait_for("the card to close", || async { card_state(&env, &did).await == "cancelled" }).await;
+    let t = card(&env, &did).await.unwrap();
+    assert!(!moves(&env, &t.id).await.iter().any(|m| m.ends_with(">review")), "it never went to review");
+    let events = env.state.db.task_events(&t.id, 200).await.unwrap();
+    assert!(events.iter().any(|e| e.detail.contains("one-way hand-off")), "the close says why");
+    settle().await;
+    assert_eq!(review_asks_for(&t.id), 0, "nobody is asked to review a notice");
+}
+
+/// The hand-off finished while its card was blocked, so the lead's results turn didn't see the
+/// card. When the person unblocks it, it goes to Review and the lead gets a review turn for it.
+#[tokio::test]
+async fn a_card_unblocked_after_its_hand_off_finished_gets_a_review_turn() {
+    let env = setup().await;
+    let release = tempfile::tempdir().unwrap().keep().join("go");
+    let d = delegate(&env, &format!("Long job BLOCKMARK LONGTASK:{} ", release.display()), "Long job").await;
+    let did = id(&d);
+    wait_for("the card to be worked on", || async { card_state(&env, &did).await == "working" }).await;
+    let t = card(&env, &did).await.unwrap();
+    let (s, v) = call(&env.app, "POST", &format!("/api/tasks/{}/block", t.id), Some(json!({"reason": "wait for the release"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    std::fs::write(&release, "go").unwrap();
+    wait_for("the hand-off to finish", || async { status_of(&env, &did).await == "completed" }).await;
+    wait_for("the lead's results turn", || async { !prompts_with(&["finished the task you delegated", "Long job"]).is_empty() }).await;
+    settle().await;
+    assert_eq!(card_state(&env, &did).await, "blocked");
+    assert_eq!(review_asks_for(&t.id), 0, "a blocked card isn't up for review yet");
+
+    let (s, v) = call(&env.app, "POST", &format!("/api/tasks/{}/unblock", t.id), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    wait_for("the card in review", || async { card_state(&env, &did).await == "review" }).await;
+    wait_for("the lead's review turn", || async { !prompts_with(&["its card is waiting for your review", &t.id]).is_empty() }).await;
+    wait_for("the one reminder", || async { asks_logged(&env, &t.id).await == 2 }).await;
+}
+
+/// kwnt restarted after the card reached Review but before the lead's turn (here: the hand-off
+/// ended without kwant reporting it). The sweep gives the lead its review turn, plus the one
+/// reminder, and then leaves the card alone.
+#[tokio::test]
+async fn the_sweep_asks_the_lead_about_a_card_whose_review_turn_was_lost() {
+    let env = setup().await;
+    let lead = env.state.db.get_kwant(&env.lead).await.unwrap().unwrap();
+    let new = kwnt::db::threads::NewDelegation {
+        lead_kwant_id: env.lead.clone(),
+        specialist_kwant_id: env.specialist.clone(),
+        origin_channel_id: None,
+        origin_kwant_id: Some(lead.id.clone()),
+        origin_thread_id: None,
+        team_id: None,
+        task: "Rotate the keys SWEEPMARK".into(),
+        title: "Key rotation".into(),
+        continue_lead: true,
+        depth: 1,
+        follow_up_at: None,
+    };
+    let (_, d) = env.state.db.create_delegation(&new).await.unwrap();
+    assert!(env.state.db.finish_delegation(&d.id, "completed", None, None).await.unwrap());
+    missions::listener::on_delegation(&env.state, &d.id).await;
+    assert_eq!(card_state(&env, &d.id).await, "review");
+    let t = card(&env, &d.id).await.unwrap();
+    assert_eq!(review_asks_for(&t.id), 0, "nobody asked the lead yet");
+
+    missions::listener::sweep_unreviewed(&env.state, Duration::from_secs(3600)).await;
+    settle().await;
+    assert_eq!(review_asks_for(&t.id), 0, "within the grace time the sweep waits for the batch turn");
+
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
+    wait_for("the lead's review turn", || async { !prompts_with(&["its card is waiting for your review", &t.id]).is_empty() }).await;
+    wait_for("the one reminder", || async { asks_logged(&env, &t.id).await == 2 }).await;
+    settle().await;
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
+    settle().await;
+    assert_eq!(review_asks_for(&t.id), 2, "asked once and reminded once, then left for the lead or the person");
+    assert_eq!(card_state(&env, &d.id).await, "review");
 }
 
 /// Each hand-off from one message is named after what the lead asked that teammate.
