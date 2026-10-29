@@ -190,7 +190,7 @@ async fn resume_capped(state: &AppState, notice_id: &str, mut meta: serde_json::
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "could not set up the chat"))?;
     tokio::spawn(async move {
         let _job = job;
-        super::routes::delegate_mentions(&scope, &lead, &text, &user_prompt, &[], Some(&waiting)).await;
+        super::routes::delegate_mentions(&scope, &lead, &text, &user_prompt, &[], Some(&waiting), None).await;
     });
     Ok(())
 }

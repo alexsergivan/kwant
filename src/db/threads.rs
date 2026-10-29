@@ -59,6 +59,10 @@ pub struct Delegation {
     /// has the numbers, …"). Set while it is parked as `queued`; cleared when it starts.
     #[sqlx(default)]
     pub after_delegation_id: Option<String>,
+    /// The delegation whose result @mentioned this teammate, so this task was started from it.
+    /// The lead hears both results in one batch (see `finished_batch`).
+    #[sqlx(default)]
+    pub relayed_from_delegation_id: Option<String>,
 }
 
 impl Delegation {
@@ -153,6 +157,9 @@ impl Database {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
         let _ = sqlx::query("ALTER TABLE delegations ADD COLUMN after_delegation_id TEXT;")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE delegations ADD COLUMN relayed_from_delegation_id TEXT;")
             .execute(&self.pool)
             .await;
         Ok(())
@@ -292,6 +299,7 @@ impl Database {
             ended_at: None,
             retries: 0,
             after_delegation_id: None,
+            relayed_from_delegation_id: None,
         };
         sqlx::query(
             "INSERT INTO delegations (id, thread_id, lead_kwant_id, specialist_kwant_id, origin_channel_id, origin_kwant_id, \
@@ -439,6 +447,17 @@ impl Database {
     pub async fn set_delegation_after(&self, id: &str, after: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE delegations SET after_delegation_id = ? WHERE id = ? AND status = 'queued'")
             .bind(after)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Marks `id` as started from `from`'s result by an @mention (see
+    /// [`Delegation::relayed_from_delegation_id`]).
+    pub async fn set_delegation_relayed_from(&self, id: &str, from: &str) -> Result<(), DbError> {
+        sqlx::query("UPDATE delegations SET relayed_from_delegation_id = ? WHERE id = ?")
+            .bind(from)
             .bind(id)
             .execute(&self.pool)
             .await?;

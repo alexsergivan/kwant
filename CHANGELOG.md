@@ -39,6 +39,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   model.
 
 ### Fixed
+- **A teammate's result now hands on its @mentions.** In a team channel, when a teammate's result
+  @mentions another teammate ("@Frontend could switch to …"), that teammate gets the task even if the
+  lead doesn't pass it on. It follows the same caps as the lead's mentions (Continue past them), never
+  hands work back to someone earlier in the same chain, and skips mentions that only credit someone.
+  The lead is resumed once with all of these results.
+- **"@Frontend why didn't you answer QA" goes to Frontend.** A message that @mentions exactly one
+  teammate goes to that teammate even if it names others without an @. Two @mentions still go to
+  the lead.
 - **A restart no longer leaves an audit running.** An audit cut off mid-turn by a restart ends
   `interrupted` and says so in the task's history; one still waiting to start runs after the restart
   (or is skipped if the auditor was turned off).

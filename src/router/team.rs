@@ -587,7 +587,26 @@ pub fn pick_member_after<'a>(
         Pick { kwant: k, basis: if agree { "skills" } else { "keywords" }, reason, terms }
     };
 
-    // 1. Named in the message ("Bea, can you…")
+    // 1. @Named in the message: one @Name wins over plain names ("@Frontend why didn't you answer
+    //    QA" is for Frontend, not "Frontend and QA"); two or more @Names go to the lead
+    let member_names: Vec<&str> = members.iter().map(|m| m.name.as_str()).collect();
+    let at_named: Vec<&'a Kwant> =
+        crate::router::handoff_mentions(prompt, &member_names).targets.into_iter().map(|i| &members[i]).collect();
+    match at_named.as_slice() {
+        [] => {}
+        [k] => return Some(chosen(k, vec![k.name.trim().to_lowercase()], "was @mentioned in your message")),
+        several => {
+            let terms = several.iter().map(|k| k.name.trim().to_lowercase()).collect();
+            let reason = format!(
+                "Your message @mentions {}, so it went to the {lead_word}, {} ({}), to answer or hand parts on",
+                names(several),
+                lead.name,
+                lead.title
+            );
+            return Some(Pick { kwant: lead, basis: "several", reason, terms });
+        }
+    }
+    //    Named without @ ("Bea, can you…")
     let named: Vec<&Kwant> = members.iter().filter(|m| words.iter().any(|w| *w == m.name.trim().to_lowercase())).collect();
     if let [k] = named.as_slice() {
         return Some(chosen(k, vec![k.name.trim().to_lowercase()], "was named in your message"));
@@ -1260,6 +1279,37 @@ mod tests {
         assert_eq!(p.kwant.id, "kwant-2", "{p:?}");
         assert!(is_small_talk("Hi") && is_small_talk("thanks, ok!") && !is_small_talk("hi, deploy the app"));
         assert!(!is_small_talk(""));
+    }
+
+    /// Oleks 2026-10-29: "@Frontend why you did not answer to QA" named two bots, so it went to
+    /// the lead. One @Name wins over a plain name; two @Names still go to the lead.
+    #[test]
+    fn one_at_mention_wins_over_plain_names() {
+        let (_, mut members) = make_test_fixture();
+        let base = members[0].clone();
+        let named = |id: &str, name: &str, title: &str| Kwant { id: id.into(), name: name.into(), title: title.into(), ..base.clone() };
+        members.extend([
+            named("kwant-fe", "Frontend", "Frontend and UX engineer"),
+            named("kwant-qa", "QA", "QA and DevOps engineer"),
+            named("kwant-de", "Designer", "Product and UI designer"),
+        ]);
+        let sure_qa = Some(LayaGuess { kwant: &members[members.len() - 2], confident: true });
+        let p = pick_member_after("@Frontend why you did not answer to QA. It mentioned you", "kwant-1", &members, sure_qa, "lead", Some("kwant-qa"))
+            .unwrap();
+        assert_eq!((p.kwant.id.as_str(), p.basis), ("kwant-fe", "keywords"), "{p:?}");
+        assert!(p.reason.contains("@mentioned"), "{p:?}");
+        // Inline code that is just the name counts too, as in a chip
+        let p = pick_member_after("`@Frontend` please answer QA's design report", "kwant-1", &members, None, "lead", None).unwrap();
+        assert_eq!(p.kwant.id, "kwant-fe", "{p:?}");
+        // Two @Names: the lead
+        let p = pick_member_after("@Frontend and @QA, sort out the chip focus", "kwant-1", &members, None, "lead", None).unwrap();
+        assert_eq!((p.kwant.id.as_str(), p.basis), ("kwant-1", "several"), "{p:?}");
+        assert!(p.reason.contains("Frontend") && p.reason.contains("QA"), "{p:?}");
+        // An email address or an unknown @name is no pick: the old rules apply
+        let p = pick_member_after("mail ops@frontend.example about QA", "kwant-1", &members, None, "lead", None).unwrap();
+        assert_ne!(p.kwant.id, "kwant-fe", "{p:?}");
+        let p = pick_member_after("@Nobody, Frontend please look", "kwant-1", &members, None, "lead", None).unwrap();
+        assert_eq!(p.kwant.id, "kwant-fe", "{p:?}");
     }
 
     /// F2a: a pick that went against Laya's unsure guess is logged as "low confidence".

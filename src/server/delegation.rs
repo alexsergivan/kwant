@@ -151,6 +151,9 @@ pub struct StartRequest {
     /// Another open delegation of the same lead and chat whose result this task waits for: it is
     /// created parked and starts with that result once it completes (see [`release_dependents`]).
     pub after: Option<String>,
+    /// The ended delegation whose result @mentioned this teammate (see
+    /// [`Delegation::relayed_from_delegation_id`]).
+    pub relayed_from: Option<String>,
 }
 
 /// Checks a request, creates the thread and the delegation, and starts the specialist's turn
@@ -260,6 +263,15 @@ pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (S
         })
         .await
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error".into()))?;
+
+    // Linked before it runs, so the lead's batch waits for it (see `finished_batch`)
+    let d = match &req.relayed_from {
+        Some(from) => {
+            let _ = state.db.set_delegation_relayed_from(&d.id, from).await;
+            state.db.get_delegation(&d.id).await.ok().flatten().unwrap_or(d)
+        }
+        None => d,
+    };
 
     // Waits for a sibling of the same lead and chat that is still open; anything else is ignored
     let prereq = match &req.after {
@@ -669,6 +681,10 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
     .await;
     release_dependents(state, &done.id).await;
     if !carried_on {
+        // Teammates the result @mentions start first, so the lead's batch waits for them too
+        if let Ok(reply) = &outcome {
+            relay_mentions(state, &done, specialist, reply).await;
+        }
         return report_to_lead(state, &done, None).await;
     }
     // Its batch already went to the lead: this result goes on its own (a stop was the person's)
@@ -676,6 +692,66 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
         let opening = format!("{} carried on with the task you delegated (“{}”) after the person sent it back.", specialist.name, done.title);
         continue_lead(state, &done, std::slice::from_ref(&done), Some(opening)).await;
     }
+}
+
+/// How many relays back [`relay_chain`] looks; a chain is bounded by the hand-off caps anyway.
+const MAX_RELAY_CHAIN: usize = 32;
+
+/// Hands on the @mentions of other teammates in a completed result posted to a team channel
+/// (Oleks, 2026-10-29: QA's result said "@Frontend could switch to …" and Frontend never heard).
+/// Same rules as a lead's mentions ([`super::routes::delegate_mentions`]): per-bot and
+/// per-request caps, a notice for each one not sent, never back to a bot in this chain.
+async fn relay_mentions(state: &AppState, done: &Delegation, specialist: &Kwant, reply: &str) {
+    let Some(cid) = done.origin_channel_id.clone() else { return };
+    if !done.continue_lead || done.status != "completed" || !reply.contains('@') {
+        return;
+    }
+    let Ok(Some(lead)) = state.db.get_kwant(&done.lead_kwant_id).await else { return };
+    let job = state.turns.start_job([done.id.clone()]);
+    let Ok(scope) = scope_for(state, &lead, Some(cid), None, &job, done.depth - 1).await else { return };
+    if !scope.teammates.iter().any(|k| k.id == specialist.id) {
+        return;
+    }
+    let user_prompt = state
+        .db
+        .list_messages(done.origin_context().unwrap_or(&lead.id), 100)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .find(|m| m.sender_role == "user")
+        .map(|m| m.text)
+        .unwrap_or_else(|| done.task.clone());
+    let end = |d: &Delegation| d.ended_at.unwrap_or(d.created_at);
+    let alongside = state
+        .db
+        .list_delegations(Some(&done.lead_kwant_id), None, 50)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| s.continue_lead && s.origin_context() == done.origin_context())
+        .filter(|s| s.is_open() || (s.created_at <= end(done) && end(s) >= done.created_at))
+        .map(|s| s.specialist_kwant_id)
+        .collect();
+    let relay = super::routes::Relay { from: specialist, source: done, chain: relay_chain(state, done).await, alongside };
+    super::routes::delegate_mentions(&scope, &lead, reply, &user_prompt, &[], None, Some(&relay)).await;
+}
+
+/// The teammates of `d` and of every delegation it was relayed from.
+async fn relay_chain(state: &AppState, d: &Delegation) -> Vec<String> {
+    let mut chain = vec![d.specialist_kwant_id.clone()];
+    let mut from = d.relayed_from_delegation_id.clone();
+    while let Some(id) = from.take() {
+        if chain.len() > MAX_RELAY_CHAIN {
+            break;
+        }
+        let Ok(Some(p)) = state.db.get_delegation(&id).await else { break };
+        if !chain.contains(&p.specialist_kwant_id) {
+            chain.push(p.specialist_kwant_id.clone());
+        }
+        from = p.relayed_from_delegation_id.clone();
+    }
+    chain
 }
 
 /// Resumes the lead once `d` ended, if it was the last of its batch to end (see
@@ -784,13 +860,19 @@ async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegati
         return None;
     }
     let end = |s: &Delegation| s.ended_at.unwrap_or(s.created_at);
-    // Grow from `d` to every delegation whose run overlaps the batch's span
+    // Grow from `d` to every delegation whose run overlaps the batch's span, and to the results
+    // that relayed work to a batch member or were relayed from one (they ran one after the other)
     let mut batch = vec![siblings.iter().find(|s| s.id == d.id)?.clone()];
     let (mut lo, mut hi) = (d.created_at, end(d));
+    let linked = |s: &Delegation, batch: &[Delegation]| {
+        batch.iter().any(|b| {
+            s.relayed_from_delegation_id.as_deref() == Some(b.id.as_str()) || b.relayed_from_delegation_id.as_deref() == Some(s.id.as_str())
+        })
+    };
     loop {
         let more: Vec<Delegation> = siblings
             .iter()
-            .filter(|s| !batch.iter().any(|b| b.id == s.id) && s.created_at <= hi && end(s) >= lo)
+            .filter(|s| !batch.iter().any(|b| b.id == s.id) && ((s.created_at <= hi && end(s) >= lo) || linked(s, &batch)))
             .cloned()
             .collect();
         if more.is_empty() {
@@ -856,6 +938,12 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
             _ => format!("({}: {})", b.status, b.error.as_deref().unwrap_or("no result")),
         };
         results.push_str(&format!("### {who}: “{}”\n{}\n", b.title, crate::drivers::peer_message(&who, &body)));
+        if let Some(from) = b.relayed_from_delegation_id.as_ref().and_then(|id| batch.iter().find(|x| &x.id == id)) {
+            results.push_str(&format!(
+                "({who} got this task because {}'s result @mentioned it; you didn't send it yourself.)\n",
+                name_of(state, &from.specialist_kwant_id).await
+            ));
+        }
         if let Some(q) = open_question(state, b).await {
             results.push_str(&format!(
                 "(Waiting: {who} asked the person “{}” in its thread and has no answer yet. Don't redo this task: tell the \
@@ -1304,6 +1392,7 @@ pub async fn create_delegation(State(state): State<AppState>, Json(p): Json<Dele
         origin_depth,
         allowed: None,
         after: None,
+        relayed_from: None,
     };
     match start(&state, req).await {
         Ok(d) => (StatusCode::ACCEPTED, Json(d)).into_response(),
@@ -1382,6 +1471,7 @@ pub async fn tool_delegate(state: &AppState, scope: &super::continuity::SelfScop
         origin_depth: origin.depth,
         allowed: (!origin.member_ids.is_empty()).then(|| origin.member_ids.clone()),
         after: None,
+        relayed_from: None,
     };
     match start(state, req).await {
         Ok(d) => (
