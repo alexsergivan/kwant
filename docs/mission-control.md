@@ -649,3 +649,35 @@ and text "Paused after N hand-offs so it doesn't loop: A, B not sent yet. Press 
 person typing "continue" while it's the newest bot message. Continuing sets `resumed` true and hands
 only the waiting teammates the lead's reply, with a fresh allowance.
 
+## 17. Performance Market (Phase D1, report-only)
+
+kwant observes every task once it settles and reports, per task class × bot (× model), how often work
+ends **verified**, how long it takes, what it costs and how often the person stepped in. Nothing reads
+these numbers to route work: Laya stays the router, and bots can't read the report.
+
+**One row per task** in `performance_observations`, written when a task moves to `verified`, `failed`
+or `cancelled` (`after_move` → `performance::record_soon`, in the background; a failure is logged and
+never fails or slows the move). `cancelled` counts as `unverified`, and only if the task ran (had a
+claim). Tasks with no owner are skipped. A reopened task that settles again replaces its row, so it
+counts once, by its last outcome, with the earlier attempts in `retries` / `autofix_attempts`.
+
+| Field | From |
+|-------|------|
+| `latency_ms`, `runs`, `started_at` | the task's claims (time a bot held it), their count, the first one |
+| `fresh_tokens` | `tasks.spent_tokens` |
+| `model`, `cost_usd` | the owner's `model_usage` rows inside the claim windows (model with the most tokens, else the bot's preferred model); `cost_usd` is null if none was reported |
+| `engine` | the bot's driver type |
+| `approvals`, `check_approvals`, `unblocks`, `retries`, `autofix_attempts` | tool cards answered, owner checks the person approved, person moves out of blocked/needs you, person `failed → ready`, AutoFix attempts that ran; `interventions` is their sum |
+
+Model and cost are attributed by time, not by turn: a bot chatting elsewhere while it holds a claim
+adds to the task's cost. The token number is the exact mission meter.
+
+**Backfill.** On startup, once (setting `performance_backfill_v1`), every finished task is observed
+with the same rules and inserted as `source = 'backfill'`; rows that exist are never overwritten.
+
+**`GET /api/performance?space=&class=&bot=&since=&by=`** (person-only, read-only). `since` is
+`Nd` (1–365), a `YYYY-MM-DD` date or an RFC 3339 time, default `30d`; `by` is `model` (default) or
+`bot`; anything else is 400. Each group has `n`, `verified` / `failed` / `unverified`,
+`verified_rate`, `verified_ci95` (Wilson score interval, z = 1.96), `median_latency_ms`,
+`median_fresh_tokens`, `cost_usd` and `cost_per_task_usd` (over rows with a cost),
+`interventions_per_task` and `low_confidence` (n < 5). Groups sort by class, then n descending.

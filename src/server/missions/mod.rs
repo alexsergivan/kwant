@@ -18,6 +18,7 @@ pub mod checks;
 pub mod flight_school;
 pub mod graph;
 pub mod listener;
+pub mod performance;
 pub mod routes;
 pub mod runner;
 pub mod tools;
@@ -233,6 +234,10 @@ pub async fn transition(
 }
 
 async fn after_move(state: &AppState, task: &Task, to: &str) {
+    // The Performance Market observes a settled task in the background (report-only, D1)
+    if crate::db::performance::result_of(to).is_some() {
+        performance::record_soon(state, &task.id);
+    }
     if to == "ready" {
         listener::kick_handoff(state, task);
     }
