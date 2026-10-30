@@ -26,7 +26,9 @@ use tower::ServiceExt;
 /// "MENTION:<name>", and by "`@<name>` please revise your part." (inline code, as models write it)
 /// for a lead's results follow-up with "FOLLOWUP:<name>"; several names go as "<a>+<b>". A
 /// follow-up with "CREDIT:<name>" adds "As @<name> found, it's done." (a mention that asks nothing);
-/// a "LONGTASK:<file>" prompt waits (up to 60 s) for that file first, and a "FAILTASK" prompt fails. Every prompt is saved under `$KWNT_TEST_PROMPTS`.
+/// a "LONGTASK:<file>" prompt waits (up to 60 s) for that file first, and a "FAILTASK" prompt fails.
+/// "LINES:<name>:<n>" adds n lines "@<name>, please build part <i>." to a reply that isn't a
+/// delegated task or a results follow-up. Every prompt is saved under `$KWNT_TEST_PROMPTS`.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1" in
   auth) echo '{"loggedIn":true}'; exit 0 ;;
@@ -44,10 +46,16 @@ mention=$(printf '%s\n' "$last" | sed -n 's/.*MENTION:\([A-Za-z0-9_+]*\).*/\1/p'
 followup=$(printf '%s\n' "$last" | sed -n 's/.*FOLLOWUP:\([A-Za-z0-9_+]*\).*/\1/p' | head -n 1)
 credit=$(printf '%s\n' "$last" | sed -n 's/.*CREDIT:\([A-Za-z0-9_]*\).*/\1/p' | head -n 1)
 case "$last" in *"finished the task you delegated"*|*"tasks you delegated have ended"*) ;; *) followup=""; credit="" ;; esac
+lines=$(printf '%s\n' "$last" | sed -n 's/.*LINES:\([A-Za-z0-9_]*:[0-9]*\).*/\1/p' | head -n 1)
+case "$last" in *"finished the task you delegated"*|*"tasks you delegated have ended"*|*"mentioned you"*) lines="" ;; esac
 out="answer ${tag:-none}"
 for n in $(printf '%s' "$mention" | tr '+' ' '); do out="$out @$n"; done
 for n in $(printf '%s' "$followup" | tr '+' ' '); do out="$out \`@$n\` please revise your part."; done
 [ -n "$credit" ] && out="$out As @$credit found, it's done."
+if [ -n "$lines" ]; then
+  i=1
+  while [ $i -le "${lines##*:}" ]; do out="$out\\n@${lines%%:*}, please build part $i."; i=$((i+1)); done
+fi
 echo "{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"result\":\"$out\"}"
 "#;
 
@@ -1485,4 +1493,80 @@ async fn a_relayed_mention_past_the_cap_waits_for_continue() {
     assert!(notices[0].text.contains("Growth not sent yet"), "{}", notices[0].text);
     let to_growth = env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap().iter().filter(|d| d.specialist_kwant_id == growth).count();
     assert_eq!(to_growth, per_bot_limit(), "nothing past the cap until Continue");
+}
+
+/// The lead's delegations from `channel`, oldest first.
+async fn handoffs_from(env: &Env, channel: &str) -> Vec<kwnt::db::threads::Delegation> {
+    let mut ds: Vec<_> = env
+        .state
+        .db
+        .list_delegations(Some(&env.lead), None, 50)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.origin_channel_id.as_deref() == Some(channel))
+        .collect();
+    ds.sort_by_key(|d| d.created_at);
+    ds
+}
+
+/// Rigel's promo footage (2026-10-30): the lead wrote five "@Frontend, please …" lines and kwant
+/// made one card, named after the first. Each line that hands the same teammate its own piece is
+/// now a delegation (a board card) of its own, named after that line and carrying only that line
+/// as its task; the lead is still resumed once, with every result.
+#[tokio::test]
+async fn each_line_for_the_same_teammate_is_its_own_hand_off() {
+    let env = setup().await;
+    let (lead, specialist) = (name(&env, &env.lead).await, name(&env, &env.specialist).await);
+    let channel = team_channel(&env, "lines-squad").await;
+    say_in(&env, &channel, &format!("@{lead} Build the site LINESMARK1 REPLYTAG:plan LINES:{specialist}:3")).await;
+
+    wait_for("three hand-offs", || async { handoffs_from(&env, &channel).await.len() >= 3 }).await;
+    wait_for("the lead's final answer", || async {
+        prompts_with("LINESMARK1").iter().any(|p| p.contains("tasks you delegated have ended"))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let ds = handoffs_from(&env, &channel).await;
+    assert_eq!(ds.len(), 3, "one hand-off per line: {:?}", ds.iter().map(|d| &d.title).collect::<Vec<_>>());
+    for (i, d) in ds.iter().enumerate() {
+        let part = format!("build part {}.", i + 1);
+        assert_eq!(d.specialist_kwant_id, env.specialist);
+        assert!(d.title.to_lowercase().contains(&part), "named after its own line: {}", d.title);
+        let own = d.task.split("Your task is this line").nth(1).unwrap_or_default();
+        assert!(own.contains(&part), "the task names its line: {}", d.task);
+        for j in (1..=3).filter(|&j| j != i + 1) {
+            assert!(!own.contains(&format!("build part {j}.")), "only its own line: {own}");
+        }
+    }
+    let resumes = prompts_with("LINESMARK1").into_iter().filter(|p| p.contains("tasks you delegated have ended")).count();
+    assert_eq!(resumes, 1, "the lead is resumed once for the whole batch");
+    assert!(capped(&channel_messages(&env, &channel).await).is_empty());
+}
+
+/// Five lines for one teammate: the per-teammate cap sends four, a Continue notice holds the
+/// fifth, and Continue sends just that one, not the four again.
+#[tokio::test]
+async fn lines_past_the_per_teammate_cap_wait_for_continue_and_are_sent_once() {
+    let env = setup().await;
+    let (lead, specialist) = (name(&env, &env.lead).await, name(&env, &env.specialist).await);
+    let channel = team_channel(&env, "five-lines").await;
+    say_in(&env, &channel, &format!("@{lead} Build the site LINESMARK2 REPLYTAG:plan LINES:{specialist}:5")).await;
+
+    wait_for("the Continue notice", || async { !capped(&channel_messages(&env, &channel).await).is_empty() }).await;
+    let ds = handoffs_from(&env, &channel).await;
+    assert_eq!(ds.len(), per_bot_limit(), "up to the per-teammate cap");
+    let notice = capped(&channel_messages(&env, &channel).await).remove(0);
+    assert!(notice.text.contains(&format!("{specialist} not sent yet")), "{}", notice.text);
+    for d in &ds {
+        wait_for("a part to finish", || async { delegation_status(&env, &d.id).await == "completed" }).await;
+    }
+
+    let (s, v) = call(&env.app, "POST", &format!("/api/chains/{}/continue", notice.id), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    wait_for("the fifth part", || async { handoffs_from(&env, &channel).await.len() > per_bot_limit() }).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let ds = handoffs_from(&env, &channel).await;
+    assert_eq!(ds.len(), 5, "Continue sends only the line that waited: {:?}", ds.iter().map(|d| &d.title).collect::<Vec<_>>());
+    assert!(ds[4].title.to_lowercase().contains("build part 5."), "{}", ds[4].title);
 }

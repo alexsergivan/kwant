@@ -1302,6 +1302,7 @@ pub(super) async fn delegate_mentions(
         targets.insert(at, k);
     }
     let mut started: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut sent = 0;
     let user = truncate_chars(user_prompt.trim(), 3000);
     let task = match relay {
         None => format!(
@@ -1326,13 +1327,48 @@ pub(super) async fn delegate_mentions(
         None => title.clone(),
     };
     let allowed: Vec<String> = scope.teammates.iter().map(|k| k.id.clone()).collect();
+    // One line of several for the same teammate is a task of its own (Rigel's promo footage,
+    // 2026-10-30: five "@Frontend, please …" lines made one card)
+    let line_task = |line: &str| {
+        format!(
+            "{task}\n\nYour task is this line of {lead}'s message only:\n{line}\n{lead} sent each line that mentions you as a \
+            task of its own, so the other lines are not part of this one.",
+            lead = lead.name,
+        )
+    };
+    let mut units: Vec<(&Kwant, Option<String>)> = Vec::new();
     for (n, specialist) in targets.into_iter().enumerate() {
         if n >= MAX_HANDOFFS {
             skipped.push((specialist.name.clone(), format!("a message hands work to at most {MAX_HANDOFFS} teammates")));
             continue;
         }
+        let lines = handoff_lines(text, &specialist.name);
+        if lines.len() < 2 {
+            units.push((specialist, None));
+            continue;
+        }
+        let mut left = MAX_MENTION_DELEGATIONS_PER_BOT.saturating_sub(asked(&specialist.id));
+        for line in lines {
+            // Continue sends only the lines that weren't sent before the cap
+            let sent = |d: &crate::db::threads::Delegation| d.specialist_kwant_id == specialist.id && d.task.starts_with(&line_task(&line));
+            if resumed.is_some() && mine.iter().any(sent) {
+                continue;
+            }
+            if left == 0 {
+                if !capped.iter().any(|c| c.id == specialist.id) {
+                    capped.push(specialist);
+                }
+                break;
+            }
+            left -= 1;
+            units.push((specialist, Some(line)));
+        }
+    }
+    for (specialist, line) in units {
         if room == 0 {
-            capped.push(specialist);
+            if !capped.iter().any(|c| c.id == specialist.id) {
+                capped.push(specialist);
+            }
             continue;
         }
         // Waits for a teammate started here, or for one still on an earlier task from this chat
@@ -1354,8 +1390,11 @@ pub(super) async fn delegate_mentions(
         let req = super::delegation::StartRequest {
             lead: lead.clone(),
             specialist: specialist.clone(),
-            task: task.clone(),
-            title: Some(handoff_title(text, &specialist.name).unwrap_or_else(|| title_for(specialist))),
+            task: line.as_deref().map_or_else(|| task.clone(), line_task),
+            title: Some(match &line {
+                Some(l) => handoff_title(l, &specialist.name).unwrap_or_else(|| first_line(l)),
+                None => handoff_title(text, &specialist.name).unwrap_or_else(|| title_for(specialist)),
+            }),
             origin: super::delegation::Origin { channel_id: Some(cid.clone()), ..Default::default() },
             continue_lead: true,
             origin_depth: scope.delegation_depth,
@@ -1366,6 +1405,7 @@ pub(super) async fn delegate_mentions(
         match super::delegation::start(&scope.state, req).await {
             Ok(d) => {
                 started.insert(specialist.id.clone(), d.id);
+                sent += 1;
                 room -= 1;
             }
             Err((_, why)) => skipped.push((specialist.name.clone(), why.trim_end_matches('.').to_string())),
@@ -1373,7 +1413,7 @@ pub(super) async fn delegate_mentions(
     }
     report_skipped(scope, skipped).await;
     if !capped.is_empty() {
-        super::budget::pause_capped(scope, lead, &capped, this_request.len() + started.len(), text, user_prompt).await;
+        super::budget::pause_capped(scope, lead, &capped, this_request.len() + sent, text, user_prompt).await;
     }
 }
 
@@ -1405,6 +1445,30 @@ pub fn handoff_title(text: &str, name: &str) -> Option<String> {
     let mut chars = sentence.chars();
     let title: String = chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default();
     Some(truncate_chars(&title, 80).to_string())
+}
+
+/// The lines of `text` that each hand `name` a piece of work: they @mention `name` and nobody
+/// else, outside ``` / ~~~ blocks; a line said twice counts once. Two or more of them are a task
+/// (and a board card) each, so every piece is reviewed and verified on its own; one line, or a
+/// line naming several teammates, leaves the whole message as one task, as before.
+pub fn handoff_lines(text: &str, name: &str) -> Vec<String> {
+    let tag = format!("@{}", name.to_lowercase());
+    let mut fenced = false;
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        let lower = trimmed.to_lowercase();
+        let names_it = lower.match_indices(&tag).any(|(i, _)| !lower[i + tag.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'));
+        let mentions = trimmed.match_indices('@').filter(|&(i, _)| trimmed[i + 1..].starts_with(char::is_alphanumeric)).count();
+        if !fenced && names_it && mentions == 1 && !out.iter().any(|l| l == trimmed) {
+            out.push(trimmed.to_string());
+        }
+    }
+    out
 }
 
 /// The first line of `text` that @mentions `name`, without its list marker, for a relayed task's title.
