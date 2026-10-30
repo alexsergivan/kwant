@@ -653,6 +653,23 @@ event is logged; per stay in Review it's asked at most `listener::MAX_REVIEW_ASK
 After both asks the card waits, "Waiting for <lead> to review", for the lead or the person. Cards
 from before this change (no result evidence) and cards whose lead was deleted are left for the person.
 
+### One card per hand-off line
+
+When a lead's message names the same teammate on two or more lines that each @mention only that
+teammate (`@Frontend, please build the menu.` on one line, `@Frontend, please build the footer.` on
+the next), each line is its own hand-off: its own delegation, thread and board card, titled after
+its line, with the whole message as context and "Your task is this line of <lead>'s message only:
+<line>". Each card gets its own review and checks. The lead is still resumed once, when the last
+hand-off of the batch ends. Lines inside a code fence don't count.
+
+Dedupe, and why: a teammate named on **one** line, or on lines that also name other teammates,
+still gets one hand-off with the whole message, as before, since kwant can't tell which part of a
+shared line is whose. The same line repeated word for word counts once (it's a repeat, not more
+work). Lines past the per-teammate cap (4) wait for Continue; on Continue, lines already sent are
+skipped, so no line is sent twice. The lead's open limit (`delegation::MAX_OPEN_PER_LEAD`, 5 unfinished)
+still applies per hand-off: a line past it is refused with the usual `handoff_refused` note. A dependency wait
+("after @X") on a teammate with several cards waits for the last of them started.
+
 ### Capped hand-offs: the Continue notice
 
 One person message starts at most `routes::MAX_DELEGATIONS_PER_REQUEST` (16) hand-offs by mention,

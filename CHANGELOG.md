@@ -15,6 +15,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Mission board, Bots & teams, Browser and Skills docs cover them, with the hand-off caps and Settings →
   Usage → Hand-offs per request. The site also gains /llms.txt and the Grok Bot comparison page.
 
+### Fixed
+- **One card per hand-off line.** A lead's message that hands the same teammate several lines (five
+  `@Frontend, please …` lines) now makes one task and board card per line instead of one card for the
+  whole message. The per-teammate cap (4) still applies; the rest wait for Continue and are sent once.
+
 ## [Mac 0.4.0] - 2026-10-29
 
 ### Added
