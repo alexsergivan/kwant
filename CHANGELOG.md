@@ -57,6 +57,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the notification toggles. This is step 4 of Automation Discovery.
 
 ### Changed
+- **Browser checkouts ask before paying, also behind a plain "Continue".** Before a bot clicks or
+  presses Enter in its browser, kwant reads the page: the button the click would really hit, card
+  number or CVC fields, a payment provider's card frame (Stripe, Braintree, Adyen, …) and forms that
+  post to a checkout. Any of these gets the payment card in every approval mode, as before for
+  "Pay" buttons and checkout addresses. Bots using the browser through the shell can't show a card,
+  so they leave that step to you. Clicks by screen position are now for your live view only.
 - **kwant.si footer says "Made in Germany with ❤️".** The line sits under the trademark note on every
   page; screen readers read it as "Made in Germany with love".
 

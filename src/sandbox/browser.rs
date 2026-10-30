@@ -38,8 +38,9 @@ pub(crate) async fn connect_cdp(url: &str) -> Result<WsStream, BrowserError> {
 
 /// `function(needle)` evaluated in the page. Collects visible interactive elements (incl. open
 /// shadow roots and same-origin iframes), topmost first. With a needle, picks the best label match
-/// and either returns its viewport center (when nothing covers it) or clicks it directly.
-const CLICKABLES_JS: &str = r#"function (needle) {
+/// and either returns its viewport center (when nothing covers it) or clicks it directly. With
+/// `probe`, returns the matched item itself (with its element) and touches nothing.
+const CLICKABLES_JS: &str = r#"function (needle, probe) {
   var SEL = 'button,a[href],[role=button],[role=link],[role=menuitem],[role=tab],[role=checkbox],[role=option],input,textarea,select,summary,label,[onclick]';
   var items = [];
   function clean(s) { return (s || '').replace(/\s+/g, ' ').trim().slice(0, 80); }
@@ -92,6 +93,7 @@ const CLICKABLES_JS: &str = r#"function (needle) {
       var s = l === n ? 3 : l.indexOf(n) === 0 ? 2 : l.indexOf(n) >= 0 ? 1 : 0;
       if (s > best) { best = s; match = items[j]; }
     }
+    if (probe) return match;
     if (match) {
       var m = match.el;
       if (!match.onTop) {
@@ -105,6 +107,78 @@ const CLICKABLES_JS: &str = r#"function (needle) {
     }
   }
   return { items: items.map(function (i) { return { label: i.label, onTop: i.onTop }; }), match: match };
+}"#;
+
+/// What the payment floor needs from the page before a `browser_act` (see
+/// `payment_floor::PageSignals`): the element a click on `needle` would hit (the same match as
+/// `click_text`) or, with no needle, the focused element; visible card fields; and frames by host.
+const PAYMENT_SIGNALS_JS: &str = r#"function (needle) {
+  var CLICK = __CLICKABLES__;
+  var CARD = /card.?num|cardnumber|cc.?num|credit.?card|card.?cvc|\bcvc2?\b|\bcvv2?\b/i;
+  function isCard(el) {
+    if (!el || el.tagName !== 'INPUT') return false;
+    var t = (el.type || '').toLowerCase();
+    if (['hidden', 'checkbox', 'radio', 'submit', 'button', 'image', 'reset'].indexOf(t) >= 0) return false;
+    var ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+    if (/\bcc-(number|csc|exp)/.test(ac)) return true;
+    return CARD.test([el.name, el.id, el.placeholder, el.getAttribute('aria-label'), el.getAttribute('data-stripe')].join(' '));
+  }
+  function shown(el) {
+    var r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    var cs = getComputedStyle(el);
+    return cs.visibility !== 'hidden' && cs.display !== 'none';
+  }
+  var cards = 0, frames = [];
+  function walk(root) {
+    var all;
+    try { all = root.querySelectorAll('*'); } catch (e) { return; }
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.shadowRoot) walk(el.shadowRoot);
+      if (el.tagName === 'IFRAME') {
+        var host = '';
+        try { host = new URL(el.src, location.href).hostname; } catch (e) {}
+        if (shown(el)) frames.push({ host: host, title: (el.title || el.name || '').slice(0, 120) });
+        try { var d = el.contentDocument; if (d) walk(d); } catch (e) {}
+        continue;
+      }
+      if (isCard(el) && shown(el)) cards++;
+    }
+  }
+  walk(document);
+  function formOf(el) {
+    var f = el.form || (el.closest && el.closest('form'));
+    return f || null;
+  }
+  function describe(el, label) {
+    if (!el) return null;
+    var tag = el.tagName, role = (el.getAttribute('role') || '').toLowerCase(), t = (el.type || '').toLowerCase();
+    var kind = 'other';
+    if (tag === 'BUTTON' || role === 'button' || (tag === 'INPUT' && ['submit', 'button', 'image', 'reset'].indexOf(t) >= 0)
+        || el.hasAttribute('onclick') || tag === 'SUMMARY') kind = 'button';
+    else if (tag === 'A' || role === 'link') kind = 'link';
+    else if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') kind = 'field';
+    var f = formOf(el), action = '', formCard = false;
+    if (f) {
+      var a = el.getAttribute && el.getAttribute('formaction') ? el.formAction : (f.getAttribute('action') ? f.action : '');
+      action = String(a || '');
+      var inputs = f.querySelectorAll('input');
+      for (var i = 0; i < inputs.length; i++) if (isCard(inputs[i])) { formCard = true; break; }
+    }
+    return { label: label || '', kind: kind, in_form: !!f, form_action: action, form_card: formCard, card_field: isCard(el) };
+  }
+  var target = null;
+  if (needle) {
+    var m = CLICK(needle, true);
+    if (m) target = describe(m.el, m.label);
+  } else {
+    var a = document.activeElement;
+    try { while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; } catch (e) {}
+    try { while (a && a.tagName === 'IFRAME' && a.contentDocument && a.contentDocument.activeElement) a = a.contentDocument.activeElement; } catch (e) {}
+    if (a && a !== document.body && a !== document.documentElement) target = describe(a, (a.getAttribute('aria-label') || a.name || a.id || '').slice(0, 80));
+  }
+  return { url: location.href, target: target, card_fields: cards, frames: frames.slice(0, 40) };
 }"#;
 
 #[derive(Error, Debug)]
@@ -1208,6 +1282,23 @@ impl BrowserController {
         *self.current_url.lock().await = Some(url.clone());
         *self.current_title.lock().await = Some(title.clone());
         Some((url, title))
+    }
+
+    /// What the page shows for the payment floor before `action` (see [`PAYMENT_SIGNALS_JS`]):
+    /// for a click the element `needle` would hit, for a key the focused element. Reads only.
+    pub async fn payment_signals(&self, needle: Option<&str>) -> Result<Value, BrowserError> {
+        let needle = serde_json::to_string(&needle).map_err(|e| BrowserError::Protocol(e.to_string()))?;
+        let script = PAYMENT_SIGNALS_JS.replace("__CLICKABLES__", CLICKABLES_JS);
+        let res = self
+            .send_cdp_command(
+                "Runtime.evaluate",
+                json!({ "expression": format!("({script})({needle})"), "returnByValue": true }),
+            )
+            .await?;
+        if let Some(err) = res.get("exceptionDetails") {
+            return Err(BrowserError::Protocol(format!("payment check failed: {}", err["text"])));
+        }
+        Ok(res["result"]["value"].clone())
     }
 
     /// Labels of visible interactive elements, topmost (e.g. modal buttons) first.

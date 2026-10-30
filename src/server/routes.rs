@@ -4386,9 +4386,34 @@ pub async fn get_sandbox_page(
     Ok(Json(sandbox_page_state(&ctrl).await))
 }
 
-/// Agent-facing action endpoint: performs one action and returns the resulting page state,
-/// so an agent can act and answer without extra round-trips.
+/// Agent-facing action endpoint (`POST /api/sandbox/:id/act`, the shell bots' browser API):
+/// performs one action and returns the resulting page state, so an agent can act and answer
+/// without extra round-trips. This path has no approval card to show, so an action that looks
+/// like a payment (D8, `continuity::browser_act_payment`) is not done here: the bot is told to
+/// leave that step to the person. `browser_act` asks with a card and then runs [`act_sandbox_allowed`].
 pub async fn act_sandbox(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+    Json(payload): Json<InteractPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let ctrl = get_or_create_browser_controller(&state, &team_id)
+        .await
+        .ok_or_else(|| browser_unavailable(&state))?;
+    let args = json!({"action": payload.action, "text": payload.text, "key": payload.key});
+    if let Some(why) = super::continuity::browser_act_payment(&state, &team_id, &args).await {
+        let mut page = sandbox_page_state(&ctrl).await;
+        page["payment"] = json!(why);
+        page["error"] = json!(format!(
+            "Not done: this looks like a payment ({why}). Payments always need the person's OK, and this browser API can't ask for it. \
+             Tell the person what you were about to do and ask them to finish this step themselves in the live browser panel (Take Control)."
+        ));
+        return Ok(Json(page));
+    }
+    act_sandbox_allowed(State(state), Path(team_id), Json(payload)).await
+}
+
+/// [`act_sandbox`] without the payment check: for `browser_act`, whose approver already asked.
+pub async fn act_sandbox_allowed(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
     Json(payload): Json<InteractPayload>,

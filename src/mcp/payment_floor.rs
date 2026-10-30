@@ -91,6 +91,11 @@ fn builtin_reason(tool: &str, input: &Value) -> Option<String> {
     }
 }
 
+/// kwnt's `browser_act` by its arguments and the page address alone (before the page is read).
+pub fn browser_act_reason(args: &Value, page_url: Option<&str>) -> Option<String> {
+    self_reason("browser_act", args, page_url)
+}
+
 /// kwnt's own tools: only `browser_act` can pay today. A new self tool with a money word in its
 /// name fails `self_tools_have_no_money_words` until it is classified here.
 fn self_reason(tool: &str, args: &Value, page_url: Option<&str>) -> Option<String> {
@@ -114,6 +119,123 @@ fn self_reason(tool: &str, args: &Value, page_url: Option<&str>) -> Option<Strin
             } else {
                 None
             }
+        }
+        _ => None,
+    }
+}
+
+/// What kwnt's browser sees on the page before a `browser_act`, read by
+/// `BrowserController::payment_signals`: the element the action would hit, card fields and
+/// payment frames. Read from the page itself, so a plain "Continue" on a card form still asks.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+#[serde(default)]
+pub struct PageSignals {
+    /// The element a click would hit, or the focused one for a key.
+    pub target: Option<TargetSignals>,
+    /// Visible card number / CVC fields on the page (open shadow roots and same-origin frames too).
+    pub card_fields: u32,
+    /// Frames on the page as (host, title): a payment provider's card frame is cross-origin.
+    pub frames: Vec<FrameSignal>,
+}
+
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+#[serde(default)]
+pub struct TargetSignals {
+    pub label: String,
+    /// `button`, `link`, `field` or `other`.
+    pub kind: String,
+    /// Inside a form (or the form a button submits).
+    pub in_form: bool,
+    /// The form's address when it names one (`action` or the button's `formaction`).
+    pub form_action: String,
+    /// The form has a card number or CVC field.
+    pub form_card: bool,
+    /// The element itself is a card field.
+    pub card_field: bool,
+}
+
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+#[serde(default)]
+pub struct FrameSignal {
+    pub host: String,
+    pub title: String,
+}
+
+/// Card-field frame hosts that aren't in [`PAYMENT_HOSTS`].
+const PAY_FRAME_HOSTS: &[&str] = &[
+    "braintreegateway.com", "braintree-api.com", "squarecdn.com", "paddle.com", "worldpay.com", "cybersource.com",
+    "spreedly.com", "globalpay.com", "chargebee.com", "recurly.com", "hsforms.com",
+];
+
+/// First words of buttons that never pay, even on a card form.
+const NEVER_PAYS: &[&str] = &[
+    "cancel", "back", "close", "remove", "edit", "change", "help", "menu", "logout", "log", "sign", "show", "hide", "view",
+    "apply", "use", "add",
+];
+
+/// Why a payment frame is one: its host, or a card-input title ("Secure card payment input frame").
+fn payment_frame(frame: &FrameSignal) -> Option<String> {
+    let host = frame.host.trim_end_matches('.').to_lowercase();
+    let listed = !host.is_empty()
+        && (payment_host(&host) || PAY_FRAME_HOSTS.iter().any(|h| host == *h || host.ends_with(&format!(".{h}"))));
+    if listed {
+        return Some(host);
+    }
+    let title = words(&frame.title.to_lowercase());
+    let has = |w: &str| title.iter().any(|t| t == w);
+    (has("card") && (has("payment") || has("number") || has("input")) || has("payment") && has("input"))
+        .then(|| frame.title.chars().take(60).collect())
+}
+
+/// Why a `browser_act` is a payment from what the page shows (see [`PageSignals`]), or `None`.
+/// Pure, so the rules are tested as tables; the bot's own words never mark a call as safe.
+pub fn page_reason(action: &str, key: Option<&str>, page: &PageSignals) -> Option<String> {
+    let frame = page.frames.iter().find_map(payment_frame);
+    let card_on_page = page.card_fields > 0 || frame.is_some();
+    let card_where = || match &frame {
+        Some(f) if page.card_fields == 0 => format!("a payment frame ({f})"),
+        _ => "card fields".to_string(),
+    };
+    let target = page.target.as_ref();
+    match action {
+        "click_text" | "click" => {
+            let t = target?;
+            // The label of the element it really hits, not the words the bot wrote
+            if let Some(why) = pay_label(&t.label) {
+                return Some(why);
+            }
+            let presses = t.kind == "button" || t.kind == "link";
+            if presses && t.in_form {
+                if let Some(page) = checkout_page(&t.form_action) {
+                    return Some(format!("a button that sends a checkout form ({page})"));
+                }
+            }
+            let first = words(&t.label.to_lowercase()).into_iter().next().unwrap_or_default();
+            let never = NEVER_PAYS.contains(&first.as_str()) || has_phrase(&t.label.to_lowercase(), "continue shopping");
+            if presses && !never && (t.form_card || card_on_page) {
+                let label = t.label.chars().take(40).collect::<String>();
+                return Some(format!("\"{label}\" on a page with {}", card_where()));
+            }
+            None
+        }
+        "key" => {
+            let submits = matches!(key.unwrap_or("Enter").to_ascii_lowercase().as_str(), "enter" | "return" | "numpadenter");
+            if !submits {
+                return None;
+            }
+            if frame.is_some() && page.card_fields == 0 {
+                return Some(format!("Enter on a page with {}", card_where()));
+            }
+            let t = target?;
+            if t.card_field || t.in_form && t.form_card {
+                return Some("Enter in a form with card fields".into());
+            }
+            if t.in_form {
+                if let Some(page) = checkout_page(&t.form_action) {
+                    return Some(format!("Enter in a form that sends to a checkout ({page})"));
+                }
+            }
+            None
         }
         _ => None,
     }
@@ -497,6 +619,72 @@ mod tests {
         assert!(mcp("playwright", "browser_type", json!({"ref": "e5", "text": "hello"})).is_none());
         // A long id elsewhere isn't a card number to type
         assert!(mcp("discord", "get_message", json!({"id": "4242424242424242"})).is_none());
+    }
+
+    fn target(label: &str, kind: &str) -> TargetSignals {
+        TargetSignals { label: label.into(), kind: kind.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn the_page_decides_what_a_click_really_hits() {
+        let click = |page: &PageSignals| page_reason("click_text", None, page);
+        // The bot wrote "Order" but the element it hits is "Place order"
+        let hits = |t: TargetSignals| PageSignals { target: Some(t), ..Default::default() };
+        assert!(click(&hits(target("Place order", "button"))).is_some());
+        assert!(click(&hits(target("Pay $12.99", "button"))).is_some());
+        assert!(click(&hits(target("Continue", "button"))).is_none(), "a plain button on a plain page");
+        // A plain "Continue" on a page with card fields asks; Cancel, Back and the fields don't
+        let card = |t: TargetSignals| PageSignals { target: Some(t), card_fields: 2, ..Default::default() };
+        for label in ["Continue", "Next", "Finish", "Submit", "Confirm", "Review"] {
+            assert!(click(&card(target(label, "button"))).is_some(), "{label}");
+        }
+        for label in ["Cancel", "Back to cart", "Continue shopping", "Apply coupon", "Edit address"] {
+            assert!(click(&card(target(label, "button"))).is_none(), "{label}");
+        }
+        assert!(click(&card(target("Card number (field)", "field"))).is_none(), "clicking into a field");
+        // A card frame from Stripe (cross-origin) counts, as does its title
+        let frame = |host: &str, title: &str, t: TargetSignals| PageSignals {
+            target: Some(t),
+            frames: vec![FrameSignal { host: host.into(), title: title.into() }],
+            ..Default::default()
+        };
+        let why = click(&frame("js.stripe.com", "", target("Continue", "button"))).unwrap();
+        assert!(why.contains("js.stripe.com"), "{why}");
+        assert!(click(&frame("pay.example-psp.io", "Secure card payment input frame", target("Next", "button"))).is_some());
+        assert!(click(&frame("www.youtube.com", "YouTube video player", target("Next", "button"))).is_none());
+        // A submit button whose form posts to a checkout address
+        let mut t = target("Continue", "button");
+        t.in_form = true;
+        t.form_action = "https://shop.example.com/checkout/confirm".into();
+        assert!(click(&hits(t.clone())).is_some());
+        t.form_action = "https://shop.example.com/search".into();
+        assert!(click(&hits(t)).is_none());
+        // Nothing found under the label: no page rule (the label and address rules still run)
+        assert!(click(&PageSignals { card_fields: 3, ..Default::default() }).is_none());
+    }
+
+    #[test]
+    fn enter_asks_in_a_card_form_or_a_checkout_form() {
+        let key = |k: &str, page: &PageSignals| page_reason("key", Some(k), page);
+        let focus = |t: TargetSignals| PageSignals { target: Some(t), ..Default::default() };
+        let mut f = target("Card number (field)", "field");
+        f.card_field = true;
+        assert!(key("Enter", &focus(f.clone())).is_some());
+        assert!(key("Tab", &focus(f)).is_none());
+        let mut name = target("Name on card (field)", "field");
+        name.in_form = true;
+        name.form_card = true;
+        assert!(key("Enter", &focus(name)).is_some());
+        let mut search = target("Search (field)", "field");
+        search.in_form = true;
+        search.form_action = "https://example.com/search".into();
+        assert!(key("Enter", &focus(search.clone())).is_none());
+        search.form_action = "https://example.com/billing/upgrade".into();
+        assert!(key("Enter", &focus(search)).is_some());
+        let stripe = PageSignals { frames: vec![FrameSignal { host: "js.stripe.com".into(), title: String::new() }], ..Default::default() };
+        assert!(key("Enter", &stripe).is_some());
+        assert!(page_reason("scroll", None, &stripe).is_none());
+        assert!(page_reason("type", None, &stripe).is_none(), "typing alone doesn't pay; the submit does");
     }
 
     #[test]
