@@ -83,13 +83,10 @@ pub fn bot_workspace(space_data_dir: &std::path::Path, kwant_id: &str) -> PathBu
     dir
 }
 
-pub async fn resolve_or_prepare_workspace(
-    base_data_dir: &std::path::Path,
-    team_name: &str,
-    workspace_path: Option<&str>,
-    repo_url: Option<&str>,
-) -> PathBuf {
-    let target_dir = if let Some(ws) = workspace_path.filter(|s| !s.trim().is_empty()) {
+/// The folder a team works in, as [`resolve_or_prepare_workspace`] picks it, without creating or
+/// cloning anything: its own path (`~/` expanded), its repo's clone, else the space's shared folder.
+pub fn team_workspace_path(base_data_dir: &std::path::Path, team_name: &str, workspace_path: Option<&str>, repo_url: Option<&str>) -> PathBuf {
+    if let Some(ws) = workspace_path.filter(|s| !s.trim().is_empty()) {
         let trimmed = ws.trim();
         if let Some(rest) = trimmed.strip_prefix("~/") {
             if let Ok(home) = std::env::var("HOME") {
@@ -104,7 +101,16 @@ pub async fn resolve_or_prepare_workspace(
         base_data_dir.join("workspaces").join(team_name)
     } else {
         base_data_dir.join("workspace")
-    };
+    }
+}
+
+pub async fn resolve_or_prepare_workspace(
+    base_data_dir: &std::path::Path,
+    team_name: &str,
+    workspace_path: Option<&str>,
+    repo_url: Option<&str>,
+) -> PathBuf {
+    let target_dir = team_workspace_path(base_data_dir, team_name, workspace_path, repo_url);
 
     if let Some(repo) = repo_url.filter(|s| !s.trim().is_empty()) {
         let git_dir = target_dir.join(".git");

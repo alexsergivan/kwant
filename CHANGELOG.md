@@ -15,6 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Mission board, Bots & teams, Browser and Skills docs cover them, with the hand-off caps and Settings →
   Usage → Hand-offs per request. The site also gains /llms.txt and the Grok Bot comparison page.
 
+### Fixed
+- **Team hand-offs share one folder for checks and audits.** A hand-off card from a team's channel
+  now checks files, keeps checkpoints and runs its audit in the team's folder, where its owner wrote
+  them. Before, it looked in the owner's own folder, and the Swarm Auditor's challenger in its own,
+  so it could miss a file the owner had written (the challenger found no `index.html`).
+
 ## [Mac 0.4.0] - 2026-10-29
 
 ### Added

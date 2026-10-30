@@ -405,10 +405,16 @@ The header works on `POST /api/tasks/:id/fork`, `POST /api/tasks/:id/retry` and 
 ## 12. Checkpoints and restore (Phase B2)
 
 Design and decisions: `/home/maus/shared/ship-software-safely/mission-control/phase-b/contract.md` §3
-and `decisions.md` (D4, D6, D8, D9). A checkpoint is a snapshot of a task's folder (the mission's
-`workspace_path`, else the owner bot's workspace). A restore writes back only the paths this task's
+and `decisions.md` (D4, D6, D8, D9). A checkpoint is a snapshot of a task's folder (see "The task folder" below). A restore writes back only the paths this task's
 own runs changed. What a tool did outside the folder (Bash, web, email, other bots) is never undone:
 it is listed as "not undone".
+
+**The task folder** (`missions::task_folder`) is where a task's file checks, evidence, checkpoints and
+audit turns look: the mission's `workspace_path`; else, for a task whose thread belongs to a team (a
+hand-off made in a team's channel or thread), the team's folder, where that hand-off's turns run;
+else the owner bot's own workspace. Before 2026-10-30 a team hand-off card without a mission fell back
+to the owner's own folder, so its checks and audit didn't see the files its owner wrote in the team
+folder. A hand-off from a direct chat (no team) still uses the owner's own folder.
 
 ### When a checkpoint is taken
 
@@ -727,7 +733,8 @@ no challenger) logs `audit_skipped`.
 handed the task off. Ranked by verified tasks of the task's class (Performance Market), then fewest
 challenges in the last 7 days, then name and id.
 
-**Exchange.** Two hidden turns, each `always_ask` (any call that could change something asks the
+**Exchange.** Two hidden turns, each in the task folder (§12; where the owner wrote the files, not the
+challenger's own folder), each `always_ask` (any call that could change something asks the
 person; payments ask in every mode, D8), each capped at 20 minutes:
 
 1. The challenger calls `audit_challenge {audit_id, risks: [{risk, evidence, evidence_ids?}]}` once:

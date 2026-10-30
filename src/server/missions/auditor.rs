@@ -211,13 +211,13 @@ pub async fn drive(state: &AppState, audit: &Audit) {
         return finish(state, audit).await;
     };
     let p = challenge_prompt(state, audit, &task, &owner).await;
-    let err = run_stage(state, audit, &challenger, "challenge", p).await;
+    let err = run_stage(state, audit, &task, &challenger, "challenge", p).await;
     if state.db.move_audit(&audit.id, "challenge", "failed", Some(&ended_without("challenge", err.as_deref()))).await.unwrap_or(false) {
         return finish(state, audit).await;
     }
     if matches!(state.db.get_audit(&audit.id).await, Ok(Some(a)) if a.status == "rebuttal") {
         let p = rebuttal_prompt(state, audit, &task, &challenger).await;
-        let err = run_stage(state, audit, &owner, "rebuttal", p).await;
+        let err = run_stage(state, audit, &task, &owner, "rebuttal", p).await;
         // No answer: the audit ends with every risk still open
         if matches!(state.db.get_audit(&audit.id).await, Ok(Some(a)) if a.status == "rebuttal") && state.db.record_rebuttal(&audit.id, &[]).await.ok().flatten().is_some() {
             let _ = state.db.move_audit(&audit.id, "done", "done", Some(&ended_without("rebuttal", err.as_deref()))).await;
@@ -297,11 +297,15 @@ async fn finish(state: &AppState, audit: &Audit) {
 
 /// One hidden turn of `bot` in its direct chat, every change asking the person. Its tokens are
 /// added to the stage. The turn's error, if any.
-async fn run_stage(state: &AppState, audit: &Audit, bot: &Kwant, stage: &str, prompt: String) -> Option<String> {
+/// One audit turn of `bot`, in `task`'s folder (where its owner wrote the files), not the bot's own.
+async fn run_stage(state: &AppState, audit: &Audit, task: &Task, bot: &Kwant, stage: &str, prompt: String) -> Option<String> {
     let started = Utc::now();
     let job = state.turns.start_job([bot.id.clone()]);
     let reply = match scope_for(state, bot, None, None, &job, 0).await {
-        Ok(scope) => {
+        Ok(mut scope) => {
+            if let Some(dir) = super::task_folder(state, task).await {
+                scope.workspace_dir = Some(dir);
+            }
             let mut opts = TurnOpts::always_asking("Audit");
             (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(PURPOSE.into()));
             opts.tier = tier_of(model_mode(state).await);
@@ -344,6 +348,7 @@ async fn challenge_prompt(state: &AppState, audit: &Audit, task: &Task, owner: &
         "[Swarm Auditor] You are auditing task {tid} \"{title}\", done by {owner}. You are not its reviewer: \
          you can't verify or fail it, and nothing in this audit counts as proof either way; only its checks \
          or the person decide.\nAcceptance: {acc}\nEvidence attached:\n{ev}\nChecks:\n{ch}\n\
+         You are working in the task's folder, where {owner} worked, so its files are where they wrote them. \
          Look for concrete reasons it may not meet its acceptance: wrong, missing, unsafe or unverifiable. \
          Read what you need, but change nothing. Then call audit_challenge once with audit_id {aid} and at \
          most {max} risks. Each risk needs `evidence`: what you looked at and what you saw (put ids from the \

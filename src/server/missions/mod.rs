@@ -1040,7 +1040,9 @@ pub async fn create_task(state: &AppState, space: &SpaceId, t: NewTask) -> Resul
     Ok(task)
 }
 
-/// The folder a task's file checks and evidence resolve in: its mission's, else its owner's.
+/// The folder a task's file checks, evidence and audit resolve in: its mission's, else its
+/// thread's team's (a hand-off in a team runs in the team's folder, not the owner's own), else its
+/// owner's.
 pub async fn task_folder(state: &AppState, task: &Task) -> Option<std::path::PathBuf> {
     task_folder_in(&state.db, &state.config.data_dir, task).await
 }
@@ -1054,8 +1056,19 @@ pub async fn task_folder_in(db: &crate::db::Database, data_dir: &std::path::Path
             }
         }
     }
-    let owner = task.owner_kwant_id.as_deref().or(task.suggested_kwant_id.as_deref())?;
     let space = SpaceId::new(&task.space_id);
+    let team_id = match &task.thread_id {
+        Some(tid) => db.get_thread(tid).await.ok().flatten().and_then(|t| t.team_id),
+        None => None,
+    };
+    if let Some(Ok(Some(team))) = match &team_id {
+        Some(id) => Some(db.get_team(id).await),
+        None => None,
+    } {
+        let base = crate::db::spaces::space_data_dir(data_dir, &space);
+        return Some(crate::tools::team_workspace_path(&base, &team.name, team.workspace_path.as_deref(), team.repo_url.as_deref()));
+    }
+    let owner = task.owner_kwant_id.as_deref().or(task.suggested_kwant_id.as_deref())?;
     Some(crate::tools::bot_workspace(&crate::db::spaces::space_data_dir(data_dir, &space), owner))
 }
 
