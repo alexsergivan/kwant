@@ -19,6 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **One card per hand-off line.** A lead's message that hands the same teammate several lines (five
   `@Frontend, please …` lines) now makes one task and board card per line instead of one card for the
   whole message. The per-teammate cap (4) still applies; the rest wait for Continue and are sent once.
+- **Team hand-offs share one folder for checks and audits.** A hand-off card from a team's channel
+  now checks files, keeps checkpoints and runs its audit in the team's folder, where its owner wrote
+  them. Before, it looked in the owner's own folder, and the Swarm Auditor's challenger in its own,
+  so it could miss a file the owner had written (the challenger found no `index.html`).
 
 ## [Mac 0.4.0] - 2026-10-29
 
