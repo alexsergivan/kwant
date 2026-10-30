@@ -8,7 +8,7 @@ card_art: avatar:user
 ---
 <p class="kicker">Docs</p>
 <h1>AI agent browser: your Chrome or Docker</h1>
-<p class="intro">Bots can browse the web, and you watch it live in the app's browser panel. Take control at any time to sign in or solve a CAPTCHA yourself.</p>
+<p class="intro">Bots can browse the web, read pages and look at screenshots of them, and you watch it live in the app's browser panel. Take control at any time to sign in or solve a CAPTCHA yourself.</p>
 
 <h2 id="how">How it works</h2>
 <p>kwant runs one long-lived Chromium per installation, with a separate browser context for each bot, channel or team. The app connects to kwant over a same-origin WebSocket. kwant relays the screen frames and your input, so your browser never talks to Chromium directly.</p>
@@ -16,6 +16,14 @@ card_art: avatar:user
   <li><strong>Take Control</strong> gives you an exclusive hold. Bot navigation waits until you hand it back, close the panel or disconnect.</li>
   <li>Closing the panel stops its stream. Slow viewers don't build up a backlog of frames.</li>
   <li>Restarting kwant reconnects to the existing sessions while Chromium keeps running.</li>
+</ul>
+
+<h2 id="screenshots">Bots can see the page</h2>
+<p>Besides reading a page's text, a bot can take a screenshot with <code>browser_screenshot</code> and look at the picture, to check layout, colours, spacing and images that text can't show.</p>
+<ul>
+  <li><strong>A set width:</strong> the bot can take the shot at a width from 320 to 1280 pixels, such as 390 for a phone or 1280 for a desktop. The browser goes back to its own size afterwards, and the picture you see in the panel isn't changed.</li>
+  <li><strong>Waits for you:</strong> like the other browser tools, it won't take a shot while you're signing in, solving a CAPTCHA or holding the browser with Take Control.</li>
+  <li><strong>Which bots:</strong> Claude and Codex bots get the picture. Bots on other engines get a short text note in its place for now.</li>
 </ul>
 
 <h2 id="modes">Local or VM mode</h2>

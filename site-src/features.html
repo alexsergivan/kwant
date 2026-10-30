@@ -18,6 +18,8 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-teams">New in 0.4.0</a></li>
+        <li><a href="#performance">Performance &amp; audits</a></li>
         <li><a href="#mission-board">Mission board</a></li>
         <li><a href="#flight-school">Flight School</a></li>
         <li><a href="#connect">Connect apps</a></li>
@@ -32,10 +34,56 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-teams" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.4.0 · Teams</p>
+      <h2>Work handed on, checked and seen</h2>
+      <p>Teammates pass work along on their own, the bot that handed it out checks the result, and a bot can look at a page instead of only reading it.</p>
+    </div>
+    <ul class="flist">
+      <li id="lead-review"><h3>The lead reviews hand-offs</h3><p>When a teammate finishes, the bot that handed out the work reviews it: a pass makes the card Verified, a fail sends it back with the reason. It gets one reminder, then the card says "Waiting for &lt;lead&gt; to review". A bot still can't approve its own card.</p></li>
+      <li id="closed-notices"><h3>Notices don't wait in Review</h3><p>A one-way hand-off nobody is asked about is shown as Closed, "Notice, no review needed", never as Verified.</p></li>
+      <li id="relayed"><h3>@mentions in a result hand work on</h3><p>When QA's result says "@Frontend could switch the header", Frontend gets that task even if the lead doesn't pass it on. The lead hears back once, with every result.</p></li>
+      <li id="one-mention"><h3>One @mention picks who answers</h3><p>"@Frontend why didn't you answer QA" goes to Frontend, even though it names QA. Two @mentions still go to the lead.</p></li>
+      <li id="screenshots"><h3>Bots see the page</h3><p>A <code>browser_screenshot</code> tool hands Claude and Codex bots a real picture of the page, at a width they choose (390 for a phone, 1280 for a desktop), so a designer can check layout, colours and spacing.</p></li>
+      <li id="no-limits"><h3>No token limits by default</h3><p>Tasks, missions and hand-offs no longer stop at a hidden token budget. Set one in Settings → Usage if you want it. Hand-off caps (4 per bot, 16 per request) still stop loops, with a Continue button.</p></li>
+    </ul>
+    <p class="section-foot"><a class="more-link" href="docs/mission-board.html#lead-review">How lead review works →</a></p>
+  </div>
+</section>
+
+<section id="performance" class="fgroup alt">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.4.0 · Performance &amp; audits</p>
+      <h2>Learn from the work that's already done</h2>
+      <p>See which bot and model does each kind of work well, have a second bot challenge important work, and turn work done well into skills. All of it needs the Mission board, and the Auditor and Skill Foundry are off by default.</p>
+    </div>
+    <div class="grid two">
+      <article class="card">
+        <span class="shot">{{shot:v4-performance|The Performance report under the Mission board: for each kind of work and bot, tasks finished, the verified rate with its likely range, median time and tokens, cost per task and how often you stepped in, with a "few tasks" tag on a small group.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Who does each kind of work well</h3><p>Verified rates by bot or by model over the last 30 days, 90 days or all time. Report-only: it never decides who gets work.</p></div>
+      </article>
+      <article class="card">
+        <span class="shot">{{shot:v4-open-risks|A high-priority task in Review with its Open risks: risks a second bot raised with evidence, the owner's answer to each, and Resolve and Dismiss buttons.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Open risks on the task</h3><p>When the Auditor is on, a second bot's risks sit on the task with their evidence and the owner's answer. You resolve or dismiss each one.</p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li><h3>Performance (report-only)</h3><p>Under the board, per kind of work and bot or model: tasks finished, the verified rate with its likely range, median time and tokens, cost per task and how often you stepped in. Groups with fewer than 5 tasks say "few tasks". It never changes who gets work.</p></li>
+      <li><h3>Swarm Auditor (off by default)</h3><p>An important task, or one no outside check will judge, gets one challenge when it reaches review: a teammate from outside the lead's loop lists risks with evidence, and the owner answers once. An audit never verifies, fails or moves a task. Up to 5 a day by default, on a fast, cheap model unless you pick another.</p></li>
+      <li><h3>Open risks</h3><p>What an audit leaves unresolved is listed on the task, with its evidence and the owner's answer, until you Resolve or Dismiss it. Board cards count the open risks.</p></li>
+      <li><h3>Skill Foundry (off by default)</h3><p>When a bot has 3 or more verified tasks of one kind of work in 60 days, 70% of them verified, it drafts a skill from them. Each draft is replayed as a dry run on up to 3 of those tasks in a scratch copy, and waits in the Skills tab for you to approve, edit or reject. Versions can be rolled back. It's switched on through the API for now.</p></li>
+    </ul>
+    <p class="section-foot"><a class="more-link" href="docs/mission-board.html#performance">Performance &amp; Auditor docs →</a> <a class="more-link" href="docs/memory-skills.html#foundry">Skill Foundry docs →</a></p>
+  </div>
+</section>
+
 <section id="mission-board" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.2.0 · Mission board</p>
+      <p class="kicker">Mission board</p>
       <h2>Work your bots can prove they finished</h2>
       <p>One board for every task your bots take on. A task counts as Verified only when a check passes, never on a bot's word.</p>
     </div>
@@ -66,7 +114,7 @@ card_art: team
       <div class="frame">{{video:clip-autofix|Demo: a load-test report fails its check because it has no p95 latency. The task panel shows why and AutoFix's plan, Retry now is pressed, the bot adds the missing figures and the task ends Verified.}}</div>
     </div>
     <ul class="flist">
-      <li><h3>Missions with a budget</h3><p>Group tasks toward one goal with a token budget. Tasks wait for the ones they build on.</p></li>
+      <li><h3>Missions</h3><p>Group tasks toward one goal, with a token limit if you want one. Tasks wait for the ones they build on.</p></li>
       <li><h3>No marking its own homework</h3><p>A check a bot adds to its own task waits for your OK before it counts.</p></li>
       <li><h3>Change approvals</h3><p>A bot can propose changing a check or the acceptance. You see before and after, and nothing changes until you approve.</p></li>
       <li><h3>"May be invalid"</h3><p>When a file a verified task relied on changes, the task and those built on it are flagged for you to keep or redo.</p></li>
@@ -80,7 +128,7 @@ card_art: team
 <section id="flight-school" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.2.0 · Flight School</p>
+      <p class="kicker">Flight School</p>
       <h2>Freedom a bot earns, one kind of work at a time</h2>
       <p>Give each bot a tier per kind of work: Observe, Sandbox or Act. A tier only adds approval cards, and payments always ask.</p>
     </div>
@@ -123,7 +171,7 @@ card_art: team
 <section id="connect" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.2.0 · Connect apps</p>
+      <p class="kicker">Connect apps</p>
       <h2>Bots find a way round</h2>
       <p>Before a bot says "not possible", it tries another route, and when it needs an app you haven't connected, it hands you a card.</p>
     </div>
@@ -166,7 +214,7 @@ card_art: team
       </article>
     </div>
     <ul class="flist">
-      <li><h3>Handoffs with an @mention</h3><p>Mention a teammate, or <code>@everyone</code>, and they answer next in the same chat, up to four handoffs per message.</p></li>
+      <li><h3>Handoffs with an @mention</h3><p>Mention a teammate, or <code>@everyone</code>, and they answer next in the same chat. Caps of 4 per bot and 16 per message stop loops, with Continue.</p></li>
       <li><h3>Team discussions</h3><p>Ask a team and the lead runs a short discussion, then posts one summary. Teammates can pass when they have nothing to add.</p></li>
       <li><h3>Channels and direct chats</h3><p>Talk to the whole team in a channel or to one bot directly. Threads keep side topics apart.</p></li>
       <li><h3>The Laya router</h3><p>Picks which bot answers in a channel, and the model and effort for bots set to auto. If it is offline, kwant routes by keyword.</p></li>

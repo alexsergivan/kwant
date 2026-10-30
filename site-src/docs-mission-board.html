@@ -1,5 +1,5 @@
 title: Mission board: AI agent tasks with proof
-description: One board for all bot work. A task is Verified only when a check passes. Checkpoints undo file changes and AutoFix retries what is safe to retry.
+description: One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Performance shows who does well.
 card_title: Mission board, checkpoints & AutoFix
 path: docs/mission-board.html
 nav: mission-board
@@ -24,7 +24,7 @@ card_art: avatar:tech_lead
     <tr><td>Ready</td><td>A bot can pick it up. Dimmed tasks are waiting on another task to be verified first.</td></tr>
     <tr><td>Working</td><td>A bot holds it and is working on it now.</td></tr>
     <tr><td>Needs you</td><td>Something waits on you: a question, an approval card, a check that needs your OK, a failure to fix, or a proposed change.</td></tr>
-    <tr><td>Review</td><td>The bot says it's done. kwant is running the task's checks, or a teammate or you still have to look.</td></tr>
+    <tr><td>Review</td><td>The bot says it's done. kwant is running the task's checks, or the lead, a teammate or you still have to look.</td></tr>
     <tr><td>Verified</td><td>Every check that counts has passed.</td></tr>
   </tbody>
 </table></div>
@@ -46,8 +46,28 @@ card_art: avatar:tech_lead
 </figure>
 <p>Optional checks are shown but never hold a task back. A Verified task with an optional check still waiting says "Check passed" and "1 optional check waiting".</p>
 
-<h2 id="missions">Missions and budgets</h2>
-<p>A mission groups tasks toward one goal, with a token budget a bot can't go over. A task waits for the tasks it depends on. When a lead bot plans a mission, it waits for your approval before anything runs.</p>
+<h2 id="lead-review">Hand-offs: the lead reviews</h2>
+<p>When a bot hands work to a teammate with an @mention, the hand-off gets its own card. When the teammate finishes, the card goes to Review and the bot that handed the work out reviews the result in its next reply:</p>
+<ul>
+  <li><strong>A pass</strong> makes the card Verified.</li>
+  <li><strong>A fail</strong> sends the work back to the teammate with the reason. It stays one card the whole time.</li>
+  <li><strong>No review:</strong> the lead gets one reminder, which lists every card still waiting. After that the card says <strong>Waiting for &lt;lead&gt; to review</strong> and nothing asks again. You can still press <strong>Verify</strong> yourself.</li>
+  <li><strong>One-way notices</strong>, where nobody is asked about the result, never wait in Review. They're shown as <strong>Closed</strong>, "Notice, no review needed", not Verified.</li>
+  <li>A card that was blocked when its hand-off finished, or left waiting by a restart, gets its own review turn.</li>
+</ul>
+<p>Only the lead's review counts: the teammate who did the work still can't approve its own card. Cards made before 0.4.0 have no result attached for the lead to review, so verify them yourself or leave them.</p>
+
+<h2 id="missions">Missions</h2>
+<p>A mission groups tasks toward one goal. A task waits for the tasks it depends on. When a lead bot plans a mission, it waits for your approval before anything runs.</p>
+
+<h2 id="limits">Token limits</h2>
+<p>Since 0.3.0 nothing has a token limit by default: tasks, missions and requests that hand work around run until they're done. A task or mission shows plain usage, such as "64.9k tokens used".</p>
+<ul>
+  <li><strong>Set a limit</strong> next to Cost on a task, or under a mission's cost, offers 50k, 200k, 1M or a custom amount. A task stopped by its limit offers <strong>Remove limit and continue</strong> and <strong>Raise limit</strong>.</li>
+  <li><strong>Settings → Usage</strong> sets defaults: <strong>Token limits</strong> for new tasks and missions, and <strong>Hand-offs per request</strong> for the tokens one request may spend on bots handing work to each other. Both start at <strong>No limit</strong>. With a limit set, a request pauses there and offers <strong>Continue</strong>.</li>
+  <li>Updating to 0.4.0 switches off a hand-off limit still at the old 200k default, once. A number you set yourself stays.</li>
+</ul>
+<p>What stops runaway loops are the hand-off caps: one bot can be asked up to 4 times per message, and one message can start up to 16 hand-offs. Past that, the chat shows "Paused after 16 hand-offs so it doesn't loop. Continue?" with a <strong>Continue</strong> button, or you can type "continue".</p>
 
 <h2 id="flags">"May be invalid"</h2>
 <p>If the file a verified task points to changes or disappears, or you redo it, that task and the tasks built on it get a <strong>May be invalid</strong> badge and wait under Needs you. They stay Verified until you pick <strong>Still valid</strong>, <strong>Redo</strong> or <strong>Cancel</strong>. Redo makes a copy that runs again, so the verified history stays as it was. <strong>How tasks connect</strong> shows a mission's tasks step by step, with a <strong>Check files now</strong> button.</p>
@@ -77,8 +97,8 @@ card_art: avatar:tech_lead
   <div class="frame">{{video:clip-autofix|Demo: a load-test report fails its check because it has no p95 latency. The task panel shows why it failed and AutoFix's plan, Retry now is pressed, the bot adds the missing figures and the task ends Verified.}}</div>
   <figcaption>A check fails, AutoFix retries with what the check said, and the task ends Verified.</figcaption>
 </figure>
-<p>A failed task shows its tries, what retries have cost, and <strong>Retry now</strong> and <strong>Don't retry</strong>. Choose <strong>Ask me first</strong> to approve each retry yourself, or <strong>Retry on its own</strong>. Retries stay within the task's attempts and a retry budget, a quarter of the task's budget unless you change it.</p>
-<div class="note"><strong>Some failures always ask you.</strong> A missing sign-in, a used-up usage limit, a spent budget or an action you denied is never retried. The task tells you what to do instead.</div>
+<p>A failed task shows its tries, what retries have cost, and <strong>Retry now</strong> and <strong>Don't retry</strong>. Choose <strong>Ask me first</strong> to approve each retry yourself, or <strong>Retry on its own</strong>. Retries stay within the task's attempts and a retry budget, a quarter of the task's token limit when it has one.</p>
+<div class="note"><strong>Some failures always ask you.</strong> A missing sign-in, a used-up usage limit, a reached token limit or an action you denied is never retried. The task tells you what to do instead.</div>
 
 <h3 id="changes">Proposed changes</h3>
 <p>A bot can propose changing a task's check or acceptance, or a routine, for example when a check can't pass for a reason outside the task. The proposal appears under Needs you with the before and after, and nothing changes until you approve it.</p>
@@ -86,6 +106,23 @@ card_art: avatar:tech_lead
   <div class="frame">{{shot:v3-change-approval|A proposed change in Needs you: the bot explains why, shows the task's acceptance before and after, with Approve and apply, and Reject.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>Only you can approve a change to how a task is checked.</figcaption>
 </figure>
+
+<h2 id="performance">Performance</h2>
+<p>Under the board, on <strong>All work</strong>, a <strong>Performance</strong> section shows how each bot's finished work goes, per kind of work and per bot, or <strong>By model</strong>:</p>
+<ul>
+  <li>how many tasks finished, and the verified rate with its likely range, such as "56% (27–81%)";</li>
+  <li>median time and median tokens, cost per task, and how often you stepped in.</li>
+</ul>
+<p>Filter by kind of work, bot and period (30 days, 90 days or all time). A group with fewer than 5 tasks says "few tasks", so a lucky streak doesn't look like a trend. It's report-only: the numbers never change which bot gets work, and only you can see them. Tasks finished before the update are counted too.</p>
+
+<h2 id="auditor">Swarm Auditor and open risks</h2>
+<p>The Auditor is off by default. Turn it on in <strong>Settings → Mission board → Challenge important work with an audit</strong>. Then a task gets one challenge when it reaches Review if it's high or urgent priority, or if no outside check will judge it:</p>
+<ol>
+  <li>A teammate from outside the owner's lead loop lists concrete risks, each with evidence.</li>
+  <li>The owner answers once.</li>
+  <li>What stays unresolved is listed on the task as <strong>open risks</strong> until you <strong>Resolve</strong> or <strong>Dismiss</strong> each one. Board cards show how many are still open.</li>
+</ol>
+<p>An audit never verifies, fails or moves a task, and "no risks raised" isn't a pass. Both turns ask before changing anything; while one waits on your approval card, the task says "Audit waiting for your answer" with a link to it. By default there are at most 5 audits a day, and they run on the engine's fast, cheap model. Change both under the switch: <strong>Audit model</strong> offers Fast, Balanced, Deep or the bot's own model.</p>
 
 <h2 id="phone">On a phone</h2>
 <p>The board works on a phone: it shows one column at a time, picked from tabs that show how many tasks each holds.</p>

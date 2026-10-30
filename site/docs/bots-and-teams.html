@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Bots &amp; teams: Persona presets, souls, teams with a lead, and handoffs between bots.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-10-29">
+<meta property="article:modified_time" content="2026-10-30">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="AI agent teams: bots, leads &amp; handoffs · kwant">
 <meta name="twitter:description" content="Create bots from persona presets, give each a soul and a model, group them into teams with a lead, and let them hand work to each other with @mentions.">
@@ -100,14 +100,21 @@
 </figure>
 
 <h2 id="routing">Who answers</h2>
-<p>In a channel, kwant picks the bot whose persona fits your message best and shows the reason. The <a href="/docs/models#laya">Laya router</a> does this, and falls back to keyword matching while it's unavailable. Mention a bot (<code>@Designer</code>) to ask it directly.</p>
+<p>In a channel, kwant picks the bot whose persona fits your message best and shows the reason. The <a href="/docs/models#laya">Laya router</a> does this, and falls back to keyword matching while it's unavailable. Mention a bot (<code>@Designer</code>) to ask it directly. A message with exactly one @mention goes to that bot, even if it names others without an @: "@Frontend why didn't you answer QA" goes to Frontend. With two or more @mentions in a team, the lead answers and passes the work on.</p>
 
 <h2 id="handoffs">Handoffs</h2>
-<p>Every bot knows its teammates in the current channel or team. When a reply @mentions a teammate, or <code>@everyone</code>, that teammate answers right after in the same chat. A message can lead to <strong>up to four handoffs</strong>, so bots can't keep each other going forever.</p>
+<p>Every bot knows its teammates in the current channel or team. When a reply @mentions a teammate, or <code>@everyone</code>, that teammate answers right after in the same chat. With the <a href="/docs/mission-board#lead-review">Mission board</a> on, each hand-off gets a card, and the bot that handed it out reviews the result.</p>
+<ul>
+  <li><strong>Caps that stop loops:</strong> one bot can be asked up to 4 times per message, and one message can start up to 16 hand-offs. Past that, the chat shows a notice with a <strong>Continue</strong> button, or type "continue".</li>
+  <li><strong>No token limit by default:</strong> set one in <strong>Settings → Usage → Hand-offs per request</strong> if you want a request to pause after that many tokens. See <a href="/docs/mission-board#limits">Token limits</a>.</li>
+</ul>
 <figure>
   <div class="frame"><a class="zoom" href="../assets/media/desktop-handoff-2880.webp?v=f09f8242e2" data-caption="Designer answers in the design-review channel, then @mentions QA, and QA picks it up."><img src="../assets/media/desktop-handoff-1440.webp?v=67386ee237" srcset="../assets/media/desktop-handoff-1440.webp?v=67386ee237 1440w, ../assets/media/desktop-handoff-2880.webp?v=f09f8242e2 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Designer answers in the design-review channel, then @mentions QA, and QA picks it up."></a></div>
   <figcaption>Designer hands the check to QA with an @mention.</figcaption>
 </figure>
+
+<h3 id="relayed">A teammate's @mention hands work on</h3>
+<p>In a team, when a teammate's result @mentions another teammate, such as QA writing "@Frontend could switch the header to dark blue", Frontend gets that as a task even if the lead doesn't pass it on. The lead is resumed once, with all the results. These hand-offs count toward the same caps, never send work back to a bot earlier in the same chain, and skip mentions that only credit someone ("thanks to @Designer").</p>
 
 <h2 id="discussions">Team discussions</h2>
 <p>When a question to a team needs several views, the lead runs a short, moderated discussion:</p>
@@ -168,6 +175,6 @@
 </footer>
 <script src="../assets/js/site.js?v=c490c973ba" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/bots-and-teams#article","headline":"AI agent teams: bots, leads & handoffs","description":"Create bots from persona presets, give each a soul and a model, group them into teams with a lead, and let them hand work to each other with @mentions.","url":"https://kwant.si/docs/bots-and-teams","mainEntityOfPage":"https://kwant.si/docs/bots-and-teams","image":"https://kwant.si/assets/og/docs-bots-and-teams.png?v=b027504528","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-29","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Bots & teams","item":"https://kwant.si/docs/bots-and-teams"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/bots-and-teams#article","headline":"AI agent teams: bots, leads & handoffs","description":"Create bots from persona presets, give each a soul and a model, group them into teams with a lead, and let them hand work to each other with @mentions.","url":"https://kwant.si/docs/bots-and-teams","mainEntityOfPage":"https://kwant.si/docs/bots-and-teams","image":"https://kwant.si/assets/og/docs-bots-and-teams.png?v=b027504528","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-30","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Bots & teams","item":"https://kwant.si/docs/bots-and-teams"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 </body>
 </html>
