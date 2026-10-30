@@ -10,7 +10,15 @@ use std::path::{Path, PathBuf};
 pub fn claude_config(ctx: &McpTurnContext) -> Value {
     let mut servers = Map::new();
     for s in &ctx.servers {
-        let entry = if s.transport == "http" {
+        // fastbrowse runs through kwnt's gateway, which guards its calls and results
+        let entry = if super::fastbrowse::is_fastbrowse(s) {
+            let Some(gateway) = &ctx.gateway else { continue };
+            json!({
+                "type": "http",
+                "url": gateway.server_url(&s.name),
+                "headers": {"Authorization": format!("Bearer {}", gateway.token)},
+            })
+        } else if s.transport == "http" {
             json!({"type": "http", "url": s.url, "headers": s.headers})
         } else {
             json!({"type": "stdio", "command": s.command, "args": s.args, "env": s.env})

@@ -163,6 +163,14 @@ impl McpClient {
     }
 
     fn spawn_stdio(server: &McpServer, cwd: Option<&Path>) -> Result<StdioTransport, McpError> {
+        // fastbrowse keeps its rules even when its row was saved before them
+        let checked;
+        let server = if super::fastbrowse::is_fastbrowse(server) {
+            checked = super::fastbrowse::check_before_start(server).map_err(McpError::Spawn)?;
+            &checked
+        } else {
+            server
+        };
         let program = server.command.as_deref().ok_or_else(|| McpError::Spawn("no command".into()))?;
         let mut cmd = Command::new(program);
         cmd.args(&server.args).env_clear();

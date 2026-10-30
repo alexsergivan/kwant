@@ -237,6 +237,10 @@ impl McpToolSession {
             Some(_) if !arguments.is_object() => ("error", "Tool arguments must be a JSON object.".to_string()),
             Some(t) => {
                 let (server, client) = &self.clients[t.server_index];
+                let fastbrowse = self.ctx.servers.iter().any(|s| &s.name == server && super::fastbrowse::is_fastbrowse(s));
+                // fastbrowse never goes through irreversible actions itself
+                let arguments =
+                    if fastbrowse { super::fastbrowse::guard_arguments(&arguments) } else { arguments.clone() };
                 let outcome = self
                     .ctx
                     .approver
@@ -258,6 +262,7 @@ impl McpToolSession {
                 } else {
                     match client.call_tool(&t.tool.name, arguments.clone()).await {
                         Ok(r) if r.is_error => ("error", r.text),
+                        Ok(r) if fastbrowse => ("ok", self.confirm_fastbrowse_stop(caller, server, &arguments, r.text).await),
                         Ok(r) => ("ok", r.text),
                         Err(e) => ("error", format!("Tool call failed: {e}")),
                     }
@@ -280,6 +285,32 @@ impl McpToolSession {
         }
         self.ctx.record(record.clone());
         CallOutcome { text, status, record }
+    }
+
+    /// fastbrowse stopped before an irreversible step: the person answers an approval card
+    /// (`mcp__<server>__confirm_step`, never covered by "always allow" for `browse`), and the
+    /// bot reads their answer under the result.
+    async fn confirm_fastbrowse_stop(&self, caller: &Caller, server: &str, arguments: &Value, text: String) -> String {
+        let Some(details) = super::fastbrowse::confirmation(arguments, &text) else {
+            return text;
+        };
+        let outcome = self
+            .ctx
+            .approver
+            .decide(ToolApprovalRequest {
+                kwant_id: caller.kwant_id.clone(),
+                kwant_name: caller.kwant_name.clone(),
+                turn_id: caller.turn_id.clone(),
+                tool_name: namespaced_tool_name(server, "confirm_step"),
+                server: server.to_string(),
+                tool: "confirm_step".into(),
+                arguments: details,
+                builtin: None,
+                smart: Some(super::SmartVerdict::Ask("fastbrowse stopped before an irreversible step".into())),
+                payment: None,
+            })
+            .await;
+        text + super::fastbrowse::confirmation_note(outcome.allowed())
     }
 
     pub async fn shutdown(mut self) {

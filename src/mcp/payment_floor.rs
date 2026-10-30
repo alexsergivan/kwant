@@ -122,6 +122,9 @@ fn self_reason(tool: &str, args: &Value, page_url: Option<&str>) -> Option<Strin
 /// An MCP tool (incl. Composio): by its name and server, the Composio slugs it runs, and for
 /// browser-type tools, the label it clicks or the card number it types.
 fn mcp_reason(server: &str, tool: &str, args: &Value) -> Option<String> {
+    if let Some(why) = agent_task_reason(server, tool, args) {
+        return Some(why);
+    }
     let mut names = vec![tool.to_string()];
     collect_slugs(args, &mut names, 0);
     for name in &names {
@@ -147,6 +150,44 @@ fn mcp_reason(server: &str, tool: &str, args: &Value) -> Option<String> {
             if let Some(why) = args[key].as_str().and_then(shell_reason) {
                 return Some(why);
             }
+        }
+    }
+    None
+}
+
+/// Words in a browser agent's task that mean it could pay: it acts on its own once it runs, so
+/// the card comes before the call, not before the click.
+const TASK_PAY_WORDS: &[&str] = &[
+    "buy", "buying", "purchase", "purchasing", "checkout", "pay", "paying", "payment", "payments", "order", "orders",
+    "ordering", "card", "cards", "subscribe", "subscription", "donate", "donation", "upgrade",
+];
+const TASK_PAY_PHRASES: &[&str] = &["check out", "top up", "add funds", "send money"];
+
+/// A browser agent that takes a whole task in words (fastbrowse's `browse`, or any tool on a
+/// fastbrowse server): any pay word in the task, or a start page that is a checkout, asks first.
+fn agent_task_reason(server: &str, tool: &str, args: &Value) -> Option<String> {
+    let agent = tool == "browse" || server.to_ascii_lowercase().contains("fastbrowse");
+    if !agent {
+        return None;
+    }
+    let mut texts = Vec::new();
+    collect_strings(args, &mut texts, 0);
+    for text in &texts {
+        let lower = text.to_lowercase();
+        let task_words = words(&lower);
+        if let Some(word) = task_words.iter().find(|w| TASK_PAY_WORDS.contains(&w.as_str())) {
+            return Some(format!("a browser task that mentions \"{word}\""));
+        }
+        if let Some(phrase) = TASK_PAY_PHRASES.iter().find(|p| task_words.join(" ").contains(*p)) {
+            return Some(format!("a browser task that mentions \"{phrase}\""));
+        }
+        if card_number(text) {
+            return Some("a browser task with what looks like a card number".into());
+        }
+    }
+    for key in ["start", "stopped_at"] {
+        if let Some(page) = args[key].as_str().and_then(checkout_page) {
+            return Some(format!("a browser task on a checkout page ({page})"));
         }
     }
     None

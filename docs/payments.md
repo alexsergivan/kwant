@@ -62,6 +62,13 @@ every MCP tool, through claude's permission prompt and the MCP gateway), in
 - Typing anything that looks like a card number: 13–19 digits (spaces or dashes allowed) that
   pass the Luhn check.
 
+**Browser agents that take a whole task** (fastbrowse's `browse`, or any tool of a server
+named like fastbrowse): kwnt can't see the clicks, so it judges the task before the call. Any
+argument with `buy`, `purchase`, `checkout`/`check out`, `pay`/`payment`, `order`, `card`,
+`subscribe`, `donate`, `upgrade`, `top up`, `add funds` or `send money`, a `card_number` field,
+or a `start` (or fastbrowse's stopped-at) address that is a checkout page asks first. See
+[fastbrowse](fastbrowse.md).
+
 `WebFetch` never pays (it only reads). kwnt's own other tools don't pay, and
 `self_tools_have_no_money_words` fails if one is added with a money word in its name until it is
 classified here.
@@ -88,5 +95,5 @@ a `/billing` page. That's accepted: an extra card costs a tap, a missed payment 
 
 ## Tests
 
-`cargo test --test payment_floor_test` and the tables in `src/mcp/payment_floor.rs`
+`cargo test --test payment_floor_test`, `cargo test --test fastbrowse_test` and the tables in `src/mcp/payment_floor.rs`
 (`cargo test --lib payment_floor`).

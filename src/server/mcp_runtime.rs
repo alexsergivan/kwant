@@ -663,6 +663,12 @@ async fn decide(session: &PermissionSession, args: &Value, smart: bool) -> Value
     let input = args.get("input").cloned().unwrap_or_else(|| json!({}));
     let tool_use_id = args["tool_use_id"].as_str().unwrap_or("").to_string();
 
+    // fastbrowse reaches claude through kwnt's gateway, which asks for this call itself
+    if let Some((server, _)) = mcp::split_tool_name(tool_name) {
+        if session.ctx.servers.iter().any(|s| s.name == server && mcp::fastbrowse::is_fastbrowse(s)) {
+            return json!({"behavior": "allow", "updatedInput": mcp::fastbrowse::guard_arguments(&input)});
+        }
+    }
     let mut verdict = None;
     let (server, tool, builtin) = match mcp::split_tool_name(tool_name) {
         Some((server, tool)) if session.ctx.servers.iter().any(|s| s.name == server) => {
@@ -820,7 +826,19 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
 /// stays out of URLs and argv. Every call is approved through the turn's approver (the
 /// approval card) before it is forwarded, and recorded like any other MCP call.
 pub async fn gateway_endpoint(State(state): State<AppState>, headers: HeaderMap, Json(msg): Json<Value>) -> Response {
-    gateway_rpc(&state, &headers, msg, GatewayNaming::Plain).await
+    gateway_rpc(&state, &headers, msg, GatewayNaming::Plain, None).await
+}
+
+/// `POST /api/mcp/gateway/server/:name`: one server's tools under their own names. The claude
+/// CLI reaches fastbrowse this way (see [`mcp::fastbrowse`]), so its tool is still
+/// `mcp__<server>__<tool>` and kwnt answers the call, not claude.
+pub async fn gateway_server_endpoint(
+    State(state): State<AppState>,
+    Path(server): Path<String>,
+    headers: HeaderMap,
+    Json(msg): Json<Value>,
+) -> Response {
+    gateway_rpc(&state, &headers, msg, GatewayNaming::Plain, Some(&server)).await
 }
 
 /// `POST /api/mcp/gateway/grok`: the same gateway, with tool names grok accepts (no `__`).
@@ -830,7 +848,7 @@ pub async fn gateway_grok_endpoint(
     headers: HeaderMap,
     Json(msg): Json<Value>,
 ) -> Response {
-    gateway_rpc(&state, &headers, msg, GatewayNaming::Grok).await
+    gateway_rpc(&state, &headers, msg, GatewayNaming::Grok, None).await
 }
 
 async fn gateway_rpc(
@@ -838,6 +856,7 @@ async fn gateway_rpc(
     headers: &HeaderMap,
     msg: Value,
     naming: GatewayNaming,
+    scope: Option<&str>,
 ) -> Response {
     let session = match bearer_token(headers) {
         Some(token) => state.mcp_sessions.lock().await.get(token).cloned(),
@@ -860,7 +879,20 @@ async fn gateway_rpc(
         ),
         "ping" => rpc_result(id, json!({})),
         "tools/list" => match session.tool_session().await {
-            Some(tools) => rpc_result(id, json!({"tools": tools.gateway_tools(naming)})),
+            Some(tools) => {
+                let mut listed = tools.gateway_tools(naming);
+                if let Some(server) = scope {
+                    let prefix = format!("{server}__");
+                    listed.retain_mut(|t| match t["name"].as_str().and_then(|n| n.strip_prefix(&prefix)) {
+                        Some(tool) => {
+                            t["name"] = json!(tool);
+                            true
+                        }
+                        None => false,
+                    });
+                }
+                rpc_result(id, json!({"tools": listed}))
+            }
             None => StatusCode::UNAUTHORIZED.into_response(),
         },
         "tools/call" => {
@@ -873,6 +905,14 @@ async fn gateway_rpc(
                 return StatusCode::UNAUTHORIZED.into_response();
             };
             // An unknown grok name stays as given, and the call fails as an unknown tool
+            let scoped;
+            let name = match scope {
+                Some(server) => {
+                    scoped = format!("{server}__{name}");
+                    scoped.as_str()
+                }
+                None => name,
+            };
             let tool_name = tools
                 .canonical_name(naming, name)
                 .unwrap_or_else(|| name.to_string());

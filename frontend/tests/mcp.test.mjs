@@ -383,13 +383,27 @@ test('only presets that need a key or token mark it required', () => {
   const marked = Object.fromEntries(
     MCP_PRESETS.map((p) => [p.id, [...p.form.env, ...p.form.headers].filter((r) => r.required).map((r) => r.key)]).filter(([, keys]) => keys.length > 0),
   );
-  assert.deepEqual(marked, { github: ['Authorization'], 'brave-search': ['BRAVE_API_KEY'], postgres: ['DATABASE_URI'] });
+  assert.deepEqual(marked, {
+    github: ['Authorization'],
+    fastbrowse: ['OPENROUTER_API_KEY'],
+    'brave-search': ['BRAVE_API_KEY'],
+    postgres: ['DATABASE_URI'],
+  });
   // Every preset tagged as needing a key or token has a required field, and no Sign-in preset does.
   for (const p of MCP_PRESETS) {
     const hasRequired = [...p.form.env, ...p.form.headers].some((r) => r.required);
     assert.equal(hasRequired, p.needs.includes('Token') || p.needs.includes('API key') || p.id === 'postgres', p.id);
     if (p.needs.includes('Sign-in')) assert.equal(hasRequired, false, p.id);
   }
+});
+
+test('the fastbrowse preset runs locally, never authorizes, and has time for a whole task', () => {
+  const p = MCP_PRESETS.find((x) => x.id === 'fastbrowse');
+  assert.match(p.form.commandLine, /fastbrowse-mcp --local\b/);
+  assert.doesNotMatch(p.form.commandLine, /authorize|cloud-profile/);
+  assert.equal(p.form.timeout_secs, 600);
+  assert.match(p.blurb, /own model key/);
+  assert.match(p.blurb, /costs/);
 });
 
 test('warns about required keys that are still blank, and only those', () => {

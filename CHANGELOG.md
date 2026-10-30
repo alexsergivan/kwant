@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **fastbrowse as an optional browser connection.** "+ Add connection" offers fastbrowse, a fast
+  browser agent that takes a whole web task and returns an answer with citations. It runs on your
+  computer with `--local` (never the Browser Use cloud), uses its own model key (OPENROUTER_API_KEY or
+  AI_GATEWAY_API_KEY, stored with the connection and never shown to bots) and costs money per run,
+  capped at $0.25. kwant never lets it take an irreversible step itself: `--allow-authorize` and
+  `authorize` are refused, and when it stops before one you get an approval card. A task that mentions
+  buying, checkout, paying, an order or a card asks first in every approval mode. kwant's own browser
+  stays the default. A missing uv, Chrome or model key is named when the connection is tested.
+
 ## [Mac 0.4.1] - 2026-10-30
 
 ### Changed

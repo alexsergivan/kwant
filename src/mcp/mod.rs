@@ -6,6 +6,7 @@ pub mod cli_config;
 pub mod client;
 pub mod composio;
 pub mod echo_server;
+pub mod fastbrowse;
 pub mod fetch_risk;
 pub mod oauth;
 pub mod payment_floor;
@@ -181,6 +182,12 @@ pub fn build_server(input: McpServerInput, existing: Option<&McpServer>) -> Resu
             }
             if let Some(bad) = env.keys().find(|k| !valid_env_key(k)) {
                 return Err(format!("invalid env variable name '{bad}'"));
+            }
+            if fastbrowse::is_fastbrowse_command(command.as_deref(), &args) {
+                let keys: Vec<&str> = env.keys().map(String::as_str).collect();
+                if let Some(problem) = fastbrowse::config_problem(&args, &keys) {
+                    return Err(problem);
+                }
             }
         }
         "http" => {
@@ -419,6 +426,12 @@ impl GatewayAccess {
     /// The gateway's grok naming mode (`POST /api/mcp/gateway/grok`): no `__` in tool names.
     pub fn grok_url(&self) -> String {
         format!("{}/grok", self.url.trim_end_matches('/'))
+    }
+
+    /// One server's tools under their own names (`POST /api/mcp/gateway/server/:name`), so the
+    /// claude CLI can reach a server through kwnt instead of starting it itself.
+    pub fn server_url(&self, server: &str) -> String {
+        format!("{}/server/{server}", self.url.trim_end_matches('/'))
     }
 }
 

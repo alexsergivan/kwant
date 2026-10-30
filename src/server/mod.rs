@@ -313,6 +313,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/permission/:token", post(mcp_runtime::permission_endpoint))
         .route("/api/mcp/gateway", post(mcp_runtime::gateway_endpoint))
         .route("/api/mcp/gateway/grok", post(mcp_runtime::gateway_grok_endpoint))
+        .route("/api/mcp/gateway/server/:name", post(mcp_runtime::gateway_server_endpoint))
         .route("/api/mcp/self", post(continuity::self_endpoint))
         .route("/api/mcp/suggestions", get(mcp_suggest::list))
         .route("/api/mcp/suggestions/:id/install", post(mcp_suggest::install))

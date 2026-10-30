@@ -182,6 +182,23 @@ export const MCP_PRESETS: McpPreset[] = [
     form: stdioPreset('playwright', 'npx -y @playwright/mcp@latest --headless'),
   },
   {
+    // PyPI fastbrowse 0.9.1, checked 2026-10-30. Always --local (never the Browser Use cloud);
+    // kwnt refuses --allow-authorize, so its pause before an irreversible step becomes an
+    // approval card, and a task that mentions paying gets the payment card first.
+    id: 'fastbrowse',
+    label: 'fastbrowse',
+    blurb: 'Hand a whole web task to a fast local browser. Uses its own model key; each run costs up to $0.25.',
+    category: 'web',
+    needs: ['uv', 'API key'],
+    source: 'https://github.com/agent-labs-dev/fastbrowse',
+    form: {
+      ...stdioPreset('fastbrowse', 'uvx --from fastbrowse fastbrowse-mcp --local --max-dollars 0.25 --max-seconds 540', [
+        ['OPENROUTER_API_KEY', 'From openrouter.ai/keys (or name it AI_GATEWAY_API_KEY)', true],
+      ]),
+      timeout_secs: 600,
+    },
+  },
+  {
     // npm @brave/brave-search-mcp-server 2.1.4. Replaces the deprecated @modelcontextprotocol/server-brave-search.
     id: 'brave-search',
     label: 'Brave Search',
