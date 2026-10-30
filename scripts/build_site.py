@@ -257,7 +257,7 @@ def footer(root):
     <div class="foot-brand">
       <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
       <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
-      <a class="foot-badge" href="https://www.opensourcealternatives.to/" rel="noopener"><img src="{root}assets/badges/opensourcealternatives.svg" alt="As seen on Open Source Alternatives" width="270" height="20" loading="lazy"></a>
+      <a class="foot-badge" href="https://www.opensourcealternatives.to" rel="noopener"><img src="{root}assets/badges/opensourcealternatives.svg" alt="As seen on Open Source Alternatives" width="270" height="20" loading="lazy"></a>
     </div>
     <nav aria-label="Product">
       <h2>Product</h2>
