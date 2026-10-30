@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.4.1] - 2026-10-30
+
 ### Changed
 - **kwant.si covers 0.4.0.** The home page says "New in 0.4.0" (screenshots for bots, leads reviewing
   hand-offs, @mentions in results handing work on, no default token limits). The features page has
@@ -473,6 +475,7 @@ First public release of kwant for Mac: one universal app for Apple silicon and I
 later) that runs the kwant server and its interface, with a menu-bar icon. It uses the same data folder
 as `kwnt serve` (`~/.kwnt`).
 
+[Mac 0.4.1]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.4.1
 [Mac 0.4.0]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.4.0
 [Mac 0.3.0]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.3.0
 [Mac 0.2.0]: https://github.com/alexsergivan/kwant/releases/tag/mac-v0.2.0
