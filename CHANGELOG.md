@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- **kwant.si footer says "Made in Germany with ❤️".** The line sits under the trademark note on every
+  page; screen readers read it as "Made in Germany with love".
+
 ## [Mac 0.4.1] - 2026-10-30
 
 ### Changed

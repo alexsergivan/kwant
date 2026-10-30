@@ -286,6 +286,7 @@ def footer(root):
       <a href="{root}terms.html#license">License</a>
     </nav>
     <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+    <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
   </div>
 </footer>
 <script src="{root}assets/js/site.js" defer></script>

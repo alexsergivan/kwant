@@ -215,6 +215,7 @@ section { padding: 104px 0; }
 .site-footer { background: var(--panel); color: var(--v8); padding: 56px 0 64px; }
 .site-footer .wrap { display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(4, minmax(0, 1fr)); gap: 32px; }
 .foot-legal { grid-column: 1 / -1; padding-top: 24px; border-top: 1px solid rgba(255, 255, 255, .12); font-size: 13px; color: var(--v7); }
+.foot-made { grid-column: 1 / -1; margin-top: -20px; font-size: 13px; color: var(--v7); }
 .site-footer .brand { color: #fff; }
 .foot-brand p { margin-top: 16px; max-width: 340px; font-size: 15px; color: var(--v7); }
 .site-footer h2 { font: 600 13px var(--sans); color: var(--v7); margin-bottom: 12px; }
