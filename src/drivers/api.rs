@@ -418,7 +418,7 @@ const DEFER_TOOLS_ABOVE_CHARS: usize = 12_000;
 const UPFRONT_TOOLS_CHARS: usize = 8_000;
 /// kwnt's own tools a turn always gets in full: talking to the person, memory, teammates, the
 /// browser and files. The rest (routines, bots, spaces, settings, …) are a lookup away.
-const CORE_SELF_TOOLS: [&str; 12] = [
+const CORE_SELF_TOOLS: [&str; 13] = [
     "ask_user",
     "search_history",
     "memory_add",
@@ -428,6 +428,7 @@ const CORE_SELF_TOOLS: [&str; 12] = [
     "browser_open",
     "browser_page",
     "browser_act",
+    "browser_cite",
     "list_attachments",
     "read_attachment",
     "share_file",

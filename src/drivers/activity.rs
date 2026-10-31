@@ -473,6 +473,7 @@ pub fn summarize(name: &str, args: &Value) -> (String, Option<String>) {
         },
         "browser_page" | "browser_snapshot" | "browser_read" => ("Reading the browser page".into(), None),
         "browser_screenshot" => ("Looking at the browser page".into(), None),
+        "browser_cite" => ("Checking a quote on the browser page".into(), None),
         "browser_act" | "browser_click" | "browser_type" => ("Using the browser".into(), None),
         "ask_user" => ("Asking you a question".into(), None),
         "request_human_step" => ("Asking you to do a step in the browser".into(), arg(args, &["reason"]).map(str::to_string)),
