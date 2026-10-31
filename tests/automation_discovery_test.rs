@@ -794,3 +794,117 @@ async fn keep_checks_saves_the_real_spec_not_the_mask() {
     let (checks,): (String,) = sqlx::query_as("SELECT checks FROM routines WHERE id = ?").bind(rid).fetch_one(&e.pool).await.unwrap();
     assert!(checks.contains(secret) && !checks.contains("[redacted]"), "{checks}");
 }
+
+// Rigel's re-test of #165: what counts toward the cap, and replace_offer losing to the person
+
+#[tokio::test]
+async fn an_offer_ended_without_a_replacement_still_counts_for_its_day() {
+    let e = setup().await;
+    let a = bot(&e, "Ana").await;
+    let space = SpaceId::default_space();
+    person(&e, "POST", "/api/settings", Some(json!({"automation_discovery": "on", "automation_discovery_daily_cap": 1}))).await;
+    mondays(&e, &a, "Weekly report", day("2026-10-12")).await;
+    let mut rx = e.state.event_sender.subscribe();
+    let monday = berlin(day("2026-10-12"), 10, 0);
+    let old = discovery::scan_space(&e.state, &space, TZ, monday).await.unwrap().offered[0].clone();
+    assert!(e.state.db.end_offer(&old, "superseded", monday + Duration::hours(1)).await.unwrap());
+
+    // Its day's one offer was used: two hours on, nothing new, and no live offer
+    let s = discovery::scan_space(&e.state, &space, TZ, monday + Duration::hours(2)).await.unwrap();
+    assert!(s.offered.is_empty(), "{s:?}");
+    assert_eq!(live(&e).await, 0);
+    // A day on, the habit is offered again
+    let s = discovery::scan_space(&e.state, &space, TZ, monday + Duration::hours(25)).await.unwrap();
+    assert_eq!((s.offered.len(), live(&e).await), (1, 1), "{s:?}");
+    assert_eq!(suggested(&mut rx).len(), 2);
+    assert_eq!(e.state.db.suggestion_stats(space.as_str(), monday + Duration::hours(25)).await.unwrap().offered_30d, 2);
+}
+
+#[tokio::test]
+async fn repeated_replacements_never_add_a_live_offer_or_a_notification() {
+    let e = setup().await;
+    let space = SpaceId::default_space();
+    person(&e, "POST", "/api/settings", Some(json!({"automation_discovery": "on", "automation_discovery_daily_cap": 10}))).await;
+    let mut owners = Vec::new();
+    for (k, name) in ["Ana", "Ben", "Cleo", "Dan", "Eve"].iter().enumerate() {
+        owners.push(habit_on(&e, k as i64, name).await);
+    }
+    let other = bot(&e, "Finn").await;
+    let mut rx = e.state.event_sender.subscribe();
+    let now = Utc::now();
+    let s = discovery::scan_space(&e.state, &space, TZ, now).await.unwrap();
+    assert_eq!((s.offered.len(), live(&e).await, suggested(&mut rx).len()), (5, 5, 5), "{s:?}");
+
+    // Ana's habit moves between Ana and Finn six times: replaced each time, the space stays at 5
+    for round in 1..=6 {
+        let (from, to) = if round % 2 == 1 { (&owners[0], &other) } else { (&other, &owners[0]) };
+        sqlx::query("UPDATE tasks SET owner_kwant_id = ? WHERE owner_kwant_id = ?").bind(&to.id).bind(&from.id).execute(&e.pool).await.unwrap();
+        let s = discovery::scan_space(&e.state, &space, TZ, now + Duration::hours(round)).await.unwrap();
+        assert_eq!((s.superseded.len(), s.offered.len(), live(&e).await), (1, 0, 5), "round {round}: {s:?}");
+        assert!(suggested(&mut rx).is_empty(), "round {round}");
+    }
+    assert_eq!(count(&e, "routine_suggestions").await, 11);
+    assert_eq!(e.state.db.suggestion_stats(space.as_str(), now + Duration::hours(6)).await.unwrap().offered_30d, 5);
+
+    // A sixth habit still finds the space full
+    habit_on(&e, 5, "Gus").await;
+    let s = discovery::scan_space(&e.state, &space, TZ, now + Duration::hours(7)).await.unwrap();
+    assert!(s.offered.is_empty() && s.skipped.iter().any(|k| k.title.starts_with("Gus")), "{s:?}");
+    assert_eq!((live(&e).await, suggested(&mut rx).len()), (5, 0));
+}
+
+/// What a scan mined for `space` at `now`, before it stored anything: the habit as it is now.
+async fn mined(e: &Env, space: &SpaceId, now: DateTime<Utc>) -> kwnt::automation_discovery::Scan {
+    let db = &e.state.db;
+    let tasks = db.discovery_tasks(space.as_str(), now).await.unwrap();
+    let checks = db.discovery_checks(space.as_str(), now).await.unwrap();
+    let routines = db.discovery_routines(space.as_str()).await.unwrap();
+    let past = db.discovery_past(space.as_str(), now).await.unwrap();
+    let bots = db.list_kwants(space).await.unwrap().into_iter().map(|k| k.id).collect();
+    kwnt::automation_discovery::mine(&kwnt::automation_discovery::Input {
+        tz: TZ,
+        now,
+        tasks: &tasks,
+        checks: &checks,
+        routines: &routines,
+        bots: &bots,
+        past: &past,
+        daily_cap: 2,
+        max_live: kwnt::automation_discovery::MAX_LIVE_PER_SPACE,
+    })
+}
+
+#[tokio::test]
+async fn a_replacement_loses_to_an_accept_or_dismiss_that_came_first() {
+    for decision in ["accept", "dismiss"] {
+        let e = setup().await;
+        let a = bot(&e, "Ana").await;
+        let b = bot(&e, "Ben").await;
+        let space = SpaceId::default_space();
+        discovery_on(&e).await;
+        mondays(&e, &a, "Weekly report", day("2026-10-12")).await;
+        let monday = berlin(day("2026-10-12"), 10, 0);
+        let old = discovery::scan_space(&e.state, &space, TZ, monday).await.unwrap().offered[0].clone();
+
+        // A scan mines the habit, now Ben's, while the offer is live...
+        sqlx::query("UPDATE tasks SET owner_kwant_id = ? WHERE owner_kwant_id = ?").bind(&b.id).bind(&a.id).execute(&e.pool).await.unwrap();
+        let later = monday + Duration::hours(2);
+        let changed = mined(&e, &space, later).await.live.into_iter().next().expect("the habit is still live");
+        assert_eq!(changed.kwant_id, b.id);
+        // ...the person decides it before the scan replaces it...
+        let (status, _, v) = call_with(&e.app, "POST", &format!("{LIST}/{old}/{decision}"), None, Some("k1"), Some(json!({}))).await;
+        assert!(status.is_success(), "{decision}: {status} {v}");
+        let before = (written_rows(&e).await, count(&e, "routines").await, events(&e, &old).await);
+
+        // ...so the replacement writes nothing, and the decision stands
+        assert_eq!(e.state.db.replace_offer(&old, space.as_str(), &changed, later).await.unwrap(), None, "{decision}");
+        assert_eq!((written_rows(&e).await, count(&e, "routines").await, events(&e, &old).await), before, "{decision}");
+        let row = e.state.db.get_suggestion(&old).await.unwrap().unwrap();
+        assert_eq!(row.status, if decision == "accept" { "accepted" } else { "dismissed" });
+        assert_eq!((row.kwant_id, live(&e).await), (a.id.clone(), 0));
+        if decision == "accept" {
+            let (sid,): (Option<String>,) = sqlx::query_as("SELECT suggestion_id FROM routines").fetch_one(&e.pool).await.unwrap();
+            assert_eq!(sid.as_deref(), Some(old.as_str()));
+        }
+    }
+}

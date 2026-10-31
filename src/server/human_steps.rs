@@ -380,11 +380,12 @@ pub async fn raise(
     };
     let _guard = WaiterGuard { hub, id: step.id.clone() };
     let mut wait = hub.wait();
+    let mut captcha_deadline = None;
     if step.kind == "captcha" {
         let limit = captcha_timeout(state).await;
-        let left = (step.created_at + chrono::Duration::from_std(limit).unwrap_or_default() - chrono::Utc::now())
-            .to_std()
-            .unwrap_or_default();
+        let deadline = step.created_at + chrono::Duration::from_std(limit).unwrap_or_default();
+        captcha_deadline = Some(deadline);
+        let left = (deadline - chrono::Utc::now()).to_std().unwrap_or_default();
         // A little past the limit, so the watcher's timed_out wakes the turn before the wait ends
         wait = wait.min(left + hub.probe_interval() * 2);
     }
@@ -431,7 +432,17 @@ pub async fn raise(
         _ = tokio::time::sleep(wait) => {
             hub.take(&step.id);
             // An answer that arrived just as the wait ran out still counts
-            Ok(rx.try_recv().ok())
+            if let Ok(outcome) = rx.try_recv() {
+                return Ok(Some(outcome));
+            }
+            // A CAPTCHA past its time limit has timed out, whoever notices first: the watcher can
+            // lag behind this wait on a busy machine, and the bot would be told to wait for a step
+            // that is already over (as CI saw once on c185fc9)
+            if captcha_deadline.is_some_and(|d| chrono::Utc::now() >= d) && close(state, &step.id, Outcome::TimedOut.status()).await.is_some() {
+                tracing::info!(human_step_id = %step.id, "CAPTCHA step timed out at the end of the turn's wait");
+                return Ok(Some(Outcome::TimedOut));
+            }
+            Ok(None)
         }
     }
 }

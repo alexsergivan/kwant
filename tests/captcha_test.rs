@@ -253,13 +253,19 @@ async fn post(app: &Router, uri: &str, token: &str, body: Value) -> Value {
 
 async fn turn(state: &AppState, turn_id: &str) -> String {
     let bot = state.db.list_kwants(&SpaceId::default_space()).await.unwrap().remove(0);
+    turn_in(state, turn_id, Some(bot.id)).await
+}
+
+/// A turn of the first bot, in bot browser `sandbox_target` (none: no browser, so no watcher).
+async fn turn_in(state: &AppState, turn_id: &str, sandbox_target: Option<String>) -> String {
+    let bot = state.db.list_kwants(&SpaceId::default_space()).await.unwrap().remove(0);
     let scope = SelfScope {
         kwant_id: bot.id.clone(),
         kwant_name: bot.name.clone(),
         origin: Some(TurnOrigin { direct_kwant_id: Some(bot.id.clone()), ..Default::default() }),
         cancel: Some(tokio_util::sync::CancellationToken::new()),
         turn_id: Some(turn_id.into()),
-        sandbox_target: Some(bot.id.clone()),
+        sandbox_target,
         ..Default::default()
     };
     mcp_runtime::prepare_turn_with_self(state, &bot, Some(turn_id.into()), None, Some(scope)).await.unwrap().1
@@ -362,6 +368,41 @@ async fn a_captcha_step_nobody_solves_times_out_without_a_browser() {
     assert!(text.contains("didn't solve the CAPTCHA in time"), "{text}");
     assert!(started.elapsed() < Duration::from_secs(10));
     assert_eq!(state.db.get_human_step(&step.id).await.unwrap().unwrap().status, "timed_out");
+}
+
+/// A CAPTCHA step whose watcher never gets there (none runs without a sandbox, as a watcher lagging
+/// on a busy machine): the turn's own wait, ending past the limit, closes it as timed out rather
+/// than telling the bot to wait for a step that is already over (the flake CI saw on c185fc9).
+#[tokio::test]
+async fn a_captcha_step_times_out_even_when_its_watcher_is_late() {
+    let tmp = tempdir().unwrap();
+    let state = state_with(&tmp, None).await;
+    state.human_steps.set_captcha_timing(Duration::from_millis(300), Duration::from_millis(100));
+    let app = create_router(state.clone());
+    let token = turn_in(&state, "turn-late", None).await;
+    let task = call(&app, &token, "request_human_step", json!({"kind": "captcha", "reason": "Solve the check on example.com"}));
+    let step = open_step(&state).await;
+    let (text, is_error) = tokio::time::timeout(Duration::from_secs(15), task).await.expect("the turn never hangs").unwrap();
+    assert!(!is_error, "{text}");
+    assert!(text.contains("didn't solve the CAPTCHA in time"), "{text}");
+    assert_eq!(state.db.get_human_step(&step.id).await.unwrap().unwrap().status, "timed_out");
+}
+
+/// The turn's wait ending before the CAPTCHA's time limit leaves the step open for the person.
+#[tokio::test]
+async fn a_turn_that_stops_waiting_early_leaves_the_captcha_open() {
+    let tmp = tempdir().unwrap();
+    let state = state_with(&tmp, None).await;
+    state.human_steps.set_captcha_timing(Duration::from_secs(60), Duration::from_millis(100));
+    state.human_steps.set_wait(Duration::from_millis(300));
+    let app = create_router(state.clone());
+    let token = turn_in(&state, "turn-early", None).await;
+    let task = call(&app, &token, "request_human_step", json!({"kind": "captcha", "reason": "Solve the check on example.com"}));
+    let step = open_step(&state).await;
+    let (text, is_error) = tokio::time::timeout(Duration::from_secs(15), task).await.expect("the turn never hangs").unwrap();
+    assert!(!is_error, "{text}");
+    assert!(text.contains("hasn't solved the CAPTCHA yet"), "{text}");
+    assert_eq!(state.db.get_human_step(&step.id).await.unwrap().unwrap().status, "open");
 }
 
 #[tokio::test]

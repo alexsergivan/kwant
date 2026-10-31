@@ -51,6 +51,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **kwant.si footer says "Made in Germany with ❤️".** The line sits under the trademark note on every
   page; screen readers read it as "Made in Germany with love".
 
+### Fixed
+- **A CAPTCHA nobody solved is always reported as timed out.** When the time limit ran out, the bot
+  could sometimes be told to keep waiting for a step that was already over, if the page watcher was
+  slow on a busy machine. The bot's own wait now closes the step as timed out once the limit has
+  passed, so the bot moves on straight away.
+
 ## [Mac 0.4.1] - 2026-10-30
 
 ### Changed
