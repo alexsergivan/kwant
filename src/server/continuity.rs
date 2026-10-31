@@ -372,11 +372,11 @@ impl ToolApprover for SelfToolsApprover {
         // The payment floor (D8): a click or key on a checkout page, a pay-type button or a typed
         // card number gets a card in every mode. The address comes from the browser, not the bot.
         if req.server == SELF_SERVER_NAME && req.tool == BROWSER_ACT {
-            let url = match &self.browser {
-                Some((state, target)) => page_url(state, target).await,
-                None => None,
+            let why = match &self.browser {
+                Some((state, target)) => browser_act_payment(state, target, &req.arguments).await,
+                None => crate::mcp::payment_floor::reason(&req, None),
             };
-            if let Some(why) = crate::mcp::payment_floor::reason(&req, url.as_deref()) {
+            if let Some(why) = why {
                 req.payment = Some(why);
                 return self.inner.decide(req).await;
             }
@@ -412,11 +412,42 @@ impl ToolApprover for SelfToolsApprover {
     }
 }
 
-/// The address the turn's browser shows now, without starting a browser.
-async fn page_url(state: &AppState, target: &str) -> Option<String> {
-    let ctrl = state.browser_controllers.lock().await.get(target).cloned()?;
-    let url = ctrl.current_url.lock().await.clone();
-    url
+/// Why a `browser_act` on `target`'s browser is a payment (D8), or `None`. First the label the bot
+/// wrote and the address the browser shows; then the page itself: the element the click really
+/// hits, a form that posts to a checkout, card fields and payment frames (`page_reason`). Uses
+/// only a browser that is already open. If the page can't be read, only the first rules count.
+pub async fn browser_act_payment(state: &AppState, target: &str, args: &Value) -> Option<String> {
+    use crate::mcp::payment_floor::{browser_act_reason, page_reason, PageSignals};
+    let ctrl = state.browser_controllers.lock().await.get(target).cloned();
+    let url = match &ctrl {
+        Some(ctrl) => ctrl.current_url.lock().await.clone(),
+        None => None,
+    };
+    if let Some(why) = browser_act_reason(args, url.as_deref()) {
+        return Some(why);
+    }
+    let ctrl = ctrl?;
+    let action = args["action"].as_str().unwrap_or("");
+    let needle = match action {
+        "click_text" | "click" => Some(args["text"].as_str().map(str::trim).filter(|t| !t.is_empty())?),
+        "key" => None,
+        _ => return None,
+    };
+    let page = match ctrl.payment_signals(needle).await {
+        Ok(page) => page,
+        Err(e) => {
+            tracing::warn!(error = %e, "payment floor could not read the page");
+            return None;
+        }
+    };
+    // The address the page reports now (the stored one can lag a client-side navigation)
+    if let Some(now) = page["url"].as_str().filter(|u| Some(*u) != url.as_deref()) {
+        if let Some(why) = browser_act_reason(args, Some(now)) {
+            return Some(why);
+        }
+    }
+    let signals: PageSignals = serde_json::from_value(page).unwrap_or_default();
+    page_reason(action, args["key"].as_str(), &signals)
 }
 
 /// The tools a turn's kwant server lists: `skill_draft` only while the bot has a Skill Foundry
@@ -603,7 +634,7 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
 }
 
 async fn run_browser_tool(state: &AppState, target: &str, name: &str, args: &Value) -> (String, bool) {
-    use super::routes::{act_sandbox, get_sandbox_page, navigate_sandbox, InteractPayload, NavigatePayload};
+    use super::routes::{act_sandbox_allowed, get_sandbox_page, navigate_sandbox, InteractPayload, NavigatePayload};
     let state = State(state.clone());
     let target = Path(target.to_string());
     let result = match name {
@@ -628,7 +659,8 @@ async fn run_browser_tool(state: &AppState, target: &str, name: &str, args: &Val
                 delta_x: None,
                 delta_y: args["delta_y"].as_f64(),
             };
-            act_sandbox(state, target, Json(payload)).await
+            // SelfToolsApprover already gave a payment its card (browser_act_payment)
+            act_sandbox_allowed(state, target, Json(payload)).await
         }
     };
     match result {

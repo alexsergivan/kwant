@@ -55,12 +55,33 @@ every MCP tool, through claude's permission prompt and the MCP gateway), in
 - Clicking a pay-type label: `Pay`, `Buy`, `Purchase`, `Checkout`/`Check out`, `Subscribe`,
   `Upgrade`, `Donate`, `Place order`, `Confirm order`, `Complete payment`, `Book now`, `Top up`,
   … or any label with a price on it (`$12.99`, `12,99 €`, `USD 10`).
-- Any click, or Enter, on a checkout page: a payment host (`checkout.stripe.com`, `paypal.com`,
+- Any click, Enter or Space on a checkout page: a payment host (`checkout.stripe.com`, `paypal.com`,
   `pay.google.com`, …), a host starting `checkout.`/`pay.`/`payment.`/`billing.`, or a path
   segment like `/checkout`, `/payment`, `/pay`, `/billing`, `/buy`, `/subscribe`. The address
   comes from the browser, not the bot.
 - Typing anything that looks like a card number: 13–19 digits (spaces or dashes allowed) that
   pass the Luhn check.
+
+Before the click or key, kwnt also reads the page itself (`BrowserController::payment_signals`,
+rules in `payment_floor::page_reason`), so the bot's own words never decide:
+
+- The element the click would really hit (the same match `click_text` makes) has a pay-type
+  label: the bot wrote "order", the button is "Place order".
+- A button on a page with card fields: a card number or CVC field (`autocomplete="cc-number"`,
+  `cc-csc`, `cc-exp`, or a name/id/placeholder like `cardnumber`, `cvc`, `cvv`), in open shadow
+  roots and same-origin frames too, or a payment provider's card frame (`js.stripe.com`,
+  Braintree, Adyen, Square, PayPal, … or a frame titled like "Secure card payment input frame").
+  "Continue", "Next", "Finish" and "Submit" ask there; buttons starting "Cancel", "Back", "Edit",
+  "Apply", "Add", … and clicks into the fields don't.
+- A submit button whose form posts to a checkout address (`action` or `formaction`).
+- Enter or Space in a card field, in a form with card fields, in a form that posts to a checkout
+  address, or anywhere on a page with a payment provider's card frame. Either key on a focused
+  button or link presses it, so the click rules above apply to it, by the text it shows.
+
+The shell bots' browser API (`POST /api/sandbox/:id/act`) can't show a card, so it doesn't do an
+action that looks like a payment: the page comes back with `error` ("Not done: this looks like a
+payment …") and `payment` (why), and the bot is told to leave that step to the person in the live
+browser panel. Clicks by position (`/api/sandbox/:id/interact`) are the person's live view only.
 
 `WebFetch` never pays (it only reads). kwnt's own other tools don't pay, and
 `self_tools_have_no_money_words` fails if one is added with a money word in its name until it is
@@ -69,10 +90,11 @@ classified here.
 ## What it doesn't catch
 
 - A plain "Continue", "Next" or "Confirm" button on a checkout page whose address doesn't look
-  like one (no checkout word in the host or path).
+  like one and that shows no card fields or payment frame (e.g. a review step with a saved card).
 - A card the website already has saved, one-click buying, and Apple Pay or Google Pay sheets.
-- Payment fields inside another site's frame on a normal-looking page (the address checked is
-  the page's, not the frame's).
+- A payment frame from a provider missing from the lists, with no card-like title.
+- A page kwnt can't read before the click (the browser didn't answer): only the label and address
+  rules count then.
 - A card number typed in pieces (one field for each group of 4 digits).
 - Shell commands that hide the host or method: variables (`$URL`), scripts, config files, other
   languages' HTTP libraries without `.post(`, and SDKs (`stripe.Charge.create(...)` in Python).
@@ -88,5 +110,6 @@ a `/billing` page. That's accepted: an extra card costs a tap, a missed payment 
 
 ## Tests
 
-`cargo test --test payment_floor_test` and the tables in `src/mcp/payment_floor.rs`
+`cargo test --test payment_floor_test`, `cargo test --test browser_pay_gate_test` (a real
+Chrome on local card pages; `-- --ignored` also walks saucedemo.com to "Finish") and the tables in `src/mcp/payment_floor.rs`
 (`cargo test --lib payment_floor`).

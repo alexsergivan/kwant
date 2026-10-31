@@ -315,6 +315,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
     let segs: Vec<&str> = path.trim_end_matches('/').split('/').collect();
     match segs.as_slice() {
         ["", "api", "sandbox", _, "passwords", ..] => true,
+        // Raw clicks by position are the person's live view: a bot clicking by coordinates would
+        // skip the payment floor, which reads the element under a label (bots use /act)
+        ["", "api", "sandbox", _, "interact"] => true,
         ["", "api", "passwords", ..] => true,
         // Loose ends read the person's mail: bots never see or change them
         ["", "api", "zombie", ..] => true,
@@ -858,6 +861,8 @@ mod tests {
         assert!(person_only(&get, "/api/sandbox/t1/passwords"));
         assert!(person_only(&post, "/api/sandbox/t1/passwords/c1/reveal"));
         assert!(person_only(&del, "/api/sandbox/t1/passwords/c1"));
+        assert!(person_only(&post, "/api/sandbox/t1/interact"));
+        assert!(!person_only(&post, "/api/sandbox/t1/act"));
         assert!(person_only(&get, "/api/passwords/store"));
         assert!(person_only(&post, "/api/messages/m1/decisions/0/change"));
         assert!(person_only(&post, "/api/work-ahead/run"));
