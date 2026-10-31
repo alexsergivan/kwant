@@ -1012,3 +1012,62 @@ never applied (the person approves checks), and the preview says so.
 offer), `suggestion_id`, `task_class`, `acceptance` and `checks` (JSON). `routine_suggestions` holds
 offers, with one live offer per `(space_id, cluster_key)`. `routine_suggestion_events` is their
 append-only history, enforced by triggers. Older binaries ignore all of it.
+
+## 21. Truth Ledger (Phase C1, shadow mode)
+
+Contract: `phase-c/contract.md`. **C1 ships the ledger in shadow mode only: it records, the person can
+read and decide, and nothing the bots see changes.** Memory stays the write path; C2 makes it a view of
+the ledger.
+
+**Setting.** `truth_ledger`: `off` (default), `shadow` or `on`, set by the person in `POST /api/settings`
+(a bot's token gets a 403, and the bots' own settings tool refuses it). **In C1 `on` behaves exactly like
+`shadow`.** The mirror below runs in every mode, so turning the ledger on later shows the whole history;
+the setting only gates the routes.
+
+**What it covers (D1).** Bot memory (`kwant_memories`), the person's notes on a bot and imported notes.
+Team and space facts, evidence, citations and disputes have tables but nothing writes them in C1.
+
+**The mirror (D2).** SQL triggers on `kwant_memories` mirror every insert, text change, pin and delete
+into `knowledge_facts`, so any writer (an older binary included) is seen; no row is moved. A fact has a
+`trust` and a `status`:
+- the person's note: `person`/`accepted`, decided by the person;
+- a bot's note: `bot`/`accepted`;
+- a bot's note from a turn that read outside text, or an imported note: `outside`/`proposed`
+  (`source_kind` `bot` with the turn id, or `import` with the import id). The memory row is unchanged:
+  an import's note keeps `source = 'user'` and `imported = 1`, and the bot still sees the note (D3).
+
+An edit supersedes the fact in force and adds a new one (`superseded_by` points to it); a bot rewriting
+an `outside` note that the person hasn't accepted keeps it `outside`, so a later clean turn can't launder
+it. A delete supersedes the fact with no successor. One fact per memory is in force at a time; the rest
+are its history. Deleting a bot, or undoing an import, deletes its facts and their events.
+
+**Taint.** A turn is tainted once it calls a tool that brings outside text in: web fetch or search, a
+shell, a sub-agent, any MCP server other than kwant's own, the browser, `read_attachment`, `mcp_search`
+or `page_source`, or when every call needs approval (the turn is assumed to). A bot note written later in
+that turn is `outside`. The bit lives in memory for the turn and is cleared at its end.
+
+**Rules in the database.** `superseded` is final; accepting a `proposed` or `disputed` fact needs
+`decided_by` and `decided_at`; an `outside` fact is accepted only by the person, and so is any team or
+space fact that is accepted or `outside`. `fact_events` is append-only (`created`, `superseded`,
+`pinned`, `unpinned`, `removed`, `backfilled`, `accepted`, `rejected`).
+
+**Routes, all person only** (a bot's token gets a 403 on every one, reads included; bots get facts
+through tools in C2):
+- `GET /api/facts?space=&scope=&scope_id=&status=&q=`: `{setting, facts}`, newest first, at most 500;
+  with the ledger off `{setting: "off", facts: []}`.
+- `GET /api/facts/:id?space=`: `{fact, events, evidence: [], citations: [], disputes: []}`; 404 when off.
+- `POST /api/facts/:id/accept` and `/reject` (`Idempotency-Key` optional; the same key replays): a
+  `proposed` fact becomes `accepted`, or `superseded` with no successor, decided by the person. 409
+  `{error, status}` when it isn't proposed, so of racing clicks exactly one changes it; 409 when off. In
+  C1 a rejected note stays in the bot's memory.
+
+**Storage** (add-only, idempotent): `knowledge_facts`, `fact_evidence`, `fact_citations`,
+`fact_disputes`, `fact_events` and `fact_provenance` (a write's pending trust, consumed by the mirror).
+The first start backfills every memory that has no fact (an `imported` note as `outside`/`proposed`,
+others by source) with a `backfilled` event; running it again adds nothing. Older binaries ignore the
+tables and their memory writes are still mirrored.
+
+**Known limits.** Taint is per turn and coarse: a tool call that was asked about and then denied still
+taints, and a bot can save text it read in an earlier turn from a clean one. Notes from before the
+ledger can't say whether their turn read outside text, so they are `bot`/`accepted`. An edited or
+deleted note keeps its old text as history in the ledger until the bot is deleted.

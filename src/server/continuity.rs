@@ -413,6 +413,11 @@ impl ToolApprover for SelfToolsApprover {
     }
 }
 
+/// The turn's id when it read outside text: its notes land `outside`/`proposed` in the Truth Ledger.
+fn outside_turn(scope: &SelfScope) -> Option<&str> {
+    scope.turn_id.as_deref().filter(|t| super::missions::truth_ledger::is_tainted(t))
+}
+
 /// The address the turn's browser shows now, without starting a browser.
 async fn page_url(state: &AppState, target: &str) -> Option<String> {
     let ctrl = state.browser_controllers.lock().await.get(target).cloned()?;
@@ -896,7 +901,7 @@ async fn call_tool(
             let text = str_arg("text").unwrap_or("");
             let before = db.list_memories(&scope.kwant_id).await.unwrap_or_default();
             let pinned = args["pinned"].as_bool().unwrap_or(false);
-            match db.add_memory_pinned(&scope.kwant_id, text, "agent", pinned).await {
+            match db.add_memory_from(&scope.kwant_id, text, "agent", pinned, outside_turn(scope)).await {
                 Ok(m) => {
                     memory_changed();
                     let mut reply = format!("Saved as [{}].", m.id);
@@ -923,7 +928,7 @@ async fn call_tool(
             }
             let mut updated = None;
             if let Some(text) = text {
-                match db.agent_update_memory(&scope.kwant_id, id, text).await {
+                match db.agent_update_memory_from(&scope.kwant_id, id, text, outside_turn(scope)).await {
                     Ok(m) => updated = Some(m),
                     Err(e) => return (e.to_string(), true),
                 }

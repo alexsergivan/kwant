@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
+- **Truth Ledger, shadow mode (Mission Control Phase C1).** A new `truth_ledger` setting (off by
+  default; `shadow`, or `on`, which behaves like shadow for now) lets you see every bot note as a fact
+  with where it came from. Notes a bot wrote after reading a web page, a file or another tool, and
+  imported notes, show as proposed until you accept or reject them; your own and the bot's other notes
+  are accepted. Nothing the bots see changes yet. Only you can read or decide facts; bots get a 403.
 - **Routines can say what a good run is.** A routine can carry a Flight School class, a description
   of a good result and checks. Each run's board task gets them, with the checks already approved, so a
   run that passes its checks is verified on its own. Only the person sets the class and the checks; a

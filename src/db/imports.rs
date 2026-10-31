@@ -179,6 +179,8 @@ impl Database {
         let now = Utc::now();
         let mut tx = self.pool.begin().await?;
         let mut ids: HashMap<&str, String> = HashMap::new();
+        // Known up front so the ledger can say which import each memory came from
+        let import_id = Uuid::new_v4().to_string();
 
         for bot in &bundle.bots {
             let (taken,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM kwants WHERE space_id = ? AND name = ? COLLATE NOCASE")
@@ -211,8 +213,10 @@ impl Database {
                 .execute(&mut *tx)
                 .await?;
             for text in &bot.memories {
+                let memory_id = Uuid::new_v4().to_string();
+                super::truth_ledger::note_provenance(&mut tx, &memory_id, super::truth_ledger::Provenance::Import { import_id: &import_id }).await?;
                 sqlx::query("INSERT INTO kwant_memories (id, kwant_id, text, source, imported, created_at, updated_at) VALUES (?, ?, ?, 'user', 1, ?, ?)")
-                    .bind(Uuid::new_v4().to_string())
+                    .bind(&memory_id)
                     .bind(&id)
                     .bind(text)
                     .bind(now)
@@ -276,7 +280,7 @@ impl Database {
             }
         }
 
-        let id = Uuid::new_v4().to_string();
+        let id = import_id;
         sqlx::query("INSERT INTO imports (id, space_id, source_kind, created, status, created_at) VALUES (?, ?, ?, ?, 'applied', ?)")
             .bind(&id)
             .bind(space.as_str())
@@ -354,6 +358,9 @@ impl Database {
                 "DELETE FROM kwant_mcp_disabled WHERE kwant_id = ?",
                 "DELETE FROM kwant_mcp_servers WHERE kwant_id = ?",
             ] {
+                sqlx::query(sql).bind(&k.id).execute(&mut *tx).await?;
+            }
+            for sql in super::truth_ledger::PURGE_BOT_FACTS {
                 sqlx::query(sql).bind(&k.id).execute(&mut *tx).await?;
             }
             // Memberships the person added since (another team or channel) go with it.

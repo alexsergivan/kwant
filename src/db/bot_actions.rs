@@ -273,6 +273,9 @@ impl Database {
         ] {
             sqlx::query(sql).bind(id).execute(&mut *tx).await?;
         }
+        for sql in super::truth_ledger::PURGE_BOT_FACTS {
+            sqlx::query(sql).bind(id).execute(&mut *tx).await?;
+        }
         for table in ["channels", "teams"] {
             let rows: Vec<(String, String)> =
                 sqlx::query_as(&format!("SELECT id, member_kwants FROM {table} WHERE member_kwants LIKE '%' || ? || '%'"))
@@ -350,6 +353,9 @@ impl Database {
             "DELETE FROM api_contexts WHERE kwant_id = ?1",
             "DELETE FROM model_usage WHERE kwant_id = ?1",
         ] {
+            sqlx::query(sql).bind(id).execute(&mut *tx).await?;
+        }
+        for sql in super::truth_ledger::PURGE_BOT_FACTS {
             sqlx::query(sql).bind(id).execute(&mut *tx).await?;
         }
         // Memberships; a channel or team it led goes to its next member, else `new_lead`

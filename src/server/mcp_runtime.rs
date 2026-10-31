@@ -170,6 +170,10 @@ impl ToolApprover for BrokerApprover {
     }
 
     async fn note(&self, req: &ToolApprovalRequest, decision: &'static str, approval_id: Option<&str>) {
+        // Truth Ledger: a turn that ran a tool reading outside text writes `outside` notes from now on
+        if decision != "denied" && super::missions::truth_ledger::request_reads_outside(req) {
+            super::missions::truth_ledger::taint(&req.turn_id);
+        }
         super::missions::checkpoints::log_call(&self.db, &self.data_dir, req, decision, approval_id).await;
     }
 
@@ -558,7 +562,7 @@ pub async fn prepare_turn_with_opts(
     kwant: &Kwant,
     turn_id: Option<String>,
     cwd: Option<PathBuf>,
-    self_scope: Option<super::continuity::SelfScope>,
+    mut self_scope: Option<super::continuity::SelfScope>,
     opts: TurnApprovalOpts,
 ) -> Option<(McpTurnContext, String)> {
     let mut servers = match state.db.list_active_mcp_servers_for_kwant(&kwant.id).await {
@@ -583,6 +587,14 @@ pub async fn prepare_turn_with_opts(
     }
     let setting = state.db.get_setting("mcp_max_tool_iterations").await.ok().flatten();
     let turn_id = turn_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    // The memory tools look the turn's taint up by this id
+    if let Some(scope) = self_scope.as_mut() {
+        scope.turn_id.get_or_insert_with(|| turn_id.clone());
+    }
+    // A turn that always asks reads outside text from the start (contract §2.4)
+    if opts.always_ask {
+        super::missions::truth_ledger::taint(&turn_id);
+    }
     let mut chat = turn_chat(state, &turn_id).await;
     if let Some((agent, effort)) = &opts.routed {
         let chat = chat.get_or_insert_with(|| json!({"direct_kwant_id": kwant.id}));
@@ -627,6 +639,7 @@ pub async fn finish_turn(state: &AppState, token: &str) {
     state.self_tools.lock().await.remove(token);
     let session = state.mcp_sessions.lock().await.remove(token);
     if let Some(session) = session {
+        super::missions::truth_ledger::end_turn(&session.turn_id);
         session.close().await;
     }
 }

@@ -25,6 +25,7 @@ pub mod performance;
 pub mod routes;
 pub mod runner;
 pub mod tools;
+pub mod truth_ledger;
 
 use super::AppState;
 use crate::db::missions::{Mission, NewCheck, NewTask, OutcomeCheck, Task, TaskChange};

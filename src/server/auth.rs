@@ -373,6 +373,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "skills", "foundry", ..] | ["", "api", "skills", _, "foundry"] => true,
         // Automation Discovery reads every board task the person made in the space
         ["", "api", "automation-discovery", ..] => true,
+        // Truth Ledger (C1): the person reads facts here and accepts or rejects them; bots get fact
+        // tools in C2
+        ["", "api", "facts", ..] => true,
         ["", "api", "skills", ..] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "bot-actions" | "imports", _, "undo"] => *method == Method::POST,
         _ => false,

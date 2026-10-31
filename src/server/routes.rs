@@ -2416,6 +2416,10 @@ async fn run_kwant_turn_inner(
                             Some(RuntimeEvent::UsageSoFar { fresh }) => state.turns.saw_usage(&tag.turn_id, fresh),
                             Some(event) => {
                                 if let RuntimeEvent::ToolCallPending { name, args, .. } = &event {
+                                    // Engines' own tools that no approver sees (Codex's web search)
+                                    if super::missions::truth_ledger::reads_outside(name) {
+                                        super::missions::truth_ledger::taint(&tag.turn_id);
+                                    }
                                     if name == super::questions::NATIVE_ASK_TOOL {
                                         let place = crate::db::questions::QuestionPlace {
                                             kwant_id: target_kwant.id.clone(),
@@ -3489,6 +3493,9 @@ pub struct SettingsResponse {
     pub automation_discovery: String,
     /// Routines suggested per space per 24 hours (0–10).
     pub automation_discovery_daily_cap: i64,
+    /// Truth Ledger: `off` (default), `shadow` or `on` (`on` reads like `shadow` until C2; see
+    /// `super::missions::truth_ledger`).
+    pub truth_ledger: String,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3542,6 +3549,7 @@ pub struct SaveSettingsPayload {
     pub skill_foundry_replay_tokens: Option<i64>,
     pub automation_discovery: Option<String>,
     pub automation_discovery_daily_cap: Option<i64>,
+    pub truth_ledger: Option<String>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3604,6 +3612,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         skill_foundry_replay_tokens: super::missions::foundry::replay_tokens(&state).await,
         automation_discovery: if super::missions::discovery::enabled(&state).await { "on" } else { "off" }.into(),
         automation_discovery_daily_cap: super::missions::discovery::daily_cap(&state).await,
+        truth_ledger: super::missions::truth_ledger::mode(&state).await.into(),
     }))
 }
 
@@ -3675,6 +3684,9 @@ pub async fn save_settings(
         return bad(e);
     }
     if let Some(e) = super::missions::discovery::settings_error(payload.automation_discovery.as_deref(), payload.automation_discovery_daily_cap) {
+        return bad(e);
+    }
+    if let Some(e) = super::missions::truth_ledger::settings_error(payload.truth_ledger.as_deref()) {
         return bad(e);
     }
     if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
@@ -3827,6 +3839,9 @@ pub async fn save_settings(
     }
     if let Some(n) = payload.automation_discovery_daily_cap {
         let _ = state.db.set_setting(super::missions::discovery::CAP_SETTING, &n.to_string()).await;
+    }
+    if let Some(m) = &payload.truth_ledger {
+        let _ = state.db.set_setting(super::missions::truth_ledger::SETTING, m).await;
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;

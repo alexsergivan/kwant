@@ -485,6 +485,19 @@ impl Database {
         source: &str,
         pinned: bool,
     ) -> Result<Memory, MemoryError> {
+        self.add_memory_from(kwant_id, text, source, pinned, None).await
+    }
+
+    /// [`Self::add_memory_pinned`] by a bot in turn `outside_turn`, which read outside text: the
+    /// Truth Ledger mirrors the note as `outside`/`proposed` (contract §2.4).
+    pub async fn add_memory_from(
+        &self,
+        kwant_id: &str,
+        text: &str,
+        source: &str,
+        pinned: bool,
+        outside_turn: Option<&str>,
+    ) -> Result<Memory, MemoryError> {
         let text = clean_memory_text(text)?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
@@ -500,6 +513,9 @@ impl Database {
         let pinned_by = pinned.then(|| source.to_string());
         if pinned && pinned_count(&mut tx, kwant_id).await? >= MAX_PINNED_PER_KWANT {
             return Err(MemoryError::TooManyPinned);
+        }
+        if let Some(turn_id) = outside_turn {
+            super::truth_ledger::note_provenance(&mut tx, &id, super::truth_ledger::Provenance::Outside { turn_id }).await?;
         }
         sqlx::query("INSERT INTO kwant_memories (id, kwant_id, text, source, pinned_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(&id)
@@ -556,7 +572,23 @@ impl Database {
         id: &str,
         text: &str,
     ) -> Result<Memory, MemoryError> {
+        self.agent_update_memory_from(kwant_id, id, text, None).await
+    }
+
+    /// [`Self::agent_update_memory`] in turn `outside_turn`, which read outside text (see
+    /// [`Self::add_memory_from`]).
+    pub async fn agent_update_memory_from(
+        &self,
+        kwant_id: &str,
+        id: &str,
+        text: &str,
+        outside_turn: Option<&str>,
+    ) -> Result<Memory, MemoryError> {
         let text = clean_memory_text(text)?;
+        let mut tx = self.pool.begin().await?;
+        if let Some(turn_id) = outside_turn {
+            super::truth_ledger::note_provenance(&mut tx, id, super::truth_ledger::Provenance::Outside { turn_id }).await?;
+        }
         let res = sqlx::query(
             "UPDATE kwant_memories SET text = ?, updated_at = ? \
              WHERE id = ? AND kwant_id = ? AND source <> 'user'",
@@ -565,11 +597,16 @@ impl Database {
         .bind(Utc::now())
         .bind(id)
         .bind(kwant_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         if res.rows_affected() == 0 {
+            // Rolls the provenance row back with it
+            drop(tx);
             return Err(self.why_agent_cannot_touch(kwant_id, id).await);
         }
+        // Unchanged text fires no mirror; the marker must not outlive this write
+        sqlx::query("DELETE FROM fact_provenance WHERE memory_id = ?").bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
         self.get_memory(id).await
     }
 
