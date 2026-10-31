@@ -57,6 +57,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the notification toggles. This is step 4 of Automation Discovery.
 
 ### Changed
+- **Bots click page controls by number, and never through a banner.** The page a bot reads lists
+  its buttons, links and fields as numbered refs with their role (`[9] button "Add to cart" · Sauce
+  Labs Bike Light`), naming the product or row when several share a name. A bot clicks or types by
+  ref, so the click hits exactly that control (scrolled into view, also inside frames). If it has
+  gone, been hidden or renamed, or a cookie banner or dialog covers it, nothing is clicked and the bot
+  gets a fresh list with the reason. Clicking by label still works.
 - **Browser checkouts ask before paying, also behind a plain "Continue".** Before a bot clicks or
   presses Enter or Space in its browser, kwant reads the page: the button the click would really hit, card
   number or CVC fields, a payment provider's card frame (Stripe, Braintree, Adyen, …) and forms that

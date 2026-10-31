@@ -6,7 +6,7 @@ pub mod manager;
 pub mod service;
 pub mod vault;
 
-pub use browser::{detect_bot_wall, refuse_file_path, BrowserController, BrowserError, NavigationResult, PendingCapture};
+pub use browser::{detect_bot_wall, ref_line, refuse_file_path, BrowserController, ClickTarget, BrowserError, NavigationResult, PendingCapture};
 pub use credentials::{Credential, CredentialMeta, CredentialStore, EncryptedFileStore};
 pub use manager::{ActiveSandbox, SandboxError, SandboxManager, ShellOutput};
 

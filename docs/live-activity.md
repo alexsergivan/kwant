@@ -135,7 +135,7 @@ While a step is open in a bot browser:
 The person can use the live view freely.
 
 **Bots never see typed passwords.** The agent's browser tools are `browser_open`, `browser_page`
-and `browser_act` (click by text, type, key, scroll); there is no script tool. Page reads use
+and `browser_act` (click by ref or text, type, key, scroll); there is no script tool. Page reads use
 `innerText` and element labels, which never include the value of an input (only submit and button
 labels), and all three tools are refused while the step is open. This covers kwnt's own browser
 tools; a CLI engine's own built-in browser or shell is outside it.
