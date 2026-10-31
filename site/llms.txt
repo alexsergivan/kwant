@@ -44,6 +44,10 @@ Key facts:
 ## Alternatives
 - [Grok Bot Alternative: Open-Source & Self-Hosted](https://kwant.si/alternatives/grok-bot): kwant is an open-source, self-hosted alternative to Grok Bot. Run a team of AI bots on your own machine and import your Grok Bot in minutes.
 
+## Blog
+- [Blog: guides and comparisons for self-hosted AI agents](https://kwant.si/blog/): Guides, comparisons and notes on running a self-hosted team of AI agents with kwant.
+- [Run Claude Code on a VPS and reach it from your phone](https://kwant.si/blog/claude-code-on-a-vps): Three ways to run Claude Code on a VPS and reach it from your phone: SSH and tmux, Anthropic's Remote Control, or a self-hosted AI agent team with kwant.
+
 ## Optional
 - [Privacy policy](https://kwant.si/privacy): What kwant.si and the self-hosted kwant software send where. The website sets no cookies and counts page views with cookie-free Cloudflare Web Analytics; the software has no telemetry.
 - [Terms of use](https://kwant.si/terms): kwant is free software under the GNU AGPL-3.0, provided as is. You run it yourself and are responsible for your accounts, your bots and their costs.

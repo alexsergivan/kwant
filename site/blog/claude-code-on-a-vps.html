@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run Claude Code on a VPS and reach it from your phone · kwant</title>
+<meta name="description" content="Three ways to run Claude Code on a VPS and reach it from your phone: SSH and tmux, Anthropic&#x27;s Remote Control, or a self-hosted AI agent team with kwant.">
+<meta name="theme-color" content="#f4f1ff">
+<meta name="color-scheme" content="light">
+<link rel="canonical" href="https://kwant.si/blog/claude-code-on-a-vps">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="kwant">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Run Claude Code on a VPS and reach it from your phone · kwant">
+<meta property="og:description" content="Three ways to run Claude Code on a VPS and reach it from your phone: SSH and tmux, Anthropic&#x27;s Remote Control, or a self-hosted AI agent team with kwant.">
+<meta property="og:url" content="https://kwant.si/blog/claude-code-on-a-vps">
+<meta property="og:image" content="https://kwant.si/assets/og/blog-claude-code-on-a-vps.png?v=3dd3b9e0c8">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Run Claude Code on a VPS and reach it from your phone: SSH and tmux, Remote Control, or a kwant bot team.">
+<meta property="article:published_time" content="2026-10-31">
+<meta property="article:modified_time" content="2026-10-31">
+<meta property="article:tag" content="claude-code">
+<meta property="article:tag" content="vps">
+<meta property="article:tag" content="self-hosted">
+<meta property="article:tag" content="how-to">
+<meta property="article:tag" content="ai-agents">
+<link rel="alternate" type="application/rss+xml" title="kwant blog" href="https://kwant.si/blog/feed.xml">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Run Claude Code on a VPS and reach it from your phone · kwant">
+<meta name="twitter:description" content="Three ways to run Claude Code on a VPS and reach it from your phone: SSH and tmux, Anthropic&#x27;s Remote Control, or a self-hosted AI agent team with kwant.">
+<meta name="twitter:image" content="https://kwant.si/assets/og/blog-claude-code-on-a-vps.png?v=3dd3b9e0c8">
+<meta name="twitter:image:alt" content="Run Claude Code on a VPS and reach it from your phone: SSH and tmux, Remote Control, or a kwant bot team.">
+<link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png?v=ac1a1e97c4" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
+<link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css?v=147a9c7514">
+</head>
+<body class="page-blog">
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart">Docs</a>
+      <a href="/blog/" aria-current="page">Blog</a>
+      <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<section class="page-head post-head">
+  <div class="wrap">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">kwant</a> <span aria-hidden="true">/</span> <a href="/blog/">Blog</a></nav>
+    <p class="kicker">claude-code, vps, self-hosted, how-to, ai-agents</p>
+    <h1>Run Claude Code on a VPS and reach it from your phone</h1>
+    <p class="lede">Three ways to run Claude Code on a VPS and reach it from your phone: SSH and tmux, Anthropic&#x27;s Remote Control, or a self-hosted AI agent team with kwant.</p>
+    <p class="post-meta">The kwant team · <time datetime="2026-10-31">October 31, 2026</time> · 7 min read</p>
+  </div>
+</section>
+
+<div class="wrap">
+  <article class="prose solo post">
+<p>A laptop that sleeps is a poor home for a coding agent. A small server that stays on is better, and the question that follows is how to reach it from your phone. This guide covers three routes, what each one needs, and when each is the right pick. One of them is kwant, the self-hosted AI agent team we build. It is not the right answer for everyone, and we say where it isn't.</p>
+<h2 id="what-you-need-before-you-start">What you need before you start</h2>
+<ul><li>A VPS you can SSH into. Anything small that runs Linux works for the first two options. The Docker route for kwant needs about 4 GB of free RAM (<a href="https://kwant.si/docs/install">install guide</a>, checked 2026-10-31).</li><li>Claude Code installed on that server. Anthropic's recommended install is <code>curl -fsSL https://claude.ai/install.sh | bash</code> (<a href="https://code.claude.com/docs/en/overview" rel="noopener">Anthropic docs</a>, as of 2026-10-31).</li><li>A Claude login the CLI can use. Which kind matters for option 2; see below.</li></ul>
+<h2 id="option-1-ssh-and-tmux">Option 1: SSH and tmux</h2>
+<p>This is the simplest route and it needs nothing beyond Claude Code.</p>
+<ol><li>SSH into the server and start a session that survives disconnects: <code>tmux new -s claude</code>.</li><li>Run <code>claude</code> inside it and detach with <code>Ctrl-b d</code>.</li><li>Reconnect later with <code>tmux attach -t claude</code>.</li></ol>
+<p>On a phone, use any SSH app. The cost is the experience: you are typing into a terminal on a small screen, and approving a command means reading it in a terminal.</p>
+<p><strong>Pick this if</strong> you already live in a terminal and want no extra software.</p>
+<h2 id="option-2-claude-code-s-remote-control">Option 2: Claude Code's Remote Control</h2>
+<p>Anthropic's own route is <a href="https://code.claude.com/docs/en/remote-control" rel="noopener">Remote Control</a>. It connects claude.ai/code or the Claude mobile app to a Claude Code session running on your machine. Run <code>claude remote-control</code> in your project directory; the process stays running and shows a session URL, and you can press the spacebar to show a QR code for your phone (Anthropic docs, as of 2026-10-31).</p>
+<p>Two requirements from the docs are worth knowing before you plan around it:</p>
+<ul><li>It needs a claude.ai subscription login on a Pro, Max, Ultra, Team or Enterprise plan. The docs say API keys are not supported, and on Team and Enterprise an Owner must first turn on the Remote Control toggle in Claude Code admin settings.</li><li>The session runs on your machine, so "your computer has to stay on and the claude process has to keep running." A VPS is such a machine, but we have not tested this route on a headless server, so check the docs for the sign-in step before relying on it.</li></ul>
+<p><strong>Pick this if</strong> you pay for a Claude subscription, want the official mobile app experience, and mainly work with one Claude Code session at a time.</p>
+<h2 id="option-3-kwant-on-the-same-server-with-a-phone-friendly-web-app">Option 3: kwant on the same server, with a phone-friendly web app</h2>
+<p><a href="https://kwant.si/">kwant</a> is an open-source, self-hosted team of AI agents ("bots" in its own wording) in one binary, <code>kwnt</code>. It runs the bots with the CLIs you already use, and its web app works on a phone, so you can read the team's summary or approve an action away from your desk (<a href="https://kwant.si/">home page</a>, checked 2026-10-31). kwant is licensed AGPL-3.0, with a commercial option.</p>
+<p>This is a bigger step than the other two: you are adding a small server application, not only reaching a CLI. It makes sense if you want several bots, approvals in one place, and scheduled work on your own server. If you only want one Claude Code session on your phone, option 1 or 2 is less to set up.</p>
+<h2 id="set-up-kwant-on-a-vps">Set up kwant on a VPS</h2>
+<p>The <a href="https://kwant.si/docs/install">install guide</a> documents a Docker Compose route that starts kwant, its router and a private browser for the bots:</p>
+<pre><code>git clone https://github.com/alexsergivan/kwant.git &amp;&amp; cd kwant
+KWNT_CLIS=claude,codex docker compose up -d --build
+docker compose exec kwnt kwnt doctor
+docker compose exec kwnt claude auth login
+docker compose exec kwnt kwnt signin-link</code></pre>
+<p><code>kwnt doctor</code> reports what works and the fix for what doesn't. <code>kwnt signin-link</code> prints a one-time sign-in link and a QR code that work once, for 15 minutes; set <code>KWNT_ALLOWED_ORIGINS</code> first (below) so the link has your HTTPS address. The guide also mentions <code>kwnt token --raw</code>, which prints the permanent API token: keep that for scripts and treat it like a password. Instead of a CLI sign-in you can add an API key in the app under Space settings → Accounts (<a href="https://kwant.si/docs/install">install guide</a>). Read the <a href="https://kwant.si/docs/accounts">accounts page</a> for how several accounts and failover work, and check your provider's terms for whatever you sign in with.</p>
+<p>The guide also describes a single-binary route. Build with <code>make build</code>, copy the binary to the server, and run <code>kwnt serve --host 0.0.0.0 --port 8799</code>. <code>make build</code> needs Rust and Node, and makes a binary for the machine it runs on, so build on the server itself or on a Linux machine with the same CPU type and the same or an older distribution (a binary built on a Mac won't run on Linux). Or use the Docker route. The server prints a one-time sign-in link that works once, for 15 minutes.</p>
+<h3 id="put-https-in-front">Put HTTPS in front</h3>
+<p>With Docker, the web app is published on 127.0.0.1:8799 only. Put an HTTPS reverse proxy in front and set <code>KWNT_ALLOWED_ORIGINS</code> to your HTTPS address. The guide's Caddy example is two lines: <code>your.domain { reverse_proxy 127.0.0.1:8799 }</code>. HTTPS also matters for the phone: the guide notes that browsers only install the web app from pages served over https or from 127.0.0.1.</p>
+<p>If you would rather not expose anything, the guide shows an SSH tunnel: <code>ssh -N -L 8799:127.0.0.1:8799 user@your-vps</code>, then open <code>http://127.0.0.1:8799</code> on your computer.</p>
+<h3 id="sign-in-from-your-phone">Sign in from your phone</h3>
+<p>Once you are signed in, open Settings → Signed-in devices and choose Add a phone or browser. kwant shows a one-time QR code that works once, for 15 minutes. Scan it with your phone's camera. The page then offers to install kwant as a web app (<a href="https://kwant.si/docs/install">install guide</a>).</p>
+<h3 id="keep-it-running">Keep it running</h3>
+<p>The guide includes a systemd unit that runs <code>kwnt serve</code> as its own user with <code>Restart=always</code> and <code>KWNT_DATA_DIR=/var/lib/kwnt</code>, so kwant starts again after a reboot.</p>
+<h2 id="security-checklist-for-a-server-that-runs-a-coding-agent">Security checklist for a server that runs a coding agent</h2>
+<ul><li><strong>Decide what the agent may do without asking.</strong> kwant has three approval modes (ask, smart, off) and, in every mode, anything that looks like a payment asks first (<a href="https://kwant.si/docs/approvals">approvals</a>). Its own docs say the middle mode "guards against accidents. It isn't a sandbox." Use the strictest mode for bots or folders you don't trust.</li><li><strong>Never expose Chromium's debugging port or the Docker socket.</strong> The install guide says so in as many words.</li><li><strong>Keep the sign-in link private.</strong> Anyone who can read the server's output can use it.</li><li><strong>Use a dedicated user.</strong> The systemd example creates one for kwant.</li><li><strong>Limit freedom per bot.</strong> <a href="https://kwant.si/docs/flight-school">Flight School</a> lets you set Observe, Sandbox or Act per bot and per kind of work. It is off until you switch it on, and tiers apply to tasks on the Mission board.</li></ul>
+<h2 id="which-option-should-you-pick">Which option should you pick?</h2>
+<div class="table-wrap"><table><thead><tr><th scope="col">If you…</th><th scope="col">Pick</th></tr></thead><tbody><tr><td>live in a terminal and want nothing extra</td><td>SSH and tmux</td></tr><tr><td>pay for Claude and want Anthropic's mobile experience</td><td>Remote Control</td></tr><tr><td>want several bots, approvals and scheduled work on your own server</td><td>kwant</td></tr><tr><td>want a hosted service with no server to look after</td><td>None of these; look at hosted options</td></tr></tbody></table></div>
+<p>A note on the name: "kwant" here means the open-source AI agent team at kwant.si. It is not the Kwant physics package or Kwant.ai, and kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple.</p>
+<p>Ready to try it? Start with the <a href="https://kwant.si/docs/install">install guide</a> or the <a href="https://kwant.si/docs/quickstart">quickstart</a>.</p>
+    <aside class="post-cta" aria-label="Try kwant">
+      <p><strong>Try kwant.</strong> A self-hosted team of AI agents in one binary, free and open source.</p>
+      <p class="cta"><a class="btn btn-violet" href="/docs/install">Install kwant</a> <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">See it on GitHub</a></p>
+    </aside>
+  </article>
+  
+</div>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="foot-brand">
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
+      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="https://github.com/alexsergivan/kwant" rel="noopener">Toss one our way <span aria-hidden="true">⭐</span></a></p>
+    </div>
+    <nav aria-label="Product">
+      <h2>Product</h2>
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart">Quickstart</a>
+      <a href="/docs/install">Install &amp; run</a>
+      <a href="/self-hosted-ai-agents">Self-hosted AI agents</a>
+      <a href="/blog/">Blog</a>
+      <a href="/docs/mcp">MCP tools</a>
+    </nav>
+    <nav aria-label="Using kwant">
+      <h2>Using kwant</h2>
+      <a href="/docs/spaces">Spaces</a>
+      <a href="/docs/accounts">Accounts</a>
+      <a href="/docs/approvals">Approvals</a>
+      <a href="/docs/routines">Routines</a>
+    </nav>
+    <nav aria-label="Project">
+      <h2>Project</h2>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+      <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Issues</a>
+      <a href="https://github.com/alexsergivan/kwant/blob/main/SECURITY.md" rel="noopener">Security</a>
+    </nav>
+    <nav aria-label="Legal">
+      <h2>Legal</h2>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms of use</a>
+      <a href="/terms#license">License</a>
+    </nav>
+    <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+    <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
+  </div>
+</footer>
+<script src="../assets/js/site.js?v=c490c973ba" defer></script>
+<script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"BlogPosting","@id":"https://kwant.si/blog/claude-code-on-a-vps#post","headline":"Run Claude Code on a VPS and reach it from your phone","description":"Three ways to run Claude Code on a VPS and reach it from your phone: SSH and tmux, Anthropic's Remote Control, or a self-hosted AI agent team with kwant.","url":"https://kwant.si/blog/claude-code-on-a-vps","mainEntityOfPage":"https://kwant.si/blog/claude-code-on-a-vps","image":"https://kwant.si/assets/og/blog-claude-code-on-a-vps.png?v=3dd3b9e0c8","inLanguage":"en","datePublished":"2026-10-31","dateModified":"2026-10-31","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"wordCount":1406,"isPartOf":{"@id":"https://kwant.si/blog/#blog"},"about":{"@id":"https://kwant.si/#app"},"keywords":["claude-code","vps","self-hosted","how-to","ai-agents"]},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://kwant.si/blog/"},{"@type":"ListItem","position":3,"name":"Run Claude Code on a VPS and reach it from your phone","item":"https://kwant.si/blog/claude-code-on-a-vps"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
+</body>
+</html>
