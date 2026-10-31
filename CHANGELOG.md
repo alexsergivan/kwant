@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.5.1] - 2026-10-31
+
 ### Added
 - **Star on GitHub, asked nicely.** After real use (5 finished turns and 2 days since this device
   first opened the app) a small card says "kwant bots run on coffee and GitHub stars ⭐" with
