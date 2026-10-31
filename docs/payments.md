@@ -55,7 +55,7 @@ every MCP tool, through claude's permission prompt and the MCP gateway), in
 - Clicking a pay-type label: `Pay`, `Buy`, `Purchase`, `Checkout`/`Check out`, `Subscribe`,
   `Upgrade`, `Donate`, `Place order`, `Confirm order`, `Complete payment`, `Book now`, `Top up`,
   … or any label with a price on it (`$12.99`, `12,99 €`, `USD 10`).
-- Any click, or Enter, on a checkout page: a payment host (`checkout.stripe.com`, `paypal.com`,
+- Any click, Enter or Space on a checkout page: a payment host (`checkout.stripe.com`, `paypal.com`,
   `pay.google.com`, …), a host starting `checkout.`/`pay.`/`payment.`/`billing.`, or a path
   segment like `/checkout`, `/payment`, `/pay`, `/billing`, `/buy`, `/subscribe`. The address
   comes from the browser, not the bot.
@@ -74,8 +74,9 @@ rules in `payment_floor::page_reason`), so the bot's own words never decide:
   "Continue", "Next", "Finish" and "Submit" ask there; buttons starting "Cancel", "Back", "Edit",
   "Apply", "Add", … and clicks into the fields don't.
 - A submit button whose form posts to a checkout address (`action` or `formaction`).
-- Enter in a card field, in a form with card fields, in a form that posts to a checkout address,
-  or anywhere on a page with a payment provider's card frame.
+- Enter or Space in a card field, in a form with card fields, in a form that posts to a checkout
+  address, or anywhere on a page with a payment provider's card frame. Either key on a focused
+  button or link presses it, so the click rules above apply to it, by the text it shows.
 
 The shell bots' browser API (`POST /api/sandbox/:id/act`) can't show a card, so it doesn't do an
 action that looks like a payment: the page comes back with `error` ("Not done: this looks like a
