@@ -220,7 +220,8 @@ async fn claude_turn_gets_browser_tools_that_drive_its_own_panel() {
     assert!(!ctrl.capture_screenshot().await.unwrap().is_empty());
     assert!(!state.browser_controllers.lock().await.contains_key(&other.id), "no other bot's browser touched");
 
-    let (text, is_error) = self_tool(&app, &token, "browser_page", json!({})).await;
+    // full: the click's own answer may already show this page, and a plain re-read would say "unchanged"
+    let (text, is_error) = self_tool(&app, &token, "browser_page", json!({"full": true})).await;
     assert!(!is_error && text.contains("button was pressed"), "{text}");
     let (text, is_error) = self_tool(&app, &token, "browser_act", json!({"action": "dance"})).await;
     assert!(is_error && text.contains("Unknown action"), "{text}");

@@ -519,8 +519,14 @@ fn browser_tools() -> Vec<Value> {
         }),
         json!({
             "name": BROWSER_PAGE,
-            "description": "Read the page your browser shows now: url, title, visible text and clickable controls, numbered for browser_act.",
-            "inputSchema": {"type": "object", "properties": {}},
+            "description": "Read the page your browser shows now: url, title, visible text and clickable controls, numbered for browser_act. If nothing changed since your last look at it (a read or an action's answer), it says so instead of sending the page again. On a page with many controls only 40 are listed: give find to list the ones you look for first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "find": {"type": "string", "description": "Words for what you look for, e.g. \"bike light add to cart\": controls naming them are listed first."},
+                    "full": {"type": "boolean", "description": "true: send the whole page even if it didn't change since your last look."},
+                },
+            },
         }),
         json!({
             "name": BROWSER_SCREENSHOT,
@@ -622,7 +628,10 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
             true,
         );
     }
-    let (text, is_error) = run_browser_tool(state, target, name, args).await;
+    // Each turn is its own reader: a new turn gets the whole page on its first read. A turn
+    // without an id always gets the whole page
+    let reader = scope.turn_id.clone().unwrap_or_default();
+    let (text, is_error) = run_browser_tool(state, target, &reader, name, args).await;
     // A CAPTCHA wall: ask the person to solve it, then show the agent the page they left
     if !is_error {
         if let Ok(page) = serde_json::from_str::<Value>(&text) {
@@ -631,7 +640,7 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
                     if super::human_steps::browser_is_held(state, target).await {
                         return (note, false);
                     }
-                    let (after, _) = run_browser_tool(state, target, BROWSER_PAGE, &Value::Null).await;
+                    let (after, _) = run_browser_tool(state, target, &reader, BROWSER_PAGE, &json!({"full": true})).await;
                     return (format!("{note}\n\nThe page now:\n{after}"), false);
                 }
             }
@@ -640,8 +649,14 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
     (text, is_error)
 }
 
-async fn run_browser_tool(state: &AppState, target: &str, name: &str, args: &Value) -> (String, bool) {
-    use super::routes::{act_sandbox_allowed, get_sandbox_page, navigate_sandbox, InteractPayload, NavigatePayload};
+/// `reader` names who reads (empty: nobody known), for `browser_page` to answer "unchanged" when
+/// that reader's last page (from any browser tool) still reads the same.
+async fn run_browser_tool(state: &AppState, target: &str, reader: &str, name: &str, args: &Value) -> (String, bool) {
+    use super::routes::{act_sandbox_allowed, get_sandbox_page, navigate_sandbox, unchanged_read, InteractPayload, NavigatePayload, PageQuery};
+    let ctrl = match reader {
+        "" => None,
+        _ => super::routes::get_or_create_browser_controller(state, target).await,
+    };
     let state = State(state.clone());
     let target = Path(target.to_string());
     let result = match name {
@@ -651,7 +666,10 @@ async fn run_browser_tool(state: &AppState, target: &str, name: &str, args: &Val
             };
             navigate_sandbox(state, target, Json(NavigatePayload { url: url.to_string() })).await
         }
-        BROWSER_PAGE => get_sandbox_page(state, target).await,
+        BROWSER_PAGE => {
+            let find = args["find"].as_str().map(str::to_string);
+            get_sandbox_page(state, target, Query(PageQuery { find, since: None })).await
+        }
         _ => {
             let Some(action) = args["action"].as_str() else {
                 return ("action is required: click, type, key or scroll".into(), true);
@@ -672,7 +690,15 @@ async fn run_browser_tool(state: &AppState, target: &str, name: &str, args: &Val
         }
     };
     match result {
-        Ok(Json(page)) => {
+        Ok(Json(mut page)) => {
+            if let (Some(ctrl), Some(hash)) = (ctrl, page["hash"].as_str().map(str::to_string)) {
+                let mut reads = ctrl.reads.lock().unwrap_or_else(|e| e.into_inner());
+                let same = name == BROWSER_PAGE && args["full"].as_bool() != Some(true) && reads.is_same(reader, &hash);
+                reads.saw(reader, &hash);
+                if same {
+                    page = unchanged_read(&page);
+                }
+            }
             let is_error = page.get("error").is_some();
             (page.to_string(), is_error)
         }

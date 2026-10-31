@@ -57,6 +57,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the notification toggles. This is step 4 of Automation Discovery.
 
 ### Changed
+- **Bots don't re-read a page that hasn't changed, and find controls on crowded pages.** When a bot
+  reads its browser page again and nothing changed since its last look, it gets a one-line
+  "unchanged" instead of the whole page. On a page with more than 40 controls, the bot can say what
+  it looks for ("add to cart bike light") and the matching controls are listed first, by plain word
+  matching with no extra model call; their numbers stay the same.
 - **Bots see what each browser step changed, and stop going round in circles.** After every click,
   key or typing, the bot gets one line saying what changed: the page it went to, or the new and gone
   lines. If its last 3 steps changed nothing, or it asks a 3rd time in a row for the same click that

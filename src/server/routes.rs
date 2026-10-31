@@ -4327,11 +4327,19 @@ pub async fn interact_sandbox(
 /// Compact, text-only page state for agents (no base64 image to wade through).
 async fn sandbox_page_state(ctrl: &crate::sandbox::BrowserController) -> serde_json::Value {
     let snap = ctrl.snapshot().await;
-    page_state_from(ctrl, snap).await
+    page_state_from(ctrl, snap, "").await
 }
 
 /// [`sandbox_page_state`] from a snapshot already read (`None`: the page couldn't be read).
-async fn page_state_from(ctrl: &crate::sandbox::BrowserController, snap: Option<crate::sandbox::progress::Snapshot>) -> serde_json::Value {
+/// `find`: the bot's words for what it looks for, to list the matching controls first on a page
+/// with more than [`reads::SHOWN_CONTROLS`](crate::sandbox::reads::SHOWN_CONTROLS). `hash` says
+/// what the read shows, for [`get_sandbox_page`]'s `since`.
+async fn page_state_from(
+    ctrl: &crate::sandbox::BrowserController,
+    snap: Option<crate::sandbox::progress::Snapshot>,
+    find: &str,
+) -> serde_json::Value {
+    use crate::sandbox::reads;
     let (url, title, text) = match snap {
         Some(s) => (s.url, s.title, s.text),
         None => (
@@ -4340,14 +4348,21 @@ async fn page_state_from(ctrl: &crate::sandbox::BrowserController, snap: Option<
             String::new(),
         ),
     };
-    let clickable = ctrl.list_clickables(40).await;
+    let controls = ctrl.list_clickables(reads::READ_CONTROLS).await;
+    let shown = truncate_chars(&text, 2000);
+    let hash = reads::page_hash(&url, &title, shown, &controls, find.trim());
+    let (clickable, controls_note) = reads::pick_controls(&controls, find, reads::SHOWN_CONTROLS);
     let mut page = json!({
         "url": url,
         "title": title,
-        "text": truncate_chars(&text, 2000),
+        "text": shown,
         "clickable": clickable,
         "blocked": false,
+        "hash": hash,
     });
+    if let Some(note) = controls_note {
+        page["controls_note"] = json!(note);
+    }
     // A CAPTCHA widget on an otherwise normal page (TikTok's slider over the feed, a
     // reCAPTCHA on a form) counts too; its box tells the person's view where to look
     let captcha = ctrl.probe_captcha().await.ok().flatten();
@@ -4385,14 +4400,43 @@ async fn broadcast_sandbox_screenshot(state: &AppState, team_id: &str, ctrl: &cr
     }
 }
 
+/// `GET /api/sandbox/:id/page` options. `find`: words for what the bot looks for (matching
+/// controls listed first). `since`: the `hash` of the bot's last read; when the page still reads
+/// the same, the answer is a short `unchanged` note instead of the page.
+#[derive(Debug, Default, Deserialize)]
+pub struct PageQuery {
+    #[serde(default)]
+    pub find: Option<String>,
+    #[serde(default)]
+    pub since: Option<String>,
+}
+
 pub async fn get_sandbox_page(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
+    Query(query): Query<PageQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = get_or_create_browser_controller(&state, &team_id)
         .await
         .ok_or_else(|| browser_unavailable(&state))?;
-    Ok(Json(sandbox_page_state(&ctrl).await))
+    let snap = ctrl.snapshot().await;
+    let page = page_state_from(&ctrl, snap, query.find.as_deref().unwrap_or_default()).await;
+    if query.since.as_deref().is_some_and(|since| !since.is_empty() && page["hash"] == json!(since)) {
+        return Ok(Json(unchanged_read(&page)));
+    }
+    Ok(Json(page))
+}
+
+/// What a read of a page that still reads the same returns instead of it.
+pub fn unchanged_read(page: &serde_json::Value) -> serde_json::Value {
+    json!({
+        "url": page["url"],
+        "title": page["title"],
+        "hash": page["hash"],
+        "blocked": page["blocked"],
+        "unchanged": true,
+        "note": crate::sandbox::reads::UNCHANGED_NOTE,
+    })
 }
 
 /// Agent-facing action endpoint (`POST /api/sandbox/:id/act`, the shell bots' browser API):
@@ -4444,7 +4488,7 @@ pub async fn act_sandbox_allowed(
     let here = before.as_ref().map(|b| b.url.clone()).unwrap_or_default();
     let repeat = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).before(&here, key.as_deref());
     if let Some(stop) = repeat {
-        let mut page = page_state_from(&ctrl, before).await;
+        let mut page = page_state_from(&ctrl, before, "").await;
         page["stalled"] = json!(true);
         page["error"] = json!(stop);
         return Ok(Json(page));
@@ -4506,7 +4550,7 @@ pub async fn act_sandbox_allowed(
         changed = diff(&after);
     }
     let stall = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).after(changed.is_some());
-    let mut page = page_state_from(&ctrl, after).await;
+    let mut page = page_state_from(&ctrl, after, "").await;
     page["changed"] = json!(changed.as_deref().unwrap_or("Nothing on the page changed."));
     match result {
         Ok(done) => page["result"] = json!(done),
