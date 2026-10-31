@@ -253,6 +253,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sandbox/:team_id/stream", get(browser_stream::upgrade))
         .route("/api/sandbox/:team_id/page", get(routes::get_sandbox_page))
         .route("/api/sandbox/:team_id/act", post(routes::act_sandbox))
+        .route("/api/sandbox/:team_id/cite", post(routes::cite_sandbox))
         .route("/api/sandbox/:team_id/passwords", get(passwords::list).post(passwords::save))
         .route("/api/sandbox/:team_id/passwords/pending", post(passwords::save_pending).delete(passwords::discard_pending))
         .route("/api/sandbox/:team_id/passwords/:id", delete(passwords::remove))
