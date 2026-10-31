@@ -234,6 +234,12 @@ pub fn kick_handoff(state: &AppState, task: &Task) {
     tokio::spawn(async move { on_delegation(&state, &id).await });
 }
 
+/// [`on_delegation`] boxed, for [`lead_review_note`]: a send-back runs the hand-off, whose end
+/// resumes the lead, whose turn comes back to [`lead_review_note`].
+fn on_delegation_boxed<'a>(state: &'a AppState, delegation_id: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    Box::pin(on_delegation(state, delegation_id))
+}
+
 pub async fn on_delegation(state: &AppState, delegation_id: &str) {
     if !super::enabled(state).await {
         return;
@@ -402,13 +408,22 @@ pub async fn lead_review_note(state: &AppState, d: &crate::db::threads::Delegati
     if !super::enabled(state).await || d.status != "completed" {
         return None;
     }
+    // The board may not have seen the hand-off at all yet (its listener lags behind the run): the
+    // card is made now, or the lead's turn would leave it out and nothing would ask until the sweep
+    if state.db.task_by_source("delegation", &d.id).await.ok().flatten().is_none() {
+        on_delegation_boxed(state, &d.id).await;
+    }
     // The board may not have seen the end yet: its card goes to review first. Not through
     // [`on_delegation`], whose send-back runs the hand-off, whose end comes back here.
     let t = {
         let _serial = SERIAL.lock().await;
+        // `d` is from when the batch ended; a review may have sent it back since. Only the end
+        // that is still current puts the card in review, or a late turn would push the card of a
+        // fix still running to review, and the fix's own result would then never be attached.
+        let d = state.db.get_delegation(&d.id).await.ok().flatten().filter(|now| now.status == "completed" && now.ended_at == d.ended_at)?;
         let t = state.db.task_by_source("delegation", &d.id).await.ok().flatten()?;
         if matches!(t.state.as_str(), "working" | "needs_you") {
-            attach_result(state, &t, d).await;
+            attach_result(state, &t, &d).await;
             finish(state, &t, "review", "the hand-off finished").await;
         }
         state.db.get_task(&t.id).await.ok().flatten()?

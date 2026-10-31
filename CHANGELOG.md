@@ -57,6 +57,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   page; screen readers read it as "Made in Germany with love".
 
 ### Fixed
+- **A hand-off card the lead reviewed no longer loses its fixed result.** When the lead's review sent
+  work back and the lead's earlier results turn ran late, that turn put the card back in Review while the
+  teammate was still fixing it, and the fix's result was never attached. The lead's turn now also makes a
+  hand-off's card if the board hasn't seen it yet, so the lead reviews it right away instead of minutes
+  later. Both races made `handoff_review_test` fail now and then on CI.
 - **Truth Ledger: outside facts can't be laundered or erased.** A bot editing a note that ever came
   from outside text, or re-adding its exact text after deleting it, lands it as proposed again, even
   after you accepted an earlier version. Only you can take a fact out of "outside", and your decision

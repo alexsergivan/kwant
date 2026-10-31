@@ -485,3 +485,64 @@ async fn a_batch_of_two_cards_gets_one_prompt_and_one_reminder() {
         assert_eq!(review_asks_for(t), 2, "no card was asked about on its own");
     }
 }
+
+/// A hand-off made in the database, finished, that no board event has seen yet (no card).
+async fn ended_unseen(env: &Env, task: &str, title: &str) -> kwnt::db::threads::Delegation {
+    let new = kwnt::db::threads::NewDelegation {
+        lead_kwant_id: env.lead.clone(),
+        specialist_kwant_id: env.specialist.clone(),
+        origin_channel_id: None,
+        origin_kwant_id: Some(env.lead.clone()),
+        origin_thread_id: None,
+        team_id: None,
+        task: task.into(),
+        title: title.into(),
+        continue_lead: true,
+        depth: 1,
+        follow_up_at: None,
+    };
+    let (_, d) = env.state.db.create_delegation(&new).await.unwrap();
+    assert!(env.state.db.finish_delegation(&d.id, "completed", None, None).await.unwrap());
+    env.state.db.get_delegation(&d.id).await.unwrap().unwrap()
+}
+
+/// The lead's results turn can run before the board's listener has seen the hand-off (a slow
+/// listener; the batch test timed out on CI for this): its card is made then, in review with its
+/// result, and the lead is asked about it in that turn instead of only by the sweep minutes later.
+#[tokio::test]
+async fn the_lead_is_asked_about_a_card_the_board_had_not_seen_yet() {
+    let env = setup().await;
+    let d = ended_unseen(&env, "Index the archive UNSEENMARK", "Archive index").await;
+    assert!(card(&env, &d.id).await.is_none(), "no event made its card");
+    let note = missions::listener::lead_review_note(&env.state, &d, "Specialist").await;
+    let t = card(&env, &d.id).await.expect("the results turn made the card");
+    assert!(note.is_some_and(|n| n.contains(&t.id)), "the lead is asked about it in this turn");
+    assert_eq!(t.state, "review");
+    assert_eq!(result_evidence(&env, &t.id).await.len(), 1, "with its result");
+    assert_eq!(asks_logged(&env, &t.id).await, 1);
+}
+
+/// A results turn that runs late, after the lead's review already sent the work back, carries
+/// the hand-off as it was when it ended. It must not push the card of the fix still running to
+/// review: the fix's own result would then never be attached (CI, #170: one result, not two).
+#[tokio::test]
+async fn a_late_results_turn_leaves_the_card_of_a_running_fix_alone() {
+    let env = setup().await;
+    let ended = ended_unseen(&env, "Fix the importer STALEMARK", "Importer fix").await;
+    missions::listener::on_delegation(&env.state, &ended.id).await;
+    assert_eq!(card_state(&env, &ended.id).await, "review");
+    let t = card(&env, &ended.id).await.unwrap();
+    let ev = result_evidence(&env, &t.id).await;
+    let release = tempfile::tempdir().unwrap().keep().join("fixed");
+    let (out, err) = review(&env, &env.lead, &t.id, "fail", &ev, &format!("Handle empty rows LONGTASK:{} ", release.display())).await;
+    assert!(!err, "{out}");
+    wait_for("the fix to run", || async { status_of(&env, &ended.id).await == "running" && card_state(&env, &ended.id).await == "working" }).await;
+
+    let note = missions::listener::lead_review_note(&env.state, &ended, "Specialist").await;
+    assert!(note.is_none(), "the old end isn't up for review any more");
+    assert_eq!(card_state(&env, &ended.id).await, "working", "the fix's card stays with the fix");
+
+    std::fs::write(&release, "go").unwrap();
+    wait_for("the fixed result in review", || async { card_state(&env, &ended.id).await == "review" }).await;
+    assert_eq!(result_evidence(&env, &t.id).await.len(), 2, "the fix's result is attached too");
+}
