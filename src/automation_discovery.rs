@@ -47,15 +47,21 @@ const NAME_CHARS: usize = 80;
 const SOURCES_IN_INSTRUCTIONS: usize = 5;
 
 /// Words that say when, not what: dropped from titles before they are compared.
-const WHEN_WORDS: &[&str] = &[
+const WEEKDAY_WORDS: &[&str] = &[
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
     "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun",
     "montag", "dienstag", "mittwoch", "donnerstag", "freitag", "samstag", "sonnabend", "sonntag",
+    "today", "tomorrow", "heute", "morgen",
+];
+const MONTH_WORDS: &[&str] = &[
     "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
     "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
     "januar", "jänner", "februar", "märz", "mai", "juni", "juli", "oktober", "dezember", "okt", "dez",
-    "today", "tomorrow", "heute", "morgen",
 ];
+
+fn when_word(w: &str) -> bool {
+    WEEKDAY_WORDS.contains(&w) || MONTH_WORDS.contains(&w)
+}
 
 // Titles
 
@@ -64,7 +70,7 @@ const WHEN_WORDS: &[&str] = &[
 pub fn norm(title: &str) -> String {
     let text: String = title.nfkc().collect::<String>().to_lowercase();
     text.split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty() && !w.chars().any(|c| c.is_numeric()) && !WHEN_WORDS.contains(w))
+        .filter(|w| !w.is_empty() && !w.chars().any(|c| c.is_numeric()) && !when_word(w))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -103,17 +109,139 @@ pub fn jaccard(a: &str, b: &str) -> f64 {
     a.intersection(&b).count() as f64 / union as f64
 }
 
-/// A title without its date and number words, for a routine's name.
-pub fn routine_name(title: &str) -> String {
-    let kept: Vec<&str> = title.split_whitespace().filter(|w| !w.chars().any(|c| c.is_numeric())).collect();
-    let name = kept.join(" ");
-    let name = name.trim_matches(|c: char| !c.is_alphanumeric() && c != ')' && c != '"' && c != '\'');
-    let name = if name.is_empty() { title.trim() } else { name };
+/// Words that tie a date to the rest of a title ("for October", "vom 3."), dropped when the date
+/// went and they were left at an end.
+const DANGLING_WORDS: &[&str] = &[
+    "for", "of", "on", "in", "at", "from", "to", "by", "the", "per", "due", "until",
+    "für", "vom", "von", "am", "im", "zum", "zur", "bis", "ab", "den", "der", "des",
+];
+
+/// A word as titles are compared: NFKC, lowercase, without the punctuation around it.
+fn bare(word: &str) -> String {
+    word.nfkc().collect::<String>().to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()).to_string()
+}
+
+/// How a title word says when, if it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum When {
+    /// A year ("2026").
+    Year,
+    /// A month name or a date ("Oct", "26.10.", "2026-10-05", "3rd", "10月26日").
+    Date,
+    /// A weekday, "today"/"tomorrow", or another number ("10", "Q4").
+    Other,
+}
+
+fn says_when(raw: &str, bare: &str) -> Option<When> {
+    let digits = bare.chars().any(char::is_numeric);
+    let parts: Vec<&str> = bare.split(|c: char| !c.is_alphanumeric()).filter(|p| !p.is_empty()).collect();
+    if bare.len() == 4 && (bare.starts_with("19") || bare.starts_with("20")) && bare.chars().all(|c| c.is_ascii_digit()) {
+        return Some(When::Year);
+    }
+    let ordinal = ["st", "nd", "rd", "th"].iter().any(|s| bare.strip_suffix(s).is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())));
+    // "26.10.", "10/26", "2026-10-05", German "26." and CJK "10月26日"
+    let dated = digits && (parts.len() > 1 || bare.contains(['月', '日', '年']) || raw.trim_end_matches([',', ')', ']', ';', ':']).ends_with('.'));
+    if ordinal || dated || parts.iter().any(|p| MONTH_WORDS.contains(p)) {
+        return Some(When::Date);
+    }
+    (digits || parts.iter().any(|p| WEEKDAY_WORDS.contains(p))).then_some(When::Other)
+}
+
+/// A routine's name from its newest title and the source asks' titles and local dates. Dates,
+/// years, numbers, ordinals and weekday or month names are dropped unless every one of at least two
+/// sources has the same word ("Top 10 leads for Monday", "Q4 board pack"); a shared month name or
+/// date counts only when the sources span more than one month, a shared year more than one year,
+/// since otherwise it is only the month they happened in. "For", "vom" and the like that this leaves
+/// at either end go too, as do brackets left empty or unpaired. When nothing is left, only words
+/// with digits are dropped, and when even that leaves nothing the title is kept as it is.
+pub fn routine_name(title: &str, sources: &[(&str, NaiveDate)]) -> String {
+    let source_words: Vec<HashSet<String>> = sources.iter().map(|(s, _)| s.split_whitespace().map(bare).collect()).collect();
+    let months: HashSet<(i32, u32)> = sources.iter().map(|(_, d)| (d.year(), d.month())).collect();
+    let years: HashSet<i32> = sources.iter().map(|(_, d)| d.year()).collect();
+    let in_every = |w: &str| source_words.len() >= 2 && source_words.iter().all(|s| s.contains(w));
+    let shared = |w: &str, when: When| {
+        in_every(w)
+            && match when {
+                When::Year => years.len() > 1,
+                When::Date => months.len() > 1,
+                When::Other => true,
+            }
+    };
+    let words: Vec<&str> = title.split_whitespace().collect();
+    let mut keep: Vec<bool> = words
+        .iter()
+        .map(|w| {
+            let b = bare(w);
+            says_when(w, &b).is_none_or(|when| shared(&b, when))
+        })
+        .collect();
+    let dangling = |w: &str| DANGLING_WORDS.contains(&bare(w).as_str());
+    // Words left at an end once the date beyond them went.
+    if keep.first() == Some(&false) {
+        for i in 0..words.len() {
+            if !keep[i] {
+                continue;
+            }
+            if dangling(words[i]) { keep[i] = false } else { break }
+        }
+    }
+    if keep.last() == Some(&false) {
+        for i in (0..words.len()).rev() {
+            if !keep[i] {
+                continue;
+            }
+            if dangling(words[i]) { keep[i] = false } else { break }
+        }
+    }
+    let kept: Vec<&str> = words.iter().zip(&keep).filter(|(_, k)| **k).map(|(w, _)| *w).collect();
+    let name = tidy(&kept.join(" "));
+    let name = if name.is_empty() {
+        tidy(&words.iter().filter(|w| !w.chars().any(char::is_numeric)).copied().collect::<Vec<_>>().join(" "))
+    } else {
+        name
+    };
+    let name = if name.is_empty() { title.trim().to_string() } else { name };
     if name.chars().count() <= NAME_CHARS {
-        name.to_string()
+        name
     } else {
         name.chars().take(NAME_CHARS).collect::<String>().trim_end().to_string()
     }
+}
+
+/// Without unpaired brackets, empty brackets, separators in a row or punctuation at the ends.
+fn tidy(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    let mut drop = vec![false; chars.len()];
+    let mut open: Vec<usize> = Vec::new();
+    for (i, &c) in chars.iter().enumerate() {
+        match c {
+            '(' | '[' | '{' => open.push(i),
+            ')' | ']' | '}' => {
+                let pair = match c { ')' => '(', ']' => '[', _ => '{' };
+                match open.last() {
+                    Some(&o) if chars[o] == pair => {
+                        open.pop();
+                        if chars[o + 1..i].iter().all(|c| !c.is_alphanumeric()) {
+                            (o..=i).for_each(|j| drop[j] = true);
+                        }
+                    }
+                    _ => drop[i] = true,
+                }
+            }
+            _ => {}
+        }
+    }
+    open.into_iter().for_each(|o| drop[o] = true);
+    let name: String = chars.iter().zip(&drop).filter(|(_, d)| !**d).map(|(c, _)| *c).collect();
+    let mut out: Vec<&str> = Vec::new();
+    for w in name.split_whitespace() {
+        let separator = !w.chars().any(char::is_alphanumeric);
+        if separator && out.last().is_some_and(|p| !p.chars().any(char::is_alphanumeric)) {
+            continue;
+        }
+        out.push(w);
+    }
+    out.join(" ").trim_matches(|c: char| !c.is_alphanumeric() && c != ')' && c != ']' && c != '"' && c != '\'').to_string()
 }
 
 // What the miner reads
@@ -807,7 +935,8 @@ pub fn mine(input: &Input) -> Scan {
     for c in &mut clusters {
         c.tasks.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
         let days = days_of(c, input.tz);
-        let newest_title = c.tasks.last().map(|t| t.title.trim().to_string()).unwrap_or_default();
+        let titles: Vec<(&str, NaiveDate)> = days.iter().map(|d| (c.tasks[d.task].title.as_str(), d.date)).collect();
+        let newest_title = c.tasks.last().map(|t| routine_name(&t.title, &titles)).unwrap_or_default();
         let skip = |reason| Skip { cluster_key: c.key.clone(), title: newest_title.clone(), asks: days.len(), reason };
         let cadence = match detect(&days, today) {
             Ok(cd) => cd,
@@ -858,7 +987,8 @@ pub fn mine(input: &Input) -> Scan {
             skipped.push(skip(Reason::NotRegular));
             continue;
         };
-        let name = routine_name(&latest.title);
+        let titles: Vec<(&str, NaiveDate)> = cadence.matched.iter().map(|&i| (c.tasks[days[i].task].title.as_str(), days[i].date)).collect();
+        let name = routine_name(&latest.title, &titles);
         let acceptance = latest.acceptance.trim().to_string();
         let (checks, left_out_checks) = checks_of(&verified, input.checks);
         let chain = chain_of(&c.key, &asks, &keyed, &bot);
@@ -1085,12 +1215,69 @@ mod tests {
         assert!(cluster_key("general", "Bookkeeping").is_some());
     }
 
+    /// Titles asked `every` days apart from `first`.
+    fn asked<'a>(titles: &[&'a str], first: &str, every: i64) -> Vec<(&'a str, NaiveDate)> {
+        let first: NaiveDate = first.parse().unwrap();
+        titles.iter().enumerate().map(|(i, t)| (*t, first + Duration::days(every * i as i64))).collect()
+    }
+
     #[test]
     fn routine_name_drops_date_words_and_is_capped() {
-        assert_eq!(routine_name("Weekly sales report 2026-10-05"), "Weekly sales report");
-        assert_eq!(routine_name("  Invoices (Oct 3rd) "), "Invoices (Oct");
-        assert_eq!(routine_name("2026-10-05"), "2026-10-05");
-        assert_eq!(routine_name(&"long ".repeat(40)).chars().count(), 79);
+        assert_eq!(routine_name("Weekly sales report 2026-10-05", &[]), "Weekly sales report");
+        assert_eq!(routine_name("  Invoices (Oct 3rd) ", &[]), "Invoices");
+        assert_eq!(routine_name("Sales – Oct – EU", &[]), "Sales – EU");
+        assert_eq!(routine_name("Monday: standup notes", &[]), "standup notes");
+        assert_eq!(routine_name(&"long ".repeat(40), &[]).chars().count(), 79);
+    }
+
+    #[test]
+    fn routine_name_drops_the_month_and_day() {
+        let s = asked(&["Weekly status report Sep", "Weekly status report Oct", "Weekly status report Oct"], "2026-09-28", 7);
+        assert_eq!(routine_name("Weekly status report Oct", &s), "Weekly status report");
+        // Every source says "Oct", but only because they all fell in October
+        let s = asked(&["Weekly status report 19 Oct", "Weekly status report 26 Oct"], "2026-10-19", 7);
+        assert_eq!(routine_name("Weekly status report 26 Oct", &s), "Weekly status report");
+        let s = asked(&["Pay supplier invoices for August", "Pay supplier invoices for September", "Pay supplier invoices for October"], "2026-08-03", 31);
+        assert_eq!(routine_name("Pay supplier invoices for October", &s), "Pay supplier invoices");
+        assert_eq!(routine_name("Pay supplier invoices for October 2026", &[]), "Pay supplier invoices");
+    }
+
+    #[test]
+    fn routine_name_keeps_what_every_source_shares() {
+        let s = asked(&["Q4 board pack 3 Oct", "Q4 board pack 10 Oct", "q4 Board pack 17 Oct"], "2026-10-03", 7);
+        assert_eq!(routine_name("q4 Board pack 17 Oct", &s), "q4 Board pack");
+        let s = asked(&["Top 10 leads for Monday", "Top 10 leads for Monday"], "2026-10-19", 7);
+        assert_eq!(routine_name("Top 10 leads for Monday", &s), "Top 10 leads for Monday");
+        // One source is not enough to say a word is shared
+        assert_eq!(routine_name("Top 10 leads for Monday", &s[..1]), "Top leads");
+        // "May" in every title across months is a word, not the month; the rent is due on the 1st
+        let s = asked(&["May I see the rent 1st", "May I see the rent 1st"], "2026-09-01", 30);
+        assert_eq!(routine_name("May I see the rent 1st", &s), "May I see the rent 1st");
+        let s = asked(&["Pay rent 1st 2026", "Pay rent 1st 2026"], "2026-09-01", 30);
+        assert_eq!(routine_name("Pay rent 1st 2026", &s), "Pay rent 1st");
+    }
+
+    #[test]
+    fn routine_name_of_a_non_english_title() {
+        let s = asked(&["Monatsbericht für September 2026", "Monatsbericht für Oktober 2026"], "2026-09-30", 31);
+        assert_eq!(routine_name("Monatsbericht für Oktober 2026", &s), "Monatsbericht");
+        let s = asked(&["Wochenbericht vom 19. Oktober", "Wochenbericht vom 26. Oktober"], "2026-10-19", 7);
+        assert_eq!(routine_name("Wochenbericht vom 26. Oktober", &s), "Wochenbericht");
+        assert_eq!(routine_name("Rechnungen prüfen (26.10.)", &[]), "Rechnungen prüfen");
+        let s = asked(&["Звіт продажів 19.10.2026", "Звіт продажів 26.10.2026"], "2026-10-19", 7);
+        assert_eq!(routine_name("Звіт продажів 26.10.2026", &s), "Звіт продажів");
+        let s = asked(&["売上レポート 10月19日", "売上レポート 10月26日"], "2026-10-19", 7);
+        assert_eq!(routine_name("売上レポート 10月26日", &s), "売上レポート");
+    }
+
+    #[test]
+    fn routine_name_is_never_empty() {
+        let s = asked(&["2026-10-05", "2026-10-12"], "2026-10-05", 7);
+        assert_eq!(routine_name("2026-10-12", &s), "2026-10-12");
+        let s = asked(&["Oct 5", "Oct 12"], "2026-10-05", 7);
+        assert_eq!(routine_name("Oct 12", &s), "Oct");
+        let s = asked(&["Monday", "Tuesday"], "2026-10-19", 1);
+        assert_eq!(routine_name("Tuesday", &s), "Tuesday");
     }
 
     // Daylight saving: the same local time on both sides of the switch

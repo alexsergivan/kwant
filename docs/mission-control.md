@@ -921,7 +921,14 @@ instructions when the same bot did it, only mentioned when another bot did. The 
 time, down to the quarter hour ("time varies" past 4 hours apart); the first run is the next one after
 now and at least half a period after the last ask. Checks that passed with the same spec on ≥ 2 verified
 asks are kept (≤ 10); `person`/`peer_review` checks, ones whose spec changes every time and ones that
-passed once are listed as left out.
+passed once are listed as left out. The name is the newest ask's title without its dates, years, numbers,
+ordinals and weekday or month names, unless every source title (at least two) has the same word ("Top
+10 leads for Monday", "Q4 board pack"); a shared month name or date counts only when the sources span
+more than one month, a shared year more than one year. "For", "vom" and the like this leaves at an
+end go too, as do empty or unpaired brackets ("Pay supplier invoices for October" →
+"Pay supplier invoices"); a title that is nothing but those keeps its words without digits, or stays as
+it is. Skipped habits are titled the same way. Each source is one matched ask: `local_date`
+(`YYYY-MM-DD`) and `local_time` (`HH:MM`) in the person's time zone.
 
 **Settings:** `automation_discovery` `off` (default) or `on`, `automation_discovery_daily_cap` 0–10
 (default 2; anything else, a non-number too, is refused). Every `/api/automation-discovery` route is the
@@ -963,8 +970,9 @@ live offers are hidden.
 A **suggestion**: `{id, space_id, cluster_key, kwant_id, name, instructions, schedule, schedule_text,
 first_run_at, first_run_text, delivery: {channel_id?|thread_id?|direct_kwant_id?}, task_class,
 acceptance, checks: [{kind, spec, required}], left_out_checks: [{kind, spec, reason}], chain,
-source_task_ids, sources: [{id, title, created_at, state}], time_spread, evidence, permissions, status,
-routine_id, cooldown_until, routine_deleted_at, retention, retention_at, offered_at, decided_at}`. Check
+source_task_ids, sources: [{task_id, title, local_date, local_time, state}], time_spread, evidence,
+permissions, status, routine_id, cooldown_until, routine_deleted_at, retention, retention_at, offered_at,
+decided_at}`. Check
 specs are shown with secrets masked. A live offer's first run is recomputed whenever it is shown: the
 next slot after now and at least half a period after the last ask. Once accepted, it is the routine's
 first run.
