@@ -421,7 +421,8 @@ td code { white-space: nowrap; }
   .compare tr { margin-top: 12px; background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
   .compare tbody th { padding: 12px 14px; background: var(--v9); border-bottom: 1px solid var(--line); }
   .compare td { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 12px; min-width: 0; }
-  .compare tr td:last-child { border-bottom: 0; }
+  .compare tbody tr td { border-bottom: 1px solid var(--line); }
+  .compare tbody tr td:last-child { border-bottom: 0; }
   .compare td::before { content: attr(data-label); color: var(--dim); font-weight: 600; font-size: 14px; }
   .post-cta, .post-card { padding: 18px; }
   .post-list, .related { padding-bottom: 72px; }
