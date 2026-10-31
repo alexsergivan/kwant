@@ -16,7 +16,7 @@ use kwnt::{
         continuity::PinChange,
         models::{Kwant, NewKwant},
         spaces::SpaceId,
-        truth_ledger::TRUTH_LEDGER_DOWN,
+        truth_ledger::{self as truth_ledger_db, DELETE_GUARDS_DOWN, TRUTH_LEDGER_DOWN},
         Database,
     },
     router::LayaRouter,
@@ -262,7 +262,11 @@ async fn backfill_is_idempotent() {
         e.state.db.add_memory(&a.id, t, "agent").await.unwrap();
     }
     assert_eq!(e.state.db.backfill_truth_ledger().await.unwrap(), 0, "the mirror already has them");
+    // Facts only go with a permit (the privacy paths hold one)
+    sqlx::query("INSERT INTO fact_purge_permits (scope_id) VALUES (?)").bind(&a.id).execute(&e.pool).await.unwrap();
+    sqlx::query("DELETE FROM fact_events").execute(&e.pool).await.unwrap();
     sqlx::query("DELETE FROM knowledge_facts").execute(&e.pool).await.unwrap();
+    sqlx::query("DELETE FROM fact_purge_permits").execute(&e.pool).await.unwrap();
     assert_eq!(e.state.db.backfill_truth_ledger().await.unwrap(), 3);
     assert_eq!(e.state.db.backfill_truth_ledger().await.unwrap(), 0, "running it twice changes nothing");
     assert_eq!(count(&e.pool, "SELECT COUNT(*) FROM knowledge_facts").await, 3);
@@ -496,4 +500,120 @@ async fn migrating_a_copy_of_an_existing_database_keeps_every_memory() {
     let (_, _state, pool) = open(&data).await;
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM knowledge_facts").await, memories_before);
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM fact_events").await, memories_before);
+}
+
+#[tokio::test]
+async fn an_edit_of_an_accepted_outside_fact_lands_outside_proposed() {
+    let e = setup().await;
+    let fid = proposed_fact(&e).await;
+    let (a_id, m_id): (String, String) =
+        sqlx::query_as("SELECT scope_id, memory_id FROM knowledge_facts WHERE id = ?").bind(&fid).fetch_one(&e.pool).await.unwrap();
+    assert_eq!(e.state.db.decide_fact("spc_default", &fid, true).await.unwrap(), truth_ledger_db::Decision::Done);
+    assert_eq!(live_fact(&e, &m_id).await, (fid.clone(), "outside".into(), "accepted".into()));
+
+    // Rigel's case: the person accepted it, then a bot edit in a clean turn
+    e.state.db.agent_update_memory(&a_id, &m_id, "limit is 5000").await.unwrap();
+    let (_, trust, status) = live_fact(&e, &m_id).await;
+    assert_eq!((trust.as_str(), status.as_str()), ("outside", "proposed"), "an accepted outside fact isn't laundered by a bot edit");
+    let rows = facts_of(&e, &m_id).await;
+    assert_eq!((rows[1].3.as_str(), rows[1].4.is_some()), ("bot", true), "it keeps where it came from");
+
+    // Delete, then re-add the same text from a clean turn: still outside
+    let (_, token) = turn(&e, &e.state.db.get_kwant(&a_id).await.unwrap().unwrap()).await;
+    assert!(e.state.db.delete_memory(&a_id, &m_id).await.unwrap());
+    let again = saved_id(&tool(&e, &token, "memory_add", json!({"text": "limit is 5000"})).await);
+    let (_, trust, status) = live_fact(&e, &again).await;
+    assert_eq!((trust.as_str(), status.as_str()), ("outside", "proposed"), "delete and re-add doesn't launder it");
+    // Other text is the bot's own (exact text only: rewording is the known gap, docs §21)
+    let other = saved_id(&tool(&e, &token, "memory_add", json!({"text": "standup is at 10"})).await);
+    assert_eq!(live_fact(&e, &other).await.1, "bot");
+}
+
+#[tokio::test]
+async fn only_the_person_takes_a_fact_out_of_outside() {
+    let e = setup().await;
+    let fid = proposed_fact(&e).await;
+    let set = |sql: &'static str| {
+        let (pool, fid) = (e.pool.clone(), fid.clone());
+        async move { sqlx::query(sql).bind(fid).execute(&pool).await }
+    };
+    // Rigel's case: trust='bot' first, then an evidence accept
+    assert!(set("UPDATE knowledge_facts SET trust = 'bot' WHERE id = ?").await.is_err(), "trust can't leave outside without the person");
+    assert!(
+        set("UPDATE knowledge_facts SET trust = 'bot', status = 'accepted', decided_by = 'evidence', decided_at = 'now' WHERE id = ?").await.is_err(),
+        "nor in one go with evidence"
+    );
+    assert_eq!(live_fact(&e, &sqlx::query_as::<_, (String,)>("SELECT memory_id FROM knowledge_facts WHERE id = ?").bind(&fid).fetch_one(&e.pool).await.unwrap().0).await.1, "outside");
+
+    // The person decides it; their decision then stands
+    assert_eq!(e.state.db.decide_fact("spc_default", &fid, true).await.unwrap(), truth_ledger_db::Decision::Done);
+    assert!(set("UPDATE knowledge_facts SET decided_by = 'evidence' WHERE id = ?").await.is_err(), "evidence can't overrule the person");
+    assert!(set("UPDATE knowledge_facts SET trust = 'bot', decided_by = 'evidence' WHERE id = ?").await.is_err());
+    set("UPDATE knowledge_facts SET trust = 'bot' WHERE id = ?").await.expect("with the person's decision, trust may change");
+    assert!(set("UPDATE knowledge_facts SET decided_by = 'evidence' WHERE id = ?").await.is_err(), "an ex-outside fact never becomes evidence-accepted");
+}
+
+#[tokio::test]
+async fn facts_and_their_events_are_deleted_only_with_their_bot() {
+    let e = setup().await;
+    let a = bot(&e, "Ana").await;
+    let b = bot(&e, "Ben").await;
+    e.state.db.add_memory(&a.id, "Ana's note", "agent").await.unwrap();
+    e.state.db.add_memory(&b.id, "Ben's note", "agent").await.unwrap();
+
+    // Rigel's case: a plain DELETE, of facts or of their events, is refused
+    assert!(sqlx::query("DELETE FROM knowledge_facts").execute(&e.pool).await.is_err(), "facts can't be deleted");
+    assert!(sqlx::query("DELETE FROM fact_events").execute(&e.pool).await.is_err(), "events can't be deleted");
+    assert_eq!(count(&e.pool, "SELECT COUNT(*) FROM knowledge_facts").await, 2);
+    assert_eq!(count(&e.pool, "SELECT COUNT(*) FROM fact_events").await, 2);
+
+    // Deleting Ana removes only hers, and leaves no permit behind
+    let (status, v) = call(&e.app, "DELETE", &format!("/api/kwants/{}", a.id), None, None, None).await;
+    assert!(status.is_success(), "{status} {v}");
+    assert_eq!(count(&e.pool, &format!("SELECT COUNT(*) FROM knowledge_facts WHERE scope_id = '{}'", a.id)).await, 0);
+    assert_eq!(count(&e.pool, "SELECT COUNT(*) FROM knowledge_facts").await, 1);
+    assert_eq!(count(&e.pool, "SELECT COUNT(*) FROM fact_events").await, 1);
+    assert_eq!(count(&e.pool, "SELECT COUNT(*) FROM fact_purge_permits").await, 0);
+    assert!(sqlx::query("DELETE FROM knowledge_facts").execute(&e.pool).await.is_err(), "Ben's are still guarded");
+}
+
+#[tokio::test]
+async fn a_restart_brings_this_builds_rules_to_a_database_an_earlier_build_migrated() {
+    let e = setup().await;
+    let a = bot(&e, "Ana").await;
+    e.state.db.add_memory(&a.id, "Ana's note", "agent").await.unwrap();
+
+    // A rollback to a703732, whose bot deletion purges without a permit, takes the guards off first
+    for sql in DELETE_GUARDS_DOWN {
+        sqlx::query(sql).execute(&e.pool).await.unwrap();
+    }
+    let mut tx = e.pool.begin().await.unwrap();
+    for sql in [
+        "DELETE FROM fact_evidence WHERE fact_id IN (SELECT id FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1)",
+        "DELETE FROM fact_citations WHERE fact_id IN (SELECT id FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1)",
+        "DELETE FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1",
+        "DELETE FROM fact_events WHERE fact_id NOT IN (SELECT id FROM knowledge_facts)",
+    ] {
+        sqlx::query(sql).bind(&a.id).execute(&mut *tx).await.unwrap();
+    }
+    tx.rollback().await.unwrap();
+
+    // An earlier build's laundering update trigger and missing guards: the next start replaces them
+    sqlx::query("DROP TRIGGER kwant_memories_ledger_au").execute(&e.pool).await.unwrap();
+    sqlx::query("CREATE TRIGGER kwant_memories_ledger_au AFTER UPDATE ON kwant_memories BEGIN SELECT 1; END").execute(&e.pool).await.unwrap();
+    sqlx::query("DROP TRIGGER knowledge_facts_trust").execute(&e.pool).await.unwrap();
+    drop(e.state);
+    let (_, state, pool) = open(&e.data).await;
+    let n = |name: &'static str| {
+        let pool = pool.clone();
+        async move { count(&pool, &format!("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = '{name}'")).await }
+    };
+    for name in ["knowledge_facts_no_delete", "fact_events_no_delete", "knowledge_facts_trust", "kwant_memories_ledger_au"] {
+        assert_eq!(n(name).await, 1, "{name}");
+    }
+    assert!(sqlx::query("DELETE FROM knowledge_facts").execute(&pool).await.is_err(), "guards are back");
+    let m = state.db.list_memories(&a.id).await.unwrap().remove(0);
+    state.db.agent_update_memory(&a.id, &m.id, "Ana's note, edited").await.unwrap();
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM knowledge_facts WHERE statement = 'Ana''s note, edited' AND status = 'accepted'").await, 1, "the mirror is this build's again");
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM knowledge_facts").await, 2);
 }

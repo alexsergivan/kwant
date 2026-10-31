@@ -1036,10 +1036,13 @@ into `knowledge_facts`, so any writer (an older binary included) is seen; no row
   (`source_kind` `bot` with the turn id, or `import` with the import id). The memory row is unchanged:
   an import's note keeps `source = 'user'` and `imported = 1`, and the bot still sees the note (D3).
 
-An edit supersedes the fact in force and adds a new one (`superseded_by` points to it); a bot rewriting
-an `outside` note that the person hasn't accepted keeps it `outside`, so a later clean turn can't launder
-it. A delete supersedes the fact with no successor. One fact per memory is in force at a time; the rest
-are its history. Deleting a bot, or undoing an import, deletes its facts and their events.
+An edit supersedes the fact in force and adds a new one (`superseded_by` points to it). A bot rewriting
+a note whose history ever had an `outside` fact lands `outside`/`proposed` again, even in a clean turn
+and even after the person accepted an earlier version; so does a bot re-adding the exact text of an
+`outside` fact it had (delete, then add). A delete supersedes the fact with no successor. One fact per
+memory is in force at a time; the rest are its history. Deleting a bot, or undoing an import, deletes
+its facts and their events: those two paths hold a row in `fact_purge_permits` for the bot inside their
+transaction, and any other `DELETE` of a fact or of a living fact's event is refused.
 
 **Taint.** A turn is tainted once it calls a tool that brings outside text in: web fetch or search, a
 shell, a sub-agent, any MCP server other than kwant's own, the browser, `read_attachment`, `mcp_search`
@@ -1048,8 +1051,11 @@ that turn is `outside`. The bit lives in memory for the turn and is cleared at i
 
 **Rules in the database.** `superseded` is final; accepting a `proposed` or `disputed` fact needs
 `decided_by` and `decided_at`; an `outside` fact is accepted only by the person, and so is any team or
-space fact that is accepted or `outside`. `fact_events` is append-only (`created`, `superseded`,
-`pinned`, `unpinned`, `removed`, `backfilled`, `accepted`, `rejected`).
+space fact that is accepted or `outside`. A fact's trust leaves `outside` only with `decided_by =
+'person'`, and once the person decided a fact nothing changes `decided_by` again, so an ex-outside fact
+never ends up `decided_by = 'evidence'`. `fact_events` is append-only (`created`, `superseded`,
+`pinned`, `unpinned`, `removed`, `backfilled`, `accepted`, `rejected`). The triggers are recreated on
+every start, in one transaction, so a database an earlier build migrated gets the current rules.
 
 **Routes, all person only** (a bot's token gets a 403 on every one, reads included; bots get facts
 through tools in C2):
@@ -1065,9 +1071,13 @@ through tools in C2):
 `fact_disputes`, `fact_events` and `fact_provenance` (a write's pending trust, consumed by the mirror).
 The first start backfills every memory that has no fact (an `imported` note as `outside`/`proposed`,
 others by source) with a `backfilled` event; running it again adds nothing. Older binaries ignore the
-tables and their memory writes are still mirrored.
+tables and their memory writes are still mirrored. **Rollback:** releases before the ledger (2b936e4)
+need nothing. A703732 deletes a bot's facts without a permit, so before rolling back to it run
+`DELETE_GUARDS_DOWN` (drops `knowledge_facts_no_delete` and `fact_events_no_delete`), or deleting a bot
+fails; the next start of a later build puts them back.
 
 **Known limits.** Taint is per turn and coarse: a tool call that was asked about and then denied still
-taints, and a bot can save text it read in an earlier turn from a clean one. Notes from before the
+taints, and a bot can save text it read in an earlier turn from a clean one, or re-add a removed
+`outside` note in other words. Notes from before the
 ledger can't say whether their turn read outside text, so they are `bot`/`accepted`. An edited or
 deleted note keeps its old text as history in the ledger until the bot is deleted.

@@ -86,6 +86,11 @@ const TABLES: &[&str] = &[
         source_kind TEXT NOT NULL CHECK (source_kind IN ('person', 'bot', 'import', 'check', 'task')),
         source_ref TEXT
     )",
+    // Lets the privacy paths (a deleted bot, an undone import) delete that bot's facts and events;
+    // written and cleared inside the deletion's transaction (see [`PURGE_BOT_FACTS`]).
+    "CREATE TABLE IF NOT EXISTS fact_purge_permits (scope_id TEXT PRIMARY KEY)",
+    // A bot re-adding a note it removed: finds the outside fact with the same text
+    "CREATE INDEX IF NOT EXISTS knowledge_facts_outside_text ON knowledge_facts (scope_id, statement) WHERE trust = 'outside'",
 ];
 
 /// The new fact of a memory row `new`: trust and source from its provenance row, else from the
@@ -107,8 +112,13 @@ fn triggers() -> Vec<String> {
     let now = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
     let live = LIVE;
     vec![
+        // A bot re-adding the exact text of an outside fact it had (delete, then add) keeps it outside.
         format!(
             "CREATE TRIGGER IF NOT EXISTS kwant_memories_ledger_ai AFTER INSERT ON kwant_memories BEGIN \
+             INSERT OR IGNORE INTO fact_provenance (memory_id, trust, source_kind, source_ref) \
+               SELECT new.id, 'outside', f.source_kind, f.source_ref FROM knowledge_facts f \
+               WHERE new.source = 'agent' AND f.trust = 'outside' AND f.scope = 'bot' AND f.scope_id = new.kwant_id \
+                 AND f.statement = new.text ORDER BY f.created_at DESC, f.rowid DESC LIMIT 1; \
              {insert} \
              INSERT INTO fact_events (fact_id, kind, actor, created_at) \
                SELECT id, 'created', CASE source_kind WHEN 'person' THEN 'person' WHEN 'import' THEN 'import' ELSE new.kwant_id END, {now} \
@@ -117,14 +127,15 @@ fn triggers() -> Vec<String> {
             insert = MIRROR_INSERT.replace("{valid_from}", &format!("COALESCE(new.created_at, {now})")),
         ),
         // A changed note: the fact in force goes `superseded`, a new one replaces it (history kept).
-        // A bot editing a note that came from outside text keeps it outside, even in a clean turn.
+        // A bot editing a note that ever came from outside text keeps it outside, even in a clean
+        // turn and even after the person accepted an earlier version.
         format!(
             "CREATE TRIGGER IF NOT EXISTS kwant_memories_ledger_au AFTER UPDATE OF text, source, imported ON kwant_memories \
              WHEN old.text IS NOT new.text OR old.source IS NOT new.source OR old.imported IS NOT new.imported BEGIN \
              INSERT OR IGNORE INTO fact_provenance (memory_id, trust, source_kind, source_ref) \
                SELECT new.id, 'outside', f.source_kind, f.source_ref FROM knowledge_facts f \
-               WHERE new.source = 'agent' AND f.trust = 'outside' AND f.status <> 'accepted' \
-                 AND f.id = (SELECT id FROM knowledge_facts WHERE memory_id = new.id ORDER BY created_at DESC, rowid DESC LIMIT 1); \
+               WHERE new.source = 'agent' AND f.memory_id = new.id AND f.trust = 'outside' \
+               ORDER BY f.created_at DESC, f.rowid DESC LIMIT 1; \
              INSERT INTO fact_events (fact_id, kind, actor, created_at) \
                SELECT id, 'superseded', CASE WHEN new.source = 'agent' THEN new.kwant_id ELSE 'person' END, {now} \
                FROM knowledge_facts WHERE memory_id = new.id AND status IN {live}; \
@@ -177,12 +188,25 @@ fn triggers() -> Vec<String> {
            OR (new.scope <> 'bot' AND (new.trust = 'outside' OR new.status = 'accepted') AND new.decided_by IS NOT 'person') BEGIN \
          SELECT RAISE(ABORT, 'outside or shared facts are accepted only by the person'); END"
             .into(),
+        // Outside text stays outside unless the person decides; and nothing overrules the person
+        // afterwards, so an ex-outside fact can't end up `decided_by = 'evidence'`.
+        "CREATE TRIGGER IF NOT EXISTS knowledge_facts_trust BEFORE UPDATE ON knowledge_facts \
+         WHEN (old.trust = 'outside' AND new.trust IS NOT 'outside' AND new.decided_by IS NOT 'person') \
+           OR (old.decided_by = 'person' AND new.decided_by IS NOT 'person') BEGIN \
+         SELECT RAISE(ABORT, 'only the person takes a fact out of outside, and their decision stands'); END"
+            .into(),
         "CREATE TRIGGER IF NOT EXISTS fact_events_no_update BEFORE UPDATE ON fact_events BEGIN \
          SELECT RAISE(ABORT, 'fact_events is append-only'); END"
             .into(),
-        // Only the events of a fact that no longer exists (a deleted bot's) may go
+        // Facts and their events are deleted only by the privacy paths, which hold a permit for the
+        // bot (PURGE_BOT_FACTS). Events of a fact that is already gone may go too.
+        "CREATE TRIGGER IF NOT EXISTS knowledge_facts_no_delete BEFORE DELETE ON knowledge_facts \
+         WHEN NOT (old.scope = 'bot' AND EXISTS (SELECT 1 FROM fact_purge_permits WHERE scope_id = old.scope_id)) BEGIN \
+         SELECT RAISE(ABORT, 'facts are deleted only with their bot or import'); END"
+            .into(),
         "CREATE TRIGGER IF NOT EXISTS fact_events_no_delete BEFORE DELETE ON fact_events \
-         WHEN EXISTS (SELECT 1 FROM knowledge_facts WHERE id = old.fact_id) BEGIN \
+         WHEN EXISTS (SELECT 1 FROM knowledge_facts f WHERE f.id = old.fact_id \
+           AND NOT (f.scope = 'bot' AND EXISTS (SELECT 1 FROM fact_purge_permits p WHERE p.scope_id = f.scope_id))) BEGIN \
          SELECT RAISE(ABORT, 'fact_events is append-only'); END"
             .into(),
     ]
@@ -196,6 +220,7 @@ pub const TRUTH_LEDGER_DOWN: &[&str] = &[
     "DROP TRIGGER IF EXISTS kwant_memories_ledger_au",
     "DROP TRIGGER IF EXISTS kwant_memories_ledger_pin",
     "DROP TRIGGER IF EXISTS kwant_memories_ledger_ad",
+    "DROP TABLE IF EXISTS fact_purge_permits",
     "DROP TABLE IF EXISTS fact_provenance",
     "DROP TABLE IF EXISTS fact_events",
     "DROP TABLE IF EXISTS fact_disputes",
@@ -205,13 +230,23 @@ pub const TRUTH_LEDGER_DOWN: &[&str] = &[
 ];
 
 /// Removes a deleted bot's facts and their events (run in the deletion's transaction, after its
-/// memories): a bot that no longer exists keeps no history of what it remembered.
+/// memories): a bot that no longer exists keeps no history of what it remembered. The only path
+/// allowed to delete facts: it holds a permit for the bot while it runs.
 pub const PURGE_BOT_FACTS: &[&str] = &[
+    "INSERT OR IGNORE INTO fact_purge_permits (scope_id) VALUES (?1)",
     "DELETE FROM fact_evidence WHERE fact_id IN (SELECT id FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1)",
     "DELETE FROM fact_citations WHERE fact_id IN (SELECT id FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1)",
+    "DELETE FROM fact_events WHERE fact_id IN (SELECT id FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1)",
     "DELETE FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1",
     "DELETE FROM fact_events WHERE fact_id NOT IN (SELECT id FROM knowledge_facts)",
+    "DELETE FROM fact_purge_permits WHERE scope_id = ?1",
 ];
+
+/// Takes the delete guards off again, for a rollback to a release whose bot deletion purges facts
+/// without a permit (a703732). Older releases don't purge facts at all and need nothing.
+#[doc(hidden)]
+pub const DELETE_GUARDS_DOWN: &[&str] =
+    &["DROP TRIGGER IF EXISTS knowledge_facts_no_delete", "DROP TRIGGER IF EXISTS fact_events_no_delete"];
 
 /// How a memory write in the current turn should be trusted, when the row alone can't say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,9 +342,15 @@ impl Database {
         if cols.len() < 3 {
             return Ok(());
         }
+        // Recreated on every start, in one transaction, so a database an earlier build migrated
+        // gets this build's rules and no memory write slips between drop and create.
+        let mut tx = self.pool.begin().await?;
         for t in triggers() {
-            sqlx::query(&t).execute(&self.pool).await?;
+            let name = t.split_whitespace().nth(5).unwrap_or_default();
+            sqlx::query(&format!("DROP TRIGGER IF EXISTS {name}")).execute(&mut *tx).await?;
+            sqlx::query(&t).execute(&mut *tx).await?;
         }
+        tx.commit().await?;
         self.backfill_truth_ledger().await?;
         Ok(())
     }

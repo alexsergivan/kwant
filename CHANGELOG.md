@@ -57,6 +57,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   page; screen readers read it as "Made in Germany with love".
 
 ### Fixed
+- **Truth Ledger: outside facts can't be laundered or erased.** A bot editing a note that ever came
+  from outside text, or re-adding its exact text after deleting it, lands it as proposed again, even
+  after you accepted an earlier version. Only you can take a fact out of "outside", and your decision
+  can't be overruled afterwards. Facts and their history can no longer be deleted except by deleting
+  their bot or undoing their import.
 - **A CAPTCHA nobody solved is always reported as timed out.** When the time limit ran out, the bot
   could sometimes be told to keep waiting for a step that was already over, if the page watcher was
   slow on a busy machine. The bot's own wait now closes the step as timed out once the limit has
