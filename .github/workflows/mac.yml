@@ -76,7 +76,7 @@ jobs:
     needs: version
     # runs on PRs and manual runs (version skipped), and on tags only after the version check passed
     if: ${{ !failure() && !cancelled() }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
