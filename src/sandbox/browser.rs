@@ -795,6 +795,8 @@ pub struct BrowserController {
     viewport: Arc<std::sync::Mutex<Option<(u32, u32)>>>,
     /// The bot's recent actions, for the loop stop (see [`super::progress::Tracker`]).
     pub progress: Arc<std::sync::Mutex<super::progress::Tracker>>,
+    /// Which read each bot saw last, for "unchanged since your last read" (see [`super::reads`]).
+    pub reads: Arc<std::sync::Mutex<super::reads::Reads>>,
 }
 
 /// Widest screenshot a bot gets, in pixels, and the narrowest width it may ask for.
@@ -856,6 +858,7 @@ impl BrowserController {
             cookie_jar: Arc::default(),
             viewport: Arc::default(),
             progress: Arc::default(),
+            reads: Arc::default(),
         }
     }
 
