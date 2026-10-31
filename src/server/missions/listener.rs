@@ -94,10 +94,7 @@ async fn mission_of_holder(state: &AppState, kwant_id: &str) -> Option<String> {
     None
 }
 
-/// Creates a working task held by kwant for `owner` (a hand-off or routine run), or `None`.
-#[allow(clippy::too_many_arguments)]
-/// What a routine gives each run's task besides its acceptance: a class and the checks the
-/// person set on the routine (approved by the person, who set them there).
+/// The class and person-approved checks a routine gives each run's task besides its acceptance.
 struct RunOutcome {
     task_class: Option<String>,
     checks: Vec<crate::server::scheduler::RoutineCheck>,
@@ -134,6 +131,7 @@ impl RunOutcome {
     }
 }
 
+/// Creates a working task held by kwant for `owner` (a hand-off or routine run), or `None`.
 #[allow(clippy::too_many_arguments)]
 async fn start_held(
     state: &AppState,
