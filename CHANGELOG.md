@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
+- **Bot status dots.** The dot on each bot's avatar in the sidebar now says what the bot is doing:
+  green Available, a pulsing Working dot, amber Needs you, a hollow Queued ring, and grey Can't run.
+  A bot with a running turn never shows green, in the open chat included, and hovering or a screen
+  reader gives the status in words. The line under the name says "Working here" for the open chat.
 - **Truth Ledger, shadow mode (Mission Control Phase C1).** A new `truth_ledger` setting (off by
   default; `shadow`, or `on`, which behaves like shadow for now) lets you see every bot note as a fact
   with where it came from. Notes a bot wrote after reading a web page, a file or another tool, and

@@ -4,6 +4,7 @@ import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
 import { canRunNow, isUsable, pickLabel } from '../engines';
+import { STATUS_DOT, statusOf, statusText, type BotStatus } from '../botStatus';
 import { EnginesApi, useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
 import { Space, spaceSummary } from '../spaces';
@@ -78,8 +79,10 @@ export interface SidebarProps {
   selectedId: string;
   isChannel: boolean;
   selectedTeamId?: string | null;
-  /** Bots busy outside the open chat -> "Working on …", shown under their name. */
+  /** What busy bots are doing ("Working on …", "Working here"), shown under their name. */
   busyKwants?: Record<string, string>;
+  /** Busy bots' status for the avatar dot; bots not listed are Available (or Can't run). */
+  botStatus?: Record<string, BotStatus>;
   /** Open browser steps per bot ("Needs you" pill). */
   needsYou?: Record<string, number>;
   onSelectKwant: (kwant: Kwant) => void;
@@ -147,6 +150,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isChannel,
   selectedTeamId,
   busyKwants = {},
+  botStatus = {},
   needsYou = {},
   onSelectKwant,
   onSelectChannel,
@@ -520,8 +524,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                   <Hand size={11} />
                                 </span>
                               )}
-                              {busyKwants[k.id] && (
-                                <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-sky-400 animate-pulse motion-reduce:animate-none" aria-hidden="true" />
+                              {botStatus[k.id] && (
+                                <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${STATUS_DOT[botStatus[k.id]].replace('border-2', 'border')}`} title={statusText(k.name, botStatus[k.id])} aria-hidden="true" />
                               )}
                               {phone ? (
                                 <>
@@ -701,12 +705,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
                   }`}
                 >
-                  <span className="shrink-0" title={canRun === false ? "Can't run yet: no account works here" : undefined}>
+                  <span className="shrink-0" title={statusOf(k.id, botStatus, canRun) === 'cant_run' ? "Can't run yet: no account works here" : undefined}>
                     <ModernAvatar
                       role={k.avatar_sprite}
                       name={k.name}
                       size={32}
-                      isOnline={canRun !== false}
+                      status={statusOf(k.id, botStatus, canRun)}
                       kwantId={k.id}
                     />
                   </span>

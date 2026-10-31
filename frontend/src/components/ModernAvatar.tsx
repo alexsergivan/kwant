@@ -1,11 +1,13 @@
 import React, { useCallback, useSyncExternalStore } from 'react';
 import { isKwantWorking, subscribeKwant } from '../kwantActivity';
+import { STATUS_DOT, STATUS_PRIORITY, statusText, type BotStatus } from '../botStatus';
 
 interface ModernAvatarProps {
   role?: string;
   name?: string;
   size?: number; // pixel diameter
-  isOnline?: boolean;
+  /** Draws the status dot; a bot with a running turn shows Working even if this lags behind. */
+  status?: BotStatus;
   className?: string;
   /** The kwant this avatar shows; it animates while that kwant is working on a turn. */
   kwantId?: string;
@@ -327,11 +329,14 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   role = 'default',
   name = '',
   size = 36,
-  isOnline,
+  status,
   className = '',
   kwantId,
 }) => {
   const working = useKwantWorking(kwantId);
+  // Never green (or idle grey) while a turn runs: the turn stream wins over a stale status.
+  const shown = status && working && STATUS_PRIORITY.indexOf(status) > STATUS_PRIORITY.indexOf('working') ? 'working' : status;
+  const label = shown ? statusText(name, shown) : name ? (working ? `${name} is working…` : name) : undefined;
   const creature = pickCreature(role, name);
   // At tiny sizes the frame would dominate, so zoom in on the creature alone
   const framed = size > 20;
@@ -342,8 +347,9 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
     <div
       className={`kw-avatar relative inline-flex flex-shrink-0 select-none ${working ? 'kw-avatar-working' : ''} ${className}`}
       style={{ width: size, height: size }}
-      title={name ? (working ? `${name} is working…` : name) : undefined}
+      title={label}
       data-working={working || undefined}
+      data-status={shown}
     >
       {working && <span className="kw-avatar-ring" aria-hidden="true" />}
       <svg
@@ -366,12 +372,11 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
         </g>
       </svg>
       {working && <span className="kw-avatar-pip" aria-hidden="true" />}
-      {isOnline !== undefined && (
-        <span
-          className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-zinc-950 ${
-            isOnline ? 'bg-emerald-400' : 'bg-zinc-600'
-          }`}
-        />
+      {shown && (
+        <>
+          <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-zinc-950 ${STATUS_DOT[shown]}`} aria-hidden="true" />
+          <span className="sr-only">{label}</span>
+        </>
       )}
     </div>
   );

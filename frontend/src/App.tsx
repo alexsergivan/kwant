@@ -47,6 +47,7 @@ import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
 import { clearAllTurns, resetTurns, turnEnded, turnStarted } from './kwantActivity';
+import { botStatuses, busyLines } from './botStatus';
 import {
   ChatLoads,
   Delegation,
@@ -2564,12 +2565,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         {pendingHere === 1 ? '1 skill to review' : `${pendingHere} skills to review`}
       </button>
     ) : null;
-  // Sidebar: bots busy somewhere other than the open chat.
-  const busyKwants: Record<string, string> = {};
-  for (const t of Object.values(turns)) {
-    if (t.context_id === openCtx || busyKwants[t.kwant_id]) continue;
-    busyKwants[t.kwant_id] = `${t.state === 'queued' ? 'Waiting to work on' : browserTurns.has(t.turn_id) ? 'Needs you in the browser in' : awaitingTurns.has(t.turn_id) ? 'Asked you a question in' : 'Working on'} ${describeContext(t.context_id, t.kwant_id)}`;
-  }
+  // Sidebar: what busy bots are doing, "here" for the open chat.
+  const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext });
+  const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
 
   // Delete is off while the bot runs anywhere, the open chat included.
   const workingKwants = new Set(Object.values(turns).map((t) => t.kwant_id));
@@ -2785,6 +2783,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       isChannel={isChannel}
       selectedTeamId={selectedTeamId}
       busyKwants={busyKwants}
+      botStatus={botStatus}
       needsYou={needsYouByKwant}
       onSelectKwant={handleSelectKwant}
       onSelectChannel={handleSelectChannel}
