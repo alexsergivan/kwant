@@ -870,6 +870,9 @@ mod tests {
         assert!(person_only(&post, "/api/skills/s1/replay"));
         assert!(person_only(&post, "/api/automation-discovery/scan"));
         assert!(person_only(&get, "/api/automation-discovery/scan?space=s1"));
+        assert!(person_only(&get, "/api/automation-discovery"));
+        assert!(person_only(&post, "/api/automation-discovery/sug_1/accept"));
+        assert!(person_only(&post, "/api/automation-discovery/sug_1/dismiss"));
         assert!(!person_only(&get, "/api/skills/s1"));
         assert!(person_only(&post, "/api/missions"));
         assert!(person_only(&post, "/api/missions/m1/approve"));

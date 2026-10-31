@@ -870,8 +870,9 @@ tool.
 ## 20. Automation Discovery (Phase D4)
 
 Design note: `phase-d/automation-discovery.md`. v1 learns only from board tasks the person created.
-**Build step 1 (shipped): what a routine's runs are held to. Step 2: the miner and a read-only scan.**
-Offers, Accept and Dismiss come in step 3.
+**Build step 1 (shipped): what a routine's runs are held to. Step 2 (shipped): the miner and a
+read-only scan. Step 3: offers that are kept, Accept, Dismiss, the hourly scan.** The screens come in
+step 4.
 
 **Routine outcomes.** Every routine can carry, besides its instructions:
 - `task_class`: the Flight School class of each run's task (§14). `null`, `""` or `general` clear it.
@@ -922,12 +923,78 @@ now and at least half a period after the last ask. Checks that passed with the s
 asks are kept (≤ 10); `person`/`peer_review` checks, ones whose spec changes every time and ones that
 passed once are listed as left out.
 
-**Scan** (`POST /api/automation-discovery/scan?space=`, person only): `{blocked_by, preview: true,
-timezone, offered, skipped: [{cluster_key, title, asks, reason}]}`. `blocked_by` is `off`, `board_off` or
-`no_timezone` (none set, or one this machine can't read), with empty lists; with the setting off nothing
-is read. It writes nothing: no offer, no event, no routine. A thread or channel that no longer fits
-falls back to the bot's direct chat, and check specs are shown with secrets masked. Settings:
-`automation_discovery` `off` (default) or `on`, `automation_discovery_daily_cap` 0–10 (default 2).
+**Settings:** `automation_discovery` `off` (default) or `on`, `automation_discovery_daily_cap` 0–10
+(default 2; anything else, a non-number too, is refused). Every `/api/automation-discovery` route is the
+person's only: a bot's token gets 403. Nothing is created without Accept.
+
+**Scan** (`POST /api/automation-discovery/scan?space=`): scans now (ignoring the hourly wait, not the
+cap) and keeps what it finds. `{blocked_by: null, preview: false, timezone, offered: [suggestion],
+skipped: [{cluster_key, title, asks, reason}], expired: [id], superseded: [id]}`. `blocked_by` is `off`,
+`board_off` or `no_timezone` (none set, or one this machine can't read), with empty lists; with the
+setting off nothing is read or written. `?preview=1` is step 2's preview: `{blocked_by, preview: true,
+timezone, offered: [offer], skipped}`, writing nothing at all.
+
+A scan, per space: a live offer whose habit no longer passes the miner is `expired`; one whose habit
+still passes but changed (another bot, another rhythm, days or time zone, or the time moved ≥ 30
+minutes) is `superseded` and offered again as it is now, within the cap and without a second
+notification. Then each new offer is stored (`sug_…`) with one `offered` event, within the daily cap
+(offers in the last 24 hours) and 5 live per space, checked in the same statement as the insert, so two
+racing scans store one offer per habit. Delivery is re-checked: a thread that is gone or archived, or
+a channel of another space, falls back to the bot's direct chat. Checks a routine may not carry are
+moved to the left-out list.
+
+**The hourly scan.** While the setting is on, the board is on and a time zone is set, every non-archived
+space is scanned once an hour (the loop wakes every 10 minutes and reads
+`automation_discovery_last_scan`). It writes nothing otherwise. Each new offer sends one notification,
+kind `automation_suggested` ("Suggested routine: <name>", "<bot> could do this on a schedule. Accept or
+dismiss it in Routines."), with no chat text; it can be turned off like any kind and is not a Needs-you
+item. Lists saved before the kind existed count it as on.
+
+**List** (`GET /api/automation-discovery?space=&status=`): `{setting: "on"|"off", daily_cap, blocked_by:
+[every reason, empty when scans run], last_scan_at, suggestions: [suggestion], stats: {offered_30d,
+accepted_30d, dismissed_30d, retained, dropped}}`. `status` is `offered` (default), `accepted`,
+`dismissed`, `expired`, `superseded` or `all`, newest first; anything else is 400. While scans can't run,
+live offers are hidden.
+
+A **suggestion**: `{id, space_id, cluster_key, kwant_id, name, instructions, schedule, schedule_text,
+first_run_at, first_run_text, delivery: {channel_id?|thread_id?|direct_kwant_id?}, task_class,
+acceptance, checks: [{kind, spec, required}], left_out_checks: [{kind, spec, reason}], chain,
+source_task_ids, sources: [{id, title, created_at, state}], time_spread, evidence, permissions, status,
+routine_id, cooldown_until, routine_deleted_at, retention, retention_at, offered_at, decided_at}`. Check
+specs are shown with secrets masked. A live offer's first run is recomputed whenever it is shown: the
+next slot after now and at least half a period after the last ask. Once accepted, it is the routine's
+first run.
+
+`permissions` previews what the bot may do when the routine runs; Accept grants nothing: `{flight_school,
+tier: observe|sandbox|act, tier_from: class|any_class|default|off, tier_label, approval_mode:
+ask|smart|off, payments_ask: true, past: {external, workspace, needed_ok}}`. `past` counts the tool calls
+of the source tasks' turns that changed something outside or in the workspace, and those the person
+approved.
+
+**Accept** (`POST /api/automation-discovery/:id/accept`, `Idempotency-Key` required, else 400). Body,
+all optional: `{name, instructions, schedule, kwant_id, channel_id, thread_id, acceptance,
+keep_checks: [index]}`; unknown fields are 400. Checks can be dropped (`keep_checks`, out of range: 422),
+not added. Another bot must be in the suggestion's space; a thread or direct chat belongs to the
+suggested bot, so another bot delivers to its own direct chat unless told otherwise. The routine is
+built and checked like `POST /api/routines`, then gets `origin: "discovery"`, the `suggestion_id` and
+the first run recomputed for now. The status change, the routine and the `accepted` event are one
+transaction. 201 `{suggestion, routine, first_run_text}`; the same key replays it
+(`idempotent-replayed: true`). Once the offer isn't live: 409 `{error, status, routine_id}`. A `?space=`
+naming another space: 404.
+
+**Dismiss** (`POST /api/automation-discovery/:id/dismiss`): 200 `{suggestion}`, with `cooldown_until`
+30 days on; the habit is `cooling_off` until then. 409 as for Accept.
+
+**After Accept.** Turning the routine off or on appends `disabled`/`enabled` (actor `person` or
+`kwant`); deleting it sets `routine_deleted_at`, appends `deleted` and cools the habit off for 30 days.
+An undone delete makes the new routine the suggestion's again (`origin`, `suggestion_id`, and the
+suggestion's `routine_id`), so the habit is covered again. 14 days after Accept, each scan's retention
+pass marks the suggestion `retained` (its routine exists and is on) or `dropped`, once, with an event;
+it runs every 10 minutes whatever the setting says now.
+
+**Export.** A bundle's routines carry `task_class` and `acceptance`, and `checks` only when no spec
+holds anything that looks like a secret. An import brings the class and the acceptance; checks are
+never applied (the person approves checks), and the preview says so.
 
 **Storage** (add-only, idempotent): `routines` gains nullable `origin` (`discovery` for an accepted
 offer), `suggestion_id`, `task_class`, `acceptance` and `checks` (JSON). `routine_suggestions` holds

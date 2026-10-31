@@ -147,6 +147,16 @@ pub struct RoutineSpec {
     /// The schedule as the source wrote it: a cron line, `09:00`, `daily 09:00`, ….
     #[serde(default)]
     pub schedule_text: Option<String>,
+    /// Each run's Flight School class (kwant bundles only; absent: `general`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_class: Option<String>,
+    /// What "done" means for each run (kwant bundles only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance: Option<String>,
+    /// Each run's checks `[{kind, spec, required}]`. Exported only when no spec holds a secret;
+    /// never applied on import, since a check runs commands the person must approve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -714,11 +724,22 @@ fn tidy_routines(
                 placeholder_schedule()
             }
         };
+        if r.checks.as_ref().is_some_and(|c| !c.is_empty()) {
+            warnings.push(Notice::new(who, format!("Routine {label}: its checks weren't brought over. Add them in Routines if you want them.")));
+        }
+        let task_class = r
+            .task_class
+            .map(|c| c.trim().to_string())
+            .filter(|c| crate::db::flight_school::valid_class(c) && c != crate::db::flight_school::DEFAULT_CLASS);
+        let acceptance = r.acceptance.map(|a| cut(a.trim(), crate::server::scheduler::MAX_ACCEPTANCE_CHARS)).filter(|a| !a.is_empty());
         out.push(RoutineSpec {
             name,
             instructions,
             schedule: serde_json::to_value(&schedule).ok(),
             schedule_text: r.schedule_text.map(|t| cut(t.trim(), 200)),
+            task_class,
+            acceptance,
+            checks: None,
         });
     }
     out
@@ -782,7 +803,7 @@ mod tests {
     }
 
     fn routine(schedule: Option<serde_json::Value>, text: Option<&str>) -> RoutineSpec {
-        RoutineSpec { name: "r".into(), instructions: "i".into(), schedule, schedule_text: text.map(Into::into) }
+        RoutineSpec { name: "r".into(), instructions: "i".into(), schedule, schedule_text: text.map(Into::into), ..Default::default() }
     }
 
     #[test]

@@ -412,6 +412,7 @@ fn from_grokbot(v: &Value) -> Bundle {
             // An object like {"type": "cron", "expression": …, "timeZone": …} is read as is.
             schedule: r.get("schedule").filter(|v| v.is_object()).cloned(),
             schedule_text: Some(any_s(r, &["schedule", "cron", "time"])).filter(|t| !t.is_empty()),
+            ..Default::default()
         })
         .collect();
     let tool_hints = arr(v, "plugins")
@@ -530,7 +531,7 @@ fn from_openmaus_package(v: &Value) -> Result<Bundle, ImportError> {
     b.skills = skills_by_name.into_iter().filter(|sk| !used.contains(&sk.name)).collect();
     for r in arr(pkg, "routines") {
         let (schedule, schedule_text) = openmaus_schedule(r.get("schedule").unwrap_or(&Value::Null));
-        let spec = RoutineSpec { name: s(r, "name"), instructions: any_s(r, &["prompt", "instructions"]), schedule, schedule_text };
+        let spec = RoutineSpec { name: s(r, "name"), instructions: any_s(r, &["prompt", "instructions"]), schedule, schedule_text, ..Default::default() };
         let agent = s(r, "agent");
         match b.bots.iter_mut().find(|bot| bot.ref_ == agent) {
             Some(bot) => bot.routines.push(spec),
@@ -575,6 +576,7 @@ fn from_openmaus_grok(v: &Value) -> Bundle {
             // An object like {"type": "cron", "expression": …, "timeZone": …} is read as is.
             schedule: r.get("schedule").filter(|v| v.is_object()).cloned(),
             schedule_text: Some(any_s(r, &["schedule", "cron", "time", "when"])).filter(|t| !t.is_empty()),
+            ..Default::default()
         })
         .collect();
     let mut tool_hints = texts(arr(bot, "connectedApps"));

@@ -713,37 +713,16 @@ impl Database {
     pub async fn create_routine(&self, input: &NewRoutine) -> Result<RoutineRow, DbError> {
         let space = self.routine_space(input).await?;
         let id = Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO routines (id, kwant_id, channel_id, name, instructions, schedule, enabled, next_run_at, created_at, space_id, \
-             thread_id, context_message_id, origin, suggestion_id, task_class, acceptance, checks) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(&input.kwant_id)
-        .bind(&input.channel_id)
-        .bind(&input.name)
-        .bind(&input.instructions)
-        .bind(&input.schedule)
-        .bind(input.enabled)
-        .bind(input.next_run_at)
-        .bind(Utc::now())
-        .bind(space.as_str())
-        .bind(&input.thread_id)
-        .bind(&input.context_message_id)
-        .bind(&input.origin)
-        .bind(&input.suggestion_id)
-        .bind(&input.task_class)
-        .bind(&input.acceptance)
-        .bind(&input.checks)
-        .execute(&self.pool)
-        .await?;
+        let mut conn = self.pool.acquire().await?;
+        insert_routine(&mut conn, &id, &space, input).await?;
+        drop(conn);
         self.get_routine(&id)
             .await?
             .ok_or(DbError::Sqlx(sqlx::Error::RowNotFound))
     }
 
     /// The kwant (and channel, when set) a routine runs as must share a space.
-    async fn routine_space(&self, input: &NewRoutine) -> Result<SpaceId, DbError> {
+    pub(super) async fn routine_space(&self, input: &NewRoutine) -> Result<SpaceId, DbError> {
         let other = || DbError::OtherSpace("the bot and channel must be in the same space".into());
         let space = self.space_of_kwant(&input.kwant_id).await?.ok_or_else(other)?;
         if let Some(channel) = &input.channel_id {
@@ -798,6 +777,10 @@ impl Database {
             .bind(id)
             .execute(&mut *tx)
             .await?;
+        if res.rows_affected() > 0 {
+            // A discovered routine's habit isn't offered again for 30 days
+            super::automation::routine_deleted(&mut tx, id, Utc::now()).await?;
+        }
         tx.commit().await?;
         Ok(res.rows_affected() > 0)
     }
@@ -990,6 +973,35 @@ async fn pinned_count(tx: &mut sqlx::Transaction<'_, Sqlite>, kwant_id: &str) ->
     Ok(n)
 }
 
+/// Inserts a routine as `id` in `space`, which [`Database::routine_space`] checked.
+pub(super) async fn insert_routine(conn: &mut sqlx::SqliteConnection, id: &str, space: &SpaceId, input: &NewRoutine) -> Result<(), DbError> {
+    sqlx::query(
+        "INSERT INTO routines (id, kwant_id, channel_id, name, instructions, schedule, enabled, next_run_at, created_at, space_id, \
+         thread_id, context_message_id, origin, suggestion_id, task_class, acceptance, checks) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(&input.kwant_id)
+    .bind(&input.channel_id)
+    .bind(&input.name)
+    .bind(&input.instructions)
+    .bind(&input.schedule)
+    .bind(input.enabled)
+    .bind(input.next_run_at)
+    .bind(Utc::now())
+    .bind(space.as_str())
+    .bind(&input.thread_id)
+    .bind(&input.context_message_id)
+    .bind(&input.origin)
+    .bind(&input.suggestion_id)
+    .bind(&input.task_class)
+    .bind(&input.acceptance)
+    .bind(&input.checks)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1028,3 +1040,4 @@ mod tests {
         );
     }
 }
+

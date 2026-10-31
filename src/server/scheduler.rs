@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 pub const MAX_SLEEP: Duration = Duration::from_secs(30);
 const MAX_NAME_CHARS: usize = 100;
 const MAX_ROUTINE_INSTRUCTIONS_CHARS: usize = 4000;
-const MAX_ACCEPTANCE_CHARS: usize = 4000;
+pub(crate) const MAX_ACCEPTANCE_CHARS: usize = 4000;
 /// Checks one routine copies onto each run's task.
 const MAX_ROUTINE_CHECKS: usize = 10;
 
@@ -165,7 +165,7 @@ pub struct RoutinePayload {
 }
 
 /// Tells a missing field (`None`) from an explicit `null` (`Some(None)`).
-fn double_option<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<Option<T>>, D::Error> {
+pub(crate) fn double_option<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<Option<T>>, D::Error> {
     Ok(Some(Option::<T>::deserialize(d)?))
 }
 
@@ -225,7 +225,7 @@ fn build_outcome(
 }
 
 /// Merges `p` over `existing` and checks the result.
-async fn build(
+pub(crate) async fn build(
     state: &AppState,
     p: RoutinePayload,
     existing: Option<&RoutineRow>,
@@ -429,6 +429,13 @@ pub async fn update_by(state: &AppState, id: String, p: RoutinePayload, by: By) 
     match state.db.update_routine(&id, &input).await {
         Ok(Some(r)) => {
             state.scheduler_wake.notify_one();
+            // A discovered routine's switches feed its suggestion's history (design §10)
+            if let (Some(sug), true) = (existing.suggestion_id.as_deref(), existing.enabled != r.enabled) {
+                let actor = if by == By::Bot { "kwant" } else { "person" };
+                if let Err(e) = state.db.suggestion_switched(sug, r.enabled, actor).await {
+                    tracing::warn!(error = %e, routine = %id, "recording a discovered routine's switch");
+                }
+            }
             Json(RoutineView::from(r)).into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -833,5 +840,6 @@ pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     crate::documents::reminders::spawn(state.clone(), shutdown.clone());
     super::missions::listener::spawn(state.clone(), shutdown.clone());
     super::missions::foundry::spawn(state.clone(), shutdown.clone());
+    super::missions::discovery::spawn(state.clone(), shutdown.clone());
     spawn(state, shutdown);
 }

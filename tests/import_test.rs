@@ -12,7 +12,7 @@ use kwnt::{
     broker::PermissionBroker,
     config::Config,
     db::{
-        models::{McpServer, NewMessage},
+        models::{McpServer, NewKwant, NewMessage},
         spaces::{NewSpace, SpaceId},
         Database,
     },
@@ -704,4 +704,49 @@ async fn pasted_schedule_with_a_time_zone_keeps_it_and_stays_paused() {
     let stored: Value = serde_json::from_str(&morning.schedule).unwrap();
     assert_eq!(stored, json!({ "type": "cron", "expression": "0 7 * * *", "tz": "Europe/Berlin" }));
     assert!(rows.iter().all(|r| !r.enabled && r.next_run_at.is_none()), "routines still arrive paused");
+}
+
+/// A routine's class and acceptance travel in a bundle; its checks only when no spec holds a
+/// secret, and an import never applies them (the person approves checks).
+#[tokio::test]
+async fn routine_outcomes_are_exported_and_checks_only_when_secret_free() {
+    let e = setup().await;
+    let a = new_space(&e, "Source").await;
+    let b = new_space(&e, "Copy").await;
+    let bot = NewKwant { name: "Ana".into(), title: "Reporter".into(), persona_prompt: String::new(), soul: String::new(), avatar_sprite: "s".into(), driver_type: "cli".into(), preferred_model: "codex".into() };
+    let k = e.state.db.create_kwant(&SpaceId::new(a.clone()), &bot).await.unwrap();
+    let routine = |name: &str, check: Value| {
+        json!({
+            "kwant_id": k.id, "name": name, "instructions": "Write the weekly report",
+            "schedule": {"type": "weekly", "time": "09:00", "weekdays": ["mon"], "tz": "UTC"}, "enabled": false,
+            "task_class": "reporting", "acceptance": "report.md exists", "checks": [check],
+        })
+    };
+    let clean = json!({"kind": "file_exists", "spec": {"path": "report.md"}});
+    let secret = json!({"kind": "command", "spec": {"command": "curl -H 'Authorization: Bearer sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789' https://example.com"}});
+    for (name, check) in [("Clean", clean.clone()), ("Secret", secret)] {
+        let (status, v) = json_call(&e.app, "POST", &format!("/api/routines?space={a}"), routine(name, check)).await;
+        assert_eq!(status, StatusCode::CREATED, "{v}");
+    }
+    let (status, bundle) = get(&e.app, &format!("/api/export?space={a}")).await;
+    assert_eq!(status, StatusCode::OK, "{bundle}");
+    let routines = bundle["bots"][0]["routines"].as_array().unwrap().clone();
+    assert!(!bundle.to_string().contains("sk-ant-api03"), "{bundle}");
+    let by = |n: &str| routines.iter().find(|r| r["name"] == n).unwrap().clone();
+    assert_eq!((by("Clean")["task_class"].clone(), by("Clean")["acceptance"].clone()), (json!("reporting"), json!("report.md exists")));
+    assert_eq!(by("Clean")["checks"], json!([{"kind": "file_exists", "spec": {"path": "report.md"}, "required": true}]));
+    assert!(by("Secret").get("checks").is_none(), "{}", by("Secret"));
+    assert_eq!(by("Secret")["task_class"], "reporting");
+
+    let (status, p) = send(&e.app, "POST", &format!("/api/import/preview?space={b}&filename=space.kwant.json"), "application/octet-stream", bundle.to_string().into_bytes()).await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    assert!(p["warnings"].to_string().contains("checks weren't brought over"), "{}", p["warnings"]);
+    let (status, v) = apply(&e.app, &b, &p["bundle"], &[]).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    let (_, list) = get(&e.app, &format!("/api/routines?space={b}")).await;
+    let list = list.as_array().unwrap();
+    assert_eq!(list.len(), 2, "{list:?}");
+    for r in list {
+        assert_eq!((r["task_class"].clone(), r["acceptance"].clone(), r["checks"].clone()), (json!("reporting"), json!("report.md exists"), json!([])), "{r}");
+    }
 }

@@ -424,14 +424,23 @@ impl Database {
         .into_iter()
         .map(|(name, description, body)| SkillSpec { name, description, body })
         .collect();
-        let routines = sqlx::query_as::<_, (String, String, String)>(
-            "SELECT name, instructions, schedule FROM routines WHERE kwant_id = ? ORDER BY created_at, rowid",
+        type Row = (String, String, String, Option<String>, Option<String>, Option<String>);
+        let routines = sqlx::query_as::<_, Row>(
+            "SELECT name, instructions, schedule, task_class, acceptance, checks FROM routines WHERE kwant_id = ? ORDER BY created_at, rowid",
         )
         .bind(&k.id)
         .fetch_all(&self.pool)
         .await?
         .into_iter()
-        .map(|(name, instructions, schedule)| RoutineSpec { name, instructions, schedule: serde_json::from_str(&schedule).ok(), schedule_text: None })
+        .map(|(name, instructions, schedule, task_class, acceptance, checks)| RoutineSpec {
+            name,
+            instructions,
+            schedule: serde_json::from_str(&schedule).ok(),
+            schedule_text: None,
+            task_class,
+            acceptance,
+            checks: shareable_checks(checks.as_deref()),
+        })
         .collect();
         let tool_hints = self.list_active_mcp_servers_for_kwant(&k.id).await?.into_iter().map(|s| s.name).collect();
         Ok(BotSpec {
@@ -529,6 +538,14 @@ async fn insert_pending_skill(
     Ok(id)
 }
 
+/// A routine's checks for a bundle, only when no spec holds anything that looks like a secret:
+/// a bundle is shared, and a masked check would be useless.
+fn shareable_checks(checks: Option<&str>) -> Option<Vec<serde_json::Value>> {
+    let list: Vec<serde_json::Value> = serde_json::from_str(checks?).ok()?;
+    let clean = list.iter().all(|c| crate::server::missions::autofix::redact_value(&c["spec"]) == c["spec"]);
+    (clean && !list.is_empty()).then_some(list)
+}
+
 async fn insert_paused_routine(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     space: &SpaceId,
@@ -544,8 +561,8 @@ async fn insert_paused_routine(
         .unwrap_or_else(crate::import::placeholder_schedule);
     let id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO routines (id, kwant_id, channel_id, name, instructions, schedule, enabled, next_run_at, created_at, space_id)
-         VALUES (?, ?, NULL, ?, ?, ?, 0, NULL, ?, ?)",
+        "INSERT INTO routines (id, kwant_id, channel_id, name, instructions, schedule, enabled, next_run_at, created_at, space_id, task_class, acceptance)
+         VALUES (?, ?, NULL, ?, ?, ?, 0, NULL, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(kwant_id)
@@ -554,6 +571,8 @@ async fn insert_paused_routine(
     .bind(serde_json::to_string(&schedule)?)
     .bind(now)
     .bind(space.as_str())
+    .bind(&r.task_class)
+    .bind(&r.acceptance)
     .execute(&mut **tx)
     .await?;
     Ok(id)

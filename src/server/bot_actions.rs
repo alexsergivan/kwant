@@ -1826,7 +1826,14 @@ async fn undo_action(state: &AppState, a: &BotAction) -> Result<Option<String>, 
             let p = deleted_routine_payload(&before)?;
             let resp = super::scheduler::create_by(state, space.clone(), space_uri("/api/routines", &space), p, By::Person).await;
             let created = ok_or_conflict(resp, "the routine can't be recreated").await?;
-            return Ok(created["id"].as_str().map(str::to_string));
+            let id = created["id"].as_str().map(str::to_string);
+            // A discovered routine stays "Suggested by kwant" (design §8)
+            if let (Some(id), Some("discovery"), Some(suggestion)) = (&id, before["origin"].as_str(), before["suggestion_id"].as_str()) {
+                if let Err(e) = state.db.relink_discovered(id, suggestion).await {
+                    tracing::warn!(error = %e, routine = %id, "relinking an undone discovered routine");
+                }
+            }
+            return Ok(id);
         }
         "bot_create" => delete_unused_bot(state, &target).await?,
         "bot_hire" => {

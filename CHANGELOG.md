@@ -22,6 +22,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   mostly verified, mostly done by one bot and not already covered by a routine, on or off, qualify.
   Tasks made by bots, routines, hand-offs or chats never count. The scan is a preview: it creates no
   offer and no routine yet. This is step 2 of Automation Discovery.
+- **Automation Discovery suggests routines you can accept or dismiss.** With it on, each space is
+  scanned once an hour (or when you ask) and new suggestions are kept, at most 2 a day (you can change
+  that) and 5 waiting per space, each with one notification. A suggestion shows its schedule, first
+  run, checks, the tasks it came from and what the bot may do when it runs. Accept makes the routine,
+  with your changes to the name, schedule, bot, delivery, acceptance or checks; Dismiss stops it being
+  suggested for 30 days. Nothing is made without Accept, and only you can see, accept or dismiss
+  suggestions. Suggestions whose habit stopped or changed are withdrawn. Undoing the delete of a
+  suggested routine keeps it marked as suggested. Exports now carry a routine's class and acceptance,
+  and its checks when they hold no secrets. This is step 3 of Automation Discovery; the screens come
+  next.
 
 ### Changed
 - **kwant.si footer says "Made in Germany with ❤️".** The line sits under the trademark note on every

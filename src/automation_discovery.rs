@@ -5,7 +5,7 @@
 //! mission-control/phase-d/automation-discovery.md §4–§5; contract: docs/mission-control.md §20.
 
 use crate::routines::{now_in, run_time_text, MonthDay, Schedule};
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc, Weekday};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Timelike, Utc, Weekday};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -41,6 +41,8 @@ pub const CHAIN_MAX_SOURCES: usize = 20;
 pub const CHAIN_HOURS: i64 = 24;
 /// What a routine may carry (as `POST /api/routines` allows).
 pub const MAX_CHECKS: usize = 10;
+/// How far a habit's usual time must move before its live offer is replaced.
+pub const SUPERSEDE_MINUTES: i64 = 30;
 const NAME_CHARS: usize = 80;
 const SOURCES_IN_INSTRUCTIONS: usize = 5;
 
@@ -229,7 +231,7 @@ pub struct Skip {
 }
 
 /// Where the routine would post.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Delivery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_id: Option<String>,
@@ -287,6 +289,8 @@ pub struct Evidence {
     pub total: usize,
     pub time_spread: String,
     pub time_varies: bool,
+    /// The newest matched ask: Accept recomputes the first run from it (design §5).
+    pub last_ask_at: DateTime<Utc>,
 }
 
 /// A routine the miner would suggest. Nothing here is stored or created by the miner.
@@ -314,6 +318,11 @@ pub struct Offer {
 pub struct Scan {
     pub offered: Vec<Offer>,
     pub skipped: Vec<Skip>,
+    /// Habits that already have a live offer and still pass, as they would be offered now: the
+    /// caller keeps, or replaces, the live offer with these and expires the rest (design §6).
+    /// Each is also in `skipped` as `already_offered`.
+    #[serde(skip)]
+    pub live: Vec<Offer>,
 }
 
 // Cadence
@@ -794,6 +803,7 @@ pub fn mine(input: &Input) -> Scan {
     }
     let mut passing: Vec<Offer> = Vec::new();
     let mut skipped: Vec<Skip> = Vec::new();
+    let mut live: Vec<Offer> = Vec::new();
     for c in &mut clusters {
         c.tasks.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
         let days = days_of(c, input.tz);
@@ -835,9 +845,9 @@ pub fn mine(input: &Input) -> Scan {
             skipped.push(skip(Reason::CoolingOff));
             continue;
         }
-        if input.past.live.contains(&c.key) {
+        let is_live = input.past.live.contains(&c.key);
+        if is_live {
             skipped.push(skip(Reason::AlreadyOffered));
-            continue;
         }
 
         let minutes: Vec<u32> = cadence.matched.iter().map(|&i| days[i].minutes).collect();
@@ -867,7 +877,7 @@ pub fn mine(input: &Input) -> Scan {
             (None, Some(channel)) => Delivery { channel_id: Some(channel), ..Default::default() },
             (None, None) => Delivery { direct_kwant_id: Some(bot.clone()), ..Default::default() },
         };
-        passing.push(Offer {
+        let offer = Offer {
             cluster_key: c.key.clone(),
             instructions: instructions(&name, &acceptance, &chain, &sources),
             first_run_text: run_time_text(first_run_at, schedule.tz()),
@@ -893,9 +903,15 @@ pub fn mine(input: &Input) -> Scan {
                 total: days.len(),
                 time_spread: if lo == hi { hhmm(lo) } else { format!("{}–{}", hhmm(lo), hhmm(hi)) },
                 time_varies: hi - lo > TIME_VARIES_MINUTES,
+                last_ask_at: last_ask,
             },
             sources,
-        });
+        };
+        if is_live {
+            live.push(offer);
+        } else {
+            passing.push(offer);
+        }
     }
 
     // A follow-up written into another offer's steps isn't offered on its own
@@ -915,14 +931,33 @@ pub fn mine(input: &Input) -> Scan {
     let capped = passing.split_off(room.min(passing.len()));
     skipped.extend(capped.into_iter().map(|o| Skip { title: o.name.clone(), asks: o.evidence.total, cluster_key: o.cluster_key, reason: Reason::Capped }));
     skipped.sort_by(|a, b| a.cluster_key.cmp(&b.cluster_key));
-    Scan { offered: passing, skipped }
+    Scan { offered: passing, skipped, live }
+}
+
+/// Whether a live offer (`schedule`, `kwant_id`) no longer says what the habit is now, so a scan
+/// replaces it: another rhythm, days, zone or bot, or a usual time moved by at least
+/// [`SUPERSEDE_MINUTES`]. Smaller drifts of the median keep the offer, so it doesn't churn.
+pub fn materially_changed(schedule: &Schedule, kwant_id: &str, now: &Offer) -> bool {
+    if kwant_id != now.kwant_id {
+        return true;
+    }
+    let minutes = |t: &str| NaiveTime::parse_from_str(t, "%H:%M").ok().map(|t| i64::from(t.hour() * 60 + t.minute()));
+    let moved = |a: &str, b: &str| match (minutes(a), minutes(b)) {
+        (Some(a), Some(b)) => (a - b).abs() >= SUPERSEDE_MINUTES,
+        _ => a != b,
+    };
+    match (schedule, &now.schedule) {
+        (Schedule::Daily { time: a, tz: x }, Schedule::Daily { time: b, tz: y }) => x != y || moved(a, b),
+        (Schedule::Weekly { time: a, weekdays: d, tz: x }, Schedule::Weekly { time: b, weekdays: e, tz: y }) => d != e || x != y || moved(a, b),
+        (Schedule::Monthly { time: a, days: d, tz: x }, Schedule::Monthly { time: b, days: e, tz: y }) => d != e || x != y || moved(a, b),
+        _ => true,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::routines::local_instant;
-    use chrono::NaiveTime;
 
     const BERLIN: &str = "Europe/Berlin";
 
@@ -1168,6 +1203,38 @@ mod tests {
         assert_eq!((d.pattern, d.month_day, d.matched.clone()), (Pattern::Monthly, Some(MonthDay::Day(3)), vec![1, 2, 3, 4]));
     }
 
+    #[test]
+    fn a_habit_on_the_31st_takes_a_30_day_months_last_day() {
+        // September has no 31st: asking on the 30th is the same habit, so it runs on the last day
+        let dates = ["2026-07-31", "2026-08-31", "2026-09-30"].map(date);
+        let tasks = asks(BERLIN, "m", "Pay rent", &dates, "09:00");
+        let o = Fx::new(BERLIN, at(BERLIN, date("2026-10-05"), "10:00"), tasks).only_offer();
+        assert_eq!(o.schedule, Schedule::Monthly { time: "09:00".into(), days: vec![MonthDay::Last], tz: BERLIN.into() });
+        assert_eq!(o.first_run_at, at(BERLIN, date("2026-10-31"), "09:00"));
+        // A habit on the 30th is not one on the last day
+        let dates = ["2026-07-30", "2026-08-30", "2026-09-30"].map(date);
+        let tasks = asks(BERLIN, "m", "Pay rent", &dates, "09:00");
+        let o = Fx::new(BERLIN, at(BERLIN, date("2026-10-05"), "10:00"), tasks).only_offer();
+        assert_eq!(o.schedule, Schedule::Monthly { time: "09:00".into(), days: vec![MonthDay::Day(30)], tz: BERLIN.into() });
+        assert_eq!(o.first_run_at, at(BERLIN, date("2026-10-30"), "09:00"));
+    }
+
+    #[test]
+    fn the_60_and_120_day_windows_end_where_they_say() {
+        // Weekly: an ask 59 days back counts, one 60 days back doesn't
+        let mondays = every("2026-08-24", 7, 9);
+        let d = detect(&days(&mondays), date("2026-10-22")).unwrap();
+        assert_eq!((d.pattern, d.matched.first()), (Pattern::Weekly, Some(&0)));
+        let d = detect(&days(&mondays), date("2026-10-23")).unwrap();
+        assert_eq!((d.pattern, d.matched.first(), d.matched.len()), (Pattern::Weekly, Some(&1), 8));
+        // Monthly: 119 days back counts, 120 doesn't
+        let thirds = ["2026-06-03", "2026-07-03", "2026-08-03", "2026-09-03"].map(date);
+        let d = detect(&days(&thirds), date("2026-09-30")).unwrap();
+        assert_eq!((d.pattern, d.matched.clone()), (Pattern::Monthly, vec![0, 1, 2, 3]));
+        let d = detect(&days(&thirds), date("2026-10-01")).unwrap();
+        assert_eq!((d.pattern, d.matched.clone()), (Pattern::Monthly, vec![1, 2, 3]));
+    }
+
     // Near-misses at each tolerance edge
 
     #[test]
@@ -1398,8 +1465,32 @@ mod tests {
         let mut fx = Fx::new(BERLIN, after_weekly(), weekly("d", "Weekly report"));
         fx.past.cooling.insert(key.clone());
         assert_eq!(fx.only_skip(), Reason::CoolingOff);
-        fx.past = Past { live: HashSet::from([key]), live_count: 1, ..Past::default() };
+        fx.past = Past { live: HashSet::from([key.clone()]), live_count: 1, ..Past::default() };
         assert_eq!(fx.only_skip(), Reason::AlreadyOffered);
+        // Still passing, so the caller keeps the live offer; it is not offered again
+        let scan = fx.scan();
+        assert_eq!(scan.live.len(), 1);
+        assert_eq!(scan.live[0].cluster_key, key);
+        assert_eq!(scan.live[0].evidence.last_ask_at, at(BERLIN, date("2026-10-12"), "09:00"));
+        // Cooling wins over live, so a live offer of a cooled habit isn't in `live` (it expires)
+        fx.past.cooling.insert(key);
+        assert!(fx.scan().live.is_empty());
+    }
+
+    #[test]
+    fn a_live_offer_is_replaced_only_for_a_real_change() {
+        let fx = Fx::new(BERLIN, after_weekly(), weekly("m", "Weekly report"));
+        let now = fx.only_offer();
+        let weekly_at = |time: &str, days: &[&str], tz: &str| Schedule::Weekly { time: time.into(), weekdays: days.iter().map(|d| d.to_string()).collect(), tz: tz.into() };
+        assert!(!materially_changed(&now.schedule, "bot-a", &now));
+        // The median drifting under half an hour keeps the offer
+        assert!(!materially_changed(&weekly_at("09:15", &["mon"], BERLIN), "bot-a", &now));
+        assert!(!materially_changed(&weekly_at("08:31", &["mon"], BERLIN), "bot-a", &now));
+        assert!(materially_changed(&weekly_at("09:30", &["mon"], BERLIN), "bot-a", &now));
+        assert!(materially_changed(&weekly_at("09:00", &["mon", "thu"], BERLIN), "bot-a", &now));
+        assert!(materially_changed(&weekly_at("09:00", &["mon"], "America/New_York"), "bot-a", &now));
+        assert!(materially_changed(&Schedule::Daily { time: "09:00".into(), tz: BERLIN.into() }, "bot-a", &now));
+        assert!(materially_changed(&now.schedule, "bot-b", &now));
     }
 
     #[test]
@@ -1558,6 +1649,23 @@ mod tests {
         let w = Schedule::Weekly { time: "09:00".into(), weekdays: vec!["mon".into()], tz: BERLIN.into() };
         let monday = at(BERLIN, date("2026-10-05"), "08:00");
         assert_eq!(first_run_at(&w, monday, monday + Duration::hours(1)), Some(at(BERLIN, date("2026-10-12"), "09:00")));
+    }
+
+    #[test]
+    fn first_run_is_recomputed_when_accepted_days_later() {
+        // Offered on Monday 10:00 after that Monday's 09:00 ask: the stored first run is next Monday
+        let w = Schedule::Weekly { time: "09:00".into(), weekdays: vec!["mon".into()], tz: BERLIN.into() };
+        let asked = at(BERLIN, date("2026-10-12"), "09:00");
+        let stored = first_run_at(&w, asked, at(BERLIN, date("2026-10-12"), "10:00")).unwrap();
+        assert_eq!(stored, at(BERLIN, date("2026-10-19"), "09:00"));
+        // Accepted the Wednesday after that Monday: the following Monday, not the stale one
+        let wednesday = at(BERLIN, date("2026-10-21"), "11:00");
+        assert_eq!(first_run_at(&w, asked, wednesday), Some(at(BERLIN, date("2026-10-26"), "09:00")));
+        // Edited to Thursdays: the next Thursday
+        let thu = Schedule::Weekly { time: "09:00".into(), weekdays: vec!["thu".into()], tz: BERLIN.into() };
+        assert_eq!(first_run_at(&thu, asked, wednesday), Some(at(BERLIN, date("2026-10-22"), "09:00")));
+        // Across the 25 October DST change it stays 09:00 local
+        assert_eq!(first_run_at(&w, asked, at(BERLIN, date("2026-10-20"), "08:00")), Some(at(BERLIN, date("2026-10-26"), "09:00")));
     }
 
     #[test]
