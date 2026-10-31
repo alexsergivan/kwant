@@ -61,6 +61,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   page; screen readers read it as "Made in Germany with love".
 
 ### Fixed
+- **A Review action survives closing the tab.** Mark verified, Send back or Dismiss on the Mission board
+  waits 6 seconds for Undo. Closing, reloading or backgrounding the page in that window used to drop the
+  action; now it is sent then, with `keepalive`, and still only once.
+- **Only routine runs fold on the Review column.** Worked-ahead and loose-end cards with the same title
+  can be different work, so they stay separate cards and "Dismiss N older" never covers them.
 - **A hand-off card the lead reviewed no longer loses its fixed result.** When the lead's review sent
   work back and the lead's earlier results turn ran late, that turn put the card back in Review while the
   teammate was still fixing it, and the fix's result was never attached. The lead's turn now also makes a

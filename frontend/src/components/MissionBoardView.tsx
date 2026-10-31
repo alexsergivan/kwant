@@ -49,6 +49,8 @@ import {
   QUICK_LABELS,
   QuickAction,
   UNDO_MS,
+  HeldActionSlot,
+  flushOnPageLeave,
   collapseRepeats,
   elapsedText,
   filterByTeams,
@@ -3327,42 +3329,49 @@ export const MissionBoardPage: React.FC<{
   const [groupBy, setGroupBy] = useState<GroupBy>(readGroupBy);
   const [teamFilter, setTeamFilter] = useState<string[]>([]);
   const [undo, setUndo] = useState<{ id: number; text: string } | null>(null);
-  const pending = useRef<{ id: number; tasks: Task[]; run: () => Promise<void>; timer: number } | null>(null);
+  const pending = useRef(new HeldActionSlot()).current;
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   const pendingSeq = useRef(0);
 
-  const commitPending = useCallback(() => {
-    const p = pending.current;
-    if (!p) return;
-    pending.current = null;
-    window.clearTimeout(p.timer);
-    if (alive.current) setUndo((u) => (u?.id === p.id ? null : u));
-    p.run().finally(() => {
-      if (!alive.current) return;
-      setHidden((h) => {
-        const next = new Set(h);
-        p.tasks.forEach((t) => next.delete(t.id));
-        return next;
+  const commitPending = useCallback(
+    (leaving = false) => {
+      const c = pending.commit(leaving);
+      if (!c) return;
+      const p = c.action;
+      if (alive.current) setUndo((u) => (u?.id === p.id ? null : u));
+      c.sent.finally(() => {
+        if (!alive.current) return;
+        setHidden((h) => {
+          const next = new Set(h);
+          p.tasks.forEach((t) => next.delete(t.id));
+          return next;
+        });
       });
-    });
-  }, []);
+    },
+    [pending],
+  );
 
-  // Leaving the board sends what's still waiting: the person saw it done.
+  // Leaving the board, or closing or backgrounding the page, sends what's still waiting: the person
+  // saw it done.
   useEffect(() => () => commitPending(), [commitPending]);
+  useEffect(() => flushOnPageLeave(() => commitPending(true)), [commitPending]);
 
-  const runCardActions = useCallback(async (list: Task[], a: QuickAction, note?: string) => {
+  const runCardActions = useCallback(async (list: Task[], a: QuickAction, note: string | undefined, leaving: boolean) => {
     let failed = 0;
     let lastError = '';
-    for (const t of list) {
+    const one = async (t: Task) => {
       try {
-        const next = await missionsApi.act(t.id, a, a === 'reject' ? note?.trim() || DEFAULT_SEND_BACK : undefined);
+        const next = await missionsApi.act(t.id, a, a === 'reject' ? note?.trim() || DEFAULT_SEND_BACK : undefined, leaving);
         if (alive.current) setTasks((l) => (l ? (next.state === 'cancelled' ? l.filter((x) => x.id !== next.id) : upsertTask(l, next)) : l));
       } catch (e) {
         failed++;
         lastError = failMsg(e);
         if (e instanceof MissionError && e.status === 401 && alive.current) setNeedsToken(true);
       }
-    }
+    };
+    // A closing page won't wait for one request to finish before the next starts, so all go at once.
+    if (leaving) await Promise.all(list.map(one));
+    else for (const t of list) await one(t);
     if (!alive.current) return;
     if (failed) setNotice({ text: list.length === 1 ? `Couldn’t do that: ${lastError}` : `${failed} of ${list.length} didn’t go through: ${lastError}`, error: true });
     else if (a === 'verify') playSfx('coin');
@@ -3379,17 +3388,15 @@ export const MissionBoardPage: React.FC<{
       return next;
     });
     const timer = window.setTimeout(() => commitPending(), UNDO_MS);
-    pending.current = { id, tasks: list, run: () => runCardActions(list, a, note), timer };
+    pending.hold({ id, tasks: list, send: (leaving) => runCardActions(list, a, note, leaving), timer });
     setUndo({ id, text: quickDoneText(a, list.length, list[0]?.title) });
     setNotice(null);
     playSfx('click');
   };
 
   const undoPending = () => {
-    const p = pending.current;
+    const p = pending.take();
     if (!p) return setUndo(null);
-    pending.current = null;
-    window.clearTimeout(p.timer);
     setUndo(null);
     setHidden((h) => {
       const next = new Set(h);
@@ -3468,7 +3475,7 @@ export const MissionBoardPage: React.FC<{
         onClearOld={(ts) => queueCardAction(ts, 'cancel')}
         undo={undo}
         onUndo={undoPending}
-        onCloseUndo={commitPending}
+        onCloseUndo={() => commitPending()}
       />
       {openId && (
         <TaskPanel title={detail?.task.title ?? listed?.title ?? 'Task'} onClose={closeTask}>

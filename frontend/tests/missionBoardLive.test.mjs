@@ -72,10 +72,22 @@ test('work the person asked for never folds, even with the same title', () => {
   assert.equal(m.repeatKey(task({ source_kind: 'delegation' })), null);
 });
 
-test('worked-ahead and loose-end cards fold by bot and title (case and spaces ignored)', () => {
-  const a = task({ source_kind: 'work_ahead', title: 'Worked ahead: API Error 529', state: 'review' });
-  const b = task({ source_kind: 'work_ahead', title: ' worked ahead: api error 529 ', state: 'review' });
+test('routine runs fold by bot and title with case and spaces ignored', () => {
+  const a = routineRun(3);
+  const b = routineRun(5, { title: ' routine: MORNING overview ' });
   assert.equal(m.collapseRepeats([a, b]).length, 1);
+});
+
+test('worked-ahead and loose-end cards never fold, even with identical titles: they can be different work', () => {
+  const ahead = (over) => task({ source_kind: 'work_ahead', title: 'Worked ahead: API Error 529', state: 'review', owner_kwant_id: 'k_tw', ...over });
+  const loose = (over) => task({ source_kind: 'zombie', title: 'Loose end: reply to Maya', state: 'review', owner_kwant_id: 'k_tw', ...over });
+  const cards = [ahead({ source_id: 'w1' }), ahead({ source_id: 'w2' }), loose({ source_id: 'z1' }), loose({ source_id: 'z2' })];
+  const items = m.collapseRepeats(cards);
+  assert.equal(items.length, 4);
+  assert.ok(items.every((i) => i.older.length === 0), 'nothing folded under them, so "Dismiss N older" never covers them');
+  for (const c of cards) assert.equal(m.repeatKey(c), null);
+  const html = ui.card({ task: cards[0], names, now: NOW, older: m.collapseRepeats(cards)[0].older, onQuick: noop, onDismissMany: noop });
+  assert.doesNotMatch(html, /older/i);
 });
 
 // ---------- Verified fades out ----------
@@ -322,4 +334,90 @@ test('without live data the view stays as before: no strip, no toolbar', () => {
   });
   assert.doesNotMatch(html, /Live now/);
   assert.doesNotMatch(html, /data-board-toolbar/);
+});
+
+// ---------- A held action is sent exactly once ----------
+
+const held = (sent, over = {}) => ({ id: 1, tasks: [task()], timer: 7, send: (leaving) => (sent.push(leaving), Promise.resolve()), ...over });
+
+test('a held action is sent once, however many flushes race for it', async () => {
+  const sent = [];
+  const cleared = [];
+  const slot = new m.HeldActionSlot((t) => cleared.push(t));
+  slot.hold(held(sent));
+  const first = slot.commit(true);
+  assert.ok(first);
+  await first.sent;
+  assert.equal(slot.commit(true), null, 'pagehide after visibilitychange finds nothing');
+  assert.equal(slot.commit(), null, 'the Undo timer firing late finds nothing');
+  assert.equal(slot.take(), null, 'Undo after it went finds nothing');
+  assert.deepEqual(sent, [true]);
+  assert.deepEqual(cleared, [7], 'its timer is stopped');
+});
+
+test('Undo drops the held action: nothing is sent', () => {
+  const sent = [];
+  const slot = new m.HeldActionSlot(noop);
+  slot.hold(held(sent));
+  assert.equal(slot.take()?.id, 1);
+  assert.equal(slot.commit(true), null);
+  assert.deepEqual(sent, []);
+});
+
+const fakePage = () => {
+  const win = new EventTarget();
+  const doc = new EventTarget();
+  doc.visibilityState = 'visible';
+  return { win, doc };
+};
+
+test('closing the page sends the held action once, with keepalive', () => {
+  const sent = [];
+  const slot = new m.HeldActionSlot(noop);
+  const { win, doc } = fakePage();
+  const stop = m.flushOnPageLeave(() => slot.commit(true), win, doc);
+  slot.hold(held(sent));
+  // A phone closing a tab: hidden first, then pagehide.
+  doc.visibilityState = 'hidden';
+  doc.dispatchEvent(new Event('visibilitychange'));
+  win.dispatchEvent(new Event('pagehide'));
+  assert.deepEqual(sent, [true]);
+  stop();
+});
+
+test('pagehide alone sends it; becoming visible again does not', () => {
+  const sent = [];
+  const slot = new m.HeldActionSlot(noop);
+  const { win, doc } = fakePage();
+  const stop = m.flushOnPageLeave(() => slot.commit(true), win, doc);
+  slot.hold(held(sent));
+  doc.dispatchEvent(new Event('visibilitychange'));
+  assert.deepEqual(sent, [], 'still visible: keep waiting');
+  win.dispatchEvent(new Event('pagehide'));
+  assert.deepEqual(sent, [true]);
+  stop();
+  slot.hold(held(sent, { id: 2 }));
+  win.dispatchEvent(new Event('pagehide'));
+  assert.deepEqual(sent, [true], 'after cleanup the page no longer flushes');
+});
+
+test('card actions can ask for keepalive, so they finish after the page closes', async () => {
+  const seen = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url, keepalive: init?.keepalive === true });
+    return new Response(JSON.stringify(task({ state: 'verified' })), { status: 200 });
+  };
+  try {
+    await m.missionsApi.act('t1', 'verify', undefined, true);
+    await m.missionsApi.act('t1', 'cancel', undefined, true);
+    await m.missionsApi.act('t1', 'reject', 'nope');
+  } finally {
+    globalThis.fetch = real;
+  }
+  assert.deepEqual(seen, [
+    { url: '/api/tasks/t1/verify', keepalive: true },
+    { url: '/api/tasks/t1/cancel', keepalive: true },
+    { url: '/api/tasks/t1/reject', keepalive: false },
+  ]);
 });

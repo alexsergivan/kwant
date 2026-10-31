@@ -1530,7 +1530,7 @@ export function errorFrom(status: number, answer: unknown): MissionError {
   return new MissionError(err ?? `Something went wrong (HTTP ${status}).`, status, code);
 }
 
-async function call<T>(url: string, method = 'GET', body?: unknown, extra?: Record<string, string>): Promise<T> {
+async function call<T>(url: string, method = 'GET', body?: unknown, extra?: Record<string, string>, keepalive = false): Promise<T> {
   let res: Response;
   const headers = { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...extra };
   try {
@@ -1539,6 +1539,7 @@ async function call<T>(url: string, method = 'GET', body?: unknown, extra?: Reco
       cache: 'no-store',
       headers: Object.keys(headers).length ? headers : undefined,
       body: body === undefined ? undefined : JSON.stringify(body),
+      ...(keepalive ? { keepalive: true } : {}),
     });
   } catch (e) {
     if (e instanceof PersonCancelledError) throw new MissionError(e.message, 401);
@@ -1600,20 +1601,23 @@ export const missionsApi = {
   resolveRisk: (id: string, riskId: string, resolution: RiskResolution, note?: string) =>
     call<{ risk: Risk; unresolved: boolean }>(`/api/tasks/${enc(id)}/risks/${enc(riskId)}/resolve`, 'POST', note ? { resolution, note } : { resolution }),
   decideChange: (id: string, approve: boolean) => call<WorkflowChange>(`/api/workflow-changes/${enc(id)}/${approve ? 'approve' : 'reject'}`, 'POST', {}),
-  /** One person action on a task. `run_checks` answers `{checks, task}`, the others the Task. */
-  act: async (id: string, action: TaskAction, reason?: string): Promise<Task> => {
+  /**
+   * One person action on a task. `run_checks` answers `{checks, task}`, the others the Task.
+   * `keepalive` lets the request finish after the page closes.
+   */
+  act: async (id: string, action: TaskAction, reason?: string, keepalive = false): Promise<Task> => {
     const base = `/api/tasks/${enc(id)}`;
     switch (action) {
       case 'verify':
-        return call<Task>(`${base}/verify`, 'POST', reason ? { note: reason } : {});
+        return call<Task>(`${base}/verify`, 'POST', reason ? { note: reason } : {}, undefined, keepalive);
       case 'reject':
-        return call<Task>(`${base}/reject`, 'POST', { reason: reason ?? '' });
+        return call<Task>(`${base}/reject`, 'POST', { reason: reason ?? '' }, undefined, keepalive);
       case 'block':
-        return call<Task>(`${base}/block`, 'POST', { reason: reason ?? '' });
+        return call<Task>(`${base}/block`, 'POST', { reason: reason ?? '' }, undefined, keepalive);
       case 'run_checks':
-        return call<{ task: Task }>(`${base}/checks/run`, 'POST', {}).then((r) => r.task);
+        return call<{ task: Task }>(`${base}/checks/run`, 'POST', {}, undefined, keepalive).then((r) => r.task);
       default:
-        return call<Task>(`${base}/${action}`, 'POST', {});
+        return call<Task>(`${base}/${action}`, 'POST', {}, undefined, keepalive);
     }
   },
 };
@@ -1697,27 +1701,28 @@ export function teamOfBots(teams: BoardTeam[]): Record<string, BoardTeam> {
 /** The bot a card belongs to: its owner, else the bot holding it. */
 export const taskBot = (t: Pick<Task, 'owner_kwant_id' | 'claim'>): string | null => t.owner_kwant_id ?? t.claim?.kwant_id ?? null;
 
-/** Sources the person didn't ask for one by one: they pile up, so they fold and can be cleared in bulk. */
+/** Sources the person didn't ask for one by one: they pile up, so they can be cleared in bulk. */
 const AUTO_SOURCES = new Set<SourceKind>(['routine', 'work_ahead', 'zombie']);
 export const isAutoTask = (t: Pick<Task, 'source_kind'>): boolean => AUTO_SOURCES.has(t.source_kind);
 
-/** One card on the board: the newest task, and older repeats of the same routine folded under it. */
+/** One card on the board: the newest task, and older runs of the same routine folded under it. */
 export interface BoardItem {
   task: Task;
   older: Task[];
 }
 
 /**
- * What makes two cards "the same run again": the same automatic source, bot and title. A routine
- * card's source is its run, not the routine, so its title ("Routine: Morning overview") stands in.
+ * What makes two cards "the same run again": a routine run by the same bot with the same title. A
+ * routine card's source is its run, not the routine, so its title ("Routine: Morning overview")
+ * stands in. Worked-ahead and loose-end cards never fold: the same title can be different work.
  */
 export function repeatKey(t: Task): string | null {
-  if (!isAutoTask(t)) return null;
-  return `${t.source_kind}:${taskBot(t) ?? ''}:${t.title.trim().toLowerCase()}`;
+  if (t.source_kind !== 'routine') return null;
+  return `routine:${taskBot(t) ?? ''}:${t.title.trim().toLowerCase()}`;
 }
 
 /**
- * Folds repeated automatic runs into one card, newest first, keeping the input's order otherwise.
+ * Folds repeated routine runs into one card, newest first, keeping the input's order otherwise.
  * Only cards in the same column fold together, so callers pass one column's tasks.
  */
 export function collapseRepeats(tasks: Task[]): BoardItem[] {
@@ -1968,3 +1973,63 @@ export function quickDoneText(a: QuickAction, n: number, title?: string): string
 
 /** How long Undo stays on screen before the action goes to the server. */
 export const UNDO_MS = 6000;
+
+/** A card action waiting out its Undo window. `send(leaving)` is told when the page is going away. */
+export interface HeldAction {
+  id: number;
+  tasks: Task[];
+  send: (leaving: boolean) => Promise<void>;
+  timer: number;
+}
+
+/**
+ * Holds at most one card action. Taking it out is the only way to send it, so an action goes once:
+ * the timer, the next action, Undo, leaving the board and the page closing all race for the same one.
+ */
+export class HeldActionSlot {
+  private held: HeldAction | null = null;
+  constructor(private clearTimer: (t: number) => void = (t) => clearTimeout(t)) {}
+
+  get current(): HeldAction | null {
+    return this.held;
+  }
+
+  hold(a: HeldAction): void {
+    this.held = a;
+  }
+
+  /** Takes the action out and stops its timer, without sending it. */
+  take(): HeldAction | null {
+    const a = this.held;
+    if (!a) return null;
+    this.held = null;
+    this.clearTimer(a.timer);
+    return a;
+  }
+
+  /** Sends the held action now, if there is one. */
+  commit(leaving = false): { action: HeldAction; sent: Promise<void> } | null {
+    const a = this.take();
+    return a ? { action: a, sent: a.send(leaving) } : null;
+  }
+}
+
+/**
+ * Sends a held action when the page is closed, reloaded or put in the background (a phone's app
+ * switcher often never fires pagehide). Returns the cleanup.
+ */
+export function flushOnPageLeave(
+  flush: () => void,
+  win: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> = window,
+  doc: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> & { visibilityState: string } = document,
+): () => void {
+  const onHide = () => {
+    if (doc.visibilityState === 'hidden') flush();
+  };
+  win.addEventListener('pagehide', flush);
+  doc.addEventListener('visibilitychange', onHide);
+  return () => {
+    win.removeEventListener('pagehide', flush);
+    doc.removeEventListener('visibilitychange', onHide);
+  };
+}
