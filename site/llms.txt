@@ -10,7 +10,8 @@ Key facts:
 - Source: https://github.com/alexsergivan/kwant
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - The program you install and run is called `kwnt` (`kwnt serve`).
-- No telemetry: kwant sends nothing to its developers.
+- No telemetry: kwant sends nothing to its developers. The kwant.si website sets no cookies and counts page views with
+  Cloudflare's cookie-free Web Analytics.
 - Optional Mission board: a task counts as Verified only when a check passes, and the bot that handed out work reviews
   the result. No token limits by default; hand-off caps (4 per bot, 16 per request, with Continue) stop loops.
 - Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.
@@ -42,5 +43,5 @@ Key facts:
 - [Grok Bot Alternative: Open-Source & Self-Hosted](https://kwant.si/alternatives/grok-bot): kwant is an open-source, self-hosted alternative to Grok Bot. Run a team of AI bots on your own machine and import your Grok Bot in minutes.
 
 ## Optional
-- [Privacy policy](https://kwant.si/privacy): What kwant.si and the self-hosted kwant software send where. The website sets no cookies and has no analytics; the software has no telemetry.
+- [Privacy policy](https://kwant.si/privacy): What kwant.si and the self-hosted kwant software send where. The website sets no cookies and counts page views with cookie-free Cloudflare Web Analytics; the software has no telemetry.
 - [Terms of use](https://kwant.si/terms): kwant is free software under the GNU AGPL-3.0, provided as is. You run it yourself and are responsible for your accounts, your bots and their costs.

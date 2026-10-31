@@ -52,6 +52,13 @@ OPERATOR = {
     "CONTACT_EMAIL": "contact@kwant.si",
 }
 
+# Cloudflare Web Analytics: counts page views without cookies, local storage or fingerprinting. The token is the kwant.si
+# site in Cloudflare (automatic install is off there). site/_headers allows its two hosts in script-src and connect-src.
+CF_ANALYTICS = (
+    "<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' "
+    "data-cf-beacon='{\"token\": \"7f6ed395033a43eea3885ad0943890c2\"}'></script><!-- End Cloudflare Web Analytics -->"
+)
+
 DOC_GROUPS = [
     ("Get started", [("quickstart", "Quickstart"), ("install", "Install & run")]),
     ("Using kwant", [
@@ -472,7 +479,8 @@ def page(meta, body, root, dates):
 {body}
 </main>
 {footer(root)}
-{structured_data(meta, url, title, image, dates, body)}</body>
+{structured_data(meta, url, title, image, dates, body)}{CF_ANALYTICS}
+</body>
 </html>
 """
 
@@ -588,7 +596,8 @@ Key facts:
 - Source: https://github.com/alexsergivan/kwant
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - The program you install and run is called `kwnt` (`kwnt serve`).
-- No telemetry: kwant sends nothing to its developers.
+- No telemetry: kwant sends nothing to its developers. The kwant.si website sets no cookies and counts page views with
+  Cloudflare's cookie-free Web Analytics.
 - Optional Mission board: a task counts as Verified only when a check passes, and the bot that handed out work reviews
   the result. No token limits by default; hand-off caps (4 per bot, 16 per request, with Continue) stop loops.
 - Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.
