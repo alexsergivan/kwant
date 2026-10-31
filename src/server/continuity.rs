@@ -34,7 +34,7 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 12] = [
+pub const NOTIFY_KINDS: [&str; 13] = [
     "turn_finished",
     "approval_needed",
     "routine_failed",
@@ -47,6 +47,7 @@ pub const NOTIFY_KINDS: [&str; 12] = [
     "app_update",
     "work_ahead",
     "automation_suggested",
+    "tier_proposed",
 ];
 const MASK: &str = "••••••••";
 
@@ -481,6 +482,7 @@ fn tool_list(scope: &SelfScope, board: bool) -> Value {
         if board {
             list.extend(super::missions::tools::tools());
             list.push(super::missions::flight_school::tool());
+            list.push(super::missions::flight_school::propose_tool());
         }
         list.extend(super::skills::tools());
         list.extend(super::mcp_suggest::tools());
@@ -1075,6 +1077,7 @@ async fn call_tool(
         n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
         n if super::missions::tools::handles(n) => super::missions::tools::call(state, scope, n, args).await,
         "tier_status" => super::missions::flight_school::call_tool(state, &scope.kwant_id, args).await,
+        "tier_propose" => super::missions::flight_school::call_propose(state, scope, args).await,
         "list_attachments" if scope.origin.is_some() => super::attachments::tool_list(state, scope).await,
         "share_file" if scope.origin.is_some() => super::attachments::tool_share(state, scope, args).await,
         "delegate" => super::delegation::tool_delegate(state, scope, args).await,
@@ -1415,7 +1418,7 @@ pub async fn notify_settings_view(state: &AppState) -> (String, Vec<String>) {
 pub const NOTIFY_KNOWN_SETTING: &str = "notify_known";
 /// Kinds added after `notify_on` lists were first saved but before `notify_known` existed: a list
 /// saved without `notify_known` was chosen from every kind but these.
-const KINDS_SINCE_FIRST_LIST: [&str; 3] = ["app_update", "work_ahead", "automation_suggested"];
+const KINDS_SINCE_FIRST_LIST: [&str; 4] = ["app_update", "work_ahead", "automation_suggested", "tier_proposed"];
 
 /// Kinds the user wants to hear about; all of them unless set. A kind added after the list was
 /// saved is on, so a new event isn't silently off for everyone who ever saved the settings.

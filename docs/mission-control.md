@@ -584,13 +584,71 @@ the turn ended, and the next tick put the task back in `working` with no turn ru
 ### Routes
 
 - `GET /api/capabilities?kwant_id=&space=` (open): `{flight_school, kwant_id, default_tier, policies,
-  effective: [{task_class, tier, from: class|any_class|default|unreadable}], events}`.
+  effective: [{task_class, tier, from: class|any_class|default|unreadable}], proposals, events}` (`proposals`:
+  the bot's last 20, newest first, C4).
 - `POST /api/capabilities` `{kwant_id, task_class, tier, note?}` (person only): sets the tier; the same tier
   again returns `unchanged: true`.
 - `POST /api/capabilities/:kwant_id/revoke` `{task_class, to_tier: observe|sandbox, note?}` (person only):
   lowers it; a tier that isn't lower returns `unchanged: true`.
 - Bot tool `tier_status {task_class?}` (read-only, offered with the task board).
 - `task_json` gains `task_class` and `owner_tier` (`null` while Flight School is off).
+
+### Scorecards and proposals (Phase C4)
+
+A bot earns a tier from verified work, and only the person gives it. kwant computes the scorecard every
+time from rows it wrote itself; it is never stored as truth, and a bot can't edit any of its inputs.
+
+**The scorecard** of a bot for a class covers its settled tasks of that class (`verified`, `failed`,
+`cancelled`) that it ran (at least one claim) and that finished in the last 30 days, newest first:
+
+| field | from |
+|---|---|
+| `tasks {settled, verified, failed, cancelled}` | `tasks.state`, `finished_at` |
+| `first_try {k, n, rate}`: verified on attempt ≤ 1 with no failure row | `tasks.attempts`, `task_failures` |
+| `false_success {k, n, rate}`: verified, then flagged `evidence_changed` and not resolved `still_valid` | `task_flags` |
+| `failures {total, by_class {denied, check_failed}}` | `task_failures` |
+| `cards {shown, approved, denied, approved_rate}`, `calls`, `external_calls` | `turn_tool_calls` |
+| `interventions`: the person's state moves (except accepting a verify), edits, forks, checks added, flags resolved | `task_events` actor `person` |
+| `tokens {spent, recovery}` | `tasks.spent_tokens`, `recovery_spent_tokens` |
+| `recent_denials {n, of, with_denial}`: tasks with a denied call or a `denied` failure among the last 5/10 | the above |
+
+Every rate comes with its `k` and `n`; with `n = 0` the rate is `null`. The card also carries `tier`,
+`tier_from`, `next_tier` (`null` at `act`), `eligible` and `missing` (one plain sentence per unmet rule).
+
+**Eligibility** (§9 D5): `observe → sandbox` needs ≥ 5 verified and no denial in the last 5 tasks;
+`sandbox → act` needs ≥ 10 verified, first try ≥ 70 %, no false success and no denial in the last 10.
+
+**`tier_propose {task_class, reason}`** (bot tool, offered with the task board, free at every tier) asks for
+the next tier up. kwant refuses it while Flight School is off, at `act`, within 7 days of the person
+declining the same step, and when the card doesn't qualify (the reply lists what is missing). Otherwise it
+saves a `tier_proposals` row with the card it qualified with, sends the notification `tier_proposed`
+(on by default, also for notification lists saved before it existed) and `capability_changed`. One open
+proposal per bot and class (a unique index); asking again reports the open one.
+
+**Deciding** is the person's (`/api/capabilities` writes are person-only; a bot token gets 403). A grant first
+checks again that the bot is still at `from_tier` and still qualifies; if not, the proposal goes `stale` with
+the reason in `note` and the grant answers 409. Otherwise one transaction moves the proposal from `proposed`
+to `granted` (claim-first, so of racing grants exactly one does anything; the rest get 409 with the status
+it has now), revokes the live class row and writes the new tier with an event. A decline writes no tier.
+Open proposals are also checked for staleness whenever they are read (`GET /api/capabilities`, the
+proposals list, `tier_status`, `tier_propose`); while Flight School is off they are left alone. Revoke
+stays instant and needs no proposal, and no tier lifts the payment floor or a high-risk card.
+
+`tier_proposals` (C4): `id, space_id, kwant_id, task_class, from_tier observe|sandbox, to_tier sandbox|act,
+scorecard (JSON), reason (the bot's words), status proposed|granted|declined|stale, decided_at, note,
+created_at`. Triggers: a row is never deleted, and only its status (out of `proposed`), `decided_at` and
+`note` change, once. `FLIGHT_SCHOOL_DOWN` drops it.
+
+Routes (C4):
+- `GET /api/capabilities/:kwant_id/scorecard?class=` (open; class defaults to `general`): the card above.
+- `GET /api/capabilities/proposals?status=&kwant_id=` (open): `{proposals: [...]}`, newest first; each has
+  `kind: "tier_proposal"` (its Needs-you kind) and `scorecard` as JSON.
+- `POST /api/capabilities/proposals/:id/grant` (person only, `Idempotency-Key` optional):
+  `{proposal, capabilities}`; 409 `{error, status}` when it isn't open or went stale; 404 when unknown.
+- `POST /api/capabilities/proposals/:id/decline {note?}` (person only, `Idempotency-Key` optional): same
+  shape.
+- SSE `{"type": "capability_changed", "data": {"capability": {space_id, kwant_id, task_class, proposal}}}`: reload the bot's
+  capabilities.
 
 ## 15. Opt-in budgets
 

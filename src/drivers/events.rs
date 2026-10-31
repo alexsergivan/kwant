@@ -117,6 +117,11 @@ pub enum RuntimeEvent {
     /// whole proposal with its `card`. See `crate::db::hires` and docs/bot-actions.md → "Hiring".
     #[serde(rename = "hire_updated", alias = "HireUpdated")]
     HireUpdated { hire: Value },
+    /// Flight School (C4): a bot proposed a tier, or the person granted, declined or kwant marked
+    /// a proposal stale. `capability` is `{space_id, kwant_id, task_class, proposal?}`; clients
+    /// reload `GET /api/capabilities`. See docs/mission-control.md §14.
+    #[serde(rename = "capability_changed", alias = "CapabilityChanged")]
+    CapabilityChanged { capability: Value },
     /// An event from inside one turn, tagged with the turn and its chat. On the SSE wire it is
     /// the inner event with `turn_id`, `kwant_id`, `context_id` and `thread_id` added at the top
     /// level (see [`RuntimeEvent::to_wire`]), so clients that ignore the tags still work.

@@ -118,7 +118,8 @@ export type NotifyKind =
   | 'human_step'
   | 'app_update'
   | 'work_ahead'
-  | 'automation_suggested';
+  | 'automation_suggested'
+  | 'tier_proposed';
 export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'turn_finished', label: 'A bot finished replying' },
   { id: 'approval_needed', label: 'A bot needs your approval' },
