@@ -22,8 +22,13 @@ pub const MAX_MEMORY_SEARCH_LIMIT: i64 = 20;
 /// Columns a [`Memory`] row is read with.
 const MEMORY_COLUMNS: &str = "id, kwant_id, text, source, pinned_by, imported, created_at, updated_at";
 /// Undoes the pinning and memory-search migration (see [`Database::migrate_continuity`]): the
-/// table goes back to the shape older releases read. Kept for rollbacks and tested.
-pub const MEMORY_PINS_DOWN: &str = "DROP TRIGGER IF EXISTS kwant_memories_fts_ai; \
+/// table goes back to the shape older releases read. Kept for rollbacks and tested. The Truth
+/// Ledger's mirror reads the dropped columns, so it goes first; the next start brings it back.
+pub const MEMORY_PINS_DOWN: &str = "DROP TRIGGER IF EXISTS kwant_memories_ledger_ai; \
+    DROP TRIGGER IF EXISTS kwant_memories_ledger_au; \
+    DROP TRIGGER IF EXISTS kwant_memories_ledger_pin; \
+    DROP TRIGGER IF EXISTS kwant_memories_ledger_ad; \
+    DROP TRIGGER IF EXISTS kwant_memories_fts_ai; \
     DROP TRIGGER IF EXISTS kwant_memories_fts_ad; \
     DROP TRIGGER IF EXISTS kwant_memories_fts_au; \
     DROP TABLE IF EXISTS kwant_memories_fts; \

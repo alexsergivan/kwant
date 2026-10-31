@@ -63,10 +63,11 @@ async fn legacy(dir: &Path) -> SqlitePool {
 }
 
 /// Every row of every table except `spaces` and `llm_profile_endpoints` (both new, the second
-/// from the Custom API change), without `space_id`, as quoted text.
+/// from the Custom API change) and the Truth Ledger's backfill (checked on its own), without
+/// `space_id`, as quoted text.
 async fn snapshot(pool: &SqlitePool) -> BTreeMap<String, Vec<String>> {
     let tables: Vec<(String,)> = sqlx::query_as(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('spaces', 'llm_profile_endpoints', 'mcp_suggestions', 'bot_actions', 'hire_proposals', 'hire_policies', 'imports', 'approval_modes') ORDER BY name",
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('spaces', 'llm_profile_endpoints', 'mcp_suggestions', 'bot_actions', 'hire_proposals', 'hire_policies', 'imports', 'approval_modes', 'knowledge_facts', 'fact_events') ORDER BY name",
     )
     .fetch_all(pool)
     .await
@@ -118,6 +119,11 @@ async fn migration_keeps_every_row_and_id_and_backs_up_first() {
 
     let after = snapshot(&pool).await;
     assert_eq!(before, after, "every row and id survives, nothing added or lost");
+    // The Truth Ledger mirrors the one memory, as the person's
+    assert_eq!(
+        sqlx::query_as::<_, (String, String, String)>("SELECT memory_id, trust, status FROM knowledge_facts").fetch_all(&pool).await.unwrap(),
+        vec![("mem_1".to_string(), "person".to_string(), "accepted".to_string())]
+    );
 
     assert_eq!(
         sqlx::query_as::<_, (String, String)>("SELECT id, name FROM spaces").fetch_all(&pool).await.unwrap(),
