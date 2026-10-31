@@ -45,6 +45,8 @@ const ORDER_PAGE: &str = "<!doctype html><title>order</title>\
 const FORM_PAGE: &str = "<!doctype html><title>form</title><form action='/shop/checkout/confirm' method=post>\
 <input name=email placeholder=Email><button type=submit>Continue</button></form>\
 <form action='/search'><input name=q placeholder=Search></form>";
+const FINISH_PAGE: &str = "<!doctype html><title>overview</title>\
+<button autofocus onclick=\"document.title='finished'\">Finish</button>";
 const PLAIN_PAGE: &str = "<!doctype html><title>plain</title>\
 <button onclick=\"document.title='went on'\">Continue</button><input name=q placeholder=Search>";
 
@@ -64,6 +66,7 @@ async fn serve() -> String {
                     "/frame" => FRAME_PAGE,
                     "/order" => ORDER_PAGE,
                     "/form" => FORM_PAGE,
+                    "/checkout-step-two.html" => FINISH_PAGE,
                     _ => PLAIN_PAGE,
                 };
                 let reply = format!(
@@ -184,6 +187,38 @@ async fn the_page_decides_whether_a_browser_click_pays() {
     // Nothing to pay on a plain page
     open(&e, &format!("{base}/plain")).await;
     assert_eq!(pay(&e, click("Continue")).await, None);
+}
+
+#[tokio::test]
+async fn space_on_a_focused_button_asks_like_enter() {
+    if computer::local_chrome_path().is_none() {
+        eprintln!("skipped: no Chrome or Chromium installed");
+        return;
+    }
+    let e = setup().await;
+    let _chrome = ChromeGuard(e.tmp.path().join("local-chrome"));
+    let base = serve().await;
+    let space = json!({"action": "key", "key": " "});
+
+    // An autofocused "Finish" on a checkout page: Space presses it, so it asks like Enter and click
+    let ctrl = open(&e, &format!("{base}/checkout-step-two.html")).await;
+    for args in [space.clone(), json!({"action": "key", "key": "Space"}), json!({"action": "key", "key": "Enter"})] {
+        assert!(pay(&e, args.clone()).await.is_some(), "{args}");
+    }
+    let (status, page) = post_act(&e.app, &e.bot.id, space.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page["error"].as_str().unwrap_or("").starts_with("Not done: this looks like a payment"), "{page}");
+    assert_eq!(title(&ctrl).await, "overview", "Finish was not pressed");
+
+    // A focused "Place order" asks by its label, on any address
+    let ctrl = open(&e, &format!("{base}/order")).await;
+    ctrl.send_cdp_command("Runtime.evaluate", json!({"expression": "document.querySelector('button').focus()"})).await.unwrap();
+    assert!(pay(&e, space.clone()).await.expect("Space on Place order").contains("place order"));
+
+    // Space on a plain page's button runs
+    let ctrl = open(&e, &format!("{base}/plain")).await;
+    ctrl.send_cdp_command("Runtime.evaluate", json!({"expression": "document.querySelector('button').focus()"})).await.unwrap();
+    assert_eq!(pay(&e, space).await, None);
 }
 
 #[tokio::test]

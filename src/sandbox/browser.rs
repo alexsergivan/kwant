@@ -176,7 +176,13 @@ const PAYMENT_SIGNALS_JS: &str = r#"function (needle) {
     var a = document.activeElement;
     try { while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; } catch (e) {}
     try { while (a && a.tagName === 'IFRAME' && a.contentDocument && a.contentDocument.activeElement) a = a.contentDocument.activeElement; } catch (e) {}
-    if (a && a !== document.body && a !== document.documentElement) target = describe(a, (a.getAttribute('aria-label') || a.name || a.id || '').slice(0, 80));
+    if (a && a !== document.body && a !== document.documentElement) {
+      // A focused button or link is named by what it shows, so Enter or Space on "Place order" reads as that
+      var presses = a.tagName === 'BUTTON' || a.tagName === 'A' || /^(button|link)$/i.test(a.getAttribute('role') || '');
+      var shows = presses ? (a.innerText || '') : (a.tagName === 'INPUT' && /^(submit|button)$/i.test(a.type || '') ? a.value : '');
+      var name = a.getAttribute('aria-label') || shows.replace(/\s+/g, ' ').trim() || a.name || a.id || '';
+      target = describe(a, name.slice(0, 80));
+    }
   }
   return { url: location.href, target: target, card_fields: cards, frames: frames.slice(0, 40) };
 }"#;

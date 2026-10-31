@@ -112,13 +112,8 @@ fn self_reason(tool: &str, args: &Value, page_url: Option<&str>) -> Option<Strin
         }
         "type" => card_number(text).then(|| "typing what looks like a card number".to_string()),
         "key" => {
-            let key = args["key"].as_str().unwrap_or("Enter");
-            let submits = matches!(key.to_ascii_lowercase().as_str(), "enter" | "return" | "numpadenter");
-            if submits {
-                page_url.and_then(checkout_page).map(|page| format!("Enter on a checkout page ({page})"))
-            } else {
-                None
-            }
+            let name = submit_key(args["key"].as_str())?;
+            page_url.and_then(checkout_page).map(|page| format!("{name} on a checkout page ({page})"))
         }
         _ => None,
     }
@@ -187,6 +182,16 @@ fn payment_frame(frame: &FrameSignal) -> Option<String> {
         .then(|| frame.title.chars().take(60).collect())
 }
 
+/// The name of a key that can submit or press what has focus: Enter submits a form, and Space
+/// presses a focused button. A missing key means Enter. Every other key is `None`.
+fn submit_key(key: Option<&str>) -> Option<&'static str> {
+    match key.unwrap_or("Enter").to_ascii_lowercase().as_str() {
+        "enter" | "return" | "numpadenter" => Some("Enter"),
+        " " | "space" | "spacebar" => Some("Space"),
+        _ => None,
+    }
+}
+
 /// Why a `browser_act` is a payment from what the page shows (see [`PageSignals`]), or `None`.
 /// Pure, so the rules are tested as tables; the bot's own words never mark a call as safe.
 pub fn page_reason(action: &str, key: Option<&str>, page: &PageSignals) -> Option<String> {
@@ -219,20 +224,23 @@ pub fn page_reason(action: &str, key: Option<&str>, page: &PageSignals) -> Optio
             None
         }
         "key" => {
-            let submits = matches!(key.unwrap_or("Enter").to_ascii_lowercase().as_str(), "enter" | "return" | "numpadenter");
-            if !submits {
-                return None;
-            }
+            let name = submit_key(key)?;
             if frame.is_some() && page.card_fields == 0 {
-                return Some(format!("Enter on a page with {}", card_where()));
+                return Some(format!("{name} on a page with {}", card_where()));
             }
             let t = target?;
+            // Enter or Space on a focused button or link presses it, so the click rules apply
+            if t.kind == "button" || t.kind == "link" {
+                if let Some(why) = page_reason("click", None, page) {
+                    return Some(why);
+                }
+            }
             if t.card_field || t.in_form && t.form_card {
-                return Some("Enter in a form with card fields".into());
+                return Some(format!("{name} in a form with card fields"));
             }
             if t.in_form {
                 if let Some(page) = checkout_page(&t.form_action) {
-                    return Some(format!("Enter in a form that sends to a checkout ({page})"));
+                    return Some(format!("{name} in a form that sends to a checkout ({page})"));
                 }
             }
             None
@@ -670,7 +678,19 @@ mod tests {
         let mut f = target("Card number (field)", "field");
         f.card_field = true;
         assert!(key("Enter", &focus(f.clone())).is_some());
+        assert!(key(" ", &focus(f.clone())).is_some(), "Space too");
         assert!(key("Tab", &focus(f)).is_none());
+        // Space or Enter on a focused button presses it: the click rules decide
+        let mut finish = target("Finish", "button");
+        finish.in_form = true;
+        finish.form_action = "https://shop.example.com/checkout/complete".into();
+        for k in [" ", "Space", "Spacebar", "Enter"] {
+            assert!(key(k, &focus(finish.clone())).is_some(), "{k:?} on a checkout button");
+        }
+        let place = target("Place order", "button");
+        assert!(key(" ", &focus(place.clone())).expect("Space on Place order").contains("place order"));
+        assert!(key("Tab", &focus(place)).is_none());
+        assert!(key(" ", &focus(target("Help", "button"))).is_none());
         let mut name = target("Name on card (field)", "field");
         name.in_form = true;
         name.form_card = true;
@@ -701,6 +721,11 @@ mod tests {
         assert!(act(json!({"action": "click_text", "text": "Continue"}), Some("https://shop.example.com/checkout/step-2")).is_some());
         assert!(act(json!({"action": "click_text", "text": "Next"}), Some("https://checkout.stripe.com/c/pay/cs_test")).is_some());
         assert!(act(json!({"action": "key", "key": "Enter"}), Some("https://www.paypal.com/checkoutnow?token=x")).is_some());
+        for k in [" ", "Space", "space", "Spacebar"] {
+            let why = act(json!({"action": "key", "key": k}), Some("https://shop.example.com/checkout-step-two.html"));
+            assert!(why.expect(k).starts_with("Space on a checkout page"), "{k:?}");
+        }
+        assert!(act(json!({"action": "key", "key": " "}), Some("https://example.com/search")).is_none());
         assert!(act(json!({"action": "key", "key": "Tab"}), Some("https://shop.example.com/checkout")).is_none());
         assert!(act(json!({"action": "key", "key": "Enter"}), Some("https://example.com/search")).is_none());
         assert!(act(json!({"action": "scroll"}), Some("https://shop.example.com/checkout")).is_none());
