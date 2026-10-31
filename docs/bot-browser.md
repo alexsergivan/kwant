@@ -39,8 +39,10 @@ alone is no change; for keys (Tab) it is.
 - 3 actions in a row that change nothing: the third returns `stalled: true` and `error` set to
   `STALL_STOP` (try something else, or tell the person). The count then starts over.
 - The same click (same ref or label) or the same typing into the same place a 3rd time in a row on
-  the same address is refused before it runs (`REPEAT_STOP`), until the bot does something else.
-  Scrolls and keys don't count and don't break a run.
+  the same address, when the two before it changed nothing, is refused before it runs
+  (`REPEAT_STOP`), until the bot does something else. A repeat that changes the page (a counter,
+  "Load more") resets the count, so it can run any number of times. Scrolls and keys don't count
+  and don't break a run.
 
 The page text in page states is now `document.body.innerText` (laid out in lines, hidden parts left
 out) instead of the text of a detached copy, which ran lines together.

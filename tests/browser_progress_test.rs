@@ -1,7 +1,7 @@
 //! What changed after each action in kwnt's own browser, and the loop stop, through a real
 //! Chrome: each `/act` says what is new or gone (or that it went to another page), waits a moment
-//! for a slow change, and stops a bot whose last 3 actions changed nothing or who asks for the
-//! same action a 3rd time in a row. Opening an address starts over. Skipped when no Chrome is
+//! for a slow change, and stops a bot whose last 3 actions changed nothing or who asks a 3rd time
+//! in a row for the same action that changed nothing. Opening an address starts over. Skipped when no Chrome is
 //! installed.
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
@@ -145,20 +145,27 @@ async fn each_action_says_what_changed_and_a_loop_is_stopped() {
     assert_eq!(page["error"], progress::STALL_STOP, "{page}");
     assert_eq!(page["stalled"], true);
 
-    // The same click a third time in a row is refused before it runs, until something else
-    act(&e, click("Add")).await;
-    act(&e, click("Add")).await;
-    let page = act(&e, click("Add")).await;
+    // The same click that changes the page every time runs every time (Rigel's counter page)
+    for n in 2..=6 {
+        let page = act(&e, click("Add")).await;
+        assert!(page["error"].is_null(), "click {n}: {page}");
+        assert_eq!(page["changed"], format!("New: \"Count {n}\". Gone: \"Count {}\".", n - 1), "{page}");
+    }
+    // The same click that changed nothing twice is refused a third time before it runs, until
+    // something else
+    act(&e, click("Nothing")).await;
+    act(&e, click("Nothing")).await;
+    let page = act(&e, click("Nothing")).await;
     assert_eq!(page["error"], progress::REPEAT_STOP, "{page}");
-    assert!(page["text"].as_str().unwrap().contains("Count 3"), "not clicked: {page}");
-    let page = act(&e, click("Add")).await;
+    let page = act(&e, click("Nothing")).await;
     assert_eq!(page["error"], progress::REPEAT_STOP, "still refused");
     act(&e, json!({"action": "key", "key": "Tab"})).await;
-    let page = act(&e, click("Add")).await;
+    let page = act(&e, click("Nothing")).await;
     assert_eq!(page["error"], progress::REPEAT_STOP, "a key doesn't count as something else");
-    act(&e, click("Nothing")).await;
     let page = act(&e, click("Add")).await;
-    assert!(page["error"].is_null() && page["text"].as_str().unwrap().contains("Count 4"), "{page}");
+    assert!(page["error"].is_null() && page["text"].as_str().unwrap().contains("Count 7"), "{page}");
+    let page = act(&e, click("Nothing")).await;
+    assert!(page["error"].is_null(), "after something else it may again: {page}");
 
     // Another page
     let page = act(&e, click("Other page")).await;
@@ -166,10 +173,10 @@ async fn each_action_says_what_changed_and_a_loop_is_stopped() {
 
     // Opening an address starts over
     open(&e, &format!("{base}/counter")).await;
-    act(&e, click("Add")).await;
-    act(&e, click("Add")).await;
+    act(&e, click("Nothing")).await;
+    act(&e, click("Nothing")).await;
     open(&e, &format!("{base}/counter")).await;
-    let page = act(&e, click("Add")).await;
+    let page = act(&e, click("Nothing")).await;
     assert!(page["error"].is_null(), "{page}");
 }
 
