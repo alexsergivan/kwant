@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useUndoableDelete } from '../undoDelete';
 import { UndoNotice } from './UndoNotice';
-import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, History, Loader2, Pencil, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, History, Loader2, Pencil, Play, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 import {
   Routine,
+  RoutineInput,
   RoutineRun,
   RunStatus,
   ScheduleForm,
@@ -22,6 +23,7 @@ import {
 import { asSchedule, scheduleWords } from '../botActions';
 import type { Channel, Kwant } from './Sidebar';
 import { playSfx } from '../audio/chiptune';
+import { SuggestedRoutines } from './SuggestedRoutines';
 
 const smallBtn =
   'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
@@ -65,6 +67,17 @@ const StatusBadge: React.FC<{ status: RunStatus }> = ({ status }) => (
   </span>
 );
 
+/** On a routine added from one kwant suggested (Automation Discovery). */
+export const SuggestedBadge: React.FC = () => (
+  <span
+    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border bg-violet-500/10 text-violet-200 border-violet-500/25"
+    title="You added this from a suggestion, after you asked for it on a regular rhythm."
+  >
+    <Sparkles size={9} aria-hidden="true" />
+    Suggested for you
+  </span>
+);
+
 interface FormState {
   kwantId: string;
   channelId: string;
@@ -74,22 +87,36 @@ interface FormState {
   schedule: ScheduleForm;
 }
 
-const RoutineForm: React.FC<{
+/** What a routine form starts from when it isn't editing a saved routine (an Accept with edits). */
+export type RoutineSeed = Pick<Routine, 'kwant_id' | 'channel_id' | 'name' | 'instructions' | 'schedule'> & { thread_id?: string | null };
+
+export const RoutineForm: React.FC<{
   initial?: Routine;
+  /** Prefills a new routine; ignored with `initial`. */
+  seed?: RoutineSeed;
   fixedKwantId?: string;
   kwants: Kwant[];
   channels: Channel[];
   onCancel: () => void;
   onSaved: () => void;
-}> = ({ initial, fixedKwantId, kwants, channels, onCancel, onSaved }) => {
+  /** Saves instead of creating or updating; `placeChanged` says whether the person picked another place. */
+  onSubmit?: (body: RoutineInput, placeChanged: boolean) => Promise<void>;
+  submitLabel?: string;
+  label?: string;
+  /** Hides Enabled (an accepted suggestion starts on). */
+  hideEnabled?: boolean;
+  /** Shown above the error and buttons. */
+  children?: React.ReactNode;
+}> = ({ initial, seed, fixedKwantId, kwants, channels, onCancel, onSaved, onSubmit, submitLabel, label, hideEnabled = false, children }) => {
   const uid = useId();
-  const initialChannel = initial?.thread_id ? IN_THREAD : initial?.channel_id ?? '';
-  const initialSchedule = initial ? asSchedule(initial.schedule) : null;
+  const base = initial ?? seed;
+  const initialChannel = base?.thread_id ? IN_THREAD : base?.channel_id ?? '';
+  const initialSchedule = base ? asSchedule(base.schedule) : null;
   const [f, setF] = useState<FormState>(() => ({
-    kwantId: initial?.kwant_id ?? fixedKwantId ?? kwants[0]?.id ?? '',
+    kwantId: base?.kwant_id ?? fixedKwantId ?? kwants[0]?.id ?? '',
     channelId: initialChannel,
-    name: initial?.name ?? '',
-    instructions: initial?.instructions ?? '',
+    name: base?.name ?? '',
+    instructions: base?.instructions ?? '',
     enabled: initial?.enabled ?? true,
     schedule: initialSchedule ? formFromSchedule(initialSchedule) : emptyScheduleForm(),
   }));
@@ -116,7 +143,8 @@ const RoutineForm: React.FC<{
       enabled: f.enabled,
     };
     try {
-      if (initial) {
+      if (onSubmit) await onSubmit(body, f.channelId !== initialChannel);
+      else if (initial) {
         // Sending the place again would move a follow-up out of its thread and forget what it
         // checks back on, so it only goes when the person picked another one.
         const { channel_id, ...rest } = body;
@@ -133,7 +161,7 @@ const RoutineForm: React.FC<{
   const id = (k: string) => `${uid}-${k}`;
 
   return (
-    <form onSubmit={submit} noValidate className="p-3 rounded-xl border border-sky-500/30 bg-zinc-950/70 space-y-3" aria-label={initial ? `Edit ${initial.name}` : 'New routine'}>
+    <form onSubmit={submit} noValidate className="p-3 rounded-xl border border-sky-500/30 bg-zinc-950/70 space-y-3" aria-label={label ?? (initial ? `Edit ${initial.name}` : 'New routine')}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label htmlFor={id('name')} className={labelClass}>Name</label>
@@ -152,7 +180,7 @@ const RoutineForm: React.FC<{
         <div>
           <label htmlFor={id('channel')} className={labelClass}>Posts in</label>
           <select id={id('channel')} value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value })} className={inputClass}>
-            {initial?.thread_id && <option value={IN_THREAD}>The thread it was set up in</option>}
+            {base?.thread_id && <option value={IN_THREAD}>The thread it was set up in</option>}
             <option value="">Direct chat with the bot</option>
             {channels.map((c) => (
               <option key={c.id} value={c.id}>{channelLabel(c.name)}</option>
@@ -313,10 +341,14 @@ const RoutineForm: React.FC<{
         )}
       </fieldset>
 
-      <label className="flex items-center gap-2 text-[11px] text-zinc-300">
-        <input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} className="accent-sky-500" />
-        Enabled
-      </label>
+      {!hideEnabled && (
+        <label className="flex items-center gap-2 text-[11px] text-zinc-300">
+          <input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} className="accent-sky-500" />
+          Enabled
+        </label>
+      )}
+
+      {children}
 
       {error && (
         <p className="text-[11px] text-rose-400 flex items-center gap-1.5" role="alert">
@@ -328,7 +360,7 @@ const RoutineForm: React.FC<{
           Cancel
         </button>
         <button type="submit" disabled={saving} className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50">
-          {saving ? 'Saving…' : initial ? 'Save routine' : 'Create routine'}
+          {saving ? 'Saving…' : submitLabel ?? (initial ? 'Save routine' : 'Create routine')}
         </button>
       </div>
     </form>
@@ -436,6 +468,7 @@ export const RoutineRow: React.FC<{
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="text-xs font-medium text-zinc-100 break-words">{routine.name}</span>
+            {routine.origin === 'discovery' && <SuggestedBadge />}
             {routine.last_status && <StatusBadge status={routine.last_status} />}
           </div>
           <p className="text-[11px] text-zinc-500 break-words">
@@ -481,13 +514,18 @@ export const RoutineRow: React.FC<{
   );
 };
 
-/** Routines for one kwant (`kwantId`) or for everyone. Live: refetches on `routine_run`. */
-export const RoutinesPanel: React.FC<{ kwantId?: string; kwants: Kwant[]; channels: Channel[]; focus?: RoutineFocus | null }> = ({
-  kwantId,
-  kwants,
-  channels,
-  focus,
-}) => {
+/**
+ * Routines for one kwant (`kwantId`) or for everyone. Live: refetches on `routine_run`. The
+ * everyone list also shows the routines kwant suggests (Automation Discovery) on top.
+ */
+export const RoutinesPanel: React.FC<{
+  kwantId?: string;
+  kwants: Kwant[];
+  channels: Channel[];
+  focus?: RoutineFocus | null;
+  /** Opens app Settings, where suggestions are turned on. */
+  onOpenSettings?: () => void;
+}> = ({ kwantId, kwants, channels, focus, onOpenSettings }) => {
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Routine | 'new' | null>(null);
@@ -551,6 +589,8 @@ export const RoutinesPanel: React.FC<{ kwantId?: string; kwants: Kwant[]; channe
           </button>
         )}
       </div>
+
+      {!kwantId && <SuggestedRoutines kwants={kwants} channels={channels} onAccepted={reload} onOpenSettings={onOpenSettings} />}
 
       {editing === 'new' && (
         <RoutineForm fixedKwantId={kwantId} kwants={kwants} channels={channels} onCancel={() => setEditing(null)} onSaved={saved} />

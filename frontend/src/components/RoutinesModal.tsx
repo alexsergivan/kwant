@@ -5,11 +5,12 @@ import type { Channel, Kwant } from './Sidebar';
 import { playSfx } from '../audio/chiptune';
 
 /** Every kwant's routines in one list. */
-export const RoutinesModal: React.FC<{ isOpen: boolean; onClose: () => void; kwants: Kwant[]; channels: Channel[] }> = ({
+export const RoutinesModal: React.FC<{ isOpen: boolean; onClose: () => void; kwants: Kwant[]; channels: Channel[]; onOpenSettings?: () => void }> = ({
   isOpen,
   onClose,
   kwants,
   channels,
+  onOpenSettings,
 }) => {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -51,7 +52,7 @@ export const RoutinesModal: React.FC<{ isOpen: boolean; onClose: () => void; kwa
             <X size={18} />
           </button>
         </div>
-        <RoutinesPanel kwants={kwants} channels={channels} />
+        <RoutinesPanel kwants={kwants} channels={channels} onOpenSettings={onOpenSettings} />
       </div>
     </div>
   );

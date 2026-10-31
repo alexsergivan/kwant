@@ -49,6 +49,7 @@ import {
   requestLimitFrom,
 } from '../missions';
 import { FlightSchoolSettings, TIERS, TIER_HINTS, TIER_LABELS, Tier, parseFlightSchoolSettings } from '../flightSchool';
+import { DISCOVERY_CAPS, DISCOVERY_SETTING_EVENT, parseDiscoverySettings } from '../automationDiscovery';
 
 const RECOVERY_PCTS = [0, 10, 25, 50, 100];
 
@@ -243,6 +244,48 @@ interface SettingsModalProps {
 
 /** App settings: shared by every space (keys, Laya, limits, notifications, sounds). Accounts,
  * bots and tools are per space, in Space settings. */
+type DiscoverySettings = NonNullable<ReturnType<typeof parseDiscoverySettings>>;
+
+/** Automation Discovery: off until the person turns it on; suggestions only, never a routine on its own. */
+const DiscoverySetting: React.FC<{ value: DiscoverySettings; onChange: (v: DiscoverySettings) => void }> = ({ value, onChange }) => {
+  const on = value.automation_discovery === 'on';
+  const cap = value.automation_discovery_daily_cap;
+  return (
+    <SwitchRow
+      id="automation-discovery"
+      label="Suggest routines from repeated tasks"
+      hint="When you ask for the same task on the board on a regular rhythm, you get a suggested routine for it, with the bot, the time and the checks it would keep. Nothing is set up until you accept it in Routines. It learns only from board tasks you created, never from chats."
+      checked={on}
+      onToggle={() => onChange({ ...value, automation_discovery: on ? 'off' : 'on' })}
+    >
+      {on && (
+        <div className="mt-2 flex flex-wrap items-center gap-2" data-testid="automation-discovery-options">
+          <label htmlFor="automation-discovery-cap" className="text-[11px] text-zinc-300">
+            At most
+          </label>
+          <select
+            id="automation-discovery-cap"
+            value={cap}
+            onChange={(e) => onChange({ ...value, automation_discovery_daily_cap: Number(e.target.value) })}
+            aria-describedby="automation-discovery-cap-hint"
+            className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+          >
+            {DISCOVERY_CAPS.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          <span className="text-[11px] text-zinc-300">new {cap === 1 ? 'suggestion' : 'suggestions'} a day</span>
+          <p id="automation-discovery-cap-hint" className="basis-full text-[11px] text-zinc-500">
+            {cap === 0 ? 'With 0, it still looks but suggests nothing new; Scan now in Routines shows what it found.' : 'More waiting suggestions come on later days.'}
+          </p>
+        </div>
+      )}
+    </SwitchRow>
+  );
+};
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0 }) => {
   const { authRequired, deviceLogin, signOut } = useAuth();
   const computer = useComputerMode(isOpen);
@@ -271,6 +314,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [auditor, setAuditor] = useState<AuditorSettings | null>(null);
   // null on a server without Flight School: the switch stays hidden and out of the save
   const [flightSchool, setFlightSchool] = useState<FlightSchoolSettings | null>(null);
+  const [discovery, setDiscovery] = useState<DiscoverySettings | null>(null);
   // null until loaded, and on a server without these settings
   const [place, setPlace] = useState<{ timezone: string; location: string } | null>(null);
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -345,6 +389,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           setAutofix(parseAutofixSettings(data));
           setAuditor(parseAuditorSettings(data));
           setFlightSchool(parseFlightSchoolSettings(data));
+          setDiscovery(parseDiscoverySettings(data));
           setPlace(
             typeof data.timezone === 'string'
               ? { timezone: data.timezone || defaultTimeZone(), location: typeof data.location === 'string' ? data.location : '' }
@@ -413,7 +458,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           openai_api_key: openaiKey,
           ollama_url: ollamaUrl,
           notify_webhook_url: webhookUrl.trim(),
-          notify_on: notifyOnToSave(notifyOn, appUpdates, !!proactive),
+          notify_on: notifyOnToSave(notifyOn, appUpdates, !!proactive, !!discovery),
           ...(limits
             ? {
                 max_turns_per_agent: Number(limits.max_turns_per_agent),
@@ -429,6 +474,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           ...(autofix !== null ? { autofix: autofix.autofix, recovery_budget_pct: autofix.recovery_budget_pct } : {}),
           ...(flightSchool ?? {}),
           ...(auditor ?? {}),
+          ...(discovery ?? {}),
           ...(place ? { timezone: place.timezone.trim(), location: place.location.trim() } : {}),
         }),
       });
@@ -436,6 +482,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
       if (res.ok) {
         setSaveSuccess(true);
         if (missionBoard !== null) window.dispatchEvent(new CustomEvent(MISSION_BOARD_SETTING_EVENT, { detail: missionBoard }));
+        if (discovery) window.dispatchEvent(new CustomEvent(DISCOVERY_SETTING_EVENT, { detail: discovery }));
         // Saving a key or the Ollama URL re-checks engines on the server; show the result.
         window.setTimeout(engines.reload, 1500);
         window.setTimeout(engines.reload, 6000);
@@ -955,6 +1002,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                   )}
                 </SwitchRow>
               )}
+              {discovery !== null && <DiscoverySetting value={discovery} onChange={setDiscovery} />}
             </fieldset>
           )}
 
@@ -1039,7 +1087,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
             <div className="space-y-1.5" role="group" aria-labelledby="notify-kinds-label">
               <p id="notify-kinds-label" className="text-xs font-medium text-zinc-400">Tell me when</p>
-              {notifyKindsFor(appUpdates, !!proactive).map((k) => (
+              {notifyKindsFor(appUpdates, !!proactive, !!discovery).map((k) => (
                 <label key={k.id} className="flex items-center gap-2 text-[11px] text-zinc-300">
                   <input
                     type="checkbox"

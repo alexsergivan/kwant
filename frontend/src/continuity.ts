@@ -82,6 +82,9 @@ export interface Routine {
   thread_id?: string | null;
   /** The message a follow-up checks back on. */
   context_message_id?: string | null;
+  /** `discovery`: added from a routine kwant suggested (Automation Discovery). */
+  origin?: string | null;
+  suggestion_id?: string | null;
 }
 
 export interface RoutineRun {
@@ -114,7 +117,8 @@ export type NotifyKind =
   | 'question_asked'
   | 'human_step'
   | 'app_update'
-  | 'work_ahead';
+  | 'work_ahead'
+  | 'automation_suggested';
 export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'turn_finished', label: 'A bot finished replying' },
   { id: 'approval_needed', label: 'A bot needs your approval' },
@@ -132,19 +136,36 @@ export const APP_UPDATE_KIND: { id: NotifyKind; label: string } = { id: 'app_upd
 /** Sent by servers with the proactive-bots settings (`work_ahead` in GET /api/settings). */
 export const WORK_AHEAD_KIND: { id: NotifyKind; label: string } = { id: 'work_ahead', label: 'A bot worked ahead while you were away' };
 
-/** The checkboxes under "Tell me when": App updates only in the Mac app, work ahead only where the server has it. */
-export const notifyKindsFor = (appUpdates: boolean, workAhead = false) => [
+/** Sent by servers with Automation Discovery (`automation_discovery` in GET /api/settings). Not a Needs-you item. */
+export const AUTOMATION_SUGGESTED_KIND: { id: NotifyKind; label: string } = { id: 'automation_suggested', label: 'A routine was suggested' };
+
+/**
+ * The checkboxes under "Tell me when": App updates only in the Mac app, work ahead and suggested
+ * routines only where the server has them.
+ */
+export const notifyKindsFor = (appUpdates: boolean, workAhead = false, discovery = false) => [
   ...NOTIFY_KINDS,
   ...(workAhead ? [WORK_AHEAD_KIND] : []),
+  ...(discovery ? [AUTOMATION_SUGGESTED_KIND] : []),
   ...(appUpdates ? [APP_UPDATE_KIND] : []),
 ];
 
 /** What to save: never a kind the server doesn't know (it would refuse the whole list). */
-export const notifyOnToSave = (on: NotifyKind[], appUpdates: boolean, workAhead = false) =>
-  on.filter((k) => (k !== APP_UPDATE_KIND.id || appUpdates) && (k !== WORK_AHEAD_KIND.id || workAhead));
+export const notifyOnToSave = (on: NotifyKind[], appUpdates: boolean, workAhead = false, discovery = false) =>
+  on.filter(
+    (k) => (k !== APP_UPDATE_KIND.id || appUpdates) && (k !== WORK_AHEAD_KIND.id || workAhead) && (k !== AUTOMATION_SUGGESTED_KIND.id || discovery),
+  );
 
 /** Kinds also shown as an in-app toast while kwnt is visible (the others only matter in the background). */
-export const TOAST_KINDS: NotifyKind[] = ['routine_failed', 'delegation_finished', 'delegation_stalled', 'skill_proposed', 'question_asked', 'human_step'];
+export const TOAST_KINDS: NotifyKind[] = [
+  'routine_failed',
+  'delegation_finished',
+  'delegation_stalled',
+  'skill_proposed',
+  'question_asked',
+  'human_step',
+  'automation_suggested',
+];
 
 export interface NotifyEvent {
   kind: NotifyKind;
@@ -493,7 +514,8 @@ export function shouldShowOsNotification(opts: {
   hidden: boolean;
   kind: string;
 }): boolean {
-  return opts.enabled && opts.permission === 'granted' && opts.hidden && (NOTIFY_KINDS.some((k) => k.id === opts.kind) || opts.kind === WORK_AHEAD_KIND.id);
+  const known = NOTIFY_KINDS.some((k) => k.id === opts.kind) || opts.kind === WORK_AHEAD_KIND.id || opts.kind === AUTOMATION_SUGGESTED_KIND.id;
+  return opts.enabled && opts.permission === 'granted' && opts.hidden && known;
 }
 
 /** Whether this browser has OS notifications switched on for kwnt (stored per browser). */
@@ -515,7 +537,9 @@ export function notificationPermission(): NotificationPermission | 'unsupported'
 export type ContinuityEvent =
   | { type: 'memory_changed'; data: { kwant_id: string } }
   | { type: 'routine_run'; data: { routine_id: string; run_id: string; status: RunStatus } }
-  | { type: 'skill_updated'; data: Skill | DeletedSkill };
+  | { type: 'skill_updated'; data: Skill | DeletedSkill }
+  /** kwant suggested a routine (re-broadcast from its notification), so an open Routines list reloads. */
+  | { type: 'automation_suggested'; data: NotifyEvent };
 
 const bus = typeof EventTarget !== 'undefined' ? new EventTarget() : null;
 

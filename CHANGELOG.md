@@ -34,6 +34,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   suggested routine keeps it marked as suggested. Exports now carry a routine's class and acceptance,
   and its checks when they hold no secrets. This is step 3 of Automation Discovery; the screens come
   next.
+- **Suggested routines in Routines, and a switch in Settings.** Settings > Mission board has "Suggest
+  routines from repeated tasks" (off by default) and how many new suggestions a day (0–10). Routines
+  lists each suggestion with its bot, rhythm, first run, the tasks it learned from (with their days),
+  what the bot may do when it runs (its Flight School tier, when it asks you, what past runs changed),
+  and which checks it keeps or leaves out and why. Accept opens the routine form to edit it first,
+  then says when it first runs; checks can only be unticked, and masked check details are never
+  editable. Dismiss says the suggestion is hidden for 30 days. If it was already handled elsewhere, the
+  list refreshes and says so. Preview and Scan now show what was found and, in plain words, why other
+  repeated tasks weren't suggested. When suggestions are paused (the switch or the board is off, or no
+  time zone is set), the section says why and how to fix it. Routines added this way carry a
+  "Suggested for you" badge, a small line shows the last 30 days, and "A routine was suggested" joins
+  the notification toggles. This is step 4 of Automation Discovery.
 
 ### Changed
 - **kwant.si footer says "Made in Germany with ❤️".** The line sits under the trademark note on every

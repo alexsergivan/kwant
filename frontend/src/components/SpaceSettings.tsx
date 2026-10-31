@@ -175,7 +175,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
             </div>
           )}
           {tab === 'skills' && <SkillsTab {...p} />}
-          {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} />}
+          {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} onOpenSettings={p.onOpenAppSettings} />}
           {tab === 'import' && <ImportTab {...tp} />}
           <div className="md:hidden pt-2">
             <button type="button" onClick={p.onOpenAppSettings} className="flex items-center gap-2 text-xs text-zinc-400 hover:text-zinc-100">

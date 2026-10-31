@@ -344,17 +344,20 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const showNotification = (n: NotifyEvent) => {
     // Another space's news is the shell's to show, with a way to switch there.
     if (n.space_id && n.space_id !== space.id) return;
+    if (n.kind === 'automation_suggested') emitContinuity({ type: 'automation_suggested', data: n });
     const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
     // Failed routines and finished or slow delegations show in the app; the OS notification is for a hidden tab.
     if (!document.hidden && (TOAST_KINDS as string[]).includes(n.kind)) {
-      if (n.kind !== 'routine_failed' && n.kind !== 'skill_proposed' && openCtxRef.current === (n.channel_id ?? n.kwant_id)) return;
+      if (n.kind !== 'routine_failed' && n.kind !== 'skill_proposed' && n.kind !== 'automation_suggested' && openCtxRef.current === (n.channel_id ?? n.kwant_id)) return;
       const id = ++toastIdRef.current;
       const action =
         n.kind === 'routine_failed'
           ? undefined
           : n.kind === 'skill_proposed'
             ? { label: 'Review', onClick: () => openSkillsRef.current(n.kwant_id) }
-            : n.kind === 'question_asked'
+            : n.kind === 'automation_suggested'
+              ? { label: 'Review', onClick: () => setIsRoutinesOpen(true) }
+              : n.kind === 'question_asked'
               ? { label: 'Answer', onClick: () => openQuestionRef.current(n.kwant_id) || openTargetRef.current(target) }
               : n.kind === 'human_step'
                 ? { label: 'Open', onClick: () => openHumanStepRef.current(n.kwant_id) || openTargetRef.current(target) }
@@ -370,6 +373,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const openNotified = (n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id'>) => {
     const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
     if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
+    // A suggested routine is decided in Routines, not in the bot's chat
+    else if (n.kind === 'automation_suggested') setIsRoutinesOpen(true);
     else if (n.kind === 'human_step' && openHumanStepRef.current(n.kwant_id)) {
       setIsVmPaneOpen(true);
       // A CAPTCHA lands straight in the solve view
@@ -3214,7 +3219,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }}
         />
         {isSearchOpen && <SearchModal isOpen onClose={() => setIsSearchOpen(false)} kwants={kwants} onJump={handleJump} />}
-        {isRoutinesOpen && <RoutinesModal isOpen onClose={() => setIsRoutinesOpen(false)} kwants={kwants} channels={channels} />}
+        {isRoutinesOpen && <RoutinesModal isOpen onClose={() => setIsRoutinesOpen(false)} kwants={kwants} channels={channels} onOpenSettings={onOpenAppSettings} />}
       </Suspense>
 
       {editingChannelInstructions && (
