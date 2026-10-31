@@ -44,16 +44,49 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
   var SEL = 'button,a[href],[role=button],[role=link],[role=menuitem],[role=tab],[role=checkbox],[role=option],input,textarea,select,summary,label,[onclick]';
   var items = [];
   function clean(s) { return (s || '').replace(/\s+/g, ' ').trim().slice(0, 80); }
-  function labelOf(el) {
+  // A control's role for the ref list: what it is, in one word
+  function roleOf(el) {
+    var role = (el.getAttribute('role') || '').toLowerCase();
+    if (role) return role;
+    var tag = el.tagName, t = (el.type || '').toLowerCase();
+    if (tag === 'A') return 'link';
+    if (tag === 'SELECT') return 'select';
+    if (tag === 'LABEL') return 'label';
+    if (tag === 'INPUT' && (t === 'checkbox' || t === 'radio')) return t;
+    if (tag === 'TEXTAREA' || (tag === 'INPUT' && ['submit', 'button', 'image', 'reset'].indexOf(t) < 0)) return 'field';
+    return 'button';
+  }
+  function nameOf(el) {
     var tag = el.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
       var t = (el.type || '').toLowerCase();
       if (t === 'submit' || t === 'button') return clean(el.value);
       if (t === 'hidden') return '';
-      var name = clean(el.getAttribute('aria-label') || el.placeholder || el.name || el.id);
-      return name ? name + ' (' + (t === 'checkbox' || t === 'radio' ? t : 'field') + ')' : '';
+      return clean(el.getAttribute('aria-label') || el.placeholder || el.name || el.id);
     }
     return clean(el.innerText || el.getAttribute('aria-label') || el.title || el.value);
+  }
+  function labelOf(el) {
+    var name = nameOf(el), tag = el.tagName, t = (el.type || '').toLowerCase();
+    if (!name || !(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') || t === 'submit' || t === 'button') return name;
+    return name + ' (' + (t === 'checkbox' || t === 'radio' ? t : 'field') + ')';
+  }
+  // The text that tells a repeated control apart (the product a repeated "Add to cart" belongs
+  // to): the first line of the largest block around it that holds no other control of that name
+  function contextOf(el, name, twins) {
+    var block = null;
+    for (var a = el.parentElement, depth = 0; a && depth < 10; a = a.parentElement, depth++) {
+      var shared = false;
+      for (var t = 0; t < twins.length; t++) if (twins[t] !== el && a.contains(twins[t])) { shared = true; break; }
+      if (shared) break;
+      block = a;
+    }
+    var lines = block ? (block.innerText || '').split('\n') : [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = clean(lines[i]).slice(0, 50);
+      if (line && line !== name) return line;
+    }
+    return '';
   }
   function walk(root, ox, oy) {
     var all;
@@ -80,7 +113,7 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
         var hit = root.elementFromPoint ? root.elementFromPoint(lx, ly) : null;
         onTop = !hit || hit === el || el.contains(hit) || hit.contains(el);
       }
-      items.push({ label: label, x: Math.round(x), y: Math.round(y), inView: inView, onTop: onTop, el: el });
+      items.push({ label: label, name: nameOf(el), role: roleOf(el), x: Math.round(x), y: Math.round(y), inView: inView, onTop: onTop, el: el });
     }
   }
   walk(document, 0, 0);
@@ -106,7 +139,79 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
       }
     }
   }
+  if (!needle) {
+    // A listing numbers the controls (ref = position + 1) and keeps their elements in the page,
+    // so the next `act` by ref hits exactly this element or says it is gone
+    var twins = {};
+    for (var k = 0; k < items.length; k++) (twins[items[k].name] = twins[items[k].name] || []).push(items[k].el);
+    var reg = window[Symbol.for('kwnt.refs')];
+    if (!reg) {
+      reg = { gen: 0 };
+      try { Object.defineProperty(window, Symbol.for('kwnt.refs'), { value: reg }); } catch (e) {}
+    }
+    reg.gen += 1;
+    reg.items = items.map(function (i) { return { el: i.el, label: i.label }; });
+    reg.labelOf = labelOf;
+    return { gen: reg.gen, items: items.map(function (i, k) {
+      return { ref: k + 1, label: i.label, name: i.name, role: i.role, onTop: i.onTop,
+               context: twins[i.name].length > 1 ? contextOf(i.el, i.name, twins[i.name]) : '' };
+    }) };
+  }
   return { items: items.map(function (i) { return { label: i.label, onTop: i.onTop }; }), match: match };
+}"#;
+
+/// Finds control `ref` from the last listing (see [`CLICKABLES_JS`]). With `probe`, returns
+/// `{el, label}` (or null) and touches nothing. Otherwise checks it can still be clicked: still
+/// in the page, shown, the same label, and on top at its center after scrolling it into view
+/// (so a cookie banner or modal over it is reported, not clicked through). Returns
+/// `{ok: true, x, y, label}` in top-page pixels, or `{ok: false, why}`.
+const REF_JS: &str = r#"function (ref, probe) {
+  function clean(s) { return (s || '').replace(/\s+/g, ' ').trim().slice(0, 80); }
+  var reg = window[Symbol.for('kwnt.refs')];
+  var item = reg && reg.items && reg.items[ref - 1];
+  if (probe) return item ? { el: item.el, label: item.label } : null;
+  if (!item) return { ok: false, why: reg ? 'there is no ref ' + ref + ' in the last list' : 'this page has no list of refs yet (it changed or reloaded)' };
+  var el = item.el;
+  if (!el.isConnected) return { ok: false, why: 'it is no longer on the page' };
+  var label = reg.labelOf ? reg.labelOf(el) : item.label;
+  if (label !== item.label) return { ok: false, why: 'it now reads "' + label + '", not "' + item.label + '"' };
+  function shown() {
+    var r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return null;
+    var cs = getComputedStyle(el);
+    if (cs.visibility === 'hidden' || cs.display === 'none' || Number(cs.opacity) === 0) return null;
+    return r;
+  }
+  var r = shown();
+  if (!r) return { ok: false, why: 'it is hidden now' };
+  var win = el.ownerDocument.defaultView;
+  if (r.top < 0 || r.left < 0 || r.bottom > win.innerHeight || r.right > win.innerWidth) {
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    r = shown();
+    if (!r) return { ok: false, why: 'it is hidden now' };
+  }
+  var lx = r.left + r.width / 2, ly = r.top + r.height / 2;
+  // The top-page point: add the offsets of the (same-origin) frames it sits in
+  var x = lx, y = ly, frames = [];
+  for (var w = win; w !== w.top && w.frameElement; w = w.parent) {
+    var fr = w.frameElement.getBoundingClientRect();
+    x += fr.left; y += fr.top;
+    frames.push(w.frameElement);
+  }
+  if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return { ok: false, why: 'it is outside the window' };
+  function covers(hit, target) { return !hit || hit === target || target.contains(hit) || hit.contains(target); }
+  function what(hit) {
+    var t = clean(hit.innerText || hit.getAttribute('aria-label') || '').slice(0, 40);
+    return hit.tagName.toLowerCase() + (t ? ' "' + t + '"' : '');
+  }
+  var root = el.getRootNode();
+  var hit = root.elementFromPoint ? root.elementFromPoint(lx, ly) : null;
+  if (!covers(hit, el)) return { ok: false, why: 'it is covered by ' + what(hit) };
+  if (frames.length) {
+    var top = document.elementFromPoint(x, y), outer = frames[frames.length - 1];
+    if (!covers(top, outer)) return { ok: false, why: 'it is covered by ' + what(top) };
+  }
+  return { ok: true, x: Math.round(x), y: Math.round(y), label: item.label };
 }"#;
 
 /// What the payment floor needs from the page before a `browser_act` (see
@@ -114,6 +219,7 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
 /// `click_text`) or, with no needle, the focused element; visible card fields; and frames by host.
 const PAYMENT_SIGNALS_JS: &str = r#"function (needle) {
   var CLICK = __CLICKABLES__;
+  var REF = __REF__;
   var CARD = /card.?num|cardnumber|cc.?num|credit.?card|card.?cvc|\bcvc2?\b|\bcvv2?\b/i;
   function isCard(el) {
     if (!el || el.tagName !== 'INPUT') return false;
@@ -170,7 +276,7 @@ const PAYMENT_SIGNALS_JS: &str = r#"function (needle) {
   }
   var target = null;
   if (needle) {
-    var m = CLICK(needle, true);
+    var m = typeof needle === 'number' ? REF(needle, true) : CLICK(needle, true);
     if (m) target = describe(m.el, m.label);
   } else {
     var a = document.activeElement;
@@ -205,6 +311,50 @@ pub enum BrowserError {
     /// A file path (or file:// address) handed to the browser; see [`refuse_file_path`].
     #[error("{0}")]
     NotWebAddress(String),
+    /// A ref from the control list that can't be clicked any more (gone, hidden, covered).
+    #[error("{0}")]
+    StaleRef(String),
+}
+
+/// What a click aims at: a label to match, or a numbered ref from the last control list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClickTarget {
+    Text(String),
+    Ref(u32),
+}
+
+impl ClickTarget {
+    /// From `browser_act`/`/act` arguments: `ref` (a number, or digits) wins; a text that starts
+    /// with a listed ref (`[3] button "Add to cart"`, copied whole from the list) is that ref.
+    pub fn from_args(args: &Value) -> Option<ClickTarget> {
+        let r = &args["ref"];
+        let num = r.as_u64().or_else(|| r.as_str().and_then(|t| t.trim().trim_start_matches('[').trim_end_matches(']').parse().ok()));
+        if let Some(n) = num.and_then(|n| u32::try_from(n).ok()).filter(|n| *n > 0) {
+            return Some(ClickTarget::Ref(n));
+        }
+        let text = args["text"].as_str().map(str::trim).filter(|t| !t.is_empty())?;
+        // Only a whole copied line: a bare "[1]" is a footnote link's label (Wikipedia)
+        if let Some((n, rest)) = text.strip_prefix('[').and_then(|t| t.split_once(']')) {
+            if let Some(n) = n.trim().parse::<u32>().ok().filter(|n| *n > 0 && rest.contains('"')) {
+                return Some(ClickTarget::Ref(n));
+            }
+        }
+        Some(ClickTarget::Text(text.to_string()))
+    }
+}
+
+/// One line of the control list: `[3] button "Add to cart" · Sauce Labs Backpack`. The context
+/// (nearby text) is only there when several controls share a name.
+pub fn ref_line(item: &Value) -> Option<String> {
+    let r = item["ref"].as_u64()?;
+    let name = item["name"].as_str().filter(|n| !n.is_empty()).or(item["label"].as_str())?;
+    let role = item["role"].as_str().filter(|r| !r.is_empty()).unwrap_or("button");
+    let mut line = format!("[{r}] {role} \"{name}\"");
+    if let Some(ctx) = item["context"].as_str().filter(|c| !c.is_empty()) {
+        line.push_str(" · ");
+        line.push_str(ctx);
+    }
+    Some(line)
 }
 
 /// Refuses an address that is a file on the computer before it reaches Chrome, so it is never
@@ -1292,9 +1442,13 @@ impl BrowserController {
 
     /// What the page shows for the payment floor before `action` (see [`PAYMENT_SIGNALS_JS`]):
     /// for a click the element `needle` would hit, for a key the focused element. Reads only.
-    pub async fn payment_signals(&self, needle: Option<&str>) -> Result<Value, BrowserError> {
-        let needle = serde_json::to_string(&needle).map_err(|e| BrowserError::Protocol(e.to_string()))?;
-        let script = PAYMENT_SIGNALS_JS.replace("__CLICKABLES__", CLICKABLES_JS);
+    pub async fn payment_signals(&self, target: Option<&ClickTarget>) -> Result<Value, BrowserError> {
+        let needle = match target {
+            Some(ClickTarget::Text(t)) => json!(t),
+            Some(ClickTarget::Ref(n)) => json!(n),
+            None => Value::Null,
+        };
+        let script = PAYMENT_SIGNALS_JS.replace("__CLICKABLES__", CLICKABLES_JS).replace("__REF__", REF_JS);
         let res = self
             .send_cdp_command(
                 "Runtime.evaluate",
@@ -1307,7 +1461,9 @@ impl BrowserController {
         Ok(res["result"]["value"].clone())
     }
 
-    /// Labels of visible interactive elements, topmost (e.g. modal buttons) first.
+    /// The page's controls as numbered refs (see [`ref_line`]), topmost (e.g. modal buttons)
+    /// first. Listing also re-indexes the page, so the refs a bot was last shown are the ones
+    /// [`Self::click_ref`] resolves.
     pub async fn list_clickables(&self, limit: usize) -> Vec<String> {
         let expression = format!("({})(null)", CLICKABLES_JS);
         let Ok(res) = self
@@ -1319,20 +1475,47 @@ impl BrowserController {
         else {
             return Vec::new();
         };
-        let mut labels: Vec<String> = Vec::new();
-        if let Some(items) = res["result"]["value"]["items"].as_array() {
-            for item in items {
-                if let Some(label) = item["label"].as_str() {
-                    if !labels.iter().any(|l| l == label) {
-                        labels.push(label.to_string());
-                    }
-                }
-                if labels.len() >= limit {
-                    break;
-                }
-            }
+        res["result"]["value"]["items"]
+            .as_array()
+            .map(|items| items.iter().filter_map(ref_line).take(limit).collect())
+            .unwrap_or_default()
+    }
+
+    /// Clicks control `r` from the last list with a real mouse click at its center, after
+    /// checking it is still in the page, shown, unchanged and not covered (see [`REF_JS`]).
+    /// Otherwise clicks nothing and says why ([`BrowserError::StaleRef`]); the page state the
+    /// caller returns next re-lists the controls.
+    pub async fn click_ref(&self, r: u32) -> Result<String, BrowserError> {
+        let res = self
+            .send_cdp_command(
+                "Runtime.evaluate",
+                json!({ "expression": format!("({REF_JS})({r}, false)"), "returnByValue": true }),
+            )
+            .await?;
+        if let Some(err) = res.get("exceptionDetails") {
+            return Err(BrowserError::Protocol(format!("ref check failed: {}", err["text"])));
         }
-        labels
+        let v = &res["result"]["value"];
+        if v["ok"].as_bool() != Some(true) {
+            let why = v["why"].as_str().unwrap_or("it can't be found");
+            return Err(BrowserError::StaleRef(format!(
+                "Didn't click ref {r}: {why}. The clickable list was read again just now; pick from the new list."
+            )));
+        }
+        let (x, y) = (v["x"].as_i64().unwrap_or(0), v["y"].as_i64().unwrap_or(0));
+        self.interact_click(x, y).await?;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let _ = self.sync_location().await;
+        let _ = self.capture_screenshot().await;
+        Ok(v["label"].as_str().unwrap_or_default().to_string())
+    }
+
+    /// Clicks `target`: a ref with [`Self::click_ref`], a label with [`Self::click_text`].
+    pub async fn click_target(&self, target: &ClickTarget) -> Result<String, BrowserError> {
+        match target {
+            ClickTarget::Ref(r) => self.click_ref(*r).await,
+            ClickTarget::Text(t) => self.click_text(t).await,
+        }
     }
 
     /// Clicks the visible element whose label best matches `text` (exact > prefix > contains,
@@ -1497,5 +1680,36 @@ mod agent_shot_tests {
         assert_eq!(agent_shot_viewport(Some(1280), (1280, 800), 1.0), Some((1280, 800, false)));
         assert_eq!(agent_shot_viewport(Some(10), (1280, 800), 1.0), Some((320, 844, true)));
         assert_eq!(agent_shot_viewport(Some(9000), (1280, 800), 1.0), Some((1280, 800, false)));
+    }
+}
+
+#[cfg(test)]
+mod ref_tests {
+    use super::{ref_line, ClickTarget};
+    use serde_json::json;
+
+    #[test]
+    fn a_click_aims_at_a_ref_or_a_label() {
+        let t = |a| ClickTarget::from_args(&a);
+        assert_eq!(t(json!({"ref": 3})), Some(ClickTarget::Ref(3)));
+        assert_eq!(t(json!({"ref": "7"})), Some(ClickTarget::Ref(7)));
+        assert_eq!(t(json!({"ref": "[7]", "text": "Login"})), Some(ClickTarget::Ref(7)), "ref wins over text");
+        assert_eq!(t(json!({"text": "[4] button \"Add to cart\" · Backpack"})), Some(ClickTarget::Ref(4)), "a whole copied line");
+        assert_eq!(t(json!({"text": "[1]"})), Some(ClickTarget::Text("[1]".into())), "a footnote link stays a label");
+        assert_eq!(t(json!({"text": "  Login "})), Some(ClickTarget::Text("Login".into())));
+        assert_eq!(t(json!({"ref": 0, "text": "Login"})), Some(ClickTarget::Text("Login".into())));
+        assert_eq!(t(json!({"ref": -2})), None);
+        assert_eq!(t(json!({"ref": null, "text": " "})), None);
+    }
+
+    #[test]
+    fn a_ref_line_names_role_and_context_only_when_needed() {
+        let line = |v| ref_line(&v);
+        assert_eq!(line(json!({"ref": 3, "role": "button", "name": "Add to cart", "context": "Sauce Labs Backpack"})).as_deref(),
+            Some("[3] button \"Add to cart\" · Sauce Labs Backpack"));
+        assert_eq!(line(json!({"ref": 1, "role": "field", "name": "Username", "label": "Username (field)", "context": ""})).as_deref(),
+            Some("[1] field \"Username\""));
+        assert_eq!(line(json!({"ref": 2, "label": "Menu"})).as_deref(), Some("[2] button \"Menu\""));
+        assert_eq!(line(json!({"label": "No ref"})), None);
     }
 }
