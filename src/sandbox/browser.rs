@@ -793,6 +793,8 @@ pub struct BrowserController {
     /// The fixed viewport set for a windowless browser, restored after a bot's sized screenshot.
     /// `None`: the page follows its real window.
     viewport: Arc<std::sync::Mutex<Option<(u32, u32)>>>,
+    /// The bot's recent actions, for the loop stop (see [`super::progress::Tracker`]).
+    pub progress: Arc<std::sync::Mutex<super::progress::Tracker>>,
 }
 
 /// Widest screenshot a bot gets, in pixels, and the narrowest width it may ask for.
@@ -853,6 +855,7 @@ impl BrowserController {
             pointer_held: Arc::default(),
             cookie_jar: Arc::default(),
             viewport: Arc::default(),
+            progress: Arc::default(),
         }
     }
 
@@ -1160,6 +1163,7 @@ impl BrowserController {
 
     pub async fn navigate_unlocked(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
         refuse_file_path(target_url)?;
+        self.progress.lock().unwrap_or_else(|e| e.into_inner()).reset();
         let _ = self.collect_captured_credentials().await;
         let _ = self.send_cdp_command("Page.enable", json!({})).await;
         let res = self
@@ -1267,6 +1271,38 @@ impl BrowserController {
             .filter(|d| !d.is_empty())
             .map(str::to_string)
             .ok_or_else(|| BrowserError::Protocol("Screenshot data missing".into()))
+    }
+
+    /// The page as one [`Snapshot`](super::progress::Snapshot) (url, title, the rendered text in
+    /// lines, scroll and field state, and focus), in one read. Also updates the stored location.
+    pub async fn snapshot(&self) -> Option<super::progress::Snapshot> {
+        let expression = r#"
+            (function() {
+                // The rendered text, laid out in lines (hidden parts, scripts and styles left out)
+                var text = document.body ? document.body.innerText.substring(0, 10000) : '';
+                // Lengths and checks only: a field's value never leaves the page
+                var fields = [];
+                document.querySelectorAll('input,textarea,select').forEach(function (el) {
+                    fields.push((el.value || '').length + (el.checked ? 'c' : ''));
+                });
+                var a = document.activeElement;
+                var focus = a ? a.tagName + '#' + (a.id || a.name || '') : '';
+                return [location.href, document.title, text, Math.round(scrollX) + ',' + Math.round(scrollY) + '|' + fields.join(','), focus];
+            })()
+        "#;
+        let res = self
+            .send_cdp_command("Runtime.evaluate", json!({ "expression": expression, "returnByValue": true }))
+            .await
+            .ok()?;
+        let v = res["result"]["value"].as_array()?;
+        let s = |i: usize| v.get(i).and_then(Value::as_str).unwrap_or_default().to_string();
+        let snap = super::progress::Snapshot { url: s(0), title: s(1), text: s(2), state: s(3), focus: s(4) };
+        if snap.url.is_empty() {
+            return None;
+        }
+        *self.current_url.lock().await = Some(snap.url.clone());
+        *self.current_title.lock().await = Some(snap.title.clone());
+        Some(snap)
     }
 
     pub async fn extract_content(&self) -> Result<String, BrowserError> {

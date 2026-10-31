@@ -4294,14 +4294,20 @@ pub async fn interact_sandbox(
 
 /// Compact, text-only page state for agents (no base64 image to wade through).
 async fn sandbox_page_state(ctrl: &crate::sandbox::BrowserController) -> serde_json::Value {
-    let (url, title) = match ctrl.sync_location().await {
-        Some(loc) => loc,
+    let snap = ctrl.snapshot().await;
+    page_state_from(ctrl, snap).await
+}
+
+/// [`sandbox_page_state`] from a snapshot already read (`None`: the page couldn't be read).
+async fn page_state_from(ctrl: &crate::sandbox::BrowserController, snap: Option<crate::sandbox::progress::Snapshot>) -> serde_json::Value {
+    let (url, title, text) = match snap {
+        Some(s) => (s.url, s.title, s.text),
         None => (
             ctrl.current_url.lock().await.clone().unwrap_or_default(),
             ctrl.current_title.lock().await.clone().unwrap_or_default(),
+            String::new(),
         ),
     };
-    let text = ctrl.extract_content().await.unwrap_or_default();
     let clickable = ctrl.list_clickables(40).await;
     let mut page = json!({
         "url": url,
@@ -4395,6 +4401,22 @@ pub async fn act_sandbox_allowed(
     let _permit = ctrl.control.try_read().map_err(|_| browser_request_failed(crate::sandbox::BrowserError::HumanControl))?;
     let text = payload.text.clone().unwrap_or_default();
     let clicks = crate::sandbox::ClickTarget::from_args(&json!({"ref": payload.ref_, "text": payload.text}));
+    // The loop stop: the same action a 3rd time in a row on this page is refused
+    use crate::sandbox::progress;
+    let before = ctrl.snapshot().await;
+    let target = match payload.action.as_str() {
+        "type" => crate::sandbox::ClickTarget::from_args(&json!({"ref": payload.ref_})),
+        _ => clicks.clone(),
+    };
+    let key = progress::action_key(&payload.action, target.as_ref(), payload.text.as_deref());
+    let here = before.as_ref().map(|b| b.url.clone()).unwrap_or_default();
+    let repeat = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).before(&here, key.as_deref());
+    if let Some(stop) = repeat {
+        let mut page = page_state_from(&ctrl, before).await;
+        page["stalled"] = json!(true);
+        page["error"] = json!(stop);
+        return Ok(Json(page));
+    }
     let result: Result<String, String> = match (payload.action.as_str(), clicks) {
         ("click_text" | "click", Some(target)) => ctrl
             .click_target(&target)
@@ -4438,10 +4460,31 @@ pub async fn act_sandbox_allowed(
         )),
     };
     broadcast_sandbox_screenshot(&state, &team_id, &ctrl).await;
-    let mut page = sandbox_page_state(&ctrl).await;
+    // What changed; a page that hasn't yet gets one more moment (a slow submit, an animation)
+    let focus = !matches!(payload.action.as_str(), "click" | "click_text");
+    let diff = |after: &Option<progress::Snapshot>| match (&before, after) {
+        (Some(b), Some(a)) => progress::what_changed(b, a, focus),
+        _ => Some("The page couldn't be read before or after.".to_string()),
+    };
+    let mut after = ctrl.snapshot().await;
+    let mut changed = diff(&after);
+    if changed.is_none() {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        after = ctrl.snapshot().await;
+        changed = diff(&after);
+    }
+    let stall = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).after(changed.is_some());
+    let mut page = page_state_from(&ctrl, after).await;
+    page["changed"] = json!(changed.as_deref().unwrap_or("Nothing on the page changed."));
     match result {
         Ok(done) => page["result"] = json!(done),
         Err(err) => page["error"] = json!(err),
+    }
+    if let Some(stop) = stall {
+        page["stalled"] = json!(true);
+        if page.get("error").is_none() {
+            page["error"] = json!(stop);
+        }
     }
     if let Some(url) = page["url"].as_str() {
         let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {

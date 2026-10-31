@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Changed
+- **Bots see what each browser step changed, and stop going round in circles.** After every click,
+  key or typing, the bot gets one line saying what changed: the page it went to, or the new and gone
+  lines. If its last 3 steps changed nothing, or it asks for the same click a 3rd time in a row, it
+  is told to stop and try something else. The page text bots read now keeps its line breaks.
 - **Bots click page controls by number, and never through a banner.** The page a bot reads lists
   its buttons, links and fields as numbered refs with their role (`[9] button "Add to cart" · Sauce
   Labs Bike Light`), naming the product or row when several share a name. A bot clicks or types by

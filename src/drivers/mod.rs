@@ -439,7 +439,7 @@ impl TurnInput {
                 - `browser_page`: read the page (url, title, text, clickable controls numbered like [3] button \"Add to cart\").\n\
                 - `browser_act` (action click + ref, type + text (+ ref), key + key, scroll + delta_y): click a control by its number from the clickable list, type into that field (or the focused one), press a key, scroll. If a ref is gone or covered, nothing is clicked and you get a fresh list.\n\
                 - `browser_screenshot` (optional width, e.g. 390 phone / 1280 desktop): see the page as a picture, for layout, colours and spacing.\n\
-                Every call returns the updated page, so you rarely need a separate read. \
+                Every call returns the updated page and what changed, so you rarely need a separate read. If it says nothing changed or tells you to stop, don't repeat the action: try something else. \
                 The current page state and its clickable list are usually already in the request; act on them directly.\n\
                 {control_rules}",
                 tools = crate::mcp::SELF_SERVER_NAME,
@@ -455,7 +455,7 @@ impl TurnInput {
                 - Type into a field by its number (leave out ref for the focused field): curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"type\",\"ref\":5,\"text\":\"<text>\"}}'\n\
                 - Press a key: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"key\",\"key\":\"Enter\"}}'\n\
                 - Scroll: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"scroll\",\"delta_y\":600}}'\n\
-                Every /act call returns the updated page (url, title, text, clickable), so you rarely need a separate read. \
+                Every /act call returns the updated page (url, title, text, clickable) and what changed, so you rarely need a separate read. If it says nothing changed or tells you to stop, don't repeat the action: try something else. \
                 The current page state and its clickable list are usually already in the request; act on them directly.\n\
                 {control_rules}",
                 api = api,
