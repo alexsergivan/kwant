@@ -30,6 +30,7 @@ import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
 import { useEngines } from '../useEngines';
 import { LayaStatusRow } from './LayaStatus';
 import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
+import { StarAskSettingsLink } from './StarAsk';
 import { ProactiveSettings, WORK_AHEAD_CAP_MAX, WORK_AHEAD_CAP_MIN, parseProactiveSettings } from '../decideFirst';
 import {
   AUTOFIX_MODES,
@@ -585,6 +586,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         </div>
 
         <AppUpdateAbout />
+        <StarAskSettingsLink />
 
         {computer.state.settings && (
           <div className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3">

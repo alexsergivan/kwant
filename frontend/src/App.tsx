@@ -10,6 +10,8 @@ import { ApprovalsOffBadge } from './components/ApprovalsSetting';
 import { APPROVALS_CHANGED_EVENT, approvalsOff } from './approvalMode';
 import { QuestionCard } from './components/QuestionCard';
 import { HumanStepCard } from './components/HumanStepCard';
+import { StarAsk } from './components/StarAsk';
+import { starAskStore } from './starAsk';
 import { LiveActivity, appendThinking, applyActivity, parseStep } from './activity';
 import {
   HumanStep,
@@ -789,6 +791,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const key = d.turn_id ?? d.context_id;
             if (event.type === 'turn_ended' || event.type === 'TurnEnded') {
               turnEnded(d.kwant_id, key);
+              starAskStore().turnFinished();
               if (d.turn_id) completed.delete(d.turn_id);
               // The reply is saved by now; TurnComplete's load may have come back without it
               if (reloadOnTurnEnd(d.turn_id)) refreshContext(ctx).then(() => settle(ctx));
@@ -3246,6 +3249,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         </Suspense>
       )}
 
+      <StarAsk needsYou={Object.keys(needsYouByKwant).length > 0} waiting={awaitingTurns.size > 0 || pendingApprovals.length > 0} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
     </div>
   );

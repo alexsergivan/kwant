@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Star on GitHub, asked nicely.** After real use (5 finished turns and 2 days since this device
+  first opened the app) a small card says "kwant bots run on coffee and GitHub stars ⭐" with
+  Star on GitHub, Maybe later (asks again in 2 weeks) and Don't ask again. It never shows on first
+  run or while a bot needs you, a question or an approval waits. After a star or Don't ask again it
+  never comes back. App settings has a quiet "Star kwant bots on GitHub" link. It is all kept in
+  this device's storage; nothing is sent anywhere.
+- **kwant.si:** every page's footer says "kwant runs on coffee and GitHub stars. Toss one our way ⭐",
+  and the home page's closing panel has a Star on GitHub card. Plain links, no GitHub widget, so the
+  Content-Security-Policy is unchanged.
+
 ## [Mac 0.5.0] - 2026-10-31
 
 ### Added

@@ -264,6 +264,7 @@ def footer(root):
     <div class="foot-brand">
       <a class="brand" href="{home}" aria-label="kwant home">{LOGO}<span>kwant</span></a>
       <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
+      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="{GITHUB}" rel="noopener">Toss one our way <span aria-hidden="true">⭐</span></a></p>
     </div>
     <nav aria-label="Product">
       <h2>Product</h2>
