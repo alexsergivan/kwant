@@ -11,12 +11,13 @@ card_art: scene
       <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Open-source, self-hosted AI agents in one binary</p>
       <h1 id="hero-title">Your own self-hosted team of AI agents</h1>
       <p class="lede">They share chats, pass work to each other and get it done on their own, on a schedule or while you're away. It runs on your laptop or a VPS.</p>
-      <div class="cta">
-        <a class="btn btn-violet" href="docs/quickstart.html">Get started <span aria-hidden="true">→</span></a>
-        <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">View on GitHub</a>
+      <div class="cta cta-one">
+        <a class="btn btn-violet" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download for Mac</a>
+        <p class="cta-alt"><a href="docs/quickstart.html">Linux, a VPS or Docker? Get started <span aria-hidden="true">→</span></a></p>
       </div>
+      <p class="mac-dl">Free, for Apple silicon and Intel. <a href="docs/install.html#mac">First open</a> needs one extra step.</p>
       {{install:hero}}
-      <p class="mac-dl">On a Mac? <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download the Mac app</a>. <a href="docs/install.html#mac">First open</a> needs one extra step.</p>
+      {{releases}}
     </div>
     <figure class="crt hero-crt">
       <div class="crt-screen">
@@ -177,80 +178,16 @@ card_art: scene
   </div>
 </section>
 
-<section class="tour tint" id="parallel" aria-labelledby="parallel-title">
+<section class="new-strip more-strip" aria-labelledby="more-title">
   <div class="wrap">
-    <div class="row">
-      <div class="row-copy">
-        <p class="kicker">Parallel Universe</p>
-        <h2 id="parallel-title">Try every way to deploy before you pick one</h2>
-        <p>Describe your app and up to three ways to run it. kwant runs each one in a sealed container on your own server, load-tests it and puts it next to a dated price estimate. No cloud account, no spending.</p>
-        <a class="more-link" href="docs/parallel-universe.html">How Parallel Universe works →</a>
-      </div>
-      <div class="frame">{{shot:v2-parallel-universe|Parallel Universe comparing three ways to host an API on cost, p95 latency, ops burden and rollback, with the fastest and cheapest option marked. The figures are sample data.}}</div>
-    </div>
-  </div>
-</section>
-
-<section class="tour" id="more" aria-labelledby="more-title">
-  <div class="wrap">
-    <div class="sec-head">
-      <p class="kicker">And more</p>
-      <h2 id="more-title">Bots that grow with you</h2>
-      <p>They set things up when you ask and remember what matters. You approve each step.</p>
-    </div>
-    <div class="grow">
-      <article class="gcard">
-        <div class="frame">{{shot:v2-action-undo|TechLead created the channel #launch-waitlist when asked. The card says Done and has an Undo button.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
-        <h3>Changes with an Undo</h3><p>Bots make routines, channels and bots when you ask.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame">{{shot:v2-hire-card|TechLead proposes hiring a Support bot, with the reason, what it is based on, its model and tools, and Deny, Accept once and Always accept buttons.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
-        <h3>Bots that propose a hire</h3><p>A bot can suggest a new teammate. You decide.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame">{{shot:v2-skills|QA's Skills tab with a release-checklist skill waiting for review, with Approve, Edit then approve, and Reject, above a bug-report skill already in use.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
-        <h3>Skills you approve</h3><p>Bots write down how they work. Nothing is used until you approve it.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame">{{shot:v2-memory|QA's Memory tab with an add box and four memories, each marked as written by the bot or by you, with edit and delete.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
-        <h3>Memory you can read</h3><p>See every memory, who wrote it, and edit or delete it.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame">{{shot:v2-search|Search for "waitlist" across every chat in the space, with highlighted hits grouped by chat.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
-        <h3>Search every chat</h3><p><kbd>⌘K</kbd> or <kbd>Ctrl K</kbd> searches every channel in a space.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame">{{shot:v2-import|The import dialog: Bring a bot from Grok, ChatGPT, Claude or another app, or upload a file.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
-        <h3>Bring your bots</h3><p>Import from Grok, ChatGPT, Claude or a file, with no tools or keys. <a href="alternatives/grok-bot.html">Coming from Grok Bot?</a></p>
-      </article>
-      <article class="gcard">
-        <div class="frame">{{shot:desktop-handoff|The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
-        <h3>Handoffs with an @mention</h3><p>Mention a teammate, or <code>@everyone</code>, and they pick it up right after.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame">{{shot:desktop-reasoning|The general channel. kwant routes a Postgres or queue question to Architect and shows why, plus the model and effort it used.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
-        <h3>The right bot and model</h3><p>kwant picks who answers and shows why, with the model and effort it used.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame">{{shot:v2-computer-mode|App settings: the Laya router status and the choice of computer for browsing and commands, Local computer or VM.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
-        <h3>Local or VM</h3><p>Browser and shell work runs on your computer or in a Docker container.</p>
-      </article>
-    </div>
-    <p class="section-foot"><a class="btn btn-soft" href="features.html">See every feature</a></p>
-  </div>
-</section>
-
-<section class="tour tint phone-sec" id="phone" aria-labelledby="phone-title">
-  <div class="wrap phone-grid">
-    <div class="row-copy">
-      <p class="kicker">Anywhere</p>
-      <h2 id="phone-title">Check in from your phone</h2>
-      <p>The web app works on a phone, so you can read the team's summary or approve an action away from your desk.</p>
-    </div>
-    <div class="phones">
-      <div class="phone">{{shot:phone-team-chat|The Product team summary on a phone screen.|240px}}</div>
-      <div class="phone">{{shot:phone-approval|The approval card for a GitHub pull request on a phone screen.|240px}}</div>
-    </div>
+    <h2 id="more-title" class="new-title">More in kwant</h2>
+    <ul class="new-list">
+      <li id="parallel"><a href="features.html#parallel"><b>Parallel Universe</b><span>Load-test up to three ways to deploy on your own server before you pick one.</span></a></li>
+      <li id="more"><a href="features.html#more"><b>Bots that grow with you</b><span>Changes with an Undo, search across every chat, imports and @mention handoffs.</span></a></li>
+      <li id="phone"><a href="features.html#phone"><b>From your phone</b><span>Read the team's summary or approve an action away from your desk.</span></a></li>
+      <li id="works-with"><a href="features.html#works-with"><b>Works with what you have</b><span>Claude Code, Codex, Grok, API keys and any MCP server. Mac, Linux, Docker.</span></a></li>
+    </ul>
+    <p class="section-foot"><a class="more-link" href="features.html">See every feature →</a></p>
   </div>
 </section>
 
@@ -281,23 +218,6 @@ card_art: scene
       </li>
     </ol>
     <p class="section-foot"><a class="more-link" href="docs/quickstart.html">Read the quickstart →</a></p>
-  </div>
-</section>
-
-<section class="runs" aria-labelledby="runs-title">
-  <div class="wrap">
-    <div class="sec-head">
-      <h2 id="runs-title">Works with what you already have</h2>
-      <p>One binary with the web app and its database built in. Your data stays in one folder.</p>
-    </div>
-    <dl class="runs-list">
-      <div><dt>CLI</dt><dd>Claude Code, Codex, Grok</dd></div>
-      <div><dt>API keys</dt><dd>Anthropic, OpenAI, xAI</dd></div>
-      <div><dt>Tools</dt><dd>Any MCP server</dd></div>
-      <div><dt>Optional</dt><dd><a href="features.html#running">Composio</a> for Gmail, Slack, Notion</dd></div>
-      <div><dt>Where</dt><dd>Your laptop or a VPS (<a href="self-hosted-ai-agents.html">what is a self-hosted AI agent team?</a>)</dd></div>
-      <div><dt>OS</dt><dd>macOS (<a href="https://github.com/alexsergivan/kwant/releases/latest" rel="noopener">app</a> or CLI), Linux, Docker</dd></div>
-    </dl>
   </div>
 </section>
 

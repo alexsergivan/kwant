@@ -29,7 +29,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=147a9c7514">
+<link rel="stylesheet" href="assets/css/site.css?v=c0c2b1a93c">
 </head>
 <body class="page-home">
 <a class="skip" href="#main">Skip to content</a>
@@ -51,12 +51,13 @@
       <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Open-source, self-hosted AI agents in one binary</p>
       <h1 id="hero-title">Your own self-hosted team of AI agents</h1>
       <p class="lede">They share chats, pass work to each other and get it done on their own, on a schedule or while you're away. It runs on your laptop or a VPS.</p>
-      <div class="cta">
-        <a class="btn btn-violet" href="/docs/quickstart">Get started <span aria-hidden="true">→</span></a>
-        <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">View on GitHub</a>
+      <div class="cta cta-one">
+        <a class="btn btn-violet" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download for Mac</a>
+        <p class="cta-alt"><a href="/docs/quickstart">Linux, a VPS or Docker? Get started <span aria-hidden="true">→</span></a></p>
       </div>
+      <p class="mac-dl">Free, for Apple silicon and Intel. <a href="/docs/install#mac">First open</a> needs one extra step.</p>
       <div class="install" data-tabs><div class="install-top"><span class="install-k" aria-hidden="true">Install</span><div class="tabs" role="tablist" aria-label="Install with"><button type="button" role="tab" id="hero-t-src" aria-controls="hero-p-src" aria-selected="true">macOS · Linux</button><button type="button" role="tab" id="hero-t-docker" aria-controls="hero-p-docker" aria-selected="false" tabindex="-1">Docker</button></div></div><div class="cmd" role="tabpanel" id="hero-p-src" aria-labelledby="hero-t-src"><span class="p" aria-hidden="true">$</span><code>git clone https://github.com/alexsergivan/kwant &amp;&amp; cd kwant &amp;&amp; make run</code><button type="button" class="copy-cmd" aria-label="Copy the macOS · Linux install command">copy</button></div><div class="cmd" role="tabpanel" id="hero-p-docker" aria-labelledby="hero-t-docker" hidden><span class="p" aria-hidden="true">$</span><code>git clone https://github.com/alexsergivan/kwant &amp;&amp; cd kwant &amp;&amp; docker compose up -d --build</code><button type="button" class="copy-cmd" aria-label="Copy the Docker install command">copy</button></div></div>
-      <p class="mac-dl">On a Mac? <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download the Mac app</a>. <a href="/docs/install#mac">First open</a> needs one extra step.</p>
+      <p class="proof">0.5.1 released Oct 31 <span aria-hidden="true">·</span> <a href="https://github.com/alexsergivan/kwant/releases" rel="noopener">10 releases since Oct 25</a> <span aria-hidden="true">·</span> <a href="https://github.com/alexsergivan/kwant" rel="noopener">AGPL-3.0, open source</a></p>
     </div>
     <figure class="crt hero-crt">
       <div class="crt-screen">
@@ -217,80 +218,16 @@
   </div>
 </section>
 
-<section class="tour tint" id="parallel" aria-labelledby="parallel-title">
+<section class="new-strip more-strip" aria-labelledby="more-title">
   <div class="wrap">
-    <div class="row">
-      <div class="row-copy">
-        <p class="kicker">Parallel Universe</p>
-        <h2 id="parallel-title">Try every way to deploy before you pick one</h2>
-        <p>Describe your app and up to three ways to run it. kwant runs each one in a sealed container on your own server, load-tests it and puts it next to a dated price estimate. No cloud account, no spending.</p>
-        <a class="more-link" href="/docs/parallel-universe">How Parallel Universe works →</a>
-      </div>
-      <div class="frame"><a class="zoom" href="assets/media/v2-parallel-universe-2880.webp?v=abb779a6d2" data-caption="Parallel Universe comparing three ways to host an API on cost, p95 latency, ops burden and rollback, with the fastest and cheapest option marked. The figures are sample data."><img src="assets/media/v2-parallel-universe-1440.webp?v=6ea986d9b2" srcset="assets/media/v2-parallel-universe-1440.webp?v=6ea986d9b2 1440w, assets/media/v2-parallel-universe-2880.webp?v=abb779a6d2 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Parallel Universe comparing three ways to host an API on cost, p95 latency, ops burden and rollback, with the fastest and cheapest option marked. The figures are sample data."></a></div>
-    </div>
-  </div>
-</section>
-
-<section class="tour" id="more" aria-labelledby="more-title">
-  <div class="wrap">
-    <div class="sec-head">
-      <p class="kicker">And more</p>
-      <h2 id="more-title">Bots that grow with you</h2>
-      <p>They set things up when you ask and remember what matters. You approve each step.</p>
-    </div>
-    <div class="grow">
-      <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/v2-action-undo-2880.webp?v=10fb76b657" data-caption="TechLead created the channel #launch-waitlist when asked. The card says Done and has an Undo button."><img src="assets/media/v2-action-undo-1440.webp?v=7493d23d33" srcset="assets/media/v2-action-undo-1440.webp?v=7493d23d33 1440w, assets/media/v2-action-undo-2880.webp?v=10fb76b657 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="TechLead created the channel #launch-waitlist when asked. The card says Done and has an Undo button."></a></div>
-        <h3>Changes with an Undo</h3><p>Bots make routines, channels and bots when you ask.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/v2-hire-card-2880.webp?v=c3c3051ce5" data-caption="TechLead proposes hiring a Support bot, with the reason, what it is based on, its model and tools, and Deny, Accept once and Always accept buttons."><img src="assets/media/v2-hire-card-1440.webp?v=56ada30b48" srcset="assets/media/v2-hire-card-1440.webp?v=56ada30b48 1440w, assets/media/v2-hire-card-2880.webp?v=c3c3051ce5 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="TechLead proposes hiring a Support bot, with the reason, what it is based on, its model and tools, and Deny, Accept once and Always accept buttons."></a></div>
-        <h3>Bots that propose a hire</h3><p>A bot can suggest a new teammate. You decide.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/v2-skills-2880.webp?v=f2d29e9200" data-caption="QA&#x27;s Skills tab with a release-checklist skill waiting for review, with Approve, Edit then approve, and Reject, above a bug-report skill already in use."><img src="assets/media/v2-skills-1440.webp?v=b7d6cda4b8" srcset="assets/media/v2-skills-1440.webp?v=b7d6cda4b8 1440w, assets/media/v2-skills-2880.webp?v=f2d29e9200 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="QA&#x27;s Skills tab with a release-checklist skill waiting for review, with Approve, Edit then approve, and Reject, above a bug-report skill already in use."></a></div>
-        <h3>Skills you approve</h3><p>Bots write down how they work. Nothing is used until you approve it.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/v2-memory-2880.webp?v=06337f6975" data-caption="QA&#x27;s Memory tab with an add box and four memories, each marked as written by the bot or by you, with edit and delete."><img src="assets/media/v2-memory-1440.webp?v=a745aefda5" srcset="assets/media/v2-memory-1440.webp?v=a745aefda5 1440w, assets/media/v2-memory-2880.webp?v=06337f6975 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="QA&#x27;s Memory tab with an add box and four memories, each marked as written by the bot or by you, with edit and delete."></a></div>
-        <h3>Memory you can read</h3><p>See every memory, who wrote it, and edit or delete it.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/v2-search-2880.webp?v=0ae25bf11d" data-caption="Search for &quot;waitlist&quot; across every chat in the space, with highlighted hits grouped by chat."><img src="assets/media/v2-search-1440.webp?v=ecbc658006" srcset="assets/media/v2-search-1440.webp?v=ecbc658006 1440w, assets/media/v2-search-2880.webp?v=0ae25bf11d 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="Search for &quot;waitlist&quot; across every chat in the space, with highlighted hits grouped by chat."></a></div>
-        <h3>Search every chat</h3><p><kbd>⌘K</kbd> or <kbd>Ctrl K</kbd> searches every channel in a space.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/v2-import-2880.webp?v=c9b249beb6" data-caption="The import dialog: Bring a bot from Grok, ChatGPT, Claude or another app, or upload a file."><img src="assets/media/v2-import-1440.webp?v=609c99980f" srcset="assets/media/v2-import-1440.webp?v=609c99980f 1440w, assets/media/v2-import-2880.webp?v=c9b249beb6 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The import dialog: Bring a bot from Grok, ChatGPT, Claude or another app, or upload a file."></a></div>
-        <h3>Bring your bots</h3><p>Import from Grok, ChatGPT, Claude or a file, with no tools or keys. <a href="/alternatives/grok-bot">Coming from Grok Bot?</a></p>
-      </article>
-      <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/desktop-handoff-2880.webp?v=f09f8242e2" data-caption="The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen."><img src="assets/media/desktop-handoff-1440.webp?v=67386ee237" srcset="assets/media/desktop-handoff-1440.webp?v=67386ee237 1440w, assets/media/desktop-handoff-2880.webp?v=f09f8242e2 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen."></a></div>
-        <h3>Handoffs with an @mention</h3><p>Mention a teammate, or <code>@everyone</code>, and they pick it up right after.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/desktop-reasoning-2880.webp?v=ecb27f77b5" data-caption="The general channel. kwant routes a Postgres or queue question to Architect and shows why, plus the model and effort it used."><img src="assets/media/desktop-reasoning-1440.webp?v=4b5ace5d5f" srcset="assets/media/desktop-reasoning-1440.webp?v=4b5ace5d5f 1440w, assets/media/desktop-reasoning-2880.webp?v=ecb27f77b5 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The general channel. kwant routes a Postgres or queue question to Architect and shows why, plus the model and effort it used."></a></div>
-        <h3>The right bot and model</h3><p>kwant picks who answers and shows why, with the model and effort it used.</p>
-      </article>
-      <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/v2-computer-mode-2880.webp?v=7d3248a5a5" data-caption="App settings: the Laya router status and the choice of computer for browsing and commands, Local computer or VM."><img src="assets/media/v2-computer-mode-1440.webp?v=efa3a7186e" srcset="assets/media/v2-computer-mode-1440.webp?v=efa3a7186e 1440w, assets/media/v2-computer-mode-2880.webp?v=7d3248a5a5 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="App settings: the Laya router status and the choice of computer for browsing and commands, Local computer or VM."></a></div>
-        <h3>Local or VM</h3><p>Browser and shell work runs on your computer or in a Docker container.</p>
-      </article>
-    </div>
-    <p class="section-foot"><a class="btn btn-soft" href="/features">See every feature</a></p>
-  </div>
-</section>
-
-<section class="tour tint phone-sec" id="phone" aria-labelledby="phone-title">
-  <div class="wrap phone-grid">
-    <div class="row-copy">
-      <p class="kicker">Anywhere</p>
-      <h2 id="phone-title">Check in from your phone</h2>
-      <p>The web app works on a phone, so you can read the team's summary or approve an action away from your desk.</p>
-    </div>
-    <div class="phones">
-      <div class="phone"><a class="zoom" href="assets/media/phone-team-chat-780.webp?v=486274f5f6" data-caption="The Product team summary on a phone screen."><img src="assets/media/phone-team-chat-390.webp?v=67dad4c43d" srcset="assets/media/phone-team-chat-390.webp?v=67dad4c43d 390w, assets/media/phone-team-chat-780.webp?v=486274f5f6 780w" sizes="240px" width="390" height="844" loading="lazy" decoding="async" alt="The Product team summary on a phone screen."></a></div>
-      <div class="phone"><a class="zoom" href="assets/media/phone-approval-780.webp?v=470f929bdd" data-caption="The approval card for a GitHub pull request on a phone screen."><img src="assets/media/phone-approval-390.webp?v=30be1cdd00" srcset="assets/media/phone-approval-390.webp?v=30be1cdd00 390w, assets/media/phone-approval-780.webp?v=470f929bdd 780w" sizes="240px" width="390" height="844" loading="lazy" decoding="async" alt="The approval card for a GitHub pull request on a phone screen."></a></div>
-    </div>
+    <h2 id="more-title" class="new-title">More in kwant</h2>
+    <ul class="new-list">
+      <li id="parallel"><a href="/features#parallel"><b>Parallel Universe</b><span>Load-test up to three ways to deploy on your own server before you pick one.</span></a></li>
+      <li id="more"><a href="/features#more"><b>Bots that grow with you</b><span>Changes with an Undo, search across every chat, imports and @mention handoffs.</span></a></li>
+      <li id="phone"><a href="/features#phone"><b>From your phone</b><span>Read the team's summary or approve an action away from your desk.</span></a></li>
+      <li id="works-with"><a href="/features#works-with"><b>Works with what you have</b><span>Claude Code, Codex, Grok, API keys and any MCP server. Mac, Linux, Docker.</span></a></li>
+    </ul>
+    <p class="section-foot"><a class="more-link" href="/features">See every feature →</a></p>
   </div>
 </section>
 
@@ -321,23 +258,6 @@
       </li>
     </ol>
     <p class="section-foot"><a class="more-link" href="/docs/quickstart">Read the quickstart →</a></p>
-  </div>
-</section>
-
-<section class="runs" aria-labelledby="runs-title">
-  <div class="wrap">
-    <div class="sec-head">
-      <h2 id="runs-title">Works with what you already have</h2>
-      <p>One binary with the web app and its database built in. Your data stays in one folder.</p>
-    </div>
-    <dl class="runs-list">
-      <div><dt>CLI</dt><dd>Claude Code, Codex, Grok</dd></div>
-      <div><dt>API keys</dt><dd>Anthropic, OpenAI, xAI</dd></div>
-      <div><dt>Tools</dt><dd>Any MCP server</dd></div>
-      <div><dt>Optional</dt><dd><a href="/features#running">Composio</a> for Gmail, Slack, Notion</dd></div>
-      <div><dt>Where</dt><dd>Your laptop or a VPS (<a href="/self-hosted-ai-agents">what is a self-hosted AI agent team?</a>)</dd></div>
-      <div><dt>OS</dt><dd>macOS (<a href="https://github.com/alexsergivan/kwant/releases/latest" rel="noopener">app</a> or CLI), Linux, Docker</dd></div>
-    </dl>
   </div>
 </section>
 

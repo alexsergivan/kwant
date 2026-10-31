@@ -217,10 +217,25 @@ def check_blog(errors, sitemap_urls, drafts):
             errors.append(f"blog/feed.xml: blog/{slug} is missing")
 
 
+def check_release_line(errors):
+    """The hero's release line must match CHANGELOG.md, so a release can't leave kwant.si with an old count."""
+    import build_site
+
+    want = build_site.release_line()
+    home = (OUT / "index.html").read_text()
+    if want not in home:
+        found = re.search(r'<p class="proof">.*?</p>', home)
+        errors.append(
+            "index.html: release line does not match CHANGELOG.md (run python3 scripts/build_site.py): "
+            + (found[0] if found else "missing")
+        )
+
+
 def main():
     drafts = "--drafts" in sys.argv[1:]
     errors = []
     pages = sorted(OUT.rglob("*.html"))
+    check_release_line(errors)
     sitemap = (OUT / "sitemap.xml").read_text()
     sitemap_urls = dict(re.findall(r"<loc>([^<]+)</loc><lastmod>(\d{4}-\d\d-\d\d)</lastmod>", sitemap))
     for path in pages:

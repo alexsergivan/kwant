@@ -89,6 +89,14 @@ kbd { display: inline-block; padding: 0 5px; font-size: 0.82em; line-height: 1.5
 .hero h1 { margin-top: 22px; font-size: clamp(44px, 5.4vw, 70px); line-height: 1; }
 .hero .lede { margin-top: 20px; max-width: 34em; color: var(--muted); font-size: 19px; line-height: 1.55; }
 .hero .cta { margin-top: 28px; }
+.hero .cta-one { align-items: center; gap: 12px 24px; }
+.cta-alt { margin: 0; font-weight: 600; }
+.cta-alt a { text-decoration: none; }
+.cta-alt a:hover { text-decoration: underline; }
+.hero .cta-one + .mac-dl { margin-top: 12px; }
+.proof { margin-top: 14px; color: var(--dim); font-size: 14px; }
+.proof a { color: inherit; text-underline-offset: 2px; }
+.proof a:hover { color: var(--v4); }
 
 /* Install box: a light card with a segmented switch and a dark command line */
 .install { margin-top: 28px; max-width: 600px; padding: 6px; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
@@ -127,6 +135,11 @@ section { padding: 104px 0; }
 .new-list a:focus-visible { outline: 2px solid var(--v5); outline-offset: 2px; }
 .new-list b { display: block; font-size: 15px; }
 .new-list span { display: block; margin-top: 2px; color: var(--muted); font-size: 14px; line-height: 1.4; }
+/* "More in kwant": the same strip lower on the home page, pointing at the sections that moved to the features page */
+.new-strip.more-strip { margin-top: 0; padding: 0; }
+.more-strip .wrap { flex-wrap: wrap; }
+.more-strip .section-foot { flex-basis: 100%; margin-top: 0; }
+.fgroup .runs-list + .grid { margin-top: 28px; }
 .moments { padding-top: 24px; padding-bottom: 56px; }
 .moment-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
 .moment { padding: 12px 12px 24px; background: #fff; border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); }

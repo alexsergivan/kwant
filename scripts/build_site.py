@@ -16,6 +16,8 @@ Shortcodes in the HTML:
   {{install:ID}}                          the install command box with macOS/Linux and Docker tabs
   {{CONTACT_EMAIL}}                       the contact address, from OPERATOR below (marked placeholder while empty)
   {{avatar:ROLE}}                         a kwant app avatar (the same CRT-framed creature the app draws)
+  {{releases}}                            the release line under the hero: latest Mac version and date, release count
+                                          since the first one, licence (from CHANGELOG.md, see release_line)
 
 Every local asset URL in the pages and in site.css gets a `?v=<content hash>` query, so a deploy never pairs new HTML
 with a browser's cached old CSS, JS, fonts or images.
@@ -225,6 +227,37 @@ def install(uid):
     )
 
 
+RELEASE_HEAD = re.compile(r"^## \[Mac (\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})\s*$", re.M)
+
+
+def releases(changelog=None):
+    """Mac releases as (version, date), newest first, from the CHANGELOG headings `## [Mac X.Y.Z] - YYYY-MM-DD`.
+
+    CHANGELOG.md is the source because it is checked in: every release adds its heading in the same commit as the
+    version bump, so the count can't fall behind, and the build needs no git tags or network. Pre-releases
+    (mac-v0.1.0-test.1) never get a heading, so they don't count."""
+    text = (ROOT / "CHANGELOG.md").read_text() if changelog is None else changelog
+    found = [(v, datetime.date.fromisoformat(d)) for v, d in RELEASE_HEAD.findall(text)]
+    if not found:
+        raise SystemExit("CHANGELOG.md has no '## [Mac X.Y.Z] - YYYY-MM-DD' release headings")
+    return sorted(found, key=lambda r: (r[1], tuple(int(n) for n in r[0].split("."))), reverse=True)
+
+
+def short_date(d):
+    return f"{d:%b} {d.day}"
+
+
+def release_line(changelog=None):
+    rel = releases(changelog)
+    (latest, day), first = rel[0], rel[-1][1]
+    count = f"{len(rel)} releases since {short_date(first)}" if len(rel) > 1 else "First release"
+    return (
+        f'<p class="proof">{latest} released {short_date(day)} <span aria-hidden="true">·</span> '
+        f'<a href="{GITHUB}/releases" rel="noopener">{count}</a> <span aria-hidden="true">·</span> '
+        f'<a href="{GITHUB}" rel="noopener">AGPL-3.0, open source</a></p>'
+    )
+
+
 def operator(key):
     value = OPERATOR[key].strip()
     if not value:
@@ -238,6 +271,8 @@ def expand(body, root):
     body = body.replace("{{root}}", root)
     body = re.sub(r"\{\{(" + "|".join(OPERATOR) + r")\}\}", lambda m: operator(m[1]), body)
     body = re.sub(r"\{\{install:([a-z0-9-]+)\}\}", lambda m: install(m[1]), body)
+    if "{{releases}}" in body:
+        body = body.replace("{{releases}}", release_line())
     body = re.sub(r"\{\{avatar:([a-z_]+)\}\}", lambda m: avatar(m[1]), body)
     body = re.sub(r"\{\{shot:([^|}]+)\|([^|}]+)(?:\|([^}]*))?\}\}", lambda m: shot(root, m[1], m[2], m[3]), body)
     body = re.sub(

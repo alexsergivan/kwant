@@ -30,7 +30,10 @@ card_art: team
         <li><a href="#own">Works on its own</a></li>
         <li><a href="#safety">Safety &amp; control</a></li>
         <li><a href="#knowledge">Bots &amp; knowledge</a></li>
+        <li><a href="#more">Grows with you</a></li>
+        <li><a href="#phone">On your phone</a></li>
         <li><a href="#running">Running it</a></li>
+        <li><a href="#parallel">Parallel Universe</a></li>
       </ul>
     </div>
   </div>
@@ -317,7 +320,6 @@ card_art: team
       <li><h3>While you were away</h3><p>What is waiting on you, what finished and what failed or got stuck, with questions and approvals answered in place.</p></li>
       <li><h3>Letters</h3><p>Photograph a bill or notice. kwant reads the sender, the ask, the deadline and amounts, and reminds you before it is due.</p></li>
       <li><h3>Never sends</h3><p>Loose ends and letters draft the reply. You copy it or open it in your mail app.</p></li>
-      <li><h3>Parallel Universe</h3><p>Load-test up to three ways to deploy in sealed containers on your server, next to dated price estimates. No cloud account and no spending.</p></li>
       <li><h3>Notifications</h3><p>Browser notifications, or an HTTPS webhook such as ntfy for your phone.</p></li>
     </ul>
     <p class="section-foot"><a class="more-link" href="docs/routines.html">Routines &amp; bot actions →</a></p>
@@ -382,6 +384,52 @@ card_art: team
   </div>
 </section>
 
+<section id="more" class="fgroup" aria-labelledby="more-title">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">And more</p>
+      <h2 id="more-title">Bots that grow with you</h2>
+      <p>They set things up when you ask and remember what matters. You approve each step.</p>
+    </div>
+    <div class="grow">
+      <article class="gcard">
+        <div class="frame">{{shot:v2-action-undo|TechLead created the channel #launch-waitlist when asked. The card says Done and has an Undo button.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+        <h3>Changes with an Undo</h3><p>Bots make routines, channels and bots when you ask.</p>
+      </article>
+      <article class="gcard">
+        <div class="frame">{{shot:v2-search|Search for "waitlist" across every chat in the space, with highlighted hits grouped by chat.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+        <h3>Search every chat</h3><p><kbd>⌘K</kbd> or <kbd>Ctrl K</kbd> searches every channel in a space.</p>
+      </article>
+      <article class="gcard">
+        <div class="frame">{{shot:v2-import|The import dialog: Bring a bot from Grok, ChatGPT, Claude or another app, or upload a file.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+        <h3>Bring your bots</h3><p>Import from Grok, ChatGPT, Claude or a file, with no tools or keys. <a href="alternatives/grok-bot.html">Coming from Grok Bot?</a></p>
+      </article>
+      <article class="gcard">
+        <div class="frame">{{shot:desktop-handoff|The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+        <h3>Handoffs with an @mention</h3><p>Mention a teammate, or <code>@everyone</code>, and they pick it up right after.</p>
+      </article>
+      <article class="gcard">
+        <div class="frame">{{shot:desktop-reasoning|The general channel. kwant routes a Postgres or queue question to Architect and shows why, plus the model and effort it used.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+        <h3>The right bot and model</h3><p>kwant picks who answers and shows why, with the model and effort it used.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="phone" class="fgroup alt phone-sec" aria-labelledby="phone-title">
+  <div class="wrap phone-grid">
+    <div class="row-copy">
+      <p class="kicker">Anywhere</p>
+      <h2 id="phone-title">Check in from your phone</h2>
+      <p>The web app works on a phone, so you can read the team's summary or approve an action away from your desk.</p>
+    </div>
+    <div class="phones">
+      <div class="phone">{{shot:phone-team-chat|The Product team summary on a phone screen.|240px}}</div>
+      <div class="phone">{{shot:phone-approval|The approval card for a GitHub pull request on a phone screen.|240px}}</div>
+    </div>
+  </div>
+</section>
+
 <section id="running" class="fgroup">
   <div class="wrap">
     <div class="section-head">
@@ -389,6 +437,14 @@ card_art: team
       <h2>One binary, on your laptop or a server</h2>
       <p>No cloud service to sign up for.</p>
     </div>
+    <dl class="runs-list" id="works-with" aria-label="Works with">
+      <div><dt>CLI</dt><dd>Claude Code, Codex, Grok</dd></div>
+      <div><dt>API keys</dt><dd>Anthropic, OpenAI, xAI</dd></div>
+      <div><dt>Tools</dt><dd>Any MCP server</dd></div>
+      <div><dt>Optional</dt><dd><a href="docs/mcp.html">Composio</a> for Gmail, Slack, Notion</dd></div>
+      <div><dt>Where</dt><dd>Your laptop or a VPS (<a href="self-hosted-ai-agents.html">what is a self-hosted AI agent team?</a>)</dd></div>
+      <div><dt>OS</dt><dd>macOS (<a href="https://github.com/alexsergivan/kwant/releases/latest" rel="noopener">app</a> or CLI), Linux, Docker</dd></div>
+    </dl>
     <div class="grid two">
       <article class="card">
         <span class="shot">{{shot:v2-computer-mode|App settings: the Laya router status and the choice of computer for browsing and commands, Local computer or VM.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
@@ -409,6 +465,20 @@ card_art: team
       <li><h3>Your data, one folder</h3><p>Chats, bots and settings live in <code>~/.kwnt</code> by default.</p></li>
     </ul>
     <p class="section-foot"><a class="more-link" href="docs/install.html">Install &amp; run →</a></p>
+  </div>
+</section>
+
+<section id="parallel" class="fgroup alt" aria-labelledby="parallel-title">
+  <div class="wrap">
+    <div class="row">
+      <div class="row-copy">
+        <p class="kicker">Parallel Universe</p>
+        <h2 id="parallel-title">Try every way to deploy before you pick one</h2>
+        <p>Describe your app and up to three ways to run it. kwant runs each one in a sealed container on your own server, load-tests it and puts it next to a dated price estimate. No cloud account, no spending.</p>
+        <a class="more-link" href="docs/parallel-universe.html">How Parallel Universe works →</a>
+      </div>
+      <div class="frame">{{shot:v2-parallel-universe|Parallel Universe comparing three ways to host an API on cost, p95 latency, ops burden and rollback, with the fastest and cheapest option marked. The figures are sample data.}}</div>
+    </div>
   </div>
 </section>
 

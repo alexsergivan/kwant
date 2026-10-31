@@ -25,6 +25,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   sections for web citations, browser steps, numbered controls, asking before paying, status dots,
   suggested routines, routine checks, the Truth Ledger preview (off by default) and the star card. The
   Browser, Routines and Bots & teams docs cover them, and /llms.txt mentions citations.
+- **kwant.si home page, focused.** One main button in the hero, Download for Mac; Linux, VPS and Docker
+  get a text link to the quickstart. Under the install box, a release line ("0.5.1 released Oct 31 · 10
+  releases since Oct 25 · AGPL-3.0") that `build_site.py` reads from the `## [Mac X.Y.Z] - date` headings in
+  this file; `check_site.py` fails if the built page is behind them, so a release must rebuild the site.
+  The home page is about 30% shorter: Parallel Universe, "Bots that grow with you", the phone section and
+  "Works with what you already have" moved to the features page (`#parallel`, `#more`, `#phone`,
+  `#works-with`), and a "More in kwant" strip on the home page links to each. Old home links to
+  `#parallel`, `#more` and `#phone` land on that strip.
 
 ## [Mac 0.5.1] - 2026-10-31
 
