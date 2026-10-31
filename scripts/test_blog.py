@@ -30,6 +30,40 @@ class Markdown(unittest.TestCase):
     def test_text_is_escaped(self):
         self.assertIn("&lt;script&gt;", site.md_inline("a <script> tag"))
 
+    def test_safe_links_render(self):
+        cases = {
+            "https://github.com/x": '<a href="https://github.com/x" rel="noopener">t</a>',
+            "HTTP://example.com/": '<a href="HTTP://example.com/" rel="noopener">t</a>',
+            "https://kwant.si/features": '<a href="https://kwant.si/features">t</a>',
+            "mailto:hi@kwant.si": '<a href="mailto:hi@kwant.si">t</a>',
+            "/docs/install": '<a href="/docs/install">t</a>',
+            "#setup": '<a href="#setup">t</a>',
+            "{{root}}docs/quickstart.html": '<a href="{{root}}docs/quickstart.html">t</a>',
+            "https://a.example/?x=1&y=2": '<a href="https://a.example/?x=1&amp;y=2" rel="noopener">t</a>',
+        }
+        for href, want in cases.items():
+            with self.subTest(href=href):
+                self.assertEqual(site.md_inline(f"[t]({href})"), want)
+
+    def test_unsafe_links_stay_text(self):
+        for href in ("javascript:alert(5)", "JavaScript:alert(1)", "data:text/html,hi", "vbscript:msgbox",
+                     "//evil.example/x", "/\\evil.example", "{{root}}javascript:x", "file:///etc/passwd",
+                     "docs/install.html", "https:/evil", "&#106;avascript:alert(1)", "java&#x09;script:x"):
+            with self.subTest(href=href):
+                out = site.md_inline(f"[t]({href})")
+                self.assertNotIn("<a", out)
+                self.assertTrue(out.startswith("[t]("), out)
+
+    def test_link_url_with_parentheses(self):
+        self.assertEqual(
+            site.md_inline("see [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) now"),
+            'see <a href="https://en.wikipedia.org/wiki/Foo_(bar)" rel="noopener">Foo</a> now',
+        )
+        self.assertEqual(
+            site.md_inline("([docs](/docs/install))"),
+            '(<a href="/docs/install">docs</a>)',
+        )
+
     def test_h1_is_refused(self):
         with self.assertRaises(SystemExit):
             site.markdown("# Title")

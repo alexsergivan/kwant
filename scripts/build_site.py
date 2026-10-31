@@ -551,6 +551,11 @@ def slugify(text):
     return re.sub(r"[^a-z0-9]+", "-", html.unescape(re.sub(r"<[^>]+>", "", text)).lower()).strip("-")
 
 
+# Link targets a post may use: web, mail, this site (root-relative, {{root}}-relative) and in-page anchors.
+# Anything else, javascript:, data:, protocol-relative //host and the rest, stays plain text.
+_SAFE_HREF = re.compile(r"(?:https?://[^\s/]|mailto:[^\s/]|/(?![/\\])|\{\{root\}\}(?![/\\])[^:]*$|#)", re.I)
+
+
 def md_inline(text):
     """Inline Markdown to HTML: `code`, [text](url), **bold**, *italic*. Text is escaped; code spans are kept verbatim."""
     codes = []
@@ -560,10 +565,12 @@ def md_inline(text):
     text = re.sub(r"`([^`]+)`", keep, text)
     text = html.escape(text, quote=False)
     def link(m):
-        href = m[2]
-        ext = ' rel="noopener"' if re.match(r"https?://", href) and not href.startswith(SITE_URL) else ""
+        href = html.unescape(m[2])
+        if not _SAFE_HREF.match(href):
+            return m[0]
+        ext = ' rel="noopener"' if re.match(r"https?://", href, re.I) and not href.startswith(SITE_URL) else ""
         return f'<a href="{html.escape(href, quote=True)}"{ext}>{m[1]}</a>'
-    text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", link, text)
+    text = re.sub(r"\[([^\]]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)", link, text)
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", text)
     return re.sub(r"\x00(\d+)\x00", lambda m: codes[int(m[1])], text)

@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tables that turn into one card per row on phones. Posts marked `draft: yes` are left out everywhere;
   `--drafts` previews them locally. The Blog link in the header and footer appears with the first published
   post, so the live site is unchanged until then. `check_site.py` checks blog pages and the feed.
+  Post links may only point to http(s), mailto, this site or an in-page anchor; anything else
+  (`javascript:`, `data:`, `//host`, …) stays plain text. Links whose address has parentheses work.
 
 ### Changed
 - **kwant.si covers 0.5.** The home page says "New in 0.5" (bots bring receipts, status dots, smarter
