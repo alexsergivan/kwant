@@ -65,7 +65,8 @@ every MCP tool, through claude's permission prompt and the MCP gateway), in
 Before the click or key, kwnt also reads the page itself (`BrowserController::payment_signals`,
 rules in `payment_floor::page_reason`), so the bot's own words never decide:
 
-- The element the click would really hit (the same match `click_text` makes) has a pay-type
+- The element the click would really hit (the control a `ref` points to, or the same match
+  `click_text` makes) has a pay-type
   label: the bot wrote "order", the button is "Place order".
 - A button on a page with card fields: a card number or CVC field (`autocomplete="cc-number"`,
   `cc-csc`, `cc-exp`, or a name/id/placeholder like `cardnumber`, `cvc`, `cvv`), in open shadow

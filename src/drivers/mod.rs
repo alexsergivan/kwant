@@ -436,11 +436,11 @@ impl TurnInput {
                 Your browser session is displayed live in the user's right panel; the user can browse in it too.\n\
                 Never open a host desktop browser (no `open <url>`, `xdg-open`, etc.) and don't use the shell or curl for it. Use ONLY your `{tools}` tools:\n\
                 - `browser_open` (url): open a page.\n\
-                - `browser_page`: read the page (url, title, text, clickable labels).\n\
-                - `browser_act` (action click_text + text, type + text, key + key, scroll + delta_y): click a button/link/field by its visible label, type into the focused field, press a key, scroll.\n\
+                - `browser_page`: read the page (url, title, text, clickable controls numbered like [3] button \"Add to cart\").\n\
+                - `browser_act` (action click + ref, type + text (+ ref), key + key, scroll + delta_y): click a control by its number from the clickable list, type into that field (or the focused one), press a key, scroll. If a ref is gone or covered, nothing is clicked and you get a fresh list.\n\
                 - `browser_screenshot` (optional width, e.g. 390 phone / 1280 desktop): see the page as a picture, for layout, colours and spacing.\n\
                 Every call returns the updated page, so you rarely need a separate read. \
-                The current page state and its clickable labels are usually already in the request; act on them directly.\n\
+                The current page state and its clickable list are usually already in the request; act on them directly.\n\
                 {control_rules}",
                 tools = crate::mcp::SELF_SERVER_NAME,
             ),
@@ -450,13 +450,13 @@ impl TurnInput {
                 Browser API: {api}\n\
                 Never open a host desktop browser (no `open <url>`, `xdg-open`, etc.). Use ONLY these commands (the full API, do not search for more):\n\
                 - Open a page: curl -sS -X POST '{api}/navigate' -H 'Content-Type: application/json' -d '{{\"url\":\"<url>\"}}'\n\
-                - Read the page (url, title, text, clickable labels): curl -sS '{api}/page'\n\
-                - Click a button/link/field by its visible label: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"click_text\",\"text\":\"<label>\"}}'\n\
-                - Type into the focused field: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"type\",\"text\":\"<text>\"}}'\n\
+                - Read the page (url, title, text, clickable controls numbered like [3] button \"Add to cart\"): curl -sS '{api}/page'\n\
+                - Click a control by its number from the clickable list: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"click\",\"ref\":3}}' (if it is gone or covered, nothing is clicked and you get a fresh list)\n\
+                - Type into a field by its number (leave out ref for the focused field): curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"type\",\"ref\":5,\"text\":\"<text>\"}}'\n\
                 - Press a key: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"key\",\"key\":\"Enter\"}}'\n\
                 - Scroll: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"scroll\",\"delta_y\":600}}'\n\
                 Every /act call returns the updated page (url, title, text, clickable), so you rarely need a separate read. \
-                The current page state and its clickable labels are usually already in the request; act on them directly.\n\
+                The current page state and its clickable list are usually already in the request; act on them directly.\n\
                 {control_rules}",
                 api = api,
             ),

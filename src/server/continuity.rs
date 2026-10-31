@@ -429,11 +429,11 @@ pub async fn browser_act_payment(state: &AppState, target: &str, args: &Value) -
     let ctrl = ctrl?;
     let action = args["action"].as_str().unwrap_or("");
     let needle = match action {
-        "click_text" | "click" => Some(args["text"].as_str().map(str::trim).filter(|t| !t.is_empty())?),
+        "click_text" | "click" => Some(crate::sandbox::ClickTarget::from_args(args)?),
         "key" => None,
         _ => return None,
     };
-    let page = match ctrl.payment_signals(needle).await {
+    let page = match ctrl.payment_signals(needle.as_ref()).await {
         Ok(page) => page,
         Err(e) => {
             tracing::warn!(error = %e, "payment floor could not read the page");
@@ -504,7 +504,7 @@ fn browser_tools() -> Vec<Value> {
     vec![
         json!({
             "name": BROWSER_OPEN,
-            "description": "Open a web page in your browser, the one shown live in the user's side panel. Returns the page you landed on (url, title, text, clickable labels); trust it over the url you asked for.",
+            "description": "Open a web page in your browser, the one shown live in the user's side panel. Returns the page you landed on (url, title, text, clickable controls, numbered for browser_act); trust it over the url you asked for.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"url": {"type": "string", "description": "The address to open, e.g. https://www.google.com/maps"}},
@@ -513,7 +513,7 @@ fn browser_tools() -> Vec<Value> {
         }),
         json!({
             "name": BROWSER_PAGE,
-            "description": "Read the page your browser shows now: url, title, visible text and clickable labels.",
+            "description": "Read the page your browser shows now: url, title, visible text and clickable controls, numbered for browser_act.",
             "inputSchema": {"type": "object", "properties": {}},
         }),
         json!({
@@ -533,12 +533,13 @@ fn browser_tools() -> Vec<Value> {
         }),
         json!({
             "name": BROWSER_ACT,
-            "description": "Do one thing on the current page and get the page back. click_text clicks a button, link or field by its visible label; type types into the focused field; key presses a key (Enter, Tab, Escape, ArrowDown…); scroll scrolls by delta_y pixels (negative is up).",
+            "description": "Do one thing on the current page and get the page back. click clicks a control by its ref, the number in the page's clickable list ([3] button \"Add to cart\"), or by its visible label in text; if the ref is gone, hidden or covered nothing is clicked and you get a fresh list. type types into the field with that ref, or the focused field; key presses a key (Enter, Tab, Escape, ArrowDown…); scroll scrolls by delta_y pixels (negative is up).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["click_text", "type", "key", "scroll"]},
-                    "text": {"type": "string", "description": "click_text: the label to click; type: the text to type"},
+                    "action": {"type": "string", "enum": ["click", "click_text", "type", "key", "scroll"]},
+                    "ref": {"type": "integer", "description": "click or type: the control's number from the clickable list"},
+                    "text": {"type": "string", "description": "click: a visible label, when there's no ref; type: the text to type"},
                     "key": {"type": "string", "description": "key: the key to press"},
                     "delta_y": {"type": "number", "description": "scroll: pixels to scroll, default 600"},
                 },
@@ -647,7 +648,7 @@ async fn run_browser_tool(state: &AppState, target: &str, name: &str, args: &Val
         BROWSER_PAGE => get_sandbox_page(state, target).await,
         _ => {
             let Some(action) = args["action"].as_str() else {
-                return ("action is required: click_text, type, key or scroll".into(), true);
+                return ("action is required: click, type, key or scroll".into(), true);
             };
             let payload = InteractPayload {
                 action: action.to_string(),
@@ -658,6 +659,7 @@ async fn run_browser_tool(state: &AppState, target: &str, name: &str, args: &Val
                 code: None,
                 delta_x: None,
                 delta_y: args["delta_y"].as_f64(),
+                ref_: Some(args["ref"].clone()).filter(|r| !r.is_null()),
             };
             // SelfToolsApprover already gave a payment its card (browser_act_payment)
             act_sandbox_allowed(state, target, Json(payload)).await

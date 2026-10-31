@@ -4231,6 +4231,9 @@ pub struct InteractPayload {
     pub code: Option<String>,
     pub delta_x: Option<f64>,
     pub delta_y: Option<f64>,
+    /// click (or type): a numbered ref from the page's clickable list instead of a label
+    #[serde(default, rename = "ref")]
+    pub ref_: Option<serde_json::Value>,
 }
 
 pub async fn interact_sandbox(
@@ -4367,7 +4370,7 @@ pub async fn act_sandbox(
     let ctrl = get_or_create_browser_controller(&state, &team_id)
         .await
         .ok_or_else(|| browser_unavailable(&state))?;
-    let args = json!({"action": payload.action, "text": payload.text, "key": payload.key});
+    let args = json!({"action": payload.action, "text": payload.text, "key": payload.key, "ref": payload.ref_});
     if let Some(why) = super::continuity::browser_act_payment(&state, &team_id, &args).await {
         let mut page = sandbox_page_state(&ctrl).await;
         page["payment"] = json!(why);
@@ -4391,31 +4394,46 @@ pub async fn act_sandbox_allowed(
         .ok_or_else(|| browser_unavailable(&state))?;
     let _permit = ctrl.control.try_read().map_err(|_| browser_request_failed(crate::sandbox::BrowserError::HumanControl))?;
     let text = payload.text.clone().unwrap_or_default();
-    let result: Result<String, String> = match payload.action.as_str() {
-        "click_text" | "click" if !text.is_empty() => ctrl
-            .click_text(&text)
+    let clicks = crate::sandbox::ClickTarget::from_args(&json!({"ref": payload.ref_, "text": payload.text}));
+    let result: Result<String, String> = match (payload.action.as_str(), clicks) {
+        ("click_text" | "click", Some(target)) => ctrl
+            .click_target(&target)
             .await
             .map(|label| format!("clicked \"{}\"", label))
             .map_err(|e| e.to_string()),
-        "type" => ctrl
-            .interact_type(&text)
-            .await
-            .map(|_| format!("typed {} chars", text.chars().count()))
-            .map_err(|e| e.to_string()),
-        "key" => {
+        // type with a ref: click that field first, then type into it
+        ("type", _) => {
+            let focus = match crate::sandbox::ClickTarget::from_args(&json!({"ref": payload.ref_})) {
+                Some(field) => ctrl.click_target(&field).await.map(Some),
+                None => Ok(None),
+            };
+            match focus {
+                Ok(field) => ctrl
+                    .interact_type(&text)
+                    .await
+                    .map(|_| match field {
+                        Some(f) => format!("typed {} chars into \"{f}\"", text.chars().count()),
+                        None => format!("typed {} chars", text.chars().count()),
+                    })
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        ("key", _) => {
             let key = payload.key.clone().unwrap_or_else(|| "Enter".into());
             ctrl.interact_key(&key, payload.code.as_deref())
                 .await
                 .map(|_| format!("pressed {}", key))
                 .map_err(|e| e.to_string())
         }
-        "scroll" => ctrl
+        ("scroll", _) => ctrl
             .interact_scroll(640, 400, 0.0, payload.delta_y.unwrap_or(600.0))
             .await
             .map(|_| "scrolled".to_string())
             .map_err(|e| e.to_string()),
-        other => Err(format!(
-            "Unknown action \"{}\". Use click_text (with text), type (with text), key (with key) or scroll (with delta_y).",
+        ("click_text" | "click", None) => Err("click needs ref (a number from the clickable list) or text (a label).".to_string()),
+        (other, _) => Err(format!(
+            "Unknown action \"{}\". Use click (with ref or text), type (with text), key (with key) or scroll (with delta_y).",
             other
         )),
     };
