@@ -6,7 +6,7 @@
 
 use super::checks::run_task_checks;
 use super::{lease_ms, transition, Actor};
-use crate::db::missions::{NewTask, Task, TaskChange};
+use crate::db::missions::{NewCheck, NewTask, Task, TaskChange};
 use crate::db::spaces::SpaceId;
 use crate::drivers::events::RuntimeEvent;
 use crate::server::AppState;
@@ -96,6 +96,45 @@ async fn mission_of_holder(state: &AppState, kwant_id: &str) -> Option<String> {
 
 /// Creates a working task held by kwant for `owner` (a hand-off or routine run), or `None`.
 #[allow(clippy::too_many_arguments)]
+/// What a routine gives each run's task besides its acceptance: a class and the checks the
+/// person set on the routine (approved by the person, who set them there).
+struct RunOutcome {
+    task_class: Option<String>,
+    checks: Vec<crate::server::scheduler::RoutineCheck>,
+}
+
+impl RunOutcome {
+    fn of(r: &crate::db::continuity::RoutineRow) -> Self {
+        Self {
+            task_class: r.task_class.clone(),
+            checks: r.checks.as_deref().and_then(|c| serde_json::from_str(c).ok()).unwrap_or_default(),
+        }
+    }
+
+    async fn apply(&self, state: &AppState, task_id: &str) {
+        if let Some(class) = self.task_class.as_deref().filter(|c| *c != crate::db::flight_school::DEFAULT_CLASS) {
+            if let Err(e) = state.db.set_task_class(task_id, class, "person").await {
+                tracing::warn!(error = %e, "could not set a routine task's class");
+            }
+        }
+        for c in &self.checks {
+            let nc = NewCheck {
+                task_id: task_id.into(),
+                kind: c.kind.clone(),
+                spec: c.spec.clone(),
+                required: c.required,
+                approved: true,
+                requested_by: "person".into(),
+                approved_by: Some("person".into()),
+            };
+            if let Err(e) = state.db.add_check(&nc).await {
+                tracing::warn!(error = %e, "could not add a routine task's check");
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn start_held(
     state: &AppState,
     space: &SpaceId,
@@ -107,6 +146,7 @@ async fn start_held(
     source_id: &str,
     place: (Option<String>, Option<String>, Option<String>),
     context_id: &str,
+    outcome: Option<&RunOutcome>,
 ) -> Option<Task> {
     let budget_tokens = super::default_task_budget(state).await;
     let new = |mission_id: Option<String>| NewTask {
@@ -135,6 +175,9 @@ async fn start_held(
             return None;
         }
     };
+    if let Some(o) = outcome {
+        o.apply(state, &task.id).await;
+    }
     hold(state, &task, owner, context_id).await;
     state.db.get_task(&task.id).await.ok().flatten()
 }
@@ -211,7 +254,7 @@ pub async fn on_delegation(state: &AppState, delegation_id: &str) {
         let mission = mission_of_holder(state, &d.lead_kwant_id).await;
         let title = if d.title.trim().is_empty() { d.task.lines().next().unwrap_or("Hand-off").to_string() } else { d.title.clone() };
         let place = (None, None, Some(d.thread_id.clone()));
-        task = start_held(state, &space, mission, &title, &d.task, &d.specialist_kwant_id, "delegation", &d.id, place, &d.thread_id).await;
+        task = start_held(state, &space, mission, &title, &d.task, &d.specialist_kwant_id, "delegation", &d.id, place, &d.thread_id, None).await;
         if live || task.is_none() {
             return;
         }
@@ -474,7 +517,9 @@ pub async fn on_routine_run(state: &AppState, routine_id: &str, run_id: &str, st
             let direct = if r.channel_id.is_none() && r.thread_id.is_none() { Some(r.kwant_id.clone()) } else { None };
             let place = (r.channel_id.clone(), direct, r.thread_id.clone());
             let title = format!("Routine: {}", r.name);
-            start_held(state, &space, None, &title, &r.instructions, &r.kwant_id, "routine", run_id, place, &context).await;
+            let outcome = RunOutcome::of(&r);
+            let acceptance = r.acceptance.as_deref().unwrap_or(&r.instructions);
+            start_held(state, &space, None, &title, acceptance, &r.kwant_id, "routine", run_id, place, &context, Some(&outcome)).await;
         }
         (Some(t), "running") => {
             let _ = state.db.refresh_claim(&t.id, lease_ms(state).await).await;

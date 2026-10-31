@@ -10,7 +10,7 @@
 #![allow(clippy::result_large_err)]
 
 use super::continuity::SelfScope;
-use super::scheduler::RoutinePayload;
+use super::scheduler::{By, RoutinePayload};
 use super::spaces::Scope;
 use super::AppState;
 use crate::db::bot_actions::{BotAction, NewBotAction, ACTION_STATUSES, MAX_PER_TURN};
@@ -786,14 +786,9 @@ impl Ctx<'_> {
             enabled: Some(true),
             thread_id: Some(thread_id),
             context_message_id: Some(context_message_id),
+            ..Default::default()
         };
-        let resp = super::scheduler::create(
-            State(self.state.clone()),
-            Scope(self.space.clone()),
-            space_uri("/api/routines", &self.space),
-            Json(payload),
-        )
-        .await;
+        let resp = super::scheduler::create_by(self.state, self.space.clone(), space_uri("/api/routines", &self.space), payload, By::Bot).await;
         let view = match read(resp).await {
             Ok(v) => v,
             Err(e) => return fail(format!("The routine was not created: {e}")),
@@ -868,14 +863,9 @@ impl Ctx<'_> {
             enabled: Some(true),
             thread_id: Some(thread),
             context_message_id: Some(self.anchor().await),
+            ..Default::default()
         };
-        let resp = super::scheduler::create(
-            State(self.state.clone()),
-            Scope(self.space.clone()),
-            space_uri("/api/routines", &self.space),
-            Json(payload),
-        )
-        .await;
+        let resp = super::scheduler::create_by(self.state, self.space.clone(), space_uri("/api/routines", &self.space), payload, By::Bot).await;
         let view = match read(resp).await {
             Ok(v) => v,
             Err(e) => return fail(format!("The follow-up was not scheduled: {e}")),
@@ -894,7 +884,7 @@ impl Ctx<'_> {
 
     async fn routine_patch(&self, action: &str, row: crate::db::continuity::RoutineRow, payload: RoutinePayload, verb: &str) -> ToolResult {
         let before = serde_json::to_value(super::scheduler::RoutineView::from(row.clone())).unwrap_or(Value::Null);
-        let resp = super::scheduler::update(State(self.state.clone()), Path(row.id.clone()), Json(payload)).await;
+        let resp = super::scheduler::update_by(self.state, row.id.clone(), payload, By::Bot).await;
         let view = match read(resp).await {
             Ok(v) => v,
             Err(e) => return fail(format!("The routine was not changed: {e}")),
@@ -1801,6 +1791,20 @@ fn routine_payload(before: &Value) -> Result<RoutinePayload, Response> {
         enabled: before["enabled"].as_bool(),
         thread_id: Some(before["thread_id"].as_str().map(str::to_string)),
         context_message_id: Some(before["context_message_id"].as_str().map(str::to_string)),
+        // A bot never changes these, so an undone change keeps them; see `deleted_routine_payload`
+        ..Default::default()
+    })
+}
+
+/// What an undone delete recreates: [`routine_payload`] plus what each run's task carried. The
+/// snapshot shows checks masked, so a check with a masked secret can't come back and is left out.
+fn deleted_routine_payload(before: &Value) -> Result<RoutinePayload, Response> {
+    let checks: Vec<super::scheduler::RoutineCheck> = serde_json::from_value(before["checks"].clone()).unwrap_or_default();
+    Ok(RoutinePayload {
+        task_class: Some(before["task_class"].as_str().map(str::to_string)),
+        acceptance: Some(before["acceptance"].as_str().map(str::to_string)),
+        checks: Some(Some(checks.into_iter().filter(|c| !c.spec.to_string().contains("[redacted]")).collect())),
+        ..routine_payload(before)?
     })
 }
 
@@ -1815,12 +1819,12 @@ async fn undo_action(state: &AppState, a: &BotAction) -> Result<Option<String>, 
         }
         "routine_update" | "routine_pause" | "routine_resume" => {
             let p = routine_payload(&before)?;
-            ok_or_conflict(super::scheduler::update(State(state.clone()), Path(target), Json(p)).await, "the routine can't be put back")
+            ok_or_conflict(super::scheduler::update_by(state, target, p, By::Person).await, "the routine can't be put back")
                 .await?;
         }
         "routine_delete" => {
-            let p = routine_payload(&before)?;
-            let resp = super::scheduler::create(State(state.clone()), Scope(space.clone()), space_uri("/api/routines", &space), Json(p)).await;
+            let p = deleted_routine_payload(&before)?;
+            let resp = super::scheduler::create_by(state, space.clone(), space_uri("/api/routines", &space), p, By::Person).await;
             let created = ok_or_conflict(resp, "the routine can't be recreated").await?;
             return Ok(created["id"].as_str().map(str::to_string));
         }

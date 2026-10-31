@@ -13,7 +13,7 @@ use crate::drivers::events::RuntimeEvent;
 use crate::routines::Schedule;
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -27,6 +27,9 @@ use tokio_util::sync::CancellationToken;
 pub const MAX_SLEEP: Duration = Duration::from_secs(30);
 const MAX_NAME_CHARS: usize = 100;
 const MAX_ROUTINE_INSTRUCTIONS_CHARS: usize = 4000;
+const MAX_ACCEPTANCE_CHARS: usize = 4000;
+/// Checks one routine copies onto each run's task.
+const MAX_ROUTINE_CHECKS: usize = 10;
 
 fn error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
@@ -65,6 +68,16 @@ pub struct RoutineView {
     pub thread_id: Option<String>,
     /// The message it follows up on (in the chat it delivers to), when it is a follow-up.
     pub context_message_id: Option<String>,
+    /// `"discovery"` when the person accepted an Automation Discovery suggestion; else `null`.
+    pub origin: Option<String>,
+    pub suggestion_id: Option<String>,
+    /// Each run's board task gets this Flight School class (`null`: `general`).
+    pub task_class: Option<String>,
+    /// Each run's board task's acceptance (`null`: the instructions, as before).
+    pub acceptance: Option<String>,
+    /// `[{kind, spec, required}]` each run's task gets, approved by the person; specs are shown
+    /// with secrets masked. `[]`: none.
+    pub checks: serde_json::Value,
 }
 
 impl From<RoutineRow> for RoutineView {
@@ -75,6 +88,11 @@ impl From<RoutineRow> for RoutineView {
             schedule,
             thread_id: r.thread_id,
             context_message_id: r.context_message_id,
+            checks: shown_checks(r.checks.as_deref()),
+            origin: r.origin,
+            suggestion_id: r.suggestion_id,
+            task_class: r.task_class,
+            acceptance: r.acceptance,
             id: r.id,
             kwant_id: r.kwant_id,
             channel_id: r.channel_id,
@@ -87,6 +105,33 @@ impl From<RoutineRow> for RoutineView {
             created_at: r.created_at,
         }
     }
+}
+
+/// A routine's stored checks, specs masked as everywhere checks are shown.
+fn shown_checks(stored: Option<&str>) -> serde_json::Value {
+    let list: Vec<serde_json::Value> = stored.and_then(|c| serde_json::from_str(c).ok()).unwrap_or_default();
+    serde_json::Value::Array(
+        list.into_iter()
+            .map(|mut c| {
+                c["spec"] = super::missions::autofix::redact_value(&c["spec"]);
+                c
+            })
+            .collect(),
+    )
+}
+
+/// One check a routine copies onto each run's task.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RoutineCheck {
+    pub kind: String,
+    #[serde(default)]
+    pub spec: serde_json::Value,
+    #[serde(default = "yes")]
+    pub required: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// `POST /api/routines` body; `PATCH` takes the same fields, all optional.
@@ -106,13 +151,77 @@ pub struct RoutinePayload {
     /// A message in the delivery chat this routine follows up on.
     #[serde(default, deserialize_with = "double_option")]
     pub context_message_id: Option<Option<String>>,
+    /// The Flight School class each run's task gets; `null`, `""` or `"general"` clears it.
+    /// The person's only, like the checks.
+    #[serde(default, deserialize_with = "double_option")]
+    pub task_class: Option<Option<String>>,
+    /// What a good result is, for each run's task; `null` or `""`: the instructions.
+    #[serde(default, deserialize_with = "double_option")]
+    pub acceptance: Option<Option<String>>,
+    /// Checks each run's task gets, approved by the person; `null` or `[]` clears them. The
+    /// person's only: a bot's token gets a 403.
+    #[serde(default, deserialize_with = "double_option")]
+    pub checks: Option<Option<Vec<RoutineCheck>>>,
 }
 
 /// Tells a missing field (`None`) from an explicit `null` (`Some(None)`).
-fn double_option<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> Result<Option<Option<String>>, D::Error> {
-    Ok(Some(Option::<String>::deserialize(d)?))
+fn double_option<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<Option<T>>, D::Error> {
+    Ok(Some(Option::<T>::deserialize(d)?))
+}
+
+/// Who sends a routine change: the class and checks a run's task gets are the person's to set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum By {
+    Person,
+    Bot,
+}
+
+impl RoutinePayload {
+    fn sets_person_fields(&self) -> bool {
+        self.task_class.is_some() || self.checks.is_some()
+    }
+}
+
+/// Merges the class, acceptance and checks of `p` over `existing` and checks them: the JSON to
+/// store for each (`None`: not set).
+#[allow(clippy::type_complexity)]
+fn build_outcome(
+    p: &RoutinePayload,
+    existing: Option<&RoutineRow>,
+) -> Result<(Option<String>, Option<String>, Option<String>), Response> {
+    let bad = |m: &str| error(StatusCode::BAD_REQUEST, m);
+    let task_class = match &p.task_class {
+        Some(c) => c.as_deref().map(str::trim).filter(|c| !c.is_empty() && *c != crate::db::flight_school::DEFAULT_CLASS).map(str::to_string),
+        None => existing.and_then(|e| e.task_class.clone()),
+    };
+    if task_class.as_deref().is_some_and(|c| !crate::db::flight_school::valid_class(c)) {
+        return Err(bad("task_class must be 1–40 of a-z, 0-9 and -"));
+    }
+    let acceptance = match &p.acceptance {
+        Some(a) => a.as_deref().map(str::trim).filter(|a| !a.is_empty()).map(str::to_string),
+        None => existing.and_then(|e| e.acceptance.clone()),
+    };
+    if acceptance.as_deref().is_some_and(|a| a.chars().count() > MAX_ACCEPTANCE_CHARS) {
+        return Err(bad("acceptance must be at most 4000 characters"));
+    }
+    let checks = match &p.checks {
+        Some(list) => {
+            let list = list.as_deref().unwrap_or_default();
+            if list.len() > MAX_ROUTINE_CHECKS {
+                return Err(bad("at most 10 checks"));
+            }
+            for c in list {
+                // Shown masked; one sent back that way would check for the mask
+                if c.spec.to_string().contains("[redacted]") {
+                    return Err(bad("a check spec has masked values ([redacted]); send the real ones"));
+                }
+                super::missions::validate_check(&c.kind, &c.spec, true).map_err(|m| bad(&m))?;
+            }
+            (!list.is_empty()).then(|| serde_json::to_string(list).unwrap_or_default())
+        }
+        None => existing.and_then(|e| e.checks.clone()),
+    };
+    Ok((task_class, acceptance, checks))
 }
 
 /// Merges `p` over `existing` and checks the result.
@@ -122,6 +231,7 @@ async fn build(
     existing: Option<&RoutineRow>,
 ) -> Result<NewRoutine, Response> {
     let bad = |m: &str| error(StatusCode::BAD_REQUEST, m);
+    let (task_class, acceptance, checks) = build_outcome(&p, existing)?;
     let kwant_id = p
         .kwant_id
         .or_else(|| existing.map(|e| e.kwant_id.clone()))
@@ -217,6 +327,11 @@ async fn build(
         schedule: serde_json::to_string(&schedule).unwrap_or_default(),
         enabled,
         next_run_at,
+        origin: existing.and_then(|e| e.origin.clone()),
+        suggestion_id: existing.and_then(|e| e.suggestion_id.clone()),
+        task_class,
+        acceptance,
+        checks,
     })
 }
 
@@ -243,9 +358,32 @@ pub async fn create(
     State(state): State<AppState>,
     Scope(space): Scope,
     uri: axum::http::Uri,
+    headers: HeaderMap,
     Json(p): Json<RoutinePayload>,
 ) -> Response {
-    let input = match build(&state, p, None).await {
+    let by = caller(&state, &headers).await;
+    create_by(&state, space, uri, p, by).await
+}
+
+/// A bot's turn token, or a bearer that isn't the API token, is a bot; anything else is the person
+/// (auth already let the request in).
+async fn caller(state: &AppState, headers: &HeaderMap) -> By {
+    match super::mcp_suggest::refuse_agent_tokens(state, headers, "").await {
+        Ok(()) => By::Person,
+        Err(_) => By::Bot,
+    }
+}
+
+fn person_fields_refused() -> Response {
+    error(StatusCode::FORBIDDEN, "only the person sets a routine's class and checks")
+}
+
+/// [`create`] for in-process callers: a bot's own tools pass [`By::Bot`].
+pub async fn create_by(state: &AppState, space: crate::db::spaces::SpaceId, uri: axum::http::Uri, p: RoutinePayload, by: By) -> Response {
+    if by == By::Bot && p.sets_person_fields() {
+        return person_fields_refused();
+    }
+    let input = match build(state, p, None).await {
         Ok(i) => i,
         Err(r) => return r,
     };
@@ -267,14 +405,24 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Json(p): Json<RoutinePayload>,
 ) -> Response {
+    let by = caller(&state, &headers).await;
+    update_by(&state, id, p, by).await
+}
+
+/// [`update`] for in-process callers: a bot's own tools pass [`By::Bot`].
+pub async fn update_by(state: &AppState, id: String, p: RoutinePayload, by: By) -> Response {
+    if by == By::Bot && p.sets_person_fields() {
+        return person_fields_refused();
+    }
     let existing = match state.db.get_routine(&id).await {
         Ok(Some(r)) => r,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return internal(),
     };
-    let input = match build(&state, p, Some(&existing)).await {
+    let input = match build(state, p, Some(&existing)).await {
         Ok(i) => i,
         Err(r) => return r,
     };

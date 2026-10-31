@@ -257,7 +257,7 @@ and when a task is verified or failed.
 | `mission` | `mission_plan` / `POST /api/missions` | backlog → ready after approval |
 | `person` | `POST /api/tasks` | ready (backlog if it has unverified deps) |
 | `delegation` | a team lead hands work on (`delegate` tool or @mention in a team chat) | working (kwant holds the specialist's lease) → review when the hand-off completes, failed if it fails, cancelled if cancelled. Inside a mission task, it joins that mission. |
-| `routine` | a routine run starts | working → review when it completes, failed if it fails |
+| `routine` | a routine run starts | working → review when it completes, failed if it fails; with the routine's class, acceptance and checks (§20), verified when they pass |
 | `zombie` | the person takes a Loose End on (`POST /api/tasks {source_kind:"zombie", source_id}`), or kwant starts its owner turn | ready, or working while the owner turn runs |
 | `work_ahead` | a work-ahead run posts its message | review |
 
@@ -866,3 +866,33 @@ early ends its run `failed`. One Foundry turn runs at a time server-wide.
 
 Not built yet: recording `skill_id@version` on a task's claim, and warning when a bot lost a listed
 tool.
+
+## 20. Automation Discovery (Phase D4)
+
+Design note: `phase-d/automation-discovery.md`. v1 learns only from board tasks the person created.
+**Build step 1 (shipped): what a routine's runs are held to.** The scanner, offers and Accept come
+later.
+
+**Routine outcomes.** Every routine can carry, besides its instructions:
+- `task_class`: the Flight School class of each run's task (§14). `null`, `""` or `general` clear it.
+- `acceptance`: what a good result is, up to 4,000 characters. Without it, a run's task uses the
+  instructions, as before.
+- `checks`: up to 10 `[{kind, spec, required = true}]`, validated like task checks (no `person` or
+  `peer_review` checks). `null` or `[]` clear them.
+
+`POST`/`PATCH /api/routines` take them, and the routine views return them. Check specs are shown with
+secrets masked, and a spec containing `[redacted]` is refused, so a masked spec can't be saved back.
+When a run starts, its board task gets the class (event actor `person`), the acceptance and a copy of
+each check, already approved by the person. When the run ends `ok`, the checks run and can take the
+task to `verified`. A routine without these fields runs exactly as before.
+
+**The class and checks are the person's.** A bot's turn token on `POST`/`PATCH /api/routines`, or the
+bot's own routine tools, get a 403 when they set `task_class` or `checks`. Bots may still change
+everything else, the acceptance included, and their changes keep the person's class and checks. An
+undone delete brings back the class, the acceptance and the checks. The exception is a check whose spec
+held a secret: its stored spec is never shown, so the undo can't restore it.
+
+**Storage** (add-only, idempotent): `routines` gains nullable `origin` (`discovery` for an accepted
+offer), `suggestion_id`, `task_class`, `acceptance` and `checks` (JSON). `routine_suggestions` holds
+offers, with one live offer per `(space_id, cluster_key)`. `routine_suggestion_events` is their
+append-only history, enforced by triggers. Older binaries ignore all of it.

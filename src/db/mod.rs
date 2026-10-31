@@ -32,6 +32,7 @@ pub mod flight_school;
 pub mod performance;
 pub mod auditor;
 pub mod foundry;
+pub mod automation;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -194,6 +195,8 @@ impl Database {
         // Phase D2: audits and their risks (add-only)
         db.migrate_auditor().await?;
         db.migrate_foundry().await?;
+        // Phase D4: routines carry class, acceptance and checks; suggestion storage (add-only)
+        db.migrate_automation_discovery().await?;
         db.pool.close().await;
 
         let pool = SqlitePoolOptions::new()

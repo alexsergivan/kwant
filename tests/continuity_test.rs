@@ -1301,6 +1301,7 @@ async fn add_routine(
             next_run_at: Some(next),
             thread_id: None,
             context_message_id: None,
+            ..Default::default()
         })
         .await
         .unwrap()

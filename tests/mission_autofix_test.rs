@@ -583,6 +583,7 @@ async fn a_failed_routine_run_is_retried_as_a_new_linked_run() {
             next_run_at: None,
             thread_id: None,
             context_message_id: None,
+            ..Default::default()
         })
         .await
         .unwrap();

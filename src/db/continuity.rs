@@ -199,6 +199,15 @@ pub struct RoutineRow {
     pub thread_id: Option<String>,
     /// A message in the delivery chat the routine follows up on; its run gets that exchange.
     pub context_message_id: Option<String>,
+    /// `discovery` when Automation Discovery suggested it and the person accepted; else empty.
+    pub origin: Option<String>,
+    pub suggestion_id: Option<String>,
+    /// What each run's board task carries: its Flight School class, a good result, and its checks
+    /// (JSON `[{kind, spec, required}]`, set by the person only). Empty: as before, the
+    /// instructions are the acceptance and the task has no checks.
+    pub task_class: Option<String>,
+    pub acceptance: Option<String>,
+    pub checks: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
@@ -213,7 +222,7 @@ pub struct RoutineRun {
     pub message_id: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewRoutine {
     pub kwant_id: String,
     pub channel_id: Option<String>,
@@ -225,10 +234,18 @@ pub struct NewRoutine {
     pub next_run_at: Option<DateTime<Utc>>,
     pub thread_id: Option<String>,
     pub context_message_id: Option<String>,
+    /// Kept through edits; only Automation Discovery's accept sets them.
+    pub origin: Option<String>,
+    pub suggestion_id: Option<String>,
+    pub task_class: Option<String>,
+    pub acceptance: Option<String>,
+    /// Checks JSON, already validated.
+    pub checks: Option<String>,
 }
 
 const ROUTINE_SELECT: &str = "SELECT r.id, r.kwant_id, r.channel_id, r.name, r.instructions, r.schedule, r.enabled, \
      r.next_run_at, r.last_run_at, r.created_at, r.space_id, r.thread_id, r.context_message_id, \
+     r.origin, r.suggestion_id, r.task_class, r.acceptance, r.checks, \
      (SELECT status FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_status \
      FROM routines r";
 
@@ -698,7 +715,8 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         sqlx::query(
             "INSERT INTO routines (id, kwant_id, channel_id, name, instructions, schedule, enabled, next_run_at, created_at, space_id, \
-             thread_id, context_message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             thread_id, context_message_id, origin, suggestion_id, task_class, acceptance, checks) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&input.kwant_id)
@@ -712,6 +730,11 @@ impl Database {
         .bind(space.as_str())
         .bind(&input.thread_id)
         .bind(&input.context_message_id)
+        .bind(&input.origin)
+        .bind(&input.suggestion_id)
+        .bind(&input.task_class)
+        .bind(&input.acceptance)
+        .bind(&input.checks)
         .execute(&self.pool)
         .await?;
         self.get_routine(&id)
@@ -740,7 +763,8 @@ impl Database {
         let space = self.routine_space(input).await?;
         let res = sqlx::query(
             "UPDATE routines SET kwant_id = ?, channel_id = ?, name = ?, instructions = ?, schedule = ?, enabled = ?, \
-             next_run_at = ?, space_id = ?, thread_id = ?, context_message_id = ? WHERE id = ?",
+             next_run_at = ?, space_id = ?, thread_id = ?, context_message_id = ?, task_class = ?, acceptance = ?, checks = ? \
+             WHERE id = ?",
         )
         .bind(&input.kwant_id)
         .bind(&input.channel_id)
@@ -752,6 +776,9 @@ impl Database {
         .bind(space.as_str())
         .bind(&input.thread_id)
         .bind(&input.context_message_id)
+        .bind(&input.task_class)
+        .bind(&input.acceptance)
+        .bind(&input.checks)
         .bind(id)
         .execute(&self.pool)
         .await?;

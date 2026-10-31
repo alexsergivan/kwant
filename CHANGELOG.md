@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Routines can say what a good run is.** A routine can carry a Flight School class, a description
+  of a good result and checks. Each run's board task gets them, with the checks already approved, so a
+  run that passes its checks is verified on its own. Only the person sets the class and the checks; a
+  bot that tries gets a 403. Routines without them run as before. This is the first step of
+  Automation Discovery (Mission Control Phase D4).
+
 ### Changed
 - **kwant.si footer says "Made in Germany with ❤️".** The line sits under the trademark note on every
   page; screen readers read it as "Made in Germany with love".
