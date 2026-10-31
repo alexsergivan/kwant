@@ -4,6 +4,7 @@ pub mod computer;
 pub mod credentials;
 pub mod manager;
 pub mod progress;
+pub mod reads;
 pub mod service;
 pub mod vault;
 

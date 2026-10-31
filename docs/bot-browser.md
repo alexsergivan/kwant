@@ -47,8 +47,27 @@ alone is no change; for keys (Tab) it is.
 The page text in page states is now `document.body.innerText` (laid out in lines, hidden parts left
 out) instead of the text of a detached copy, which ran lines together.
 
+## Cheaper reads
+
+Every page state carries `hash` (`reads::page_hash`, FNV-1a over url, title, the text shown, every
+control line and the `find` words). A read of a page that still reads the same as the reader's last
+look returns only `{url, title, hash, blocked, unchanged: true, note}`:
+- HTTP: `GET /page?since=<hash>`, with the hash of the bot's last page state (from `/page`,
+  `/navigate` or `/act`). Without `since` the page is always sent whole.
+- `browser_page`: the turn is the reader (`SelfScope::turn_id`). Every browser tool's answer counts
+  as a look (`BrowserController::reads`, the last 32 readers), so a read right after an action that
+  changed nothing is "unchanged". `full: true` sends it whole anyway; a new turn, or one without an
+  id, always gets it whole.
+
+Pages list at most 40 controls (`reads::pick_controls`). Without `find` they are the first 40 in
+page order (topmost first). With `find` (`browser_page`, or `/page?find=`), the controls naming the
+most of its words (3+ letters, a few filler words left out; plain word matching, no model call)
+come first, ties in page order. Ref numbers are the page's own, so a control past the 40th still
+clicks by its ref. `controls_note` says what was left out. Step answers (`/act`, `browser_act`)
+list the first 40 in page order.
+
 ## Tests
 
-`tests/browser_refs_test.rs` and `tests/browser_progress_test.rs` (real Chrome, skipped without one;
+`tests/browser_refs_test.rs`, `tests/browser_progress_test.rs` and `tests/browser_reads_test.rs` (real Chrome, skipped without one;
 the `saucedemo_*` tests are ignored and need the network), `ref_tests` in `src/sandbox/browser.rs`
-and the tests in `src/sandbox/progress.rs`.
+and the tests in `src/sandbox/progress.rs` and `src/sandbox/reads.rs`.
