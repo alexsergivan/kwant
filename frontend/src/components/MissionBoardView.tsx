@@ -22,7 +22,12 @@ import {
   ShieldCheck,
   StickyNote,
   Target,
+  Undo2,
+  Users,
   Wrench,
+  ChevronDown,
+  ChevronRight,
+  Trash2,
   X,
   XCircle,
 } from 'lucide-react';
@@ -36,6 +41,30 @@ import { playSfx } from '../audio/chiptune';
 import {
   ACTION_DONE,
   ACTION_LABELS,
+  BoardTeam,
+  BoardTurn,
+  DEFAULT_SEND_BACK,
+  GroupBy,
+  LiveBot,
+  QUICK_LABELS,
+  QuickAction,
+  UNDO_MS,
+  collapseRepeats,
+  elapsedText,
+  filterByTeams,
+  groupIntoLanes,
+  liveBots,
+  liveByTeam,
+  liveSummary,
+  oldAutoReviews,
+  quickActionsFor,
+  quickDoneText,
+  readGroupBy,
+  saveGroupBy,
+  splitVerified,
+  teamOfBots,
+  verifiedCountText,
+  NO_TEAM,
   AutofixAttempt,
   Checkpoint,
   NeedsYouItem,
@@ -141,6 +170,12 @@ const mainBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-500`;
 const goodBtn = `${actionBtn} bg-emerald-600 text-white hover:bg-emerald-500`;
 const dangerBtn = `${actionBtn} border border-rose-500/30 text-rose-200 hover:bg-rose-500/10`;
 const card = 'rounded-xl border border-zinc-800 bg-zinc-900/40';
+// Card-sized buttons: compact on desktop, a full 40px tap target on the phone.
+const cardBtn =
+  'inline-flex items-center justify-center gap-1 min-h-[40px] sm:min-h-[28px] px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
+const cardGoodBtn = 'bg-emerald-600/90 text-white hover:bg-emerald-500';
+const cardPlainBtn = 'border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700';
+const cardQuietBtn = 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800';
 const field =
   'w-full min-h-[40px] sm:min-h-[36px] px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-sky-500';
 const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
@@ -325,6 +360,7 @@ const initials = (name: string) =>
 
 /** Bot id → avatar sprite, so owner chips show the same creature as the sidebar and chat. */
 const NO_AVATARS: Record<string, string> = {};
+const NO_TEAMS: BoardTeam[] = [];
 export const AvatarsContext = React.createContext<Record<string, string>>(NO_AVATARS);
 
 /** The owner's avatar: the bot's own creature, or their initials when the bot isn't known (removed, or no id). */
@@ -484,7 +520,13 @@ export const TaskCard: React.FC<{
   busy?: boolean;
   /** Unresolved Auditor risks on this task. */
   openRisks?: number;
-}> = ({ task: t, names, now = Date.now(), showMission = true, onOpen, onRemoveLimit, busy = false, openRisks = 0 }) => {
+  /** Older runs of the same routine folded under this card, newest first. */
+  older?: Task[];
+  /** Review's one-tap actions on the card (Mark verified, Send back, Dismiss; Try again when it failed). */
+  onQuick?: (t: Task, a: QuickAction, note?: string) => void;
+  /** Dismiss the folded older runs together. */
+  onDismissMany?: (ts: Task[]) => void;
+}> = ({ task: t, names, now = Date.now(), showMission = true, onOpen, onRemoveLimit, busy = false, openRisks = 0, older = [], onQuick, onDismissMany }) => {
   const owner = (t.owner_kwant_id && names[t.owner_kwant_id]) || t.owner_name;
   const checks = checksText(t.checks_summary);
   const optionalNote = optionalChecksNote(t.checks_summary);
@@ -492,8 +534,12 @@ export const TaskCard: React.FC<{
   const flags = openFlags(t);
   const dimmed = t.state === 'backlog' && !flags.length && !t.held_at;
   const autofixLive = !!autofixCardText(t, now);
+  const quick = onQuick && columnOfTask(t) === 'review' ? quickActionsFor(t) : [];
+  const [sending, setSending] = useState(false);
+  const [note, setNote] = useState('');
+  const noteId = useId();
   return (
-    <li data-task={t.id} data-state={t.state}>
+    <li data-task={t.id} data-state={t.state} data-repeats={older.length ? older.length + 1 : undefined}>
       <button
         type="button"
         onClick={() => onOpen(t)}
@@ -533,7 +579,18 @@ export const TaskCard: React.FC<{
           )}
           {showMission && t.mission_title && <span className="min-w-0 truncate text-[11px] text-zinc-500">{t.mission_title}</span>}
         </span>
-        <span className="block text-sm font-medium text-zinc-100 break-words">{t.title}</span>
+        <span className="flex items-start gap-2 text-sm font-medium text-zinc-100 break-words">
+          <span className="min-w-0 flex-1">{t.title}</span>
+          {older.length > 0 && (
+            <span
+              className="shrink-0 mt-0.5 px-1.5 rounded-md bg-zinc-800 border border-zinc-700 text-[11px] font-semibold tabular-nums text-zinc-300"
+              title={`${older.length + 1} runs; the newest is shown`}
+              data-repeat-count
+            >
+              ×{older.length + 1}
+            </span>
+          )}
+        </span>
         {status && (
           <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || t.held_at || (t.state === 'review' && approvalHolds(t.checks_summary)) ? 'text-amber-200' : autofixLive ? 'text-violet-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
             {status}
@@ -577,6 +634,65 @@ export const TaskCard: React.FC<{
           Remove limit and continue
         </button>
       )}
+      {quick.length > 0 && !sending && (
+        <div className="mt-1.5 flex flex-wrap gap-1.5" data-card-actions>
+          {quick.map((a) => (
+            <button
+              key={a}
+              type="button"
+              disabled={busy}
+              onClick={() => (a === 'reject' ? setSending(true) : onQuick!(t, a))}
+              className={`${cardBtn} ${a === 'verify' || a === 'retry' ? cardGoodBtn : a === 'cancel' ? cardQuietBtn : cardPlainBtn}`}
+              data-card-action={a}
+            >
+              {a === 'verify' ? <CheckCircle2 size={12} aria-hidden="true" /> : a === 'reject' ? <Undo2 size={12} aria-hidden="true" /> : a === 'retry' ? <RotateCcw size={12} aria-hidden="true" /> : <X size={12} aria-hidden="true" />}
+              {QUICK_LABELS[a]}
+            </button>
+          ))}
+          {older.length > 0 && onDismissMany && (
+            <button type="button" disabled={busy} onClick={() => onDismissMany(older)} className={`${cardBtn} ${cardQuietBtn}`} data-card-dismiss-older>
+              Dismiss {older.length} older
+            </button>
+          )}
+        </div>
+      )}
+      {sending && (
+        <form
+          className="mt-1.5 space-y-1.5 rounded-xl border border-zinc-800 bg-zinc-900/60 p-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onQuick!(t, 'reject', note);
+            setSending(false);
+            setNote('');
+          }}
+          data-card-send-back
+        >
+          <label htmlFor={noteId} className="block text-[11px] text-zinc-400">
+            What still needs doing? <span className="text-zinc-500">(optional)</span>
+          </label>
+          <textarea
+            id={noteId}
+            autoFocus
+            rows={2}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setSending(false);
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) e.currentTarget.form?.requestSubmit();
+            }}
+            className={`${field} w-full resize-none text-xs`}
+            placeholder="e.g. The links in section 2 are broken"
+          />
+          <div className="flex gap-1.5">
+            <button type="submit" disabled={busy} className={`${cardBtn} ${cardGoodBtn}`}>
+              Send back
+            </button>
+            <button type="button" onClick={() => setSending(false)} className={`${cardBtn} ${cardQuietBtn}`}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
     </li>
   );
 };
@@ -595,8 +711,16 @@ export const Board: React.FC<{
   busy?: boolean;
   /** Task id → unresolved Auditor risks. */
   openRisks?: Record<string, number>;
-}> = ({ tasks, names, column, now, showMission, onColumn, onOpen, onRemoveLimit, busy, openRisks = {} }) => {
+  /** Rows by team or bot across the five columns; 'none' is the plain board. */
+  groupBy?: GroupBy;
+  teams?: BoardTeam[];
+  onQuick?: (t: Task, a: QuickAction, note?: string) => void;
+  onDismissMany?: (ts: Task[]) => void;
+}> = ({ tasks, names, column, now = Date.now(), showMission, onColumn, onOpen, onRemoveLimit, busy, openRisks = {}, groupBy = 'none', teams = [], onQuick, onDismissMany }) => {
   const grouped = useMemo(() => groupByColumn(tasks), [tasks]);
+  const lanes = useMemo(() => (groupBy === 'none' ? null : groupIntoLanes(tasks, groupBy, teams, names)), [tasks, groupBy, teams, names]);
+  const [showOlder, setShowOlder] = useState(false);
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
   const tabsId = useId();
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const onTabKey = (e: React.KeyboardEvent, i: number) => {
@@ -607,21 +731,109 @@ export const Board: React.FC<{
     onColumn(COLUMNS[next].key);
     tabRefs.current[next]?.focus();
   };
-  const list = (key: Column) => {
+  const verifiedAll = grouped.verified.length;
+  const verifiedRecent = useMemo(() => splitVerified(grouped.verified, now).recent.length, [grouped.verified, now]);
+  const countText = (key: Column) => (key === 'verified' && !showOlder ? verifiedCountText(verifiedRecent, verifiedAll) : String(grouped[key].length));
+
+  /** One column's cards: Review folds repeated runs; Verified hides what's older than a day. */
+  const list = (key: Column, items: Task[], compactEmpty = false) => {
     const meta = COLUMNS.find((c) => c.key === key)!;
-    const items = grouped[key];
-    return items.length ? (
-      <ul className="space-y-2">
-        {items.map((t) => (
-          <TaskCard key={t.id} task={t} names={names} now={now} showMission={showMission} onOpen={onOpen} onRemoveLimit={onRemoveLimit} busy={busy} openRisks={openRisks[t.id] ?? 0} />
-        ))}
-      </ul>
-    ) : (
-      <p className="px-3 py-6 rounded-xl border border-dashed border-zinc-800 text-center text-xs text-zinc-500" data-empty-column={key}>
-        {meta.empty}
-      </p>
+    let shown = items;
+    let hidden = 0;
+    let olderCount = 0;
+    if (key === 'verified') {
+      const split = splitVerified(items, now);
+      olderCount = split.older.length;
+      if (!showOlder) {
+        shown = split.recent;
+        hidden = olderCount;
+      }
+    }
+    const cards = key === 'review' ? collapseRepeats(shown) : shown.map((t) => ({ task: t, older: [] as Task[] }));
+    const more =
+      olderCount > 0 ? (
+        <button type="button" onClick={() => setShowOlder((v) => !v)} className={`${subtleBtn} ml-0 w-full justify-center`} data-show-older={hidden}>
+          {showOlder ? 'Show the last 24 hours only' : `Show older (${hidden})`}
+        </button>
+      ) : null;
+    if (!cards.length) {
+      if (compactEmpty) return more ?? <p className="px-2 py-3 text-center text-[11px] text-zinc-600" data-empty-column={key}>—</p>;
+      return (
+        <div className="space-y-2">
+          <p className="px-3 py-6 rounded-xl border border-dashed border-zinc-800 text-center text-xs text-zinc-500" data-empty-column={key}>
+            {key === 'verified' && hidden > 0 ? 'Nothing verified in the last 24 hours.' : meta.empty}
+          </p>
+          {more}
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-2">
+        <ul className="space-y-2">
+          {cards.map(({ task: t, older }) => (
+            <TaskCard
+              key={t.id}
+              task={t}
+              names={names}
+              now={now}
+              showMission={showMission}
+              onOpen={onOpen}
+              onRemoveLimit={onRemoveLimit}
+              busy={busy}
+              openRisks={openRisks[t.id] ?? 0}
+              older={older}
+              onQuick={onQuick}
+              onDismissMany={onDismissMany}
+            />
+          ))}
+        </ul>
+        {more}
+      </div>
     );
   };
+
+  const countPill = (key: Column, n: number | string, dark = false) => (
+    <span
+      className={`min-w-[18px] px-1 rounded-full text-[10px] text-center tabular-nums ${
+        key === 'needs_you' && Number(n) > 0 ? 'bg-amber-500 text-zinc-950' : dark ? 'bg-zinc-700/70 text-zinc-200' : 'bg-zinc-800 text-zinc-300'
+      }`}
+    >
+      {n}
+    </span>
+  );
+
+  const laneHeader = (l: NonNullable<typeof lanes>[number], key: Column | null) => {
+    const open = !folded[l.key];
+    return (
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setFolded((f) => ({ ...f, [l.key]: open }))}
+        className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-zinc-900/70 ${focusRing}`}
+        data-lane-header={l.key}
+      >
+        {open ? <ChevronDown size={14} className="text-zinc-500" aria-hidden="true" /> : <ChevronRight size={14} className="text-zinc-500" aria-hidden="true" />}
+        {groupBy === 'bot' && l.key !== '__no_owner__' ? <OwnerAvatar kwantId={l.key} name={l.label} size={18} /> : <Users size={14} className="text-zinc-400" aria-hidden="true" />}
+        <span className="min-w-0 truncate text-xs font-semibold text-zinc-100">{l.label}</span>
+        <span className="text-[11px] tabular-nums text-zinc-500">{key ? l.columns[key].length : l.total}</span>
+        {l.needsYou > 0 && (
+          <span className="ml-1" data-lane-needs-you={l.needsYou}>
+            <Badge tone="amber">{l.needsYou} needs you</Badge>
+          </span>
+        )}
+        {!open && key === null && (
+          <span className="ml-auto hidden lg:flex items-center gap-3 text-[11px] text-zinc-500 tabular-nums">
+            {COLUMNS.map((c) => (
+              <span key={c.key}>
+                {c.label} {l.columns[c.key].length}
+              </span>
+            ))}
+          </span>
+        )}
+      </button>
+    );
+  };
+
   return (
     <>
       {/* Phone and tablet: one column at a time, picked from tabs with counts */}
@@ -629,7 +841,6 @@ export const Board: React.FC<{
         <div role="tablist" aria-label="Board columns" className="flex gap-1 overflow-x-auto -mx-1 px-1 pb-1 [scrollbar-width:none]">
           {COLUMNS.map((c, i) => {
             const on = c.key === column;
-            const n = grouped[c.key].length;
             return (
               <button
                 key={c.key}
@@ -647,38 +858,235 @@ export const Board: React.FC<{
                 }`}
               >
                 {c.label}
-                <span className={`min-w-[18px] px-1 rounded-full text-[10px] text-center tabular-nums ${c.key === 'needs_you' && n > 0 ? 'bg-amber-500 text-zinc-950' : 'bg-zinc-700/70 text-zinc-200'}`}>{n}</span>
+                {countPill(c.key, c.key === 'verified' ? (showOlder ? verifiedAll : verifiedRecent) : grouped[c.key].length, true)}
               </button>
             );
           })}
         </div>
         <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${column}`}>
           <p className="mb-2 text-[11px] text-zinc-500">{COLUMNS.find((c) => c.key === column)!.hint}</p>
-          {list(column)}
+          {lanes ? (
+            <div className="space-y-3" data-lanes={groupBy}>
+              {lanes.filter((l) => l.columns[column].length > 0).map((l) => (
+                <section key={l.key} className="space-y-1.5" data-lane={l.key}>
+                  {laneHeader(l, column)}
+                  {!folded[l.key] && list(column, l.columns[column])}
+                </section>
+              ))}
+              {lanes.every((l) => l.columns[column].length === 0) && list(column, [])}
+            </div>
+          ) : (
+            list(column, grouped[column])
+          )}
         </div>
       </div>
-      {/* Desktop: all five columns side by side */}
-      <div className="hidden lg:grid grid-cols-5 gap-3 items-start" data-board="columns">
-        {COLUMNS.map((c) => (
-          <section key={c.key} aria-labelledby={`${tabsId}-h-${c.key}`} className="min-w-0 space-y-2" data-column={c.key}>
-            <header className="px-1">
-              <h3 id={`${tabsId}-h-${c.key}`} className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
+      {/* Desktop: all five columns side by side, as one board or as a row per team or bot */}
+      {lanes ? (
+        <div className="hidden lg:block space-y-2" data-board="lanes" data-lanes={groupBy}>
+          <div className="grid grid-cols-5 gap-3 sticky top-0 z-10 -mx-1 px-1 py-1.5 bg-zinc-950/95 backdrop-blur-sm border-b border-zinc-800/80">
+            {COLUMNS.map((c) => (
+              <h3 key={c.key} className="flex items-center gap-2 px-1 text-xs font-semibold text-zinc-200" data-column={c.key} title={c.hint}>
                 {c.label}
-                <span className={`min-w-[18px] px-1 rounded-full text-[10px] text-center tabular-nums ${c.key === 'needs_you' && grouped[c.key].length > 0 ? 'bg-amber-500 text-zinc-950' : 'bg-zinc-800 text-zinc-300'}`}>
-                  {grouped[c.key].length}
-                </span>
+                {countPill(c.key, countText(c.key))}
               </h3>
-              <p className="text-[11px] text-zinc-500 truncate" title={c.hint}>
-                {c.hint}
-              </p>
-            </header>
-            {list(c.key)}
-          </section>
-        ))}
-      </div>
+            ))}
+          </div>
+          {lanes.map((l) => (
+            <section key={l.key} className="rounded-2xl border border-zinc-800/80 bg-zinc-900/20 p-2 space-y-2" data-lane={l.key}>
+              {laneHeader(l, null)}
+              {!folded[l.key] && (
+                <div className="grid grid-cols-5 gap-3 items-start">
+                  {COLUMNS.map((c) => (
+                    <div key={c.key} className="min-w-0" data-lane-column={c.key}>
+                      {list(c.key, l.columns[c.key], true)}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          ))}
+        </div>
+      ) : (
+        <div className="hidden lg:grid grid-cols-5 gap-3 items-start" data-board="columns">
+          {COLUMNS.map((c) => (
+            <section key={c.key} aria-labelledby={`${tabsId}-h-${c.key}`} className="min-w-0 space-y-2" data-column={c.key}>
+              <header className="px-1">
+                <h3 id={`${tabsId}-h-${c.key}`} className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
+                  {c.label}
+                  {countPill(c.key, countText(c.key))}
+                </h3>
+                <p className="text-[11px] text-zinc-500 truncate" title={c.hint}>
+                  {c.hint}
+                </p>
+              </header>
+              {list(c.key, grouped[c.key])}
+            </section>
+          ))}
+        </div>
+      )}
     </>
   );
 };
+
+// ---------- Live now ----------
+
+/** Every bot running something right now, by team: chats, rooms and routines too, not only tasks. */
+export const LiveStrip: React.FC<{
+  bots: LiveBot[];
+  teams: BoardTeam[];
+  workingCards: number;
+  now?: number;
+  onOpen?: (b: LiveBot) => void;
+}> = ({ bots, teams, workingCards, now = Date.now(), onOpen }) => {
+  const groups = liveByTeam(bots, teams);
+  const idle = bots.length === 0;
+  return (
+    <section aria-label="Live now" className={`${card} px-3 py-2.5`} data-live={bots.length}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-100">
+          <span className="relative flex h-2 w-2" aria-hidden="true">
+            {!idle && <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping motion-reduce:animate-none" />}
+            <span className={`relative inline-flex h-2 w-2 rounded-full ${idle ? 'bg-zinc-600' : 'bg-emerald-400'}`} />
+          </span>
+          Live now
+        </span>
+        <span className="text-[11px] text-zinc-400" data-live-summary>
+          {liveSummary(bots, workingCards)}
+        </span>
+      </div>
+      {!idle && (
+        <div className="mt-2 flex gap-4 overflow-x-auto -mx-3 px-3 scroll-px-3 pb-1 snap-x lg:snap-none [scrollbar-width:thin] lg:flex-wrap lg:overflow-visible">
+          {groups.map((g) => (
+            <div key={g.teamId} className="shrink-0 snap-start min-w-0" data-live-team={g.teamId}>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{g.teamName}</p>
+              <ul className="flex gap-1.5">
+                {g.bots.map((b) => (
+                  <li key={b.kwantId}>
+                    <button
+                      type="button"
+                      onClick={onOpen ? () => onOpen(b) : undefined}
+                      disabled={!onOpen}
+                      title={`${b.name}: ${b.what}${b.more ? ` (+${b.more} more)` : ''}. Open the conversation.`}
+                      className={`group flex items-center gap-2 w-[220px] sm:w-[240px] min-h-[44px] px-2 py-1.5 rounded-xl border text-left ${
+                        b.kind === 'task' ? 'border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10' : 'border-emerald-500/25 bg-emerald-500/5 hover:bg-emerald-500/10'
+                      } ${focusRing}`}
+                      data-live-bot={b.kwantId}
+                      data-live-kind={b.kind}
+                    >
+                      <span className="relative shrink-0">
+                        <OwnerAvatar kwantId={b.kwantId} name={b.name} size={26} />
+                        <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-zinc-950 bg-emerald-400" aria-hidden="true" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline gap-1.5">
+                          <span className="truncate text-xs font-medium text-zinc-100">{b.name}</span>
+                          <span className="ml-auto shrink-0 text-[10px] tabular-nums text-zinc-400" data-live-elapsed>
+                            {elapsedText(b.since, now)}
+                          </span>
+                        </span>
+                        <span className="block truncate text-[11px] text-zinc-400">
+                          {b.kind === 'task' && <span className="text-sky-300">Task · </span>}
+                          {b.what}
+                          {b.more > 0 && <span className="text-zinc-500"> · +{b.more}</span>}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
+
+/** Board controls: Group by, team chips, and clearing old automatic reviews. */
+export const BoardToolbar: React.FC<{
+  groupBy: GroupBy;
+  onGroupBy: (g: GroupBy) => void;
+  teamChips: Array<{ id: string; name: string; count: number }>;
+  picked: string[];
+  onPick: (ids: string[]) => void;
+  oldReviews: number;
+  onClearOld?: () => void;
+}> = ({ groupBy, onGroupBy, teamChips, picked, onPick, oldReviews, onClearOld }) => (
+  <div className="space-y-2" data-board-toolbar>
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-[11px] font-medium text-zinc-400" id="board-group-label">
+        Group
+      </span>
+      <div role="group" aria-labelledby="board-group-label" className="inline-flex rounded-lg border border-zinc-800 p-0.5" data-group-by={groupBy}>
+        {(['none', 'team', 'bot'] as const).map((g) => (
+          <button
+            key={g}
+            type="button"
+            aria-pressed={groupBy === g}
+            onClick={() => onGroupBy(g)}
+            className={`min-h-[40px] sm:min-h-[30px] px-3 rounded-md text-xs font-medium ${focusRing} ${groupBy === g ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`}
+          >
+            {g === 'none' ? 'None' : g === 'team' ? 'Team' : 'Bot'}
+          </button>
+        ))}
+      </div>
+      {oldReviews > 0 && onClearOld && (
+        <button
+          type="button"
+          onClick={onClearOld}
+          className={`ml-auto inline-flex items-center gap-1.5 min-h-[40px] sm:min-h-[30px] px-3 rounded-lg text-xs text-zinc-300 border border-zinc-700/60 hover:bg-zinc-800 ${focusRing}`}
+          data-clear-old={oldReviews}
+        >
+          <Trash2 size={12} aria-hidden="true" />
+          Clear old reviews ({oldReviews})
+        </button>
+      )}
+    </div>
+    {teamChips.length > 1 && (
+      <div role="group" aria-label="Show teams" className="flex gap-1.5 overflow-x-auto -mx-1 px-1 pb-1 [scrollbar-width:none]" data-team-chips>
+        <button
+          type="button"
+          aria-pressed={picked.length === 0}
+          onClick={() => onPick([])}
+          className={`shrink-0 min-h-[36px] sm:min-h-[28px] px-3 rounded-full text-xs border ${focusRing} ${picked.length === 0 ? 'bg-sky-500/15 border-sky-500/40 text-sky-100' : 'border-zinc-800 text-zinc-400 hover:text-zinc-200'}`}
+        >
+          All teams
+        </button>
+        {teamChips.map((c) => {
+          const on = picked.includes(c.id);
+          return (
+            <button
+              key={c.id}
+              type="button"
+              aria-pressed={on}
+              onClick={() => onPick(on ? picked.filter((p) => p !== c.id) : [...picked, c.id])}
+              className={`shrink-0 inline-flex items-center gap-1.5 min-h-[36px] sm:min-h-[28px] px-3 rounded-full text-xs border ${focusRing} ${on ? 'bg-sky-500/15 border-sky-500/40 text-sky-100' : 'border-zinc-800 text-zinc-400 hover:text-zinc-200'}`}
+              data-team-chip={c.id}
+            >
+              {c.name}
+              <span className="tabular-nums text-[10px] text-zinc-500">{c.count}</span>
+            </button>
+          );
+        })}
+      </div>
+    )}
+  </div>
+);
+
+/** One pending card action: it waits UNDO_MS before reaching the server, so Undo can take it back. */
+export const UndoToast: React.FC<{ text: string; onUndo: () => void; onClose: () => void }> = ({ text, onUndo, onClose }) => (
+  <div className="fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 pointer-events-none" data-undo-toast>
+    <div role="status" aria-live="polite" className="pointer-events-auto flex items-center gap-3 max-w-md w-full sm:w-auto px-4 py-2.5 rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl shadow-black/50">
+      <span className="min-w-0 flex-1 text-xs text-zinc-100 break-words">{text}</span>
+      <button type="button" onClick={onUndo} className={`shrink-0 min-h-[36px] px-3 rounded-lg text-xs font-semibold text-sky-300 hover:bg-sky-500/10 ${focusRing}`} data-undo>
+        Undo
+      </button>
+      <button type="button" onClick={onClose} aria-label="Close" className={`shrink-0 p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 ${focusRing}`}>
+        <X size={14} aria-hidden="true" />
+      </button>
+    </div>
+  </div>
+);
 
 // ---------- Evidence receipt ----------
 
@@ -2064,6 +2472,22 @@ export interface MissionBoardViewProps {
   refreshCount?: number;
   /** Task id → unresolved Auditor risks, for the card badges. */
   openRisks?: Record<string, number>;
+  /** Bots running anything right now; leave out to hide the Live strip. */
+  live?: LiveBot[] | null;
+  onOpenLive?: (b: LiveBot) => void;
+  teams?: BoardTeam[];
+  groupBy?: GroupBy;
+  onGroupBy?: (g: GroupBy) => void;
+  /** Picked team ids (none = all); `NO_TEAM` is cards without a team. */
+  teamFilter?: string[];
+  onTeamFilter?: (ids: string[]) => void;
+  onQuick?: (t: Task, a: QuickAction, note?: string) => void;
+  onDismissMany?: (ts: Task[]) => void;
+  /** Dismiss automatic cards that sat in Review over a week; the view asks first. */
+  onClearOld?: (ts: Task[]) => void;
+  undo?: { text: string } | null;
+  onUndo?: () => void;
+  onCloseUndo?: () => void;
 }
 
 export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
@@ -2100,14 +2524,46 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
   showPerformance = false,
   refreshCount = 0,
   openRisks,
+  live = null,
+  onOpenLive,
+  teams = [],
+  groupBy = 'none',
+  onGroupBy,
+  teamFilter = [],
+  onTeamFilter,
+  onQuick,
+  onDismissMany,
+  onClearOld,
+  undo = null,
+  onUndo,
+  onCloseUndo,
 }) => {
   const selectId = useId();
+  const [confirmClear, setConfirmClear] = useState(false);
   const visibleMissions = missions.filter((m) => m.status !== 'cancelled');
   const mission = missionId ? missions.find((m) => m.id === missionId) ?? null : null;
   const showGraph = !!mission && !!onView && view === 'graph';
   const drafts = mission ? [] : visibleMissions.filter((m) => m.status === 'draft');
-  const shown = (tasks ?? []).filter((t) => t.state !== 'cancelled' && (!missionId || t.mission_id === missionId));
-  const empty = tasks !== null && shown.length === 0 && !mission && drafts.length === 0;
+  const inMission = (tasks ?? []).filter((t) => t.state !== 'cancelled' && (!missionId || t.mission_id === missionId));
+  const shown = filterByTeams(inMission, teamFilter, teams);
+  const empty = tasks !== null && inMission.length === 0 && !mission && drafts.length === 0;
+  const teamOf = teamOfBots(teams);
+  const liveShown = live ? (teamFilter.length ? live.filter((b) => teamFilter.includes(b.teamId)) : live) : null;
+  // Chips for the teams on the board or busy now, in the person's order; "No team" when some cards have none.
+  const teamChips = (() => {
+    const counts = new Map<string, number>();
+    for (const t of inMission) {
+      const bot = t.owner_kwant_id ?? t.claim?.kwant_id ?? null;
+      const id = (bot && teamOf[bot]?.id) || NO_TEAM;
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    for (const b of live ?? []) if (!counts.has(b.teamId)) counts.set(b.teamId, 0);
+    const chips = teams.filter((t) => counts.has(t.id)).map((t) => ({ id: t.id, name: t.name, count: counts.get(t.id) ?? 0 }));
+    if (counts.has(NO_TEAM)) chips.push({ id: NO_TEAM, name: 'No team', count: counts.get(NO_TEAM) ?? 0 });
+    return chips;
+  })();
+  const oldReviews = oldAutoReviews(shown, now);
+  const workingCards = shown.filter((t) => columnOfTask(t) === 'working').length;
   return (
     <div className="flex-1 flex flex-col h-full bg-zinc-950 overflow-hidden">
       <div className={`h-14 shrink-0 border-b border-zinc-800/80 ${onBack ? 'px-2' : 'px-4'} sm:px-6 flex items-center justify-between gap-3 bg-zinc-900/30 backdrop-blur-sm select-none`}>
@@ -2166,6 +2622,8 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
 
           {tasks !== null && (
             <>
+              {liveShown && <LiveStrip bots={liveShown} teams={teams} workingCards={workingCards} now={now} onOpen={onOpenLive} />}
+
               <InsightsStrip insights={insights} needsYou={needsYouCount(tasks)} />
 
               {visibleMissions.length > 0 && (
@@ -2225,6 +2683,40 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
                 />
               ))}
 
+              {!showGraph && !empty && onGroupBy && (
+                <BoardToolbar
+                  groupBy={groupBy}
+                  onGroupBy={onGroupBy}
+                  teamChips={teamChips}
+                  picked={teamFilter}
+                  onPick={onTeamFilter ?? (() => {})}
+                  oldReviews={oldReviews.length}
+                  onClearOld={onClearOld ? () => setConfirmClear(true) : undefined}
+                />
+              )}
+              {confirmClear && onClearOld && (
+                <div role="alertdialog" aria-labelledby="clear-old-title" className="px-3 py-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 flex flex-wrap items-center gap-2" data-clear-confirm={oldReviews.length}>
+                  <p id="clear-old-title" className="flex-1 min-w-[200px] text-xs text-amber-100">
+                    {oldReviews.length === 1 ? 'Dismiss 1 automatic card' : `Dismiss ${oldReviews.length} automatic cards`} (routine runs, worked-ahead and loose ends) that have been in Review for more than 7 days? They leave the board; your other cards stay.
+                  </p>
+                  <button
+                    type="button"
+                    autoFocus
+                    disabled={oldReviews.length === 0}
+                    onClick={() => {
+                      setConfirmClear(false);
+                      onClearOld(oldReviews);
+                    }}
+                    className={`${cardBtn} ${cardGoodBtn}`}
+                  >
+                    Dismiss {oldReviews.length}
+                  </button>
+                  <button type="button" onClick={() => setConfirmClear(false)} className={`${cardBtn} ${cardQuietBtn}`}>
+                    Keep them
+                  </button>
+                </div>
+              )}
+
               {showGraph ? (
                 <WorkGraphView
                   graph={graph}
@@ -2260,7 +2752,19 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
                   onRemoveLimit={onRemoveLimit}
                   busy={busyCard}
                   openRisks={openRisks}
+                  groupBy={groupBy}
+                  teams={teams}
+                  onQuick={onQuick}
+                  onDismissMany={onDismissMany}
                 />
+              )}
+              {!showGraph && !empty && shown.length === 0 && teamFilter.length > 0 && (
+                <p className="text-xs text-zinc-500" data-filter-empty>
+                  No cards for the picked teams.{' '}
+                  <button type="button" onClick={() => onTeamFilter?.([])} className="underline underline-offset-2 hover:text-zinc-300">
+                    Show all teams
+                  </button>
+                </p>
               )}
 
               {showPerformance && !mission && !needsToken && <PerformancePanel names={names} refreshKey={refreshCount} />}
@@ -2268,6 +2772,7 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
           )}
         </div>
       </div>
+      {undo && onUndo && <UndoToast text={undo.text} onUndo={onUndo} onClose={onCloseUndo ?? (() => {})} />}
     </div>
   );
 };
@@ -2280,7 +2785,15 @@ export const MissionBoardPage: React.FC<{
   avatars?: Record<string, string>;
   onBack?: () => void;
   onOpenChat?: (t: Task, place?: ChatPlace | null) => void;
-}> = ({ spaceId, names, avatars, onBack, onOpenChat }) => {
+  /** The space's running and queued turns, for the Live strip. */
+  turns?: BoardTurn[];
+  teams?: BoardTeam[];
+  /** Room id → name, and thread id → title, so the Live strip can say where each bot is. */
+  rooms?: Record<string, string>;
+  threadTitles?: Record<string, string>;
+  /** Opens a Live bot's conversation. */
+  onOpenPlace?: (place: ChatPlace) => void;
+}> = ({ spaceId, names, avatars, onBack, onOpenChat, turns, teams = NO_TEAMS, rooms, threadTitles, onOpenPlace }) => {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [insights, setInsights] = useState<Insights | null>(null);
@@ -2810,13 +3323,100 @@ export const MissionBoardPage: React.FC<{
     }
   };
 
+  // Card actions from the board wait UNDO_MS before they reach the server: Undo just drops them.
+  const [groupBy, setGroupBy] = useState<GroupBy>(readGroupBy);
+  const [teamFilter, setTeamFilter] = useState<string[]>([]);
+  const [undo, setUndo] = useState<{ id: number; text: string } | null>(null);
+  const pending = useRef<{ id: number; tasks: Task[]; run: () => Promise<void>; timer: number } | null>(null);
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+  const pendingSeq = useRef(0);
+
+  const commitPending = useCallback(() => {
+    const p = pending.current;
+    if (!p) return;
+    pending.current = null;
+    window.clearTimeout(p.timer);
+    if (alive.current) setUndo((u) => (u?.id === p.id ? null : u));
+    p.run().finally(() => {
+      if (!alive.current) return;
+      setHidden((h) => {
+        const next = new Set(h);
+        p.tasks.forEach((t) => next.delete(t.id));
+        return next;
+      });
+    });
+  }, []);
+
+  // Leaving the board sends what's still waiting: the person saw it done.
+  useEffect(() => () => commitPending(), [commitPending]);
+
+  const runCardActions = useCallback(async (list: Task[], a: QuickAction, note?: string) => {
+    let failed = 0;
+    let lastError = '';
+    for (const t of list) {
+      try {
+        const next = await missionsApi.act(t.id, a, a === 'reject' ? note?.trim() || DEFAULT_SEND_BACK : undefined);
+        if (alive.current) setTasks((l) => (l ? (next.state === 'cancelled' ? l.filter((x) => x.id !== next.id) : upsertTask(l, next)) : l));
+      } catch (e) {
+        failed++;
+        lastError = failMsg(e);
+        if (e instanceof MissionError && e.status === 401 && alive.current) setNeedsToken(true);
+      }
+    }
+    if (!alive.current) return;
+    if (failed) setNotice({ text: list.length === 1 ? `Couldn’t do that: ${lastError}` : `${failed} of ${list.length} didn’t go through: ${lastError}`, error: true });
+    else if (a === 'verify') playSfx('coin');
+    missionsApi.insights().then((i) => alive.current && setInsights(i), () => {});
+  }, []);
+
+  const queueCardAction = (list: Task[], a: QuickAction, note?: string) => {
+    if (!list.length) return;
+    commitPending();
+    const id = ++pendingSeq.current;
+    setHidden((h) => {
+      const next = new Set(h);
+      list.forEach((t) => next.add(t.id));
+      return next;
+    });
+    const timer = window.setTimeout(() => commitPending(), UNDO_MS);
+    pending.current = { id, tasks: list, run: () => runCardActions(list, a, note), timer };
+    setUndo({ id, text: quickDoneText(a, list.length, list[0]?.title) });
+    setNotice(null);
+    playSfx('click');
+  };
+
+  const undoPending = () => {
+    const p = pending.current;
+    if (!p) return setUndo(null);
+    pending.current = null;
+    window.clearTimeout(p.timer);
+    setUndo(null);
+    setHidden((h) => {
+      const next = new Set(h);
+      p.tasks.forEach((t) => next.delete(t.id));
+      return next;
+    });
+  };
+
+  // The Live strip's elapsed times tick on their own.
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const live = useMemo(
+    () => (turns ? liveBots(turns, { names, teams, rooms, threadTitles, tasks: tasks ?? [] }) : null),
+    [turns, names, teams, rooms, threadTitles, tasks],
+  );
+  const boardTasks = useMemo(() => (tasks && hidden.size ? tasks.filter((t) => !hidden.has(t.id)) : tasks), [tasks, hidden]);
+
   const tasksById = useMemo(() => Object.fromEntries((tasks ?? []).map((t) => [t.id, t])), [tasks]);
   const listed = openId ? tasksById[openId] : undefined;
 
   return (
     <AvatarsContext.Provider value={avatars ?? NO_AVATARS}>
       <MissionBoardView
-        tasks={tasks}
+        tasks={boardTasks}
         missions={missions}
         insights={insights}
         names={names}
@@ -2852,6 +3452,23 @@ export const MissionBoardPage: React.FC<{
         showPerformance
         refreshCount={refreshCount}
         openRisks={riskCounts}
+        now={tick}
+        live={live}
+        onOpenLive={onOpenPlace ? (b) => onOpenPlace(b.place) : undefined}
+        teams={teams}
+        groupBy={groupBy}
+        onGroupBy={(g) => {
+          setGroupBy(g);
+          saveGroupBy(g);
+        }}
+        teamFilter={teamFilter}
+        onTeamFilter={setTeamFilter}
+        onQuick={(t, a, note) => queueCardAction([t], a, note)}
+        onDismissMany={(ts) => queueCardAction(ts, 'cancel')}
+        onClearOld={(ts) => queueCardAction(ts, 'cancel')}
+        undo={undo}
+        onUndo={undoPending}
+        onCloseUndo={commitPending}
       />
       {openId && (
         <TaskPanel title={detail?.task.title ?? listed?.title ?? 'Task'} onClose={closeTask}>

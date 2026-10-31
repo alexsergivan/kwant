@@ -1642,3 +1642,329 @@ export function sourceChat(t: Pick<Task, 'channel_id' | 'direct_kwant_id' | 'thr
   if (t.direct_kwant_id) return { channelId: null, kwantId: t.direct_kwant_id, threadId: t.thread_id };
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Live board: who is busy right now, lanes by team or bot, repeated runs folded, Verified fading out
+
+/** A running or queued turn, as GET /api/turns lists it. */
+export interface BoardTurn {
+  turn_id: string;
+  kwant_id: string;
+  context_id: string;
+  thread_id: string | null;
+  state: 'queued' | 'running';
+  since?: string;
+  purpose?: string;
+}
+
+export interface BoardTeam {
+  id: string;
+  name: string;
+  lead_kwant_id: string;
+  member_kwants: string[];
+}
+
+export type GroupBy = 'none' | 'team' | 'bot';
+export const GROUP_BY_KEY = 'kwnt.missionBoard.groupBy';
+export const NO_TEAM = '__no_team__';
+export const NO_OWNER = '__no_owner__';
+
+export function readGroupBy(): GroupBy {
+  try {
+    const v = localStorage.getItem(GROUP_BY_KEY);
+    return v === 'team' || v === 'bot' ? v : 'none';
+  } catch {
+    return 'none';
+  }
+}
+
+export function saveGroupBy(g: GroupBy): void {
+  try {
+    localStorage.setItem(GROUP_BY_KEY, g);
+  } catch {
+    // Private mode: the choice lasts until the page closes.
+  }
+}
+
+/** Bot id → its team. A bot in several teams goes to the first one it leads, else the first it's in. */
+export function teamOfBots(teams: BoardTeam[]): Record<string, BoardTeam> {
+  const out: Record<string, BoardTeam> = {};
+  for (const t of teams) if (t.lead_kwant_id) out[t.lead_kwant_id] ??= t;
+  for (const t of teams) for (const k of t.member_kwants ?? []) out[k] ??= t;
+  return out;
+}
+
+/** The bot a card belongs to: its owner, else the bot holding it. */
+export const taskBot = (t: Pick<Task, 'owner_kwant_id' | 'claim'>): string | null => t.owner_kwant_id ?? t.claim?.kwant_id ?? null;
+
+/** Sources the person didn't ask for one by one: they pile up, so they fold and can be cleared in bulk. */
+const AUTO_SOURCES = new Set<SourceKind>(['routine', 'work_ahead', 'zombie']);
+export const isAutoTask = (t: Pick<Task, 'source_kind'>): boolean => AUTO_SOURCES.has(t.source_kind);
+
+/** One card on the board: the newest task, and older repeats of the same routine folded under it. */
+export interface BoardItem {
+  task: Task;
+  older: Task[];
+}
+
+/**
+ * What makes two cards "the same run again": the same automatic source, bot and title. A routine
+ * card's source is its run, not the routine, so its title ("Routine: Morning overview") stands in.
+ */
+export function repeatKey(t: Task): string | null {
+  if (!isAutoTask(t)) return null;
+  return `${t.source_kind}:${taskBot(t) ?? ''}:${t.title.trim().toLowerCase()}`;
+}
+
+/**
+ * Folds repeated automatic runs into one card, newest first, keeping the input's order otherwise.
+ * Only cards in the same column fold together, so callers pass one column's tasks.
+ */
+export function collapseRepeats(tasks: Task[]): BoardItem[] {
+  const out: BoardItem[] = [];
+  const at = new Map<string, number>();
+  const newest = (t: Task) => Date.parse(t.finished_at ?? t.updated_at) || 0;
+  for (const t of tasks) {
+    const k = repeatKey(t);
+    const i = k === null ? undefined : at.get(k);
+    if (i === undefined) {
+      if (k !== null) at.set(k, out.length);
+      out.push({ task: t, older: [] });
+      continue;
+    }
+    const item = out[i];
+    if (newest(t) > newest(item.task)) out[i] = { task: t, older: [item.task, ...item.older] };
+    else item.older.push(t);
+  }
+  for (const item of out) item.older.sort((a, b) => newest(b) - newest(a));
+  return out;
+}
+
+export const VERIFIED_WINDOW_HOURS = 24;
+export const OLD_REVIEW_DAYS = 7;
+
+/** Verified cards from the last day show; older ones wait behind "Show older". Nothing is deleted. */
+export function splitVerified(tasks: Task[], now: number = Date.now(), hours = VERIFIED_WINDOW_HOURS): { recent: Task[]; older: Task[] } {
+  const cutoff = now - hours * 3_600_000;
+  const recent: Task[] = [];
+  const older: Task[] = [];
+  for (const t of tasks) {
+    const at = Date.parse(t.finished_at ?? t.updated_at);
+    (Number.isNaN(at) || at >= cutoff ? recent : older).push(t);
+  }
+  return { recent, older };
+}
+
+/** Automatic cards (routine runs, worked-ahead, loose ends) sitting in Review for more than a week. */
+export function oldAutoReviews(tasks: Task[], now: number = Date.now(), days = OLD_REVIEW_DAYS): Task[] {
+  const cutoff = now - days * 86_400_000;
+  return tasks.filter((t) => columnOfTask(t) === 'review' && isAutoTask(t) && Date.parse(t.updated_at) < cutoff);
+}
+
+export interface Lane {
+  key: string;
+  label: string;
+  columns: Record<Column, Task[]>;
+  total: number;
+  needsYou: number;
+}
+
+/**
+ * Splits the board into rows (by team or bot), each with the five columns. Teams keep the order the
+ * person made them in; bots go alphabetically; "No team" / "No owner" come last. Rows without a card
+ * are left out.
+ */
+export function groupIntoLanes(tasks: Task[], by: Exclude<GroupBy, 'none'>, teams: BoardTeam[], names: Record<string, string>): Lane[] {
+  const teamOf = teamOfBots(teams);
+  const lanes = new Map<string, Lane>();
+  const laneOf = (t: Task): { key: string; label: string } => {
+    const bot = taskBot(t);
+    if (by === 'team') {
+      const team = bot ? teamOf[bot] : undefined;
+      return team ? { key: team.id, label: team.name } : { key: NO_TEAM, label: 'No team' };
+    }
+    return bot ? { key: bot, label: names[bot] ?? t.owner_name ?? 'Unknown bot' } : { key: NO_OWNER, label: 'No owner yet' };
+  };
+  for (const t of sortTasks(tasks)) {
+    const c = columnOfTask(t);
+    if (!c) continue;
+    const { key, label } = laneOf(t);
+    let lane = lanes.get(key);
+    if (!lane) {
+      lane = { key, label, columns: { ready: [], working: [], needs_you: [], review: [], verified: [] }, total: 0, needsYou: 0 };
+      lanes.set(key, lane);
+    }
+    lane.columns[c].push(t);
+    lane.total++;
+    if (c === 'needs_you') lane.needsYou++;
+  }
+  const order = by === 'team' ? new Map(teams.map((t, i) => [t.id, i])) : null;
+  const last = (k: string) => k === NO_TEAM || k === NO_OWNER;
+  return [...lanes.values()].sort((a, b) => {
+    if (last(a.key) !== last(b.key)) return last(a.key) ? 1 : -1;
+    if (order) return (order.get(a.key) ?? 1e9) - (order.get(b.key) ?? 1e9);
+    return a.label.localeCompare(b.label);
+  });
+}
+
+/** Keeps the cards of the picked teams (none picked = all). `NO_TEAM` picks cards without one. */
+export function filterByTeams(tasks: Task[], picked: string[], teams: BoardTeam[]): Task[] {
+  if (!picked.length) return tasks;
+  const teamOf = teamOfBots(teams);
+  const want = new Set(picked);
+  return tasks.filter((t) => {
+    const bot = taskBot(t);
+    return want.has((bot && teamOf[bot]?.id) || NO_TEAM);
+  });
+}
+
+/** "45s", "12m", "1h 05m", "2d 3h": how long a turn has been running. */
+export function elapsedText(since: string | undefined, now: number = Date.now()): string {
+  const t = since ? Date.parse(since) : NaN;
+  if (Number.isNaN(t)) return '';
+  const s = Math.max(0, Math.floor((now - t) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${String(m % 60).padStart(2, '0')}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
+export interface LiveBot {
+  kwantId: string;
+  name: string;
+  teamId: string;
+  teamName: string;
+  /** One line: what it is doing. */
+  what: string;
+  kind: 'task' | 'room' | 'thread' | 'chat' | 'deciding';
+  since?: string;
+  /** Where clicking it goes. */
+  place: ChatPlace;
+  /** Its other running turns. */
+  more: number;
+  /** The card it's working on, when the turn is a task's. */
+  taskId: string | null;
+}
+
+export interface LiveContext {
+  names: Record<string, string>;
+  teams: BoardTeam[];
+  /** Room id → name. */
+  rooms?: Record<string, string>;
+  /** Thread id → title. */
+  threadTitles?: Record<string, string>;
+  tasks?: Task[];
+}
+
+/** What one running turn is about, and where it happens. */
+export function describeTurn(turn: BoardTurn, ctx: LiveContext): Pick<LiveBot, 'what' | 'kind' | 'place' | 'taskId'> {
+  const room = ctx.rooms?.[turn.context_id];
+  const place: ChatPlace = room !== undefined
+    ? { channelId: turn.context_id, kwantId: null, threadId: turn.thread_id }
+    : { channelId: null, kwantId: turn.kwant_id, threadId: turn.thread_id };
+  // A task's chat is the turn's: its thread, else its room, else its bot's direct chat.
+  const task = (ctx.tasks ?? []).find(
+    (t) => t.state === 'working' && taskBot(t) === turn.kwant_id && (turn.thread_id ? t.thread_id === turn.thread_id : !t.thread_id && (t.channel_id ?? t.direct_kwant_id) === turn.context_id),
+  );
+  if (task) return { what: task.title, kind: 'task', place, taskId: task.id };
+  if (turn.purpose === 'decide') return { what: 'Deciding how to answer', kind: 'deciding', place, taskId: null };
+  if (room !== undefined) return { what: `In ${room || 'a room'}`, kind: 'room', place, taskId: null };
+  if (turn.thread_id) {
+    const title = ctx.threadTitles?.[turn.thread_id];
+    return { what: title ? title : 'In a side conversation', kind: 'thread', place, taskId: null };
+  }
+  return { what: 'In your chat', kind: 'chat', place, taskId: null };
+}
+
+/**
+ * Every bot running something right now, one row per bot (its longest-running turn, "+N more" for
+ * the rest), longest first. Queued turns aren't running, so they're left out.
+ */
+export function liveBots(turns: BoardTurn[], ctx: LiveContext): LiveBot[] {
+  const teamOf = teamOfBots(ctx.teams);
+  const byBot = new Map<string, BoardTurn[]>();
+  for (const t of turns) {
+    if (t.state !== 'running' || !t.kwant_id) continue;
+    byBot.set(t.kwant_id, [...(byBot.get(t.kwant_id) ?? []), t]);
+  }
+  const started = (t: BoardTurn) => (t.since ? Date.parse(t.since) || Infinity : Infinity);
+  const out: LiveBot[] = [];
+  for (const [kwantId, list] of byBot) {
+    // Prefer a task's turn (it says the most), then the longest-running.
+    const described = list.map((t) => ({ t, d: describeTurn(t, ctx) }));
+    described.sort((a, b) => Number(b.d.kind === 'task') - Number(a.d.kind === 'task') || started(a.t) - started(b.t));
+    const { t, d } = described[0];
+    const team = teamOf[kwantId];
+    out.push({
+      kwantId,
+      name: ctx.names[kwantId] ?? 'A bot',
+      teamId: team?.id ?? NO_TEAM,
+      teamName: team?.name ?? 'No team',
+      ...d,
+      since: list.map((x) => x.since).filter(Boolean).sort()[0] ?? t.since,
+      more: list.length - 1,
+    });
+  }
+  return out.sort((a, b) => (a.since ?? '').localeCompare(b.since ?? '') || a.name.localeCompare(b.name));
+}
+
+/** Live bots by team, in the order the person made their teams; "No team" last. */
+export function liveByTeam(bots: LiveBot[], teams: BoardTeam[]): Array<{ teamId: string; teamName: string; bots: LiveBot[] }> {
+  const order = new Map(teams.map((t, i) => [t.id, i]));
+  const groups = new Map<string, { teamId: string; teamName: string; bots: LiveBot[] }>();
+  for (const b of bots) {
+    const g = groups.get(b.teamId) ?? { teamId: b.teamId, teamName: b.teamName, bots: [] };
+    g.bots.push(b);
+    groups.set(b.teamId, g);
+  }
+  return [...groups.values()].sort((a, b) => (order.get(a.teamId) ?? 1e9) - (order.get(b.teamId) ?? 1e9));
+}
+
+/** The Live strip's summary, so it and the Working column never seem to disagree. */
+export function liveSummary(bots: LiveBot[], workingCards: number): string {
+  if (!bots.length) return workingCards ? `All bots idle · ${workingCards === 1 ? '1 task waits' : `${workingCards} tasks wait`} in Working for its bot’s next turn` : 'All bots idle';
+  const onTasks = bots.filter((b) => b.kind === 'task').length;
+  const head = bots.length === 1 ? '1 bot busy' : `${bots.length} bots busy`;
+  const rest = bots.length - onTasks;
+  if (!rest) return `${head}, all on board tasks`;
+  return `${head} · ${onTasks} on board tasks, ${rest} in chats, rooms or routines`;
+}
+
+/** The Verified column's header count: "5 · 37 all" once older cards are hidden. */
+export function verifiedCountText(recent: number, all: number): string {
+  return recent === all ? String(all) : `${recent} · ${all} all`;
+}
+
+/** The one-tap actions a Review card carries. Dismiss is the server's cancel. */
+export type QuickAction = 'verify' | 'reject' | 'cancel' | 'retry';
+
+export function quickActionsFor(t: Pick<Task, 'state'>): QuickAction[] {
+  if (t.state === 'review') return ['verify', 'reject', 'cancel'];
+  if (t.state === 'failed') return ['retry', 'cancel'];
+  return [];
+}
+
+export const QUICK_LABELS: Record<QuickAction, string> = { verify: 'Mark verified', reject: 'Send back', cancel: 'Dismiss', retry: 'Try again' };
+
+/** Sending back needs a reason on the server; an empty note sends this one. */
+export const DEFAULT_SEND_BACK = 'Take another look: it isn’t done yet.';
+
+/** The undo toast's line for an action on `n` cards. */
+export function quickDoneText(a: QuickAction, n: number, title?: string): string {
+  const what = n === 1 && title ? `“${title}”` : n === 1 ? '1 card' : `${n} cards`;
+  switch (a) {
+    case 'verify':
+      return `Marked ${what} verified.`;
+    case 'reject':
+      return `Sent ${what} back to its bot.`;
+    case 'retry':
+      return `${what} goes back to Ready for another try.`;
+    default:
+      return `Dismissed ${what}.`;
+  }
+}
+
+/** How long Undo stays on screen before the action goes to the server. */
+export const UNDO_MS = 6000;

@@ -2874,6 +2874,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   );
   const missionNames = Object.fromEntries(kwants.map((k) => [k.id, k.name]));
   const missionAvatars = Object.fromEntries(kwants.map((k) => [k.id, k.avatar_sprite ?? '']));
+  const missionTurns = useMemo(() => Object.values(turns), [turns]);
+  const missionRooms = useMemo(() => Object.fromEntries(channels.map((c) => [c.id, c.name])), [channels]);
+  const missionThreadTitles = useMemo(
+    () => Object.fromEntries(Object.values(threadsByKwant).flatMap((list) => (list ?? []).map((t) => [t.id, t.title]))),
+    [threadsByKwant],
+  );
   const missionsPage = (
     <MissionBoardPage
       key={space.id}
@@ -2884,6 +2890,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpenChat={(t, place) => {
         const c = place ?? sourceChat(t);
         if (!c) return;
+        if (c.kwantId && c.threadId) return openThread(c.kwantId, c.threadId);
+        if (!openTarget({ channel_id: c.channelId, kwant_id: c.kwantId })) pushToast('That chat no longer exists.');
+      }}
+      turns={missionTurns}
+      teams={teams}
+      rooms={missionRooms}
+      threadTitles={missionThreadTitles}
+      onOpenPlace={(c) => {
         if (c.kwantId && c.threadId) return openThread(c.kwantId, c.threadId);
         if (!openTarget({ channel_id: c.channelId, kwant_id: c.kwantId })) pushToast('That chat no longer exists.');
       }}
