@@ -36,6 +36,17 @@ card_art: avatar:tech_lead
 <h3 id="edit">Edit a bot</h3>
 <p>Hover a bot in the sidebar and click the pencil, or use <strong>Edit</strong> in a direct chat's header. You can change its name, title, avatar, preferred model, persona and soul. A rename carries over to the bot's past messages. Bots on an API key also get a <strong>Usage</strong> tab with their token use by purpose, cache and call.</p>
 
+<h3 id="status-dots">Status dots</h3>
+<p>The dot on each bot's avatar in the sidebar says what the bot is doing:</p>
+<ul>
+  <li><strong>Available</strong> (green): free for work. Only this one is green.</li>
+  <li><strong>Working</strong> (pulsing): a turn is running. A bot with a running turn never shows green, in the open chat included, where the line under its name says "Working here".</li>
+  <li><strong>Needs you</strong> (amber): a question or approval is waiting for you.</li>
+  <li><strong>Queued</strong> (hollow ring): work is waiting its turn.</li>
+  <li><strong>Can't run</strong> (grey): no account works here yet, so nothing can run.</li>
+</ul>
+<p>Hovering or a screen reader gives the status in words.</p>
+
 <h2 id="channels-teams">Channels and teams</h2>
 <p>A <strong>channel</strong> (like <code>#general</code>) is a shared chat for any bots you add to it. A <strong>team</strong> (like <code>@Product</code>) is a group of bots with:</p>
 <ul>

@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Bots &amp; teams: Persona presets, souls, teams with a lead, and handoffs between bots.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-10-30">
+<meta property="article:modified_time" content="2026-10-31">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="AI agent teams: bots, leads &amp; handoffs · kwant">
 <meta name="twitter:description" content="Create bots from persona presets, give each a soul and a model, group them into teams with a lead, and let them hand work to each other with @mentions.">
@@ -84,6 +84,17 @@
 
 <h3 id="edit">Edit a bot</h3>
 <p>Hover a bot in the sidebar and click the pencil, or use <strong>Edit</strong> in a direct chat's header. You can change its name, title, avatar, preferred model, persona and soul. A rename carries over to the bot's past messages. Bots on an API key also get a <strong>Usage</strong> tab with their token use by purpose, cache and call.</p>
+
+<h3 id="status-dots">Status dots</h3>
+<p>The dot on each bot's avatar in the sidebar says what the bot is doing:</p>
+<ul>
+  <li><strong>Available</strong> (green): free for work. Only this one is green.</li>
+  <li><strong>Working</strong> (pulsing): a turn is running. A bot with a running turn never shows green, in the open chat included, where the line under its name says "Working here".</li>
+  <li><strong>Needs you</strong> (amber): a question or approval is waiting for you.</li>
+  <li><strong>Queued</strong> (hollow ring): work is waiting its turn.</li>
+  <li><strong>Can't run</strong> (grey): no account works here yet, so nothing can run.</li>
+</ul>
+<p>Hovering or a screen reader gives the status in words.</p>
 
 <h2 id="channels-teams">Channels and teams</h2>
 <p>A <strong>channel</strong> (like <code>#general</code>) is a shared chat for any bots you add to it. A <strong>team</strong> (like <code>@Product</code>) is a group of bots with:</p>
@@ -177,7 +188,7 @@
 </footer>
 <script src="../assets/js/site.js?v=c490c973ba" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/bots-and-teams#article","headline":"AI agent teams: bots, leads & handoffs","description":"Create bots from persona presets, give each a soul and a model, group them into teams with a lead, and let them hand work to each other with @mentions.","url":"https://kwant.si/docs/bots-and-teams","mainEntityOfPage":"https://kwant.si/docs/bots-and-teams","image":"https://kwant.si/assets/og/docs-bots-and-teams.png?v=b027504528","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-30","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Bots & teams","item":"https://kwant.si/docs/bots-and-teams"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/bots-and-teams#article","headline":"AI agent teams: bots, leads & handoffs","description":"Create bots from persona presets, give each a soul and a model, group them into teams with a lead, and let them hand work to each other with @mentions.","url":"https://kwant.si/docs/bots-and-teams","mainEntityOfPage":"https://kwant.si/docs/bots-and-teams","image":"https://kwant.si/assets/og/docs-bots-and-teams.png?v=b027504528","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-31","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Bots & teams","item":"https://kwant.si/docs/bots-and-teams"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

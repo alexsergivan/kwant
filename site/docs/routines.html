@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Routines &amp; bot actions: Schedule work, let bots set things up with an Undo, and decide who hires.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-10-29">
+<meta property="article:modified_time" content="2026-10-31">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Scheduled AI agents: routines &amp; cron · kwant">
 <meta name="twitter:description" content="Schedule bot work with routines, cron rules and follow-ups that run on your own machine, with an Undo on every change bots make.">
@@ -80,6 +80,19 @@
 
 <h3 id="follow-ups">Follow-ups</h3>
 <p>A bot can set itself a one-off follow-up, for example to check a deploy in an hour. Only bots create follow-ups.</p>
+
+<h3 id="good-run">What a good run is</h3>
+<p>A routine can carry a <a href="/docs/flight-school">Flight School</a> class, a description of a good result and checks. Each run's board task gets them, with the checks already approved, so a run that passes its checks is verified on its own. Only you set the class and the checks. Routines without them run as before.</p>
+
+<h2 id="suggested">Suggested routines</h2>
+<p>kwant can notice tasks you ask for on a rhythm and offer a routine for them. It's <strong>off by default</strong>: turn on <strong>Suggest routines from repeated tasks</strong> in <strong>Settings → Mission board</strong>, and pick how many new suggestions a day (0–10, 2 by default).</p>
+<ul>
+  <li><strong>What it looks at:</strong> the board tasks you made over the last 120 days, asked for daily, on weekdays, weekly on up to three days or monthly, in your time zone. Tasks made by bots, routines, hand-offs or chats never count.</li>
+  <li><strong>What qualifies:</strong> habits that were mostly verified, mostly done by one bot and not already covered by a routine.</li>
+  <li><strong>What you see:</strong> in Routines, each suggestion's bot, rhythm, first run, the tasks it learned from, what the bot may do when it runs and which checks it keeps. At most 5 wait per space, each with one notification.</li>
+  <li><strong>Accept or Dismiss:</strong> Accept opens the routine form so you can edit it first. Dismiss hides the suggestion for 30 days. Nothing is made without Accept. Routines made this way carry a "Suggested for you" badge.</li>
+  <li><strong>Paused?</strong> If suggestions are paused (the switch or the board is off, or no time zone is set), the section says why and how to fix it.</li>
+</ul>
 
 <h2 id="actions">Bots that set things up</h2>
 <p>Ask a bot for a routine, a channel or a new bot and it makes the change itself. Each change shows a card with what was done and an <strong>Undo</strong> button.</p>
@@ -164,7 +177,7 @@
 </footer>
 <script src="../assets/js/site.js?v=c490c973ba" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/routines#article","headline":"Scheduled AI agents: routines & cron","description":"Schedule bot work with routines, cron rules and follow-ups that run on your own machine, with an Undo on every change bots make.","url":"https://kwant.si/docs/routines","mainEntityOfPage":"https://kwant.si/docs/routines","image":"https://kwant.si/assets/og/docs-routines.png?v=7be758aed4","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-29","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Routines & bot actions","item":"https://kwant.si/docs/routines"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/routines#article","headline":"Scheduled AI agents: routines & cron","description":"Schedule bot work with routines, cron rules and follow-ups that run on your own machine, with an Undo on every change bots make.","url":"https://kwant.si/docs/routines","mainEntityOfPage":"https://kwant.si/docs/routines","image":"https://kwant.si/assets/og/docs-routines.png?v=7be758aed4","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-31","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Routines & bot actions","item":"https://kwant.si/docs/routines"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

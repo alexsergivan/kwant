@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- **kwant.si covers 0.5.** The home page says "New in 0.5" (bots bring receipts, status dots, smarter
+  browsing, suggested routines, off by default). The features page has "New in 0.5"
+  sections for web citations, browser steps, numbered controls, asking before paying, status dots,
+  suggested routines, routine checks, the Truth Ledger preview (off by default) and the star card. The
+  Browser, Routines and Bots & teams docs cover them, and /llms.txt mentions citations.
+
 ## [Mac 0.5.1] - 2026-10-31
 
 ### Added

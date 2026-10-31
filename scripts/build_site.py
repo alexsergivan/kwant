@@ -601,6 +601,8 @@ Key facts:
   Cloudflare's cookie-free Web Analytics.
 - Optional Mission board: a task counts as Verified only when a check passes, and the bot that handed out work reviews
   the result. No token limits by default; hand-off caps (4 per bot, 16 per request, with Continue) stop loops.
+- Bots cite web facts with links that open the page at the exact quote; kwant checks the quote is on the page word for
+  word and refuses made-up ones. Browser steps report what changed, and checkouts always ask before paying.
 - Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.
 - Not to be confused with the Kwant quantum-transport Python package (kwant-project.org) or other products named Kwant; this kwant is an AI agent app.
 """

@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Browser: A bot browser shown live in the app: your own Chrome, or isolated in Docker.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-10-30">
+<meta property="article:modified_time" content="2026-10-31">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="AI agent browser: your Chrome or Docker · kwant">
 <meta name="twitter:description" content="Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.">
@@ -73,6 +73,23 @@
   <li><strong>A set width:</strong> the bot can take the shot at a width from 320 to 1280 pixels, such as 390 for a phone or 1280 for a desktop. The browser goes back to its own size afterwards, and the picture you see in the panel isn't changed.</li>
   <li><strong>Waits for you:</strong> like the other browser tools, it won't take a shot while you're signing in, solving a CAPTCHA or holding the browser with Take Control.</li>
   <li><strong>Which bots:</strong> Claude and Codex bots get the picture. Bots on other engines get a short text note in its place for now.</li>
+</ul>
+
+<h2 id="citations">Bots cite what they read</h2>
+<p>When a bot backs a fact with a web page, it passes the exact words it read (or a block id from its read). kwant checks the words are on the page once, word for word, and returns the quote, its address and a link that opens the page with the quote highlighted.</p>
+<ul>
+  <li><strong>Nothing made up:</strong> a quote that isn't on the page, or is on it more than once, is refused with the reason.</li>
+  <li><strong>The right spot:</strong> a link never opens at a lookalike higher up the page (the same words with other capitals or accents, like "résumé" for "resume"). kwant adds nearby words to the link, or refuses when nothing tells the two apart.</li>
+  <li><strong>No model calls:</strong> the check is plain text matching. Bots are told to back web facts with these links.</li>
+</ul>
+
+<h2 id="steps">Each step says what it changed</h2>
+<p>After every click, key or typing, the bot gets one line saying what changed: the page it went to, or the new and gone lines. If its last 3 steps changed nothing, or it asks a 3rd time in a row for the same click that changed nothing, it is told to stop and try something else.</p>
+<ul>
+  <li><strong>Numbered controls:</strong> the page a bot reads lists its buttons, links and fields as numbered refs with their role (<code>[9] button "Add to cart" · Sauce Labs Bike Light</code>), naming the product or row when several share a name. A click by ref hits exactly that control, also inside frames.</li>
+  <li><strong>Never through a banner:</strong> if the control has gone, been hidden or renamed, or a cookie banner or dialog covers it, nothing is clicked and the bot gets a fresh list with the reason.</li>
+  <li><strong>No re-reading:</strong> reading a page that hasn't changed since the last look gives a one-line "unchanged". On a page with more than 40 controls, the bot can say what it looks for ("add to cart bike light") and the matches are listed first, with the same numbers.</li>
+  <li><strong>Asks before paying:</strong> before a bot clicks or presses Enter or Space, kwant reads the page: the button the click would really hit, card number or CVC fields, a payment provider's card frame (Stripe, Braintree, Adyen, …) and forms that post to a checkout. Any of these gets the <a href="/docs/approvals">payment card</a> in every approval mode, even behind a plain "Continue". Bots using the browser through the shell leave that step to you.</li>
 </ul>
 
 <h2 id="modes">Local or VM mode</h2>
@@ -155,7 +172,7 @@ docker build -t kwnt-executor:v1 -f docker/executor.Dockerfile docker</code></pr
 </footer>
 <script src="../assets/js/site.js?v=c490c973ba" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/browser#article","headline":"AI agent browser: your Chrome or Docker","description":"Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.","url":"https://kwant.si/docs/browser","mainEntityOfPage":"https://kwant.si/docs/browser","image":"https://kwant.si/assets/og/docs-browser.png?v=7175e8f75c","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-30","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Browser","item":"https://kwant.si/docs/browser"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/browser#article","headline":"AI agent browser: your Chrome or Docker","description":"Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.","url":"https://kwant.si/docs/browser","mainEntityOfPage":"https://kwant.si/docs/browser","image":"https://kwant.si/assets/og/docs-browser.png?v=7175e8f75c","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-31","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Browser","item":"https://kwant.si/docs/browser"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

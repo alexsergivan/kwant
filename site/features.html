@@ -57,7 +57,9 @@
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
-        <li><a href="#new-teams">New in 0.4.0</a></li>
+        <li><a href="#new-05">New in 0.5</a></li>
+        <li><a href="#discovery">Suggested routines</a></li>
+        <li><a href="#new-teams">Hand-offs &amp; review</a></li>
         <li><a href="#performance">Performance &amp; audits</a></li>
         <li><a href="#mission-board">Mission board</a></li>
         <li><a href="#flight-school">Flight School</a></li>
@@ -73,10 +75,47 @@
   </div>
 </nav>
 
+<section id="new-05" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.5 · Browser &amp; status</p>
+      <h2>Bots that show their work</h2>
+      <p>Web facts come with a link to the exact quote, the browser tells a bot what each step changed, and every bot's avatar says what it's doing.</p>
+    </div>
+    <ul class="flist">
+      <li id="citations"><h3>Bots bring receipts</h3><p>A bot passes the exact words it read, and kwant checks they are on the page once, word for word. It gets back the quote, its address and a link that opens the page with the quote highlighted. A quote that isn't on the page, or is on it more than once, is refused with the reason, so a bot can't make one up. No model calls.</p></li>
+      <li id="steps"><h3>Sees what each click changed</h3><p>After every click, key or typing, the bot gets one line saying what changed: the page it went to, or the new and gone lines. If its last 3 steps changed nothing, it is told to stop and try something else.</p></li>
+      <li id="refs"><h3>Clicks by number, never through a banner</h3><p>The page a bot reads lists its buttons, links and fields as numbered refs. A click by ref hits exactly that control. If a cookie banner or dialog covers it, nothing is clicked and the bot gets a fresh list with the reason.</p></li>
+      <li id="unchanged"><h3>No re-reading the same page</h3><p>Reading an unchanged page again gives a one-line "unchanged". On a page with more than 40 controls, the bot can say what it looks for and the matches are listed first.</p></li>
+      <li id="pay"><h3>Asks before paying, also behind "Continue"</h3><p>Before a bot clicks, kwant reads the page: the button the click would really hit, card number fields, a payment provider's card frame and forms that post to a checkout. Any of these gets the payment card, in every approval mode.</p></li>
+      <li id="status-dots"><h3>Status dots</h3><p>The dot on each bot's avatar says what it's doing: green Available, a pulsing Working dot, amber Needs you, a hollow Queued ring or grey Can't run. Hovering or a screen reader gives the status in words.</p></li>
+    </ul>
+    <p class="section-foot"><a class="more-link" href="/docs/browser#citations">Citations &amp; browsing docs →</a> <a class="more-link" href="/docs/bots-and-teams#status-dots">Status dots →</a></p>
+  </div>
+</section>
+
+<section id="discovery" class="fgroup alt">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.5 · Automation Discovery</p>
+      <h2>Routines that suggest themselves</h2>
+      <p>kwant notices tasks you ask for on a rhythm and offers a routine for them. Nothing is made until you press Accept. Off by default.</p>
+    </div>
+    <ul class="flist">
+      <li id="suggested"><h3>Suggested routines (off by default)</h3><p>Turn on "Suggest routines from repeated tasks" in Settings → Mission board. kwant looks at the board tasks you made over the last 120 days and finds ones you ask for daily, on weekdays, weekly or monthly. At most 2 new suggestions a day, each with its schedule, first run, checks and the tasks it came from.</p></li>
+      <li id="accept"><h3>Accept or dismiss</h3><p>Accept opens the routine form so you can change it first. Dismiss hides a suggestion for 30 days. Routines made this way carry a "Suggested for you" badge.</p></li>
+      <li id="good-run"><h3>Routines know what a good run is</h3><p>A routine can carry a Flight School class, a description of a good result and checks. A run that passes its checks is verified on its own. Only you set the class and the checks.</p></li>
+      <li id="truth-ledger"><h3>Truth Ledger preview (off by default)</h3><p>A <code>truth_ledger</code> setting, off by default, shows every bot note as a fact with where it came from. Notes a bot wrote after reading a web page, a file or another tool wait as proposed until you accept or reject them. Nothing the bots see changes yet.</p></li>
+      <li id="star"><h3>A star, asked once</h3><p>After real use, a small card asks for a GitHub star, with Maybe later and Don't ask again. It never shows on first run or while a bot needs you, and nothing is sent anywhere.</p></li>
+    </ul>
+    <p class="section-foot"><a class="more-link" href="/docs/routines#suggested">Suggested routines docs →</a></p>
+  </div>
+</section>
+
 <section id="new-teams" class="fgroup">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.4.0 · Teams</p>
+      <p class="kicker">Hand-offs &amp; review</p>
       <h2>Work handed on, checked and seen</h2>
       <p>Teammates pass work along on their own, the bot that handed it out checks the result, and a bot can look at a page instead of only reading it.</p>
     </div>
@@ -95,7 +134,7 @@
 <section id="performance" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.4.0 · Performance &amp; audits</p>
+      <p class="kicker">Performance &amp; audits</p>
       <h2>Learn from the work that's already done</h2>
       <p>See which bot and model does each kind of work well, have a second bot challenge important work, and turn work done well into skills. All of it needs the Mission board, and the Auditor and Skill Foundry are off by default.</p>
     </div>
@@ -474,7 +513,7 @@
 </footer>
 <script src="assets/js/site.js?v=c490c973ba" defer></script>
 <script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-10-30","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-10-31","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>
