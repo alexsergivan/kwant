@@ -66,8 +66,50 @@ come first, ties in page order. Ref numbers are the page's own, so a control pas
 clicks by its ref. `controls_note` says what was left out. Step answers (`/act`, `browser_act`)
 list the first 40 in page order.
 
+## Citing what a bot read
+
+A bot backs facts it read on the web with links that open the page at the words it quotes
+(`#:~:text=` text fragments). It never writes the link itself: it passes the words, and kwant checks
+them against the page open now (`sandbox::cite`, plain text matching, no model call).
+- MCP: `browser_cite` with `text` (the exact words) or `block` (an id from a read with blocks). It
+  only reads, so it is free in always-ask turns (`READ_ONLY_SELF_TOOLS`) and is a core tool.
+- HTTP: `POST /api/sandbox/:id/cite` with `{"text": …}` or `{"block": …}`.
+
+The answer is `{quote, url, link}`; `quote` is the page's own text and `url` the address it is on.
+The words must be on the page word for word: runs of spaces and line breaks count as one space,
+capitals count. They must be there exactly once, in whole words, in the page's rendered text
+(`innerText`, up to 200,000 characters) or in a same-origin frame's, which is then the `url`.
+Otherwise the call is refused with the reason (HTTP 422, a tool error): not on the page (with the
+page's spelling when only the capitals differ), on it N times (quote more), starts or ends inside a
+word. Nothing is quoted from the bot's own text.
+
+The link: `text=start` for a quote of up to 300 characters on one line, else `text=start,end` with
+its first and last five words. Every part is percent-encoded except letters, digits and `._~`, so
+`-`, `,`, `&`, `%` and spaces in the words can't break the fragment. Browsers highlight the first
+match without case or accents (`résumé` is `resume`, `ß` is `ss`, `ς` is `σ`); `cite::resolve`
+mirrors that on the page folded the same way (`cite::fold`: lowercase, compatibility decomposition
+with the accents dropped, plus `ß`, `ς`, `æ`, `œ`, `ø`, `ł`, `đ` and a few more), more leniently: no
+word or block boundaries, so it sees every lookalike Chrome would and maybe more. When its first match isn't the quote, up to three words before and after it on the same line are
+added as `prefix-,` and `,-suffix`. If that still doesn't single it out, the call is refused rather
+than returning a link that highlights something else. Two identical-looking passages with the
+same words around them can't be linked apart, so the later one is refused. A call with both `text`
+and `block` is refused too. An address with its own fragment
+(`#/route`) keeps it: `#/route:~:text=…`.
+
+Blocks: `browser_page` with `blocks: true` (HTTP `/page?blocks=1`) sends the page's lines as
+`[b3-9f2a41c0] text` (first 150, each cut at 300 characters) instead of `text`. The id is the line's
+number and a 32-bit hash of its text, so an id from an older read never cites a different block: if lines
+moved it finds the block by its hash, and if it's gone the call is refused ("read it again"). A
+read with blocks has its own `hash`, so "unchanged" (`since`, per-turn reads) only answers for the
+same kind of read.
+
+Limits: frames from other sites can't be read from the page, so their text can't be cited; a
+browser's own matching follows the page's blocks, which `innerText` lines only approximate, so a
+link can occasionally highlight nothing (it then opens at the top); pages that change text on load
+or per visit can make a link miss later.
+
 ## Tests
 
-`tests/browser_refs_test.rs`, `tests/browser_progress_test.rs` and `tests/browser_reads_test.rs` (real Chrome, skipped without one;
-the `saucedemo_*` tests are ignored and need the network), `ref_tests` in `src/sandbox/browser.rs`
-and the tests in `src/sandbox/progress.rs` and `src/sandbox/reads.rs`.
+`tests/browser_refs_test.rs`, `tests/browser_progress_test.rs` and `tests/browser_reads_test.rs` and `tests/browser_cite_test.rs` (real Chrome, skipped without one;
+the `saucedemo_*` and `a_public_page_*` tests are ignored and need the network), `ref_tests` in `src/sandbox/browser.rs`
+and the tests in `src/sandbox/progress.rs`, `src/sandbox/reads.rs` and `src/sandbox/cite.rs`.

@@ -4370,13 +4370,58 @@ async fn broadcast_sandbox_screenshot(state: &AppState, team_id: &str, ctrl: &cr
 
 /// `GET /api/sandbox/:id/page` options. `find`: words for what the bot looks for (matching
 /// controls listed first). `since`: the `hash` of the bot's last read; when the page still reads
-/// the same, the answer is a short `unchanged` note instead of the page.
+/// the same, the answer is a short `unchanged` note instead of the page. `blocks` (`1`): the
+/// page's text as blocks with ids, to cite one by its id (`POST /api/sandbox/:id/cite`).
 #[derive(Debug, Default, Deserialize)]
 pub struct PageQuery {
     #[serde(default)]
     pub find: Option<String>,
     #[serde(default)]
     pub since: Option<String>,
+    #[serde(default)]
+    pub blocks: Option<String>,
+}
+
+impl PageQuery {
+    fn wants_blocks(&self) -> bool {
+        matches!(self.blocks.as_deref().map(str::trim), Some("1" | "true" | "yes"))
+    }
+}
+
+/// Most blocks one read shows; the rest are left for the bot to find with `find` or by scrolling.
+const SHOWN_BLOCKS: usize = 150;
+
+/// A read with blocks: the page's text as `[b3-9f2a41c0] text` lines, each citable by its id, in
+/// place of the plain text. Its `hash` differs from a plain read's, so an "unchanged" answer is
+/// only given for the same kind of read.
+async fn add_blocks(ctrl: &crate::sandbox::BrowserController, page: &mut serde_json::Value) {
+    use crate::sandbox::{cite, reads};
+    let Some(frames) = ctrl.frame_texts().await else { return };
+    let all = cite::blocks(&frames[0].text);
+    let shown: Vec<String> = all.iter().take(SHOWN_BLOCKS).map(|(id, text)| cite::block_line(id, text)).collect();
+    let old = page["hash"].as_str().unwrap_or_default().to_string();
+    let hash = reads::page_hash(
+        page["url"].as_str().unwrap_or_default(),
+        page["title"].as_str().unwrap_or_default(),
+        &shown.join("\n"),
+        &[],
+        &format!("blocks {old}"),
+    );
+    if let Some(obj) = page.as_object_mut() {
+        obj.remove("text");
+    }
+    page["blocks"] = json!(shown);
+    page["hash"] = json!(hash);
+    if all.len() > SHOWN_BLOCKS {
+        page["blocks_note"] = json!(format!(
+            "Showing the first {SHOWN_BLOCKS} of {} blocks. To cite a passage further down, scroll or quote its exact words.",
+            all.len()
+        ));
+    }
+    if frames.len() > 1 {
+        page["frames_note"] =
+            json!("Text inside frames isn't listed as blocks; cite it by quoting its exact words.");
+    }
 }
 
 pub async fn get_sandbox_page(
@@ -4388,11 +4433,52 @@ pub async fn get_sandbox_page(
         .await
         .ok_or_else(|| browser_unavailable(&state))?;
     let snap = ctrl.snapshot().await;
-    let page = page_state_from(&ctrl, snap, query.find.as_deref().unwrap_or_default()).await;
+    let mut page = page_state_from(&ctrl, snap, query.find.as_deref().unwrap_or_default()).await;
+    if query.wants_blocks() {
+        add_blocks(&ctrl, &mut page).await;
+    }
     if query.since.as_deref().is_some_and(|since| !since.is_empty() && page["hash"] == json!(since)) {
         return Ok(Json(unchanged_read(&page)));
     }
     Ok(Json(page))
+}
+
+/// `POST /api/sandbox/:id/cite`: `text` (the exact words to quote) or `block` (an id from a read
+/// with blocks).
+#[derive(Debug, Default, Deserialize)]
+pub struct CitePayload {
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub block: Option<String>,
+}
+
+/// Cites what a bot read on the page open now: checks the words are on it (or in one of its
+/// same-origin frames) word for word and only once, and answers `{quote, url, link}`, the link
+/// opening the page with the quote highlighted. A quote that isn't there, or is there more than
+/// once, is refused with the reason (422). No model is asked; nothing on the page changes.
+pub async fn cite_sandbox(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+    Json(payload): Json<CitePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    use crate::sandbox::cite;
+    let refuse = |msg: String| (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": msg })));
+    let ctrl = get_or_create_browser_controller(&state, &team_id)
+        .await
+        .ok_or_else(|| browser_unavailable(&state))?;
+    let Some(frames) = ctrl.frame_texts().await else {
+        return Err(refuse("Couldn't read the page to check the quote. Open a page first.".into()));
+    };
+    let text = payload.text.as_deref().map(str::trim).filter(|t| !t.is_empty());
+    let block = payload.block.as_deref().map(str::trim).filter(|b| !b.is_empty());
+    let cited = match (text, block) {
+        (Some(_), Some(_)) => Err("Give the words to cite in text or a block id in block, not both.".into()),
+        (Some(text), None) => cite::cite_text(&frames, text),
+        (None, Some(block)) => cite::cite_block(&frames[0], block),
+        (None, None) => Err("Give the exact words to cite in text, or a block id in block.".into()),
+    };
+    cited.map(|c| Json(json!(c))).map_err(refuse)
 }
 
 /// What a read of a page that still reads the same returns instead of it.

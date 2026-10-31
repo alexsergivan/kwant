@@ -1308,6 +1308,46 @@ impl BrowserController {
         Some(snap)
     }
 
+    /// The page's rendered text and its same-origin frames', each with its own address (the page
+    /// first), for citing what a bot read ([`super::cite`]). Frames from other sites can't be read
+    /// from the page, so they are left out.
+    pub async fn frame_texts(&self) -> Option<Vec<super::cite::FrameText>> {
+        let expression = r#"
+            (function() {
+                var out = [];
+                function walk(win, depth) {
+                    var doc;
+                    try { doc = win.document; if (!doc) return; } catch (e) { return; }
+                    // A frame without an address of its own (about:blank, srcdoc) can't be linked to
+                    var href = String(win.location.href);
+                    if (depth === 0 || !/^about:/.test(href)) {
+                        out.push([href, doc.body ? doc.body.innerText.substring(0, 200000) : '']);
+                    }
+                    if (depth > 3 || out.length > 20) return;
+                    for (var i = 0; i < win.frames.length; i++) {
+                        try { walk(win.frames[i], depth + 1); } catch (e) {}
+                    }
+                }
+                walk(window, 0);
+                return out;
+            })()
+        "#;
+        let res = self
+            .send_cdp_command("Runtime.evaluate", json!({ "expression": expression, "returnByValue": true }))
+            .await
+            .ok()?;
+        let frames: Vec<super::cite::FrameText> = res["result"]["value"]
+            .as_array()?
+            .iter()
+            .filter_map(|f| {
+                let url = f.get(0)?.as_str()?.to_string();
+                let text = f.get(1)?.as_str()?.to_string();
+                Some(super::cite::FrameText { url, text })
+            })
+            .collect();
+        (!frames.is_empty() && !frames[0].url.is_empty()).then_some(frames)
+    }
+
     pub async fn extract_content(&self) -> Result<String, BrowserError> {
         let expression = r#"
             (function() {

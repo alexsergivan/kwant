@@ -358,6 +358,7 @@ pub(crate) const READ_ONLY_SELF_TOOLS: &[&str] = &[
     "mcp_search",
     super::page_source::TOOL,
     "skill_get",
+    BROWSER_CITE,
     "task_list",
     "tier_status",
 ];
@@ -519,6 +520,18 @@ fn browser_tools() -> Vec<Value> {
                 "properties": {
                     "find": {"type": "string", "description": "Words for what you look for, e.g. \"bike light add to cart\": controls naming them are listed first."},
                     "full": {"type": "boolean", "description": "true: send the whole page even if it didn't change since your last look."},
+                    "blocks": {"type": "boolean", "description": "true: the text as blocks with ids ([b3-9f2a41c0] …), so you can cite a whole block with browser_cite by its id."},
+                },
+            },
+        }),
+        json!({
+            "name": BROWSER_CITE,
+            "description": "Cite what you read on the page your browser shows now. Give the exact words (copied from your read) or a block id from browser_page with blocks. The words are checked against the page: they must be on it word for word and only once (spaces and line breaks don't matter, capitals do). You get {quote, url, link}: the link opens the page with the quote highlighted. A quote that isn't on the page, or is on it more than once, is refused with the reason: quote it exactly or quote more, never from memory. When you answer facts you read on the web, back each one with its cite link.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The exact words to quote, as the page has them; whole words, a sentence or two is best."},
+                    "block": {"type": "string", "description": "Or a block id from browser_page with blocks, e.g. b3-9f2a41c0, to quote that whole block."},
                 },
             },
         }),
@@ -559,6 +572,7 @@ pub const BROWSER_OPEN: &str = "browser_open";
 pub const BROWSER_PAGE: &str = "browser_page";
 pub const BROWSER_ACT: &str = "browser_act";
 pub const BROWSER_SCREENSHOT: &str = "browser_screenshot";
+pub const BROWSER_CITE: &str = "browser_cite";
 
 /// `browser_screenshot`: MCP content blocks (a text line and the JPEG), and whether it is an error.
 /// Same holds as the other browser tools: the person's sign-in/CAPTCHA step or their control.
@@ -646,7 +660,10 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
 /// `reader` names who reads (empty: nobody known), for `browser_page` to answer "unchanged" when
 /// that reader's last page (from any browser tool) still reads the same.
 async fn run_browser_tool(state: &AppState, target: &str, reader: &str, name: &str, args: &Value) -> (String, bool) {
-    use super::routes::{act_sandbox_allowed, get_sandbox_page, navigate_sandbox, unchanged_read, InteractPayload, NavigatePayload, PageQuery};
+    use super::routes::{
+        act_sandbox_allowed, cite_sandbox, get_sandbox_page, navigate_sandbox, unchanged_read, CitePayload, InteractPayload, NavigatePayload,
+        PageQuery,
+    };
     let ctrl = match reader {
         "" => None,
         _ => super::routes::get_or_create_browser_controller(state, target).await,
@@ -662,7 +679,12 @@ async fn run_browser_tool(state: &AppState, target: &str, reader: &str, name: &s
         }
         BROWSER_PAGE => {
             let find = args["find"].as_str().map(str::to_string);
-            get_sandbox_page(state, target, Query(PageQuery { find, since: None })).await
+            let blocks = (args["blocks"].as_bool() == Some(true)).then(|| "1".to_string());
+            get_sandbox_page(state, target, Query(PageQuery { find, since: None, blocks })).await
+        }
+        BROWSER_CITE => {
+            let payload = CitePayload { text: args["text"].as_str().map(str::to_string), block: args["block"].as_str().map(str::to_string) };
+            cite_sandbox(state, target, Json(payload)).await
         }
         _ => {
             let Some(action) = args["action"].as_str() else {
@@ -1030,7 +1052,7 @@ async fn call_tool(
                 }
             }
         }
-        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT => match &scope.sandbox_target {
+        BROWSER_OPEN | BROWSER_PAGE | BROWSER_ACT | BROWSER_CITE => match &scope.sandbox_target {
             Some(target) => call_browser_tool(state, scope, target, name, args).await,
             None => (format!("Unknown tool {name}."), true),
         },

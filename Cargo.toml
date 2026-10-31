@@ -49,6 +49,7 @@ qrcode = { version = "0.14", default-features = false }
 ring = "0.17"
 base64 = "0.22"
 url = "2"
+unicode-normalization = "0.1"
 tz-rs = "0.7"
 percent-encoding = "2"
 zip = { version = "9", default-features = false, features = ["deflate"] }
