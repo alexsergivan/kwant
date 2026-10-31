@@ -936,10 +936,14 @@ timezone, offered: [offer], skipped}`, writing nothing at all.
 
 A scan, per space: a live offer whose habit no longer passes the miner is `expired`; one whose habit
 still passes but changed (another bot, another rhythm, days or time zone, or the time moved ≥ 30
-minutes) is `superseded` and offered again as it is now, within the cap and without a second
+minutes) is replaced in one transaction: the old row becomes `superseded` (event `superseded`,
+`{replaced_by}`) and the habit as it is now is stored live (event `offered`, `{cluster_key, replaces}`),
+keeping the old `offered_at`, or neither happens. A replacement adds no live offer and is no new offer,
+so the daily cap and the live limit don't apply to it, nothing counts it toward them, and it sends no
 notification. Then each new offer is stored (`sug_…`) with one `offered` event, within the daily cap
-(offers in the last 24 hours) and 5 live per space, checked in the same statement as the insert, so two
-racing scans store one offer per habit. Delivery is re-checked: a thread that is gone or archived, or
+(new offers in the last 24 hours, rolling, not local midnight; replacements don't count) and 5 live per
+space, checked in the same statement as the insert, so two racing scans store one offer per habit.
+`stats.offered_30d` counts new offers the same way. Delivery is re-checked: a thread that is gone or archived, or
 a channel of another space, falls back to the bot's direct chat. Checks a routine may not carry are
 moved to the left-out list.
 

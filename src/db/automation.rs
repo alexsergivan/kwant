@@ -79,6 +79,12 @@ const SUGGESTION_SELECT: &str = "SELECT id, space_id, cluster_key, kwant_id, nam
     task_class, acceptance, checks, left_out_checks, chain, source_task_ids, evidence, status, routine_id, cooldown_until,
     routine_deleted_at, retention, retention_at, offered_at, decided_at FROM routine_suggestions";
 
+/// SQL: suggestion `c` was a new offer, not a replacement of a live one whose habit changed
+/// (its `offered` event names the offer it `replaces`). Only new offers count toward the daily
+/// cap and the stats, so a habit that changes is counted once however often it is replaced.
+const NEW_OFFER: &str = "NOT EXISTS (SELECT 1 FROM routine_suggestion_events e
+    WHERE e.suggestion_id = c.id AND e.kind = 'offered' AND json_extract(e.detail, '$.replaces') IS NOT NULL)";
+
 fn text<T: serde::Serialize + ?Sized>(v: &T) -> String {
     serde_json::to_string(v).unwrap_or_default()
 }
@@ -261,7 +267,7 @@ impl Database {
             .bind(space)
             .fetch_all(&self.pool)
             .await?;
-        let (offered_24h,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM routine_suggestions WHERE space_id = ? AND offered_at > ?")
+        let (offered_24h,): (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM routine_suggestions c WHERE space_id = ? AND offered_at > ? AND {NEW_OFFER}"))
             .bind(space)
             .bind(now - Duration::hours(24))
             .fetch_one(&self.pool)
@@ -292,14 +298,14 @@ impl Database {
         let mut evidence = serde_json::to_value(&offer.evidence).unwrap_or_default();
         evidence["sources"] = serde_json::to_value(&offer.sources).unwrap_or_default();
         let mut tx = self.pool.begin().await?;
-        let res = sqlx::query(
+        let res = sqlx::query(&format!(
             "INSERT INTO routine_suggestions (id, space_id, cluster_key, kwant_id, name, instructions, schedule, first_run_at, delivery,
                 task_class, acceptance, checks, left_out_checks, chain, source_task_ids, evidence, status, offered_at)
              SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'offered', ?17
              WHERE (SELECT COUNT(*) FROM routine_suggestions WHERE space_id = ?2 AND status = 'offered') < ?18
-               AND (SELECT COUNT(*) FROM routine_suggestions WHERE space_id = ?2 AND offered_at > ?19) < ?20
-             ON CONFLICT DO NOTHING",
-        )
+               AND (SELECT COUNT(*) FROM routine_suggestions c WHERE space_id = ?2 AND offered_at > ?19 AND {NEW_OFFER}) < ?20
+             ON CONFLICT DO NOTHING"
+        ))
         .bind(&id)
         .bind(space)
         .bind(&offer.cluster_key)
@@ -327,6 +333,62 @@ impl Database {
             return Ok(None);
         }
         event(&mut tx, &id, "offered", "kwant", json!({ "cluster_key": offer.cluster_key }), now).await?;
+        tx.commit().await?;
+        Ok(Some(id))
+    }
+
+    /// Replaces live offer `old` of `space`, whose habit changed (design §6), with `offer` as the
+    /// habit is now, in one transaction: `old` becomes `superseded` and the replacement is stored
+    /// live, or neither happens. The replacement adds no live offer and is no new offer, so the
+    /// daily cap and the live limit don't apply to it and it isn't counted toward them (its
+    /// `offered` event names the offer it `replaces`); it keeps `old`'s `offered_at`. `None` when
+    /// `old` is no longer live (another scan, or the person, decided it first).
+    pub async fn replace_offer(&self, old: &str, space: &str, offer: &Offer, now: DateTime<Utc>) -> Result<Option<String>, DbError> {
+        let id = format!("sug_{}", Uuid::new_v4().simple());
+        let mut evidence = serde_json::to_value(&offer.evidence).unwrap_or_default();
+        evidence["sources"] = serde_json::to_value(&offer.sources).unwrap_or_default();
+        let mut tx = self.pool.begin().await?;
+        // A write first, so the transaction holds the lock from its first statement
+        let offered_at: Option<(DateTime<Utc>,)> = sqlx::query_as(
+            "UPDATE routine_suggestions SET status = 'superseded', decided_at = ?1
+             WHERE id = ?2 AND space_id = ?3 AND cluster_key = ?4 AND status = 'offered' RETURNING offered_at",
+        )
+        .bind(now)
+        .bind(old)
+        .bind(space)
+        .bind(&offer.cluster_key)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((offered_at,)) = offered_at else {
+            tx.rollback().await?;
+            return Ok(None);
+        };
+        sqlx::query(
+            "INSERT INTO routine_suggestions (id, space_id, cluster_key, kwant_id, name, instructions, schedule, first_run_at, delivery,
+                task_class, acceptance, checks, left_out_checks, chain, source_task_ids, evidence, status, offered_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'offered', ?17)",
+        )
+        .bind(&id)
+        .bind(space)
+        .bind(&offer.cluster_key)
+        .bind(&offer.kwant_id)
+        .bind(&offer.name)
+        .bind(&offer.instructions)
+        .bind(text(&offer.schedule))
+        .bind(offer.first_run_at)
+        .bind(text(&offer.delivery))
+        .bind(&offer.task_class)
+        .bind(&offer.acceptance)
+        .bind(text(&offer.checks))
+        .bind(text(&offer.left_out_checks))
+        .bind(text(&offer.chain))
+        .bind(text(&offer.source_task_ids))
+        .bind(evidence.to_string())
+        .bind(offered_at)
+        .execute(&mut *tx)
+        .await?;
+        event(&mut tx, old, "superseded", "kwant", json!({ "replaced_by": id }), now).await?;
+        event(&mut tx, &id, "offered", "kwant", json!({ "cluster_key": offer.cluster_key, "replaces": old }), now).await?;
         tx.commit().await?;
         Ok(Some(id))
     }
@@ -491,14 +553,14 @@ impl Database {
 
     pub async fn suggestion_stats(&self, space: &str, now: DateTime<Utc>) -> Result<SuggestionStats, DbError> {
         let since = now - Duration::days(30);
-        let (offered_30d, accepted_30d, dismissed_30d, retained, dropped): (i64, i64, i64, i64, i64) = sqlx::query_as(
-            "SELECT COALESCE(SUM(offered_at > ?2), 0),
+        let (offered_30d, accepted_30d, dismissed_30d, retained, dropped): (i64, i64, i64, i64, i64) = sqlx::query_as(&format!(
+            "SELECT COALESCE(SUM(offered_at > ?2 AND {NEW_OFFER}), 0),
                     COALESCE(SUM(status = 'accepted' AND decided_at > ?2), 0),
                     COALESCE(SUM(status = 'dismissed' AND decided_at > ?2), 0),
                     COALESCE(SUM(retention = 'retained'), 0),
                     COALESCE(SUM(retention = 'dropped'), 0)
-             FROM routine_suggestions WHERE space_id = ?1",
-        )
+             FROM routine_suggestions c WHERE space_id = ?1"
+        ))
         .bind(space)
         .bind(since)
         .fetch_one(&self.pool)

@@ -187,33 +187,37 @@ pub struct Stored {
 }
 
 /// One scan of `space` at `now` that keeps what it finds (design §6): a live offer whose habit no
-/// longer passes is `expired`, one whose rhythm, time or bot changed is `superseded` and offered
-/// again as it is now (within the cap, without a second notification); new habits are stored as
-/// offers, one notification each. Two scans racing store one offer per habit.
+/// longer passes is `expired`; one whose rhythm, time or bot changed is replaced, in one step, by
+/// the habit as it is now (outside the daily cap and the live limit, since it adds no offer, and
+/// without a second notification). New habits are stored as offers, one notification each. Two
+/// scans racing store one offer per habit.
 pub async fn scan_space(state: &AppState, space_id: &SpaceId, tz: &str, now: DateTime<Utc>) -> Result<Stored, DbError> {
     let space = space_id.as_str();
     let mut out = Stored::default();
-    let mut scan = mine(state, space_id, tz, now).await?;
-    let mut replaced: HashSet<String> = HashSet::new();
+    // Live offers first, then the miner: an offer another scan stores in between isn't in `live`,
+    // so it can't be mistaken for one whose habit is gone (and expired, and offered twice)
     let live = state.db.list_suggestions(space, Some("offered")).await?;
+    let mut scan = mine(state, space_id, tz, now).await?;
     for row in &live {
         let now_offer = scan.live.iter().find(|o| o.cluster_key == row.cluster_key);
-        let kind = match (now_offer, serde_json::from_str::<Schedule>(&row.schedule)) {
-            (None, _) => "expired",
-            (Some(o), Ok(s)) if !miner::materially_changed(&s, &row.kwant_id, o) => continue,
-            (Some(_), _) => "superseded",
-        };
-        if state.db.end_offer(&row.id, kind, now).await? {
-            if kind == "expired" {
-                out.expired.push(row.id.clone());
-            } else {
-                replaced.insert(row.cluster_key.clone());
-                out.superseded.push(row.id.clone());
+        match (now_offer, serde_json::from_str::<Schedule>(&row.schedule)) {
+            (None, _) => {
+                if state.db.end_offer(&row.id, "expired", now).await? {
+                    out.expired.push(row.id.clone());
+                }
+            }
+            (Some(o), Ok(s)) if !miner::materially_changed(&s, &row.kwant_id, o) => {}
+            (Some(o), _) => {
+                let o = storable(state, space, o.clone()).await;
+                // `None`: another scan or the person decided it first; that decision stands
+                if state.db.replace_offer(&row.id, space, &o, now).await?.is_some() {
+                    out.superseded.push(row.id.clone());
+                }
             }
         }
     }
-    // Ended offers free their habits and their room: mine again with that
-    if !out.expired.is_empty() || !out.superseded.is_empty() {
+    // Expired offers free their habits and their room: mine again with that
+    if !out.expired.is_empty() {
         scan = mine(state, space_id, tz, now).await?;
     }
     let cap = daily_cap(state).await;
@@ -222,9 +226,7 @@ pub async fn scan_space(state: &AppState, space_id: &SpaceId, tz: &str, now: Dat
         let o = storable(state, space, o).await;
         match state.db.store_offer(space, &o, now, cap, miner::MAX_LIVE_PER_SPACE).await? {
             Some(id) => {
-                if !replaced.contains(&key) {
-                    announce(state, &o).await;
-                }
+                announce(state, &o).await;
                 out.offered.push(id);
             }
             // Another scan got there first, or the space filled up meanwhile

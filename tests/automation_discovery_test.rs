@@ -640,3 +640,157 @@ async fn undoing_a_bots_delete_keeps_the_routine_discovered() {
     assert_eq!((s.routine_id.as_deref(), s.routine_deleted_at), (back["id"].as_str(), None));
     assert_eq!(person(&e, "POST", SCAN, None).await["skipped"][0]["reason"], "covered");
 }
+
+// Rigel's review of #165: a changed habit under a used-up cap, races, midnight, bots, toggles
+
+#[tokio::test]
+async fn a_changed_habit_is_replaced_even_when_the_cap_is_used_up() {
+    let e = setup().await;
+    let a = bot(&e, "Ana").await;
+    let b = bot(&e, "Ben").await;
+    let c = bot(&e, "Cleo").await;
+    let space = SpaceId::default_space();
+    person(&e, "POST", "/api/settings", Some(json!({"automation_discovery": "on", "automation_discovery_daily_cap": 1}))).await;
+    mondays(&e, &a, "Weekly report", day("2026-10-12")).await;
+    let mut rx = e.state.event_sender.subscribe();
+    let monday = berlin(day("2026-10-12"), 10, 0);
+    let old = discovery::scan_space(&e.state, &space, TZ, monday).await.unwrap().offered[0].clone();
+
+    // The habit moves to Ben while the day's one offer is used up: the offer is replaced, not lost
+    sqlx::query("UPDATE tasks SET owner_kwant_id = ? WHERE owner_kwant_id = ?").bind(&b.id).bind(&a.id).execute(&e.pool).await.unwrap();
+    let s = discovery::scan_space(&e.state, &space, TZ, monday + Duration::hours(2)).await.unwrap();
+    assert_eq!((s.superseded.clone(), s.offered.len()), (vec![old.clone()], 0), "{s:?}");
+    let rows = e.state.db.list_suggestions(space.as_str(), Some("offered")).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    let new = &rows[0];
+    assert_eq!((new.kwant_id.as_str(), new.cluster_key.as_str()), (b.id.as_str(), e.state.db.get_suggestion(&old).await.unwrap().unwrap().cluster_key.as_str()));
+    assert_eq!(e.state.db.get_suggestion(&old).await.unwrap().unwrap().status, "superseded");
+    assert_eq!(events(&e, &old).await.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["offered", "superseded"]);
+    assert_eq!(events(&e, &new.id).await.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["offered"]);
+    assert_eq!(suggested(&mut rx).len(), 1, "one notification, for the first offer only");
+
+    // The replacement used no room: a new habit is still capped that day, and offered the next
+    mondays(&e, &c, "Send invoices", day("2026-10-12")).await;
+    let s = discovery::scan_space(&e.state, &space, TZ, monday + Duration::hours(3)).await.unwrap();
+    assert!(s.offered.is_empty() && s.skipped.iter().any(|k| k.title == "Send invoices" && matches!(k.reason, kwnt::automation_discovery::Reason::Capped)), "{s:?}");
+    // Changed again: replaced again, still one live and no notification
+    sqlx::query("UPDATE tasks SET owner_kwant_id = ? WHERE owner_kwant_id = ? AND title LIKE 'Weekly report%'").bind(&a.id).bind(&b.id).execute(&e.pool).await.unwrap();
+    let s = discovery::scan_space(&e.state, &space, TZ, monday + Duration::hours(4)).await.unwrap();
+    assert_eq!((s.superseded.len(), s.offered.len(), live(&e).await), (1, 0, 1), "{s:?}");
+    assert!(suggested(&mut rx).is_empty());
+    let s = discovery::scan_space(&e.state, &space, TZ, monday + Duration::hours(25)).await.unwrap();
+    assert_eq!((s.offered.len(), live(&e).await), (1, 2), "{s:?}");
+    assert_eq!(suggested(&mut rx).len(), 1);
+    // Stats count each habit's offer once, however often it was replaced
+    assert_eq!(e.state.db.suggestion_stats(space.as_str(), monday + Duration::hours(25)).await.unwrap().offered_30d, 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn six_accepts_at_once_make_one_routine() {
+    let e = setup().await;
+    let a = bot(&e, "Ana").await;
+    discovery_on(&e).await;
+    habit(&e, &a, "Weekly report").await;
+    let id = person(&e, "POST", SCAN, None).await["offered"][0]["id"].as_str().unwrap().to_string();
+    let racers = (0..6).map(|i| {
+        let (app, uri) = (e.app.clone(), format!("{LIST}/{id}/accept"));
+        tokio::spawn(async move { call_with(&app, "POST", &uri, None, Some(&format!("race-{i}")), Some(json!({}))).await.0 })
+    });
+    let mut statuses: Vec<StatusCode> = futures::future::join_all(racers).await.into_iter().map(Result::unwrap).collect();
+    statuses.sort();
+    assert_eq!(statuses, [StatusCode::CREATED, StatusCode::CONFLICT, StatusCode::CONFLICT, StatusCode::CONFLICT, StatusCode::CONFLICT, StatusCode::CONFLICT]);
+    assert_eq!(count(&e, "routines").await, 1);
+    assert_eq!(events(&e, &id).await.iter().filter(|e| e.0 == "accepted").count(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn six_scans_at_once_make_one_offer_and_one_notification() {
+    let e = setup().await;
+    let a = bot(&e, "Ana").await;
+    discovery_on(&e).await;
+    habit(&e, &a, "Weekly report").await;
+    let mut rx = e.state.event_sender.subscribe();
+    let racers = (0..6).map(|_| {
+        let app = e.app.clone();
+        tokio::spawn(async move { call(&app, "POST", SCAN, None, None).await.0 })
+    });
+    for status in futures::future::join_all(racers).await {
+        assert_eq!(status.unwrap(), StatusCode::OK);
+    }
+    assert_eq!((live(&e).await, count(&e, "routine_suggestions").await), (1, 1));
+    assert_eq!(suggested(&mut rx).len(), 1);
+}
+
+#[tokio::test]
+async fn the_cap_is_a_rolling_day_not_local_midnight() {
+    let e = setup().await;
+    discovery_on(&e).await;
+    for (k, name) in ["Ana", "Ben", "Cleo", "Dan"].iter().enumerate() {
+        habit_on(&e, k as i64, name).await;
+    }
+    let mut rx = e.state.event_sender.subscribe();
+    let today = local_date(TZ, Utc::now()).unwrap().unwrap();
+    let late = berlin(today, 23, 30);
+    assert_eq!(discovery::tick(&e.state, late).await, 2);
+    // 00:31, a new local day, and six hours on: still within 24 hours of those two
+    let after_midnight = late + Duration::minutes(61);
+    assert_eq!(local_date(TZ, after_midnight).unwrap().unwrap(), today.succ_opt().unwrap());
+    assert_eq!(discovery::tick(&e.state, after_midnight).await, 0);
+    assert_eq!(discovery::tick(&e.state, late + Duration::hours(6)).await, 0);
+    assert_eq!((live(&e).await, suggested(&mut rx).len()), (2, 2));
+    assert_eq!(discovery::tick(&e.state, late + Duration::hours(24) + Duration::minutes(1)).await, 2);
+    assert_eq!(live(&e).await, 4);
+}
+
+#[tokio::test]
+async fn a_bot_cannot_mark_a_routine_discovered() {
+    let e = setup().await;
+    let a = bot(&e, "Ana").await;
+    discovery_on(&e).await;
+    habit(&e, &a, "Weekly report").await;
+    let sid = person(&e, "POST", SCAN, None).await["offered"][0]["id"].as_str().unwrap().to_string();
+    let t = token(&e, &a).await;
+    let schedule = json!({"type": "weekly", "time": "09:00", "weekdays": ["mon"], "tz": TZ});
+    let args = json!({"name": "Mine", "instructions": "Do it", "schedule": schedule, "origin": "discovery", "suggestion_id": sid});
+    let _ = tool(&e, &t, "routine_create", args).await;
+    let routines = person(&e, "GET", "/api/routines", None).await;
+    for r in routines.as_array().unwrap() {
+        let _ = tool(&e, &t, "routine_update", json!({"routine": r["id"], "origin": "discovery", "suggestion_id": sid})).await;
+    }
+    let linked: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM routines WHERE origin IS NOT NULL OR suggestion_id IS NOT NULL").fetch_one(&e.pool).await.unwrap();
+    assert_eq!(linked.0, 0);
+    assert_eq!(e.state.db.get_suggestion(&sid).await.unwrap().unwrap().status, "offered");
+}
+
+#[tokio::test]
+async fn with_the_notification_off_the_offer_is_kept_quietly() {
+    let e = setup().await;
+    let a = bot(&e, "Ana").await;
+    discovery_on(&e).await;
+    person(&e, "POST", "/api/settings", Some(json!({"notify_on": ["turn_finished"]}))).await;
+    habit(&e, &a, "Weekly report").await;
+    let mut rx = e.state.event_sender.subscribe();
+    let v = person(&e, "POST", SCAN, None).await;
+    assert_eq!(titles(&v, "offered"), ["Weekly report"]);
+    assert_eq!(live(&e).await, 1);
+    assert!(suggested(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn keep_checks_saves_the_real_spec_not_the_mask() {
+    let e = setup().await;
+    let a = bot(&e, "Ana").await;
+    discovery_on(&e).await;
+    habit(&e, &a, "Weekly report").await;
+    let secret = "sk-live0123456789abcdef/weekly.md";
+    sqlx::query("UPDATE outcome_checks SET spec = ?").bind(json!({"path": secret}).to_string()).execute(&e.pool).await.unwrap();
+    let v = person(&e, "POST", SCAN, None).await;
+    let o = &v["offered"][0];
+    assert_eq!(o["checks"][0]["spec"]["path"], "[redacted]", "shown masked: {o}");
+    let id = o["id"].as_str().unwrap();
+    let (status, _, v) = accept(&e, id, "k1", json!({"keep_checks": [0]})).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    let rid = v["routine"]["id"].as_str().unwrap();
+    let (checks,): (String,) = sqlx::query_as("SELECT checks FROM routines WHERE id = ?").bind(rid).fetch_one(&e.pool).await.unwrap();
+    assert!(checks.contains(secret) && !checks.contains("[redacted]"), "{checks}");
+}

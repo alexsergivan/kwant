@@ -28,7 +28,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   run, checks, the tasks it came from and what the bot may do when it runs. Accept makes the routine,
   with your changes to the name, schedule, bot, delivery, acceptance or checks; Dismiss stops it being
   suggested for 30 days. Nothing is made without Accept, and only you can see, accept or dismiss
-  suggestions. Suggestions whose habit stopped or changed are withdrawn. Undoing the delete of a
+  suggestions. Suggestions whose habit stopped are withdrawn; one whose habit changed (another bot,
+  days or time) is updated in place, without a second notification and without using up the day's
+  suggestions. Undoing the delete of a
   suggested routine keeps it marked as suggested. Exports now carry a routine's class and acceptance,
   and its checks when they hold no secrets. This is step 3 of Automation Discovery; the screens come
   next.
