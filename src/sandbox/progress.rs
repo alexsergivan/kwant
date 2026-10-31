@@ -103,8 +103,8 @@ pub fn action_key(action: &str, target: Option<&ClickTarget>, text: Option<&str>
 /// How many times in a row before a bot is stopped.
 pub const STALL_AFTER: u32 = 3;
 
-pub const REPEAT_STOP: &str = "Not done: this is the 3rd time in a row you asked for exactly this action on this page. \
-     Don't repeat it; try something else (another control, scroll, a different page), or tell the person what is in the way.";
+pub const REPEAT_STOP: &str = "Not done: you asked for exactly this action on this page twice in a row and it changed \
+     nothing either time. Don't repeat it; try something else (another control, scroll, a different page), or tell the person what is in the way.";
 pub const STALL_STOP: &str = "Stop: your last 3 actions changed nothing on this page. Don't repeat them; try something else \
      (another control, scroll, a different page), or tell the person what is in the way.";
 
@@ -112,7 +112,10 @@ pub const STALL_STOP: &str = "Stop: your last 3 actions changed nothing on this 
 #[derive(Debug, Default)]
 pub struct Tracker {
     last: Option<(String, String)>,
+    /// How many times in a row `last` ran and changed nothing.
     repeats: u32,
+    /// Whether the action now running is `last`, so [`Tracker::after`] counts it.
+    running_last: bool,
     unchanged: u32,
 }
 
@@ -123,21 +126,29 @@ impl Tracker {
     }
 
     /// Before an action: `Some(REPEAT_STOP)` when it would be the same action a 3rd time in a row
-    /// on `url`. It keeps refusing until the bot does something else.
+    /// on `url` and the two before it changed nothing. It keeps refusing until the bot does
+    /// something else. The same click that keeps changing the page (a counter, "Load more") runs.
     pub fn before(&mut self, url: &str, key: Option<&str>) -> Option<&'static str> {
+        self.running_last = false;
         let key = key?;
         let same = self.last.as_ref().is_some_and(|(u, k)| u == url && k == key);
         if same && self.repeats + 1 >= STALL_AFTER {
             return Some(REPEAT_STOP);
         }
-        self.repeats = if same { self.repeats + 1 } else { 1 };
-        self.last = Some((url.to_string(), key.to_string()));
+        if !same {
+            self.repeats = 0;
+            self.last = Some((url.to_string(), key.to_string()));
+        }
+        self.running_last = true;
         None
     }
 
     /// After an action: `Some(STALL_STOP)` when it is the 3rd in a row that changed nothing.
     /// The count starts over after it is reported.
     pub fn after(&mut self, changed: bool) -> Option<&'static str> {
+        if std::mem::take(&mut self.running_last) {
+            self.repeats = if changed { 0 } else { self.repeats + 1 };
+        }
         if changed {
             self.unchanged = 0;
             return None;
@@ -191,24 +202,32 @@ mod tests {
     }
 
     #[test]
-    fn the_same_action_a_third_time_is_refused_until_the_bot_does_something_else() {
+    fn the_same_action_that_changed_nothing_is_refused_a_third_time_until_the_bot_does_something_else() {
         let mut t = Tracker::default();
         let add = action_key("click", Some(&ClickTarget::Ref(9)), None);
         let add = add.as_deref();
-        assert_eq!(t.before("u", add), None);
-        assert_eq!(t.before("u", add), None);
-        assert_eq!(t.before("u", add), Some(REPEAT_STOP));
-        assert_eq!(t.before("u", add), Some(REPEAT_STOP), "still refused");
-        assert_eq!(t.before("u", Some("click ref 3")), None);
-        assert_eq!(t.before("u", add), None, "after something else it may again");
+        // Runs and changes nothing (`after` is only called for actions that ran)
+        let idle = |t: &mut Tracker, url: &str, key: Option<&str>| {
+            let stop = t.before(url, key);
+            if stop.is_none() {
+                t.after(false);
+            }
+            stop
+        };
+        assert_eq!(idle(&mut t, "u", add), None);
+        assert_eq!(idle(&mut t, "u", add), None);
+        assert_eq!(idle(&mut t, "u", add), Some(REPEAT_STOP));
+        assert_eq!(idle(&mut t, "u", add), Some(REPEAT_STOP), "still refused");
+        assert_eq!(idle(&mut t, "u", Some("click ref 3")), None);
+        assert_eq!(idle(&mut t, "u", add), None, "after something else it may again");
         // Scrolls and keys don't count and don't break a run
         assert_eq!(action_key("scroll", None, None), None);
         assert_eq!(action_key("key", None, None), None);
-        assert_eq!(t.before("u", None), None);
-        assert_eq!(t.before("u", add), None);
-        assert_eq!(t.before("u", add), Some(REPEAT_STOP));
+        assert_eq!(idle(&mut t, "u", None), None);
+        assert_eq!(idle(&mut t, "u", add), None);
+        assert_eq!(idle(&mut t, "u", add), Some(REPEAT_STOP));
         // The same click on another page is another action
-        assert_eq!(t.before("u2", add), None);
+        assert_eq!(idle(&mut t, "u2", add), None);
         // Typing different text is a different action; a label is matched without case
         assert_ne!(action_key("type", None, Some("a")), action_key("type", None, Some("b")));
         assert_eq!(
@@ -216,7 +235,32 @@ mod tests {
             action_key("click", Some(&ClickTarget::Text("next".into())), None)
         );
         t.reset();
-        assert_eq!(t.before("u2", add), None);
+        assert_eq!(idle(&mut t, "u2", add), None);
+    }
+
+    #[test]
+    fn the_same_click_runs_as_long_as_it_changes_the_page() {
+        let mut t = Tracker::default();
+        let more = Some("click label increase");
+        for i in 1..=5 {
+            assert_eq!(t.before("u", more), None, "click {i}");
+            assert_eq!(t.after(true), None);
+        }
+        // Then it stops changing anything: two more run, the third is refused
+        assert_eq!(t.before("u", more), None);
+        t.after(false);
+        assert_eq!(t.before("u", more), None);
+        t.after(false);
+        assert_eq!(t.before("u", more), Some(REPEAT_STOP));
+        // A scroll that changes the page doesn't clear the click's count
+        let mut t = Tracker::default();
+        assert_eq!(t.before("u", more), None);
+        t.after(false);
+        assert_eq!(t.before("u", None), None);
+        t.after(true);
+        assert_eq!(t.before("u", more), None);
+        t.after(false);
+        assert_eq!(t.before("u", more), Some(REPEAT_STOP));
     }
 
     #[test]
