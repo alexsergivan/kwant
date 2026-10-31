@@ -16,6 +16,7 @@ pub mod auditor;
 pub mod autofix;
 pub mod checkpoints;
 pub mod checks;
+pub mod discovery;
 pub mod flight_school;
 pub mod foundry;
 pub mod graph;

@@ -1457,6 +1457,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tz-rs",
+ "unicode-normalization",
  "url",
  "uuid",
  "webpki-roots 1.0.9",

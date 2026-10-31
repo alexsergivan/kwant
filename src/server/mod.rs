@@ -404,6 +404,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/human-steps/:id", get(human_steps::get))
         .route("/api/human-steps/:id/done", post(human_steps::done))
         .route("/api/human-steps/:id/decline", post(human_steps::decline))
+        .route("/api/automation-discovery/scan", post(missions::discovery::scan))
         .route("/api/skills/foundry", get(missions::foundry::overview))
         .route("/api/skills/foundry/:cluster/draft", post(missions::foundry::draft_now))
         .route("/api/skills/:id/foundry", get(missions::foundry::detail))

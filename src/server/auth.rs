@@ -371,6 +371,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // or rejecting one is the person's call: bots only propose (`skill_propose`)
         // Skill Foundry clusters and drafts: the person's review queue, read too
         ["", "api", "skills", "foundry", ..] | ["", "api", "skills", _, "foundry"] => true,
+        // Automation Discovery reads every board task the person made in the space
+        ["", "api", "automation-discovery", ..] => true,
         ["", "api", "skills", ..] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "bot-actions" | "imports", _, "undo"] => *method == Method::POST,
         _ => false,
@@ -866,6 +868,8 @@ mod tests {
         assert!(person_only(&get, "/api/skills/s1/foundry"));
         assert!(person_only(&post, "/api/skills/s1/rollback"));
         assert!(person_only(&post, "/api/skills/s1/replay"));
+        assert!(person_only(&post, "/api/automation-discovery/scan"));
+        assert!(person_only(&get, "/api/automation-discovery/scan?space=s1"));
         assert!(!person_only(&get, "/api/skills/s1"));
         assert!(person_only(&post, "/api/missions"));
         assert!(person_only(&post, "/api/missions/m1/approve"));

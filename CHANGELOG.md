@@ -14,6 +14,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   run that passes its checks is verified on its own. Only the person sets the class and the checks; a
   bot that tries gets a 403. Routines without them run as before. This is the first step of
   Automation Discovery (Mission Control Phase D4).
+- **Automation Discovery can preview routines from your habits.** With Automation Discovery on in
+  Settings (off by default), a scan of a space looks at the board tasks you made over the last 120 days
+  and finds ones you ask for daily, on weekdays, weekly on up to three days or monthly, in your time
+  zone across daylight-saving changes. It says which routine it would suggest (bot, schedule, first
+  run, checks, follow-up steps) and why every other repeated task gets none. Only habits that were
+  mostly verified, mostly done by one bot and not already covered by a routine, on or off, qualify.
+  Tasks made by bots, routines, hand-offs or chats never count. The scan is a preview: it creates no
+  offer and no routine yet. This is step 2 of Automation Discovery.
 
 ### Changed
 - **kwant.si footer says "Made in Germany with ❤️".** The line sits under the trademark note on every

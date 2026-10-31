@@ -4,11 +4,25 @@
 //! nothing. See docs/mission-control.md §20.
 
 use super::{Database, DbError};
+use crate::automation_discovery::{self as miner, PassedCheck, Past, RoutineRef, TaskRow};
+use chrono::{DateTime, Duration, Utc};
+use serde_json::Value;
+use std::collections::HashSet;
 
 /// Routine columns this migration adds, all nullable: a routine without them runs as before.
 /// `origin` is `NULL` (made by hand or by a bot) or `discovery`; `checks` is JSON
 /// `[{kind, spec, required}]`.
 const ROUTINE_COLUMNS: [&str; 5] = ["origin", "suggestion_id", "task_class", "acceptance", "checks"];
+
+/// The tasks the miner learns from (design §4): created by the person on the board, as a task or
+/// in a mission, in the space, since `?2`. Not tasks a bot, a routine, a hand-off or a chat made,
+/// not retries (forks) of another task, and not cancelled ones.
+const DISCOVERY_TASKS: &str = "FROM tasks t
+     WHERE t.space_id = ?1 AND t.created_by = 'person' AND t.source_kind IN ('person', 'mission')
+       AND t.forked_from IS NULL AND t.state <> 'cancelled' AND t.created_at >= ?2";
+
+type TaskTuple = (String, String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>, DateTime<Utc>, Option<DateTime<Utc>>);
+type RoutineTuple = (String, String, String, Option<String>, Option<String>);
 
 impl Database {
     pub(super) async fn migrate_automation_discovery(&self) -> Result<(), DbError> {
@@ -68,5 +82,102 @@ impl Database {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
         Ok(())
+    }
+
+    /// The person's board tasks of the last [`miner::MONTHLY_WINDOW_DAYS`], oldest first.
+    pub async fn discovery_tasks(&self, space: &str, now: DateTime<Utc>) -> Result<Vec<TaskRow>, DbError> {
+        let rows: Vec<TaskTuple> = sqlx::query_as(&format!(
+            "SELECT t.id, t.title, t.acceptance, t.state, t.owner_kwant_id, t.task_class, t.channel_id, t.direct_kwant_id,
+                    t.thread_id, t.created_at, t.finished_at
+             {DISCOVERY_TASKS} ORDER BY t.created_at, t.id"
+        ))
+        .bind(space)
+        .bind(now - Duration::days(miner::MONTHLY_WINDOW_DAYS))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, title, acceptance, state, owner_kwant_id, task_class, channel_id, direct_kwant_id, thread_id, created_at, finished_at)| TaskRow {
+                id,
+                title,
+                acceptance,
+                state,
+                owner_kwant_id,
+                task_class,
+                channel_id,
+                direct_kwant_id,
+                thread_id,
+                created_at,
+                finished_at,
+            })
+            .collect())
+    }
+
+    /// Checks that passed on those tasks.
+    pub async fn discovery_checks(&self, space: &str, now: DateTime<Utc>) -> Result<Vec<PassedCheck>, DbError> {
+        let rows: Vec<(String, String, String, bool)> = sqlx::query_as(&format!(
+            "SELECT c.task_id, c.kind, c.spec, c.required FROM outcome_checks c
+             WHERE c.status = 'passed' AND c.task_id IN (SELECT t.id {DISCOVERY_TASKS})
+             ORDER BY c.created_at, c.id"
+        ))
+        .bind(space)
+        .bind(now - Duration::days(miner::MONTHLY_WINDOW_DAYS))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(task_id, kind, spec, required)| PassedCheck { task_id, kind, spec, required }).collect())
+    }
+
+    /// Every routine of the space, on or off, with the habit a discovered one came from.
+    pub async fn discovery_routines(&self, space: &str) -> Result<Vec<RoutineRef>, DbError> {
+        let rows: Vec<RoutineTuple> = sqlx::query_as(
+            "SELECT r.kwant_id, r.name, r.instructions, r.task_class, s.cluster_key FROM routines r
+             LEFT JOIN routine_suggestions s ON s.id = r.suggestion_id
+             WHERE r.space_id = ? ORDER BY r.created_at, r.id",
+        )
+        .bind(space)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(kwant_id, name, instructions, task_class, cluster_key)| RoutineRef { kwant_id, name, instructions, task_class, cluster_key })
+            .collect())
+    }
+
+    /// What earlier offers in the space mean for a scan now: habits cooling off (dismissed, or
+    /// their discovered routine deleted, within [`miner::DISMISS_COOL_OFF_DAYS`]), live offers and
+    /// the follow-ups written into them, and how many were made in the last 24 hours.
+    pub async fn discovery_past(&self, space: &str, now: DateTime<Utc>) -> Result<Past, DbError> {
+        let cooling: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT cluster_key FROM routine_suggestions
+             WHERE space_id = ?1 AND ((status = 'dismissed' AND cooldown_until > ?2) OR routine_deleted_at > ?3)",
+        )
+        .bind(space)
+        .bind(now)
+        .bind(now - Duration::days(miner::DISMISS_COOL_OFF_DAYS))
+        .fetch_all(&self.pool)
+        .await?;
+        let live: Vec<(String, String)> = sqlx::query_as("SELECT cluster_key, chain FROM routine_suggestions WHERE space_id = ? AND status = 'offered'")
+            .bind(space)
+            .fetch_all(&self.pool)
+            .await?;
+        let (offered_24h,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM routine_suggestions WHERE space_id = ? AND offered_at > ?")
+            .bind(space)
+            .bind(now - Duration::hours(24))
+            .fetch_one(&self.pool)
+            .await?;
+        let live_chain: HashSet<String> = live
+            .iter()
+            .filter_map(|(_, chain)| serde_json::from_str::<Vec<Value>>(chain).ok())
+            .flatten()
+            .filter(|step| step.get("in_instructions").and_then(Value::as_bool) == Some(true))
+            .filter_map(|step| step.get("key").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        Ok(Past {
+            cooling: cooling.into_iter().map(|(k,)| k).collect(),
+            live_count: live.len(),
+            live: live.into_iter().map(|(k, _)| k).collect(),
+            live_chain,
+            offered_24h: usize::try_from(offered_24h).unwrap_or(0),
+        })
     }
 }

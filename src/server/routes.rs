@@ -3485,6 +3485,10 @@ pub struct SettingsResponse {
     pub skill_foundry_replays: i64,
     /// Fresh tokens one replay turn may use before it is stopped (5,000–500,000).
     pub skill_foundry_replay_tokens: i64,
+    /// Automation Discovery: `off` (default) or `on` (see `super::missions::discovery`).
+    pub automation_discovery: String,
+    /// Routines suggested per space per 24 hours (0–10).
+    pub automation_discovery_daily_cap: i64,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3536,6 +3540,8 @@ pub struct SaveSettingsPayload {
     pub skill_foundry_daily_drafts: Option<i64>,
     pub skill_foundry_replays: Option<i64>,
     pub skill_foundry_replay_tokens: Option<i64>,
+    pub automation_discovery: Option<String>,
+    pub automation_discovery_daily_cap: Option<i64>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3596,6 +3602,8 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         skill_foundry_daily_drafts: super::missions::foundry::daily_drafts(&state).await,
         skill_foundry_replays: super::missions::foundry::replays(&state).await,
         skill_foundry_replay_tokens: super::missions::foundry::replay_tokens(&state).await,
+        automation_discovery: if super::missions::discovery::enabled(&state).await { "on" } else { "off" }.into(),
+        automation_discovery_daily_cap: super::missions::discovery::daily_cap(&state).await,
     }))
 }
 
@@ -3664,6 +3672,9 @@ pub async fn save_settings(
         payload.skill_foundry_replays,
         payload.skill_foundry_replay_tokens,
     ) {
+        return bad(e);
+    }
+    if let Some(e) = super::missions::discovery::settings_error(payload.automation_discovery.as_deref(), payload.automation_discovery_daily_cap) {
         return bad(e);
     }
     if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
@@ -3810,6 +3821,12 @@ pub async fn save_settings(
                 let _ = state.db.set_setting(key, &n.to_string()).await;
             }
         }
+    }
+    if let Some(m) = &payload.automation_discovery {
+        let _ = state.db.set_setting(super::missions::discovery::SETTING, m).await;
+    }
+    if let Some(n) = payload.automation_discovery_daily_cap {
+        let _ = state.db.set_setting(super::missions::discovery::CAP_SETTING, &n.to_string()).await;
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;

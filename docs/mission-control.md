@@ -870,8 +870,8 @@ tool.
 ## 20. Automation Discovery (Phase D4)
 
 Design note: `phase-d/automation-discovery.md`. v1 learns only from board tasks the person created.
-**Build step 1 (shipped): what a routine's runs are held to.** The scanner, offers and Accept come
-later.
+**Build step 1 (shipped): what a routine's runs are held to. Step 2: the miner and a read-only scan.**
+Offers, Accept and Dismiss come in step 3.
 
 **Routine outcomes.** Every routine can carry, besides its instructions:
 - `task_class`: the Flight School class of each run's task (§14). `null`, `""` or `general` clear it.
@@ -891,6 +891,43 @@ bot's own routine tools, get a 403 when they set `task_class` or `checks`. Bots 
 everything else, the acceptance included, and their changes keep the person's class and checks. An
 undone delete brings back the class, the acceptance and the checks. The exception is a check whose spec
 held a secret: its stored spec is never shown, so the undo can't restore it.
+
+**The miner** (`src/automation_discovery.rs`, pure: no model, clock or database). It reads the
+person's board tasks of the last 120 days: `created_by = person`, `source_kind` `person` or `mission`,
+not forks, not cancelled. Tasks a bot, a routine, a hand-off or a chat made never count. Tasks group by
+habit: `class:<class>` for a Flight School class other than `general`, else `title:` and 12 hex digits
+of the SHA-256 of the normalised title (NFKC, lowercase, without numbers, dates, ordinals, English and
+German weekday and month names, today/tomorrow/heute/morgen; too vague under 2 words and 8 letters).
+Asks are counted once per local day in the person's time zone, so daylight saving never moves a habit.
+Cadences, most specific first, each needing coverage ≥ 0.75 (slots asked, first to last) and precision
+≥ 0.80 (asks on a slot):
+- monthly, day N (a short month's last day stands in) or the last day: 120 days, ±3 days, ≥ 3 asks;
+- weekly on 1–3 weekdays, each asked twice and each covering ≥ 0.75 of its own slots: 60 days, ±1 day,
+  ≥ 3 asks over ≥ 14 days;
+- weekdays (Monday–Friday, weekend asks count against it): 60 days, ≥ 5 asks on ≥ 4 weekdays;
+- daily: 60 days, ≥ 5 asks including a weekend day.
+
+A habit is `stopped` once two of its slots (plus their shift) passed without an ask. Then the gates: at
+least 2 verified and verified ≥ 2/3 of verified plus failed (`not_verified`); one bot did ≥ 2/3 of the
+verified ones (`mixed_owners`) and is still in the space (`bot_unavailable`); no routine of the space,
+on or off, does it (`covered`: accepted from this habit, or the same bot with the same class or ≥ 0.6
+word overlap with its name or first instruction line); not dismissed or deleted within 30 days
+(`cooling_off`); no live offer (`already_offered`); not a step of another offer (`in_chain`); within
+`automation_discovery_daily_cap` per 24 hours and 5 live offers per space (`capped`, strongest habits
+first). Too few asks is `too_short`, no rhythm `not_regular`. A follow-up task created after ≥ 3 and ≥
+80% of the last 20 asks, within 24 hours of each being done, is a chain step: written into the
+instructions when the same bot did it, only mentioned when another bot did. The time is the median ask
+time, down to the quarter hour ("time varies" past 4 hours apart); the first run is the next one after
+now and at least half a period after the last ask. Checks that passed with the same spec on ≥ 2 verified
+asks are kept (≤ 10); `person`/`peer_review` checks, ones whose spec changes every time and ones that
+passed once are listed as left out.
+
+**Scan** (`POST /api/automation-discovery/scan?space=`, person only): `{blocked_by, preview: true,
+timezone, offered, skipped: [{cluster_key, title, asks, reason}]}`. `blocked_by` is `off`, `board_off` or
+`no_timezone` (none set, or one this machine can't read), with empty lists; with the setting off nothing
+is read. It writes nothing: no offer, no event, no routine. A thread or channel that no longer fits
+falls back to the bot's direct chat, and check specs are shown with secrets masked. Settings:
+`automation_discovery` `off` (default) or `on`, `automation_discovery_daily_cap` 0–10 (default 2).
 
 **Storage** (add-only, idempotent): `routines` gains nullable `origin` (`discovery` for an accepted
 offer), `suggestion_id`, `task_class`, `acceptance` and `checks` (JSON). `routine_suggestions` holds

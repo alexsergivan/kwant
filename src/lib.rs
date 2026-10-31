@@ -1,4 +1,5 @@
 pub mod app_update;
+pub mod automation_discovery;
 pub mod broker;
 pub mod config;
 pub mod db;
