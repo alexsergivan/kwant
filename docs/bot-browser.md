@@ -86,15 +86,19 @@ word. Nothing is quoted from the bot's own text.
 The link: `text=start` for a quote of up to 300 characters on one line, else `text=start,end` with
 its first and last five words. Every part is percent-encoded except letters, digits and `._~`, so
 `-`, `,`, `&`, `%` and spaces in the words can't break the fragment. Browsers highlight the first
-match, without case; `cite::resolve` mirrors that (more leniently: no word or block boundaries), and
-when its first match isn't the quote, up to three words before and after it on the same line are
+match without case or accents (`résumé` is `resume`, `ß` is `ss`, `ς` is `σ`); `cite::resolve`
+mirrors that on the page folded the same way (`cite::fold`: lowercase, compatibility decomposition
+with the accents dropped, plus `ß`, `ς`, `æ`, `œ`, `ø`, `ł`, `đ` and a few more), more leniently: no
+word or block boundaries, so it sees every lookalike Chrome would and maybe more. When its first match isn't the quote, up to three words before and after it on the same line are
 added as `prefix-,` and `,-suffix`. If that still doesn't single it out, the call is refused rather
-than returning a link that highlights something else. An address with its own fragment
+than returning a link that highlights something else. Two identical-looking passages with the
+same words around them can't be linked apart, so the later one is refused. A call with both `text`
+and `block` is refused too. An address with its own fragment
 (`#/route`) keeps it: `#/route:~:text=…`.
 
 Blocks: `browser_page` with `blocks: true` (HTTP `/page?blocks=1`) sends the page's lines as
-`[b3-9f2a] text` (first 150, each cut at 300 characters) instead of `text`. The id is the line's
-number and a hash of its text, so an id from an older read never cites a different block: if lines
+`[b3-9f2a41c0] text` (first 150, each cut at 300 characters) instead of `text`. The id is the line's
+number and a 32-bit hash of its text, so an id from an older read never cites a different block: if lines
 moved it finds the block by its hash, and if it's gone the call is refused ("read it again"). A
 read with blocks has its own `hash`, so "unchanged" (`since`, per-turn reads) only answers for the
 same kind of read.

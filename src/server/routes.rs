@@ -4391,7 +4391,7 @@ impl PageQuery {
 /// Most blocks one read shows; the rest are left for the bot to find with `find` or by scrolling.
 const SHOWN_BLOCKS: usize = 150;
 
-/// A read with blocks: the page's text as `[b3-9f2a] text` lines, each citable by its id, in
+/// A read with blocks: the page's text as `[b3-9f2a41c0] text` lines, each citable by its id, in
 /// place of the plain text. Its `hash` differs from a plain read's, so an "unchanged" answer is
 /// only given for the same kind of read.
 async fn add_blocks(ctrl: &crate::sandbox::BrowserController, page: &mut serde_json::Value) {
@@ -4473,7 +4473,8 @@ pub async fn cite_sandbox(
     let text = payload.text.as_deref().map(str::trim).filter(|t| !t.is_empty());
     let block = payload.block.as_deref().map(str::trim).filter(|b| !b.is_empty());
     let cited = match (text, block) {
-        (Some(text), _) => cite::cite_text(&frames, text),
+        (Some(_), Some(_)) => Err("Give the words to cite in text or a block id in block, not both.".into()),
+        (Some(text), None) => cite::cite_text(&frames, text),
         (None, Some(block)) => cite::cite_block(&frames[0], block),
         (None, None) => Err("Give the exact words to cite in text, or a block id in block.".into()),
     };

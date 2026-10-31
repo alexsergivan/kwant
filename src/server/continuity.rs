@@ -520,7 +520,7 @@ fn browser_tools() -> Vec<Value> {
                 "properties": {
                     "find": {"type": "string", "description": "Words for what you look for, e.g. \"bike light add to cart\": controls naming them are listed first."},
                     "full": {"type": "boolean", "description": "true: send the whole page even if it didn't change since your last look."},
-                    "blocks": {"type": "boolean", "description": "true: the text as blocks with ids ([b3-9f2a] …), so you can cite a whole block with browser_cite by its id."},
+                    "blocks": {"type": "boolean", "description": "true: the text as blocks with ids ([b3-9f2a41c0] …), so you can cite a whole block with browser_cite by its id."},
                 },
             },
         }),
@@ -531,7 +531,7 @@ fn browser_tools() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "text": {"type": "string", "description": "The exact words to quote, as the page has them; whole words, a sentence or two is best."},
-                    "block": {"type": "string", "description": "Or a block id from browser_page with blocks, e.g. b3-9f2a, to quote that whole block."},
+                    "block": {"type": "string", "description": "Or a block id from browser_page with blocks, e.g. b3-9f2a41c0, to quote that whole block."},
                 },
             },
         }),

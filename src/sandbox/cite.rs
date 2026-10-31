@@ -4,6 +4,9 @@
 //! same-origin frames') and calls [`cite_text`] or [`cite_block`]. Nothing here is made up: a
 //! quote that isn't on the page word for word, or is on it more than once, is refused.
 
+use unicode_normalization::char::is_combining_mark;
+use unicode_normalization::UnicodeNormalization;
+
 /// One document's rendered text: the page itself, or a frame inside it with its own address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameText {
@@ -39,8 +42,68 @@ fn normalize(quote: &str) -> String {
     quote.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn lower(c: char) -> char {
-    c.to_lowercase().next().unwrap_or(c)
+/// How a browser compares a character when it looks for a text fragment: Chrome matches without
+/// case or accents (`é` is `e`, `ß` is `ss`, `ς` is `σ`, `ﬁ` is `fi`). This folds at least as much,
+/// so every earlier lookalike of a quote is seen; folding more only adds context or refuses.
+fn fold_char(c: char, out: &mut Vec<char>) {
+    for l in c.to_lowercase() {
+        for d in std::iter::once(l).nfkd() {
+            if is_combining_mark(d) {
+                continue;
+            }
+            match d {
+                'ß' => out.extend(['s', 's']),
+                'ς' => out.push('σ'),
+                'æ' => out.extend(['a', 'e']),
+                'œ' => out.extend(['o', 'e']),
+                'ø' => out.push('o'),
+                'ł' => out.push('l'),
+                'đ' | 'ð' => out.push('d'),
+                'ħ' => out.push('h'),
+                'ŧ' => out.push('t'),
+                'ı' => out.push('i'),
+                d => out.extend(d.to_lowercase()),
+            }
+        }
+    }
+}
+
+fn fold(s: &str) -> Vec<char> {
+    let mut out = Vec::new();
+    s.chars().for_each(|c| fold_char(c, &mut out));
+    out
+}
+
+/// A page's text folded as a browser compares it, with where each folded character came from.
+struct Folded {
+    chars: Vec<char>,
+    /// `from[k]`: the page character folded character `k` is part of
+    from: Vec<usize>,
+    /// Whether folded character `k` is the first of its page character (`ß` gives two)
+    first: Vec<bool>,
+    len: usize,
+}
+
+impl Folded {
+    fn new(hay: &[char]) -> Self {
+        let (mut chars, mut from, mut first) = (Vec::new(), Vec::new(), Vec::new());
+        for (i, &c) in hay.iter().enumerate() {
+            let n = chars.len();
+            fold_char(c, &mut chars);
+            from.extend(std::iter::repeat_n(i, chars.len() - n));
+            first.extend((n..chars.len()).map(|k| k == n));
+        }
+        Folded { chars, from, first, len: hay.len() }
+    }
+
+    /// The page position folded position `k` starts at; `None` inside a folded character (only
+    /// part of an `ß`), which is never where a quote starts or ends.
+    fn page_at(&self, k: usize) -> Option<usize> {
+        if k == self.chars.len() {
+            return Some(self.len);
+        }
+        self.first[k].then(|| self.from[k])
+    }
 }
 
 fn is_space(c: char) -> bool {
@@ -49,13 +112,13 @@ fn is_space(c: char) -> bool {
 
 /// Where `pat` matches `hay` at `at` (a space in `pat` matches a space or a line break), and
 /// where the match ends.
-fn match_at(hay: &[char], at: usize, pat: &[char], fold: bool) -> Option<usize> {
+fn match_at(hay: &[char], at: usize, pat: &[char]) -> Option<usize> {
     if pat.is_empty() || at + pat.len() > hay.len() {
         return None;
     }
     for (i, &p) in pat.iter().enumerate() {
         let h = hay[at + i];
-        let same = if p == ' ' { is_space(h) } else if fold { lower(h) == p } else { h == p };
+        let same = if p == ' ' { is_space(h) } else { h == p };
         if !same {
             return None;
         }
@@ -79,39 +142,39 @@ struct Fragment {
     suffix: Option<String>,
 }
 
-fn folded(s: &str) -> Vec<char> {
-    s.chars().map(lower).collect()
-}
-
-/// What a browser highlights for `f` on a page whose text is `hay`: the first match, compared
-/// without case. It is more lenient than a browser (no word-boundary or block rules), so it finds
-/// every match a browser would and maybe more; a link is only given when the first is the quote.
-fn resolve(hay: &[char], f: &Fragment) -> Option<(usize, usize)> {
-    let start = folded(&f.start);
-    let prefix = f.prefix.as_deref().map(folded);
-    let end = f.end.as_deref().map(folded);
-    let suffix = f.suffix.as_deref().map(folded);
+/// What a browser highlights for `f` on a page whose folded text is `page`: the first match,
+/// compared without case or accents, as page positions. It is more lenient than a browser (no
+/// word-boundary or block rules, more folding), so it finds every match a browser would and maybe
+/// more; a link is only given when the first is the quote. A match starting or ending inside a
+/// folded character gives `(usize::MAX, usize::MAX)`, which is never the quote.
+fn resolve(page: &Folded, f: &Fragment) -> Option<(usize, usize)> {
+    let hay = &page.chars;
+    let start = fold(&f.start);
+    let prefix = f.prefix.as_deref().map(fold);
+    let end = f.end.as_deref().map(fold);
+    let suffix = f.suffix.as_deref().map(fold);
     let suffix_ok = |at: usize| match &suffix {
-        Some(sfx) => match_at(hay, skip_space(hay, at), sfx, true).is_some(),
+        Some(sfx) => match_at(hay, skip_space(hay, at), sfx).is_some(),
         None => true,
     };
+    let on_page = |s: usize, e: usize| Some(page.page_at(s).zip(page.page_at(e)).unwrap_or((usize::MAX, usize::MAX)));
     for p in 0..hay.len() {
         let s = match &prefix {
-            Some(pre) => match match_at(hay, p, pre, true) {
+            Some(pre) => match match_at(hay, p, pre) {
                 Some(pe) => skip_space(hay, pe),
                 None => continue,
             },
             None => p,
         };
-        let Some(se) = match_at(hay, s, &start, true) else { continue };
+        let Some(se) = match_at(hay, s, &start) else { continue };
         match &end {
-            None if suffix_ok(se) => return Some((s, se)),
+            None if suffix_ok(se) => return on_page(s, se),
             None => {}
             Some(end) => {
                 for q in se..hay.len() {
-                    if let Some(qe) = match_at(hay, q, end, true) {
+                    if let Some(qe) = match_at(hay, q, end) {
                         if suffix_ok(qe) {
-                            return Some((s, qe));
+                            return on_page(s, qe);
                         }
                     }
                 }
@@ -209,6 +272,7 @@ fn fragment_for(hay: &[char], s: usize, e: usize) -> Option<Fragment> {
             shapes.push((text_of(hay, h0.0, h1.1), Some(text_of(hay, t0.0, t1.1))));
         }
     }
+    let page = Folded::new(hay);
     let (line_s, _) = line_around(hay, s);
     let (_, line_e) = line_around(hay, e.saturating_sub(1));
     let before = words(hay, line_s, s);
@@ -229,7 +293,7 @@ fn fragment_for(hay: &[char], s: usize, e: usize) -> Option<Fragment> {
         }
         for (prefix, suffix) in tries {
             let f = Fragment { prefix, start: start.clone(), end: end.clone(), suffix };
-            if resolve(hay, &f) == Some((s, e)) {
+            if resolve(&page, &f) == Some((s, e)) {
                 return Some(f);
             }
         }
@@ -252,8 +316,8 @@ fn joined(text: &str) -> Vec<char> {
 }
 
 /// Every place `pat` is in `hay`, as start positions.
-fn all_matches(hay: &[char], pat: &[char], fold: bool) -> Vec<usize> {
-    (0..hay.len()).filter(|&p| match_at(hay, p, pat, fold).is_some()).collect()
+fn all_matches(hay: &[char], pat: &[char]) -> Vec<usize> {
+    (0..hay.len()).filter(|&p| match_at(hay, p, pat).is_some()).collect()
 }
 
 fn mid_word(hay: &[char], at: usize) -> bool {
@@ -272,14 +336,20 @@ pub fn cite_text(frames: &[FrameText], quote: &str) -> Result<Citation, String> 
     let pages: Vec<(&str, Vec<char>)> = frames.iter().map(|f| (f.url.as_str(), joined(&f.text))).collect();
     let mut found: Vec<(usize, usize)> = Vec::new();
     for (i, (_, hay)) in pages.iter().enumerate() {
-        found.extend(all_matches(hay, &pat, false).into_iter().map(|p| (i, p)));
+        found.extend(all_matches(hay, &pat).into_iter().map(|p| (i, p)));
     }
     match found.as_slice() {
         [] => {
-            let fold: Vec<char> = pat.iter().map(|&c| lower(c)).collect();
-            let near = pages.iter().find_map(|(_, hay)| all_matches(hay, &fold, true).first().map(|&p| text_of(hay, p, p + pat.len())));
+            let folded = fold(&q);
+            let near = pages.iter().find_map(|(_, hay)| {
+                let page = Folded::new(hay);
+                all_matches(&page.chars, &folded).into_iter().find_map(|k| {
+                    let (s, e) = page.page_at(k).zip(page.page_at(k + folded.len()))?;
+                    Some(text_of(hay, s, e))
+                })
+            });
             Err(match near {
-                Some(near) => format!("Not cited: the page has these words with other capitals (\"{near}\"). Quote them exactly as the page has them."),
+                Some(near) => format!("Not cited: the page has these words with other capitals or accents (\"{near}\"). Quote them exactly as the page has them."),
                 None => "Not cited: these words aren't on the page as given. Quote the page word for word (copy them from \
                          your read), or cite a block by its id; never quote from memory."
                     .into(),
@@ -300,7 +370,7 @@ pub fn cite_text(frames: &[FrameText], quote: &str) -> Result<Citation, String> 
     }
 }
 
-/// FNV-1a of a block's text, 4 hex digits: part of its id, so an id from an older read never
+/// FNV-1a of a block's text, 8 hex digits: part of its id, so an id from an older read never
 /// cites a different block.
 fn tag(line: &str) -> String {
     let mut h: u32 = 0x811c_9dc5;
@@ -308,7 +378,7 @@ fn tag(line: &str) -> String {
         h ^= u32::from(b);
         h = h.wrapping_mul(0x0100_0193);
     }
-    format!("{:04x}", h & 0xffff)
+    format!("{h:08x}")
 }
 
 /// The page's blocks (its lines) with their ids, `b<number>-<tag>`.
@@ -316,7 +386,7 @@ pub fn blocks(text: &str) -> Vec<(String, String)> {
     page_lines(text).into_iter().enumerate().map(|(i, l)| (format!("b{}-{}", i + 1, tag(&l)), l)).collect()
 }
 
-/// A block as a page read shows it: `[b3-9f2a] text`, long ones cut short.
+/// A block as a page read shows it: `[b3-9f2a41c0] text`, long ones cut short.
 pub fn block_line(id: &str, text: &str) -> String {
     let mut shown: String = text.chars().take(BLOCK_SHOWN_CHARS).collect();
     if text.chars().count() > BLOCK_SHOWN_CHARS {
@@ -325,13 +395,13 @@ pub fn block_line(id: &str, text: &str) -> String {
     format!("[{id}] {shown}")
 }
 
-/// Cites a whole block of the page by the id a read showed (`b3-9f2a`, with or without the
+/// Cites a whole block of the page by the id a read showed (`b3-9f2a41c0`, with or without the
 /// brackets). If the page moved, the same block is found by its text; if it is gone, refused.
 pub fn cite_block(page: &FrameText, id: &str) -> Result<Citation, String> {
     let id = id.trim().trim_start_matches('[').trim_end_matches(']');
     let parsed = id.strip_prefix('b').and_then(|r| r.split_once('-')).and_then(|(n, t)| Some((n.parse::<usize>().ok()?, t)));
     let Some((n, t)) = parsed else {
-        return Err(format!("\"{id}\" isn't a block id; they look like b3-9f2a, from a page read with blocks."));
+        return Err(format!("\"{id}\" isn't a block id; they look like b3-9f2a41c0, from a page read with blocks."));
     };
     let lines = page_lines(&page.text);
     let index = match lines.get(n.wrapping_sub(1)) {
@@ -382,7 +452,7 @@ mod tests {
     fn what_isnt_on_the_page_once_and_in_whole_words_is_refused() {
         let p = page("Cats sleep a lot.\nDogs bark.\nCats sleep a lot.");
         assert!(cite_text(&p, "Cats fly").unwrap_err().contains("aren't on the page"));
-        assert!(cite_text(&p, "cats SLEEP").unwrap_err().contains("other capitals (\"Cats sleep\")"));
+        assert!(cite_text(&p, "cats SLEEP").unwrap_err().contains("other capitals or accents (\"Cats sleep\")"));
         assert!(cite_text(&p, "Cats sleep a lot").unwrap_err().contains("2 times"));
         assert!(cite_text(&p, "ogs bark").unwrap_err().contains("middle of a word"));
         assert!(cite_text(&p, "  ").is_err());
@@ -399,7 +469,7 @@ mod tests {
         assert!(c.link.ends_with("#:~:text=A-,cat%20sat") || c.link.ends_with("#:~:text=cat%20sat"), "{}", c.link);
         // Whatever the shape, the browser's first match is the quote
         let hay: Vec<char> = "Categories\nA cat sat".chars().collect();
-        assert_eq!(resolve(&hay, &fragment_for(&hay, 13, 20).unwrap()), Some((13, 20)));
+        assert_eq!(resolve(&Folded::new(&hay), &fragment_for(&hay, 13, 20).unwrap()), Some((13, 20)));
     }
 
     #[test]
@@ -454,5 +524,49 @@ mod tests {
         let rep = FrameText { url: "u".into(), text: "Same line\nSame line".into() };
         let id = &blocks(&rep.text)[1].0;
         assert!(cite_block(&rep, id).unwrap_err().contains("Couldn't make a link"));
+    }
+
+    #[test]
+    fn an_earlier_lookalike_without_case_or_accents_gets_context_or_is_refused() {
+        // (decoy, target, quote): a browser matches these alike, so the decoy would be highlighted
+        let cases = [
+            ("Send your résumé today.", "Send your resume today.", "your resume today"),
+            ("A naive cafe visit.", "A naïve café visit.", "naïve café visit"),
+            ("Die STRASSE ist lang.", "Die Straße ist lang.", "Die Straße ist lang."),
+            ("Ünïcode ΣΑΣ test", "ünïcode σας test", "ünïcode σας test"),
+        ];
+        for (decoy, target, quote) in cases {
+            // Same words around both: nothing singles the target out
+            let p = page(&format!("Intro words here.\n{decoy}\nOutro words there.\nIntro words here.\n{target}\nOutro words there."));
+            let err = cite_text(&p, quote).unwrap_err();
+            assert!(err.contains("Couldn't make a link"), "{quote}: {err}");
+            // Other words on the target's line: they go in the link
+            let p = page(&format!("Old note: {decoy}\nNew note: {target}"));
+            let c = cite_text(&p, quote).unwrap_or_else(|e| panic!("{quote}: {e}"));
+            assert!(c.link.contains("#:~:text=New%20note"), "{quote}: {}", c.link);
+            let hay: Vec<char> = format!("Old note: {decoy}\nNew note: {target}").chars().collect();
+            let s = hay.len() - target.chars().count() + target.find(quote.split(' ').next().unwrap()).map_or(0, |b| target[..b].chars().count());
+            let e = s + quote.chars().count();
+            assert_eq!(resolve(&Folded::new(&hay), &fragment_for(&hay, s, e).unwrap()), Some((s, e)), "{quote}");
+        }
+    }
+
+    #[test]
+    fn folding_matches_what_a_browser_treats_as_the_same() {
+        assert_eq!(fold("Résumé STRASSE Straße ΣΑΣ σας ﬁne Øl"), fold("resume strasse strasse σασ σασ fine ol"));
+        assert_ne!(fold("resume"), fold("resumes"));
+        // A match inside a folded character is never taken for the quote
+        let hay: Vec<char> = "Fuß s".chars().collect();
+        let f = Fragment { prefix: None, start: "s".into(), end: None, suffix: None };
+        assert_eq!(resolve(&Folded::new(&hay), &f), Some((usize::MAX, usize::MAX)));
+        assert!(cite_text(&page("Send your résumé"), "your resume").unwrap_err().contains("accents (\"your résumé\")"));
+    }
+
+    #[test]
+    fn block_ids_carry_a_32_bit_hash() {
+        let b = blocks("Body text here.");
+        let tag = b[0].0.strip_prefix("b1-").unwrap();
+        assert_eq!(tag.len(), 8, "{}", b[0].0);
+        assert!(tag.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

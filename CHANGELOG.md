@@ -13,7 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the exact words (or a block id from its read) and kwant checks they are on the page once, word for
   word, and returns the quote, its address and a link that opens the page with it highlighted. A
   quote that isn't on the page, or is on it more than once, is refused with the reason, so a bot
-  can't make one up. Bots are told to back web facts with these links. No model calls.
+  can't make one up. A link never opens at a lookalike higher up the page (the same words with
+  other capitals or accents, like "résumé" for "resume"): kwant adds nearby words to the link, or
+  refuses when nothing tells the two apart. Bots are told to back web facts with these links. No
+  model calls.
 - **Bots don't re-read a page that hasn't changed, and find controls on crowded pages.** When a bot
   reads its browser page again and nothing changed since its last look, it gets a one-line
   "unchanged" instead of the whole page. On a page with more than 40 controls, the bot can say what

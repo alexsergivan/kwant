@@ -38,6 +38,35 @@ fn long_page() -> String {
     page
 }
 
+/// Rigel's lookalikes: (decoy, target, quote). Chrome matches a text fragment without case or
+/// accents, so a bare fragment of the quote would highlight the decoy above the target.
+const LOOKALIKES: [(&str, &str, &str); 4] = [
+    ("Send your résumé today.", "Send your resume today.", "your resume today"),
+    ("A naive cafe visit.", "A naïve café visit.", "naïve café visit"),
+    ("Die STRASSE ist lang.", "Die Straße ist lang.", "Die Straße ist lang."),
+    ("Ünïcode ΣΑΣ test", "ünïcode σας test", "ünïcode σας test"),
+];
+
+/// The decoy, then the target far below it. `note`: each on a line with its own words before it
+/// ("Old note:", "New note:"); else between the same lines, so nothing on the page tells them apart.
+fn lookalike_page(n: usize, note: bool) -> String {
+    let (decoy, target, _) = LOOKALIKES[n.min(3)];
+    let gap = "<div style=\"height:3000px\"></div>";
+    let around = |id: &str, words: &str, label: &str| {
+        if note {
+            format!("<p id={id}>{label} note: {words}</p>")
+        } else {
+            format!("<p>Intro words here.</p><p id={id}>{words}</p><p>Outro words there.</p>")
+        }
+    };
+    format!("<!doctype html><meta charset=utf-8><title>look</title>{gap}{}{gap}{}{gap}", around("d", decoy, "Old"), around("t", target, "New"))
+}
+
+/// Percent-encodes words for a bare text fragment, as kwnt does.
+fn fragment_words(words: &str) -> String {
+    words.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
 async fn serve() -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -49,6 +78,9 @@ async fn serve() -> String {
                 let head = String::from_utf8_lossy(&buf[..n]);
                 let page = if head.starts_with("GET /frame") {
                     "<!doctype html><p>Reviews: the light is very bright.</p>".to_string()
+                } else if let Some(rest) = head.strip_prefix("GET /look/") {
+                    let (n, rest) = rest.split_once('/').unwrap_or(("0", ""));
+                    lookalike_page(n.parse().unwrap_or(0), rest.starts_with("note"))
                 } else {
                     long_page()
                 };
@@ -134,6 +166,12 @@ async fn in_view(ctrl: &BrowserController, words: &str) -> bool {
         }})()"#,
         words = json!(words)
     );
+    eval(ctrl, &js).await == json!(true)
+}
+
+/// Whether the element with `id` is on screen.
+async fn id_in_view(ctrl: &BrowserController, id: &str) -> bool {
+    let js = format!("(function(){{var b=document.getElementById({}).getBoundingClientRect();return b.height>0&&b.top>=0&&b.bottom<=innerHeight;}})()", json!(id));
     eval(ctrl, &js).await == json!(true)
 }
 
@@ -280,4 +318,43 @@ async fn a_public_page_quote_opens_at_it() {
     // A made-up quote is refused
     let (status, v) = cite(&e, json!({"text": "Free software was invented on the Moon in 1802."})).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+}
+
+#[tokio::test]
+async fn a_lookalike_earlier_on_the_page_never_gets_the_link() {
+    if computer::local_chrome_path().is_none() {
+        eprintln!("skipped: no Chrome or Chromium installed");
+        return;
+    }
+    let e = setup().await;
+    let _chrome = ChromeGuard(e.tmp.path().join("local-chrome"));
+    let base = serve().await.replace("/long", "");
+    let ctrl = get_or_create_browser_controller(&e.state, &e.bot.id).await.expect("local Chrome session");
+    for (n, (_, _, quote)) in LOOKALIKES.iter().enumerate() {
+        // Same words around both: a bare fragment opens at the decoy in Chrome, so citing refuses
+        let url = format!("{base}/look/{n}/same");
+        ctrl.navigate(&url).await.unwrap();
+        let (status, c) = cite(&e, json!({"text": quote})).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{quote}: {c}");
+        assert!(c["error"].as_str().unwrap().contains("Couldn't make a link"), "{quote}: {c}");
+        open_link(&ctrl, &format!("{url}#:~:text={}", fragment_words(quote))).await;
+        assert!(id_in_view(&ctrl, "d").await && !id_in_view(&ctrl, "t").await, "{quote}: Chrome treats the decoy as the same words");
+
+        // Other words on the target's line: they go in the link, and it opens at the target
+        let url = format!("{base}/look/{n}/note");
+        ctrl.navigate(&url).await.unwrap();
+        let (status, c) = cite(&e, json!({"text": quote})).await;
+        assert_eq!(status, StatusCode::OK, "{quote}: {c}");
+        let link = c["link"].as_str().unwrap();
+        assert!(link.contains("#:~:text=New%20note"), "{quote}: {link}");
+        let y = open_link(&ctrl, link).await;
+        assert!(y > 3000.0, "{quote}: Chrome scrolled past the decoy: {y}");
+        assert!(id_in_view(&ctrl, "t").await, "{quote}: the target is on screen");
+        assert!(!id_in_view(&ctrl, "d").await, "{quote}: not the decoy");
+    }
+
+    // Text and a block together: refused, not one picked silently
+    let (status, c) = cite(&e, json!({"text": "New note", "block": "b1-00000000"})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{c}");
+    assert!(c["error"].as_str().unwrap().contains("not both"), "{c}");
 }
