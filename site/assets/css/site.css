@@ -343,6 +343,45 @@ td code { white-space: nowrap; }
 .pager small { display: block; color: var(--dim); font: 500 13px var(--sans); margin-bottom: 4px; }
 .pager .next { text-align: right; grid-column: 2; }
 
+/* Blog */
+.crumbs { margin-bottom: 18px; color: var(--dim); font-size: 14px; }
+.crumbs a { color: var(--muted); }
+.post-head h1 { font-size: clamp(34px, 4.6vw, 54px); max-width: 860px; }
+.post-meta { margin-top: 14px; color: var(--dim); font-size: 14px; }
+.post-head .post-meta { margin-top: 18px; }
+.post { max-width: 760px; }
+.post > p:first-child { margin-top: 0; }
+.prose blockquote { margin: 24px 0 0; padding: 4px 0 4px 18px; border-left: 4px solid var(--v7); color: var(--muted); }
+.prose blockquote p { margin-top: 8px; color: inherit; }
+.post-cta { margin-top: 56px; padding: 22px 24px; background: #fff; border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+.post-cta p { margin: 0; }
+.post-cta .cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.post-list, .post-grid { display: grid; gap: 16px; padding-bottom: 96px; }
+.post-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); padding-bottom: 0; }
+.post-card { padding: 22px 24px; background: #fff; border: 1px solid var(--line); border-radius: 16px; }
+.post-card h2, .post-card h3 { font: 600 21px/1.3 var(--sans); letter-spacing: -0.01em; }
+.post-card h3 { font-size: 18px; }
+.post-card h2 a, .post-card h3 a { color: var(--ink); text-decoration: none; }
+.post-card h2 a:hover, .post-card h3 a:hover { color: var(--v4); text-decoration: underline; }
+.post-card > p:not(.post-meta) { margin-top: 8px; color: var(--muted); font-size: 16px; }
+.post-card .post-meta { margin-top: 10px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
+.tags li { padding: 2px 10px; background: var(--v9); border: 1px solid var(--line); border-radius: 999px; color: var(--v4); font-size: 13px; }
+.related { max-width: 1000px; padding: 0 0 96px; }
+.related h2 { margin-bottom: 20px; font-size: clamp(24px, 2.4vw, 30px); }
+/* The comparison component: a table on wide screens, one card per row on phones, each cell labelled from data-label. */
+.compare, .prose .compare { margin: 28px 0 0; overflow-x: auto; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+.compare caption { padding: 12px 14px; caption-side: top; text-align: left; color: var(--dim); font-size: 14px; border-bottom: 1px solid var(--line); }
+.compare thead th:first-child { width: 28%; }
+.compare tbody th { background: none; white-space: normal; font: 600 15px var(--sans); }
+.compare td { min-width: 120px; }
+.compare tbody tr:last-child th { border-bottom: 0; }
+.mark { display: inline-block; width: 1.2em; font-weight: 700; text-align: center; }
+.mark-yes { color: #1f8a46; }
+.mark-no { color: #b42346; }
+.mark-partial { color: #8a6400; }
+.cmp-note { color: var(--dim); font-size: 14px; }
+
 /* Smaller screens */
 @media (max-width: 1000px) {
   .new-strip .wrap { flex-direction: column; align-items: stretch; gap: 12px; }
@@ -375,6 +414,17 @@ td code { white-space: nowrap; }
   .grid.two, .tiles { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
+  .compare, .prose .compare { overflow: visible; background: none; border: 0; border-radius: 0; }
+  .compare caption { display: block; padding: 0 0 2px; border: 0; }
+  .compare table, .compare tbody, .compare tr, .compare th, .compare td { display: block; width: auto; }
+  .compare thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .compare tr { margin-top: 12px; background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .compare tbody th { padding: 12px 14px; background: var(--v9); border-bottom: 1px solid var(--line); }
+  .compare td { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 12px; min-width: 0; }
+  .compare tr td:last-child { border-bottom: 0; }
+  .compare td::before { content: attr(data-label); color: var(--dim); font-weight: 600; font-size: 14px; }
+  .post-cta, .post-card { padding: 18px; }
+  .post-list, .related { padding-bottom: 72px; }
   .new-list { grid-template-columns: 1fr; gap: 8px; }
   section.new-strip { margin-top: -24px; padding: 0 0 24px; }
   body { font-size: 16px; }
@@ -423,6 +473,14 @@ td code { white-space: nowrap; }
   .jump-label { margin-right: 2px; }
   .pager { grid-template-columns: minmax(0, 1fr); }
   .pager .next { grid-column: 1; }
+}
+/* The smallest phones: room for a fourth header link */
+@media (max-width: 400px) {
+  .site-header .wrap { width: calc(100% - 28px); }
+  .brand { font-size: 23px; gap: 6px; }
+  .brand svg { width: 32px; height: 32px; }
+  .nav a:not(.btn) { padding: 8px 6px; }
+  .nav .btn { padding: 0 10px; }
 }
 @media (prefers-reduced-motion: no-preference) {
   html:has(.jump-bar) { scroll-behavior: smooth; }

@@ -13,6 +13,8 @@ Each card uses three optional header keys in the page source:
     <title> can change without changing the card
   card: a short line under the title (falls back to the description's first sentence)
   card_art: what sits on the CRT screen: scene (the pixel town), team (every role's avatar) or avatar:ROLE
+Published blog posts (site-src/blog/*.md) get a card too, as does the blog index once there is a post; pass --drafts to
+draw cards for draft posts as well, for a local preview built with build_site.py --drafts.
 """
 import pathlib
 import sys
@@ -125,7 +127,8 @@ def card(meta):
     left, width = 64, 548
     y = 168
     group = next((g for g, items in site.DOC_GROUPS for s, _ in items if meta.get("nav") == s), None)
-    kicker = f"Docs · {group}" if group else ("Every feature" if meta.get("active") == "features" else "")
+    kicker = (f"Docs · {group}" if group else "Every feature" if meta.get("active") == "features"
+              else "Blog" if meta.get("active") == "blog" else "")
     if kicker:
         draw.text((left, y), kicker.upper(), font=font("inter-var", 21, 700), fill=VIOLET)
         y += 44
@@ -181,6 +184,16 @@ def main():
         name = slug(meta["path"])
         card(meta).save(out / f"{name}.png", optimize=True)
         written.append(name)
+    posts = site.blog_posts(drafts="--drafts" in sys.argv[1:])
+    for stale in out.glob("blog-*.png"):
+        stale.unlink()
+    if posts:
+        index = {"path": "blog/index.html", "title": "Blog", "description": site.BLOG_DESC, "active": "blog",
+                 "card": "Guides, comparisons and notes on self-hosted AI agents", "card_art": "team"}
+        for meta in [index] + [m for m, _ in posts]:
+            name = slug(meta["path"])
+            card(meta).save(out / f"{name}.png", optimize=True)
+            written.append(name)
     print("wrote og:", ", ".join(written), file=sys.stderr)
 
 

@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **kwant.si blog, ready for posts.** `scripts/build_site.py` now builds a blog from Markdown files in
+  `site-src/blog/` (static, no new dependencies, CSP unchanged): `/blog/` lists the posts, each post has
+  breadcrumbs, reading time, related posts and a try-kwant box, plus BlogPosting and breadcrumb JSON-LD,
+  article meta, a sitemap entry and an item in `/blog/feed.xml` (RSS). A `compare` block makes comparison
+  tables that turn into one card per row on phones. Posts marked `draft: yes` are left out everywhere;
+  `--drafts` previews them locally. The Blog link in the header and footer appears with the first published
+  post, so the live site is unchanged until then. `check_site.py` checks blog pages and the feed.
+
 ### Changed
 - **kwant.si covers 0.5.** The home page says "New in 0.5" (bots bring receipts, status dots, smarter
   browsing, suggested routines, off by default). The features page has "New in 0.5"

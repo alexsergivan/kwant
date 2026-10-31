@@ -26,6 +26,12 @@ its title and description, so new pages show up there without extra work.
 Each page's og:image is its own card from scripts/build_og.py (site/assets/og/), so run that first when titles or cards change.
 lastmod and the docs' dateModified come from the last git commit that changed the page body (today if it's uncommitted).
 
+The blog: each post is a Markdown file in site-src/blog/ (see BLOG_HELP below for its header keys and what the Markdown
+supports). Posts become blog/<file name>.html, with BlogPosting JSON-LD, a reading time and related posts; the build also
+writes blog/index.html and the RSS feed blog/feed.xml, and adds the posts to the sitemap and llms.txt. A post with
+`draft: yes` is left out of everything; `python3 scripts/build_site.py --drafts` builds drafts too, for a local preview
+only (never commit that build). The Blog link in the header and footer appears once one post is published.
+
 It also writes the favicons (favicon.svg, favicon-32.png, apple-touch-icon.png, favicon.ico) from LOGO_RECTS,
 so the tab icon is always the header logo.
 """
@@ -36,6 +42,7 @@ import json
 import pathlib
 import posixpath
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -243,6 +250,7 @@ def header(root, active):
     home = root or "./"
     def cur(name):
         return ' aria-current="page"' if active == name else ""
+    blog = f'      <a href="{root}blog/index.html"{cur("blog")}>Blog</a>\n' if BLOG_LIVE else ""
 
     return f"""<a class="skip" href="#main">Skip to content</a>
 <header class="site-header">
@@ -251,7 +259,7 @@ def header(root, active):
     <nav class="nav" aria-label="Main">
       <a href="{root}features.html"{cur("features")}>Features</a>
       <a href="{root}docs/quickstart.html"{cur("docs")}>Docs</a>
-      <a class="btn btn-soft" href="{GITHUB}" rel="noopener">{GH_ICON}<span>GitHub</span></a>
+{blog}      <a class="btn btn-soft" href="{GITHUB}" rel="noopener">{GH_ICON}<span>GitHub</span></a>
     </nav>
   </div>
 </header>"""
@@ -259,6 +267,7 @@ def header(root, active):
 
 def footer(root):
     home = root or "./"
+    blog = f'      <a href="{root}blog/index.html">Blog</a>\n' if BLOG_LIVE else ""
     return f"""<footer class="site-footer">
   <div class="wrap">
     <div class="foot-brand">
@@ -272,7 +281,7 @@ def footer(root):
       <a href="{root}docs/quickstart.html">Quickstart</a>
       <a href="{root}docs/install.html">Install &amp; run</a>
       <a href="{root}self-hosted-ai-agents.html">Self-hosted AI agents</a>
-      <a href="{root}docs/mcp.html">MCP tools</a>
+{blog}      <a href="{root}docs/mcp.html">MCP tools</a>
     </nav>
     <nav aria-label="Using kwant">
       <h2>Using kwant</h2>
@@ -357,8 +366,13 @@ def page_url(path):
     return SITE_URL + "/" + path.replace("index.html", "").replace(".html", "")
 
 
-def og_image(path):
-    """The page's own social card, with a content hash so link previews refresh when it changes. 404 uses the home card."""
+def og_image(path, image=None):
+    """The page's own social card, with a content hash so link previews refresh when it changes. 404 uses the home card.
+    A blog post can name its own image (a path under site/) instead."""
+    if image:
+        if not (OUT / image).is_file():
+            sys.exit(f"{path}: image: {image} is not in site/")
+        return f"{SITE_URL}/{image}?v={file_hash(OUT / image)}"
     name = "home" if path in ("index.html", "404.html") else path.removesuffix(".html").replace("/", "-")
     card = OUT / f"assets/og/{name}.png"
     if not card.exists():
@@ -409,6 +423,24 @@ def structured_data(meta, url, title, image, dates, body=""):
             crumbs([("kwant", SITE_URL + "/"), ("Docs", f"{SITE_URL}/docs/quickstart"), (label, url)]),
             org,
         ]
+    elif meta.get("kind") == "post":
+        author = ({"@id": ORG_ID} if meta["author"] == BLOG_AUTHOR else {"@type": "Person", "name": meta["author"]})
+        post = {"@type": "BlogPosting", "@id": url + "#post", "headline": title, "description": meta["description"], "url": url,
+                "mainEntityOfPage": url, "image": image, "inLanguage": "en", "datePublished": meta["date"],
+                "dateModified": meta["updated"], "author": author, "publisher": {"@id": ORG_ID},
+                "wordCount": meta["words"], "isPartOf": {"@id": BLOG_ID}, "about": {"@id": APP_ID}}
+        if meta["tag_list"]:
+            post["keywords"] = meta["tag_list"]
+        graph = [post, crumbs([("kwant", SITE_URL + "/"), ("Blog", f"{SITE_URL}/blog/"), (title, url)]), org]
+    elif meta.get("kind") == "blog":
+        graph = [
+            {"@type": "Blog", "@id": BLOG_ID, "name": BLOG_TITLE, "description": meta["description"], "url": url, "inLanguage": "en",
+             "publisher": {"@id": ORG_ID}, "isPartOf": {"@id": SITE_ID}, "blogPost": [
+                 {"@type": "BlogPosting", "@id": page_url(m["path"]) + "#post", "headline": m["title"], "url": page_url(m["path"]),
+                  "datePublished": m["date"], "dateModified": m["updated"]} for m in meta["posts"]]},
+            crumbs([("kwant", SITE_URL + "/"), ("Blog", url)]),
+            org,
+        ]
     elif path == "404.html":
         return ""
     else:
@@ -433,14 +465,18 @@ def page(meta, body, root, dates):
     is404 = meta["path"] == "404.html"
     robots = '<meta name="robots" content="noindex">\n' if is404 else ""
     url = page_url(meta["path"])
-    image = og_image(meta["path"])
+    image = og_image(meta["path"], meta.get("image"))
     card_name = "kwant" if is404 else meta.get("card_title") or title.split(":")[0]
     img_alt = html.escape(f"{card_name}: {meta.get('card', meta['description'])}", quote=True)
     ftitle = html.escape(full_title, quote=True)
     article = (
         f'<meta property="article:published_time" content="{dates[0]}">\n<meta property="article:modified_time" content="{dates[1]}">\n'
-        if meta.get("nav") else ""
+        if meta.get("nav") or meta.get("kind") == "post" else ""
     )
+    if meta.get("kind") == "post":
+        article += "".join(f'<meta property="article:tag" content="{html.escape(t, quote=True)}">\n' for t in meta["tag_list"])
+    if meta.get("kind") in ("post", "blog"):
+        article += f'<link rel="alternate" type="application/rss+xml" title="{BLOG_TITLE}" href="{SITE_URL}/blog/feed.xml">\n'
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -451,7 +487,7 @@ def page(meta, body, root, dates):
 <meta name="theme-color" content="#f4f1ff">
 <meta name="color-scheme" content="light">
 {robots}<link rel="canonical" href="{url}">
-<meta property="og:type" content="{"article" if meta.get("nav") else "website"}">
+<meta property="og:type" content="{"article" if meta.get("nav") or meta.get("kind") == "post" else "website"}">
 <meta property="og:site_name" content="kwant">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="{ftitle}">
@@ -484,6 +520,306 @@ def page(meta, body, root, dates):
 </body>
 </html>
 """
+
+
+# ---- Blog ----
+BLOG_SRC = SRC / "blog"
+BLOG_ID = f"{SITE_URL}/blog/#blog"
+BLOG_LIVE = False  # set by main() once a post is published: shows the Blog link in the header and footer
+BLOG_AUTHOR = "The kwant team"
+BLOG_TITLE = "kwant blog"
+BLOG_DESC = "Guides, comparisons and notes on running a self-hosted team of AI agents with kwant."
+WORDS_PER_MINUTE = 220
+BLOG_HELP = """A post's header keys (one `key: value` per line, then a line with ---):
+  title, description, date (YYYY-MM-DD)     required
+  updated (YYYY-MM-DD)                      when the post last changed in substance; defaults to date
+  author                                    defaults to "The kwant team"
+  tags                                      comma separated, e.g. comparison, self-hosted; related posts share tags
+  card, card_title, card_art                the social card, as for pages (scripts/build_og.py)
+  image                                     a site path (assets/media/x.png) to use as og:image instead of the card
+  draft: yes                                left out of the site, the sitemap, the feed and llms.txt
+Markdown: ## and ### headings (h2 get an id from their text), paragraphs, - and 1. lists, **bold**, *italic*, `code`,
+[links](url), > quotes, ``` code blocks, | pipe | tables |, and a ```compare block (a comparison table that turns into
+one card per row on phones; first row = column names, yes / no / partial cells get a mark and words). A line that
+starts with < is passed through as HTML, and the page shortcodes ({{root}}, {{shot:…}}, …) work too."""
+
+_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+MARKS = {"yes": ("✓", "Yes", "yes"), "no": ("✗", "No", "no"), "partial": ("~", "Partly", "partial")}
+
+
+def slugify(text):
+    return re.sub(r"[^a-z0-9]+", "-", html.unescape(re.sub(r"<[^>]+>", "", text)).lower()).strip("-")
+
+
+def md_inline(text):
+    """Inline Markdown to HTML: `code`, [text](url), **bold**, *italic*. Text is escaped; code spans are kept verbatim."""
+    codes = []
+    def keep(m):
+        codes.append(f"<code>{html.escape(m[1], quote=False)}</code>")
+        return f"\x00{len(codes) - 1}\x00"
+    text = re.sub(r"`([^`]+)`", keep, text)
+    text = html.escape(text, quote=False)
+    def link(m):
+        href = m[2]
+        ext = ' rel="noopener"' if re.match(r"https?://", href) and not href.startswith(SITE_URL) else ""
+        return f'<a href="{html.escape(href, quote=True)}"{ext}>{m[1]}</a>'
+    text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", link, text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", text)
+    return re.sub(r"\x00(\d+)\x00", lambda m: codes[int(m[1])], text)
+
+
+def _cells(line):
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def _is_rule(line):
+    return bool(re.fullmatch(r"\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?", line.strip()))
+
+
+def compare_table(lines):
+    """The comparison component: a real table (row headers, column headers, a caption) that CSS turns into one card per
+    row on narrow screens, each cell labelled with its column through data-label."""
+    caption = ""
+    if lines and lines[0].lower().startswith("caption:"):
+        caption = lines.pop(0).split(":", 1)[1].strip()
+    rows = [_cells(l) for l in lines if l.strip() and not _is_rule(l)]
+    if len(rows) < 2 or len(rows[0]) < 3:
+        sys.exit("compare: needs a header row with a first column and at least two products, and one row")
+    head, body = rows[0], rows[1:]
+    def cell(value, label):
+        mark = MARKS.get(value.lower().split(" ", 1)[0].rstrip(".,:;"))
+        if mark:
+            rest = value.split(" ", 1)[1] if " " in value else ""
+            inner = (f'<span class="mark mark-{mark[2]}" aria-hidden="true">{mark[0]}</span> {mark[1]}'
+                     + (f" <span class=\"cmp-note\">{md_inline(rest)}</span>" if rest else ""))
+        else:
+            inner = md_inline(value)
+        return f'<td data-label="{html.escape(label, quote=True)}"><span>{inner}</span></td>'
+    out = ['<figure class="compare">', "<table>"]
+    if caption:
+        out.append(f"<caption>{md_inline(caption)}</caption>")
+    out.append("<thead><tr>" + "".join(f'<th scope="col">{md_inline(h)}</th>' for h in head) + "</tr></thead>")
+    out.append("<tbody>")
+    for r in body:
+        r = (r + [""] * len(head))[:len(head)]
+        out.append(f'<tr><th scope="row">{md_inline(r[0])}</th>' + "".join(cell(v, head[i + 1]) for i, v in enumerate(r[1:])) + "</tr>")
+    out += ["</tbody>", "</table>", "</figure>"]
+    return "\n".join(out)
+
+
+def markdown(text):
+    """The small Markdown subset in BLOG_HELP, to HTML. Kept here so the site needs nothing but Python to build."""
+    lines, out, i = text.strip("\n").split("\n"), [], 0
+    para = lambda chunk: f"<p>{md_inline(' '.join(l.strip() for l in chunk))}</p>"
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            i += 1
+            continue
+        if line.startswith("```"):
+            lang, j = line[3:].strip(), i + 1
+            while j < len(lines) and not lines[j].startswith("```"):
+                j += 1
+            block, i = lines[i + 1:j], j + 1
+            if lang == "compare":
+                out.append(compare_table(block))
+            else:
+                out.append(f"<pre><code>{html.escape(chr(10).join(block), quote=False)}</code></pre>")
+            continue
+        m = re.match(r"(#{1,6})\s+(.*)", line)
+        if m:
+            level = len(m[1])
+            if level < 2:
+                sys.exit(f"markdown: '# {m[2]}': the post's title is its only h1; start headings at ##")
+            body = md_inline(m[2].strip())
+            ident = f' id="{slugify(body)}"' if level <= 3 else ""
+            out.append(f"<h{level}{ident}>{body}</h{level}>")
+            i += 1
+            continue
+        if line.startswith("<"):
+            j = i
+            while j < len(lines) and lines[j].strip():
+                j += 1
+            out.append("\n".join(lines[i:j]))
+            i = j
+            continue
+        if line.lstrip().startswith("|") and i + 1 < len(lines) and _is_rule(lines[i + 1]):
+            j = i
+            while j < len(lines) and lines[j].lstrip().startswith("|"):
+                j += 1
+            rows = [_cells(l) for l in lines[i:j] if not _is_rule(l)]
+            head = "".join(f'<th scope="col">{md_inline(c)}</th>' for c in rows[0])
+            body = "".join("<tr>" + "".join(f"<td>{md_inline(c)}</td>" for c in r) + "</tr>" for r in rows[1:])
+            out.append(f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>')
+            i = j
+            continue
+        if line.startswith(">"):
+            j = i
+            while j < len(lines) and lines[j].startswith(">"):
+                j += 1
+            out.append(f"<blockquote>{markdown(chr(10).join(l[1:].lstrip() for l in lines[i:j]))}</blockquote>")
+            i = j
+            continue
+        m = re.match(r"(\s*)([-*]|\d+\.)\s+", line)
+        if m:
+            tag = "ol" if m[2][0].isdigit() else "ul"
+            items, j = [], i
+            while j < len(lines) and lines[j].strip():
+                im = re.match(r"\s*([-*]|\d+\.)\s+(.*)", lines[j])
+                if im and (im[1][0].isdigit()) == (tag == "ol"):
+                    items.append([im[2]])
+                elif items:
+                    items[-1].append(lines[j].strip())
+                else:
+                    break
+                j += 1
+            out.append(f"<{tag}>" + "".join(f"<li>{md_inline(' '.join(it))}</li>" for it in items) + f"</{tag}>")
+            i = j
+            continue
+        j = i
+        while j < len(lines) and lines[j].strip() and not re.match(r"(#{1,6}\s|```|<|>|\s*([-*]|\d+\.)\s)", lines[j]):
+            j += 1
+        out.append(para(lines[i:j]))
+        i = j
+    return "\n".join(out)
+
+
+def reading_minutes(text):
+    words = len(re.findall(r"\w+", re.sub(r"<[^>]+>", " ", text)))
+    return max(1, -(-words // WORDS_PER_MINUTE))
+
+
+def blog_posts(drafts=False):
+    """Every post as (meta, markdown), newest first. Header keys are checked so a typo fails the build, not the page."""
+    posts = []
+    for src in sorted(BLOG_SRC.glob("*.md")) if BLOG_SRC.exists() else []:
+        meta, body = parse(src)
+        slug = src.stem
+        if not _SLUG.fullmatch(slug):
+            sys.exit(f"{src.name}: file names are the URL, so use lowercase words and dashes only")
+        for key in ("title", "description", "date"):
+            if not meta.get(key):
+                sys.exit(f"{src.name}: missing '{key}:'\n{BLOG_HELP}")
+        for key in ("date", "updated"):
+            if meta.get(key):
+                datetime.date.fromisoformat(meta[key])
+        if meta.get("updated", meta["date"]) < meta["date"]:
+            sys.exit(f"{src.name}: updated is before date")
+        if meta.get("draft") == "yes" and not drafts:
+            continue
+        meta.update(path=f"blog/{slug}.html", slug=slug, kind="post", active="blog")
+        meta.setdefault("updated", meta["date"])
+        meta.setdefault("author", BLOG_AUTHOR)
+        meta.setdefault("card_art", "avatar:research")
+        meta["tag_list"] = [t.strip() for t in meta.get("tags", "").split(",") if t.strip()]
+        meta["words"] = len(re.findall(r"\w+", body))
+        meta["minutes"] = reading_minutes(body)
+        posts.append((meta, body))
+    return sorted(posts, key=lambda p: (p[0]["date"], p[0]["slug"]), reverse=True)
+
+
+def related(meta, posts, n=3):
+    """Up to n other posts, most shared tags first, then newest."""
+    tags = set(meta["tag_list"])
+    others = [m for m, _ in posts if m["slug"] != meta["slug"]]
+    scored = sorted(others, key=lambda m: (len(tags & set(m["tag_list"])), m["date"], m["slug"]), reverse=True)
+    return scored[:n]
+
+
+def human_date(iso):
+    d = datetime.date.fromisoformat(iso)
+    return f"{d.strftime('%B')} {d.day}, {d.year}"
+
+
+def post_meta_line(meta):
+    when = f'<time datetime="{meta["date"]}">{human_date(meta["date"])}</time>'
+    if meta["updated"] != meta["date"]:
+        when += f' · Updated <time datetime="{meta["updated"]}">{human_date(meta["updated"])}</time>'
+    return f'{html.escape(meta["author"])} · {when} · {meta["minutes"]} min read'
+
+
+def post_card(m, root, level=2):
+    tags = "".join(f"<li>{html.escape(t)}</li>" for t in m["tag_list"])
+    return (f'<article class="post-card"><h{level}><a href="{root}{m["path"]}">{html.escape(m["title"])}</a></h{level}>'
+            f'<p>{html.escape(m["description"])}</p>'
+            f'<p class="post-meta">{post_meta_line(m)}</p>' + (f'<ul class="tags" aria-label="Tags">{tags}</ul>' if tags else "")
+            + "</article>")
+
+
+def blog_post_body(meta, body, posts, root):
+    tags = ", ".join(meta["tag_list"])
+    rel = related(meta, posts)
+    rel_html = (f'<aside class="related" aria-labelledby="related-title"><h2 id="related-title">Related posts</h2>'
+                f'<div class="post-grid">{"".join(post_card(m, root, 3) for m in rel)}</div></aside>') if rel else ""
+    return f"""<section class="page-head post-head">
+  <div class="wrap">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="{root}index.html">kwant</a> <span aria-hidden="true">/</span> <a href="{root}blog/index.html">Blog</a></nav>
+    {f'<p class="kicker">{html.escape(tags)}</p>' if tags else ""}
+    <h1>{html.escape(meta["title"])}</h1>
+    <p class="lede">{html.escape(meta["description"])}</p>
+    <p class="post-meta">{post_meta_line(meta)}</p>
+  </div>
+</section>
+
+<div class="wrap">
+  <article class="prose solo post">
+{expand(markdown(body), root)}
+    <aside class="post-cta" aria-label="Try kwant">
+      <p><strong>Try kwant.</strong> A self-hosted team of AI agents in one binary, free and open source.</p>
+      <p class="cta"><a class="btn btn-violet" href="{root}docs/install.html">Install kwant</a> <a class="btn btn-soft" href="{GITHUB}" rel="noopener">See it on GitHub</a></p>
+    </aside>
+  </article>
+  {rel_html}
+</div>
+"""
+
+
+def blog_index_body(posts, root):
+    cards = "".join(post_card(m, root) for m, _ in posts)
+    return f"""<section class="page-head">
+  <div class="wrap">
+    <p class="kicker">Blog</p>
+    <h1>The kwant blog</h1>
+    <p class="lede">{html.escape(BLOG_DESC)} <a href="{root}blog/feed.xml">RSS feed</a></p>
+  </div>
+</section>
+
+<div class="wrap">
+  <div class="post-list">{cards}</div>
+</div>
+"""
+
+
+def rfc822(iso):
+    d = datetime.date.fromisoformat(iso)
+    return datetime.datetime(d.year, d.month, d.day, 8, 0, tzinfo=datetime.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+
+
+def blog_feed(posts):
+    """RSS 2.0 for the blog. Only post dates go in it, so a rebuild with no new posts writes the same bytes."""
+    esc = lambda s: html.escape(s, quote=False)
+    items = []
+    for m, _ in posts:
+        url = page_url(m["path"])
+        cats = "".join(f"<category>{esc(t)}</category>" for t in m["tag_list"])
+        items.append(f"    <item><title>{esc(m['title'])}</title><link>{url}</link><guid isPermaLink=\"true\">{url}</guid>"
+                     f"<pubDate>{rfc822(m['date'])}</pubDate><description>{esc(m['description'])}</description>{cats}</item>")
+    newest = max(m["updated"] for m, _ in posts)
+    return "\n".join([
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">',
+        "  <channel>",
+        f"    <title>{BLOG_TITLE}</title>",
+        f"    <link>{SITE_URL}/blog/</link>",
+        f"    <description>{esc(BLOG_DESC)}</description>",
+        "    <language>en</language>",
+        f"    <lastBuildDate>{rfc822(newest)}</lastBuildDate>",
+        f'    <atom:link href="{SITE_URL}/blog/feed.xml" rel="self" type="application/rss+xml"/>',
+        *items,
+        "  </channel>",
+        "</rss>",
+    ]) + "\n"
 
 
 # ---- Cache busting ----
@@ -613,11 +949,15 @@ def llms_txt(pages):
     line = lambda path: f"- [{pages[path]['title']}]({page_url(path)}): {pages[path]['description']}"
     docs = [f"docs/{d}.html" for d, _ in DOCS if f"docs/{d}.html" in pages]
     alternatives = sorted(p for p in pages if p.startswith("alternatives/"))
-    main = sorted((p for p in pages if p not in docs + alternatives and p not in ("privacy.html", "terms.html", "404.html")), key=lambda p: p != "index.html")
+    blog = ["blog/index.html"] * ("blog/index.html" in pages) + sorted((p for p in pages if p.startswith("blog/") and p != "blog/index.html"),
+                                                                        key=lambda p: pages[p]["date"], reverse=True)
+    main = sorted((p for p in pages if p not in docs + alternatives + blog and p not in ("privacy.html", "terms.html", "404.html")), key=lambda p: p != "index.html")
     legal = [p for p in ("privacy.html", "terms.html") if p in pages]
     out = [LLMS_INTRO, "## Site", *map(line, main), "", "## Docs", *map(line, docs), ""]
     if alternatives:
         out += ["## Alternatives", *map(line, alternatives), ""]
+    if blog:
+        out += ["## Blog", *map(line, blog), ""]
     out += ["## Optional", *map(line, legal)]
     return "\n".join(out) + "\n"
 
@@ -634,10 +974,16 @@ def clean_links(page_html, path):
     return re.sub(r'(<a\b[^>]*?\bhref=")((?![a-z]+:|#)[^"#?]*\.html)(#[^"]*)?"', clean, page_html)
 
 
-def main():
+def main(argv=None):
+    global BLOG_LIVE
+    argv = sys.argv[1:] if argv is None else argv
     write_favicons()
     version_css()
     written, lastmod, metas = [], {}, {}
+    posts = blog_posts(drafts="--drafts" in argv)
+    BLOG_LIVE = bool(posts)
+    # Every blog file is rebuilt from site-src/blog, so a post that was deleted or turned back into a draft goes away too.
+    shutil.rmtree(OUT / "blog", ignore_errors=True)
     for src in sorted(SRC.glob("*.html")):
         meta, body = parse(src)
         dates = git_dates(src)
@@ -652,6 +998,22 @@ def main():
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(clean_links(version_urls(page(meta, body, root, dates)), meta["path"]))
         written.append(meta["path"])
+    if posts:
+        root = "../"
+        index = {"path": "blog/index.html", "title": "Blog: guides and comparisons for self-hosted AI agents",
+                 "card_title": "Blog", "card": "Guides, comparisons and notes on self-hosted AI agents", "card_art": "team",
+                 "description": BLOG_DESC, "active": "blog", "kind": "blog", "posts": [m for m, _ in posts]}
+        newest = max(m["updated"] for m, _ in posts)
+        for meta, body in posts:
+            out = OUT / meta["path"]
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(clean_links(version_urls(page(meta, blog_post_body(meta, body, posts, root), root, (meta["date"], meta["updated"]))), meta["path"]))
+            lastmod[meta["path"]], metas[meta["path"]] = meta["updated"], meta
+            written.append(meta["path"])
+        (OUT / index["path"]).write_text(clean_links(version_urls(page(index, blog_index_body(posts, root), root, (newest, newest))), index["path"]))
+        lastmod[index["path"]], metas[index["path"]] = newest, index
+        written.append(index["path"])
+        (OUT / "blog/feed.xml").write_text(blog_feed(posts))
     urls = [p for p in written if p != "404.html"]
     sitemap = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
     for p in urls:
