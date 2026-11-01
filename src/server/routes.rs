@@ -3159,7 +3159,7 @@ async fn send_chat_inner(
                 // The team router doesn't say which path it took; Laya being down means keywords did
                 let fallback = !state.router.status().is_up();
                 let basis = if basis.is_empty() { "skills".to_string() } else { basis };
-                let routing = routing_meta(&target_kwant, &reason, members.len(), fallback, &matched_terms, &basis);
+                let routing = routing_meta(&target_kwant, &reason, members.len(), fallback, &matched_terms, &basis, &saved_user_msg.id);
                 let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                     context_id: routing_context_id,
                     kwant_id: target_kwant.id.clone(),
@@ -3284,7 +3284,7 @@ async fn send_chat_inner(
         } else if let Some((asker, _)) = awaiting.clone() {
             let reason = format!("{} asked you a question here, so your reply goes back to {}", asker.name, asker.name);
             let candidates = chat_teammates.len().max(1);
-            routing = Some(routing_meta(&asker, &reason, candidates, false, &[], "asked"));
+            routing = Some(routing_meta(&asker, &reason, candidates, false, &[], "asked", &saved_user_msg.id));
             let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                 context_id: payload.channel_id.clone(),
                 kwant_id: asker.id.clone(),
@@ -3367,7 +3367,7 @@ async fn send_chat_inner(
                         crate::router::team::Settle::Route => {}
                     }
                     if let Some(ref k) = chosen {
-                        routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms, &route.basis));
+                        routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms, &route.basis, &saved_user_msg.id));
                         if let Some(m) = routing.as_mut() {
                             m["fit"] = json!(route.fit);
                             if let Some(ids) = similar.take() {
@@ -3447,9 +3447,12 @@ fn channel_members(channel: &crate::db::models::Channel, all_kwants: &[Kwant]) -
 }
 
 /// A reply's `meta.routing`: who Laya picked for a channel or team message and why.
-pub(super) fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String], basis: &str) -> serde_json::Value {
+/// The `meta.routing` a routed reply carries. `message_id` is the person's message it answers,
+/// so "Wrong bot?" corrects and resends that message, not just the latest one.
+pub(super) fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String], basis: &str, message_id: &str) -> serde_json::Value {
     json!({
         "basis": basis,
+        "message_id": message_id,
         "kwant_id": kwant.id,
         "kwant_name": kwant.name,
         "reason": reason,
