@@ -404,7 +404,7 @@ const ROLES: &[Role] = &[
             ("backend", 2), ("back-end", 2), ("api", 2), ("endpoint", 2), ("database", 2), ("schema", 2),
             ("migration", 2), ("server", 2), ("service", 1), ("strategy", 2), ("strategies", 2), ("backtest", 2),
             ("trading", 2), ("indicator", 2), ("order", 1), ("orders", 1), ("algorithm", 2), ("query", 1),
-            ("sql", 2), ("golang", 2), ("go", 1), ("rust", 1), ("function", 1), ("cli", 1), ("parser", 2),
+            ("sql", 2), ("golang", 2), ("rust", 1), ("function", 1), ("cli", 1), ("parser", 2),
             ("python", 1), ("script", 2), ("scripts", 2), ("scrape", 2), ("scraper", 2), ("crash", 2),
             ("crashes", 2), ("crashing", 2), ("traceback", 2), ("exception", 2), ("error", 1),
         ],
@@ -771,6 +771,17 @@ pub fn pick_member_hinted<'a>(
         return Some(chosen(k, vec![k.name.trim().to_lowercase()], "was named in your message", 1.0));
     }
 
+    // 1b. A greeting, thank-you or go-ahead ("ok go ahead") carries on with the bot that spoke last
+    //     before any word matching: its everyday words name no one's work
+    let scope_words = scope_words(prompt);
+    let avoided = |k: &Kwant| hints.avoids(k, &scope_words);
+    if is_small_talk(prompt) {
+        if let Some(k) = last_speaker.and_then(|id| members.iter().find(|m| m.id == id)).filter(|k| !avoided(k)) {
+            let reason = format!("Nothing in your message named a role, so {} ({}), who spoke last here, carries on", k.name, k.title);
+            return Some(Pick { kwant: k, basis: "last", reason, terms: vec![], fit: ROUTE_AT, choices: vec![] });
+        }
+    }
+
     // 2. A request to put a team of bots together is no one specialist's work: the lead proposes
     //    the bots on one hire card (see TEAM_BUILDING_NOTE)
     if is_team_building_request(prompt) {
@@ -791,8 +802,6 @@ pub fn pick_member_hinted<'a>(
 
     // 3. The request's words belong to a role
     let role_words = role_words(prompt);
-    let scope_words = scope_words(prompt);
-    let avoided = |k: &Kwant| hints.avoids(k, &scope_words);
     let roles: Vec<(&Kwant, usize, Vec<String>)> = members
         .iter()
         .map(|m| (m, if avoided(m) { (0, vec![]) } else { role_score(&role_words, m) }))
@@ -828,6 +837,26 @@ pub fn pick_member_hinted<'a>(
                     if !terms.contains(w) {
                         terms.push(w.clone());
                     }
+                }
+            }
+            if same_role_tie {
+                // Bots sharing one role: a word of the message in just one of their own names or
+                // titles settles it ("hook" for the "TikTok Scriptwriter & Hook Specialist")
+                let titled: Vec<(&Kwant, Vec<String>)> = matched
+                    .iter()
+                    .map(|m| (*m, relevance_terms(prompt, m).into_iter().filter(|(t, s)| *s >= 2 && !terms.contains(t)).map(|(t, _)| t).collect::<Vec<_>>()))
+                    .collect();
+                let own = |k: &Kwant, t: &String| titled.iter().all(|(o, ts)| o.id == k.id || !ts.contains(t));
+                let deciders: Vec<(&Kwant, Vec<String>)> = titled
+                    .iter()
+                    .map(|(k, ts)| (*k, ts.iter().filter(|t| own(k, t)).cloned().collect::<Vec<_>>()))
+                    .filter(|(_, ts)| !ts.is_empty())
+                    .collect();
+                if let [(k, extra)] = deciders.as_slice() {
+                    let mut t = terms.clone();
+                    t.extend(extra.iter().cloned());
+                    let how = format!("does this kind of work: your message mentions {}", t.join(", "));
+                    return Some(chosen(k, t, &how, ROUTE_AT + 0.1));
                 }
             }
             let mut p = to_lead(matched.clone(), terms);
@@ -903,14 +932,19 @@ pub fn pick_member_hinted<'a>(
     if let [i] = best.as_slice() {
         let (k, s, terms, named) = &scored[*i];
         let how = format!("shares words with your message: {}", terms.join(", "));
-        // One word only in a description is a hint (0.5); a word in the name or title, or two
-        // description words, is enough to route
+        // One word only in a description is a hint (0.5) when another bot also matched; a word in
+        // the name or title, or two description words, is enough to route
         let base = (0.4 + 0.1 * *s as f32 + if *named { 0.1 } else { 0.0 }).min(0.95);
-        let mut p = chosen(k, terms.clone(), &how, base);
         let runner_up = (0..scored.len())
             .filter(|&j| j != *i && scored[j].1 > 0)
             .max_by_key(|&j| scored[j].1)
             .map(|j| scored[j].0);
+        // With no runner-up there is no one to ask about: words of the message in only this bot's
+        // name, title or description (not just a weak role hint) are enough to route
+        // ("calories" for the Nutritionist), rather than drop to the Concierge
+        let own_words = matches[*i].iter().any(|(t, _)| !shared(t));
+        let base = if runner_up.is_none() && own_words { base.max(ROUTE_AT) } else { base };
+        let mut p = chosen(k, terms.clone(), &how, base);
         p.choices = std::iter::once(*k).chain(runner_up).collect();
         return Some(p);
     }
@@ -1675,13 +1709,74 @@ mod fit_tests {
     #[test]
     fn laya_only_nudges_a_pick_with_word_evidence() {
         let members = general();
-        // One description-only word is a hint below the bar; Laya agreeing tips it over
+        // One description-only word that no other bot has routes; Laya agreeing raises the fit
         let prompt = "any thoughts on scroll-stopping openers?";
         let alone = pick_member_after(prompt, "k-lead", &members, None, "channel lead", None).unwrap();
         let agreed = pick_member_after(prompt, "k-lead", &members, Some(LayaGuess { kwant: &members[1], confident: true }), "channel lead", None).unwrap();
         assert_eq!(alone.kwant.id, "k-script", "{alone:?}");
-        assert!(alone.fit < ROUTE_AT && alone.fit >= ASK_FROM, "{alone:?}");
+        assert_eq!(alone.fit, ROUTE_AT, "{alone:?}");
         assert!(agreed.fit > alone.fit, "{agreed:?}");
+    }
+
+    fn kitchen() -> Vec<Kwant> {
+        vec![
+            bot("k-tl", "TechLead", "Tech Lead", "Leads engineering and coordinates the team"),
+            bot("k-chef", "HeadChef", "Head Chef", "Runs the kitchen: menus, techniques, recipes and cooking questions"),
+            bot("k-nutri", "Nutritionist", "Nutritionist", "Nutrition, calories, macros, diets and meal plans"),
+            bot("k-pastry", "Pastry", "Pastry Chef", "Pastry, bread, dough and desserts"),
+            bot("k-tiktok", "TikTokLead", "TikTok Lead", "Plans the TikTok channel and content calendar"),
+            bot("k-script", "Scriptwriter", "TikTok Scriptwriter & Hook Specialist", "Writes TikTok scripts and hooks"),
+            bot("k-comm", "Community", "Community Manager", "Answers followers and moderates the community"),
+            bot("k-data", "Analyst", "Data Analyst", "Analyses sales, churn and retention numbers"),
+        ]
+    }
+
+    /// The first fit score sent a specialist question with one word only its bot has, and no
+    /// runner-up, to the Concierge (0.5, nobody to ask about). Corn dogs still have no fit.
+    #[test]
+    fn a_word_only_one_bot_has_routes_to_it_not_the_concierge() {
+        let members = kitchen();
+        for (prompt, want) in [
+            ("How many calories are in a corn dog?", "k-nutri"),
+            ("Which dough is better for croissants, laminated or puff?", "k-pastry"),
+            ("Which dishes should go on tonight's menu?", "k-chef"),
+        ] {
+            let p = pick_member_after(prompt, "k-tl", &members, None, "channel lead", None).unwrap();
+            assert_eq!(p.kwant.id, want, "{prompt}: {p:?}");
+            assert_eq!(settle(&route_of(&p), true, true), Settle::Route, "{prompt}: {p:?}");
+        }
+        let p = pick_member_after("Best place to eat corn dogs in Munich tomorrow?", "k-tl", &members, None, "channel lead", None).unwrap();
+        assert_eq!(settle(&route_of(&p), true, true), Settle::Concierge, "{p:?}");
+    }
+
+    /// "go" in "ok go ahead" counted as a Backend word, so the go-ahead went to the Concierge.
+    #[test]
+    fn a_go_ahead_carries_on_with_the_last_speaker_before_word_matching() {
+        let members = vec![
+            bot("k-be", "Backend", "Backend Engineer", "Builds APIs and services"),
+            bot("k-fe", "Frontend", "Frontend Engineer", "Builds the web interface"),
+            bot("k-mk", "Marketer", "Growth Marketer", "Campaigns, copy and launches"),
+        ];
+        for last in ["k-be", "k-fe"] {
+            let p = pick_member_after("ok go ahead", "k-be", &members, None, "channel lead", Some(last)).unwrap();
+            assert_eq!((p.kwant.id.as_str(), p.basis), (last, "last"), "{p:?}");
+            assert_eq!(settle(&route_of(&p), true, true), Settle::Route);
+        }
+        // "go" as a verb names no one's work
+        let p = pick_member_after("Where should we go for the team dinner in Lisbon?", "k-be", &members, None, "channel lead", None).unwrap();
+        assert_eq!(settle(&route_of(&p), true, true), Settle::Concierge, "{p:?}");
+    }
+
+    /// Bots sharing a role word ("tiktok") are told apart by a word in just one of their titles.
+    #[test]
+    fn a_title_word_settles_a_tie_between_bots_of_one_role() {
+        let members = kitchen();
+        let p = pick_member_after("Write a TikTok hook about corn dogs", "k-tl", &members, None, "channel lead", None).unwrap();
+        assert_eq!(p.kwant.id, "k-script", "{p:?}");
+        assert_eq!(settle(&route_of(&p), true, true), Settle::Route);
+        // Without such a word it stays a close call
+        let p = pick_member_after("Ideas for our TikTok this week?", "k-tl", &members, None, "channel lead", None).unwrap();
+        assert!(matches!(settle(&route_of(&p), true, true), Settle::Ask(_)), "{p:?}");
     }
 
     #[test]

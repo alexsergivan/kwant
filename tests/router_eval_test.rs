@@ -2,8 +2,9 @@
 //! a live Laya (a case may carry a fixed Laya guess), and reports the misroute rate per space.
 //!
 //! * `router_eval_cases_are_well_formed` runs in CI: the data parses and every name resolves.
-//! * `router_eval` is `#[ignore]`d, because expected values for routes that don't exist yet
-//!   (`concierge`, `ask`) fail by design. Run it on a branch with:
+//! * `router_eval_must_pass` runs in CI: the cases in `MUST_PASS` route where expected.
+//! * `router_eval` is `#[ignore]`d: it reports every case, including ones still known to fail.
+//!   Run it with:
 //!
 //!   cargo test --test router_eval_test router_eval -- --ignored --nocapture
 //!
@@ -13,10 +14,10 @@
 //! A *misroute* is a wrong destination. A *basis mismatch* is the right destination for the wrong
 //! stated reason (basis); it is reported apart, not counted as a misroute.
 //!
-//! When the router's signature changes (a channel kind, a Concierge), only `route_case` needs to change.
+//! `route_case` routes as the server does: pick, then settle on fit (#general has a Concierge).
 
 use kwnt::db::models::Kwant;
-use kwnt::router::team::{pick_member_after, LayaGuess};
+use kwnt::router::team::{pick_member_hinted, settle, ChannelRoute, Hints, LayaGuess, Settle};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -94,15 +95,28 @@ fn route_case(case: &Case, space: &Space, members: &[Kwant]) -> (String, String)
     let by_name = |n: &str| members.iter().find(|m| m.name == n).unwrap_or_else(|| panic!("case {}: no member {n}", case.id));
     let laya = case.laya.as_ref().map(|l| LayaGuess { kwant: by_name(&l.pick), confident: l.confident });
     let last = case.last_speaker.as_ref().map(|n| by_name(n).id.clone());
-    // main: no channel kind and no Concierge yet, so `case.channel` is not passed.
-    let pick = pick_member_after(&case.message, &by_name(&space.lead).id, members, laya, "channel lead", last.as_deref())
+    // As the server does (routes.rs): pick, then settle on fit. A DM goes to its bot as picked; in
+    // #general the Concierge exists (it is made on the first no-match unless the person removed it).
+    let pick = pick_member_hinted(&case.message, &by_name(&space.lead).id, members, laya, "channel lead", last.as_deref(), &Hints::default())
         .expect("a pick");
-    let dest = match pick.basis {
-        "concierge" => "concierge".to_string(),
-        "ask" => "ask".to_string(),
-        _ => pick.kwant.name.clone(),
+    if std::env::var("ROUTER_EVAL_DEBUG").is_ok() { eprintln!("DEBUG #{} pick={} basis={} fit={:.2} choices={:?} terms={:?}", case.id, pick.kwant.name, pick.basis, pick.fit, pick.choices.iter().map(|k| &k.name).collect::<Vec<_>>(), pick.terms); }
+    if case.channel == "dm" {
+        return (pick.kwant.name.clone(), pick.basis.to_string());
+    }
+    let route = ChannelRoute {
+        kwant_id: pick.kwant.id.clone(),
+        reason: pick.reason.clone(),
+        fallback: laya.is_none(),
+        matched_terms: pick.terms.clone(),
+        basis: pick.basis.into(),
+        fit: pick.fit,
+        choices: pick.choices.iter().map(|k| k.id.clone()).collect(),
     };
-    (dest, pick.basis.to_string())
+    match settle(&route, case.channel == "general", true) {
+        Settle::Concierge => ("concierge".into(), "concierge".into()),
+        Settle::Ask(_) => ("ask".into(), "ask".into()),
+        Settle::Route => (pick.kwant.name.clone(), pick.basis.to_string()),
+    }
 }
 
 #[test]
@@ -164,4 +178,24 @@ fn router_eval() {
         let max: f64 = max.parse().expect("ROUTER_EVAL_MAX_MISROUTE is a number like 0.05");
         assert!(m as f64 / t as f64 <= max, "misroute rate {:.3} above {max}", m as f64 / t as f64);
     }
+}
+
+/// Cases the router must get right, checked in CI: every no-match case (to the Concierge in
+/// #general), the specialist questions and the go-ahead that main already routed right and the
+/// first fit score broke (#12, #13, #16, #17, #40), and #35, where "go" made Backend a runner-up.
+const MUST_PASS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 16, 17, 20, 35, 36, 40, 44, 45];
+
+#[test]
+fn router_eval_must_pass() {
+    let f = load();
+    let mut failures = Vec::new();
+    for id in MUST_PASS {
+        let c = f.cases.iter().find(|c| c.id == *id).unwrap_or_else(|| panic!("no case #{id}"));
+        let space = &f.spaces[&c.space];
+        let (dest, basis) = route_case(c, space, &kwants(space));
+        if dest != c.expect.route {
+            failures.push(format!("#{id} {:?}: expected {}, got {dest} (basis {basis})", c.message, c.expect.route));
+        }
+    }
+    assert!(failures.is_empty(), "must-pass routing cases failed:\n{}", failures.join("\n"));
 }

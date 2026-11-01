@@ -387,6 +387,8 @@ async fn corrections_and_choices_teach_routing() {
 
 /// The third similar request the Concierge gets in 14 days carries the ids of all three
 /// (`meta.routing.similar_requests`) so it can propose one hire; the fourth doesn't ask again.
+/// The Concierge's proposal with those ids is a pending hire card, and once the person denies it
+/// the same kind of bot is refused.
 #[tokio::test]
 async fn the_concierge_suggests_a_hire_on_the_third_similar_request() {
     let (app, state, _tmp) = setup().await;
@@ -419,4 +421,54 @@ async fn the_concierge_suggests_a_hire_on_the_third_similar_request() {
             _ => assert!(similar.is_null(), "{prompt}: {routing}"),
         }
     }
+
+    // The Concierge acts on it: propose_hire with exactly those ids puts a pending hire card up
+    let space = SpaceId::default_space();
+    let concierge = concierges(&state).await.pop().expect("the Concierge");
+    let guide = json!({
+        "name": "Foodie",
+        "role": "Local food guide",
+        "instructions": "You recommend street food, markets and places to eat.",
+        "reason": "Street food questions keep coming and none of the specialists here covers them.",
+        "evidence": {"basis": "repeated", "similar_requests": ids},
+    });
+    let (text, is_error) = propose_hire(&app, &state, &concierge, &general, 1, guide.clone()).await;
+    assert!(!is_error, "{text}");
+    let pending = state.db.list_hires(&space, Some("pending")).await.unwrap();
+    let [card] = pending.as_slice() else { panic!("one pending hire card: {pending:?}") };
+    assert_eq!(card.kwant_id, concierge);
+    let evidence: Value = serde_json::from_str(&card.evidence).unwrap();
+    assert_eq!(evidence["basis"], "repeated");
+    let on_card: Vec<&str> = evidence["similar_requests"].as_array().unwrap().iter().map(|r| r["message_id"].as_str().unwrap()).collect();
+    assert_eq!(on_card, ids.iter().map(String::as_str).collect::<Vec<_>>());
+    let msgs = state.db.list_messages(&general, 100).await.unwrap();
+    assert!(
+        msgs.iter().any(|m| m.meta.as_deref().is_some_and(|x| x.contains("hire_proposal") && x.contains(&card.id))),
+        "the hire card is posted in #general"
+    );
+
+    // The person turns it down: the same kind of bot isn't proposed again
+    ok(&app, "POST", &format!("/api/hires/{}/deny", card.id), None).await;
+    let (text, is_error) = propose_hire(&app, &state, &concierge, &general, 2, guide).await;
+    assert!(is_error, "a denied role is refused: {text}");
+    assert!(state.db.list_hires(&space, Some("pending")).await.unwrap().is_empty());
+    assert_eq!(state.db.list_hires(&space, None).await.unwrap().len(), 1, "nothing new was saved");
+}
+
+/// `bot` calls propose_hire in its own turn number `turn` in `channel`; the tool's text and isError.
+async fn propose_hire(app: &Router, state: &AppState, bot: &str, channel: &str, turn: u32, args: Value) -> (String, bool) {
+    let k = state.db.get_kwant(bot).await.unwrap().unwrap();
+    let turn_id = format!("turn-{bot}-{turn}");
+    let scope = SelfScope {
+        kwant_id: k.id.clone(),
+        kwant_name: k.name.clone(),
+        origin: Some(TurnOrigin { channel_id: Some(channel.into()), ..Default::default() }),
+        turn_id: Some(turn_id.clone()),
+        ..Default::default()
+    };
+    let token = mcp_runtime::prepare_turn_with_self(state, &k, Some(turn_id), None, Some(scope)).await.unwrap().1;
+    let rpc = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "propose_hire", "arguments": args}});
+    let (s, v) = call_as(app, "/api/mcp/self", &token, rpc).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    (v["result"]["content"][0]["text"].as_str().unwrap_or("").to_string(), v["result"]["isError"].as_bool().unwrap_or(false))
 }

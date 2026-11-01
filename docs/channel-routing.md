@@ -11,10 +11,20 @@ Each pick has a `fit` from 0 to 1, saved on the reply as `meta.routing.fit`.
 |---|---|
 | ≥ 0.6 | Routed to the best member |
 | 0.4–0.6, two candidates | The person is asked (basis `ask`), in any channel. Never for @mentions or DMs |
-| < 0.4 in #general | The Concierge answers (basis `concierge`), made on first need |
-| < 0.4 elsewhere | The channel's own members, as before (lead or last speaker) |
+| Anything else in #general | The Concierge answers (basis `concierge`), made on first need |
+| Anything else elsewhere | The channel's own members, as before (lead or last speaker) |
 
 Laya's titles-only guess is a tiebreaker only; it no longer picks a bot on its own.
+
+- A word of the message in only one bot's name, title or description, with no runner-up, routes
+  to it (fit 0.6): "How many calories are in a corn dog?" goes to the Nutritionist. A weak role
+  hint alone ("report", "error") doesn't.
+- A greeting, thank-you or go-ahead ("ok go ahead") stays with the bot that spoke last before any
+  word matching (basis `last`). "go" is not a role word.
+- Bots that share a role word ("tiktok") are told apart by a word in just one of their names or
+  titles ("hook" for the TikTok Scriptwriter & Hook Specialist); without one it is a close call.
+- `tests/router_eval/` holds 47 messages with their expected routing; `router_eval_must_pass` in
+  `tests/router_eval_test.rs` runs in CI.
 
 ## covers / avoids
 
