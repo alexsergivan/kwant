@@ -1,7 +1,8 @@
 //! Truth Ledger C2, `on` (Mission Control Phase C2): the bot's memory block is read from the
 //! ledger and labelled, the deterministic contradiction scan opens disputes ("4 GB" vs "12 GB";
 //! not paraphrases), a dispute is settled by the person or by a passing kwant-run check, tasks
-//! that rely on a disputed fact land in Needs you, and `off`/`shadow` stay byte-identical.
+//! that rely on a disputed fact land in Needs you, and `off`/`shadow` stay byte-identical to main
+//! (fixtures/truth_ledger_off_prompt_895a96c.txt).
 //! Contract: docs/mission-control.md §21.
 
 use axum::{
@@ -192,6 +193,26 @@ async fn check(e: &Env, t: &Task, status: &str) -> String {
     c.id
 }
 
+/// `text` with every UUID replaced by `{id}`.
+fn without_ids(text: &str) -> String {
+    let shape = |w: &[u8]| {
+        w.len() == 36 && w.iter().enumerate().all(|(i, c)| if [8, 13, 18, 23].contains(&i) { *c == b'-' } else { c.is_ascii_digit() || (b'a'..=b'f').contains(c) })
+    };
+    let bytes = text.as_bytes();
+    let (mut out, mut i) = (String::new(), 0);
+    while i < bytes.len() {
+        if bytes.len() - i >= 36 && shape(&bytes[i..i + 36]) {
+            out.push_str("{id}");
+            i += 36;
+        } else {
+            let c = text[i..].chars().next().unwrap();
+            out.push(c);
+            i += c.len_utf8();
+        }
+    }
+    out
+}
+
 #[test]
 fn the_scan_catches_numbers_negation_and_subjects_but_not_paraphrases() {
     use truth_ledger::conflict_text as c;
@@ -199,6 +220,11 @@ fn the_scan_catches_numbers_negation_and_subjects_but_not_paraphrases() {
     assert_eq!(c("The server has 4GB of RAM", None, "The server has 12 gb of RAM", None), Some("numbers_differ"));
     assert_eq!(c("Release builds are signed on CI", None, "Release builds aren't signed on CI", None), Some("negation"));
     assert_eq!(c("Standup is at 10", Some("Standup time"), "Daily meeting moved to Tuesdays", Some("standup time")), Some("same_subject"));
+    // A shared subject doesn't hide a more specific cause: what a real Claude turn sends to
+    // fact_propose ("server RAM" on both) is numbers_differ, as it is without a subject
+    assert_eq!(c("The server has 4 GB of RAM", Some("server RAM"), "The server has 12 GB of RAM", Some("Server RAM")), Some("numbers_differ"));
+    assert_eq!(c("Server RAM is 4 GB", Some("server RAM"), "The box was upgraded to 12 GB", Some("server RAM")), Some("numbers_differ"));
+    assert_eq!(c("Backups are encrypted", Some("backups"), "Backups aren't encrypted", Some("backups")), Some("negation"));
     // The same fact twice, the same numbers, or different subjects: no dispute
     assert_eq!(c("The server has 4 GB of RAM", None, "the server has 4 GB of RAM.", None), None);
     assert_eq!(c("The server has 4 GB of RAM", None, "The server has 4 GB of RAM installed", None), None);
@@ -219,6 +245,10 @@ async fn off_and_shadow_prompts_are_byte_identical_and_switching_off_restores_th
     tool(&e, &token, "memory_add", json!({"text": "Read on a web page"})).await;
 
     let off = prompt(&e, &a).await;
+    // Off is main's prompt, not just this build's: the fixture is this exact setup's prompt on
+    // main 895a96c (before C2), with ids as {id}
+    let golden = include_str!("fixtures/truth_ledger_off_prompt_895a96c.txt");
+    assert_eq!(without_ids(&off), golden, "off differs from main's prompt");
     ledger(&e, "shadow").await;
     assert_eq!(prompt(&e, &a).await, off, "shadow is today's prompt");
     // Off and shadow: no dispute is opened, no fact tool offered
@@ -274,6 +304,21 @@ async fn differing_numbers_open_one_dispute_and_a_paraphrase_none() {
     // Scanning again opens nothing new
     tool(&e, &token, "memory_add", json!({"text": "Likes green tea"})).await;
     assert_eq!(count(&e.pool, "SELECT COUNT(*) FROM fact_disputes").await, 1);
+}
+
+#[tokio::test]
+async fn fact_propose_with_a_subject_labels_differing_numbers_numbers_differ() {
+    // QA's real run: Claude gave both facts the same subject and the dispute read same_subject
+    let e = setup().await;
+    ledger_on(&e).await;
+    let a = bot(&e, "Ana").await;
+    let (_, token) = turn(&e, &a).await;
+    tool(&e, &token, "fact_propose", json!({"statement": "The server has 4 GB of RAM", "subject": "server RAM", "scope": "bot"})).await;
+    let reply = tool(&e, &token, "fact_propose", json!({"statement": "The server has 12 GB of RAM", "subject": "server RAM", "scope": "bot"})).await;
+    assert!(reply.contains("disagrees with another fact"), "{reply}");
+    let disputes = open_disputes(&e).await;
+    assert_eq!(disputes.len(), 1, "{disputes:?}");
+    assert_eq!(disputes[0]["cause"], "numbers_differ");
 }
 
 #[tokio::test]

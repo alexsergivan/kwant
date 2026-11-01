@@ -1155,9 +1155,10 @@ accepted team (the bot's teams, lead or member) and space facts, newest that fit
 **The contradiction scan** (`fact_dispute_scan`, default true, person-only setting). Deterministic and
 cheap; it runs when the prompt is built, after a bot's `memory_add`/`memory_update`/`fact_propose`, and
 after the person writes or promotes a shared fact. Two facts in force conflict when they have the same
-non-empty `subject` and different text (`same_subject`), or share at least 60% of their words (3+
-letters, no numbers, units or negators) and either carry different numbers with their units ("4 GB" vs
-"12 GB": `numbers_differ`) or exactly one is negated (`negation`). Pairs: the bot's notes among
+non-empty `subject`, or share at least 60% of their words (3+ letters, no numbers, units or
+negators), and either carry different numbers with their units ("4 GB" vs "12 GB": `numbers_differ`)
+or exactly one is negated (`negation`). Two facts with the same subject and different text that are
+neither are `same_subject`; the more specific cause always wins. Pairs: the bot's notes among
 themselves and against the shared facts it sees; shared facts among themselves. A pair that ever had a
 dispute (open, resolved or dismissed) is never raised again. **Limit:** paraphrases are missed ("Deploys
 happen on Fridays" vs "We never ship on Friday"), and similar texts with different numbers can be paired

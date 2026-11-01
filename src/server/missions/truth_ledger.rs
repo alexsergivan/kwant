@@ -358,18 +358,19 @@ fn conflict_of(a: &str, a_subject: Option<&str>, sa: &Shape, b: &str, b_subject:
         return None;
     }
     let subject = |s: Option<&str>| s.map(normal).filter(|s| !s.is_empty());
-    if let (Some(x), Some(y)) = (subject(a_subject), subject(b_subject)) {
-        if x == y {
-            return Some("same_subject");
+    let same_subject = matches!((subject(a_subject), subject(b_subject)), (Some(x), Some(y)) if x == y);
+    // A shared subject already says both are about the same thing; without one the words must
+    // overlap. Either way the more specific cause wins, so "4 GB" vs "12 GB" under one subject
+    // is `numbers_differ`, not `same_subject`.
+    if !same_subject {
+        if sa.words.is_empty() || sb.words.is_empty() {
+            return None;
         }
-    }
-    if sa.words.is_empty() || sb.words.is_empty() {
-        return None;
-    }
-    let shared = sa.words.intersection(&sb.words).count() as f64;
-    let all = sa.words.union(&sb.words).count().max(1) as f64;
-    if shared / all < SIMILAR_FACT {
-        return None;
+        let shared = sa.words.intersection(&sb.words).count() as f64;
+        let all = sa.words.union(&sb.words).count().max(1) as f64;
+        if shared / all < SIMILAR_FACT {
+            return None;
+        }
     }
     if !sa.numbers.is_empty() && !sb.numbers.is_empty() && sa.numbers != sb.numbers {
         return Some("numbers_differ");
@@ -377,7 +378,7 @@ fn conflict_of(a: &str, a_subject: Option<&str>, sa: &Shape, b: &str, b_subject:
     if sa.negated != sb.negated {
         return Some("negation");
     }
-    None
+    same_subject.then_some("same_subject")
 }
 
 /// Pairs among `facts` that conflict and never had a dispute; `only` limits the pairs to those
