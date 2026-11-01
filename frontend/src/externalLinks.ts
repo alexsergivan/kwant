@@ -20,6 +20,10 @@ export const inDesktopApp = (w: unknown = typeof window !== 'undefined' ? window
   return typeof mark === 'string' && DESKTOP_APPS.includes(mark);
 };
 
+/** The OS the desktop app names itself after in Settings → About: 'Linux' for the Linux app, else 'Mac'. */
+export const desktopAppOs = (w: unknown = typeof window !== 'undefined' ? window : undefined): 'Mac' | 'Linux' =>
+  (w ? (w as AppWindow).__KWANT_APP__ : undefined) === 'linux' ? 'Linux' : 'Mac';
+
 /**
  * Goes to a sign-in page from this tab. In a browser the tab leaves kwant and the callback page
  * returns it; in the desktop app the navigation is turned into the default browser and the window

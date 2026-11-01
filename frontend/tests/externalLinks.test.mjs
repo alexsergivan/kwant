@@ -7,7 +7,7 @@ const source = await readFile(new URL('../src/externalLinks.ts', import.meta.url
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
 });
-const { OAUTH_RETURN_KEY, DESKTOP_APPS, inDesktopApp, leaveForSignIn, signInChanged, pollUntil, mcpSignIn } = await import(
+const { OAUTH_RETURN_KEY, DESKTOP_APPS, inDesktopApp, desktopAppOs, leaveForSignIn, signInChanged, pollUntil, mcpSignIn } = await import(
   `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`
 );
 
@@ -37,6 +37,13 @@ test('only the desktop app’s marks count as the desktop app', () => {
   assert.equal(inDesktopApp(fakeWindow(true)), false);
   assert.equal(inDesktopApp(fakeWindow('includes')), false);
   assert.equal(inDesktopApp(undefined), false);
+});
+
+test('About names the Linux app after Linux and everything else after Mac', () => {
+  assert.equal(desktopAppOs(fakeWindow('linux')), 'Linux');
+  assert.equal(desktopAppOs(fakeWindow('mac')), 'Mac');
+  assert.equal(desktopAppOs(fakeWindow()), 'Mac');
+  assert.equal(desktopAppOs(undefined), 'Mac');
 });
 
 test('every mark the desktop app sets is one the page knows', async () => {

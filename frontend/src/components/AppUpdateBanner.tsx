@@ -2,6 +2,7 @@ import React, { useEffect, useId, useState, useSyncExternalStore } from 'react';
 import { AlertTriangle, ArrowUpCircle, CheckCircle2, ExternalLink, Info, Loader2, RotateCw, X } from 'lucide-react';
 import { BannerView, UpdateController, UpdateModel, aboutLine, appUpdateController, bannerView, dismissVersion, dismissedVersion } from '../appUpdate';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { desktopAppOs } from '../externalLinks';
 
 const PHONE_QUERY = '(max-width: 767px)';
 const UPDATED_NOTE_MS = 10000;
@@ -189,7 +190,7 @@ export const AppUpdateAboutView: React.FC<AboutProps> = ({ model, onCheck, onUpd
             <span>About</span>
           </h3>
           <p className="mt-1 text-xs text-zinc-200">
-            kwant bots for Mac <span className="font-mono text-zinc-300">{s.current || 'unknown version'}</span>
+            kwant bots for {desktopAppOs()} <span className="font-mono text-zinc-300">{s.current || 'unknown version'}</span>
           </p>
         </div>
         <button
