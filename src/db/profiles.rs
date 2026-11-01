@@ -308,18 +308,13 @@ impl Database {
     pub async fn kwant_views(&self, space: &SpaceId) -> Result<Vec<KwantView>, DbError> {
         let kwants = self.list_kwants(space).await?;
         let mut bindings = self.list_kwant_bindings(space).await?;
-        Ok(kwants
-            .into_iter()
-            .map(|kwant| {
-                let (profile_id, profile_failover) =
-                    bindings.remove(&kwant.id).unwrap_or((None, true));
-                KwantView {
-                    kwant,
-                    profile_id,
-                    profile_failover,
-                }
-            })
-            .collect())
+        let mut views = Vec::with_capacity(kwants.len());
+        for kwant in kwants {
+            let (profile_id, profile_failover) = bindings.remove(&kwant.id).unwrap_or((None, true));
+            let browser = self.browser_sites(&kwant.id).await?;
+            views.push(KwantView { kwant, profile_id, profile_failover, browser });
+        }
+        Ok(views)
     }
 
     pub async fn kwant_view(&self, id: &str) -> Result<Option<KwantView>, DbError> {
@@ -328,10 +323,12 @@ impl Database {
         };
         let (profile_id, profile_failover) =
             self.get_kwant_binding(id).await?.unwrap_or((None, true));
+        let browser = self.browser_sites(id).await?;
         Ok(Some(KwantView {
             kwant,
             profile_id,
             profile_failover,
+            browser,
         }))
     }
 }

@@ -7,6 +7,7 @@ pub mod cite;
 pub mod progress;
 pub mod reads;
 pub mod service;
+pub mod site_guard;
 pub mod vault;
 
 pub use browser::{detect_bot_wall, ref_line, refuse_file_path, BrowserController, ClickTarget, BrowserError, NavigationResult, PendingCapture};

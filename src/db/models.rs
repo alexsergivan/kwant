@@ -344,6 +344,9 @@ pub struct KwantView {
     pub profile_id: Option<String>,
     /// Whether a turn may move to the engine's next profile when this one is out of quota or signed out.
     pub profile_failover: bool,
+    /// Which sites the bot's browser may open.
+    #[serde(flatten)]
+    pub browser: super::browser_sites::BrowserSites,
 }
 
 /// One LLM account for an engine. Holds no secret: API keys live in `llm_profile_secrets`.

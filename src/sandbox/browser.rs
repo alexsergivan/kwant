@@ -321,6 +321,9 @@ pub enum BrowserError {
     /// A ref from the control list that can't be clicked any more (gone, hidden, covered).
     #[error("{0}")]
     StaleRef(String),
+    /// The driving bot's site rules refused the page (see [`super::site_guard`]).
+    #[error("{}", .0.message)]
+    SiteRule(super::site_guard::Refusal),
 }
 
 /// What a click aims at: a label to match, or a numbered ref from the last control list.
@@ -814,6 +817,8 @@ pub struct BrowserController {
     pub progress: Arc<std::sync::Mutex<super::progress::Tracker>>,
     /// Which read each bot saw last, for "unchanged since your last read" (see [`super::reads`]).
     pub reads: Arc<std::sync::Mutex<super::reads::Reads>>,
+    /// The driving bot's site rules and the task enforcing them (see [`super::site_guard`]).
+    pub site_guard: Arc<super::site_guard::SiteGuard>,
 }
 
 /// Widest screenshot a bot gets, in pixels, and the narrowest width it may ask for.
@@ -876,6 +881,7 @@ impl BrowserController {
             viewport: Arc::default(),
             progress: Arc::default(),
             reads: Arc::default(),
+            site_guard: Arc::default(),
         }
     }
 
@@ -994,6 +1000,57 @@ impl BrowserController {
             .as_str()
             .ok_or_else(|| BrowserError::Protocol("Missing webSocketDebuggerUrl".into()))?;
         self.reachable_ws_url(advertised)
+    }
+
+    /// GET `{endpoint}{path}` as JSON (the DevTools `/json/...` routes).
+    async fn devtools_json(&self, path: &str) -> Result<Value, BrowserError> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .map_err(|e| BrowserError::Http(e.to_string()))?;
+        let resp = client
+            .get(format!("{}{path}", self.endpoint))
+            .header(reqwest::header::HOST, "localhost")
+            .send()
+            .await
+            .map_err(|e| BrowserError::Http(e.to_string()))?;
+        resp.json().await.map_err(|e| BrowserError::Http(e.to_string()))
+    }
+
+    /// The DevTools target id of this controller's page.
+    async fn page_target_id(&self) -> Result<String, BrowserError> {
+        if let Some(id) = &self.target_id {
+            return Ok(id.clone());
+        }
+        let targets = self.devtools_json("/json/list").await?;
+        targets
+            .as_array()
+            .and_then(|t| t.iter().find(|t| t["type"] == "page"))
+            .and_then(|t| t["id"].as_str())
+            .map(str::to_string)
+            .ok_or_else(|| BrowserError::Protocol("No page to guard".into()))
+    }
+
+    /// Applies the driving bot's site rules: empty rules stop the guard; others start it if it
+    /// isn't running, and return once it intercepts. `Err` when it couldn't be started, so the
+    /// bot's action isn't done unguarded.
+    pub async fn apply_site_rules(&self, rules: super::site_guard::SiteRules) -> Result<(), BrowserError> {
+        if !self.site_guard.set_rules(rules) {
+            return Ok(());
+        }
+        let page = self.page_target_id().await?;
+        let version = self.devtools_json("/json/version").await?;
+        let advertised = version["webSocketDebuggerUrl"]
+            .as_str()
+            .ok_or_else(|| BrowserError::Protocol("Missing webSocketDebuggerUrl".into()))?;
+        let browser_ws = self.reachable_ws_url(advertised)?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(super::site_guard::run(Arc::downgrade(&self.site_guard), browser_ws, page, self.control.clone(), tx));
+        self.site_guard.set_task(task);
+        match timeout(Duration::from_secs(8), rx).await {
+            Ok(Ok(true)) => Ok(()),
+            _ => Err(BrowserError::Protocol("The browser couldn't turn on this bot's site rules".into())),
+        }
     }
 
     async fn ensure_connected(
@@ -1169,9 +1226,19 @@ impl BrowserController {
         self.pending_capture.lock().await.take()
     }
 
+    /// A bot opens `target_url`: its site rules are checked first, and a redirect they refuse
+    /// fails the same way. The person's own navigation is [`Self::navigate_unlocked`].
     pub async fn navigate(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
         let _permit = self.control.try_read().map_err(|_| BrowserError::HumanControl)?;
-        let result = self.navigate_unlocked(target_url).await?;
+        self.site_guard.set_actor(super::site_guard::Actor::Bot);
+        self.site_guard.check(target_url).await.map_err(BrowserError::SiteRule)?;
+        let _ = self.site_guard.take_refusal();
+        let navigated = self.navigate_unlocked(target_url).await;
+        if let Some(refusal) = self.site_guard.take_refusal() {
+            self.leave_refused_page().await;
+            return Err(BrowserError::SiteRule(refusal));
+        }
+        let result = navigated?;
         // Bot navigation only: the person decides banners themselves in the live view
         if let Some(clicked) = self.reject_consent().await {
             tracing::debug!("Declined cookie banner via \"{}\"", clicked);
@@ -1179,6 +1246,36 @@ impl BrowserController {
         }
         self.persist_cookies().await;
         Ok(result)
+    }
+
+    /// After a page the site rules refused: Chrome shows its own error page in its place, so
+    /// go back to the page before it (when there is one), where the bot was.
+    pub async fn leave_refused_page(&self) {
+        let on_error = |v: &Value| v["result"]["value"].as_str().is_some_and(|u| u.starts_with("chrome-error:"));
+        let href = json!({"expression": "location.href", "returnByValue": true});
+        // The error page commits just after the refused request
+        let mut erred = false;
+        for _ in 0..10 {
+            if self.send_cdp_command("Runtime.evaluate", href.clone()).await.is_ok_and(|v| on_error(&v)) {
+                erred = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if !erred {
+            return;
+        }
+        let Ok(history) = self.send_cdp_command("Page.getNavigationHistory", json!({})).await else { return };
+        let index = history["currentIndex"].as_u64().unwrap_or(0) as usize;
+        let Some(entry) = index.checked_sub(1).and_then(|i| history["entries"].get(i)) else { return };
+        let _ = self.send_cdp_command("Page.navigateToHistoryEntry", json!({"entryId": entry["id"]})).await;
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if self.send_cdp_command("Runtime.evaluate", href.clone()).await.is_ok_and(|v| !on_error(&v)) {
+                break;
+            }
+        }
+        let _ = self.refresh_location().await;
     }
 
     pub async fn navigate_unlocked(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {

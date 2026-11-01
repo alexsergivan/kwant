@@ -676,6 +676,10 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
     // Each turn is its own reader: a new turn gets the whole page on its first read. A turn
     // without an id always gets the whole page
     let reader = scope.turn_id.clone().unwrap_or_default();
+    // This bot drives the browser now, so its site rules are the ones that hold
+    if let Some(ctrl) = super::routes::get_or_create_browser_controller(state, target).await {
+        ctrl.site_guard.set_driver(&scope.kwant_id);
+    }
     let (text, is_error) = run_browser_tool(state, target, &reader, name, args).await;
     // A CAPTCHA wall: ask the person to solve it, then show the agent the page they left
     if !is_error {

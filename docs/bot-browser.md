@@ -120,8 +120,41 @@ browser's own matching follows the page's blocks, which `innerText` lines only a
 link can occasionally highlight nothing (it then opens at the top); pages that change text on load
 or per visit can make a link miss later.
 
+## Sites a bot may open
+
+Each bot has three optional settings, set by the person on `PUT /api/kwants/:id` and shown on the
+bot's read routes:
+
+- `browser_allowed_sites`: when not empty, the bot's browser opens only these sites.
+- `browser_blocked_sites`: never these. The block-list wins over the allow-list.
+- `browser_block_private_network` (off by default): no loopback, private, link-local or other
+  internal addresses, also by a hostname that resolves to one. It uses the rules in
+  `src/mcp/fetch_risk.rs`.
+
+An entry is a host: `example.com` covers the site and all its subdomains, `*.example.com` only the
+subdomains, and an IP matches only itself. Entries are lowercased, a pasted URL keeps only its host,
+and international names are stored as punycode. A bad entry (empty, `*`, a wildcard inside a name
+or on an IP) refuses the whole update with a 400. There are at most 200 entries per list. A bot's
+own token can't change these settings (403); only the person can.
+
+With both lists empty and the setting off, nothing is checked and nothing extra runs, exactly as
+before. Otherwise every navigation the bot causes is checked: the address it opens (refused before
+loading, 403 with `site_rule`), and through Chrome request interception (`Fetch`, top-level
+documents) the link it clicks, any redirect and any new tab the page opens. A refused page is
+stopped in the browser (`ERR_BLOCKED_BY_CLIENT`). The bot's action reply carries `error` with a
+message that names the rule, and a `site_rule` with `rule`, `host`, `url`, `entry` and `message`.
+Whatever the person does in live control (`/interact`, the stream, take control) is never checked.
+
+Limits: only top-level pages are checked. Frames, images, scripts and `fetch`/XHR from an allowed
+page are not, so this sets which sites a bot visits; it is not a network firewall. The
+private-network check resolves the name once, so DNS rebinding between that check and Chrome's own
+lookup isn't caught. In VM mode the name is resolved on the kwnt host, not inside the VM. A
+navigation started by the page on its own (a timer) after the person's last input counts as theirs
+until the bot acts again. In a browser several bots share, the rules of the bot that drove it last
+apply.
+
 ## Tests
 
-`tests/browser_refs_test.rs`, `tests/browser_progress_test.rs` and `tests/browser_reads_test.rs` and `tests/browser_cite_test.rs` (real Chrome, skipped without one;
+`tests/browser_refs_test.rs`, `tests/browser_progress_test.rs` and `tests/browser_reads_test.rs` `tests/browser_cite_test.rs` and `tests/browser_site_rules_test.rs` (real Chrome, skipped without one;
 the `saucedemo_*` and `a_public_page_*` tests are ignored and need the network), `ref_tests` in `src/sandbox/browser.rs`
-and the tests in `src/sandbox/progress.rs`, `src/sandbox/reads.rs` and `src/sandbox/cite.rs`.
+and the tests in `src/sandbox/progress.rs`, `src/sandbox/reads.rs`, `src/sandbox/cite.rs` and `src/sandbox/site_guard.rs`.

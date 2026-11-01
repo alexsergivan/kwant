@@ -209,7 +209,11 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
                     _ => {
                         let result = if lease.is_none() && !ctrl.is_held_for_person() { Err(BrowserError::HumanControl) } else {
                             match serde_json::from_value::<BrowserInput>(value.clone()) {
-                                Ok(input) => ctrl.dispatch_input(input).await,
+                                Ok(input) => {
+                                    // The person's own input: never held to a bot's site rules
+                                    ctrl.site_guard.set_actor(crate::sandbox::site_guard::Actor::Person);
+                                    ctrl.dispatch_input(input).await
+                                }
                                 Err(_) => Err(BrowserError::Protocol("Invalid browser input".into())),
                             }
                         };

@@ -175,6 +175,34 @@ pub struct UpdateKwantRequest {
     base: UpdateKwant,
     #[serde(flatten)]
     binding: ProfileBinding,
+    #[serde(flatten)]
+    browser: BrowserSitesUpdate,
+}
+
+type SiteList = Option<Vec<String>>;
+
+/// Which sites the bot's browser may open; a field left out stays as it is.
+#[derive(Debug, Default, Deserialize)]
+pub struct BrowserSitesUpdate {
+    browser_allowed_sites: Option<Vec<String>>,
+    browser_blocked_sites: Option<Vec<String>>,
+    browser_block_private_network: Option<bool>,
+}
+
+impl BrowserSitesUpdate {
+    fn is_empty(&self) -> bool {
+        self.browser_allowed_sites.is_none() && self.browser_blocked_sites.is_none() && self.browser_block_private_network.is_none()
+    }
+
+    /// The lists normalized, or the 400 naming the bad entry.
+    #[allow(clippy::result_large_err)]
+    fn normalized(&self) -> Result<(SiteList, SiteList), Response> {
+        use crate::sandbox::site_guard::{normalize_sites, ALLOWED, BLOCKED};
+        let norm = |list: &Option<Vec<String>>, field| {
+            list.as_ref().map(|l| normalize_sites(l, field)).transpose().map_err(|e| api_error(StatusCode::BAD_REQUEST, &e))
+        };
+        Ok((norm(&self.browser_allowed_sites, ALLOWED)?, norm(&self.browser_blocked_sites, BLOCKED)?))
+    }
 }
 
 /// The pinned profile must exist, be in the kwant's space and be for the engine of its model.
@@ -265,6 +293,21 @@ async fn ensure_general(state: &AppState, space: &SpaceId, lead: &str) {
     }
 }
 
+/// `PUT /api/kwants/:id`: [`update_kwant`], where only the person may change which sites the
+/// bot's browser may open (a bot can't loosen its own rules).
+#[allow(clippy::result_large_err)]
+pub async fn put_kwant(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateKwantRequest>,
+) -> Result<Json<KwantView>, Response> {
+    if !payload.browser.is_empty() {
+        super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person sets which sites a bot's browser may open").await?;
+    }
+    update_kwant(State(state), Path(id), Json(payload)).await
+}
+
 #[allow(clippy::result_large_err)]
 pub async fn update_kwant(
     State(state): State<AppState>,
@@ -274,6 +317,7 @@ pub async fn update_kwant(
     if let Some(msg) = crate::import::check_persona_caps(&payload.base.persona_prompt, &payload.base.soul) {
         return Err(api_error(StatusCode::BAD_REQUEST, &msg));
     }
+    let (allowed_sites, blocked_sites) = payload.browser.normalized()?;
     let space = state
         .db
         .space_of_kwant(&id)
@@ -291,6 +335,11 @@ pub async fn update_kwant(
         Err(e) => return Err(db_error(&e, &clash)),
     }
     save_binding(&state, &id, &payload.binding).await.map_err(IntoResponse::into_response)?;
+    state
+        .db
+        .set_browser_sites(&id, allowed_sites.as_deref(), blocked_sites.as_deref(), payload.browser.browser_block_private_network)
+        .await
+        .map_err(|e| db_error(&e, ""))?;
     kwant_view_json(&state, &id).await.map_err(IntoResponse::into_response)
 }
 
@@ -2095,7 +2144,12 @@ async fn run_kwant_turn_inner(
                 target_url
             )));
             if let Some(ctrl) = get_or_create_browser_controller(state, &sandbox_target).await {
-                match ctrl.navigate(&target_url).await {
+                ctrl.site_guard.set_driver(&target_kwant.id);
+                let navigated = match guard_bot_action(state, &ctrl, &sandbox_target).await {
+                    Ok(()) => ctrl.navigate(&target_url).await,
+                    Err(e) => Err(e),
+                };
+                match navigated {
                 Ok(nav) => {
                     let page_text = ctrl.extract_content().await.unwrap_or_default();
                     let preview = truncate_chars(&page_text, 3000);
@@ -2141,6 +2195,12 @@ async fn run_kwant_turn_inner(
                     final_prompt = format!(
                         "{}\n\n[Sandbox Browser State: Tried to open {} in the right-panel bot browser, but the site could not be reached ({}). The browser itself works fine; do not retry or suggest restarting it. Briefly tell the user the address didn't resolve/load and, if it looks like a typo, suggest the likely intended address.]",
                         prompt, target_url, reason
+                    );
+                }
+                Err(crate::sandbox::BrowserError::SiteRule(refusal)) => {
+                    final_prompt = format!(
+                        "{}\n\n[Sandbox Browser State: {} Tell the user this address is outside the sites your browser may open; don't try another way to reach it.]",
+                        prompt, refusal.message
                     );
                 }
                 Err(_) => {}
@@ -4119,9 +4179,11 @@ pub async fn get_or_create_browser_controller(
     // keeps the browser container from being stopped as idle while bots use it
     state.browser_service.note_use();
     let mut controllers = state.browser_controllers.lock().await;
+    let mut driver = None;
     if let Some(ctrl) = controllers.get(team_id) {
         if !ctrl.is_managed_session() || ctrl.refresh_location().await.is_ok() { return Some(ctrl.clone()); }
         if ctrl.control.try_write().is_err() { return None; }
+        driver = ctrl.site_guard.driver();
         controllers.remove(team_id);
     }
     let (_, workspace) = resolve_sandbox_target_info(state, team_id).await?;
@@ -4131,6 +4193,10 @@ pub async fn get_or_create_browser_controller(
             if let Some((owner, _)) = super::passwords::password_owner(state, team_id).await {
                 ctrl.attach_vault(state.credentials.clone(), &owner).await;
             }
+            // The new page keeps the old one's driving bot, so its site rules still hold
+            if let Some(driver) = driver {
+                ctrl.site_guard.set_driver(&driver);
+            }
             controllers.insert(team_id.to_string(), ctrl.clone());
             let _ = state.event_sender.send(RuntimeEvent::SandboxStatusChanged {
                 team_id: team_id.to_string(), container_name: "browser-service".into(), is_running: true,
@@ -4139,6 +4205,32 @@ pub async fn get_or_create_browser_controller(
         }
         Err(error) => { tracing::warn!("Browser service unavailable: {}", error); None }
     }
+}
+
+/// Before a bot's browser action: marks the bot as acting and applies its site rules (the
+/// driving bot's, else the target's when the browser is a bot's own). `Err` when the rules
+/// couldn't be read or turned on, so the action isn't done unguarded.
+pub(crate) async fn guard_bot_action(
+    state: &AppState,
+    ctrl: &crate::sandbox::BrowserController,
+    team_id: &str,
+) -> Result<(), crate::sandbox::BrowserError> {
+    use crate::sandbox::site_guard::Actor;
+    ctrl.site_guard.set_actor(Actor::Bot);
+    let driver = match ctrl.site_guard.driver() {
+        Some(driver) => Some(driver),
+        None => state.db.get_kwant(team_id).await.ok().flatten().map(|k| k.id),
+    };
+    let rules = match &driver {
+        Some(kwant) => state
+            .db
+            .browser_sites(kwant)
+            .await
+            .map_err(|e| crate::sandbox::BrowserError::Protocol(format!("couldn't read the bot's site rules: {e}")))?
+            .rules(),
+        None => Default::default(),
+    };
+    ctrl.apply_site_rules(rules).await
 }
 
 pub async fn get_sandbox_status(
@@ -4160,6 +4252,9 @@ fn browser_unavailable(state: &AppState) -> (StatusCode, Json<serde_json::Value>
 fn browser_request_failed(error: crate::sandbox::BrowserError) -> (StatusCode, Json<serde_json::Value>) {
     if matches!(error, crate::sandbox::BrowserError::HumanControl) { return (StatusCode::CONFLICT, Json(json!({"error": error.to_string()}))); }
     if matches!(error, crate::sandbox::BrowserError::NotWebAddress(_)) { return (StatusCode::BAD_REQUEST, Json(json!({"error": error.to_string()}))); }
+    if let crate::sandbox::BrowserError::SiteRule(refusal) = &error {
+        return (StatusCode::FORBIDDEN, Json(json!({"error": refusal.message, "site_rule": refusal})));
+    }
     if let crate::sandbox::BrowserError::Navigation(reason) = &error {
         return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
             "error": format!("The site could not be reached ({}). The browser is working; check the address.", reason)
@@ -4233,6 +4328,7 @@ pub async fn navigate_sandbox(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let ctrl = get_or_create_browser_controller(&state, &team_id).await
         .ok_or_else(|| browser_unavailable(&state))?;
+    guard_bot_action(&state, &ctrl, &team_id).await.map_err(browser_request_failed)?;
     let nav = ctrl.navigate(&payload.url).await.map_err(browser_request_failed)?;
 
     let _ = state.event_sender.send(RuntimeEvent::BrowserNavigated {
@@ -4295,6 +4391,8 @@ pub async fn interact_sandbox(
     let ctrl = get_or_create_browser_controller(&state, &team_id).await.ok_or_else(|| browser_unavailable(&state))?;
 
     let _permit = ctrl.control.try_read().map_err(|_| (StatusCode::CONFLICT, Json(json!({"error":"Browser is controlled by a person."}))))?;
+    // The person's own input: their navigation is never held to a bot's site rules
+    ctrl.site_guard.set_actor(crate::sandbox::site_guard::Actor::Person);
     let shot_res = match payload.action.as_str() {
         "click" => ctrl.interact_click(payload.x.unwrap(), payload.y.unwrap()).await,
         "type" => ctrl.interact_type(payload.text.as_deref().unwrap()).await,
@@ -4568,6 +4666,8 @@ pub async fn act_sandbox_allowed(
         .await
         .ok_or_else(|| browser_unavailable(&state))?;
     let _permit = ctrl.control.try_read().map_err(|_| browser_request_failed(crate::sandbox::BrowserError::HumanControl))?;
+    guard_bot_action(&state, &ctrl, &team_id).await.map_err(browser_request_failed)?;
+    let _ = ctrl.site_guard.take_refusal();
     let text = payload.text.clone().unwrap_or_default();
     let clicks = crate::sandbox::ClickTarget::from_args(&json!({"ref": payload.ref_, "text": payload.text}));
     // The loop stop: the same action a 3rd time in a row on this page is refused
@@ -4628,6 +4728,22 @@ pub async fn act_sandbox_allowed(
             other
         )),
     };
+    // A page the action led to that the bot's site rules refused (a link, redirect or new tab):
+    // the request is paused just after the click, so wait a moment for it, then go back from
+    // Chrome's error page to where the bot was
+    let mut refused = ctrl.site_guard.take_refusal();
+    if ctrl.site_guard.is_running() {
+        for _ in 0..3 {
+            if refused.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            refused = ctrl.site_guard.take_refusal();
+        }
+    }
+    if refused.is_some() {
+        ctrl.leave_refused_page().await;
+    }
     broadcast_sandbox_screenshot(&state, &team_id, &ctrl).await;
     // What changed; a page that hasn't yet gets one more moment (a slow submit, an animation)
     let focus = !matches!(payload.action.as_str(), "click" | "click_text");
@@ -4648,6 +4764,10 @@ pub async fn act_sandbox_allowed(
     match result {
         Ok(done) => page["result"] = json!(done),
         Err(err) => page["error"] = json!(err),
+    }
+    if let Some(refusal) = refused.or_else(|| ctrl.site_guard.take_refusal()) {
+        page["error"] = json!(refusal.message);
+        page["site_rule"] = json!(refusal);
     }
     if let Some(stop) = stall {
         page["stalled"] = json!(true);

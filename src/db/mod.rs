@@ -1,5 +1,6 @@
 pub mod models;
 pub mod profiles;
+pub mod browser_sites;
 pub mod continuity;
 pub mod threads;
 pub mod zombie;
@@ -151,6 +152,7 @@ impl Database {
 
         let db = Self { pool };
         db.migrate_profiles().await?;
+        db.migrate_browser_sites().await?;
         db.migrate_continuity().await?;
         db.migrate_threads().await?;
         db.migrate_skills().await?;

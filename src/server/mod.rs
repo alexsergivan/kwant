@@ -217,7 +217,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/engines/:id", post(engine_routes::set_enabled).put(engine_routes::set_enabled))
         .route("/api/laya/status", get(routes::laya_status))
         .route("/api/kwants", get(routes::list_kwants).post(routes::create_kwant))
-        .route("/api/kwants/:id", put(routes::update_kwant).delete(routes::delete_kwant))
+        .route("/api/kwants/:id", put(routes::put_kwant).delete(routes::delete_kwant))
         .route("/api/kwants/:id/usage", get(routes::kwant_usage))
         .route("/api/kwants/:id/export", get(import_routes::export_kwant))
         .route("/api/export", get(import_routes::export_space))
