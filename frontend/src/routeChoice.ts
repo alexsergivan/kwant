@@ -134,15 +134,36 @@ export function isAskingReply(body: unknown): body is { status: 'asking'; route_
   return !!body && typeof body === 'object' && (body as { status?: unknown }).status === 'asking';
 }
 
-/** For each bot reply, the person's latest saved channel message before it: the message "Wrong bot?"
- *  resends. Replies don't carry the message id they answer, so this is the nearest earlier one.
- *  Optimistic messages (temp ids) aren't saved yet and can't be corrected. */
-export function questionsOfReplies<M extends { id: string; sender_role: string; thread_id?: string | null }>(messages: M[]): Map<string, M> {
+/** The id of the person's message a routed reply answers (`meta.routing.message_id`); null on
+ *  @mentions, DMs and replies saved before the server recorded it. */
+export function answeredMessageId(meta: string | null | undefined): string | null {
+  if (!meta) return null;
+  try {
+    const id = JSON.parse(meta)?.routing?.message_id;
+    return typeof id === 'string' && id ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** For each bot reply, the person's message "Wrong bot?" corrects and resends: the one its routing
+ *  says it answers, even when the person wrote more since. Older replies without that id fall back
+ *  to the person's latest saved channel message before them. Thread and optimistic (temp id)
+ *  messages are never picked; a recorded id that isn't loaded gets no "Wrong bot?" rather than a guess. */
+export function questionsOfReplies<M extends { id: string; sender_role: string; thread_id?: string | null; meta?: string | null }>(messages: M[]): Map<string, M> {
   const out = new Map<string, M>();
+  const byId = new Map<string, M>();
   let last: M | null = null;
   for (const m of messages) {
-    if (m.sender_role === 'user') last = m.id.startsWith('temp') || m.thread_id ? null : m;
-    else if (m.sender_role === 'kwant' && last) out.set(m.id, last);
+    if (m.sender_role === 'user') {
+      const saved = !m.id.startsWith('temp') && !m.thread_id;
+      last = saved ? m : null;
+      if (saved) byId.set(m.id, m);
+    } else if (m.sender_role === 'kwant') {
+      const answered = answeredMessageId(m.meta);
+      const q = answered ? byId.get(answered) : last;
+      if (q) out.set(m.id, q);
+    }
   }
   return out;
 }
