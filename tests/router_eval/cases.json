@@ -1,0 +1,762 @@
+{
+ "about": "Routing eval for kwant's team router. expect.route is a member name, 'concierge' or 'ask'; expect.basis lists accepted bases; channel is general, a members' channel name, or dm; laya (optional) is a confident Laya guess from titles alone.",
+ "spaces": {
+  "kitchen": {
+   "about": "Mirrors the screenshot space: a restaurant crew plus a small tech and TikTok team.",
+   "lead": "TechLead",
+   "members": [
+    {
+     "name": "Architect",
+     "title": "Systems Architect",
+     "persona": "Architecture"
+    },
+    {
+     "name": "TechLead",
+     "title": "Tech Lead",
+     "persona": "Leads engineering and coordinates the team"
+    },
+    {
+     "name": "DevOps",
+     "title": "DevOps Engineer",
+     "persona": "DevOps and deployments"
+    },
+    {
+     "name": "HeadChef",
+     "title": "Head Chef",
+     "persona": "Runs the kitchen: menus, techniques, recipes and cooking questions"
+    },
+    {
+     "name": "Nutritionist",
+     "title": "Nutritionist",
+     "persona": "Nutrition, calories, macros, diets and meal plans"
+    },
+    {
+     "name": "Sous",
+     "title": "Sous Chef",
+     "persona": "Prep lists, kitchen schedules and station coordination"
+    },
+    {
+     "name": "Pantry",
+     "title": "Pantry Manager",
+     "persona": "Stock counts, ordering and suppliers"
+    },
+    {
+     "name": "Pastry",
+     "title": "Pastry Chef",
+     "persona": "Pastry, bread, dough and desserts"
+    },
+    {
+     "name": "TikTokLead",
+     "title": "TikTok Lead",
+     "persona": "Plans the TikTok channel and content calendar"
+    },
+    {
+     "name": "Scriptwriter",
+     "title": "TikTok Scriptwriter & Hook Specialist",
+     "persona": "Writes TikTok scripts and hooks"
+    },
+    {
+     "name": "Analyst",
+     "title": "Data Analyst",
+     "persona": "Analyses sales, churn and retention numbers"
+    },
+    {
+     "name": "Community",
+     "title": "Community Manager",
+     "persona": "Answers followers and moderates the community"
+    }
+   ]
+  },
+  "software": {
+   "about": "A typical software team.",
+   "lead": "Backend",
+   "members": [
+    {
+     "name": "Frontend",
+     "title": "Frontend Engineer",
+     "persona": "Builds the web interface"
+    },
+    {
+     "name": "Backend",
+     "title": "Backend Engineer",
+     "persona": "Builds APIs and services"
+    },
+    {
+     "name": "QA",
+     "title": "QA Engineer",
+     "persona": "Test plans and regression testing"
+    },
+    {
+     "name": "DevOps",
+     "title": "DevOps Engineer",
+     "persona": "CI, deployment and infrastructure"
+    },
+    {
+     "name": "Designer",
+     "title": "Brand Designer",
+     "persona": "Logos, palettes and mockups"
+    },
+    {
+     "name": "Marketer",
+     "title": "Growth Marketer",
+     "persona": "Campaigns, copy and launches"
+    },
+    {
+     "name": "Researcher",
+     "title": "Market Researcher",
+     "persona": "Competitor and market research"
+    }
+   ]
+  },
+  "duo": {
+   "about": "A small two-bot space.",
+   "lead": "Coder",
+   "members": [
+    {
+     "name": "Writer",
+     "title": "Copywriter",
+     "persona": "Writes copy and blog posts"
+    },
+    {
+     "name": "Coder",
+     "title": "Backend Engineer",
+     "persona": "Writes and fixes code"
+    }
+   ]
+  }
+ },
+ "cases": [
+  {
+   "id": 1,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Best place to eat corn dogs in Munich tomorrow?",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   },
+   "laya": {
+    "pick": "Scriptwriter",
+    "confident": true
+   },
+   "note": "The screenshot bug: a confident titles-only Laya guess picked Scriptwriter."
+  },
+  {
+   "id": 2,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Best place to eat corn dogs in Munich tomorrow?",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   },
+   "note": "Same message, Laya unreachable."
+  },
+  {
+   "id": 3,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "What's the weather going to be in Berlin this weekend?",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   },
+   "laya": {
+    "pick": "Analyst",
+    "confident": true
+   }
+  },
+  {
+   "id": 4,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Can you recommend a good book on stoicism?",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   }
+  },
+  {
+   "id": 5,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "How do I get from Munich airport to the city centre?",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   },
+   "laya": {
+    "pick": "DevOps",
+    "confident": true
+   }
+  },
+  {
+   "id": 6,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "What's the capital of Australia?",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   }
+  },
+  {
+   "id": 7,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Give me a fun fact about octopuses",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   }
+  },
+  {
+   "id": 8,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Translate 'good morning' into Italian",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   }
+  },
+  {
+   "id": 9,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Is a standing desk worth buying?",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   },
+   "laya": {
+    "pick": "Architect",
+    "confident": true
+   }
+  },
+  {
+   "id": 10,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Any nice hiking trails near Salzburg?",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   }
+  },
+  {
+   "id": 11,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "How should I braise short ribs so they stay moist?",
+   "expect": {
+    "route": "HeadChef",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   },
+   "note": "Near miss: food, but it IS the chef's work."
+  },
+  {
+   "id": 12,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Plan a high-protein meal for a marathon week",
+   "expect": {
+    "route": "Nutritionist",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 13,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "How many calories are in a corn dog?",
+   "expect": {
+    "route": "Nutritionist",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   },
+   "note": "Near miss: corn dogs again, but a nutrition question."
+  },
+  {
+   "id": 14,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Write a TikTok hook about corn dogs",
+   "expect": {
+    "route": "Scriptwriter",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   },
+   "note": "Near miss: corn dogs again, but a TikTok script."
+  },
+  {
+   "id": 15,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Our deploy pipeline keeps failing in CI",
+   "expect": {
+    "route": "DevOps",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 16,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Which dough is better for croissants, laminated or puff?",
+   "expect": {
+    "route": "Pastry",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 17,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "We're running low on flour and butter, update the stock",
+   "expect": {
+    "route": "Pantry",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 18,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "@Scriptwriter how long should the intro be?",
+   "expect": {
+    "route": "Scriptwriter",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   },
+   "note": "@mention"
+  },
+  {
+   "id": 19,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "@Nutritionist what's the weather in Rome?",
+   "expect": {
+    "route": "Nutritionist",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   },
+   "note": "@mention beats topic"
+  },
+  {
+   "id": 20,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "hi",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   },
+   "note": "Greeting, nobody spoke yet, in #general"
+  },
+  {
+   "id": 21,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "hi",
+   "expect": {
+    "route": "Nutritionist",
+    "basis": [
+     "last"
+    ]
+   },
+   "last_speaker": "Nutritionist",
+   "note": "Greeting carries on with the last speaker"
+  },
+  {
+   "id": 22,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "thanks!",
+   "expect": {
+    "route": "HeadChef",
+    "basis": [
+     "last"
+    ]
+   },
+   "last_speaker": "HeadChef"
+  },
+  {
+   "id": 23,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Review the deploy pipeline and write a TikTok hook announcing the downtime",
+   "expect": {
+    "route": "TechLead",
+    "basis": [
+     "several"
+    ]
+   },
+   "note": "Multi-role goes to the lead"
+  },
+  {
+   "id": 24,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Analyze last month's churn and retention numbers",
+   "expect": {
+    "route": "Analyst",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 25,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Which dishes should go on tonight's menu?",
+   "expect": {
+    "route": "HeadChef",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 26,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Write a post about our new sourdough",
+   "expect": {
+    "route": "ask",
+    "candidates": [
+     "Pastry",
+     "Community",
+     "Scriptwriter",
+     "TikTokLead"
+    ]
+   },
+   "note": "Unsure band: several plausible specialists, none clearly best"
+  },
+  {
+   "id": 27,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "What should we post this week about the pastry specials?",
+   "expect": {
+    "route": "ask",
+    "candidates": [
+     "Pastry",
+     "Community",
+     "Scriptwriter",
+     "TikTokLead"
+    ]
+   },
+   "note": "Unsure band"
+  },
+  {
+   "id": 28,
+   "space": "software",
+   "channel": "general",
+   "message": "The login button is misaligned on mobile",
+   "expect": {
+    "route": "Frontend",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 29,
+   "space": "software",
+   "channel": "general",
+   "message": "Add an endpoint for exporting invoices as CSV",
+   "expect": {
+    "route": "Backend",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 30,
+   "space": "software",
+   "channel": "general",
+   "message": "Write a test plan for the checkout flow",
+   "expect": {
+    "route": "QA",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 31,
+   "space": "software",
+   "channel": "general",
+   "message": "Our docker build is slow in CI",
+   "expect": {
+    "route": "DevOps",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 32,
+   "space": "software",
+   "channel": "general",
+   "message": "Design a new logo and colour palette for the brand",
+   "expect": {
+    "route": "Designer",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 33,
+   "space": "software",
+   "channel": "general",
+   "message": "Draft a launch tweet and a newsletter",
+   "expect": {
+    "route": "Marketer",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 34,
+   "space": "software",
+   "channel": "general",
+   "message": "Survey what competitors charge and summarise the market",
+   "expect": {
+    "route": "Researcher",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 35,
+   "space": "software",
+   "channel": "general",
+   "message": "Where should we go for the team offsite dinner in Lisbon?",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   },
+   "laya": {
+    "pick": "Marketer",
+    "confident": true
+   }
+  },
+  {
+   "id": 36,
+   "space": "software",
+   "channel": "general",
+   "message": "Any good podcasts about startups?",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   }
+  },
+  {
+   "id": 37,
+   "space": "software",
+   "channel": "general",
+   "message": "Update the API and the dashboard layout for the new schema",
+   "expect": {
+    "route": "Backend",
+    "basis": [
+     "several"
+    ]
+   },
+   "note": "Multi-role goes to the lead"
+  },
+  {
+   "id": 38,
+   "space": "software",
+   "channel": "design-review",
+   "message": "Best sandwich shop near the office?",
+   "expect": {
+    "route": "Backend",
+    "basis": [
+     "lead"
+    ]
+   },
+   "note": "Room purpose: in a members' channel, unrelated questions go to the lead, not the Concierge"
+  },
+  {
+   "id": 39,
+   "space": "software",
+   "channel": "dm",
+   "message": "@QA what's the weather like today?",
+   "expect": {
+    "route": "QA",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   },
+   "note": "@mention in a DM"
+  },
+  {
+   "id": 40,
+   "space": "software",
+   "channel": "general",
+   "message": "ok go ahead",
+   "expect": {
+    "route": "Backend",
+    "basis": [
+     "last"
+    ]
+   },
+   "last_speaker": "Backend"
+  },
+  {
+   "id": 41,
+   "space": "software",
+   "channel": "general",
+   "message": "Build me a team to launch the product",
+   "expect": {
+    "route": "Backend",
+    "basis": [
+     "team"
+    ]
+   },
+   "note": "Team-building request goes to the lead"
+  },
+  {
+   "id": 42,
+   "space": "duo",
+   "channel": "general",
+   "message": "Write a tagline for our app",
+   "expect": {
+    "route": "Writer",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 43,
+   "space": "duo",
+   "channel": "general",
+   "message": "Fix the crash in the parser",
+   "expect": {
+    "route": "Coder",
+    "basis": [
+     "keywords",
+     "skills"
+    ]
+   }
+  },
+  {
+   "id": 44,
+   "space": "duo",
+   "channel": "general",
+   "message": "Recommend a good coffee place in Vienna",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   }
+  },
+  {
+   "id": 45,
+   "space": "duo",
+   "channel": "general",
+   "message": "hello",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   }
+  },
+  {
+   "id": 46,
+   "space": "duo",
+   "channel": "general",
+   "message": "Thanks, that's great",
+   "expect": {
+    "route": "Writer",
+    "basis": [
+     "last"
+    ]
+   },
+   "last_speaker": "Writer"
+  },
+  {
+   "id": 47,
+   "space": "duo",
+   "channel": "general",
+   "message": "Write a blog post and fix the SQL query",
+   "expect": {
+    "route": "Coder",
+    "basis": [
+     "several"
+    ]
+   },
+   "note": "Multi-role goes to the lead"
+  }
+ ]
+}
