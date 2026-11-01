@@ -1,0 +1,183 @@
+name: linux
+
+# Builds kwant for Linux (x86_64): a .deb and an AppImage, from the same apps/mac Tauri app.
+# tauri.linux.conf.json switches the bundle targets; the Mac config and mac.yml are untouched.
+# Pull requests and manual runs only: the packages are a workflow artifact, proving the app builds,
+# installs and starts. Releases still come from mac.yml (mac-v* tags); Linux joins them later, in
+# the same GitHub release, so the one latest.json keeps working for installed Macs.
+#
+# Built on ubuntu-22.04 so the AppImage runs on distros with glibc 2.35 or newer. The updater
+# artifacts (.AppImage.sig, .deb.sig) are signed with a throwaway key: no PR code sees the release key.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/mac/**"
+      - ".github/workflows/linux.yml"
+      - "scripts/minisign_verify.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  appimage-deb:
+    name: appimage + deb
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries (WebKitGTK, GTK, tray)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf xvfb xauth
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # kwnt embeds frontend/dist, so the UI is built first
+      - name: Build the web UI
+        working-directory: frontend
+        run: npm ci && npm run build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/mac
+      - name: Unit tests (PATH merge, port choice, links)
+        working-directory: apps/mac
+        run: cargo test --locked
+      - name: Throwaway updater key
+        run: |
+          set -euo pipefail
+          openssl rand -hex 16 > "$RUNNER_TEMP/ci-updater.password"
+          npx --yes @tauri-apps/cli@2.12.4 signer generate --ci -w "$RUNNER_TEMP/ci-updater.key" -p "$(cat "$RUNNER_TEMP/ci-updater.password")" > /dev/null
+          cp "$RUNNER_TEMP/ci-updater.key.pub" "$RUNNER_TEMP/updater.pub"
+      - name: Build the .deb and AppImage
+        working-directory: apps/mac
+        timeout-minutes: 30
+        run: |
+          set -euo pipefail
+          TAURI_SIGNING_PRIVATE_KEY=$(cat "$RUNNER_TEMP/ci-updater.key")
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(cat "$RUNNER_TEMP/ci-updater.password")
+          export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          npx --yes @tauri-apps/cli@2.12.4 build --ci --bundles deb,appimage \
+            --config '{"bundle":{"createUpdaterArtifacts":true}}' -- --locked
+      # The installed app only accepts an update whose signature matches the key built into it and
+      # whose signed version matches latest.json (requireSignedVersion); same check as mac.yml.
+      - name: Updater signatures
+        id: bundle
+        working-directory: apps/mac/target/release/bundle
+        run: |
+          set -euo pipefail
+          deb=$(ls deb/*.deb)
+          appimage=$(ls appimage/*.AppImage)
+          ls -l "$deb" "$deb.sig" "$appimage" "$appimage.sig"
+          version=$(python3 -c 'import json; print(json.load(open("'"$GITHUB_WORKSPACE"'/apps/mac/tauri.conf.json"))["version"])')
+          python3 -m venv "$RUNNER_TEMP/sigvenv"
+          "$RUNNER_TEMP/sigvenv/bin/pip" install --quiet pynacl==1.6.2
+          for f in "$deb" "$appimage"; do
+            "$RUNNER_TEMP/sigvenv/bin/python" -I "$GITHUB_WORKSPACE/scripts/minisign_verify.py" \
+              --pubkey "$RUNNER_TEMP/updater.pub" --file "$f" --signature "$f.sig" --version "$version"
+          done
+          echo "deb=$PWD/$deb" >> "$GITHUB_OUTPUT"
+          echo "appimage=$PWD/$appimage" >> "$GITHUB_OUTPUT"
+      - name: Inspect the packages
+        env:
+          DEB: ${{ steps.bundle.outputs.deb }}
+          APPIMAGE: ${{ steps.bundle.outputs.appimage }}
+        run: |
+          set -euo pipefail
+          dpkg-deb -I "$DEB"
+          dpkg-deb -c "$DEB" | tee "$RUNNER_TEMP/deb-files.txt"
+          grep -Eq ' (\./)?usr/bin/kwant$' "$RUNNER_TEMP/deb-files.txt"
+          grep -Eq ' (\./)?usr/share/applications/kwant\.desktop$' "$RUNNER_TEMP/deb-files.txt"
+          grep -Eq ' (\./)?usr/share/icons/hicolor/[^/]+/apps/kwant\.png$' "$RUNNER_TEMP/deb-files.txt"
+          depends=$(dpkg-deb -f "$DEB" Depends)
+          echo "Depends: $depends"
+          for dep in libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 python3-venv; do
+            echo "$depends" | grep -q "$dep" || { echo "::error::the .deb doesn't depend on $dep"; exit 1; }
+          done
+          du -h "$DEB" "$APPIMAGE"
+      - name: Smoke test, headless (kwant --check)
+        working-directory: apps/mac/target/release
+        run: ./kwant --check
+      # Installs the .deb the way a person would (apt pulls its Depends), opens the real app on a
+      # virtual display and waits for /api/health. The log is printed either way.
+      - name: Smoke test, the installed .deb
+        env:
+          DEB: ${{ steps.bundle.outputs.deb }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y "$DEB"
+          test -x /usr/bin/kwant
+          export KWNT_DATA_DIR="$RUNNER_TEMP/kwant-data-deb"
+          xvfb-run -a dbus-run-session -- /usr/bin/kwant > "$RUNNER_TEMP/kwant-deb.out" 2>&1 &
+          pid=$!
+          ok=""
+          for _ in $(seq 1 90); do
+            if body=$(curl -fsS http://127.0.0.1:8799/api/health 2>/dev/null); then ok=1; break; fi
+            sleep 1
+          done
+          echo "health: ${body:-none}"
+          # the app is still running (not crashed after the server came up)
+          sleep 3
+          kill -0 $pid || { echo "::error::kwant exited"; ok=""; }
+          pkill -x kwant || true
+          wait $pid 2>/dev/null || true
+          cat "$RUNNER_TEMP/kwant-deb.out" || true
+          cat "$KWNT_DATA_DIR/desktop-app.log" || true
+          test -n "$ok"
+          echo "$body" | grep -q '"app":"kwnt"'
+          sudo apt-get remove -y kwant
+      # Docker-free runners have no FUSE for AppImages, so it runs extracted, as on a desktop
+      # without libfuse2.
+      - name: Smoke test, the AppImage
+        env:
+          APPIMAGE: ${{ steps.bundle.outputs.appimage }}
+        run: |
+          set -euo pipefail
+          chmod +x "$APPIMAGE"
+          export KWNT_DATA_DIR="$RUNNER_TEMP/kwant-data-appimage"
+          xvfb-run -a dbus-run-session -- "$APPIMAGE" --appimage-extract-and-run > "$RUNNER_TEMP/kwant-appimage.out" 2>&1 &
+          pid=$!
+          ok=""
+          for _ in $(seq 1 90); do
+            if body=$(curl -fsS http://127.0.0.1:8799/api/health 2>/dev/null); then ok=1; break; fi
+            sleep 1
+          done
+          echo "health: ${body:-none}"
+          sleep 3
+          kill -0 $pid || { echo "::error::kwant exited"; ok=""; }
+          pkill -x kwant || true
+          wait $pid 2>/dev/null || true
+          cat "$RUNNER_TEMP/kwant-appimage.out" || true
+          cat "$KWNT_DATA_DIR/desktop-app.log" || true
+          test -n "$ok"
+          echo "$body" | grep -q '"app":"kwnt"'
+      - name: Collect the packages
+        env:
+          DEB: ${{ steps.bundle.outputs.deb }}
+          APPIMAGE: ${{ steps.bundle.outputs.appimage }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/linux"
+          mkdir -p "$out"
+          cp "$DEB" "$DEB.sig" "$APPIMAGE" "$APPIMAGE.sig" "$out/"
+          cd "$out"
+          for f in *.deb *.AppImage; do sha256sum "$f" > "$f.sha256"; done
+          ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: ${{ runner.temp }}/linux
+          if-no-files-found: error
+          retention-days: 14

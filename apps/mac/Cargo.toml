@@ -7,7 +7,8 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/alexsergivan/kwant"
 publish = false
 
-# Its own workspace and lockfile: Tauri never enters the kwnt crate's build or the Linux CI
+# Its own workspace and lockfile: Tauri never enters the kwnt crate's build or ci.yml
+# (Linux packages are built by linux.yml)
 [workspace]
 
 [build-dependencies]

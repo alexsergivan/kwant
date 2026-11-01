@@ -58,6 +58,25 @@ files (`.VolumeIcon.icns`, `.background`, …) outside the window, so they stay 
 with hidden files shown. The art is drawn by `dmg/make-background.py`; `background.tiff` is built
 from the two PNGs and not committed.
 
+## Build on Linux (x86_64, beta)
+
+On Debian/Ubuntu (22.04 or newer):
+
+```sh
+sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+(cd ../../frontend && npm ci && npm run build)   # kwnt embeds frontend/dist
+npx @tauri-apps/cli@2 build --bundles deb,appimage
+```
+
+`tauri.linux.conf.json` (merged over `tauri.conf.json` on Linux only) sets the targets, the .deb's
+`Depends` (python3 and python3-venv for the Laya router; Tauri adds WebKitGTK, GTK and the tray
+library itself) and `Recommends` (zenity for the folder picker, xdg-utils for `xdg-open`). The
+packages land in `target/release/bundle/{deb,appimage}/`. `.github/workflows/linux.yml` builds both
+on ubuntu-22.04 (the AppImage's glibc floor) for pull requests, signs the updater artifacts with a
+throwaway key and checks them, installs the .deb and opens the app and the AppImage on a virtual
+display. Linux isn't released yet: it will ship in the same `mac-v*` GitHub release as the Mac app,
+so the one `latest.json` serves both.
+
 ## Releases and the updater key
 
 `mac.yml` signs the updater bundle on `mac-v*` tags with the repository secrets
