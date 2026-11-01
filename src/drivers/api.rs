@@ -59,7 +59,7 @@ async fn api_model_name(
         Some(m) => Ok(m.id),
         None if engine == super::engines::EngineId::AnthropicApi => Ok(DEFAULT_CLAUDE_MODEL.into()),
         None => Err(format!(
-            "Couldn't find a model to run on the {}: its model list didn't load. Check the key in Space settings → Accounts.",
+            "Couldn't find a model to run on the {}: its model list didn't load. Check the key in Settings › This space › Accounts.",
             engine.name()
         )),
     }
@@ -1241,7 +1241,7 @@ impl Driver for ApiDriver {
 
             if custom && input.model.is_none() {
                 return Err(DriverError::Execution(
-                    "This Custom API account has no model to run: enter a model id for it under Space settings → Accounts, or pin one on the bot (\"custom:<model>\").".into(),
+                    "This Custom API account has no model to run: enter a model id for it under Settings › This space › Accounts, or pin one on the bot (\"custom:<model>\").".into(),
                 ));
             }
             let model = match api_model_name(target_model, input.model.as_deref(), &url, api_key.as_deref(), effort).await {

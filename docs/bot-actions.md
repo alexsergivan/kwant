@@ -61,13 +61,13 @@ New setting: `GET/POST /api/settings` has `timezone` (IANA name; `""` means not 
 
 | Category | Where the person goes |
 |---|---|
-| API keys, tokens, passwords, webhook URL (any `*key*`, `*token*`, `*secret*`, `*webhook*` setting) | Space settings → Accounts / App settings → Notifications |
-| Engines, sign-in and sign-out, Ollama URL, profiles | Space settings → Accounts / App settings |
+| API keys, tokens, passwords, webhook URL (any `*key*`, `*token*`, `*secret*`, `*webhook*` setting) | Settings › This space › Accounts / Settings › All spaces › Notifications |
+| Engines, sign-in and sign-out, Ollama URL, profiles | Settings › This space › Accounts / Settings › All spaces |
 | How people sign in to kwnt (auth) | The host computer |
 | Approvals and questions | The card in the chat (there is no tool for these) |
-| Computer, sandbox or VM | App settings → Computer for browsing and commands |
-| `agent_tools` | App settings, person only |
-| Installing MCP servers, and MCP env or header values | `mcp_suggest` card; Space settings → Tools |
+| Computer, sandbox or VM | Settings › All spaces › Computer for browsing and commands |
+| `agent_tools` | Settings › All spaces, person only |
+| Installing MCP servers, and MCP env or header values | `mcp_suggest` card; Settings › This space › Tools |
 
 `bot_update.mcp_servers` only assigns servers that are already installed in the space. Passing `env`, `headers`, `api_key`, `password` or `token` to `bot_create`/`bot_update` is refused.
 
@@ -113,7 +113,7 @@ Each action posts a message from the bot (`sender_role: "kwant"`, `sender_id: <b
 Suggested buttons:
 - **Undo** when `can_undo`.
 - **Confirm** and **Decline** when `needs_confirmation`.
-- For routines, **Edit** and **Pause** can open the routine in Space settings → Routines (`target_id`), or call `PUT /api/routines/:id` directly. Those edits are the person's own and are not bot actions.
+- For routines, **Edit** and **Pause** can open the routine in Settings › This space › Routines (`target_id`), or call `PUT /api/routines/:id` directly. Those edits are the person's own and are not bot actions.
 
 ## Routes (person only)
 

@@ -1,6 +1,9 @@
 //! A routine whose engine can't run records why in its history, not just that it failed. Uses a
 //! signed-out fake claude CLI on PATH, so it is its own test binary: it changes the process env.
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -55,12 +58,7 @@ async fn failed_routine_run_records_the_engine_error() {
     let bin = tmp.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let fake = bin.join("claude");
-    std::fs::write(&fake, FAKE_CLAUDE).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    exe::write_executable(&fake, FAKE_CLAUDE);
     let crash = tmp.path().join("crash");
     std::env::set_var("CRASH", &crash);
     std::env::set_var(

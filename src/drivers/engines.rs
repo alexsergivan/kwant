@@ -16,11 +16,11 @@ use std::time::Duration;
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What a turn gets when no engine at all can run.
-pub const NO_ENGINE_MESSAGE: &str = "No account can run bots here yet. Add one in Space settings → Accounts.";
+pub const NO_ENGINE_MESSAGE: &str = "No account can run bots here yet. Add one in Settings › This space › Accounts.";
 
 /// What a turn gets when This machine is off in the space and no other account is on.
 pub const HOST_OFF_MESSAGE: &str =
-    "This machine is off in this space and no other account is on. Turn one on in Space settings → Accounts.";
+    "This machine is off in this space and no other account is on. Turn one on in Settings › This space › Accounts.";
 
 /// The chat message `bot` leaves when nothing can run its turn, and its `meta`: kind
 /// `setup_needed`, so the app shows a card with a button to Accounts instead of a reply.
@@ -880,11 +880,11 @@ impl EngineRegistry {
 }
 
 /// What Engines says about Custom API, which has nothing on the host to check.
-pub const CUSTOM_API_DETAIL: &str = "Runs on this space's Custom API accounts: add one under Space settings → Accounts";
+pub const CUSTOM_API_DETAIL: &str = "Runs on this space's Custom API accounts: add one under Settings › This space › Accounts";
 
 /// A turn on Custom API with no account of the space that can take it.
 pub const NO_CUSTOM_ACCOUNT: &str =
-    "No Custom API account is on in this space. Add one under Space settings → Accounts.";
+    "No Custom API account is on in this space. Add one under Settings › This space › Accounts.";
 
 /// The model a turn runs on one engine.
 #[derive(Debug, Clone, PartialEq)]
@@ -1009,7 +1009,7 @@ fn unavailable(target_model: &str, reports: &[EngineReport]) -> String {
         })
         .collect();
     format!(
-        "'{target_model}' can't run right now ({}). Fix it in Space settings → Accounts, or pick another engine for this bot.",
+        "'{target_model}' can't run right now ({}). Fix it in Settings › This space › Accounts, or pick another engine for this bot.",
         why.join("; ")
     )
 }
@@ -1022,13 +1022,13 @@ mod tests {
     fn no_engine_notice_flags_the_setup_card() {
         let (text, meta) = no_engine_notice("Architect", false);
         assert_eq!(text, format!("⚠️ [Architect] {NO_ENGINE_MESSAGE}"));
-        assert!(text.contains("Space settings → Accounts"));
+        assert!(text.contains("Settings › This space › Accounts"));
         assert!(!text.contains("Settings → Engines"));
         assert_eq!(meta, serde_json::json!({ "kind": "setup_needed", "reason": "no_account" }));
 
         let (text, meta) = no_engine_notice("DevOps", true);
         assert!(text.starts_with("⚠️ [DevOps] This machine is off"));
-        assert!(text.contains("Space settings → Accounts"));
+        assert!(text.contains("Settings › This space › Accounts"));
         assert_eq!(meta["kind"], "setup_needed");
         assert_eq!(meta["reason"], "host_off");
     }

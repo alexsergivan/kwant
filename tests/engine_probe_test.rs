@@ -1,6 +1,9 @@
 //! Each engine check against fake CLIs (signed in, signed out, broken, hanging) and a fake
 //! provider API, so every status and reason is pinned without touching real accounts.
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -14,12 +17,7 @@ use std::time::{Duration, Instant};
 
 fn script(dir: &Path, name: &str, body: &str) -> Option<String> {
     let path = dir.join(name);
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    exe::write_executable(&path, format!("#!/bin/sh\n{body}\n"));
     Some(path.to_string_lossy().into_owned())
 }
 

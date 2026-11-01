@@ -2,6 +2,9 @@
 //! even when this machine's env points Claude Code at another provider, and its first status
 //! line names the account. Its own test binary: it changes PATH and the process env.
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -84,12 +87,7 @@ async fn personal_turn_names_its_account_and_ignores_this_machines_provider() {
     let bin = tmp.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let fake = bin.join("claude");
-    std::fs::write(&fake, FAKE_CLAUDE).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    exe::write_executable(&fake, FAKE_CLAUDE);
     std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
     // This machine's Claude Code runs on Bedrock through a proxy; Personal must not
     std::env::set_var("CLAUDE_CODE_USE_BEDROCK", "1");

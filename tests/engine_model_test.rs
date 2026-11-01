@@ -2,6 +2,9 @@
 //! turned off in Settings are never checked, routed to or offered to Laya. Fake claude, codex
 //! and grok CLIs log their argv. Its own test binary: it changes PATH, HOME and the process env.
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -147,12 +150,7 @@ async fn laya_picks_model_tier_pins_and_engine_switches() {
     std::fs::create_dir_all(&bin).unwrap();
     for (name, script) in [("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX), ("grok", FAKE_GROK)] {
         let fake = bin.join(name);
-        std::fs::write(&fake, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        exe::write_executable(&fake, script);
     }
     std::env::set_var("PATH", format!("{}:/usr/bin:/bin", bin.display()));
     std::env::set_var("HOME", tmp.path());

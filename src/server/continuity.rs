@@ -133,8 +133,8 @@ pub async fn prompt_block(
             with Undo; afterwards say in one sentence what will happen. The user may undo a change later, so check with the list tools \
             before relying on an earlier one. Deleting a bot, a space or an account only asks the user to confirm. \
             Never handle keys, passwords or sign-ins, answer approvals, install tool servers, switch bots' tools on or off or change the computer: those tools \
-            tell you where in Settings the user does it. Bots' own tools are the user's switch in App settings (gear at the \
-            bottom of the space rail) → \"Bots can use their own tools\"; say that outright.\n\
+            tell you where in Settings the user does it. Bots' own tools are the user's switch in Settings › All spaces → \
+            \"Bots can use their own tools\"; say that outright.\n\
             - `propose_hire` proposes a new bot for work a specialist would do better; the person decides. `hire_status` shows \
             the space's hire policy and decisions.\n\n\
             [How to work]\n\

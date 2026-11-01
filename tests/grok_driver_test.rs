@@ -2,6 +2,9 @@
 //! only the user's model settings and login, and cleans up after itself.
 #![cfg(unix)]
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use kwnt::{
     db::models::Kwant,
     db::models::McpServer,
@@ -94,9 +97,7 @@ impl FakeGrok {
              {body}\n"
         );
         let path = dir.path().join("grok");
-        std::fs::write(&path, script).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        exe::write_executable(&path, script);
         Self { dir, user_home }
     }
 

@@ -1,5 +1,8 @@
 //! Turn-time MCP: broker approvals, the claude permission endpoint and the claude config file.
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use kwnt::{
     broker::{ApprovalDecision, PermissionBroker},
     config::Config,
@@ -313,16 +316,7 @@ fn turn(mcp: Option<McpTurnContext>) -> TurnInput {
 async fn fake_cli_run(kind: &str, mcp: Option<McpTurnContext>) -> String {
     let dir = tempdir().unwrap();
     let script = dir.path().join("fake-cli");
-    std::fs::write(
-        &script,
-        "#!/bin/sh\necho \"ARGS: $*\"\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --mcp-config ]; then echo \"MODE: $(stat -c %a \"$2\")\"; fi\n  shift\ndone\necho \"TOOL_TIMEOUT: $MCP_TOOL_TIMEOUT\"\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    exe::write_executable(&script, "#!/bin/sh\necho \"ARGS: $*\"\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --mcp-config ]; then echo \"MODE: $(stat -c %a \"$2\")\"; fi\n  shift\ndone\necho \"TOOL_TIMEOUT: $MCP_TOOL_TIMEOUT\"\n");
     let driver = CliDriver::new(Some(script.to_string_lossy().into_owned()), Some(kind.into()));
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
@@ -375,20 +369,14 @@ async fn fake_agent_run(kind: &str, mcp: Option<McpTurnContext>, mcp_list: Optio
         }
         None => "exit 3".to_string(),
     };
-    std::fs::write(
+    exe::write_executable(
         &script,
         format!(
             "#!/bin/sh\nif [ \"$1 $2 $3\" = \"mcp list --json\" ]; then {list_cmd}; fi\necho \"$*\" > {}\necho \"${{KWNT_MCP_GATEWAY_TOKEN:-unset}}\" > {}\n",
             log.display(),
             env_log.display()
         ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    );
     let driver = CliDriver::new(Some(script.to_string_lossy().into_owned()), Some(kind.into()));
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let drain = tokio::spawn(async move {
@@ -498,15 +486,7 @@ async fn aborting_a_cli_turn_kills_the_cli() {
     let dir = tempdir().unwrap();
     let script = dir.path().join("codex");
     let pid_file = dir.path().join("pid");
-    std::fs::write(
-        &script,
-        format!("#!/bin/sh\nif [ \"$1\" = mcp ]; then echo '[]'; exit 0; fi\necho $$ > {}\nexec sleep 60\n", pid_file.display()),
-    )
-    .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    exe::write_executable(&script, format!("#!/bin/sh\nif [ \"$1\" = mcp ]; then echo '[]'; exit 0; fi\necho $$ > {}\nexec sleep 60\n", pid_file.display()));
     let driver = CliDriver::new(Some(script.to_string_lossy().into_owned()), Some("codex".into()));
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     tokio::spawn(async move { while rx.recv().await.is_some() {} });

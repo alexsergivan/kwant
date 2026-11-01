@@ -534,7 +534,7 @@ async fn switching_bots_tools_off_is_refused_directly() {
     let token = turn(&e, "t-tools").await;
     for key in ["agent_tools", "agent_tools_enabled", "tools"] {
         let text = refused(&e, &token, "settings_update", json!({"settings": {key: false}})).await;
-        assert!(text.contains("Refused") && text.contains("App settings") && !text.contains("no setting"), "{key}: {text}");
+        assert!(text.contains("Refused") && text.contains("› All spaces") && !text.contains("no setting"), "{key}: {text}");
     }
     assert!(actions(&e).await.is_empty());
 }

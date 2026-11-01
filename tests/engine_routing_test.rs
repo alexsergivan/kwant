@@ -2,6 +2,9 @@
 //! and with nothing usable the turn says so instead of using another engine. A fake claude CLI
 //! is the only engine on PATH. Its own test binary: it changes PATH, HOME and the process env.
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -89,12 +92,7 @@ async fn turns_skip_engines_that_cannot_run() {
     let bin = tmp.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let fake = bin.join("claude");
-    std::fs::write(&fake, FAKE_CLAUDE).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    exe::write_executable(&fake, FAKE_CLAUDE);
     // Only the fake claude: no real CLIs from PATH or ~/.local/bin, no host keys
     std::env::set_var("PATH", format!("{}:/usr/bin:/bin", bin.display()));
     std::env::set_var("HOME", tmp.path());
@@ -184,7 +182,7 @@ async fn turns_skip_engines_that_cannot_run() {
 
     // 4. Nothing can run now: a clear message, and no CLI is started
     let text = turn_text(&app, &state, &kid).await;
-    assert!(text.contains("No account can run bots here yet. Add one in Space settings → Accounts."), "{text}");
+    assert!(text.contains("No account can run bots here yet. Add one in Settings › This space › Accounts."), "{text}");
     assert_eq!(turns_run(tmp.path()), 2);
 
     // 5. Signed in again and re-checked: claude is back. A kwant pinned to codex (not installed)

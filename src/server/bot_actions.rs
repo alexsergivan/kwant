@@ -278,17 +278,17 @@ pub fn tools() -> Vec<Value> {
 // Refusals: what stays with the person, and where they do it
 
 const SECRETS: &str = "Keys, tokens, passwords and webhook addresses are secrets you never handle. Ask the person to enter it \
-    themselves: API keys and engine accounts in Space settings → Accounts, the notification webhook in App settings → Notifications.";
-const ENGINES: &str = "Engines and their sign-in are the person's. Ask them to sign in, sign out or point to Ollama in Space settings → Accounts \
-    or App settings.";
+    themselves: API keys and engine accounts in Settings › This space › Accounts, the notification webhook in Settings › All spaces › Notifications.";
+const ENGINES: &str = "Engines and their sign-in are the person's. Ask them to sign in, sign out or point to Ollama in Settings › This space › Accounts \
+    or Settings › All spaces.";
 const AUTH: &str = "How people sign in to kwnt is the person's alone; ask them to change it on the computer kwnt runs on.";
 const APPROVALS: &str = "Approvals and questions are answered by the person, never by a bot: ask them to answer the card in the chat.";
 const APPROVALS_MODE: &str = "Whether bots ask before their tools run is the person's choice alone: only they can change it, in the app.";
-const COMPUTER: &str = "Where bots browse and run commands is the person's choice: ask them in App settings → Computer for browsing and commands.";
-const AGENT_TOOLS: &str = "Refused: you can't switch bots' own tools on or off. Only the person can: tell them to open App settings \
-    (the gear at the bottom of the space rail, or Space settings → App settings) and flip the \"Bots can use their own tools\" switch.";
+const COMPUTER: &str = "Where bots browse and run commands is the person's choice: ask them in Settings › All spaces › Computer for browsing and commands.";
+const AGENT_TOOLS: &str = "Refused: you can't switch bots' own tools on or off. Only the person can: tell them to open Settings \
+    (the gear next to the space's name) › All spaces and flip the \"Bots can use their own tools\" switch.";
 const MCP: &str = "Tool servers are installed by the person. Use mcp_suggest to offer one; they see an Install card. \
-    Their keys and headers are entered by the person in Space settings → Tools.";
+    Their keys and headers are entered by the person in Settings › This space › Tools.";
 
 /// Why an agent may not change setting `key`, with where the person does it; `None` when it may.
 /// The person's zone and city from the settings, for each turn's "[Current date]" block.
@@ -1029,7 +1029,7 @@ impl Ctx<'_> {
             e.g. claude/claude-sonnet-5-5.\n",
         );
         if profiles.is_empty() {
-            out.push_str("Accounts: none in this space yet (the person adds them in Space settings → Accounts).\n");
+            out.push_str("Accounts: none in this space yet (the person adds them in Settings › This space › Accounts).\n");
         } else {
             out.push_str("Accounts (profile_id for that engine):\n");
             for p in profiles.iter().filter(|p| p.enabled) {
@@ -1985,8 +1985,8 @@ mod tests {
         for key in ["agent_tools", "Agent_Tools", "agent_tools_enabled", "tools"] {
             let why = refused_setting(key).unwrap();
             assert!(why.starts_with("Refused"), "{key}: {why}");
-            assert!(why.contains("App settings"), "{key}: {why}");
-            assert!(why.contains("gear at the bottom of the space rail"), "{key}: the exact way there: {why}");
+            assert!(why.contains("› All spaces"), "{key}: {why}");
+            assert!(why.contains("the gear next to the space's name"), "{key}: the exact way there: {why}");
             assert!(why.contains("\"Bots can use their own tools\" switch"), "{key}: the control's own label: {why}");
         }
     }

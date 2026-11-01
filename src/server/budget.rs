@@ -77,7 +77,7 @@ pub(super) async fn pause_if_over(scope: &TurnScope, spoken: &[String], replies:
     tracing::info!(job = %scope.job_id, used, budget, waiting = ?waiting, "chain over its token budget: hand-offs paused");
     let text = format!(
         "Paused before handing on to {}: this request has used {} fresh tokens, over the {} budget. \
-         Say \"continue\" to let them take their turn, or change the budget in App settings → Usage.",
+         Say \"continue\" to let them take their turn, or change the budget in Settings › All spaces › Usage.",
         waiting.join(", "),
         short(used),
         short(budget),

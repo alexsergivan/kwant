@@ -2,6 +2,9 @@
 //! heavy usage (mostly cache reads) and @mentions a teammate when asked to, so one person message
 //! can start a chain of hand-offs. Its own test binary: it changes PATH.
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -45,12 +48,7 @@ fn fake_cli() {
         let bin = tempfile::tempdir().unwrap().keep().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let fake = bin.join("claude");
-        std::fs::write(&fake, FAKE_CLAUDE).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        exe::write_executable(&fake, FAKE_CLAUDE);
         std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
         bin
     });

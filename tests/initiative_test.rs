@@ -337,6 +337,6 @@ async fn bots_with_tools_are_told_how_to_work_and_bots_without_are_not() {
         assert!(section.contains(words), "{words}: {section}");
     }
     // Bots' own tools can only be refused by name: the prompt says where the person switches them
-    assert!(with.contains("App settings (gear at the bottom of the space rail) → \"Bots can use their own tools\""), "{with}");
+    assert!(with.contains("Settings › All spaces → \"Bots can use their own tools\""), "{with}");
     assert!(section.len() < 2000, "keep it tight: {} bytes", section.len());
 }

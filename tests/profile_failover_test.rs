@@ -1,6 +1,9 @@
 //! A turn whose profile is out of usage moves to the engine's next profile, with a fake claude
 //! CLI on PATH. Its own test binary: it changes PATH and the process env.
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -86,12 +89,7 @@ async fn out_of_usage_profile_fails_over_once_and_pinned_turns_give_up() {
     let bin = tmp.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let fake = bin.join("claude");
-    std::fs::write(&fake, FAKE_CLAUDE).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    exe::write_executable(&fake, FAKE_CLAUDE);
     std::env::set_var(
         "PATH",
         format!(

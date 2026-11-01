@@ -4,6 +4,9 @@
 //! in its own folder and found nothing). A fake claude CLI on PATH records the folder each audit
 //! turn runs in. Its own test binary: it changes PATH.
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use kwnt::{
     broker::PermissionBroker,
     config::Config,
@@ -41,12 +44,7 @@ fn cwd_dir() -> &'static PathBuf {
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::create_dir_all(&cwd).unwrap();
         let fake = bin.join("claude");
-        std::fs::write(&fake, FAKE_CLAUDE).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        exe::write_executable(&fake, FAKE_CLAUDE);
         std::env::set_var("KWNT_TEST_CWD", &cwd);
         std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
         cwd

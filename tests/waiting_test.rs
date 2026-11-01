@@ -5,6 +5,9 @@
 //! a first line "ASK:<question>" makes it call `AskUserQuestion` (choices Yes / No) before it
 //! replies with the rest. Its own test binary: it changes PATH.
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -57,12 +60,7 @@ fn behave_dir() -> &'static PathBuf {
             std::fs::create_dir_all(d).unwrap();
         }
         let fake = bin.join("claude");
-        std::fs::write(&fake, FAKE_CLAUDE).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        exe::write_executable(&fake, FAKE_CLAUDE);
         std::env::set_var("KWNT_TEST_BEHAVE", &behave);
         std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
         behave

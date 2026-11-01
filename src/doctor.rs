@@ -76,7 +76,7 @@ pub fn cli_install_fix(engine: Engine, p: Platform) -> &'static str {
         (Engine::Codex, Platform::Mac) => "kwnt setup --clis codex   (or: brew install --cask codex, or npm install -g @openai/codex)",
         (Engine::Codex, _) => "kwnt setup --clis codex   (or: npm install -g @openai/codex; needs Node.js 18+)",
         (Engine::Grok, _) => "kwnt setup --clis grok   (or: curl -fsSL https://x.ai/cli/install.sh | bash)",
-        (Engine::Custom, _) => "Add a Custom API account in the app: Space settings → Accounts",
+        (Engine::Custom, _) => "Add a Custom API account in the app: Settings › This space › Accounts",
     }
 }
 
@@ -92,7 +92,7 @@ pub fn cli_sign_in_fix(engine: Engine, p: Platform) -> String {
         Platform::Docker => format!("docker compose exec kwnt {cmd}"),
         _ => cmd.to_string(),
     };
-    format!("{run}   (or set {key}, or use Sign in / an API key in the app: Space settings → Accounts)")
+    format!("{run}   (or set {key}, or use Sign in / an API key in the app: Settings › This space › Accounts)")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,7 +266,7 @@ pub fn checks(f: &Facts, p: Platform) -> Vec<Check> {
             "AI account",
             Status::Warn,
             "no CLI is signed in here (API keys added in the app aren't checked by doctor)",
-            Some("Sign one CLI in (see above) or add an API key in the app: Space settings → Accounts".into()),
+            Some("Sign one CLI in (see above) or add an API key in the app: Settings › This space › Accounts".into()),
         ));
     }
 

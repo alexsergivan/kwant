@@ -2,6 +2,9 @@
 //! against a fake `claude` that prints a sign-in link and waits for the pasted code.
 #![cfg(unix)]
 
+#[path = "common/exe.rs"]
+mod exe;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -59,12 +62,10 @@ struct Env {
 }
 
 async fn setup_with(timeout: Duration) -> Env {
-    use std::os::unix::fs::PermissionsExt;
     logs();
     let tmp = tempdir().unwrap();
     let bin = tmp.path().join("claude");
-    std::fs::write(&bin, FAKE_CLAUDE).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    exe::write_executable(&bin, FAKE_CLAUDE);
     let home = tmp.path().join("claude-home");
     let db = Database::init(tmp.path()).await.unwrap();
     let config = Config { data_dir: tmp.path().to_path_buf(), ..Config::default() };

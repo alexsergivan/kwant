@@ -275,7 +275,7 @@ async fn propose(state: &AppState, scope: &SelfScope, space: &SpaceId, args: &Va
     if let Some(k) = ["env", "headers", "api_key", "password", "token", "mcp_env", "profile_id"].iter().find(|k| args.get(**k).is_some()) {
         return fail(format!(
             "Nothing was proposed: {k} is not something you can give a new bot. A new bot gets no keys or accounts; the person adds \
-            them in Space settings → Accounts or Tools."
+            them in Settings › This space › Accounts or Tools."
         ));
     }
     if let Some(t) = &scope.turn_id {
