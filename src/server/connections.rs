@@ -55,6 +55,9 @@ pub struct Connection {
     /// `connected`, `needs_sign_in`, `limited`, `error`, `off`, `locked` or `unknown`.
     pub status: &'static str,
     pub status_detail: Option<String>,
+    /// While `status` is `limited`: when the account's quota comes back. Screens format it in local time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limited_until: Option<DateTime<Utc>>,
     pub last_check: Option<DateTime<Utc>>,
     pub used_by: Vec<UsedBy>,
     /// Where its sign-in lives: `vault` (kwnt's password vault or Bitwarden), `kwnt` (kwnt's
@@ -157,6 +160,7 @@ async fn mcp_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]) ->
                 detail,
                 status,
                 status_detail,
+                limited_until: None,
                 last_check: checks.get(&s.id).map(|c| c.at),
                 used_by: used(&users),
                 logins_stored: if is_composio(s) { "composio" } else { "kwnt" },
@@ -203,8 +207,8 @@ async fn account_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]
             let custom_status = p.custom.as_ref().and_then(|c| c.status);
             let (status, status_detail): (&'static str, Option<String>) = if !p.enabled {
                 ("off", None)
-            } else if let Some(until) = p.limited_until {
-                ("limited", Some(format!("Out of quota until {}", until.to_rfc3339())))
+            } else if p.limited_until.is_some() {
+                ("limited", Some("Out of quota".into()))
             } else if let Some(s) = custom_status {
                 use crate::drivers::custom::CheckStatus as C;
                 match s {
@@ -234,6 +238,7 @@ async fn account_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]
                 detail,
                 status,
                 status_detail,
+                limited_until: p.limited_until.filter(|_| status == "limited"),
                 last_check: p.custom.as_ref().and_then(|c| c.checked_at),
                 used_by: users.get(&p.id).cloned().unwrap_or_default(),
                 logins_stored: "kwnt",
@@ -275,6 +280,7 @@ async fn login_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]) 
                 detail: Some(format!("{} @ {} · saved for {label}", m.username, m.origin)),
                 status: "connected",
                 status_detail: None,
+                limited_until: None,
                 last_check: DateTime::parse_from_rfc3339(&m.last_used).ok().map(|t| t.with_timezone(&Utc)),
                 used_by: used(&users),
                 logins_stored: "vault",
@@ -320,6 +326,7 @@ async fn source_connections(state: &AppState, space: &SpaceId) -> Vec<Connection
                 detail,
                 status,
                 status_detail,
+                limited_until: None,
                 last_check: s.last_scan_at,
                 used_by: users.clone(),
                 logins_stored: "vault",

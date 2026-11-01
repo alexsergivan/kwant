@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowDown, ArrowUp, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin } from 'lucide-react';
+import { ArrowDown, ArrowUp, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -14,6 +14,7 @@ import { QuestionMeta, parseQuestionMeta } from '../questions';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
+import { ReplyMeta } from './ReplyMeta';
 import { SuggestionMeta, parseSuggestionMeta } from '../mcpSuggestions';
 import { BotActionMeta, HireMeta, parseBotActionMeta, parseHireMeta } from '../botActions';
 import {
@@ -86,6 +87,7 @@ export interface ChatMessage {
   thread_id?: string | null;
   /** JSON string kwnt sets on messages it writes itself, e.g. delegation notes. */
   meta?: string | null;
+  created_at?: string | null;
 }
 
 /** The open chat's turn is waiting for a free slot. */
@@ -196,6 +198,10 @@ export interface ChatViewProps {
   onJumpToLatest?: () => void;
   /** Under the header: the bot's conversations and the open thread's controls. */
   subHeader?: React.ReactNode;
+  /** A note under the sub-header (the setup banner); hidden while `welcome` fills an empty chat. */
+  notice?: React.ReactNode;
+  /** Drawn in place of an empty chat (the first-run welcome). */
+  welcome?: React.ReactNode;
   /** Next to the title, e.g. "Working on …" while the bot has background turns. */
   titleExtra?: React.ReactNode;
   /** Set while the open chat's turn waits in the queue. */
@@ -240,7 +246,7 @@ export const renderFormattedText = (text: string): React.ReactNode => {
       return (
         <span
           key={index}
-          className="inline-flex items-center px-1.5 py-0.5 rounded text-sky-400 bg-sky-500/10 font-medium font-mono text-[11px] border border-sky-500/20"
+          className="inline-flex items-center px-1.5 py-0.5 rounded text-sky-400 bg-sky-500/10 font-medium text-[11px] border border-sky-500/20"
         >
           {part}
         </span>
@@ -413,6 +419,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   viewingHistory,
   onJumpToLatest,
   subHeader,
+  notice,
+  welcome,
   titleExtra,
   queued,
   renderDelegation,
@@ -914,62 +922,58 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </span>
 
         <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-[85%] sm:max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
-          {/* Header info: one line on phones; the account and token count move under the reply there */}
-          <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap">
-            {!isUser && (
-              <span className="sm:hidden shrink-0 inline-flex">
-                <ModernAvatar role={title} name={displayName} size={20} />
-              </span>
-            )}
-            <span className="text-zinc-200 shrink-0">{displayName}</span>
-            {ranOn && (
-              <span className="text-zinc-500 font-mono text-[10px] truncate min-w-0" title={`Answered with ${ranOn}`}>
-                {ranOn}
-              </span>
-            )}
-            {account && <span className="hidden sm:inline text-zinc-500 text-[10px] truncate max-w-[12rem]">ran on {account}</span>}
-            {tokens && (
-              <span className="hidden sm:inline text-zinc-500 font-mono text-[10px] cursor-help" title={tokens.detail}>
-                ({tokens.label})<span className="sr-only">: {tokens.detail}</span>
-              </span>
-            )}
-          </div>
+          {isUser ? (
+            <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap">
+              <span className="text-zinc-200 shrink-0">{displayName}</span>
+            </div>
+          ) : (
+            // One line, "Name · 3:42 PM"; the model, account, tokens, steps and reasoning wait behind Details
+            <ReplyMeta
+              name={displayName}
+              at={msg.created_at}
+              avatar={<ModernAvatar role={title} name={displayName} size={20} />}
+              ranOn={ranOn}
+              account={account}
+              tokens={tokens}
+              failed={!!savedActivity?.steps.some((s) => s.status === 'failed')}
+            >
+              {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
+              {savedActivity && (
+                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`}>
+                  {msg.tool_calls && (
+                    <div className="border-t border-zinc-800/60 p-2">
+                      <ToolCallsList raw={msg.tool_calls} />
+                    </div>
+                  )}
+                </SavedActivityList>
+              )}
+
+              {/* Collapsible Reasoning Disclosure (the steps above already hold the thinking when they have it) */}
+              {msg.reasoning_content && !hasThinkingText(savedActivity) && (
+                <div className="mb-2 max-w-full">
+                  <button
+                    type="button"
+                    onClick={() => toggleThought(msg.id)}
+                    className="max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer shadow-sm group"
+                  >
+                    <Sparkles size={13} className="text-violet-400 group-hover:rotate-12 transition-transform flex-shrink-0" />
+                    <span className="truncate min-w-0 sm:max-w-md">
+                      {msg.reasoning_content.split('\n')[0].replace(/^🔮\s*/, '')}
+                    </span>
+                    {isThoughtOpen ? <ChevronDown size={13} className="text-zinc-500 flex-shrink-0" /> : <ChevronRight size={13} className="text-zinc-500 flex-shrink-0" />}
+                  </button>
+
+                  {isThoughtOpen && (
+                    <div className="mt-1.5 p-3.5 rounded-xl bg-zinc-950/90 border border-zinc-800 text-xs text-zinc-300 whitespace-pre-wrap leading-relaxed shadow-inner max-h-80 overflow-y-auto">
+                      {msg.reasoning_content}
+                    </div>
+                  )}
+                </div>
+              )}
+            </ReplyMeta>
+          )}
 
           {routed && <RoutingLine text={routingLine(routed, spaceName ?? 'this space')} fallback={!!routed.fallback} />}
-
-          {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
-          {savedActivity && (
-            <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`}>
-              {msg.tool_calls && (
-                <div className="border-t border-zinc-800/60 p-2">
-                  <ToolCallsList raw={msg.tool_calls} />
-                </div>
-              )}
-            </SavedActivityList>
-          )}
-
-          {/* Collapsible Reasoning Disclosure (the steps above already hold the thinking when they have it) */}
-          {msg.reasoning_content && !hasThinkingText(savedActivity) && (
-            <div className="mb-2 max-w-full">
-              <button
-                type="button"
-                onClick={() => toggleThought(msg.id)}
-                className="max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-mono text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer shadow-sm group"
-              >
-                <Sparkles size={13} className="text-violet-400 group-hover:rotate-12 transition-transform flex-shrink-0" />
-                <span className="truncate min-w-0 sm:max-w-md">
-                  {msg.reasoning_content.split('\n')[0].replace(/^🔮\s*/, '')}
-                </span>
-                {isThoughtOpen ? <ChevronDown size={13} className="text-zinc-500 flex-shrink-0" /> : <ChevronRight size={13} className="text-zinc-500 flex-shrink-0" />}
-              </button>
-
-              {isThoughtOpen && (
-                <div className="mt-1.5 p-3.5 rounded-xl bg-zinc-950/90 border border-zinc-800 text-xs font-mono text-zinc-300 whitespace-pre-wrap leading-relaxed shadow-inner max-h-80 overflow-y-auto">
-                  {msg.reasoning_content}
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Message Body Bubble */}
           {!filesOnly && (text.trim() || !files.length) && (
@@ -1027,11 +1031,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   </>
                 )}
               </button>
-              {(account || tokens) && (
-                <span className="sm:hidden min-w-0 truncate text-[10px]" title={tokens?.detail}>
-                  {[account && `ran on ${account}`, tokens?.label].filter(Boolean).join(' · ')}
-                </span>
-              )}
             </div>
           )}
         </div>
@@ -1162,13 +1161,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-label="Bot browser"
             aria-pressed={vmOpen}
           >
-            <span className="text-xs" aria-hidden="true">🖥️</span>
+            <Monitor size={12} aria-hidden="true" />
             <span className="hidden sm:inline">Bot browser</span>
           </button>
         </div>
       </div>
 
       {subHeader}
+      {!(welcome && messages.length === 0) && notice}
 
       <PinnedInstructions items={pinned} onEdit={onEditInstructions} />
 
@@ -1228,6 +1228,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-label={`Messages in ${title}`}
             aria-busy={isStreaming}
           >
+        {welcome && messages.length === 0 && welcome}
         {groupDiscussionThreads(messages).map((item) => {
           if (item.kind === 'message') return renderMessage(item.message);
           const threadKey = `thread:${item.id}`;
@@ -1310,7 +1311,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               {liveActivity && <LiveActivityList live={liveActivity} idBase={`live-${liveActivity.turnId}`} />}
 
               {streamingThinking && (
-                <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs font-mono text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
+                <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
                   <Sparkles size={13} className="text-violet-400 flex-shrink-0" />
                   <span className="truncate">{streamingThinking}</span>
                 </div>
@@ -1367,7 +1368,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
               key={prompt}
               type="button"
               onClick={() => handlePromptSuggestion(prompt)}
-              className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-xs text-zinc-400 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:text-zinc-200 transition-all shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+              disabled={canRun === false}
+              title={canRun === false ? 'Add an account first' : undefined}
+              className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-xs text-zinc-400 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:text-zinc-200 transition-all shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-zinc-800 disabled:hover:text-zinc-400"
             >
               {prompt}
             </button>

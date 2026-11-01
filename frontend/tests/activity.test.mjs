@@ -88,12 +88,12 @@ test('live list: steps, mono command, waits announced, reduced motion', () => {
   assert.equal(ui.live({ live: { turnId: 't', steps: [], thinking: {} }, idBase: 'x' }), '');
 });
 
-test('saved list starts collapsed to the summary; the engine note stays visible', () => {
+test('saved list starts collapsed to the summary; the engine note waits inside the steps', () => {
   const activity = { steps: [step({ status: 'ok', duration_ms: 900 }), step({ id: 'n', kind: 'note', status: 'ok', title: 'This engine doesn’t share its thinking.' })], dropped: 0 };
   const html = ui.saved({ activity, idBase: 'm1' });
   assert.match(html, /aria-expanded="false"/);
   assert.match(html, /1 step/);
-  assert.match(html, /doesn’t share its thinking/);
+  assert.doesNotMatch(html, /doesn’t share its thinking/, 'the note is a step, not a line under the reply');
   assert.doesNotMatch(html, /cargo test/, 'steps hidden until opened');
   assert.equal(a.hasThinkingText(activity), false);
   assert.equal(a.hasThinkingText({ steps: [step({ kind: 'thinking', status: 'done', text: 'hm' })], dropped: 0 }), true);

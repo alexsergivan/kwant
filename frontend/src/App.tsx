@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMem
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
+import { FirstRunWelcome } from './components/FirstRunWelcome';
 import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } from './components/ChatView';
 import { ThreadBar, ThreadHeader } from './components/ThreadBar';
@@ -38,7 +39,7 @@ import { MISSION_BOARD_SETTING_EVENT, emitMission, parseMissionBoardSetting, sou
 import { type ChatTarget, planOpenTarget } from './chatTarget';
 import { ParallelPage } from './components/ParallelUniverseView';
 import { ConnectionsPage } from './components/ConnectionsView';
-import { AlertTriangle, Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
+import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings, Sparkles } from 'lucide-react';
 import { ChatApproval, OpenChat, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
@@ -416,7 +417,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     sw.addEventListener('message', onMessage);
     return () => sw.removeEventListener('message', onMessage);
   }, [space.id]);
-  // The Mission board is off unless the server says otherwise; Settings tells us when it changes.
+  // The Mission board shows once the server says it is on (the default); Settings tells us when it changes.
   useEffect(() => {
     let live = true;
     fetch('/api/settings')
@@ -2696,17 +2697,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       <div
         role="status"
         data-setup-banner
-        className="shrink-0 px-3 sm:px-6 py-2.5 border-b border-amber-500/20 bg-amber-500/5 flex flex-wrap items-center gap-x-3 gap-y-2"
+        className="shrink-0 px-3 sm:px-6 py-2.5 border-b border-violet-500/20 bg-violet-500/[0.06] flex flex-wrap items-center gap-x-3 gap-y-2"
       >
-        <AlertTriangle size={15} className="shrink-0 text-amber-300" aria-hidden="true" />
+        <Sparkles size={15} className="shrink-0 text-violet-300" aria-hidden="true" />
         <div className="flex-1 min-w-[12rem]">
-          <p className="text-xs font-medium text-zinc-100">Get {space.name} ready: add an account</p>
-          <p className="text-[11px] text-zinc-400">Bots here can't answer until one account works. Sign in with Claude, Codex or Grok, or add an API key.</p>
+          <p className="text-xs font-medium text-zinc-100">One step left: add an account</p>
+          <p className="text-[11px] text-zinc-400">Sign in with Claude or ChatGPT, or paste an API key, and your bots can start answering.</p>
         </div>
         <button
           type="button"
           onClick={offerClaude ? openClaudeSignIn : openSettings}
-          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
+          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300"
         >
           <KeyRound size={13} aria-hidden="true" />
           {offerClaude ? 'Sign in with Claude' : 'Add an account'}
@@ -3001,15 +3002,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           highlightMessageId={highlightMessageId}
           onHighlightDone={() => setHighlightMessageId(null)}
-          subHeader={
-            setupBanner ? (
-              <>
-                {subHeader}
-                {setupBanner}
-              </>
-            ) : (
-              subHeader
-            )
+          subHeader={subHeader}
+          notice={setupBanner}
+          welcome={
+            setupBanner && isChannel ? (
+              <FirstRunWelcome
+                bots={kwants}
+                actionLabel={offerClaude ? 'Sign in with Claude' : 'Add an account'}
+                onAction={offerClaude ? openClaudeSignIn : openSettings}
+              />
+            ) : undefined
           }
           onOpenAccounts={openSettings}
           canRun={canRun}
@@ -3055,7 +3057,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   return (
     <div className="flex-1 min-w-0 h-full flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden" data-space={space.id}>
       {/* The open space's colour, so it's clear where a message goes */}
-      <div className="h-[3px] shrink-0" style={{ background: spaceColor(space) }} aria-hidden="true" />
+      <div className="h-[3px] shrink-0 opacity-60" style={{ background: spaceColor(space) }} aria-hidden="true" />
 
       {isPhone ? (
         <>

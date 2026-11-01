@@ -104,7 +104,8 @@ test('nothing signed in: the card and headline name the next step', () => {
   const out = engine('claude', { status: 'signed_out', ready: false, uses: null });
   const html = panel([out], [machine, { ...personal, signed_in: false }]);
   assert.equal(summary(html, 'claude'), 'No account is signed in · Sign in to one below');
-  assert.match(html, /No engine can run right now\. Sign in with Claude below, or add an account\./);
+  // A first run: "Pick one to start" leads instead of a warning.
+  assert.match(html, /Nothing can answer yet\. Pick one way to start:/);
   assert.match(html, /Not signed in/);
   assert.match(html, /Sign in with Claude<\/button>/);
   // Personal offers its own sign-in.

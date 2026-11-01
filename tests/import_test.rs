@@ -550,7 +550,7 @@ async fn space_export_is_named_after_the_space() {
     let e = setup().await;
     let named = new_space(&e, "Travel Team!").await;
     let symbols = new_space(&e, "★★★").await;
-    for (space, want) in [(dflt(), "Default.kwant.json".to_string()), (named, "Travel-Team.kwant.json".into()), (symbols.clone(), format!("{symbols}.kwant.json"))] {
+    for (space, want) in [(dflt(), "My-space.kwant.json".to_string()), (named, "Travel-Team.kwant.json".into()), (symbols.clone(), format!("{symbols}.kwant.json"))] {
         let req = Request::builder().uri(format!("/api/export?space={space}")).body(Body::empty()).unwrap();
         let resp = e.app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);

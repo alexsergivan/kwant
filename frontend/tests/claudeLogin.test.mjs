@@ -136,7 +136,7 @@ test('a signed-out Claude row offers "Sign in with Claude"; the summary points a
   const html = panel([signedOut, engine('codex', { status: 'not_installed' })]);
   assert.match(html, /Sign in with Claude<\/button>/);
   assert.match(html, /Opens claude.ai in a new tab/);
-  assert.match(html, /No engine can run right now\. Sign in with Claude below, or add an account\./);
+  assert.match(html, /Nothing can answer yet\. Pick one way to start:/);
   assert.doesNotMatch(html, />Sign out</);
   // The button replaces "run `claude login`".
   assert.doesNotMatch(html, /claude login/);

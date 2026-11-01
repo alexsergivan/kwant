@@ -33,6 +33,14 @@ struct Env {
 }
 
 async fn setup() -> Env {
+    let e = setup_fresh().await;
+    let (status, v) = call(&e.app, "POST", "/api/settings", None, Some(json!({"mission_board": true}))).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    e
+}
+
+/// A new install: nothing in settings about the board.
+async fn setup_fresh() -> Env {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
     let config = Config { data_dir: tmp.path().to_path_buf(), ..Config::default() };
@@ -46,10 +54,7 @@ async fn setup() -> Env {
     let space = SpaceId::default_space();
     let kwants = state.db.list_kwants(&space).await.unwrap();
     let general = state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "general").unwrap().id;
-    let e = Env { app: create_router(state.clone()), bot: kwants[0].clone(), other: kwants[1].clone(), general, state, _tmp: tmp };
-    let (status, v) = call(&e.app, "POST", "/api/settings", None, Some(json!({"mission_board": true}))).await;
-    assert_eq!(status, StatusCode::OK, "{v}");
-    e
+    Env { app: create_router(state.clone()), bot: kwants[0].clone(), other: kwants[1].clone(), general, state, _tmp: tmp }
 }
 
 async fn call(app: &Router, method: &str, uri: &str, auth: Option<&str>, body: Option<Value>) -> (StatusCode, Value) {
@@ -135,6 +140,26 @@ async fn folder(e: &Env, mission_id: &str) -> std::path::PathBuf {
     let p = std::path::PathBuf::from(m.workspace_path);
     std::fs::create_dir_all(&p).unwrap();
     p
+}
+
+#[tokio::test]
+async fn the_board_is_on_unless_turned_off() {
+    let e = setup_fresh().await;
+    let v = person(&e, "GET", "/api/settings", None).await;
+    assert_eq!(v["mission_board"], json!(true), "{v}");
+    let token = turn(&e, &e.bot, "t-fresh").await;
+    let (_, v) = call(&e.app, "POST", "/api/mcp/self", Some(&token), Some(rpc("tools/list", json!({})))).await;
+    let tools = v["result"]["tools"].as_array().unwrap();
+    let plan = tools.iter().find(|t| t["name"] == "mission_plan").expect("mission_plan offered on a new install");
+    // Bots plan only when asked: an ordinary request never starts a board task on its own.
+    assert!(plan["description"].as_str().unwrap().contains("only when the person asks"), "{plan}");
+    for off in ["false", "0", "off"] {
+        e.state.db.set_setting("mission_board", off).await.unwrap();
+        let v = person(&e, "GET", "/api/settings", None).await;
+        assert_eq!(v["mission_board"], json!(false), "{off}: {v}");
+    }
+    e.state.db.set_setting("mission_board", "true").await.unwrap();
+    assert_eq!(person(&e, "GET", "/api/settings", None).await["mission_board"], json!(true));
 }
 
 #[tokio::test]

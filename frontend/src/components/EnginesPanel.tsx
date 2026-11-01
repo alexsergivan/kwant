@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { AlertTriangle, ArrowRight, ChevronDown, ChevronRight, Cpu, Key, Loader2, RefreshCw, Route, Server } from 'lucide-react';
-import { EngineInfo, checkedAgo, engineSummary, isAbsent, isUsable, onlyCliReady, sortEngines, statusView } from '../engines';
+import { AlertTriangle, ArrowRight, ChevronDown, ChevronRight, Cpu, ExternalLink, Key, Loader2, RefreshCw, Route, Server } from 'lucide-react';
+import { EngineInfo, INSTALL_URL, checkedAgo, engineSummary, isAbsent, isUsable, onlyCliReady, sortEngines, statusView } from '../engines';
 import { playSfx } from '../audio/chiptune';
 import type { EnginesApi } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
@@ -9,6 +9,7 @@ import { AccountList, StatusPill } from './EngineAccounts';
 import { Profile, accountUsable, accountsForCard, activeLimit, formatUntil } from '../profiles';
 import type { ProfilesState } from '../useProfiles';
 import { RouteRow, routeSummary } from '../routing';
+import { StartPicker } from './StartPicker';
 
 const SUMMARY_TEXT = {
   ok: 'text-emerald-300',
@@ -48,8 +49,10 @@ export const EngineCard: React.FC<{
   onAccountsChanged?: () => Promise<void>;
   /** Sign in or out of "This machine". */
   hostAction?: React.ReactNode;
+  /** Claude's sign-in sits in "Pick one to start" above the cards. */
+  signInAbove?: boolean;
   now?: number;
-}> = ({ engine, onToggle, accounts, onAccountsChanged, hostAction, now = Date.now() }) => {
+}> = ({ engine, onToggle, accounts, onAccountsChanged, hostAction, signInAbove = false, now = Date.now() }) => {
   const view = statusView(engine);
   const Icon = KIND_ICON[engine.kind] ?? Cpu;
   const off = engine.enabled === false;
@@ -57,12 +60,14 @@ export const EngineCard: React.FC<{
   const labelId = `engine-${engine.id}-name`;
   const hasMachineRow = !!accounts?.some((p) => p.kind === 'system');
   // With no "This machine" row, Claude's sign-in button sits under the name and replaces "run `claude login`".
-  const signInHere = !hasMachineRow && engine.id === 'claude' && !!hostAction;
+  const signInHere = !hasMachineRow && engine.id === 'claude' && (!!hostAction || signInAbove);
   const summary =
     signInHere && engine.status === 'signed_out' && !usable && !off
-      ? { text: 'Not signed in · Sign in below', tone: 'warn' as const }
+      ? { text: `Not signed in · Sign in ${signInAbove ? 'above' : 'below'}`, tone: 'warn' as const }
       : engineSummary(engine, accounts ? summaryAccounts(accounts, now) : []);
-  const showAccounts = engine.kind !== 'local' && accounts !== undefined && !!onAccountsChanged;
+  // Not installed and nothing but its "This machine" row: nothing to list or switch until it's installed.
+  const onlyMachine = isAbsent(engine) && !accounts?.some((p) => p.kind !== 'system');
+  const showAccounts = engine.kind !== 'local' && accounts !== undefined && !!onAccountsChanged && !onlyMachine;
   return (
     <li data-engine={engine.id} data-status={off ? 'off' : usable ? 'ready' : engine.status} aria-labelledby={labelId} className="rounded-xl border border-zinc-800 bg-zinc-900/90 text-xs">
       <div className="flex items-start gap-2.5 p-3">
@@ -72,7 +77,7 @@ export const EngineCard: React.FC<{
             <h4 id={labelId} className={`font-semibold ${off ? 'text-zinc-400' : 'text-zinc-100'}`}>
               {engine.name}
             </h4>
-            {engine.version && <span className="text-[10px] font-mono text-zinc-500">v{engine.version}</span>}
+            {engine.version && <span className="text-[10px] tabular-nums text-zinc-500">v{engine.version}</span>}
             <StatusPill tone={view.tone}>{view.label}</StatusPill>
           </div>
           <p data-summary className={`text-[11px] leading-snug break-words ${SUMMARY_TEXT[summary.tone]}`}>
@@ -86,8 +91,18 @@ export const EngineCard: React.FC<{
               {engine.models.length > 3 ? '…' : ''}
             </p>
           )}
+          {isAbsent(engine) && INSTALL_URL[engine.id] && (
+            <a
+              href={INSTALL_URL[engine.id]}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200 hover:underline underline-offset-2"
+            >
+              Install {engine.name} <ExternalLink size={10} aria-hidden="true" />
+            </a>
+          )}
           {/* Without a "This machine" row to hold it, the sign-in sits here. */}
-          {signInHere && <div className="pt-0.5">{hostAction}</div>}
+          {signInHere && hostAction && <div className="pt-0.5">{hostAction}</div>}
         </div>
         {onToggle && typeof engine.enabled === 'boolean' && (
           <button
@@ -196,8 +211,9 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState;
   const profiles = accounts?.profiles ?? null;
   const sorted = engines ? sortEngines(engines) : [];
   const cardAccounts = (e: EngineInfo) => (profiles ? accountsForCard(profiles, e.id) : undefined);
-  // An engine missing here but with accounts of its own (an API key account, say) still gets a card.
-  const present = sorted.filter((e) => !isAbsent(e) || (cardAccounts(e)?.length ?? 0) > 0);
+  // An engine missing here but with accounts of its own (an API key account, say) still gets a card;
+  // its "This machine" row alone doesn't count.
+  const present = sorted.filter((e) => !isAbsent(e) || (cardAccounts(e) ?? []).some((p) => p.kind !== 'system'));
   const absent = sorted.filter((e) => !present.includes(e));
   const lastChecked = sorted.map((e) => e.checked_at).filter(Boolean).sort().pop() ?? null;
   const ago = checkedAgo(lastChecked, now);
@@ -211,15 +227,21 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState;
   };
   const signedIn = () => void accountsChanged();
 
+  // Nothing runs yet: "Pick one to start" leads, and holds Claude's sign-in so it isn't drawn twice.
+  // An engine someone switched off isn't a first run: its card says how to turn it back on.
+  const picking = !!engines && engines.length > 0 && !engines.some(isUsable) && !engines.some((e) => e.enabled === false);
+
   const card = (e: EngineInfo) => (
     <EngineCard
       key={e.id}
       engine={e}
       now={now}
-      onToggle={(on) => setEnabled(e.id, on)}
+      // A switch only means something once the engine is on this computer, and once something runs.
+      onToggle={isAbsent(e) || picking ? undefined : (on) => setEnabled(e.id, on)}
       accounts={cardAccounts(e)}
       onAccountsChanged={accounts ? accountsChanged : undefined}
-      hostAction={hostAction(e, api, signedIn, focusClaudeSignIn)}
+      hostAction={picking && e.id === 'claude' ? null : hostAction(e, api, signedIn, focusClaudeSignIn)}
+      signInAbove={picking && e.id === 'claude' && claudeNeedsSignIn(engines)}
     />
   );
 
@@ -252,9 +274,13 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState;
             ? 'Checking which engines can run…'
             : engines.length === 0
               ? 'This server doesn’t report engine status yet.'
-              : headline(engines, profiles, now)}
+              : picking
+                ? 'Nothing can answer yet. Pick one way to start:'
+                : headline(engines, profiles, now)}
         </p>
       )}
+
+      {picking && <StartPicker engines={engines!} onSignedIn={signedIn} onKeyAdded={signedIn} focusClaudeSignIn={focusClaudeSignIn} initial={claudeNeedsSignIn(engines) ? 'claude' : null} />}
 
       {error && (
         <p role="alert" className="flex items-center gap-1.5 text-[11px] text-rose-300">

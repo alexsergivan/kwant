@@ -178,6 +178,12 @@ const AddAccountForm: React.FC<{
 
 type KeyOrLoginSpec = { engine: Profile['engine']; kind: 'cli_home' | 'api_key' };
 
+/** "Paste an API key" for an API card (anthropic_api, openai_api, xai_api): the same form as on its card. */
+export const NewKeyAccountForm: React.FC<{ card: string; onCancel: () => void; onCreated: () => void }> = ({ card, onCancel, onCreated }) => {
+  const spec = newAccountFor(card);
+  return spec && spec.kind === 'api_key' ? <KeyOrLoginForm key={card} spec={spec as KeyOrLoginSpec} onCancel={onCancel} onCreated={onCreated} /> : null;
+};
+
 const KeyOrLoginForm: React.FC<{
   spec: KeyOrLoginSpec;
   onCancel: () => void;

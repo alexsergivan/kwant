@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, Bot, ChevronLeft, ExternalLink, Github, KeyRound, Loader2, Lock, Mail, Plug, Plus, RefreshCw, Search, Server, UserRound } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronLeft, ChevronRight, ExternalLink, Github, KeyRound, Loader2, Lock, Mail, Plug, Plus, RefreshCw, Search, Server, UserRound } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { relativeTime } from '../away';
+import { quotaLine } from '../clock';
 import { UnlockDialog, usePasswordStore } from './PasswordStorePanel';
 import {
   CatalogEntry,
@@ -15,6 +16,7 @@ import {
   connectionsApi,
   countsLine,
   groupConnections,
+  isRawCommand,
   mcpServerId,
   statusBadge,
   storedLabel,
@@ -73,6 +75,7 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
   const manage = manageFor(c.kind, links);
   const canCheck = onCheck && mcpServerId(c) && c.status !== 'off';
   const composio = c.logins_stored === 'composio';
+  const status = quotaLine(c.status_detail, c.limited_until, now);
   return (
     <li className="px-3 py-3 sm:px-4" aria-labelledby={`${id}-n`} data-connection={c.id}>
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
@@ -86,10 +89,20 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
               {badge.label}
             </span>
           </div>
-          {c.detail && <p className="mt-0.5 text-xs text-zinc-400 break-all">{c.detail}</p>}
-          {c.status_detail && (
-            <p className={`mt-1 text-xs ${c.status === 'error' ? 'text-rose-300' : 'text-amber-200'} break-words`}>{c.status_detail}</p>
-          )}
+          {c.detail &&
+            (isRawCommand(c) ? (
+              // A command or path says little to most people: it waits behind Details.
+              <details className="mt-0.5 text-xs text-zinc-400 group">
+                <summary className="inline-flex items-center gap-1 cursor-pointer select-none text-[11px] text-zinc-500 hover:text-zinc-300 list-none [&::-webkit-details-marker]:hidden">
+                  <ChevronRight size={11} className="transition-transform group-open:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
+                  Details
+                </summary>
+                <code className="mt-1 block font-mono text-[11px] text-zinc-400 break-all">{c.detail}</code>
+              </details>
+            ) : (
+              <p className="mt-0.5 text-xs text-zinc-400 break-all">{c.detail}</p>
+            ))}
+          {status && <p className={`mt-1 text-xs ${c.status === 'error' ? 'text-rose-300' : 'text-amber-200'} break-words`}>{status}</p>}
           <dl className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-zinc-400">
             <div className="flex items-center gap-1">
               <dt className="sr-only">Used by</dt>
@@ -631,7 +644,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               return (
                 <section key={g.key} aria-labelledby={`conn-${g.key}`} className="space-y-2">
                   <h3 id={`conn-${g.key}`} className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">
-                    {g.label} <span className="font-mono font-normal text-zinc-400">{g.items.length}</span>
+                    {g.label} <span className="tabular-nums font-normal text-zinc-400">{g.items.length}</span>
                   </h3>
                   {g.items.length > 0 ? (
                     <ul className="rounded-xl border border-zinc-800 bg-zinc-900/60 divide-y divide-zinc-800">

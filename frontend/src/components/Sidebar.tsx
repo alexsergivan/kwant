@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, AlertTriangle, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split, Hand, Plug, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, KeyRound, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split, Hand, Plug, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
-import { canRunNow, isUsable, pickLabel } from '../engines';
+import { canRunNow, engineTip, isUsable } from '../engines';
 import { STATUS_DOT, statusOf, statusText, type BotStatus } from '../botStatus';
 import { EnginesApi, useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
@@ -380,6 +380,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   key={c.id}
                   onClick={() => onSelectChannel(c)}
+                  // The channel's header says it too; no pill on every row
+                  title={layaRoutes(c, kwants.length) ? 'Laya picks who answers here' : undefined}
                   className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left ${
                     active
                       ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50'
@@ -388,11 +390,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 >
                   <Hash size={15} className={active ? 'text-sky-400' : 'text-zinc-500'} />
                   <span className="truncate flex-1">{c.name}</span>
-                  {layaRoutes(c, kwants.length) && (
-                    <span className="shrink-0 text-[10px] px-1.5 py-px rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-200" title="Laya picks who answers here">
-                      Laya
-                    </span>
-                  )}
                 </button>
               );
             })}
@@ -476,7 +473,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
                         {!expanded && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full font-mono bg-zinc-800/80 text-zinc-400 border border-zinc-800">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full tabular-nums bg-zinc-800/80 text-zinc-400 border border-zinc-800">
                             {memberIds.length}
                           </span>
                         )}
@@ -716,7 +713,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-1">
-                      <span className="text-xs font-semibold text-zinc-200 truncate">{k.name}</span>
+                      {/* The full name; what it runs on is in the tooltip */}
+                      <span className="text-xs font-semibold text-zinc-200 truncate" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
+                        {k.name}
+                      </span>
                       {needsYou[k.id] > 0 && (
                         <span
                           className="shrink-0 inline-flex items-center gap-1 px-1.5 py-px rounded-full text-[10px] font-medium bg-amber-400/15 text-amber-200 border border-amber-400/30"
@@ -741,13 +741,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           <Pencil size={11} />
                         </button>
                       )}
-                      {/* Capped, so a long model id (Custom API) leaves room for the bot's name. */}
-                      <span
-                        className="max-w-[60%] truncate whitespace-nowrap text-[10px] text-zinc-500 font-mono uppercase bg-zinc-900 px-1 py-0.2 rounded border border-zinc-800"
-                        title={k.preferred_model === 'auto' ? 'Laya' : pickLabel(k.preferred_model)}
-                      >
-                        {k.preferred_model === 'auto' ? 'Laya' : pickLabel(k.preferred_model)}
-                      </span>
                     </div>
                     {busyKwants[k.id] ? (
                       <p className="text-[11px] text-sky-300 truncate mt-0.5" title={busyKwants[k.id]}>
@@ -796,16 +789,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             ) : readyCount > 0 ? (
               <CheckCircle2 size={13} className="text-emerald-400" aria-hidden="true" />
             ) : (
-              <AlertTriangle size={13} className="text-amber-400" aria-hidden="true" />
+              <KeyRound size={13} className="text-violet-300" aria-hidden="true" />
             )}
-            {/* The warning wraps, so its fix is never cut off */}
+            {/* The prompt wraps, so its fix is never cut off */}
             <span className={readyCount === 0 ? 'text-left' : 'truncate'}>
               {readyCount === null
                 ? 'Checking accounts…'
                 : readyCount === 0
                   ? offerClaude
-                    ? 'Nothing can run here · Sign in with Claude'
-                    : 'Nothing can run here · Add an account'
+                    ? 'No account yet · Sign in with Claude'
+                    : 'No account yet · Add an account'
                   : `Runs on ${runsOn[0]}${runsOn.length > 1 ? ` +${runsOn.length - 1}` : ''}`}
             </span>
           </button>

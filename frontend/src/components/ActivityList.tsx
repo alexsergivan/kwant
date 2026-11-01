@@ -223,8 +223,6 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string }> 
 export const SavedActivityList: React.FC<{ activity: SavedActivity; idBase: string; children?: React.ReactNode }> = ({ activity, idBase, children }) => {
   const [open, setOpen] = useState(false);
   const listId = `${idBase}-steps`;
-  // The engine's "no thinking shared" note stays in view while it explains a gap.
-  const note = activity.steps.some((s) => s.kind === 'thinking') ? undefined : activity.steps.find((s) => s.kind === 'note');
   const failed = activity.steps.some((s) => s.status === 'failed');
   return (
     <div className="mb-2 max-w-full">
@@ -245,7 +243,6 @@ export const SavedActivityList: React.FC<{ activity: SavedActivity; idBase: stri
           {children}
         </div>
       )}
-      {!open && note && <p className="mt-1 px-1 text-[11px] text-zinc-400 break-words">{note.title}</p>}
     </div>
   );
 };

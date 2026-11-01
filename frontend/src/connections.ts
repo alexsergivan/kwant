@@ -23,6 +23,8 @@ export interface Connection {
   detail: string | null;
   status: ConnectionStatus | string;
   status_detail: string | null;
+  /** When an account that ran out of quota can run again (RFC 3339); only on limited accounts. */
+  limited_until?: string | null;
   last_check: string | null;
   used_by: UsedBy[];
   logins_stored: LoginsStored | string;
@@ -76,6 +78,10 @@ export class ConnectionsError extends Error {
     super(message);
   }
 }
+
+/** An MCP server's local command ("/usr/bin/python3", "npx"), as opposed to the host of a remote one. */
+export const isRawCommand = (c: Pick<Connection, 'kind' | 'detail'>): boolean =>
+  c.kind === 'mcp' && !!c.detail && !/^[\w-]+(\.[\w-]+)+(:\d+)?$/.test(c.detail);
 
 const sentence = (s: string) => {
   const t = s.trim();

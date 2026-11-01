@@ -33,6 +33,8 @@ use tower::ServiceExt;
 async fn setup() -> (Router, AppState, TempDir) {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
+    // These turns predate the mission board, which is now on by default; keep it off here.
+    db.set_setting("mission_board", "false").await.unwrap();
     let config = Config {
         data_dir: tmp.path().to_path_buf(),
         ..Config::default()

@@ -14,7 +14,7 @@ with `?space=<id>` (default space when omitted), like the rest of the API.
 
 | key | type | default | notes |
 |---|---|---|---|
-| `mission_board` | bool | `false` | Shows the board, gives bots the mission tools, auto-creates tasks from hand-offs, routine runs, Loose Ends and work-ahead runs, and runs active missions. Off: routes still answer (read and person actions), bots get no task tools, nothing is auto-created, the runner is idle. |
+| `mission_board` | bool | `true` | On unless set to `false` (also `"0"`/`"off"`). Shows the board, gives bots the mission tools, auto-creates tasks from hand-offs, routine runs, Loose Ends and work-ahead runs, and runs active missions. Off: routes still answer (read and person actions), bots get no task tools, nothing is auto-created, the runner is idle. |
 | `mission_lease_minutes` | int 5–240 | `30` | How long a claim lives without activity. |
 | `mission_default_budget_tokens` | int 0 or 1 000–5 000 000 | `0` | A new mission's budget when none is given. 0 = no limit. |
 | `mission_default_task_budget_tokens` | int 0–5 000 000 | `0` | A new task's budget when none is given (capped at a limited mission's budget). 0 = no limit. |

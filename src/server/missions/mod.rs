@@ -35,7 +35,7 @@ use crate::db::DbError;
 use crate::drivers::events::RuntimeEvent;
 use serde_json::{json, Value};
 
-/// Setting key: `"true"` turns Mission Control on. Off by default.
+/// Setting key: on by default; `"false"`, `"0"` or `"off"` turns Mission Control off.
 pub const SETTING: &str = "mission_board";
 pub const LEASE_SETTING: &str = "mission_lease_minutes";
 pub const BUDGET_SETTING: &str = "mission_default_budget_tokens";
@@ -56,7 +56,7 @@ pub const DEFAULT_MAX_ATTEMPTS: i64 = 3;
 pub const MAX_EXCERPT: usize = 2_000;
 
 pub async fn enabled(state: &AppState) -> bool {
-    matches!(state.db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim), Some("true" | "1" | "on"))
+    !matches!(state.db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim), Some("false" | "0" | "off"))
 }
 
 pub(crate) async fn int_setting(state: &AppState, key: &str, range: (i64, i64), default: i64) -> i64 {

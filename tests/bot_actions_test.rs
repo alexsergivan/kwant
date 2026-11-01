@@ -356,7 +356,7 @@ async fn deleting_a_bot_waits_for_the_person() {
 
     // Archiving the space: declined, nothing changes
     let text = refused(&e, &token, "space_archive", json!({})).await;
-    assert!(text.contains("Default"), "{text}");
+    assert!(text.contains("My space"), "{text}");
 }
 
 #[tokio::test]

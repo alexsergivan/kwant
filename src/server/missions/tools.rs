@@ -43,7 +43,7 @@ pub fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": "mission_plan",
-            "description": "Propose a mission: a goal split into tasks with acceptance criteria and outcome checks. It is a draft until the person approves it on the board; nothing runs before that. Each task is verified only by its checks passing (or a teammate's review / the person), never by its owner saying it is done. Use it for multi-step work worth tracking, not for a quick answer.",
+            "description": "Propose a mission: a goal split into tasks with acceptance criteria and outcome checks. It is a draft until the person approves it on the board; nothing runs before that. Each task is verified only by its checks passing (or a teammate's review / the person), never by its owner saying it is done. Use it only when the person asks for a plan, project or tracked multi-step work, never on your own for an ordinary request or a quick answer.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

@@ -202,7 +202,7 @@ impl Database {
         let mut conn = self.pool.acquire().await?;
         // Table rebuilds need foreign keys off, and SQLite ignores this pragma inside a transaction
         sqlx::query("PRAGMA foreign_keys = OFF").execute(&mut *conn).await?;
-        let result = migrate_in_transaction(&mut conn).await;
+        let result = migrate_in_transaction(&mut conn, fresh).await;
         sqlx::query("PRAGMA foreign_keys = ON").execute(&mut *conn).await?;
 
         match result {
@@ -281,7 +281,7 @@ fn restrict(_path: &Path, _mode: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-async fn migrate_in_transaction(conn: &mut SqliteConnection) -> Result<(), DbError> {
+async fn migrate_in_transaction(conn: &mut SqliteConnection, fresh: bool) -> Result<(), DbError> {
     // Violations already in the data aren't ours to fix; only new ones abort the migration
     let violations_before = foreign_key_violations(conn).await?;
 
@@ -299,8 +299,13 @@ async fn migrate_in_transaction(conn: &mut SqliteConnection) -> Result<(), DbErr
     )
     .execute(&mut *tx)
     .await?;
-    sqlx::query("INSERT INTO spaces (id, name, icon, color, sort) VALUES (?, 'Default', '💼', 'amber', 0)")
+    // A new install starts in "My space"; a database from before spaces keeps the name it was migrated with
+    let (name, icon, color) = if fresh { ("My space", "🏠", "violet") } else { ("Default", "💼", "amber") };
+    sqlx::query("INSERT INTO spaces (id, name, icon, color, sort) VALUES (?, ?, ?, ?, 0)")
         .bind(DEFAULT_SPACE_ID)
+        .bind(name)
+        .bind(icon)
+        .bind(color)
         .execute(&mut *tx)
         .await?;
 

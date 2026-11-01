@@ -1424,7 +1424,8 @@ impl Ctx<'_> {
 
     async fn space_archive(&self, args: &Value) -> ToolResult {
         if self.space.is_default() {
-            return fail("The Default space can't be archived.");
+            let first = self.space_json(&self.space).await;
+            return fail(format!("{} is the first space and can't be archived.", first["name"].as_str().unwrap_or("This")));
         }
         let mut after = self.space_json(&self.space).await;
         let name = after["name"].as_str().unwrap_or("").to_string();

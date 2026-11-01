@@ -143,6 +143,8 @@ async fn setup() -> Env {
     let tmp = tempfile::tempdir().unwrap();
     let data = tmp.path().join("data");
     let db = Database::init(&data).await.unwrap();
+    // These turns predate the mission board, which is now on by default; keep it off here.
+    db.set_setting("mission_board", "false").await.unwrap();
     // Laya is unreachable: turns use the kwant's preferred model, the fake claude
     let config = Config {
         data_dir: data.clone(),

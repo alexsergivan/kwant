@@ -102,6 +102,13 @@ export function sortEngines(list: EngineInfo[]): EngineInfo[] {
  *  installed" too, but it stays out: adding a key on its card is how it becomes usable. */
 export const isAbsent = (e: EngineInfo) => e.status === 'not_installed' && e.kind !== 'api' && e.enabled !== false && !isUsable(e);
 
+/** Where to get an engine that isn't on this computer. */
+export const INSTALL_URL: Partial<Record<EngineId, string>> = {
+  claude: 'https://docs.claude.com/en/docs/claude-code/setup',
+  codex: 'https://github.com/openai/codex#quickstart',
+  ollama: 'https://ollama.com/download',
+};
+
 /** Whether only CLIs can run things right now (so "no API keys needed" is true). */
 export const onlyCliReady = (list: EngineInfo[]) => {
   const ready = list.filter(isUsable);
@@ -263,6 +270,11 @@ export function pickLabel(value: string, engines: EngineInfo[] | null = null): s
   const fam = pick.family;
   const known = engines?.filter((e) => FAMILY_OF[e.id] === fam).flatMap((e) => e.models).find((m) => m.id === pick.model);
   return `${family} · ${known?.label ?? pick.model}`;
+}
+
+/** A bot's engine in words, for its tooltip in the bot list: "Laya picks the model", "Runs on Claude · Sonnet". */
+export function engineTip(value: string, engines: EngineInfo[] | null = null): string {
+  return parsePick(value).family === 'auto' ? 'Laya picks the model' : `Runs on ${pickLabel(value, engines)}`;
 }
 
 /** "Claude Haiku (latest)" → "Haiku" when shown after the family name. */
