@@ -32,6 +32,7 @@ pub mod page_source;
 pub mod connection_suggest;
 pub mod bot_actions;
 pub mod hires;
+pub mod concierge;
 pub mod import_routes;
 pub mod approval_modes;
 pub mod passwords;

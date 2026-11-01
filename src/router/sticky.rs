@@ -74,7 +74,10 @@ pub fn awaiting_answer<'a>(recent: &[Message], open: &[Question], members: &'a [
 /// on a clear match (a role's words, a bot's name, or Laya's confident pick). A greeting, a
 /// small reply or no match ("lead", "last", "several") stays with the bot that asked.
 pub fn yields_to_route(awaiting: &Awaiting<'_>, route: &crate::router::team::ChannelRoute) -> bool {
-    !awaiting.card && route.kwant_id != awaiting.kwant.id && matches!(route.basis.as_str(), "skills" | "keywords")
+    !awaiting.card
+        && route.kwant_id != awaiting.kwant.id
+        && matches!(route.basis.as_str(), "skills" | "keywords")
+        && route.fit >= crate::router::team::ROUTE_AT
 }
 
 /// Whether the last line of `text` asks the person something real: a question on it that isn't
@@ -319,6 +322,8 @@ mod tests {
             fallback: false,
             matched_terms: vec![],
             basis: basis.into(),
+            fit: 1.0,
+            choices: vec![],
         }
     }
 
