@@ -1,7 +1,7 @@
 import React, { useId, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, MinusCircle, Undo2, UserPlus } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { HireMeta, evidenceText, hireStateText, hireView, hireLeadIndex, hiredBotGone, isTeamHire, modelText } from '../botActions';
+import { HireMeta, evidenceText, hireStateText, hireView, hireLeadIndex, hiredBotGone, isTeamHire, modelText, shortDate } from '../botActions';
 
 export type HireDecision = 'deny' | 'accept_once' | 'always_accept' | 'undo';
 
@@ -107,6 +107,16 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
               <span className="text-zinc-500">Based on: </span>
               {evidence}
             </p>
+          )}
+          {!view.requested_by_person && view.evidence?.basis === 'repeated' && view.evidence.similar_requests.some((r) => r.text) && (
+            <ul aria-label="Your earlier requests" className="space-y-1 border-l-2 border-zinc-700 pl-3">
+              {view.evidence.similar_requests.map((r) => (
+                <li key={r.message_id} className="text-xs text-zinc-300 break-words leading-relaxed">
+                  {r.text ? <q className="italic">{r.text}</q> : <span className="text-zinc-500">An earlier message</span>}
+                  {shortDate(r.at) && <span className="text-zinc-500 not-italic"> · {shortDate(r.at)}</span>}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
 

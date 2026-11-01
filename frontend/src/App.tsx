@@ -34,6 +34,8 @@ import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './m
 import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, changesBots, decisionError, hiresApi } from './botActions';
 import { BotActionCard, type BotActionDecision } from './components/BotActionCard';
 import { HireCard, type HireDecision } from './components/HireCard';
+import { RouteChoiceCard } from './components/RouteChoiceCard';
+import { RouteChoiceMeta, applyRouteChoice, correctRoute, isAskingReply, rerouteTargetsFor, resolveRouteChoice } from './routeChoice';
 import type { RoutineFocus } from './components/RoutinesPanel';
 import { AwayPage } from './components/AwayView';
 import { LooseEndsPage } from './components/LooseEndsView';
@@ -632,6 +634,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Cards for changes bots made (bot_action_updated) and hire proposals (hire_updated), by id.
   const [botActions, setBotActions] = useState<Record<string, BotActionMeta>>({});
   const [hires, setHires] = useState<Record<string, HireMeta>>({});
+  // Laya's "Who should answer this?" cards, by route_choice_id (route_choice_updated).
+  const [routeChoices, setRouteChoices] = useState<Record<string, RouteChoiceMeta>>({});
 
   // Virtual Machine & Live Browser state
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
@@ -927,6 +931,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'BotActionUpdated': {
             const a = event.data?.action;
             if (a?.id) setBotActions((prev) => applyBotAction(prev, a));
+            break;
+          }
+          case 'route_choice_updated':
+          case 'RouteChoiceUpdated': {
+            const c = event.data?.choice;
+            if (c) setRouteChoices((prev) => applyRouteChoice(prev, c));
             break;
           }
           case 'hire_updated':
@@ -1362,6 +1372,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           // no JSON body
         }
         throw new Error(message);
+      }
+      const reply = await res.json().catch(() => null);
+      if (isAskingReply(reply)) {
+        // A close call: Laya posted "Who should answer this?" and nothing runs until the person picks.
+        if (turnsIn(turnsRef.current, targetId).length === 0) clearLive(targetId);
+        if (streamingContextIdRef.current === targetId) {
+          setRoutingState(null);
+          streamingContextIdRef.current = null;
+        }
       }
       return true;
     } catch (err) {
@@ -1927,6 +1946,35 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         botIds={botIds}
       />
     );
+  };
+
+  const renderRouteChoice = (msg: ChatMessage, meta: RouteChoiceMeta, flash: boolean, question?: string) => (
+    <RouteChoiceCard
+      meta={meta}
+      messageId={msg.id}
+      live={routeChoices[meta.route_choice_id]}
+      question={question}
+      flash={flash}
+      onResolve={async (id, pick) => {
+        haptic('tap');
+        const r = await resolveRouteChoice(id, pick);
+        if (r.kind === 'error') haptic('warning');
+        return r;
+      }}
+    />
+  );
+
+  /** "Wrong bot?": teach routing that this message is the other bot's, then ask that bot now. */
+  const handleSendToOtherBot = async (question: ChatMessage, kwantId: string): Promise<string | void> => {
+    haptic('tap');
+    const err = await correctRoute(question.id, kwantId);
+    if (err) {
+      haptic('warning');
+      return err;
+    }
+    const name = kwants.find((k) => k.id === kwantId)?.name;
+    if (!name) return 'That bot is gone.';
+    if (!(await handleSendMessage(`@${name} ${question.text}`))) return `Routing learned, but ${name} wasn’t asked. Send it again with @${name}.`;
   };
 
   const renderDelegation = (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => {
@@ -2989,6 +3037,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           renderConnectionSuggestion={renderConnectionSuggestion}
           renderBotAction={renderBotAction}
           renderHire={renderHire}
+          renderRouteChoice={renderRouteChoice}
+          rerouteTargets={openThreadId ? [] : rerouteTargetsFor(currentChannel, kwants)}
+          onSendToOtherBot={openThreadId ? undefined : handleSendToOtherBot}
           awaitingAnswer={awaitingHere}
           awaitingBrowser={awaitingBrowserHere}
           liveActivity={isCurrentContextStreaming ? activityHere : null}
