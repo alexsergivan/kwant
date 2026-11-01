@@ -97,9 +97,32 @@ fn specialist(name: &str, title: &str, persona: &str) -> Value {
 }
 
 /// Sends `prompt` to the channel and returns who it was routed to and how, once the turn ended.
+/// Also checks the reply names the message it answers (`meta.routing.message_id`), on every path
+/// these tests route through (keywords, the Concierge, learned).
 async fn routed_to(app: &Router, state: &AppState, channel: &str, prompt: &str) -> (String, Option<String>) {
     let mut events = state.event_sender.subscribe();
-    ok(app, "POST", "/api/chat/send", Some(json!({"channel_id": channel, "prompt": prompt, "sender_id": "user"}))).await;
+    let sent = ok(app, "POST", "/api/chat/send", Some(json!({"channel_id": channel, "prompt": prompt, "sender_id": "user"}))).await;
+    let pick = wait_routed(&mut events).await;
+    let routing = latest_routing(state, channel).await;
+    let asked = sent["user_message_id"].as_str().expect("the message id");
+    assert_eq!(asked, last_user_message(state, channel).await);
+    assert_eq!((routing["message_id"].as_str(), routing["kwant_id"].as_str()), (Some(asked), Some(pick.0.as_str())), "{routing}");
+    pick
+}
+
+/// The `meta.routing` of the newest routed reply in `channel`.
+async fn latest_routing(state: &AppState, channel: &str) -> Value {
+    let msgs = state.db.list_messages(channel, 50).await.unwrap();
+    msgs.iter()
+        .rev()
+        .filter(|m| m.sender_role == "kwant")
+        .filter_map(|m| m.meta.as_deref().and_then(|m| serde_json::from_str::<Value>(m).ok()))
+        .map(|m| m["routing"].clone())
+        .find(|r| !r.is_null())
+        .expect("a routed reply")
+}
+
+async fn wait_routed(events: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>) -> (String, Option<String>) {
     tokio::time::timeout(Duration::from_secs(20), async {
         let mut pick = None;
         loop {
@@ -248,6 +271,7 @@ async fn a_close_call_asks_and_the_choice_answers() {
     assert!(ids.contains(&fe.as_str()) && ids.contains(&web.as_str()), "{v}");
     assert_eq!(v["general"]["name"], "Concierge");
     let choice = v["route_choice_id"].as_str().unwrap().to_string();
+    let asked = v["user_message_id"].as_str().expect("the message id").to_string();
     let card = state.db.list_messages(&general, 50).await.unwrap().into_iter().find(|m| Some(m.id.as_str()) == v["card_message_id"].as_str()).expect("the card");
     let meta: Value = serde_json::from_str(card.meta.as_deref().unwrap_or("null")).unwrap();
     assert_eq!(meta["kind"], "route_choice");
@@ -270,17 +294,25 @@ async fn a_close_call_asks_and_the_choice_answers() {
     assert_eq!((v["status"].as_str(), v["kwant_id"].as_str()), (Some("dispatched"), Some(made[0].as_str())));
     let routing = next_reply_routing(&state, &mut events, &general).await;
     assert_eq!(routing["basis"], "ask", "{routing}");
+    assert_eq!(routing["message_id"], asked.as_str(), "the reply names the message the card was for");
     let (s, _) = call(&app, "POST", &uri, Some(json!({"kwant_id": fe}))).await;
     assert_eq!(s, StatusCode::CONFLICT, "a second tap does nothing");
 
     // A general answer teaches routing nothing, so a similar message asks again; the pick answers
     let v = ok(&app, "POST", "/api/chat/send", Some(json!({"channel_id": general, "prompt": "Is the CSS grid off on the button?", "sender_id": "user"}))).await;
     assert_eq!(v["status"], "asking", "{v}");
+    let asked = v["user_message_id"].as_str().expect("the message id").to_string();
+    let second = v["route_choice_id"].as_str().unwrap().to_string();
+    // A later message in the channel (asking too) doesn't become the one the tap answers
+    let later = ok(&app, "POST", "/api/chat/send", Some(json!({"channel_id": general, "prompt": "Is the button CSS off on desktop Safari too?", "sender_id": "user"}))).await;
+    assert_eq!(later["status"], "asking", "{later}");
+    assert_ne!(later["user_message_id"], asked.as_str());
     let mut events = state.event_sender.subscribe();
-    let v = ok(&app, "POST", &format!("/api/route-choices/{}/resolve", v["route_choice_id"].as_str().unwrap()), Some(json!({"kwant_id": web}))).await;
+    let v = ok(&app, "POST", &format!("/api/route-choices/{second}/resolve"), Some(json!({"kwant_id": web}))).await;
     assert_eq!((v["status"].as_str(), v["kwant_id"].as_str()), (Some("dispatched"), Some(web.as_str())));
     let routing = next_reply_routing(&state, &mut events, &general).await;
     assert_eq!((routing["basis"].as_str(), routing["kwant_id"].as_str()), (Some("ask"), Some(web.as_str())), "{routing}");
+    assert_eq!(routing["message_id"], asked.as_str(), "the tapped card's message, not the newest one");
     assert_eq!(state.db.get_scope(&made[0]).await.unwrap().covers.len(), kwnt::server::concierge::COVERS.len());
 }
 
@@ -295,6 +327,7 @@ async fn a_hand_back_takes_one_hop() {
     let general = state.db.general_channel(&SpaceId::default_space()).await.unwrap().expect("#general").id;
     let (to, _) = routed_to(&app, &state, &general, "Write a TikTok hook about the sitemap launch party").await;
     assert_eq!(to, script);
+    let asked = last_user_message(&state, &general).await;
 
     let token = turn_token(&state, &script, &general).await;
     let (text, err) = hand_back(&app, &token, "").await;
@@ -305,6 +338,7 @@ async fn a_hand_back_takes_one_hop() {
     assert!(text.contains("Atlas"), "{text}");
     let routing = next_reply_routing(&state, &mut events, &general).await;
     assert_eq!((routing["basis"].as_str(), routing["kwant_id"].as_str()), (Some("handback"), Some(atlas.as_str())), "{routing}");
+    assert_eq!(routing["message_id"], asked.as_str());
 
     // One hop: Atlas can't bounce it on
     let token = turn_token(&state, &atlas, &general).await;

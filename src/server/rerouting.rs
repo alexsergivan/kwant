@@ -204,7 +204,7 @@ pub async fn resolve_route(State(state): State<AppState>, headers: HeaderMap, Pa
         learn(&state, &space, &c.user_message_id, &kwant.id, "ask").await;
     }
     let candidates = offered.len() + 1;
-    let mut routing = super::routes::routing_meta(&kwant, &reason, candidates, false, &[], "ask");
+    let mut routing = super::routes::routing_meta(&kwant, &reason, candidates, false, &[], "ask", &c.user_message_id);
     routing["route_choice_id"] = json!(c.id);
     let (st, k, um, ch, prompt) = (state.clone(), kwant.clone(), c.user_message_id.clone(), c.channel_id.clone(), c.prompt.clone());
     tokio::spawn(async move {
@@ -324,7 +324,7 @@ pub(super) async fn hand_back(state: &AppState, from_id: &str, channel_id: &str,
         Err(_) => return Err("Could not hand it back.".into()),
     }
     let why = format!("{} handed this back (\"{reason}\"), so {} ({}) takes it", from.name, to.name, to.title);
-    let mut routing = super::routes::routing_meta(&to, &why, members.len() + 1, false, &[], "handback");
+    let mut routing = super::routes::routing_meta(&to, &why, members.len() + 1, false, &[], "handback", &msg.id);
     routing["fit"] = json!(fit);
     routing["handed_back_by"] = json!(from.id);
     let prompt = format!(
