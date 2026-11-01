@@ -167,6 +167,8 @@ pub struct CreateKwantRequest {
     base: NewKwant,
     #[serde(flatten)]
     binding: ProfileBinding,
+    #[serde(flatten)]
+    browser: BrowserSitesUpdate,
 }
 
 #[derive(Debug, Deserialize)]
@@ -264,6 +266,7 @@ pub async fn create_kwant(
     if let Some(msg) = crate::import::check_persona_caps(&payload.base.persona_prompt, &payload.base.soul) {
         return Err(api_error(StatusCode::BAD_REQUEST, &msg));
     }
+    let (allowed_sites, blocked_sites) = payload.browser.normalized()?;
     validate_kwant_name(&state, &space, &mut payload.base.name, None).await?;
     check_binding(&state, &space, &payload.binding, &payload.base.preferred_model)
         .await
@@ -271,6 +274,12 @@ pub async fn create_kwant(
     let clash = format!("a bot called {} already exists in this space", payload.base.name);
     let kwant = state.db.create_kwant(&space, &payload.base).await.map_err(|e| db_error(&e, &clash))?;
     save_binding(&state, &kwant.id, &payload.binding).await.map_err(IntoResponse::into_response)?;
+    // A new bot's site rules only narrow what it may open, so a bot creating one may set them too
+    state
+        .db
+        .set_browser_sites(&kwant.id, allowed_sites.as_deref(), blocked_sites.as_deref(), payload.browser.browser_block_private_network)
+        .await
+        .map_err(|e| db_error(&e, ""))?;
     ensure_general(&state, &space, &kwant.id).await;
     kwant_view_json(&state, &kwant.id).await.map_err(IntoResponse::into_response)
 }
@@ -4729,18 +4738,10 @@ pub async fn act_sandbox_allowed(
         )),
     };
     // A page the action led to that the bot's site rules refused (a link, redirect or new tab):
-    // the request is paused just after the click, so wait a moment for it, then go back from
-    // Chrome's error page to where the bot was
-    let mut refused = ctrl.site_guard.take_refusal();
-    if ctrl.site_guard.is_running() {
-        for _ in 0..3 {
-            if refused.is_some() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            refused = ctrl.site_guard.take_refusal();
-        }
-    }
+    // the request is paused just after a click, so wait a moment for it (not after a scroll or
+    // plain typing, which can't navigate), then go back from Chrome's error page to where the bot was
+    let may_navigate = crate::sandbox::site_guard::may_navigate(&payload.action, payload.key.as_deref());
+    let mut refused = ctrl.site_guard.refusal_after(may_navigate).await;
     if refused.is_some() {
         ctrl.leave_refused_page().await;
     }
@@ -4758,6 +4759,14 @@ pub async fn act_sandbox_allowed(
         after = ctrl.snapshot().await;
         changed = diff(&after);
     }
+    // A refusal that arrived after the wait (or after an action that skipped it): leave that page too
+    if refused.is_none() {
+        refused = ctrl.site_guard.take_refusal();
+        if refused.is_some() {
+            ctrl.leave_refused_page().await;
+            after = ctrl.snapshot().await;
+        }
+    }
     let stall = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).after(changed.is_some());
     let mut page = page_state_from(&ctrl, after, "").await;
     page["changed"] = json!(changed.as_deref().unwrap_or("Nothing on the page changed."));
@@ -4765,7 +4774,7 @@ pub async fn act_sandbox_allowed(
         Ok(done) => page["result"] = json!(done),
         Err(err) => page["error"] = json!(err),
     }
-    if let Some(refusal) = refused.or_else(|| ctrl.site_guard.take_refusal()) {
+    if let Some(refusal) = refused {
         page["error"] = json!(refusal.message);
         page["site_rule"] = json!(refusal);
     }
