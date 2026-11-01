@@ -893,7 +893,7 @@ const MemberSheet: React.FC<{
         aria-labelledby={titleId}
         className="kw-sheet w-full max-h-[80vh] overflow-y-auto rounded-t-2xl bg-zinc-900 border-t border-zinc-800 p-3 shadow-2xl md:max-w-sm md:rounded-2xl md:border"
       >
-        <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-zinc-700" aria-hidden="true" />
+        <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-zinc-700 md:hidden" aria-hidden="true" />
         <div className="flex items-center gap-3 px-3 pb-3">
           <ModernAvatar role={kwant.avatar_sprite} name={kwant.name} size={32} kwantId={kwant.id} />
           <div className="min-w-0">
