@@ -138,10 +138,12 @@ fn a_weak_overlap_does_not_pick_a_bot() {
         assert_eq!(pick.basis, "lead", "{msg}: {}", pick.reason);
         assert!(pick.reason.starts_with("No one's role matched this"), "{msg}: {}", pick.reason);
     }
-    // with nothing in the words, a clear Laya pick still wins, and an unsure one does not
+    // with nothing in the words, even a clear Laya pick doesn't pick on its own: Laya sees only
+    // titles (it sent "Best place to eat corn dogs in Munich tomorrow?" to a TikTok scriptwriter)
     let msg = "do everything needed to build something new";
     let sure = Some(LayaGuess { kwant: &members[2], confident: true });
-    assert_eq!(pick_member(msg, "fit", &members, sure, "channel lead").unwrap().kwant.id, "be");
+    let pick = pick_member(msg, "fit", &members, sure, "channel lead").unwrap();
+    assert_eq!((pick.kwant.id.as_str(), pick.basis, pick.fit), ("fit", "lead", 0.0));
     assert_eq!(pick_member(msg, "fit", &members, unsure_frontend(&members), "channel lead").unwrap().basis, "lead");
 }
 

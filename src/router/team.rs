@@ -168,6 +168,8 @@ impl LayaRouter {
                 fallback,
                 matched_terms: p.terms,
                 basis: p.basis.into(),
+                fit: p.fit,
+                choices: p.choices.iter().map(|k| k.id.clone()).collect(),
             },
             None => ChannelRoute {
                 kwant_id: lead_kwant_id.to_string(),
@@ -175,6 +177,8 @@ impl LayaRouter {
                 fallback,
                 matched_terms: Vec::new(),
                 basis: "lead".into(),
+                fit: 0.0,
+                choices: Vec::new(),
             },
         };
         // Every pick Laya didn't make is logged with why, so the fallback rate can be read from the log
@@ -346,7 +350,19 @@ pub struct Pick<'a> {
     pub basis: &'static str,
     pub reason: String,
     pub terms: Vec<String>,
+    /// How well the message fits this pick, 0 to 1: word evidence (role signals, words in the
+    /// bot's name, title or persona), with Laya's agreement only as a nudge. A pick with no word
+    /// evidence is 0, whatever Laya guessed. See [`ROUTE_AT`] and [`ASK_FROM`].
+    pub fit: f32,
+    /// The best candidates when the pick is close: the picked bot first, then the runner-up.
+    pub choices: Vec<&'a Kwant>,
 }
+
+/// A channel message goes straight to the picked bot only at or above this fit.
+pub const ROUTE_AT: f32 = 0.6;
+/// From this fit up to [`ROUTE_AT`] the person is asked to choose between the best two bots (or a
+/// general answer). Below it nothing in the message points at anyone.
+pub const ASK_FROM: f32 = 0.4;
 
 /// Roles and the words in a request that belong to them. A bot has a role when its title
 /// (or, without a title, the first line of its persona) names it; Laya only compares titles, so it
@@ -515,7 +531,19 @@ fn role_score(words: &[String], kwant: &Kwant) -> (usize, Vec<String>) {
             }
         }
     }
+    // A role word in the bot's own name or title counts for it too: "tiktok" is on marketing's
+    // list, but the "TikTok Scriptwriter" has it in its title
+    for w in words {
+        if !terms.contains(w) && in_own_title(kwant, w) && ROLES.iter().any(|r| r.signals.iter().any(|(s, _)| s == w)) {
+            score += 2;
+            terms.push(w.clone());
+        }
+    }
     (score, terms)
+}
+
+fn in_own_title(kwant: &Kwant, w: &str) -> bool {
+    tokens(&format!("{} {}", kwant.name, kwant.title)).iter().any(|t| t == w)
 }
 
 fn lead_of<'a>(lead_kwant_id: &str, members: &'a [Kwant]) -> &'a Kwant {
@@ -563,7 +591,7 @@ pub fn pick_member_after<'a>(
         _ => None,
     };
     if let Some(k) = only {
-        return Some(Pick { kwant: k, basis: "only", reason: format!("{} is the only bot here that can answer", k.name), terms: vec![] });
+        return Some(Pick { kwant: k, basis: "only", reason: format!("{} is the only bot here that can answer", k.name), terms: vec![], fit: 1.0, choices: vec![] });
     }
     let words = tokens(prompt);
     let lead = lead_of(lead_kwant_id, members);
@@ -574,9 +602,10 @@ pub fn pick_member_after<'a>(
             lead.name,
             lead.title
         );
-        Pick { kwant: lead, basis: "several", reason, terms }
+        Pick { kwant: lead, basis: "several", reason, terms, fit: 0.7, choices: vec![] }
     };
-    let chosen = |k: &'a Kwant, terms: Vec<String>, how: &str| {
+    let laya_nudge = |k: &Kwant, base: f32| if base > 0.0 && laya.is_some_and(|g| g.kwant.id == k.id) { 0.1 } else { 0.0 };
+    let chosen = |k: &'a Kwant, terms: Vec<String>, how: &str, base: f32| {
         let agree = laya.is_some_and(|g| g.kwant.id == k.id);
         let mut reason = format!("{} ({}) {how}", k.name, k.title);
         if agree {
@@ -584,7 +613,8 @@ pub fn pick_member_after<'a>(
         } else if let Some(g) = laya {
             reason.push_str(&format!("; Laya guessed {} from titles alone, but nothing in the message points to that role", g.kwant.name));
         }
-        Pick { kwant: k, basis: if agree { "skills" } else { "keywords" }, reason, terms }
+        let fit = (base + laya_nudge(k, base)).min(1.0);
+        Pick { kwant: k, basis: if agree { "skills" } else { "keywords" }, reason, terms, fit, choices: vec![] }
     };
 
     // 1. @Named in the message: one @Name wins over plain names ("@Frontend why didn't you answer
@@ -594,7 +624,7 @@ pub fn pick_member_after<'a>(
         crate::router::handoff_mentions(prompt, &member_names).targets.into_iter().map(|i| &members[i]).collect();
     match at_named.as_slice() {
         [] => {}
-        [k] => return Some(chosen(k, vec![k.name.trim().to_lowercase()], "was @mentioned in your message")),
+        [k] => return Some(chosen(k, vec![k.name.trim().to_lowercase()], "was @mentioned in your message", 1.0)),
         several => {
             let terms = several.iter().map(|k| k.name.trim().to_lowercase()).collect();
             let reason = format!(
@@ -603,13 +633,13 @@ pub fn pick_member_after<'a>(
                 lead.name,
                 lead.title
             );
-            return Some(Pick { kwant: lead, basis: "several", reason, terms });
+            return Some(Pick { kwant: lead, basis: "several", reason, terms, fit: 1.0, choices: vec![] });
         }
     }
     //    Named without @ ("Bea, can you…")
     let named: Vec<&Kwant> = members.iter().filter(|m| words.iter().any(|w| *w == m.name.trim().to_lowercase())).collect();
     if let [k] = named.as_slice() {
-        return Some(chosen(k, vec![k.name.trim().to_lowercase()], "was named in your message"));
+        return Some(chosen(k, vec![k.name.trim().to_lowercase()], "was named in your message", 1.0));
     }
 
     // 2. A request to put a team of bots together is no one specialist's work: the lead proposes
@@ -619,7 +649,7 @@ pub fn pick_member_after<'a>(
             "This asks to put a team of bots together, so it went to the {lead_word}, {} ({}), to propose them on one hire card for you to approve",
             lead.name, lead.title
         );
-        return Some(Pick { kwant: lead, basis: "team", reason, terms: vec![] });
+        return Some(Pick { kwant: lead, basis: "team", reason, terms: vec![], fit: 1.0, choices: vec![] });
     }
 
     // 3. The request's words belong to a role
@@ -632,6 +662,16 @@ pub fn pick_member_after<'a>(
         terms.dedup();
         terms.len()
     };
+    // A word that reaches one bot through its own title and others only through their role's list
+    // is that bot's
+    let owners: Vec<&&(&Kwant, usize, Vec<String>)> = strong.iter().filter(|(m, _, t)| t.iter().any(|w| in_own_title(m, w))).collect();
+    if let [owner] = owners.as_slice() {
+        let (k, s, terms) = **owner;
+        if strong.iter().all(|(_, _, t)| t.iter().all(|w| terms.contains(w))) {
+            let how = format!("does this kind of work: your message mentions {}", terms.join(", "));
+            return Some(chosen(k, terms.clone(), &how, (0.5 + 0.1 * *s as f32).min(1.0)));
+        }
+    }
     if !strong.is_empty() {
         let top = strong.iter().map(|(_, s, _)| *s).max().unwrap_or(0);
         let best: Vec<&&(&Kwant, usize, Vec<String>)> = strong.iter().filter(|(_, s, _)| *s == top).collect();
@@ -639,6 +679,7 @@ pub fn pick_member_after<'a>(
         // is a tie the lead settles.
         if distinct_roles(&strong) > 1 || best.len() > 1 {
             let matched: Vec<&Kwant> = strong.iter().map(|(m, _, _)| *m).collect();
+            let same_role_tie = distinct_roles(&strong) == 1;
             let mut terms: Vec<String> = Vec::new();
             for (_, _, t) in &strong {
                 for w in t {
@@ -647,11 +688,17 @@ pub fn pick_member_after<'a>(
                     }
                 }
             }
-            return Some(to_lead(matched, terms));
+            let mut p = to_lead(matched.clone(), terms);
+            if same_role_tie {
+                // Two bots with the same role: a close call between them, not multi-role work
+                p.fit = 0.5;
+                p.choices = matched.into_iter().take(2).collect();
+            }
+            return Some(p);
         }
-        let (k, _, terms) = best[0];
+        let (k, s, terms) = best[0];
         let how = format!("does this kind of work: your message mentions {}", terms.join(", "));
-        return Some(chosen(k, terms.clone(), &how));
+        return Some(chosen(k, terms.clone(), &how, (0.5 + 0.1 * *s as f32).min(1.0)));
     }
 
     // 4. Shared words with a bot's name, title or persona (plus weak role hints). A word several
@@ -691,27 +738,40 @@ pub fn pick_member_after<'a>(
                 "Laya matched this to {}'s role ({}); the only words in your message that pointed elsewhere were in {}'s description",
                 g.kwant.name, g.kwant.title, scored[*i].0.name
             );
-            return Some(Pick { kwant: g.kwant, basis: "skills", reason, terms: vec![] });
+            // Laya's titles-only guess against words only in a description: neither is evidence
+            // enough on its own, so it's a close call between the two
+            return Some(Pick { kwant: g.kwant, basis: "skills", reason, terms: vec![], fit: 0.5, choices: vec![g.kwant, scored[*i].0] });
         }
     }
     if let [i] = best.as_slice() {
-        let (k, _, terms, _) = &scored[*i];
+        let (k, s, terms, named) = &scored[*i];
         let how = format!("shares words with your message: {}", terms.join(", "));
-        return Some(chosen(k, terms.clone(), &how));
+        // One word only in a description is a hint (0.5); a word in the name or title, or two
+        // description words, is enough to route
+        let base = (0.4 + 0.1 * *s as f32 + if *named { 0.1 } else { 0.0 }).min(0.95);
+        let mut p = chosen(k, terms.clone(), &how, base);
+        let runner_up = (0..scored.len())
+            .filter(|&j| j != *i && scored[j].1 > 0)
+            .max_by_key(|&j| scored[j].1)
+            .map(|j| scored[j].0);
+        p.choices = std::iter::once(*k).chain(runner_up).collect();
+        return Some(p);
     }
+    let tied: Vec<&'a Kwant> = best.iter().map(|&i| scored[i].0).take(2).collect();
 
-    // 5. Nothing in the message matched: Laya's pick only when it was clear and there was something
-    //    to match, else the bot that spoke last, else the lead
-    if let Some(g) = laya.filter(|g| g.confident && !is_small_talk(prompt)) {
-        let reason = format!("Laya matched this to {}'s role ({}); no words in your message named a role", g.kwant.name, g.kwant.title);
-        return Some(Pick { kwant: g.kwant, basis: "skills", reason, terms: vec![] });
-    }
+    // 5. Nothing in the message matched (or two bots tied on words): the bot that spoke last, else
+    //    the lead, with no fit. Laya alone never picks: it sees only titles, and its confident guess
+    //    sent "Best place to eat corn dogs in Munich tomorrow?" to a TikTok scriptwriter. A tie is a
+    //    close call between the tied bots.
+    let (fit, choices) = if tied.len() > 1 { (0.45, tied) } else { (0.0, vec![]) };
     if let Some(k) = last_speaker.and_then(|id| members.iter().find(|m| m.id == id)) {
+        // "thanks", "make it shorter", "and for Berlin?" carry on with whoever is talking
+        let fit = if choices.is_empty() && (is_small_talk(prompt) || reads_as_follow_up(prompt)) { ROUTE_AT } else { fit };
         let reason = format!("Nothing in your message named a role, so {} ({}), who spoke last here, carries on", k.name, k.title);
-        return Some(Pick { kwant: k, basis: "last", reason, terms: vec![] });
+        return Some(Pick { kwant: k, basis: "last", reason, terms: vec![], fit, choices });
     }
     let reason = format!("No one's role matched this, so it went to the {lead_word}, {} ({})", lead.name, lead.title);
-    Some(Pick { kwant: lead, basis: "lead", reason, terms: vec![] })
+    Some(Pick { kwant: lead, basis: "lead", reason, terms: vec![], fit, choices })
 }
 
 /// Everyday words that say nothing about whose work a request is. They never count as shared
@@ -740,6 +800,41 @@ pub fn is_small_talk(prompt: &str) -> bool {
     !words.is_empty()
         && words.len() <= 6
         && words.iter().all(|w| SMALL_TALK.contains(&w.as_str()) || STOP_WORDS.contains(&w.as_str()))
+}
+
+/// A short reply or one that leans on what was just said ("make it shorter", "and Berlin?", "what
+/// about tomorrow"): it belongs to the bot that spoke last, even with nothing in it to match.
+pub fn reads_as_follow_up(prompt: &str) -> bool {
+    const STARTS: &[&str] = &[
+        "and", "also", "then", "now", "so", "but", "ok", "okay", "it", "that", "this", "those", "these", "again",
+        "another", "more", "same", "make", "shorter", "longer", "what about", "how about", "why", "can you make",
+    ];
+    let lower = prompt.trim().to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric() && c != '\'').filter(|w| !w.is_empty()).collect();
+    if words.is_empty() {
+        return false;
+    }
+    let joined = words.join(" ");
+    words.len() <= 3 || STARTS.iter().any(|s| joined == *s || joined.starts_with(&format!("{s} ")))
+}
+
+/// What the channel does with a pick, given its fit and the room it was made in.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Settle {
+    /// Send it to the picked bot.
+    Route,
+    /// Nothing in the message points at anyone here: the Concierge answers.
+    Concierge,
+}
+
+/// #general (every bot in the space) leans to the Concierge: a low score or a close call goes to it
+/// rather than to whichever specialist happened to lead or speak last. Any other channel leans to
+/// its own members, so a low score stays with the last speaker or lead as before.
+pub fn settle(route: &ChannelRoute, general: bool, has_concierge: bool) -> Settle {
+    if route.fit >= ROUTE_AT || !general || !has_concierge {
+        return Settle::Route;
+    }
+    Settle::Concierge
 }
 
 /// Said to the lead with a team-building request, so it proposes the bots instead of treating the
@@ -1011,6 +1106,10 @@ pub struct ChannelRoute {
     pub matched_terms: Vec<String>,
     /// How the pick was made: see [`Pick::basis`].
     pub basis: String,
+    /// See [`Pick::fit`].
+    pub fit: f32,
+    /// See [`Pick::choices`]: bot ids, best first.
+    pub choices: Vec<String>,
 }
 
 fn calculate_kwant_relevance(prompt: &str, kwant: &Kwant) -> usize {
@@ -1274,9 +1373,13 @@ mod tests {
         // A last speaker who isn't a member here doesn't count
         let p = pick_member_after("hello there", "kwant-1", &members, None, "lead", Some("stranger")).unwrap();
         assert_eq!(p.kwant.id, "kwant-1", "{p:?}");
-        // Real work still goes to Laya's clear pick
+        // Laya's clear pick alone no longer routes real work: nothing in the message named a role,
+        // so it has no fit (the channel hands it to the Concierge in #general)
         let p = pick_member_after("Can you look into why the build broke?", "kwant-1", &members, guess, "lead", Some("kwant-3")).unwrap();
-        assert_eq!(p.kwant.id, "kwant-2", "{p:?}");
+        assert_eq!((p.kwant.id.as_str(), p.basis, p.fit), ("kwant-3", "last", 0.0), "{p:?}");
+        // A follow-up stays with the last speaker
+        let p = pick_member_after("make it shorter", "kwant-1", &members, guess, "lead", Some("kwant-3")).unwrap();
+        assert_eq!((p.kwant.id.as_str(), p.fit), ("kwant-3", ROUTE_AT), "{p:?}");
         assert!(is_small_talk("Hi") && is_small_talk("thanks, ok!") && !is_small_talk("hi, deploy the app"));
         assert!(!is_small_talk(""));
     }
@@ -1316,12 +1419,112 @@ mod tests {
     #[test]
     fn a_low_confidence_guess_is_named_as_the_fallback_reason() {
         let (_, members) = make_test_fixture();
-        let route = |id: &str| ChannelRoute { kwant_id: id.into(), reason: String::new(), fallback: false, matched_terms: vec![], basis: "lead".into() };
+        let route = |id: &str| ChannelRoute { kwant_id: id.into(), reason: String::new(), fallback: false, matched_terms: vec![], basis: "lead".into(), fit: 0.0, choices: vec![] };
         let unsure = Some(LayaGuess { kwant: &members[1], confident: false });
         assert_eq!(fallback_reason(unsure, &route("kwant-1")), Some("low confidence"));
         assert_eq!(fallback_reason(unsure, &route("kwant-2")), None);
         let sure = Some(LayaGuess { kwant: &members[1], confident: true });
         assert_eq!(fallback_reason(sure, &route("kwant-2")), None);
         assert_eq!(fallback_reason(None, &route("kwant-1")), None);
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    fn bot(id: &str, name: &str, title: &str, persona: &str) -> Kwant {
+        Kwant {
+            id: id.into(),
+            name: name.into(),
+            title: title.into(),
+            persona_prompt: persona.into(),
+            soul: String::new(),
+            avatar_sprite: String::new(),
+            driver_type: "claude".into(),
+            preferred_model: String::new(),
+            temperature: 0.7,
+            max_tokens: 4096,
+            level: 1,
+            turns_completed: 0,
+            created_at: None,
+            space_id: crate::db::spaces::DEFAULT_SPACE_ID.into(),
+        }
+    }
+
+    fn general() -> Vec<Kwant> {
+        vec![
+            bot("k-lead", "Luna", "Booktun.ing Chief", "You coordinate the booktun.ing marketing team."),
+            bot("k-script", "Scriptwriter", "TikTok Scriptwriter & Hook Specialist", "You write short TikTok video scripts and scroll-stopping hooks for book content."),
+            bot("k-seo", "Atlas", "Technical SEO", "You audit sites for crawl errors, sitemaps and page speed."),
+        ]
+    }
+
+    fn route_of(p: &Pick<'_>) -> ChannelRoute {
+        ChannelRoute {
+            kwant_id: p.kwant.id.clone(),
+            reason: p.reason.clone(),
+            fallback: false,
+            matched_terms: p.terms.clone(),
+            basis: p.basis.into(),
+            fit: p.fit,
+            choices: p.choices.iter().map(|k| k.id.clone()).collect(),
+        }
+    }
+
+    /// Oleks 2026-11-01: in #general "Best place to eat corn dogs in Munich tomorrow?" went to the
+    /// TikTok scriptwriter on Laya's confident titles-only guess. No word in it fits anyone, so it
+    /// has no fit and #general hands it to the Concierge.
+    #[test]
+    fn corn_dogs_in_munich_go_to_the_concierge() {
+        let members = general();
+        let laya = Some(LayaGuess { kwant: &members[1], confident: true });
+        let prompt = "Best place to eat corn dogs in Munich tomorrow?";
+        for last in [None, Some("k-script"), Some("k-seo")] {
+            let p = pick_member_after(prompt, "k-lead", &members, laya, "channel lead", last).unwrap();
+            assert_eq!(p.fit, 0.0, "{p:?}");
+            assert_ne!(p.basis, "skills", "{p:?}");
+            assert_eq!(settle(&route_of(&p), true, true), Settle::Concierge);
+            // Without a Concierge (the person removed it), or outside #general, today's behaviour
+            assert_eq!(settle(&route_of(&p), true, false), Settle::Route);
+            assert_eq!(settle(&route_of(&p), false, true), Settle::Route);
+        }
+    }
+
+    #[test]
+    fn a_clear_specialist_request_still_routes_straight_to_it() {
+        let members = general();
+        for laya in [None, Some(LayaGuess { kwant: &members[1], confident: true })] {
+            let p = pick_member_after("Write a TikTok hook for this fantasy book", "k-lead", &members, laya, "channel lead", Some("k-seo")).unwrap();
+            assert_eq!(p.kwant.id, "k-script", "{p:?}");
+            assert!(p.fit >= ROUTE_AT, "{p:?}");
+            assert_eq!(settle(&route_of(&p), true, true), Settle::Route);
+        }
+        let p = pick_member_after("Why is the sitemap missing pages?", "k-lead", &members, None, "channel lead", None).unwrap();
+        assert_eq!(p.kwant.id, "k-seo", "{p:?}");
+        assert!(p.fit >= ROUTE_AT, "{p:?}");
+    }
+
+    #[test]
+    fn laya_only_nudges_a_pick_with_word_evidence() {
+        let members = general();
+        // One description-only word is a hint below the bar; Laya agreeing tips it over
+        let prompt = "any thoughts on scroll-stopping openers?";
+        let alone = pick_member_after(prompt, "k-lead", &members, None, "channel lead", None).unwrap();
+        let agreed = pick_member_after(prompt, "k-lead", &members, Some(LayaGuess { kwant: &members[1], confident: true }), "channel lead", None).unwrap();
+        assert_eq!(alone.kwant.id, "k-script", "{alone:?}");
+        assert!(alone.fit < ROUTE_AT && alone.fit >= ASK_FROM, "{alone:?}");
+        assert!(agreed.fit > alone.fit, "{agreed:?}");
+    }
+
+    #[test]
+    fn follow_ups_and_greetings_stay_with_the_last_speaker() {
+        let members = general();
+        for prompt in ["thanks!", "make it shorter", "and for Berlin?", "what about the second one"] {
+            let p = pick_member_after(prompt, "k-lead", &members, None, "channel lead", Some("k-script")).unwrap();
+            assert_eq!((p.kwant.id.as_str(), p.basis), ("k-script", "last"), "{prompt}: {p:?}");
+            assert_eq!(settle(&route_of(&p), true, true), Settle::Route, "{prompt}");
+        }
+        assert!(!reads_as_follow_up("Best place to eat corn dogs in Munich tomorrow?"));
     }
 }
