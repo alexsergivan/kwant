@@ -332,7 +332,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const active = !isChannel && selectedId === k.id;
     const status = statusOf(k.id, botStatus, canRun);
     const isLead = !!team && k.id === team.lead_kwant_id;
-    const memberIds = team ? memberIdsOf(team) : [];
+    const canRemove = !!team && !isLead && !!onUpdateTeamMembers;
+    const hasRowActions = !!onEditKwant || canRemove;
     return (
       <div
         key={`${team?.id ?? 'none'}:${k.id}`}
@@ -349,7 +350,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <ModernAvatar role={k.avatar_sprite} name={k.name} size={28} status={status} kwantId={k.id} />
         </span>
         <div className="flex-1 min-w-0">
-          <div className="flex items-start gap-1">
+          {/* Desktop: on hover or focus the name makes room for Edit and Remove instead of sitting under them */}
+          <div data-bot-name-line className={`flex items-start gap-1 ${!phone && hasRowActions ? 'group-hover/fleet:pr-9 group-focus-within/fleet:pr-9' : ''}`}>
             {/* The full name, on up to two lines (QA a); what it runs on is in the tooltip */}
             <span data-bot-name className="min-w-0 text-xs font-semibold leading-4 text-zinc-200 line-clamp-2 [overflow-wrap:anywhere]" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
               {k.name}
@@ -372,7 +374,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {approvalsOff(k) && <ApprovalsOffBadge compact title={`${k.name} acts without asking. Payments still ask you.`} />}
             {/* Over the row's right edge, so a long name gets the full width until you hover */}
             {!phone && (
-              <span className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-zinc-800/95 opacity-0 group-hover/fleet:opacity-100 focus-within:opacity-100 empty:hidden">
+              <span className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-zinc-800/95 opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 empty:hidden">
                 {onEditKwant && (
                   <button
                     type="button"
@@ -380,23 +382,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       e.stopPropagation();
                       onEditKwant(k);
                     }}
-                    className="opacity-0 group-hover/fleet:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
+                    className="opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
                     title={`Edit or delete ${k.name}`}
                     aria-label={`Edit or delete ${k.name}`}
                   >
                     <Pencil size={11} />
                   </button>
                 )}
-                {team && !isLead && onUpdateTeamMembers && (
+                {canRemove && (
                   <button
                     type="button"
+                    data-remove-member={k.id}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onUpdateTeamMembers(team, memberIds.filter((id) => id !== k.id));
+                      // Asks first, like the phone sheet: a stray click can't take a bot out of its team.
+                      setMemberMenu({ team: team!, kwant: k, confirmRemove: true });
                     }}
-                    className="opacity-0 group-hover/fleet:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-rose-300 hover:bg-rose-500/10 transition-all"
-                    title={`Remove ${k.name} from @${team.name}`}
-                    aria-label={`Remove ${k.name} from @${team.name}`}
+                    className="opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-rose-300 hover:bg-rose-500/10 transition-all"
+                    title={`Remove ${k.name} from @${team!.name}`}
+                    aria-label={`Remove ${k.name} from @${team!.name}`}
                   >
                     <X size={11} />
                   </button>
@@ -855,8 +859,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
 };
 
-/** Phones: a team member's actions as a bottom sheet. Removing asks once more, away from the
- * other buttons, so a stray tap can't take a bot out of its team. */
+/** A team member's actions as a bottom sheet on phones. Removing asks once more, away from the
+ * other buttons, so a stray tap can't take a bot out of its team; desktop's Remove opens straight
+ * on that question, as a small centred dialog. */
 const MemberSheet: React.FC<{
   team: Team;
   kwant: Kwant;
@@ -880,13 +885,13 @@ const MemberSheet: React.FC<{
   const item = 'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400';
   const titleId = `member-sheet-${kwant.id}`;
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-end" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-end md:items-center md:justify-center md:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={ref}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="kw-sheet w-full max-h-[80vh] overflow-y-auto rounded-t-2xl bg-zinc-900 border-t border-zinc-800 p-3 shadow-2xl"
+        className="kw-sheet w-full max-h-[80vh] overflow-y-auto rounded-t-2xl bg-zinc-900 border-t border-zinc-800 p-3 shadow-2xl md:max-w-sm md:rounded-2xl md:border"
       >
         <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-zinc-700" aria-hidden="true" />
         <div className="flex items-center gap-3 px-3 pb-3">

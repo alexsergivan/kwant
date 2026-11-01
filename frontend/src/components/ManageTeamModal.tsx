@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Users, Trash2, Check, AlertTriangle, ShieldCheck, Folder, GitBranch, FolderSearch } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { Team, Kwant } from './Sidebar';
+import { Team, Kwant, memberIdsOf } from './Sidebar';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { playSfx } from '../audio/chiptune';
 import { InstructionsField } from './Instructions';
@@ -127,6 +127,12 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   }, [team, kwants, isOpen]);
 
   if (!isOpen || !team) return null;
+
+  const savedMembers = memberIdsOf(team);
+  const removedNames = savedMembers
+    .filter((id) => !memberIds.includes(id))
+    .map((id) => kwants.find((k) => k.id === id)?.name)
+    .filter((n): n is string => !!n);
 
   const handleToggleMember = (kwantId: string) => {
     playSfx('click');
@@ -490,6 +496,13 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
               })}
             </div>
           </div>
+
+          {/* Unticked members only leave on Save; say who, so Save is the confirm */}
+          {removedNames.length > 0 && (
+            <p data-team-removals className="text-[11px] text-amber-200/90">
+              Saving removes {removedNames.join(', ')} from @{team.name}. {removedNames.length === 1 ? 'The bot stays' : 'They stay'} in this space and {removedNames.length === 1 ? 'keeps its' : 'keep their'} chats.
+            </p>
+          )}
 
           {/* Action Buttons & Danger Zone */}
           <div className="pt-2 border-t border-zinc-800 flex items-center justify-between gap-3">

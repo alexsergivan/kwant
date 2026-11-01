@@ -3042,7 +3042,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
 
   return (
-    <div className="flex-1 min-w-0 h-full flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden" data-space={space.id}>
+    <div className="relative flex-1 min-w-0 h-full flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden" data-space={space.id}>
       {/* The open space's colour, so it's clear where a message goes */}
       <div className="h-[3px] shrink-0 opacity-60" style={{ background: spaceColor(space) }} aria-hidden="true" />
 
@@ -3229,6 +3229,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             </Suspense>
           }
           routineFocus={routineFocus}
+          isPhone={isPhone}
           onApprovalsChanged={refreshRoster}
           onImported={() => {
             // New bots, teams and their team chats.

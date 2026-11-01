@@ -85,6 +85,8 @@ interface Props {
   onOpenTools: () => void;
   /** Set by a routine card's Edit or Pause: opens that routine in Routines. */
   routineFocus?: RoutineFocus | null;
+  /** Phones get a full-screen dialog; desktop keeps the space rail beside Settings. */
+  isPhone?: boolean;
   /** After an import or its undo: load bots, teams and chats again. */
   onImported?: () => void;
   /** After the approvals switch changes: load bots and spaces again (no event fires). */
@@ -123,12 +125,14 @@ export const SpaceSettings: React.FC<Props> = (p) => {
   }, []);
 
   return (
+    // A full-screen dialog on phones. On desktop it fills the space's area beside the space rail,
+    // which stays clickable: picking another space keeps Settings open there.
     <div
-      role="dialog"
-      aria-modal="true"
+      role={p.isPhone ? 'dialog' : 'region'}
+      aria-modal={p.isPhone ? true : undefined}
       aria-labelledby="space-settings-title"
       data-space-settings
-      className="fixed inset-0 z-40 bg-zinc-950 text-zinc-100 flex flex-col md:flex-row overflow-hidden"
+      className={`${p.isPhone ? 'fixed' : 'absolute'} inset-0 z-40 bg-zinc-950 text-zinc-100 flex flex-col md:flex-row overflow-hidden`}
     >
       {/* Tab list: a column on desktop, scrolling chips on phones */}
       <div className="md:w-60 shrink-0 border-b md:border-b-0 md:border-r border-zinc-800/80 bg-zinc-900/40 flex flex-col">
