@@ -61,7 +61,7 @@
 <p class="intro">Bots remember things: a server's size, where the release checklist lives, which branch deploys. When two of those notes disagree, a bot can't know which one is right. With the Truth Ledger on, kwant notices the conflict, labels both sides, and asks you to decide.</p>
 
 <h2 id="on">Turn it on</h2>
-<p>The Truth Ledger is new in 0.6 and off by default. With it off, bots see exactly what they saw in 0.5, byte for byte. There's no switch in Settings yet: turn it on from the computer kwant runs on, with the address and port you use for kwant:</p>
+<p>The Truth Ledger is new in 0.6 and off by default. With it off, bots see exactly what 0.5.1 showed them, byte for byte. There's no switch in Settings yet: turn it on from the computer kwant runs on, with the address and port you use for kwant:</p>
 <pre><code>curl -X POST http://127.0.0.1:8799/api/settings \
   -H 'content-type: application/json' \
   -d '{"truth_ledger": "on"}'</code></pre>
