@@ -382,10 +382,12 @@ fn test_laya_team_discussion_uses_runner_up_as_second_speaker() {
         kwnt::router::parse_laya_team_answers("hi there", &lukewarm, &team, &members),
         Some(TeamDecision::Direct { kwant_id, .. }) if kwant_id == "a"
     ));
+    // Laya's pick alone (no word in the message reaches DevOps's title or role) no longer decides:
+    // the lead takes it
     let direct = json!({"answers": {"team_decision": {"choice": "direct"}, "lead_kwant": {"choice": "DevOps"}}});
     assert!(matches!(
         kwnt::router::parse_laya_team_answers("Who owns the deploy?", &direct, &team, &members),
-        Some(TeamDecision::Direct { kwant_id, .. }) if kwant_id == "c"
+        Some(TeamDecision::Direct { kwant_id, .. }) if kwant_id == "a"
     ));
 }
 
@@ -514,11 +516,12 @@ fn a_weak_laya_pick_no_longer_overrides_the_role() {
     let (id, _, basis, _) = direct(kwnt::router::parse_laya_team_answers("Create a new test simple strategy", &agree, &team, &members).unwrap());
     assert_eq!((id.as_str(), basis.as_str()), ("be", "skills"));
 
-    // No words match: a clear Laya pick stands, a near-tie goes to the lead
+    // No words match: Laya's pick never decides on its own, clear or not (Laya sees only titles;
+    // its confident guess sent corn dogs in Munich to a TikTok scriptwriter), so the lead takes it
     let clear = json!({"answers": {"team_decision": {"choice": "direct"},
         "lead_kwant": {"choice": "Ops", "probabilities": {"Ops": 0.7, "Lin": 0.1, "Ada": 0.1, "Pixel": 0.05, "Rigel": 0.05}}}});
     let (id, reason, basis, _) = direct(kwnt::router::parse_laya_team_answers("Is the box healthy?", &clear, &team, &members).unwrap());
-    assert_eq!((id.as_str(), basis.as_str()), ("sre", "skills"), "{reason}");
+    assert_eq!((id.as_str(), basis.as_str()), ("lead", "lead"), "{reason}");
     let close = json!({"answers": {"team_decision": {"choice": "direct"},
         "lead_kwant": {"choice": "Pixel", "probabilities": {"Pixel": 0.3, "Lin": 0.25, "Ada": 0.25, "Ops": 0.1, "Rigel": 0.1}}}});
     let (id, _, basis, _) = direct(kwnt::router::parse_laya_team_answers("Is the box healthy?", &close, &team, &members).unwrap());

@@ -17,6 +17,7 @@ to the turn's bot and its space. Code: `src/server/bot_actions.rs`, `src/db/bot_
 | `follow_up_create` | `at` (RFC 3339 with offset), `check`, `name?` | A one-off check-in by the calling bot in this chat or thread. Applied as `routine_create`, so undo deletes it |
 | `bot_list` | – | Bots, models, accounts, installed tool servers |
 | `bot_create` | `name`, `title`, `instructions`, `soul?`, `model?`, `profile_id?`, `avatar?` | Applied, undo deletes it if it has no history yet |
+| `concierge_create` | (made by the app, not a tool) | Applied when #general gets its first message no specialist fits; the card is from the Concierge. Undo deletes it with its history, and it is never made again unasked. Not counted against `AUTO_HIRES_PER_DAY` |
 | `bot_update` | `bot`, `name?`, `title?`, `instructions?`, `soul?`, `model?`, `profile_id?`, `avatar?`, `mcp_servers?` | Applied, undo restores fields, account and tool servers |
 | `bot_delete` | `bot`, `reason?` | **Pending** until the person confirms; only bots with no history |
 | `settings_get` | – | `timezone`, `location`, `max_turns_per_agent`, `max_turns_global`, `delegation_follow_up_minutes`, `notify_on` |

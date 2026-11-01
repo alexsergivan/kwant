@@ -1110,6 +1110,38 @@ pub(super) async fn create_bot(state: &AppState, space: &SpaceId, spec: &Value) 
     }
 }
 
+/// Records an applied change the app made on its own (not in a bot's turn) with its card in the
+/// action's channel, sent as `sender`.
+pub(super) async fn record_with_card(state: &AppState, new: &NewBotAction, sender: &str) -> Result<BotAction, String> {
+    let (a, card) = state
+        .db
+        .record_bot_action(new, |a| {
+            Some((
+                NewMessage {
+                    channel_id: a.channel_id.clone(),
+                    direct_kwant_id: a.direct_kwant_id.clone(),
+                    sender_role: "kwant".into(),
+                    sender_id: sender.to_string(),
+                    text: card_text(a),
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tokens_used: 0,
+                },
+                MessageExtra { thread_id: None, meta: Some(card_meta(a)) },
+            ))
+        })
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, action = %new.action, "could not record a bot action");
+            "the change could not be logged".to_string()
+        })?;
+    if let Some(card) = card {
+        let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&card).unwrap_or(Value::Null) });
+    }
+    let _ = state.event_sender.send(RuntimeEvent::BotActionUpdated { action: action_json(&a) });
+    Ok(a)
+}
+
 /// Records an applied change that already shows on another card (a hire), without a card of its
 /// own; Undo goes through `POST /api/bot-actions/:id/undo` as usual.
 pub(super) async fn record_quiet(state: &AppState, new: &NewBotAction) -> Result<BotAction, String> {
@@ -1837,6 +1869,9 @@ async fn undo_action(state: &AppState, a: &BotAction) -> Result<Option<String>, 
             return Ok(id);
         }
         "bot_create" => delete_unused_bot(state, &target).await?,
+        // The Concierge may have answered by now, so it goes the way the person deletes a bot; the
+        // `concierge:<space>` setting stays, so it isn't made again unasked
+        "concierge_create" => ok_or_conflict(super::routes::remove_bot(state, &target).await, "the Concierge can't be removed").await.map(|_| ())?,
         "bot_hire" => {
             let after = a.after_json();
             let ids: Vec<String> = serde_json::from_value(after["hired_kwant_ids"].clone()).unwrap_or_default();
