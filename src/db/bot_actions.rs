@@ -353,6 +353,7 @@ impl Database {
             "DELETE FROM api_contexts WHERE kwant_id = ?1",
             "DELETE FROM model_usage WHERE kwant_id = ?1",
             "DELETE FROM kwant_scope WHERE kwant_id = ?1",
+            "DELETE FROM route_examples WHERE kwant_id = ?1",
         ] {
             sqlx::query(sql).bind(id).execute(&mut *tx).await?;
         }
