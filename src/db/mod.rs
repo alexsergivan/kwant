@@ -35,6 +35,7 @@ pub mod auditor;
 pub mod foundry;
 pub mod automation;
 pub mod truth_ledger;
+pub mod routing;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -174,6 +175,7 @@ impl Database {
         db.migrate_mission_graph().await?;
         db.migrate_checkpoints().await?;
         db.migrate_autofix().await?;
+        db.migrate_routing().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;
