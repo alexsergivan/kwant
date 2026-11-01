@@ -91,6 +91,37 @@ const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS fact_purge_permits (scope_id TEXT PRIMARY KEY)",
     // A bot re-adding a note it removed: finds the outside fact with the same text
     "CREATE INDEX IF NOT EXISTS knowledge_facts_outside_text ON knowledge_facts (scope_id, statement) WHERE trust = 'outside'",
+    // C2: disputes by status, citations by the citing task, one row per piece of evidence
+    "CREATE INDEX IF NOT EXISTS fact_disputes_status ON fact_disputes (status, created_at)",
+    "CREATE INDEX IF NOT EXISTS fact_disputes_b ON fact_disputes (fact_b)",
+    "CREATE INDEX IF NOT EXISTS fact_citations_by ON fact_citations (cited_by_kind, cited_by_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS fact_evidence_once ON fact_evidence \
+     (fact_id, COALESCE(evidence_id, ''), COALESCE(check_id, ''), COALESCE(message_id, ''))",
+];
+
+/// C2 (contract §2.3): a bot's memory as the ledger sees it: notes whose fact is in force and not
+/// expired. Superseded (rejected, lost a dispute) and expired facts drop out. Recreated each start.
+const MEMORY_VIEW: &str = "CREATE VIEW bot_memory_v AS \
+    SELECT f.* FROM knowledge_facts f JOIN kwant_memories m ON m.id = f.memory_id \
+    WHERE f.scope = 'bot' AND f.status IN ('accepted', 'proposed', 'disputed') \
+      AND (f.valid_until IS NULL OR f.valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))";
+
+/// A fact in force and not expired, for queries on `knowledge_facts f`.
+const IN_FORCE: &str = "f.status IN ('proposed', 'accepted', 'disputed') \
+    AND (f.valid_until IS NULL OR f.valid_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))";
+
+/// A `disputed` fact with no open dispute left goes back to where it was: `accepted` when someone
+/// decided it or it is the bot's own note, else `proposed` (an outside note, a shared proposal).
+/// Two statements, event first (the purge runs them too, binding a `?1` they don't use).
+const RESTORE: &[&str] = &[
+    "INSERT INTO fact_events (fact_id, kind, actor, created_at) \
+     SELECT f.id, 'restored', 'system', strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM knowledge_facts f \
+     WHERE f.status = 'disputed' AND NOT EXISTS (SELECT 1 FROM fact_disputes d \
+       WHERE d.status = 'open' AND (d.fact_a = f.id OR d.fact_b = f.id))",
+    "UPDATE knowledge_facts SET status = CASE WHEN decided_by IS NOT NULL OR (scope = 'bot' AND trust = 'bot') \
+       THEN 'accepted' ELSE 'proposed' END, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+     WHERE status = 'disputed' AND NOT EXISTS (SELECT 1 FROM fact_disputes d \
+       WHERE d.status = 'open' AND (d.fact_a = knowledge_facts.id OR d.fact_b = knowledge_facts.id))",
 ];
 
 /// The new fact of a memory row `new`: trust and source from its provenance row, else from the
@@ -174,9 +205,22 @@ fn triggers() -> Vec<String> {
            OR (old.superseded_by IS NOT NULL AND new.superseded_by IS NOT old.superseded_by)) BEGIN \
          SELECT RAISE(ABORT, 'superseded facts are final'); END"
             .into(),
+        // A bot's own note (bot scope, bot trust) goes back to `accepted` once its last open dispute
+        // is dismissed or settled: it was accepted before, so nobody needs to decide it again.
         "CREATE TRIGGER IF NOT EXISTS knowledge_facts_decided BEFORE UPDATE OF status ON knowledge_facts \
-         WHEN new.status = 'accepted' AND old.status IN ('proposed', 'disputed') AND (new.decided_by IS NULL OR new.decided_at IS NULL) BEGIN \
+         WHEN new.status = 'accepted' AND old.status IN ('proposed', 'disputed') AND (new.decided_by IS NULL OR new.decided_at IS NULL) \
+           AND NOT (old.status = 'disputed' AND new.scope = 'bot' AND new.trust = 'bot' AND NOT EXISTS (SELECT 1 FROM fact_disputes d \
+             WHERE d.status = 'open' AND (d.fact_a = new.id OR d.fact_b = new.id))) BEGIN \
          SELECT RAISE(ABORT, 'accepting a proposed or disputed fact needs decided_by'); END"
+            .into(),
+        // A settled dispute is history
+        "CREATE TRIGGER IF NOT EXISTS fact_disputes_final BEFORE UPDATE ON fact_disputes WHEN old.status <> 'open' BEGIN \
+         SELECT RAISE(ABORT, 'a resolved or dismissed dispute is final'); END"
+            .into(),
+        "CREATE TRIGGER IF NOT EXISTS fact_disputes_no_delete BEFORE DELETE ON fact_disputes \
+         WHEN NOT EXISTS (SELECT 1 FROM knowledge_facts f JOIN fact_purge_permits p ON p.scope_id = f.scope_id \
+           WHERE f.scope = 'bot' AND f.id IN (old.fact_a, old.fact_b)) BEGIN \
+         SELECT RAISE(ABORT, 'disputes are deleted only with their bot or import'); END"
             .into(),
         "CREATE TRIGGER IF NOT EXISTS knowledge_facts_rules_insert BEFORE INSERT ON knowledge_facts \
          WHEN (new.trust = 'outside' AND new.status = 'accepted' AND new.decided_by IS NOT 'person') \
@@ -220,6 +264,7 @@ pub const TRUTH_LEDGER_DOWN: &[&str] = &[
     "DROP TRIGGER IF EXISTS kwant_memories_ledger_au",
     "DROP TRIGGER IF EXISTS kwant_memories_ledger_pin",
     "DROP TRIGGER IF EXISTS kwant_memories_ledger_ad",
+    "DROP VIEW IF EXISTS bot_memory_v",
     "DROP TABLE IF EXISTS fact_purge_permits",
     "DROP TABLE IF EXISTS fact_provenance",
     "DROP TABLE IF EXISTS fact_events",
@@ -229,16 +274,22 @@ pub const TRUTH_LEDGER_DOWN: &[&str] = &[
     "DROP TABLE IF EXISTS knowledge_facts",
 ];
 
-/// Removes a deleted bot's facts and their events (run in the deletion's transaction, after its
-/// memories): a bot that no longer exists keeps no history of what it remembered. The only path
+/// Removes a deleted bot's facts, their events, evidence, citations and disputes (run in the
+/// deletion's transaction, after its memories): a bot that no longer exists keeps no history of what it remembered. The only path
 /// allowed to delete facts: it holds a permit for the bot while it runs.
 pub const PURGE_BOT_FACTS: &[&str] = &[
     "INSERT OR IGNORE INTO fact_purge_permits (scope_id) VALUES (?1)",
     "DELETE FROM fact_evidence WHERE fact_id IN (SELECT id FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1)",
     "DELETE FROM fact_citations WHERE fact_id IN (SELECT id FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1)",
+    "DELETE FROM fact_citations WHERE cited_by_kind = 'fact' AND cited_by_id IN (SELECT id FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1)",
+    "DELETE FROM fact_disputes WHERE fact_a IN (SELECT id FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1) \
+       OR fact_b IN (SELECT id FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1)",
     "DELETE FROM fact_events WHERE fact_id IN (SELECT id FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1)",
     "DELETE FROM knowledge_facts WHERE scope = 'bot' AND scope_id = ?1",
     "DELETE FROM fact_events WHERE fact_id NOT IN (SELECT id FROM knowledge_facts)",
+    // The other side of a dispute with a deleted bot's fact goes back to where it was
+    RESTORE[0],
+    RESTORE[1],
     "DELETE FROM fact_purge_permits WHERE scope_id = ?1",
 ];
 
@@ -326,6 +377,117 @@ pub enum Decision {
 
 pub const MAX_FACTS: i64 = 500;
 
+/// Two facts that can't both hold (contract §2.5). `fact_a < fact_b`; one row per pair ever, so a
+/// dismissed pair is never raised again.
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct Dispute {
+    pub id: String,
+    pub fact_a: String,
+    pub fact_b: String,
+    pub cause: String,
+    pub status: String,
+    pub winner: Option<String>,
+    pub resolved_by: Option<String>,
+    pub created_at: String,
+    pub resolved_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct FactEvidence {
+    pub fact_id: String,
+    pub evidence_id: Option<String>,
+    pub check_id: Option<String>,
+    pub message_id: Option<String>,
+    pub added_by: String,
+    pub added_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct Citation {
+    pub fact_id: String,
+    pub cited_by_kind: String,
+    pub cited_by_id: String,
+    pub created_at: String,
+}
+
+/// What resolving or dismissing a dispute did.
+#[derive(Debug)]
+pub enum DisputeDecision {
+    /// This call settled it; the dispute as it now stands.
+    Done(Box<Dispute>),
+    /// It was settled first (by someone else, or because a side was superseded).
+    NotOpen(String),
+    NotFound,
+    /// `winner` isn't one of its two facts.
+    BadWinner,
+}
+
+/// A new fact written through the API or a tool (not mirrored from memory).
+#[derive(Debug)]
+pub struct NewFact<'a> {
+    pub space_id: &'a str,
+    pub scope: &'a str,
+    pub scope_id: &'a str,
+    pub statement: &'a str,
+    pub subject: Option<&'a str>,
+    pub source_kind: &'a str,
+    pub source_ref: Option<&'a str>,
+    pub author_kwant_id: Option<&'a str>,
+    pub trust: &'a str,
+    /// `person` for the person's own fact (lands `accepted`); else it lands `proposed`.
+    pub decided_by_person: bool,
+    pub actor: &'a str,
+}
+
+/// Check kinds kwant runs itself; peer reviews and person checks are judgements, not evidence.
+/// Whether a status is one of [`LIVE`].
+pub fn live(status: &str) -> bool {
+    matches!(status, "proposed" | "accepted" | "disputed")
+}
+
+const RUN_CHECKS: &str = "('command', 'http', 'file_exists', 'file_contains', 'file_sha256')";
+
+pub fn now() -> String {
+    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+async fn event(conn: &mut SqliteConnection, fact_id: &str, kind: &str, actor: &str, detail: Option<&str>) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO fact_events (fact_id, kind, actor, detail, created_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(fact_id)
+        .bind(kind)
+        .bind(actor)
+        .bind(detail)
+        .bind(now())
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+async fn restore(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    for sql in RESTORE {
+        sqlx::query(sql).execute(&mut *conn).await?;
+    }
+    Ok(())
+}
+
+/// Open disputes with a side no longer in force (removed, lost elsewhere) are over: the side
+/// still in force wins without anyone deciding (`resolved_by` stays NULL).
+async fn settle(conn: &mut SqliteConnection) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(&format!(
+        "UPDATE fact_disputes SET status = 'resolved', resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), \
+           winner = (SELECT f.id FROM knowledge_facts f WHERE f.id IN (fact_disputes.fact_a, fact_disputes.fact_b) AND {IN_FORCE} \
+                     ORDER BY f.id LIMIT 1) \
+         WHERE status = 'open' AND EXISTS (SELECT 1 FROM knowledge_facts f WHERE f.id IN (fact_disputes.fact_a, fact_disputes.fact_b) \
+           AND NOT ({IN_FORCE}))"
+    ))
+    .execute(&mut *conn)
+    .await?;
+    if res.rows_affected() > 0 {
+        restore(conn).await?;
+    }
+    Ok(res.rows_affected())
+}
+
 impl Database {
     pub(super) async fn migrate_truth_ledger(&self) -> Result<(), DbError> {
         for stmt in TABLES {
@@ -350,6 +512,8 @@ impl Database {
             sqlx::query(&format!("DROP TRIGGER IF EXISTS {name}")).execute(&mut *tx).await?;
             sqlx::query(&t).execute(&mut *tx).await?;
         }
+        sqlx::query("DROP VIEW IF EXISTS bot_memory_v").execute(&mut *tx).await?;
+        sqlx::query(MEMORY_VIEW).execute(&mut *tx).await?;
         tx.commit().await?;
         self.backfill_truth_ledger().await?;
         Ok(())
@@ -474,5 +638,441 @@ impl Database {
             .await?;
         tx.commit().await?;
         Ok(Decision::Done)
+    }
+}
+
+// C2: memory as a view, shared facts, disputes, evidence, citations
+
+impl Database {
+    /// The bot's notes the ledger keeps in force (`bot_memory_v`), keyed by memory id elsewhere.
+    pub async fn bot_memory_facts(&self, kwant_id: &str) -> Result<Vec<Fact>, DbError> {
+        Ok(sqlx::query_as::<_, Fact>("SELECT * FROM bot_memory_v WHERE scope_id = ? ORDER BY created_at, id")
+            .bind(kwant_id)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// Teams the bot leads or belongs to.
+    pub async fn teams_of_kwant(&self, kwant_id: &str) -> Result<Vec<String>, DbError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT t.id FROM teams t WHERE t.lead_kwant_id = ?1 \
+             OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.member_kwants) THEN t.member_kwants ELSE '[]' END) j WHERE j.value = ?1) \
+             ORDER BY t.id",
+        )
+        .bind(kwant_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Team facts of `teams` and space facts of `space` in force, oldest first; only `accepted`
+    /// ones with `accepted_only` (what a bot's prompt shows).
+    pub async fn shared_facts(&self, space: &str, teams: &[String], accepted_only: bool) -> Result<Vec<Fact>, DbError> {
+        let status = if accepted_only { " AND f.status = 'accepted'" } else { "" };
+        Ok(sqlx::query_as::<_, Fact>(&format!(
+            "SELECT f.* FROM knowledge_facts f WHERE f.space_id = ? AND {IN_FORCE}{status} \
+             AND (f.scope = 'space' OR (f.scope = 'team' AND f.scope_id IN (SELECT value FROM json_each(?)))) \
+             ORDER BY f.created_at, f.rowid LIMIT ?"
+        ))
+        .bind(space)
+        .bind(serde_json::to_string(teams).unwrap_or_else(|_| "[]".into()))
+        .bind(MAX_FACTS)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    pub async fn get_fact_any(&self, id: &str) -> Result<Option<Fact>, DbError> {
+        Ok(sqlx::query_as::<_, Fact>("SELECT * FROM knowledge_facts WHERE id = ?").bind(id).fetch_optional(&self.pool).await?)
+    }
+
+    /// Facts by id, any space (for labels and dispute sides).
+    pub async fn facts_by_ids(&self, ids: &[String]) -> Result<Vec<Fact>, DbError> {
+        Ok(sqlx::query_as::<_, Fact>("SELECT * FROM knowledge_facts WHERE id IN (SELECT value FROM json_each(?))")
+            .bind(serde_json::to_string(ids).unwrap_or_else(|_| "[]".into()))
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// Every dispute (any status) touching one of `ids`, newest first.
+    pub async fn disputes_of(&self, ids: &[String]) -> Result<Vec<Dispute>, DbError> {
+        Ok(sqlx::query_as::<_, Dispute>(
+            "SELECT * FROM fact_disputes WHERE fact_a IN (SELECT value FROM json_each(?1)) OR fact_b IN (SELECT value FROM json_each(?1)) \
+             ORDER BY created_at DESC, rowid DESC",
+        )
+        .bind(serde_json::to_string(ids).unwrap_or_else(|_| "[]".into()))
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Disputes in `space`, newest first; open ones only by default.
+    pub async fn list_disputes(&self, space: &str, status: Option<&str>) -> Result<Vec<Dispute>, DbError> {
+        Ok(sqlx::query_as::<_, Dispute>(
+            "SELECT d.* FROM fact_disputes d JOIN knowledge_facts f ON f.id = d.fact_a \
+             WHERE f.space_id = ? AND (? IS NULL OR d.status = ?) ORDER BY d.created_at DESC, d.rowid DESC LIMIT ?",
+        )
+        .bind(space)
+        .bind(status)
+        .bind(status)
+        .bind(MAX_FACTS)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    pub async fn get_dispute(&self, space: &str, id: &str) -> Result<Option<Dispute>, DbError> {
+        Ok(sqlx::query_as::<_, Dispute>(
+            "SELECT d.* FROM fact_disputes d JOIN knowledge_facts f ON f.id = d.fact_a WHERE d.id = ? AND f.space_id = ?",
+        )
+        .bind(id)
+        .bind(space)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// Opens a dispute between two facts in force in the same space, unless the pair ever had
+    /// one (a dismissed pair is never raised again). Both sides go `disputed`, except a fact the
+    /// person decided, which keeps its status until the person looks. `None` when nothing opened.
+    pub async fn open_dispute(&self, a: &str, b: &str, cause: &str, actor: &str) -> Result<Option<Dispute>, DbError> {
+        if a == b {
+            return Ok(None);
+        }
+        let (a, b) = if a < b { (a, b) } else { (b, a) };
+        let mut tx = self.pool.begin().await?;
+        let (live,): (i64,) = sqlx::query_as(&format!(
+            "SELECT COUNT(DISTINCT f.space_id) * 10 + COUNT(*) FROM knowledge_facts f WHERE f.id IN (?, ?) AND {IN_FORCE}"
+        ))
+        .bind(a)
+        .bind(b)
+        .fetch_one(&mut *tx)
+        .await?;
+        // Both in force (2) and in one space (10)
+        if live != 12 {
+            return Ok(None);
+        }
+        let id = format!("fd_{}", uuid::Uuid::new_v4().simple());
+        let at = now();
+        let res = sqlx::query(
+            "INSERT OR IGNORE INTO fact_disputes (id, fact_a, fact_b, cause, status, created_at) VALUES (?, ?, ?, ?, 'open', ?)",
+        )
+        .bind(&id)
+        .bind(a)
+        .bind(b)
+        .bind(cause)
+        .bind(&at)
+        .execute(&mut *tx)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Ok(None);
+        }
+        for side in [a, b] {
+            sqlx::query(
+                "UPDATE knowledge_facts SET status = 'disputed', updated_at = ? \
+                 WHERE id = ? AND status IN ('proposed', 'accepted') AND decided_by IS NOT 'person'",
+            )
+            .bind(&at)
+            .bind(side)
+            .execute(&mut *tx)
+            .await?;
+            event(&mut tx, side, "disputed", actor, Some(&id)).await?;
+        }
+        tx.commit().await?;
+        Ok(sqlx::query_as::<_, Dispute>("SELECT * FROM fact_disputes WHERE id = ?").bind(&id).fetch_optional(&self.pool).await?)
+    }
+
+    /// Settles an open dispute for `winner` (`by` is `person` or `evidence`): claim-first, so of
+    /// racing calls exactly one changes it. The loser is superseded by the winner; the winner is
+    /// accepted (a shared fact only when the person decides, and it stays `disputed` while another
+    /// dispute is open on it). Callers check the evidence rules before `by = "evidence"`.
+    pub async fn resolve_dispute(&self, space: &str, id: &str, winner: &str, by: &str) -> Result<DisputeDecision, DbError> {
+        let Some(d) = self.get_dispute(space, id).await? else { return Ok(DisputeDecision::NotFound) };
+        let loser = if winner == d.fact_a {
+            d.fact_b.clone()
+        } else if winner == d.fact_b {
+            d.fact_a.clone()
+        } else {
+            return Ok(DisputeDecision::BadWinner);
+        };
+        let at = now();
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query(
+            "UPDATE fact_disputes SET status = 'resolved', winner = ?, resolved_by = ?, resolved_at = ? WHERE id = ? AND status = 'open'",
+        )
+        .bind(winner)
+        .bind(by)
+        .bind(&at)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        if res.rows_affected() == 0 {
+            let (status,): (String,) = sqlx::query_as("SELECT status FROM fact_disputes WHERE id = ?").bind(id).fetch_one(&mut *tx).await?;
+            return Ok(DisputeDecision::NotOpen(status));
+        }
+        let lost = sqlx::query(&format!(
+            "UPDATE knowledge_facts SET status = 'superseded', superseded_by = ?, decided_by = ?, decided_at = ?, updated_at = ? \
+             WHERE id = ? AND status IN {LIVE}"
+        ))
+        .bind(winner)
+        .bind(by)
+        .bind(&at)
+        .bind(&at)
+        .bind(&loser)
+        .execute(&mut *tx)
+        .await?;
+        if lost.rows_affected() > 0 {
+            event(&mut tx, &loser, "superseded", by, Some(id)).await?;
+        }
+        sqlx::query(&format!(
+            "UPDATE knowledge_facts SET \
+               decided_by = CASE WHEN decided_by = 'person' THEN 'person' ELSE ?1 END, decided_at = ?2, updated_at = ?2, \
+               status = CASE \
+                 WHEN ?1 <> 'person' AND decided_by IS NOT 'person' AND scope <> 'bot' THEN 'proposed' \
+                 WHEN ?1 <> 'person' AND decided_by IS NOT 'person' AND EXISTS (SELECT 1 FROM fact_disputes d WHERE d.status = 'open' \
+                   AND (d.fact_a = knowledge_facts.id OR d.fact_b = knowledge_facts.id)) THEN 'disputed' \
+                 ELSE 'accepted' END \
+             WHERE id = ?3 AND status IN {LIVE}"
+        ))
+        .bind(by)
+        .bind(&at)
+        .bind(winner)
+        .execute(&mut *tx)
+        .await?;
+        event(&mut tx, winner, "won", by, Some(id)).await?;
+        settle(&mut tx).await?;
+        restore(&mut tx).await?;
+        tx.commit().await?;
+        let d = self.get_dispute(space, id).await?.ok_or(DbError::Sqlx(sqlx::Error::RowNotFound))?;
+        Ok(DisputeDecision::Done(Box::new(d)))
+    }
+
+    /// The person saying "Not a conflict": claim-first; both sides go back to where they were and
+    /// the pair is never raised again.
+    pub async fn dismiss_dispute(&self, space: &str, id: &str) -> Result<DisputeDecision, DbError> {
+        let Some(d) = self.get_dispute(space, id).await? else { return Ok(DisputeDecision::NotFound) };
+        let at = now();
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query("UPDATE fact_disputes SET status = 'dismissed', resolved_by = 'person', resolved_at = ? WHERE id = ? AND status = 'open'")
+            .bind(&at)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        if res.rows_affected() == 0 {
+            let (status,): (String,) = sqlx::query_as("SELECT status FROM fact_disputes WHERE id = ?").bind(id).fetch_one(&mut *tx).await?;
+            return Ok(DisputeDecision::NotOpen(status));
+        }
+        for side in [&d.fact_a, &d.fact_b] {
+            event(&mut tx, side, "dispute_dismissed", "person", Some(id)).await?;
+        }
+        restore(&mut tx).await?;
+        tx.commit().await?;
+        let d = self.get_dispute(space, id).await?.ok_or(DbError::Sqlx(sqlx::Error::RowNotFound))?;
+        Ok(DisputeDecision::Done(Box::new(d)))
+    }
+
+    /// Closes open disputes that lost a side (a removed note, a superseded fact). Returns how many.
+    pub async fn settle_disputes(&self) -> Result<u64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let n = settle(&mut tx).await?;
+        tx.commit().await?;
+        Ok(n)
+    }
+
+    /// Attaches evidence to a fact; `false` when that piece was already attached.
+    pub async fn add_fact_evidence(
+        &self,
+        fact_id: &str,
+        evidence_id: Option<&str>,
+        check_id: Option<&str>,
+        message_id: Option<&str>,
+        added_by: &str,
+    ) -> Result<bool, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query(
+            "INSERT OR IGNORE INTO fact_evidence (fact_id, evidence_id, check_id, message_id, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(fact_id)
+        .bind(evidence_id)
+        .bind(check_id)
+        .bind(message_id)
+        .bind(added_by)
+        .bind(now())
+        .execute(&mut *tx)
+        .await?;
+        if res.rows_affected() > 0 {
+            let what = check_id.map(|c| format!("check {c}")).or(evidence_id.map(|e| format!("evidence {e}"))).or(message_id.map(|m| format!("message {m}")));
+            event(&mut tx, fact_id, "evidence_added", added_by, what.as_deref()).await?;
+        }
+        tx.commit().await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    pub async fn fact_evidence(&self, fact_id: &str) -> Result<Vec<FactEvidence>, DbError> {
+        Ok(sqlx::query_as::<_, FactEvidence>("SELECT * FROM fact_evidence WHERE fact_id = ? ORDER BY added_at, rowid")
+            .bind(fact_id)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// `(passed, failed)` kwant-run checks attached to the fact. Message and file evidence never
+    /// count (contract §5 rule 3).
+    pub async fn check_strength(&self, fact_id: &str) -> Result<(i64, i64), DbError> {
+        let (passed, failed): (i64, i64) = sqlx::query_as(&format!(
+            "SELECT COALESCE(SUM(c.status = 'passed'), 0), COALESCE(SUM(c.status IN ('failed', 'error')), 0) \
+             FROM fact_evidence e JOIN outcome_checks c ON c.id = e.check_id \
+             WHERE e.fact_id = ? AND c.kind IN {RUN_CHECKS} AND c.approved = 1"
+        ))
+        .bind(fact_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((passed, failed))
+    }
+
+    /// `task` or `fact` `by_id` relies on `fact_id`; `false` when it already did.
+    pub async fn cite_fact(&self, fact_id: &str, kind: &str, by_id: &str, actor: &str) -> Result<bool, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query("INSERT OR IGNORE INTO fact_citations (fact_id, cited_by_kind, cited_by_id, created_at) VALUES (?, ?, ?, ?)")
+            .bind(fact_id)
+            .bind(kind)
+            .bind(by_id)
+            .bind(now())
+            .execute(&mut *tx)
+            .await?;
+        if res.rows_affected() > 0 {
+            event(&mut tx, fact_id, "cited", actor, Some(&format!("{kind} {by_id}"))).await?;
+        }
+        tx.commit().await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// The person saying a task no longer relies on a fact (clears its `fact_changed` item).
+    pub async fn uncite_fact(&self, fact_id: &str, task_id: &str) -> Result<bool, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query("DELETE FROM fact_citations WHERE fact_id = ? AND cited_by_kind = 'task' AND cited_by_id = ?")
+            .bind(fact_id)
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await?;
+        if res.rows_affected() > 0 {
+            event(&mut tx, fact_id, "uncited", "person", Some(&format!("task {task_id}"))).await?;
+        }
+        tx.commit().await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// A note on a fact's history (`dispute_reason`: why a bot disputed it).
+    pub async fn add_fact_note(&self, fact_id: &str, kind: &str, actor: &str, detail: &str) -> Result<(), DbError> {
+        let mut conn = self.pool.acquire().await?;
+        event(&mut conn, fact_id, kind, actor, Some(detail)).await?;
+        Ok(())
+    }
+
+    pub async fn citations(&self, fact_id: &str) -> Result<Vec<Citation>, DbError> {
+        Ok(sqlx::query_as::<_, Citation>("SELECT * FROM fact_citations WHERE fact_id = ? ORDER BY created_at, rowid")
+            .bind(fact_id)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// Facts a task cites that are `disputed`, or were superseded after it cited them.
+    pub async fn changed_facts_of_task(&self, task_id: &str) -> Result<Vec<Fact>, DbError> {
+        Ok(sqlx::query_as::<_, Fact>(
+            "SELECT f.* FROM fact_citations c JOIN knowledge_facts f ON f.id = c.fact_id \
+             WHERE c.cited_by_kind = 'task' AND c.cited_by_id = ? \
+               AND (f.status = 'disputed' OR (f.status = 'superseded' AND f.updated_at >= c.created_at)) \
+             ORDER BY c.created_at, c.rowid",
+        )
+        .bind(task_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Writes a fact that isn't a memory: the person's own (accepted) or a bot's shared proposal.
+    pub async fn insert_fact(&self, f: &NewFact<'_>) -> Result<Fact, DbError> {
+        let id = format!("f_{}", &uuid::Uuid::new_v4().simple().to_string()[..24]);
+        let at = now();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO knowledge_facts (id, space_id, scope, scope_id, statement, subject, source_kind, source_ref, author_kwant_id, \
+                 trust, status, valid_from, pinned, decided_by, decided_at, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(f.space_id)
+        .bind(f.scope)
+        .bind(f.scope_id)
+        .bind(f.statement)
+        .bind(f.subject)
+        .bind(f.source_kind)
+        .bind(f.source_ref)
+        .bind(f.author_kwant_id)
+        .bind(f.trust)
+        .bind(if f.decided_by_person { "accepted" } else { "proposed" })
+        .bind(&at)
+        .bind(f.decided_by_person.then_some("person"))
+        .bind(f.decided_by_person.then_some(at.as_str()))
+        .bind(&at)
+        .bind(&at)
+        .execute(&mut *tx)
+        .await?;
+        event(&mut tx, &id, "created", f.actor, None).await?;
+        tx.commit().await?;
+        self.get_fact_any(&id).await?.ok_or(DbError::Sqlx(sqlx::Error::RowNotFound))
+    }
+
+    /// Sets the subject of a fact in force (lowercased, single-spaced); `None` clears it.
+    pub async fn set_fact_subject(&self, fact_id: &str, subject: Option<&str>) -> Result<(), DbError> {
+        sqlx::query(&format!("UPDATE knowledge_facts SET subject = ?, updated_at = ? WHERE id = ? AND status IN {LIVE}"))
+            .bind(subject)
+            .bind(now())
+            .bind(fact_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The person ending a fact at `until` (now when `None`); it drops out of prompts from then.
+    pub async fn expire_fact(&self, space: &str, id: &str, until: Option<&str>) -> Result<Option<Fact>, DbError> {
+        let until = until.map(str::to_string).unwrap_or_else(now);
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query(&format!("UPDATE knowledge_facts SET valid_until = ?, updated_at = ? WHERE id = ? AND space_id = ? AND status IN {LIVE}"))
+            .bind(&until)
+            .bind(now())
+            .bind(id)
+            .bind(space)
+            .execute(&mut *tx)
+            .await?;
+        if res.rows_affected() > 0 {
+            event(&mut tx, id, "expires", "person", Some(&until)).await?;
+        }
+        tx.commit().await?;
+        if res.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_fact(space, id).await
+    }
+
+    /// The person sharing a fact with a team or the space: a new accepted fact in that scope
+    /// whose source is the old one (which stays as it is).
+    pub async fn promote_fact(&self, space: &str, id: &str, scope: &str, scope_id: &str) -> Result<Option<Fact>, DbError> {
+        let Some(old) = self.get_fact(space, id).await? else { return Ok(None) };
+        if !LIVE.contains(&format!("'{}'", old.status)) {
+            return Ok(None);
+        }
+        let new = self
+            .insert_fact(&NewFact {
+                space_id: space,
+                scope,
+                scope_id,
+                statement: &old.statement,
+                subject: old.subject.as_deref(),
+                source_kind: &old.source_kind,
+                source_ref: Some(&old.id),
+                author_kwant_id: old.author_kwant_id.as_deref(),
+                trust: &old.trust,
+                decided_by_person: true,
+                actor: "person",
+            })
+            .await?;
+        let mut conn = self.pool.acquire().await?;
+        event(&mut conn, &old.id, "promoted", "person", Some(&new.id)).await?;
+        Ok(Some(new))
     }
 }

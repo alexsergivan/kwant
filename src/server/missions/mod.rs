@@ -553,6 +553,7 @@ pub async fn needs_you(state: &AppState, task: &Task) -> Vec<Value> {
     items.extend(autofix::needs_you(state, task).await);
     items.extend(graph::flag_items(state, task).await);
     items.extend(flight_school::needs_you(task));
+    items.extend(truth_ledger::needs_you(state, task).await);
     items
 }
 

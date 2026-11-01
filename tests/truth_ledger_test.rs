@@ -357,7 +357,9 @@ async fn memory_block_is_byte_identical_with_the_ledger_off_and_shadow() {
         blocks.push((memory_block(&memories, true), memory_block(&memories, false)));
     }
     assert_eq!(blocks[0], blocks[1]);
-    assert_eq!(blocks[0], blocks[2], "`on` is shadow in C1");
+    // `memory_block` itself never changes; with `on` the prompt reads through the ledger instead
+    // (tests/truth_ledger_on_test.rs)
+    assert_eq!(blocks[0], blocks[2]);
 }
 
 #[tokio::test]

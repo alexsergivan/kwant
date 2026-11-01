@@ -119,7 +119,8 @@ export type NotifyKind =
   | 'app_update'
   | 'work_ahead'
   | 'automation_suggested'
-  | 'tier_proposed';
+  | 'tier_proposed'
+  | 'fact_disputed';
 export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'turn_finished', label: 'A bot finished replying' },
   { id: 'approval_needed', label: 'A bot needs your approval' },
@@ -129,6 +130,7 @@ export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'skill_proposed', label: 'A bot proposed a skill to review' },
   { id: 'question_asked', label: 'A bot has a question for you' },
   { id: 'human_step', label: 'A bot needs you in the browser' },
+  { id: 'fact_disputed', label: 'Two saved facts disagree' },
 ];
 
 /** Only the Mac app sends it (and only its server accepts it), so it is listed there alone. */

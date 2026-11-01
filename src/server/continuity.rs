@@ -34,7 +34,7 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 13] = [
+pub const NOTIFY_KINDS: [&str; 14] = [
     "turn_finished",
     "approval_needed",
     "routine_failed",
@@ -48,6 +48,7 @@ pub const NOTIFY_KINDS: [&str; 13] = [
     "work_ahead",
     "automation_suggested",
     "tier_proposed",
+    "fact_disputed",
 ];
 const MASK: &str = "••••••••";
 
@@ -91,7 +92,10 @@ pub async fn prompt_block(
         ));
     }
     let memories = db.list_memories(&kwant.id).await.unwrap_or_default();
-    out.push_str(&memory_block(&memories, with_tools));
+    match super::missions::truth_ledger::memory_prompt(state, kwant, &memories, with_tools).await {
+        Some(block) => out.push_str(&block),
+        None => out.push_str(&memory_block(&memories, with_tools)),
+    }
     if with_tools {
         out.push_str(crate::drivers::APP_TOOLS_MARKER);
         out.push_str(&format!(
@@ -191,13 +195,20 @@ fn memory_by(m: &Memory) -> &'static str {
 }
 
 pub fn memory_block(memories: &[Memory], with_tools: bool) -> String {
+    labelled_memory_block(memories, with_tools, &std::collections::HashMap::new())
+}
+
+/// [`memory_block`] with a label after some notes' ids (the Truth Ledger's "unconfirmed" and
+/// "disputed with"); with no labels it is `memory_block`, byte for byte.
+pub fn labelled_memory_block(memories: &[Memory], with_tools: bool, labels: &std::collections::HashMap<String, String>) -> String {
     if memories.is_empty() {
         return String::new();
     }
     let line = |m: &Memory| {
         let by = memory_by(m);
         let pin = if m.pinned() { " (pinned)" } else { "" };
-        format!("- [{}]{by}{pin} {}", m.id, m.text.replace(['\n', '\r'], " "))
+        let label = labels.get(&m.id).map_or("", String::as_str);
+        format!("- [{}]{by}{pin}{label} {}", m.id, m.text.replace(['\n', '\r'], " "))
     };
     // Pinned notes always go in; the pin cap keeps them inside the budget for ordinary text
     let pinned: Vec<String> = memories.iter().filter(|m| m.pinned()).map(line).collect();
@@ -229,6 +240,12 @@ pub fn memory_block(memories: &[Memory], with_tools: bool) -> String {
     }
     if with_tools {
         block.push_str(" The id in brackets is what memory_update and memory_remove take.");
+    }
+    if !labels.is_empty() {
+        block.push_str(
+            " A note marked unconfirmed came from outside text and the person hasn't accepted it yet; \
+            a note marked disputed disagrees with another fact: don't rely on either side until the person decides.",
+        );
     }
     block.push('\n');
     block.push_str(&pinned.into_iter().chain(recent).collect::<Vec<_>>().join("\n"));
@@ -347,6 +364,8 @@ pub struct SelfToolsApprover {
 pub(crate) const READ_ONLY_SELF_TOOLS: &[&str] = &[
     "search_history",
     "memory_search",
+    "fact_get",
+    "fact_search",
     "delegation_status",
     "routine_list",
     "bot_list",
@@ -462,6 +481,11 @@ pub async fn browser_act_payment(state: &AppState, target: &str, args: &Value) -
 /// draft run open.
 async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
     let mut tools = tool_list(scope, super::missions::enabled(state).await);
+    if super::missions::truth_ledger::on(state).await {
+        if let Some(list) = tools.as_array_mut() {
+            list.extend(super::missions::truth_ledger::tools());
+        }
+    }
     if super::missions::foundry::enabled(state).await && matches!(state.db.drafting_run_of(&scope.kwant_id).await, Ok(Some(_))) {
         if let Some(list) = tools.as_array_mut() {
             list.push(super::missions::foundry::tool());
@@ -472,7 +496,12 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
 
 /// The names of the kwant tools `scope`'s turns are offered (without `skill_draft`).
 pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<String> {
-    let tools = tool_list(scope, super::missions::enabled(state).await);
+    let mut tools = tool_list(scope, super::missions::enabled(state).await);
+    if super::missions::truth_ledger::on(state).await {
+        if let Some(list) = tools.as_array_mut() {
+            list.extend(super::missions::truth_ledger::tools());
+        }
+    }
     tools.as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default()
 }
 
@@ -996,6 +1025,7 @@ async fn call_tool(
                             old.id, old.text
                         ));
                     }
+                    reply.push_str(&super::missions::truth_ledger::after_memory_write(state, &scope.kwant_id).await);
                     (reply, false)
                 }
                 Err(e) => (e.to_string(), true),
@@ -1033,7 +1063,8 @@ async fn call_tool(
             memory_changed();
             let m = updated.expect("text or pinned was applied");
             let pin = if m.pinned() { " It is pinned." } else { "" };
-            (format!("Updated [{}].{pin}", m.id), false)
+            let disputes = super::missions::truth_ledger::after_memory_write(state, &scope.kwant_id).await;
+            (format!("Updated [{}].{pin}{disputes}", m.id), false)
         }
         "memory_remove" => {
             let Some(id) = str_arg("id") else {
@@ -1053,7 +1084,13 @@ async fn call_tool(
             };
             let limit = args["limit"].as_i64().unwrap_or(10);
             match db.search_memories(&scope.kwant_id, query, limit).await {
-                Ok(hits) => (memory_hits_as_text(&hits), false),
+                Ok(mut hits) => {
+                    // With the Truth Ledger on, only notes whose fact is in force
+                    if let Some(visible) = super::missions::truth_ledger::visible_memory_ids(state, &scope.kwant_id).await {
+                        hits.retain(|m| visible.contains(&m.id));
+                    }
+                    (memory_hits_as_text(&hits), false)
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "memory search failed");
                     ("Search failed.".into(), true)
@@ -1072,6 +1109,7 @@ async fn call_tool(
         "mcp_search" => super::mcp_suggest::tool_search(state, scope, args).await,
         "mcp_suggest" => super::mcp_suggest::tool_suggest(state, scope, args).await,
         super::page_source::TOOL => super::page_source::tool_call(state, scope, args).await,
+        n if super::missions::truth_ledger::handles(n) => super::missions::truth_ledger::call(state, scope, n, args).await,
         super::connection_suggest::TOOL if scope.origin.is_some() => super::connection_suggest::tool_call(state, scope, args).await,
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
         n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
@@ -1418,7 +1456,8 @@ pub async fn notify_settings_view(state: &AppState) -> (String, Vec<String>) {
 pub const NOTIFY_KNOWN_SETTING: &str = "notify_known";
 /// Kinds added after `notify_on` lists were first saved but before `notify_known` existed: a list
 /// saved without `notify_known` was chosen from every kind but these.
-const KINDS_SINCE_FIRST_LIST: [&str; 4] = ["app_update", "work_ahead", "automation_suggested", "tier_proposed"];
+const KINDS_SINCE_FIRST_LIST: [&str; 5] =
+    ["app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed"];
 
 /// Kinds the user wants to hear about; all of them unless set. A kind added after the list was
 /// saved is on, so a new event isn't silently off for everyone who ever saved the settings.

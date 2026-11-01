@@ -1071,15 +1071,15 @@ offer), `suggestion_id`, `task_class`, `acceptance` and `checks` (JSON). `routin
 offers, with one live offer per `(space_id, cluster_key)`. `routine_suggestion_events` is their
 append-only history, enforced by triggers. Older binaries ignore all of it.
 
-## 21. Truth Ledger (Phase C1, shadow mode)
+## 21. Truth Ledger (Phase C1 shadow, C2 on)
 
 Contract: `phase-c/contract.md`. **C1 ships the ledger in shadow mode only: it records, the person can
 read and decide, and nothing the bots see changes.** Memory stays the write path; C2 makes it a view of
 the ledger.
 
 **Setting.** `truth_ledger`: `off` (default), `shadow` or `on`, set by the person in `POST /api/settings`
-(a bot's token gets a 403, and the bots' own settings tool refuses it). **In C1 `on` behaves exactly like
-`shadow`.** The mirror below runs in every mode, so turning the ledger on later shows the whole history;
+(a bot's token gets a 403, and the bots' own settings tool refuses it). `off` and `shadow` leave every
+prompt, tool list and memory reply byte-identical to a build without the ledger; `on` is C2 (below). The mirror below runs in every mode, so turning the ledger on later shows the whole history;
 the setting only gates the routes.
 
 **What it covers (D1).** Bot memory (`kwant_memories`), the person's notes on a bot and imported notes.
@@ -1139,3 +1139,69 @@ taints, and a bot can save text it read in an earlier turn from a clean one, or 
 `outside` note in other words. Notes from before the
 ledger can't say whether their turn read outside text, so they are `bot`/`accepted`. An edited or
 deleted note keeps its old text as history in the ledger until the bot is deleted.
+### 21.1 C2: the ledger `on`
+
+Everything here happens only with `truth_ledger = on`; switching back to `shadow` or `off` gives
+today's prompt again, byte for byte (open disputes stay in the tables for when it comes back on).
+
+**Memory is a view.** The bot's memory block lists only notes whose fact is in force (`bot_memory_v`:
+`proposed`, `accepted` or `disputed`, not expired), so a superseded or rejected note drops out, and so
+does `memory_search`. Notes are labelled after their id: `(unconfirmed: from outside text, not yet
+accepted by the person)` and `(disputed with [id]; the person decides which holds)`; the header gains
+one sentence explaining the labels only when a label is shown. After it, `[What your team knows]` lists
+accepted team (the bot's teams, lead or member) and space facts, newest that fit in 2 KB, as
+`- [f_id] statement`.
+
+**The contradiction scan** (`fact_dispute_scan`, default true, person-only setting). Deterministic and
+cheap; it runs when the prompt is built, after a bot's `memory_add`/`memory_update`/`fact_propose`, and
+after the person writes or promotes a shared fact. Two facts in force conflict when they have the same
+non-empty `subject` and different text (`same_subject`), or share at least 60% of their words (3+
+letters, no numbers, units or negators) and either carry different numbers with their units ("4 GB" vs
+"12 GB": `numbers_differ`) or exactly one is negated (`negation`). Pairs: the bot's notes among
+themselves and against the shared facts it sees; shared facts among themselves. A pair that ever had a
+dispute (open, resolved or dismissed) is never raised again. **Limit:** paraphrases are missed ("Deploys
+happen on Fridays" vs "We never ship on Friday"), and similar texts with different numbers can be paired
+when they don't conflict; the person dismisses those once. Opening a dispute marks both sides
+`disputed` (a fact the person decided keeps its status), tells the bot in the tool reply, sends
+`fact_disputed` (title names the bot, the body never holds fact text) and moves tasks that cite either
+side to Needs you.
+
+**Resolution.** By the person (`resolve` with a winner: the loser is `superseded` by it; `dismiss`: not
+a conflict, both go back), or by evidence: when exactly one side has a passing, approved, kwant-run
+check (`command`, `http`, `file_*`; peer reviews and person checks are judgements) and the other none,
+kwant resolves it with `resolved_by = 'evidence'`. Evidence never wins for an `outside` fact, never
+against the person's fact or decision, and never accepts a shared fact the person hasn't. A dispute
+whose side stops being in force (edited, removed, expired) is settled for the other side with
+`resolved_by` NULL. A `disputed` fact with no open dispute goes back to `accepted` (decided, or the
+bot's own note) or `proposed`.
+
+**Citations and Needs you.** A task cites a fact via `task_cite_fact`, or when its owner reads the fact
+with `fact_get` during the task's turn. An open task (not failed/cancelled) whose cited fact is disputed
+or was replaced after the citation gets a Needs-you item `{kind: "fact_changed", id, fact_id, status,
+superseded_by, text}`; a verified task whose fact is disputed gets `rests_on_disputed_fact`. The person
+clears it with `uncite`.
+
+**Bot tools** (offered only when `on`; `fact_get` and `fact_search` are read-only):
+`fact_propose {statement, subject?, scope: bot|team|space, team_id?, based_on?, check_id?}` (bot scope
+is `memory_add` with a subject; shared scope is `proposed`, needs the person, and is refused in a turn
+that read outside text; `check_id` only for a check on one of the bot's own tasks), `fact_get {id}`
+(a note id or fact id), `fact_search {q}` (≤20 facts it can see), `task_cite_fact {task_id, fact_id}`,
+`fact_dispute {fact_id, other_id, why}`.
+
+**Routes** (person only, like the rest of `/api/facts`; 409 `the Truth Ledger isn't on` unless `on`;
+POSTs take an optional `Idempotency-Key`):
+- `POST /api/facts?space=` `{statement, scope: team|space, scope_id?, subject?}` → fact JSON (accepted, person).
+- `POST /api/facts/:id/promote` `{scope: team|space, scope_id?}` → the new fact's JSON; 409 when not in force.
+- `POST /api/facts/:id/expire` `{until?}` (RFC 3339, default now) → fact JSON; 409 when not in force.
+- `POST /api/facts/:id/evidence` exactly one of `{check_id, evidence_id, message_id}` → fact JSON.
+- `POST /api/facts/:id/uncite` `{task_id}` → `{ok: true}`; 404 when the task didn't cite it.
+- `GET /api/facts/disputes?space=&status=open|resolved|dismissed|all` → `{setting, disputes}` (empty when off).
+- `POST /api/facts/disputes/:id/resolve` `{winner}` and `/dismiss` → dispute JSON; claim-first, so of
+  racing calls one gets 200 and the rest 409 `{error, status}`; 400 when `winner` isn't one of its facts.
+
+`GET /api/facts/:id` now fills `evidence`, `citations` and `disputes` (each with `facts: [a, b]`).
+SSE: `fact_changed {fact: {id, status, space_id, scope, scope_id, kwant_id}}` and `fact_dispute
+{dispute: {id, status, space_id, fact_a, fact_b, cause, winner}}`, both space-scoped.
+
+**Not in C2:** reopening a dismissed pair, a chat line when evidence settles a dispute, and LLM
+(semantic) contradiction detection.

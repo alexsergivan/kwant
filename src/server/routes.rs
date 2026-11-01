@@ -3493,9 +3493,10 @@ pub struct SettingsResponse {
     pub automation_discovery: String,
     /// Routines suggested per space per 24 hours (0–10).
     pub automation_discovery_daily_cap: i64,
-    /// Truth Ledger: `off` (default), `shadow` or `on` (`on` reads like `shadow` until C2; see
-    /// `super::missions::truth_ledger`).
+    /// Truth Ledger: `off` (default), `shadow` or `on` (see `super::missions::truth_ledger`).
     pub truth_ledger: String,
+    /// With the Truth Ledger `on`: the deterministic contradiction scan (default true).
+    pub fact_dispute_scan: bool,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -3550,6 +3551,7 @@ pub struct SaveSettingsPayload {
     pub automation_discovery: Option<String>,
     pub automation_discovery_daily_cap: Option<i64>,
     pub truth_ledger: Option<String>,
+    pub fact_dispute_scan: Option<bool>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -3613,6 +3615,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         automation_discovery: if super::missions::discovery::enabled(&state).await { "on" } else { "off" }.into(),
         automation_discovery_daily_cap: super::missions::discovery::daily_cap(&state).await,
         truth_ledger: super::missions::truth_ledger::mode(&state).await.into(),
+        fact_dispute_scan: super::missions::truth_ledger::scan_enabled(&state).await,
     }))
 }
 
@@ -3842,6 +3845,10 @@ pub async fn save_settings(
     }
     if let Some(m) = &payload.truth_ledger {
         let _ = state.db.set_setting(super::missions::truth_ledger::SETTING, m).await;
+    }
+    if let Some(on) = payload.fact_dispute_scan {
+        let v = if on { "true" } else { "false" };
+        let _ = state.db.set_setting(super::missions::truth_ledger::SCAN_SETTING, v).await;
     }
     if let Some(on) = payload.agent_tools {
         let _ = state.db.set_setting("agent_tools", if on { "on" } else { "off" }).await;

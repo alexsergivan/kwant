@@ -91,7 +91,11 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
             out.extend(fields(suggestion, &["kwant_id", "channel_id", "direct_kwant_id", "thread_id"], Owner::Context));
             out
         }
-        E::BotActionUpdated { action: v } | E::HireUpdated { hire: v } | E::CapabilityChanged { capability: v } => {
+        E::BotActionUpdated { action: v }
+        | E::HireUpdated { hire: v }
+        | E::CapabilityChanged { capability: v }
+        | E::FactChanged { fact: v }
+        | E::FactDispute { dispute: v } => {
             let mut out = fields(v, &["space_id"], Owner::Space);
             out.extend(fields(v, &["kwant_id", "channel_id", "direct_kwant_id", "thread_id"], Owner::Context));
             out
@@ -228,6 +232,8 @@ mod tests {
             E::BotActionUpdated { action: json!({"id": "b", "space_id": "spc_default", "kwant_id": "k"}) },
             E::HireUpdated { hire: json!({"id": "h", "space_id": "spc_default", "kwant_id": "k"}) },
             E::CapabilityChanged { capability: json!({"space_id": "spc_default", "kwant_id": "k", "task_class": "general"}) },
+            E::FactChanged { fact: json!({"id": "f", "space_id": "spc_default", "kwant_id": "k"}) },
+            E::FactDispute { dispute: json!({"id": "d", "space_id": "spc_default"}) },
             E::Scoped {
                 tag: TurnTag { turn_id: s("x"), kwant_id: s("k"), context_id: s("c"), thread_id: None },
                 event: Box::new(E::TextDelta(s("x"))),
@@ -321,6 +327,8 @@ mod tests {
                 | E::BotActionUpdated { .. }
                 | E::HireUpdated { .. }
                 | E::CapabilityChanged { .. }
+                | E::FactChanged { .. }
+                | E::FactDispute { .. }
                 | E::Scoped { .. }
                 | E::ProfileSwitched { .. }
                 | E::DiscussionStarted { .. }

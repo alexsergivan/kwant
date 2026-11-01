@@ -122,6 +122,15 @@ pub enum RuntimeEvent {
     /// reload `GET /api/capabilities`. See docs/mission-control.md §14.
     #[serde(rename = "capability_changed", alias = "CapabilityChanged")]
     CapabilityChanged { capability: Value },
+    /// A Truth Ledger fact changed status (written, accepted, disputed, superseded, expired);
+    /// `fact` is `{id, status, space_id, scope, scope_id, kwant_id}`. Clients refetch it. See
+    /// docs/mission-control.md §21.
+    #[serde(rename = "fact_changed", alias = "FactChanged")]
+    FactChanged { fact: Value },
+    /// A dispute between two facts opened, was resolved or was dismissed; `dispute` is
+    /// `{id, status, space_id, fact_a, fact_b, cause, winner}`.
+    #[serde(rename = "fact_dispute", alias = "FactDispute")]
+    FactDispute { dispute: Value },
     /// An event from inside one turn, tagged with the turn and its chat. On the SSE wire it is
     /// the inner event with `turn_id`, `kwant_id`, `context_id` and `thread_id` added at the top
     /// level (see [`RuntimeEvent::to_wire`]), so clients that ignore the tags still work.
