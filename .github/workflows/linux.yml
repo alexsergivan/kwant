@@ -103,7 +103,7 @@ jobs:
           grep -Eq ' (\./)?usr/share/icons/hicolor/[^/]+/apps/kwant\.png$' "$RUNNER_TEMP/deb-files.txt"
           depends=$(dpkg-deb -f "$DEB" Depends)
           echo "Depends: $depends"
-          for dep in libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 python3-venv; do
+          for dep in libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 python3-venv xdg-utils; do
             echo "$depends" | grep -q "$dep" || { echo "::error::the .deb doesn't depend on $dep"; exit 1; }
           done
           du -h "$DEB" "$APPIMAGE"

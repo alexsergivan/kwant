@@ -5,8 +5,8 @@
     "longDescription": "kwant runs a team of AI bots on your computer: the kwant server and its web UI in one desktop app, with a tray icon.",
     "linux": {
       "deb": {
-        "depends": ["python3", "python3-venv"],
-        "recommends": ["zenity", "xdg-utils"],
+        "depends": ["python3", "python3-venv", "xdg-utils"],
+        "recommends": ["zenity"],
         "section": "devel"
       },
       "appimage": {
