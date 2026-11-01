@@ -180,6 +180,7 @@ export const TOAST_KINDS: NotifyKind[] = [
   'human_step',
   'automation_suggested',
   'tier_proposed',
+  'fact_disputed',
 ];
 
 export interface NotifyEvent {

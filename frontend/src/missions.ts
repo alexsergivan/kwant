@@ -8,6 +8,7 @@ import { PersonCancelledError, personFetch } from './auth';
 import { relativeTime } from './away';
 import { Capabilities, CapabilityChange, CapabilityChangedEvent, ENGINE_CANT_SANDBOX, ProposalDecision, ProposalStatus, Scorecard, TaskTier, Tier, TierProposal } from './flightSchool';
 import type { Risk, RiskResolution, TaskRisks } from './auditor';
+import { Dispute, DisputeStatus, Fact, FactChangedEvent, FactDetail, FactDisputeEvent, FactStatus, ledgerSetting } from './truthLedger';
 
 export type TaskState = 'backlog' | 'ready' | 'working' | 'needs_you' | 'review' | 'verified' | 'blocked' | 'failed' | 'cancelled';
 export type MissionStatus = 'draft' | 'active' | 'done' | 'cancelled';
@@ -51,10 +52,27 @@ export interface NeedsYouItem {
    * fix_needed: a failure AutoFix never retries (id = the failure's id). workflow_change: a proposed change
    * (id = the change's id); approve or reject it under /api/workflow-changes.
    * engine_cant_sandbox: Flight School blocked the task because its bot is below Act on an engine kwant
-   * can't hold to a tier (id = the task's id). */
-  kind: 'question' | 'approval' | 'human_step' | 'check_approval' | 'may_be_invalid' | 'autofix_suggested' | 'fix_needed' | 'workflow_change' | 'engine_cant_sandbox';
+   * can't hold to a tier (id = the task's id).
+   * fact_changed: an open task cites a fact that is now disputed or was replaced (cleared with
+   * `POST /api/facts/:id/uncite`). rests_on_disputed_fact: a verified task's fact is disputed. */
+  kind:
+    | 'question'
+    | 'approval'
+    | 'human_step'
+    | 'check_approval'
+    | 'may_be_invalid'
+    | 'autofix_suggested'
+    | 'fix_needed'
+    | 'workflow_change'
+    | 'engine_cant_sandbox'
+    | 'fact_changed'
+    | 'rests_on_disputed_fact';
   id: string;
   text: string;
+  /** fact_changed, rests_on_disputed_fact: the fact (id = fact_id), its status now and what replaced it. */
+  fact_id?: string;
+  status?: string;
+  superseded_by?: string | null;
   /** question, approval, human_step: the chat the card is in (the owner's hand-off thread, a
    * channel or a direct chat), which may not be the chat the task came from. */
   chat?: { channel_id: string | null; kwant_id: string | null; thread_id: string | null };
@@ -1483,7 +1501,9 @@ export type MissionEvent =
   | { type: 'task_updated'; data: { task: Task } }
   | { type: 'mission_updated'; data: { mission: Mission } }
   /** Flight School C4: a bot asked for a tier, or a proposal was granted, declined or went stale. */
-  | { type: 'capability_changed'; data: { capability: CapabilityChangedEvent } };
+  | { type: 'capability_changed'; data: { capability: CapabilityChangedEvent } }
+  | { type: 'fact_changed'; data: { fact: FactChangedEvent } }
+  | { type: 'fact_dispute'; data: { dispute: FactDisputeEvent } };
 
 const bus = typeof EventTarget !== 'undefined' ? new EventTarget() : null;
 
@@ -1542,7 +1562,7 @@ const sentence = (s: string) => {
 export function errorFrom(status: number, answer: unknown): MissionError {
   const a = answer && typeof answer === 'object' ? (answer as Record<string, unknown>) : {};
   const err = typeof a.error === 'string' && a.error.trim() ? sentence(a.error) : null;
-  // A 409 without a `code` may name the state it found instead (Flight School proposals).
+  // A 409 without a `code` may name the state it found instead (a Flight School proposal, or a dispute or fact already decided).
   const code = typeof a.code === 'string' && a.code ? a.code : status === 409 && typeof a.status === 'string' && a.status ? a.status : null;
   if (status === 403) return new MissionError('Only you can change tasks on the board.', 403);
   if (status === 404 && !err) return new MissionError('This server doesn’t have the Mission board yet. Update the app and try again.', 404);
@@ -1660,6 +1680,28 @@ export const capabilitiesApi = {
   decline: (id: string, key: string, note?: string) =>
     call<ProposalDecision>(`/api/capabilities/proposals/${enc(id)}/decline`, 'POST', note ? { note } : {}, { 'Idempotency-Key': key }),
 };
+
+/** The Truth Ledger (C2, person only; writes 409 unless the ledger is `on`). */
+export const factsApi = {
+  /** `setting` tells whether to show anything: only `on` does. */
+  list: (status?: FactStatus) =>
+    call<{ setting?: string; facts?: Fact[] }>(`/api/facts${status ? `?status=${enc(status)}` : ''}`).then((r) => ({
+      setting: ledgerSetting(r?.setting),
+      facts: Array.isArray(r?.facts) ? r.facts : [],
+    })),
+  disputes: (status: DisputeStatus | 'all' = 'open') =>
+    call<{ setting?: string; disputes?: Dispute[] }>(`/api/facts/disputes?status=${enc(status)}`).then((r) => ({
+      setting: ledgerSetting(r?.setting),
+      disputes: Array.isArray(r?.disputes) ? r.disputes : [],
+    })),
+  get: (id: string) => call<FactDetail>(`/api/facts/${enc(id)}`),
+  resolve: (id: string, winner: string, key: string) => call<Dispute>(`/api/facts/disputes/${enc(id)}/resolve`, 'POST', { winner }, { 'Idempotency-Key': key }),
+  dismiss: (id: string, key: string) => call<Dispute>(`/api/facts/disputes/${enc(id)}/dismiss`, 'POST', {}, { 'Idempotency-Key': key }),
+  accept: (id: string, key: string) => call<FactDetail>(`/api/facts/${enc(id)}/accept`, 'POST', {}, { 'Idempotency-Key': key }),
+  reject: (id: string, key: string) => call<FactDetail>(`/api/facts/${enc(id)}/reject`, 'POST', {}, { 'Idempotency-Key': key }),
+  uncite: (id: string, taskId: string) => call<{ ok: boolean }>(`/api/facts/${enc(id)}/uncite`, 'POST', { task_id: taskId }),
+};
+export type FactsApi = typeof factsApi;
 
 /** Where a task came from in the app: a channel, a bot's thread, or a bot's direct chat. */
 /** Where to answer a Needs-you card: the chat the card is in, else the chat the task came from. */

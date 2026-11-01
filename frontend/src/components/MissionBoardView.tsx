@@ -35,6 +35,8 @@ import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { ModernAvatar } from './ModernAvatar';
 import { PerformancePanel } from './PerformancePanel';
 import { TierRequests } from './TierProposals';
+import { FactNeedsYouAction, FactsLedger } from './FactsLedger';
+import { isFactNeedsYou } from '../truthLedger';
 import { RisksSection } from './RisksSection';
 import { AuditWaiting, Risk, RiskResolution, TaskRisks, auditCardPlace, auditLive, auditWaiting, openRiskCounts, riskBadgeText, riskResolvedText } from '../auditor';
 import { awayApi } from '../away';
@@ -2180,20 +2182,26 @@ export const TaskDetailBody: React.FC<{
               <li key={n.id} className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-100">
                 <span className="flex-1 min-w-[10rem] break-words">
                   <span className="font-medium">
-                    {n.kind === 'approval'
-                      ? 'Approval'
-                      : n.kind === 'human_step'
-                        ? 'Step in the browser'
-                        : n.kind === 'check_approval'
-                          ? 'Check to allow'
-                          : n.kind === ENGINE_CANT_SANDBOX
-                            ? 'Engine can’t be sandboxed'
-                            : 'Question'}
+                    {n.kind === 'fact_changed'
+                      ? 'A fact changed'
+                      : n.kind === 'rests_on_disputed_fact'
+                        ? 'Rests on a disputed fact'
+                        : n.kind === 'approval'
+                          ? 'Approval'
+                          : n.kind === 'human_step'
+                            ? 'Step in the browser'
+                            : n.kind === 'check_approval'
+                              ? 'Check to allow'
+                              : n.kind === ENGINE_CANT_SANDBOX
+                                ? 'Engine can’t be sandboxed'
+                                : 'Question'}
                     :{' '}
                   </span>
                   {n.kind === ENGINE_CANT_SANDBOX ? <span data-engine-cant-sandbox>{engineCantSandboxText(owner ?? null)}</span> : n.text}
                 </span>
-                {n.kind === 'check_approval' ? (
+                {isFactNeedsYou(n.kind) ? (
+                  <FactNeedsYouAction taskId={t.id} item={n} />
+                ) : n.kind === 'check_approval' ? (
                   (() => {
                     const c = detail.checks.find((x) => x.id === n.id);
                     return c && c.status === 'needs_approval' ? (
@@ -2549,6 +2557,14 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
   const drafts = mission ? [] : visibleMissions.filter((m) => m.status === 'draft');
   const inMission = (tasks ?? []).filter((t) => t.state !== 'cancelled' && (!missionId || t.mission_id === missionId));
   const shown = filterByTeams(inMission, teamFilter, teams);
+  const taskTitles = useMemo(() => Object.fromEntries((tasks ?? []).map((t) => [t.id, t.title])), [tasks]);
+  const openTaskById = useCallback(
+    (id: string) => {
+      const t = (tasks ?? []).find((x) => x.id === id);
+      if (t) onOpenTask(t);
+    },
+    [tasks, onOpenTask],
+  );
   const empty = tasks !== null && inMission.length === 0 && !mission && drafts.length === 0;
   const teamOf = teamOfBots(teams);
   const liveShown = live ? (teamFilter.length ? live.filter((b) => teamFilter.includes(b.teamId)) : live) : null;
@@ -2628,6 +2644,7 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
               {liveShown && <LiveStrip bots={liveShown} teams={teams} workingCards={workingCards} now={now} onOpen={onOpenLive} />}
 
               <InsightsStrip insights={insights} needsYou={needsYouCount(tasks)} />
+              <FactsLedger names={names} taskTitles={taskTitles} onOpenTask={openTaskById} now={now} />
 
               <TierRequests names={names} now={now} />
 
