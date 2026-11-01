@@ -217,7 +217,7 @@ export const HireCard: React.FC<HireCardProps> = ({ meta, messageId, kwantName, 
           )}
           {pending && can('always_accept') && (
             <p className="text-[11px] text-zinc-500">
-              Always accept hires later proposals in this space at once, up to 3 a day, each with Undo. You can change this in Space settings.
+              Always accept hires later proposals in this space at once, up to 3 a day, each with Undo. You can change this in Settings › This space.
             </p>
           )}
 

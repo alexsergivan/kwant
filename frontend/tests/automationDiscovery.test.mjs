@@ -260,7 +260,7 @@ test('the automation_suggested notification: a toggle where the server has it, a
   assert.ok(m.TOAST_KINDS.includes('automation_suggested'));
   assert.equal(m.shouldShowOsNotification({ enabled: true, permission: 'granted', hidden: true, kind: 'automation_suggested' }), true);
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  assert.match(app, /n\.kind === 'automation_suggested'\) setIsRoutinesOpen\(true\)/, 'a tapped notification opens Routines');
+  assert.match(app, /n\.kind === 'automation_suggested'\) openSpaceSettings\('routines'\)/, 'a tapped notification opens Settings › This space › Routines');
   assert.doesNotMatch(readFileSync(new URL('../src/missions.ts', import.meta.url), 'utf8'), /automation_suggested/, 'not on the Needs-you list');
   const settings = readFileSync(new URL('../src/components/SettingsModal.tsx', import.meta.url), 'utf8');
   assert.match(settings, /notifyKindsFor\(appUpdates, !!proactive, !!discovery[,)]/);
@@ -404,7 +404,7 @@ test('blocked: off is one quiet line; board off and no time zone each show their
   box = v.host.querySelector('[data-testid="discovery-blocked"]');
   assert.equal(box.getAttribute('role'), 'status');
   assert.match(box.textContent, /the board is off\..*Turn on “Show the Mission board” in Settings/);
-  assert.match(box.textContent, /time zone isn’t set.*Set your time zone in Settings, under Where you are/);
+  assert.match(box.textContent, /time zone isn’t set.*Set your time zone in Settings › All spaces, under Where you are/);
   assert.ok(v.button('Check again'));
   v.done();
 });

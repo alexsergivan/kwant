@@ -280,7 +280,7 @@ export class AcceptIntent {
 export const BLOCK_TEXT: Record<DiscoveryBlock, { title: string; fix: string }> = {
   off: {
     title: 'Suggestions are off.',
-    fix: 'Turn on “Suggest routines from repeated tasks” in Settings, under Mission board.',
+    fix: 'Turn on “Suggest routines from repeated tasks” in Settings › All spaces, under Mission board.',
   },
   board_off: {
     title: 'Suggestions learn from tasks on the Mission board, and the board is off.',
@@ -288,7 +288,7 @@ export const BLOCK_TEXT: Record<DiscoveryBlock, { title: string; fix: string }> 
   },
   no_timezone: {
     title: 'Your time zone isn’t set, so there’s no telling what time you usually ask.',
-    fix: 'Set your time zone in Settings, under Where you are.',
+    fix: 'Set your time zone in Settings › All spaces, under Where you are.',
   },
 };
 

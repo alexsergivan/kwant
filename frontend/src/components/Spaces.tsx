@@ -86,8 +86,8 @@ export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, on
     <button
       type="button"
       onClick={onOpenAppSettings}
-      aria-label="App settings"
-      title="App settings"
+      aria-label="Settings (all spaces)"
+      title="Settings (all spaces)"
       className="w-10 h-10 rounded-xl text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 flex items-center justify-center transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
     >
       <Settings size={18} />

@@ -8,12 +8,13 @@ import {
   Check,
   Download,
   FileUp,
+  Globe,
   KeyRound,
+  Link2,
   Loader2,
   Pencil,
   Plug,
   Plus,
-  Settings,
   Settings2,
   Sparkles,
   Users,
@@ -25,6 +26,7 @@ import { useEngines } from '../useEngines';
 import { useProfiles } from '../useProfiles';
 import type { Profile } from '../profiles';
 import { EnginesPanel } from './EnginesPanel';
+import { ApiKeysPanel } from './ApiKeysPanel';
 import { RoutinesPanel, type RoutineFocus } from './RoutinesPanel';
 import { HirePolicyPanel } from './HirePolicyPanel';
 import { ModernAvatar } from './ModernAvatar';
@@ -34,13 +36,17 @@ import { ImportError, ImportRecord, downloadExport, importApi, importErrorText }
 import { memberIdsOf, type Channel, type Kwant, type Team } from './Sidebar';
 import { SpaceApprovalsSetting } from './ApprovalsSetting';
 
-export type SpaceSettingsTab = 'general' | 'accounts' | 'bots' | 'teams' | 'tools' | 'skills' | 'routines' | 'import';
+import type { SettingsScope, SpaceSettingsTab } from '../nav';
+import { InstallAppButton } from './InstallAppButton';
+
+export type { SettingsScope, SpaceSettingsTab };
 
 const TABS: Array<{ id: SpaceSettingsTab; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: 'General', icon: <Settings2 size={15} /> },
   { id: 'accounts', label: 'Accounts', icon: <KeyRound size={15} /> },
   { id: 'bots', label: 'Kwant bots', icon: <Bot size={15} /> },
   { id: 'teams', label: 'Teams', icon: <Users size={15} /> },
+  { id: 'connections', label: 'Connections', icon: <Link2 size={15} /> },
   { id: 'tools', label: 'Tools', icon: <Plug size={15} /> },
   { id: 'skills', label: 'Skills', icon: <Sparkles size={15} /> },
   { id: 'routines', label: 'Routines', icon: <CalendarClock size={15} /> },
@@ -51,9 +57,17 @@ interface Props {
   space: Space;
   /** Every space, for taken names. */
   spaces: Space[];
+  /** This space, or All spaces (app-wide settings). */
+  scope: SettingsScope;
+  onScope: (scope: SettingsScope) => void;
   tab: SpaceSettingsTab;
   onTab: (tab: SpaceSettingsTab) => void;
   onClose: () => void;
+  /** This space › Connections: the space's connected apps and tools. */
+  connections: React.ReactNode;
+  /** All spaces: the app-wide settings. */
+  appSettings: React.ReactNode;
+  onOpenArchived: () => void;
   kwants: Kwant[];
   channels: Channel[];
   teams: Team[];
@@ -69,7 +83,6 @@ interface Props {
   onNewTeam: () => void;
   onManageTeam: (t: Team) => void;
   onOpenTools: () => void;
-  onOpenAppSettings: () => void;
   /** Set by a routine card's Edit or Pause: opens that routine in Routines. */
   routineFocus?: RoutineFocus | null;
   /** After an import or its undo: load bots, teams and chats again. */
@@ -87,9 +100,13 @@ const rowBtn =
 const primaryBtn =
   'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50';
 
-/** Space settings: everything here belongs to the open space only. */
+/** Settings, in one place: "This space" (only the open space) and "All spaces" (the app). */
 export const SpaceSettings: React.FC<Props> = (p) => {
-  const { space, tab, onTab, onClose } = p;
+  const { space, tab, onTab, onClose, scope, onScope } = p;
+  const toApp = () => {
+    playSfx('click');
+    onScope('app');
+  };
   const [importOpen, setImportOpen] = useState(false);
   // Bumped after the dialog imports or undoes, so the Import tab's list loads again.
   const [importsSeq, setImportsSeq] = useState(0);
@@ -115,73 +132,110 @@ export const SpaceSettings: React.FC<Props> = (p) => {
     >
       {/* Tab list: a column on desktop, scrolling chips on phones */}
       <div className="md:w-60 shrink-0 border-b md:border-b-0 md:border-r border-zinc-800/80 bg-zinc-900/40 flex flex-col">
-        <div className="flex items-center gap-2.5 p-3 md:p-4">
+        <div className="flex items-center gap-2.5 p-3 md:p-4 pb-2 md:pb-3">
           <button type="button" onClick={onClose} aria-label="Back to chats" className="p-1.5 -ml-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800">
             <ArrowLeft size={17} />
           </button>
-          <SpaceTile space={space} size={28} />
-          <div className="min-w-0">
-            <h2 id="space-settings-title" className="text-sm font-semibold truncate">{space.name} settings</h2>
-            <p className="text-[11px] text-zinc-500">Only affects this space</p>
-          </div>
+          <h2 id="space-settings-title" className="text-sm font-semibold truncate">Settings</h2>
         </div>
-        <nav aria-label="Space settings" className="flex md:flex-col gap-1 px-3 pb-3 md:px-2 overflow-x-auto md:overflow-visible">
-          {TABS.map((t) => (
+        {/* Which settings: this space's, or the ones every space shares */}
+        <div role="tablist" aria-label="Settings scope" className="mx-3 md:mx-2 mb-3 grid grid-cols-2 gap-1 rounded-lg bg-zinc-900 border border-zinc-800 p-0.5">
+          {(
+            [
+              { id: 'space', label: 'This space', icon: <SpaceTile space={space} size={16} /> },
+              { id: 'app', label: 'All spaces', icon: <Globe size={13} aria-hidden="true" /> },
+            ] as const
+          ).map((s) => (
             <button
-              key={t.id}
+              key={s.id}
               type="button"
-              aria-current={tab === t.id ? 'page' : undefined}
+              role="tab"
+              aria-selected={scope === s.id}
+              data-settings-scope={s.id}
               onClick={() => {
+                if (scope === s.id) return;
                 playSfx('click');
-                onTab(t.id);
+                onScope(s.id);
               }}
-              className={`shrink-0 flex items-center gap-2 px-3 py-1.5 md:py-2 rounded-full md:rounded-lg text-xs font-medium transition-colors ${
-                tab === t.id ? 'bg-zinc-800 text-zinc-100 border border-zinc-700/60' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 border border-transparent'
+              className={`flex items-center justify-center gap-1.5 min-w-0 px-2 py-1.5 rounded-md text-xs font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                scope === s.id ? 'bg-zinc-800 text-zinc-100 shadow-sm' : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
-              <span className={tab === t.id ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true">{t.icon}</span>
-              {t.label}
+              <span className="shrink-0 flex">{s.icon}</span>
+              <span className="truncate">{s.label}</span>
             </button>
           ))}
-        </nav>
-        <div className="hidden md:block mt-auto p-3 border-t border-zinc-800/60">
-          <button type="button" onClick={p.onOpenAppSettings} className="flex items-center gap-2 text-xs text-zinc-400 hover:text-zinc-100">
-            <Settings size={14} /> App settings (every space)
-          </button>
         </div>
+        {scope === 'space' && (
+          <nav aria-label={`${space.name} settings`} className="flex md:flex-col gap-1 px-3 pb-3 md:px-2 overflow-x-auto md:overflow-visible">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                aria-current={tab === t.id ? 'page' : undefined}
+                onClick={() => {
+                  playSfx('click');
+                  onTab(t.id);
+                }}
+                className={`shrink-0 flex items-center gap-2 px-3 py-1.5 md:py-2 rounded-full md:rounded-lg text-xs font-medium transition-colors ${
+                  tab === t.id ? 'bg-zinc-800 text-zinc-100 border border-zinc-700/60' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 border border-transparent'
+                }`}
+              >
+                <span className={tab === t.id ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true">{t.icon}</span>
+                {t.label}
+              </button>
+            ))}
+          </nav>
+        )}
       </div>
 
       <div className="flex-1 min-w-0 overflow-y-auto">
         <div className="max-w-2xl mx-auto p-4 sm:p-6 space-y-5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-base font-semibold">{TABS.find((t) => t.id === tab)?.label}</h3>
-              <p className="text-[11px] text-zinc-500">Only affects this space ({space.name})</p>
+              <h3 className="text-base font-semibold">{scope === 'app' ? 'All spaces' : TABS.find((t) => t.id === tab)?.label}</h3>
+              <p className="text-[11px] text-zinc-500">
+                {scope === 'app' ? 'Applies to every space and to this app' : `Only affects this space (${space.name})`}
+              </p>
             </div>
-            <button type="button" onClick={onClose} aria-label="Close space settings" className="hidden md:block p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800">
+            <button type="button" onClick={onClose} aria-label="Close settings" className="hidden md:block p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800">
               <X size={18} />
             </button>
           </div>
-          {tab === 'general' && <GeneralTab {...p} />}
-          {tab === 'accounts' && <AccountsTab {...p} />}
-          {tab === 'bots' && <BotsTab {...tp} />}
-          {tab === 'teams' && <TeamsTab {...p} />}
-          {tab === 'tools' && (
-            <div className={`${card} p-4 space-y-3`}>
-              <p className="text-xs text-zinc-300">Tool servers (MCP) give the bots in {space.name} abilities like files, web pages or GitHub.</p>
-              <button type="button" onClick={p.onOpenTools} className={primaryBtn}>
-                <Plug size={13} /> Manage tools
-              </button>
-            </div>
+          {scope === 'app' ? (
+            <>
+              <div className={`${card} p-4 space-y-3`} data-all-spaces-spaces>
+                <p className="text-xs font-medium text-zinc-200">Spaces</p>
+                <p className="text-[11px] text-zinc-500">Switch spaces on the left rail (Ctrl or ⌘ with 1–9). Archived spaces keep their bots and chats until you restore them.</p>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={p.onOpenArchived} className={rowBtn}>
+                    <Archive size={13} /> Archived spaces
+                  </button>
+                  <InstallAppButton className={rowBtn} />
+                </div>
+              </div>
+              {p.appSettings}
+            </>
+          ) : (
+            <>
+              {tab === 'general' && <GeneralTab {...p} />}
+              {tab === 'accounts' && <AccountsTab {...p} />}
+              {tab === 'bots' && <BotsTab {...tp} />}
+              {tab === 'teams' && <TeamsTab {...p} />}
+              {tab === 'connections' && <div data-settings-connections>{p.connections}</div>}
+              {tab === 'tools' && (
+                <div className={`${card} p-4 space-y-3`}>
+                  <p className="text-xs text-zinc-300">Tool servers (MCP) give the bots in {space.name} abilities like files, web pages or GitHub.</p>
+                  <button type="button" onClick={p.onOpenTools} className={primaryBtn}>
+                    <Plug size={13} /> Manage tools
+                  </button>
+                </div>
+              )}
+              {tab === 'skills' && <SkillsTab {...p} />}
+              {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} onOpenSettings={toApp} />}
+              {tab === 'import' && <ImportTab {...tp} />}
+            </>
           )}
-          {tab === 'skills' && <SkillsTab {...p} />}
-          {tab === 'routines' && <RoutinesPanel kwants={p.kwants} channels={p.channels} focus={p.routineFocus} onOpenSettings={p.onOpenAppSettings} />}
-          {tab === 'import' && <ImportTab {...tp} />}
-          <div className="md:hidden pt-2">
-            <button type="button" onClick={p.onOpenAppSettings} className="flex items-center gap-2 text-xs text-zinc-400 hover:text-zinc-100">
-              <Settings size={14} /> App settings (every space)
-            </button>
-          </div>
         </div>
       </div>
       {importOpen && (
@@ -467,6 +521,13 @@ const AccountsTab: React.FC<Props> = ({ space, focusClaudeSignIn, onProfilesChan
     <div className="space-y-3">
       <p className="text-xs text-zinc-400">What runs your kwant bots in {space.name}: the accounts here, and This machine when it’s on.</p>
       <EnginesPanel api={engines} accounts={accounts} focusClaudeSignIn={focusClaudeSignIn} />
+      <ApiKeysPanel
+        onSaved={() => {
+          // Saving a key or the Ollama address re-checks engines on the server; show the result.
+          window.setTimeout(engines.reload, 1500);
+          window.setTimeout(engines.reload, 6000);
+        }}
+      />
     </div>
   );
 };

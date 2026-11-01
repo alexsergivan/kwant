@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AuditorSettings, DAILY_CAPS, SETTING_HINT as AUDITOR_HINT, isAuditorModelError, MODEL_ERROR_TEXT as AUDITOR_MODEL_ERROR, parseAuditorSettings } from '../auditor';
 import { AuditorModelSetting } from './AuditorModelSetting';
-import { Key, Globe, X, Settings, Check, ChevronDown, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare } from 'lucide-react';
+import { Key, X, Settings, Check, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import { DailyUsagePanel } from './DailyUsage';
 import {
@@ -27,7 +27,6 @@ import { useAuth } from './AuthGate';
 import { SignedInDevices } from './DeviceSignIn';
 import { signedInDevicesVisible } from '../deviceSignIn';
 import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
-import { useEngines } from '../useEngines';
 import { LayaStatusRow } from './LayaStatus';
 import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
 import { StarAskSettingsLink } from './StarAsk';
@@ -241,6 +240,10 @@ interface SettingsModalProps {
   onClose: () => void;
   /** Tokens used in the open chat, shown under Usage. */
   tokensUsed?: number;
+  /** Inside Settings › All spaces: no dialog frame, no close button, Escape is the parent's. */
+  embedded?: boolean;
+  /** Opens Settings › This space › Accounts, where the API keys and Ollama address live. */
+  onOpenApiKeys?: () => void;
 }
 
 /** App settings: shared by every space (keys, Laya, limits, notifications, sounds). Accounts,
@@ -287,18 +290,12 @@ const DiscoverySetting: React.FC<{ value: DiscoverySettings; onChange: (v: Disco
   );
 };
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0 }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0, embedded = false, onOpenApiKeys }) => {
   const { authRequired, deviceLogin, signOut } = useAuth();
   const computer = useComputerMode(isOpen);
-  const engines = useEngines(isOpen);
   const [sfxMuted, setSfxMuted] = useState(isSfxMuted);
   const [vibration, setVibration] = useState(hapticsEnabled);
   const [settings, setSettings] = useState<SettingsData | null>(null);
-  const [anthropicKey, setAnthropicKey] = useState('');
-  const [xaiKey, setXaiKey] = useState('');
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434/v1');
-  const [keysOpen, setKeysOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -342,7 +339,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const limitErrors = Object.fromEntries(
     LIMIT_FIELDS.map(({ key }) => [key, limits ? limitError(key, limits[key]) : null]),
   ) as Record<TurnLimitKey, string | null>;
-  const keysSaved = [anthropicKey, xaiKey, openaiKey].filter((k) => k.trim()).length;
   const limitsInvalid = Object.values(limitErrors).some(Boolean);
   const perAgentOverGlobal =
     !!limits && !limitsInvalid && Number(limits.max_turns_per_agent) > Number(limits.max_turns_global);
@@ -350,11 +346,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || embedded) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen]);
+  }, [isOpen, embedded]);
 
   useEffect(() => {
     if (isOpen) {
@@ -366,10 +362,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         .then((r) => r.json())
         .then((data: SettingsData) => {
           setSettings(data);
-          setAnthropicKey(data.anthropic_api_key);
-          setXaiKey(data.xai_api_key);
-          setOpenaiKey(data.openai_api_key);
-          setOllamaUrl(data.ollama_url || 'http://localhost:11434/v1');
           setWebhookUrl(data.notify_webhook_url ?? '');
           if (Array.isArray(data.notify_on)) setNotifyOn(data.notify_on);
           setLimits(
@@ -454,10 +446,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          anthropic_api_key: anthropicKey,
-          xai_api_key: xaiKey,
-          openai_api_key: openaiKey,
-          ollama_url: ollamaUrl,
           notify_webhook_url: webhookUrl.trim(),
           notify_on: notifyOnToSave(notifyOn, appUpdates, !!proactive, !!discovery, flightSchool !== null),
           ...(limits
@@ -484,9 +472,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         setSaveSuccess(true);
         if (missionBoard !== null) window.dispatchEvent(new CustomEvent(MISSION_BOARD_SETTING_EVENT, { detail: missionBoard }));
         if (discovery) window.dispatchEvent(new CustomEvent(DISCOVERY_SETTING_EVENT, { detail: discovery }));
-        // Saving a key or the Ollama URL re-checks engines on the server; show the result.
-        window.setTimeout(engines.reload, 1500);
-        window.setTimeout(engines.reload, 6000);
         if (webhookUrl.trim() && webhookUrl.trim() !== MASK) setWebhookUrl(MASK);
         playSfx('coin');
         setTimeout(() => setSaveSuccess(false), 2500);
@@ -502,10 +487,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
     }
   };
 
-  return (
-    <div className="kw-dialog fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
-      <div role="dialog" aria-modal="true" aria-labelledby="settings-title" className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg sm:max-w-2xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-6">
-        {/* Header */}
+  // A plain call, not a component: a component made here would remount the form on every render.
+  const frame = (children: React.ReactNode) =>
+    embedded ? (
+      <div data-app-settings className="text-zinc-100 space-y-6 select-none">
+        {children}
+      </div>
+    ) : (
+      <div className="kw-dialog fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
+        <div role="dialog" aria-modal="true" aria-labelledby="settings-title" className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg sm:max-w-2xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-6">
+          {children}
+        </div>
+      </div>
+    );
+
+  return frame(
+    <>
+        {/* Header: the dialog's own; embedded, the Settings screen has the heading and the close button. */}
+        {!embedded && (
         <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
@@ -528,6 +527,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             <X size={18} />
           </button>
         </div>
+        )}
 
         <LayaStatusRow />
 
@@ -601,84 +601,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           </div>
         )}
 
-        {/* Cloud API Keys Form */}
+        {/* App settings form; API keys moved to Settings › This space › Accounts */}
         <form onSubmit={handleSave} className="space-y-4">
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60">
-          <button
-            type="button"
-            aria-expanded={keysOpen}
-            aria-controls="settings-api-keys"
-            onClick={() => setKeysOpen((v) => !v)}
-            className="w-full flex items-center gap-2 p-3 text-left rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
-          >
-            <Key size={14} className="text-violet-400" aria-hidden="true" />
-            <span className="flex-1">
-              <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
-              <span className="block text-[11px] text-zinc-500">
-                Optional, for every space. {keysSaved ? `${keysSaved} saved. ` : ''}Not needed when a space’s bots use a signed-in CLI.
+          {onOpenApiKeys && (
+            <button
+              type="button"
+              onClick={() => {
+                playSfx('click');
+                onOpenApiKeys();
+              }}
+              data-api-keys-link
+              className="w-full flex items-center gap-2 p-3 text-left rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+            >
+              <Key size={14} className="text-violet-400" aria-hidden="true" />
+              <span className="flex-1">
+                <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
+                <span className="block text-[11px] text-zinc-500">Now in Settings › This space › Accounts, next to the accounts that use them.</span>
               </span>
-            </span>
-            {keysOpen ? <ChevronDown size={15} className="text-zinc-500" aria-hidden="true" /> : <ChevronRight size={15} className="text-zinc-500" aria-hidden="true" />}
-          </button>
-
-          <div id="settings-api-keys" hidden={!keysOpen} className="space-y-3 px-3 pb-3">
-            <p className="text-[11px] text-zinc-500">
-              One key per provider for the API-key engines. To keep several keys for one provider, add them as accounts in a space’s settings → Accounts.
-            </p>
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1">
-                Anthropic API Key
-              </label>
-              <input
-                type="password"
-                value={anthropicKey}
-                onChange={(e) => setAnthropicKey(e.target.value)}
-                placeholder="sk-ant-api03-..."
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1">
-                xAI Grok API Key
-              </label>
-              <input
-                type="password"
-                value={xaiKey}
-                onChange={(e) => setXaiKey(e.target.value)}
-                placeholder="xai-..."
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1">
-                OpenAI API Key
-              </label>
-              <input
-                type="password"
-                value={openaiKey}
-                onChange={(e) => setOpenaiKey(e.target.value)}
-                placeholder="sk-..."
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1 flex items-center gap-1.5">
-                <Globe size={13} className="text-zinc-500" />
-                <span>Ollama Base URL</span>
-              </label>
-              <input
-                type="text"
-                value={ollamaUrl}
-                onChange={(e) => setOllamaUrl(e.target.value)}
-                placeholder="http://localhost:11434/v1"
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
-              />
-            </div>
-          </div>
-          </div>
+              <ChevronRight size={15} className="text-zinc-500" aria-hidden="true" />
+            </button>
+          )}
 
           {place && (
             <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
@@ -1152,7 +1094,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </>,
   );
 };

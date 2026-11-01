@@ -2,6 +2,8 @@ import React, { Suspense, lazy, useState, useEffect, useRef, useCallback, useMem
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
+import { InboxPage } from './components/InboxPage';
+import { InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
 import { FirstRunWelcome } from './components/FirstRunWelcome';
 import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } from './components/ChatView';
@@ -118,7 +120,7 @@ const ChannelInstructionsModal = lazy(() =>
   import('./components/ChannelInstructionsModal').then((m) => ({ default: m.ChannelInstructionsModal })),
 );
 const SearchModal = lazy(() => import('./components/SearchModal').then((m) => ({ default: m.SearchModal })));
-const RoutinesModal = lazy(() => import('./components/RoutinesModal').then((m) => ({ default: m.RoutinesModal })));
+const SettingsModal = lazy(() => import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal })));
 
 /** Where to land when a space opens: a channel or a bot's direct chat. */
 export interface SpaceTarget {
@@ -130,18 +132,21 @@ export interface SpaceAppProps {
   space: Space;
   spaces: Space[];
   initialTarget: SpaceTarget | null;
-  /** Space settings open on this tab when the space mounts (Accounts, right after creating it). */
-  initialSettingsTab?: SpaceSettingsTab | null;
+  /** Where to open instead of a chat when the space mounts: an address like /inbox or
+   * /settings/accounts (Accounts, right after creating a space). */
+  initialView?: SpaceView | null;
+  /** Asks the open space to show a view (the rail's gear, Back and Forward). `seq` makes a repeat count. */
+  viewRequest?: { view: SpaceView | null; seq: number } | null;
+  /** The view shown changed (null: a chat), for the address bar. */
+  onViewChange?: (view: SpaceView | null) => void;
   onSwitchSpace: (id: string, to?: SpaceTarget | null) => void;
   onCreateSpace: () => void;
   onOpenArchived: () => void;
-  onOpenAppSettings: () => void;
   /** Re-reads the space list (counts, #general appearing, a rename). */
   onSpacesChanged: () => void;
   onSpaceArchived: (space: Space) => void;
   /** The open chat changed, for the address bar and reopening it later. */
   onChatChange: (target: SpaceTarget) => void;
-  onTokensUsed: (n: number) => void;
 }
 
 const PHONE_QUERY = '(max-width: 767px)';
@@ -166,15 +171,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   space,
   spaces,
   initialTarget,
-  initialSettingsTab = null,
+  initialView = null,
+  viewRequest = null,
+  onViewChange,
   onSwitchSpace,
   onCreateSpace,
   onOpenArchived,
-  onOpenAppSettings,
   onSpacesChanged,
   onSpaceArchived,
   onChatChange,
-  onTokensUsed,
 }) => {
   const isPhone = useIsPhone();
   // Phones: the list (one tab of it) or the open chat.
@@ -261,8 +266,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   const [tokensUsed, setTokensUsed] = useState(0);
 
-  // Space settings: open on one tab, or closed.
-  const [spaceSettingsTab, setSpaceSettingsTab] = useState<SpaceSettingsTab | null>(initialSettingsTab);
+  // Settings: open on This space (one tab) or All spaces, or closed (tab null).
+  const [spaceSettingsTab, setSpaceSettingsTab] = useState<SpaceSettingsTab | null>(() =>
+    initialView?.kind === 'settings' ? (initialView.scope === 'space' ? initialView.tab : 'general') : null,
+  );
+  const [settingsScope, setSettingsScope] = useState<SettingsScope>(() => (initialView?.kind === 'settings' ? initialView.scope : 'space'));
   // Bumped when Space settings closes, so open bot forms read account status again.
   const [settingsClosedCount, setSettingsClosedCount] = useState(0);
   // Set when Accounts opens from a "Sign in with Claude" hint, to focus that button.
@@ -272,21 +280,21 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const openSpaceSettings = (tab: SpaceSettingsTab = 'general') => {
     setClaudeSignInFocus(0);
     if (tab !== 'routines') setRoutineFocus(null);
+    setSettingsScope('space');
     setSpaceSettingsTab(tab);
     playSfx('click');
   };
-  const openSettings = () => openSpaceSettings('accounts');
-  const openConnections = () => {
-    setShowConnections(true);
-    setShowLoose(false);
-    setShowParallel(false);
-    setShowMissions(false);
-    setShowAway(false);
-    setPhoneView('chat');
+  // Settings › All spaces: what applies to every space and to the app.
+  const openAppSettings = () => {
+    setSettingsScope('app');
+    setSpaceSettingsTab((t) => t ?? 'general');
     playSfx('click');
   };
+  const openSettings = () => openSpaceSettings('accounts');
+  const openConnections = () => openSpaceSettings('connections');
   const openClaudeSignIn = () => {
     setClaudeSignInFocus(Date.now());
+    setSettingsScope('space');
     setSpaceSettingsTab('accounts');
   };
   // This space's engine checks, shared with the sidebar: the setup banner, the "can't answer"
@@ -304,7 +312,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Connections' "+ Add connection" opens Tools straight on adding a server.
   const [mcpStartAdding, setMcpStartAdding] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [isRoutinesOpen, setIsRoutinesOpen] = useState(false);
   const [editingChannelInstructions, setEditingChannelInstructions] = useState<Channel | null>(null);
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
   // Older messages shown instead of the latest (a search hit beyond them). Kept apart from the
@@ -312,13 +319,19 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [historyWindow, setHistoryWindow] = useState<{ ctx: string; messages: ChatMessage[] } | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  // "While you were away": open instead of a chat, and its unseen count for the sidebar badge.
-  const [showAway, setShowAway] = useState(false);
-  const [showLoose, setShowLoose] = useState(false);
-  const [showConnections, setShowConnections] = useState(false);
-  const [showParallel, setShowParallel] = useState(false);
+  // What fills the main pane instead of a chat: the Inbox (New or Loose ends), the Mission board
+  // or Parallel Universe. The Inbox's unseen count is the sidebar badge.
+  const [page, setPage] = useState<'chat' | 'inbox' | 'board' | 'parallel'>(() =>
+    initialView?.kind === 'inbox' || initialView?.kind === 'board' || initialView?.kind === 'parallel' ? initialView.kind : 'chat',
+  );
+  const [inboxTab, setInboxTab] = useState<InboxTab>(() => (initialView?.kind === 'inbox' ? initialView.tab : 'new'));
+  const showPage = (next: 'inbox' | 'board' | 'parallel', tab: InboxTab = 'new') => {
+    setPage(next);
+    if (next === 'inbox') setInboxTab(tab);
+    if (spaceSettingsTab) closeSpaceSettings();
+    setPhoneView('chat');
+  };
   // Mission board: shown in the sidebar only when the server has it switched on.
-  const [showMissions, setShowMissions] = useState(false);
   const [missionBoard, setMissionBoard] = useState(false);
   const [awayCount, setAwayCount] = useState(0);
   const awaySinceRef = useRef<string | null>(null);
@@ -346,14 +359,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const openHumanStepRef = useRef<(kwantId: string) => boolean>(() => false);
   const openTargetRef = useRef<(t: ChatTarget) => boolean>(() => false);
   // A tier request or a fact dispute is decided on the board's Needs-you list.
-  const openBoardForTier = () => {
-    setShowMissions(true);
-    setShowConnections(false);
-    setShowLoose(false);
-    setShowParallel(false);
-    setShowAway(false);
-    setPhoneView('chat');
-  };
+  const openBoardForTier = () => showPage('board');
   const showNotification = (n: NotifyEvent) => {
     // Another space's news is the shell's to show, with a way to switch there.
     if (n.space_id && n.space_id !== space.id) return;
@@ -369,7 +375,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           : n.kind === 'skill_proposed'
             ? { label: 'Review', onClick: () => openSkillsRef.current(n.kwant_id) }
             : n.kind === 'automation_suggested'
-              ? { label: 'Review', onClick: () => setIsRoutinesOpen(true) }
+              ? { label: 'Review', onClick: () => openSpaceSettings('routines') }
               : n.kind === 'tier_proposed'
               ? { label: 'Review', onClick: openBoardForTier }
               : n.kind === 'fact_disputed'
@@ -391,7 +397,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
     if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
     // A suggested routine is decided in Routines, not in the bot's chat
-    else if (n.kind === 'automation_suggested') setIsRoutinesOpen(true);
+    else if (n.kind === 'automation_suggested') openSpaceSettings('routines');
     else if (n.kind === 'tier_proposed') openBoardForTier();
     else if (n.kind === 'fact_disputed') openBoardForTier();
     else if (n.kind === 'human_step' && openHumanStepRef.current(n.kwant_id)) {
@@ -1431,11 +1437,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const handleSelectTeam = (team: Team) => {
     setOpenThreadId(null);
-    setShowAway(false);
-    setShowLoose(false);
-    setShowConnections(false);
-    setShowParallel(false);
-    setShowMissions(false);
+    setPage('chat');
     setPhoneView('chat');
     setSelectedTeamId(team.id);
     const targetChannel = teamChannelOf(channels, team);
@@ -1471,11 +1473,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const handleSelectChannel = (channel: Channel) => {
     setOpenThreadId(null);
-    setShowAway(false);
-    setShowLoose(false);
-    setShowConnections(false);
-    setShowParallel(false);
-    setShowMissions(false);
+    setPage('chat');
     setPhoneView('chat');
     setSelectedId(channel.id);
     selectedIdRef.current = channel.id;
@@ -1489,11 +1487,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const handleSelectKwant = (kwant: Kwant) => {
     setOpenThreadId(null);
-    setShowAway(false);
-    setShowLoose(false);
-    setShowConnections(false);
-    setShowParallel(false);
-    setShowMissions(false);
+    setPage('chat');
     setPhoneView('chat');
     setSelectedId(kwant.id);
     selectedIdRef.current = kwant.id;
@@ -1506,11 +1500,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   /** Closes the page on top of the chat (board, Loose ends, Away…) and shows the chat pane. */
   const revealChat = () => {
-    setShowAway(false);
-    setShowLoose(false);
-    setShowConnections(false);
-    setShowParallel(false);
-    setShowMissions(false);
+    setPage('chat');
     setPhoneView('chat');
   };
 
@@ -1568,11 +1558,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       return;
     }
     knownThreadsRef.current.add(threadId);
-    setShowAway(false);
-    setShowLoose(false);
-    setShowConnections(false);
-    setShowParallel(false);
-    setShowMissions(false);
+    setPage('chat');
     if (selectedIdRef.current !== kwant.id || isChannelRef.current) handleSelectKwant(kwant);
     else playSfx('click');
     setOpenThreadId(threadId);
@@ -1585,11 +1571,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     if ('thread' in t) return openThread(t.kwant, t.thread);
     const ok = 'channel' in t ? openTarget({ channel_id: t.channel, kwant_id: null }) : openTarget({ channel_id: null, kwant_id: t.direct });
     if (!ok) return pushToast('That chat no longer exists.');
-    setShowAway(false);
-    setShowLoose(false);
-    setShowConnections(false);
-    setShowParallel(false);
-    setShowMissions(false);
+    setPage('chat');
   };
 
   const openDirectChat = () => {
@@ -2523,7 +2505,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
 
-  useEffect(() => onTokensUsed(tokensUsed), [tokensUsed, onTokensUsed]);
 
   // The address bar and "reopen where I was" follow the open chat.
   const chatChangeRef = useRef(onChatChange);
@@ -2801,7 +2782,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpenSpaceSettings={() => openSpaceSettings('general')}
       onOpenArchived={onOpenArchived}
       onOpenSearch={() => setIsSearchOpen(true)}
-      onOpenRoutines={() => setIsRoutinesOpen(true)}
       section={section}
       phone={isPhone}
       onOpenAccounts={openSettings}
@@ -2841,48 +2821,21 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setIsNewChannelOpen(true);
         playSfx('click');
       }}
-      awayCount={awayCount}
-      awayActive={showAway}
-      looseActive={showLoose}
-      parallelActive={showParallel}
+      inboxCount={awayCount}
+      inboxActive={page === 'inbox'}
+      onOpenInbox={() => {
+        showPage('inbox');
+        playSfx('click');
+      }}
+      parallelActive={page === 'parallel'}
       onOpenParallel={() => {
-        setShowParallel(true);
-        setShowMissions(false);
-        setShowLoose(false);
-        setShowConnections(false);
-        setShowAway(false);
-        setPhoneView('chat');
+        showPage('parallel');
         playSfx('click');
       }}
-      connectionsActive={showConnections}
-      onOpenConnections={openConnections}
       missionBoard={missionBoard}
-      missionsActive={showMissions}
+      missionsActive={page === 'board'}
       onOpenMissions={() => {
-        setShowMissions(true);
-        setShowConnections(false);
-        setShowLoose(false);
-        setShowParallel(false);
-        setShowAway(false);
-        setPhoneView('chat');
-        playSfx('click');
-      }}
-      onOpenLooseEnds={() => {
-        setShowConnections(false);
-        setShowLoose(true);
-        setShowParallel(false);
-        setShowMissions(false);
-        setShowAway(false);
-        setPhoneView('chat');
-        playSfx('click');
-      }}
-      onOpenAway={() => {
-        setShowAway(true);
-        setShowLoose(false);
-        setShowConnections(false);
-        setShowParallel(false);
-        setShowMissions(false);
-        setPhoneView('chat');
+        showPage('board');
         playSfx('click');
       }}
     />
@@ -2890,17 +2843,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const away = (
     <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount} onApprovalResolved={dropApproval}
-      onBack={isPhone ? () => { setShowAway(false); setPhoneView('list'); } : undefined}
     />
   );
-  const parallel = <ParallelPage onBack={isPhone ? () => { setShowParallel(false); setPhoneView('list'); } : undefined} />;
+  const backToList = isPhone ? () => { setPage('chat'); setPhoneView('list'); } : undefined;
+  const parallel = <ParallelPage onBack={backToList} />;
   const connectionsPage = (
     <ConnectionsPage
-      onBack={isPhone ? () => { setShowConnections(false); setPhoneView('list'); } : undefined}
+      embedded
       onOpenTools={() => setIsMcpOpen(true)}
       onAddTool={() => { setMcpStartAdding(true); setIsMcpOpen(true); }}
       onOpenAccounts={openSettings}
-      onOpenLooseEnds={() => { setShowConnections(false); setShowLoose(true); }}
+      onOpenLooseEnds={() => showPage('inbox', 'loose')}
     />
   );
   const missionNames = Object.fromEntries(kwants.map((k) => [k.id, k.name]));
@@ -2917,7 +2870,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       spaceId={space.id}
       names={missionNames}
       avatars={missionAvatars}
-      onBack={isPhone ? () => { setShowMissions(false); setPhoneView('list'); } : undefined}
+      onBack={backToList}
       onOpenChat={(t, place) => {
         const c = place ?? sourceChat(t);
         if (!c) return;
@@ -2934,7 +2887,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
     />
   );
-  const loose = <LooseEndsPage onBack={isPhone ? () => { setShowLoose(false); setPhoneView('list'); } : undefined} onOpenChat={openThread} />;
+  const loose = <LooseEndsPage onOpenChat={openThread} />;
+  const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={awayCount} onBack={backToList} newPage={away} loosePage={loose} />;
   const chat = (
         <ChatView
           title={chatTitle}
@@ -3040,7 +2994,40 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onChangeDecision={handleChangeDecision}
         />
   );
-  const mainPane = needsSetup ? setupChecklist : showParallel ? parallel : showMissions && missionBoard ? missionsPage : showConnections ? connectionsPage : showLoose ? loose : showAway ? away : !loaded ? (
+  // The view on screen, for the address bar; and views asked for from outside (the rail's gear,
+  // Back and Forward). The board stays the view while its setting loads; the pane shows a chat if it's off.
+  const currentView: SpaceView | null = spaceSettingsTab
+    ? settingsScope === 'app'
+      ? { kind: 'settings', scope: 'app' }
+      : { kind: 'settings', scope: 'space', tab: spaceSettingsTab }
+    : page === 'inbox'
+      ? { kind: 'inbox', tab: inboxTab }
+      : page === 'chat'
+        ? null
+        : { kind: page };
+  const viewKey = currentView ? viewSegment(currentView) : '';
+  const viewChangeRef = useRef(onViewChange);
+  viewChangeRef.current = onViewChange;
+  const currentViewRef = useRef(currentView);
+  currentViewRef.current = currentView;
+  useEffect(() => {
+    viewChangeRef.current?.(currentViewRef.current);
+  }, [viewKey]);
+  const applyViewRef = useRef<(v: SpaceView | null) => void>(() => undefined);
+  applyViewRef.current = (v) => {
+    if (!v) {
+      if (spaceSettingsTab) closeSpaceSettings();
+      setPage('chat');
+      return;
+    }
+    if (v.kind === 'settings') return v.scope === 'app' ? openAppSettings() : openSpaceSettings(v.tab);
+    showPage(v.kind, v.kind === 'inbox' ? v.tab : 'new');
+  };
+  useEffect(() => {
+    if (viewRequest) applyViewRef.current(viewRequest.view);
+  }, [viewRequest?.seq]);
+
+  const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'inbox' ? inbox : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…
     </main>
@@ -3087,12 +3074,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                     onClick={() => {
                       playSfx('click');
                       if (t.id === 'inbox') {
-                        setShowAway(true);
-                        setShowLoose(false);
-                        setShowConnections(false);
-                        setShowParallel(false);
-                        setShowMissions(false);
-                        setPhoneView('chat');
+                        showPage('inbox');
                         return;
                       }
                       if (t.id === 'space') {
@@ -3231,7 +3213,21 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onNewTeam={() => setIsNewTeamOpen(true)}
           onManageTeam={(t) => setEditingTeam(t)}
           onOpenTools={() => setIsMcpOpen(true)}
-          onOpenAppSettings={onOpenAppSettings}
+          scope={settingsScope}
+          onScope={setSettingsScope}
+          onOpenArchived={onOpenArchived}
+          connections={connectionsPage}
+          appSettings={
+            <Suspense
+              fallback={
+                <p className="flex items-center gap-2 text-xs text-zinc-400">
+                  <Loader2 size={13} className="animate-spin motion-reduce:animate-none" /> Loading…
+                </p>
+              }
+            >
+              <SettingsModal embedded isOpen onClose={closeSpaceSettings} tokensUsed={tokensUsed} onOpenApiKeys={() => openSpaceSettings('accounts')} />
+            </Suspense>
+          }
           routineFocus={routineFocus}
           onApprovalsChanged={refreshRoster}
           onImported={() => {
@@ -3255,17 +3251,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onOpenConnections={() => {
             setIsMcpOpen(false);
             setMcpStartAdding(false);
-            setShowConnections(true);
-            setShowLoose(false);
-            setShowParallel(false);
-            setShowMissions(false);
-            setShowAway(false);
-            setPhoneView('chat');
-            playSfx('click');
+            openConnections();
           }}
         />
         {isSearchOpen && <SearchModal isOpen onClose={() => setIsSearchOpen(false)} kwants={kwants} onJump={handleJump} />}
-        {isRoutinesOpen && <RoutinesModal isOpen onClose={() => setIsRoutinesOpen(false)} kwants={kwants} channels={channels} onOpenSettings={onOpenAppSettings} />}
       </Suspense>
 
       {editingChannelInstructions && (

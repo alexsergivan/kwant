@@ -526,6 +526,8 @@ export interface ConnectionsViewProps extends ManageLinks {
   onUnlockVault?: () => void;
   onAddComposio: ComposioCardProps['onAdd'];
   onBack?: () => void;
+  /** Inside Settings › This space: the screen has the heading and the scrolling. */
+  embedded?: boolean;
   /** Tests open the Composio form. */
   composioOpen?: boolean;
   /** Tests and screenshots open the "+ Add connection" list. */
@@ -545,6 +547,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   onUnlockVault,
   onAddComposio,
   onBack,
+  embedded = false,
   composioOpen = false,
   addMenuOpen = false,
   ...links
@@ -561,8 +564,14 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     sources: links.onOpenLooseEnds ? { key: 'sources', label: 'Loose ends', hint: '', run: links.onOpenLooseEnds } : undefined,
   };
   return (
-    <div className="flex-1 flex flex-col h-full bg-zinc-950 overflow-hidden">
-      <div className={`h-14 border-b border-zinc-800/80 ${onBack ? 'px-2' : 'px-4'} sm:px-6 flex items-center justify-between gap-3 bg-zinc-900/30 backdrop-blur-sm select-none`}>
+    <div className={embedded ? 'space-y-4' : 'flex-1 flex flex-col h-full bg-zinc-950 overflow-hidden'}>
+      <div
+        className={
+          embedded
+            ? 'flex items-center justify-between gap-3 select-none'
+            : `h-14 border-b border-zinc-800/80 ${onBack ? 'px-2' : 'px-4'} sm:px-6 flex items-center justify-between gap-3 bg-zinc-900/30 backdrop-blur-sm select-none`
+        }
+      >
         {onBack && (
           <button
             type="button"
@@ -574,8 +583,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
           </button>
         )}
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold text-zinc-100 truncate">Connections</h2>
-          <p className="text-[11px] text-zinc-400 truncate mt-0.5">{data ? countsLine(data.connections) : 'Everything your bots reach outside the app'}</p>
+          {!embedded && <h2 className="text-sm font-semibold text-zinc-100 truncate">Connections</h2>}
+          <p className={`text-[11px] text-zinc-400 truncate ${embedded ? '' : 'mt-0.5'}`}>{data ? countsLine(data.connections) : 'Everything your bots reach outside the app'}</p>
         </div>
         <button
           type="button"
@@ -590,8 +599,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         <AddConnectionMenu choices={choices} disabled={needsToken} initialOpen={addMenuOpen} />
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6" aria-busy={loading}>
-        <div className="max-w-3xl mx-auto space-y-5">
+      <div className={embedded ? '' : 'flex-1 overflow-y-auto p-4 sm:p-6'} aria-busy={loading}>
+        <div className={embedded ? 'space-y-5' : 'max-w-3xl mx-auto space-y-5'}>
           <p className="text-[11px] text-zinc-400">Tool servers, accounts and logins your bots use. Logins stay in your own vault on this computer unless a row says otherwise. Nothing secret is shown here.</p>
 
           {needsToken && (
@@ -699,7 +708,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
 };
 
 /** The page: loads the list, checks MCP servers, unlocks the vault and adds Composio. */
-export const ConnectionsPage: React.FC<ManageLinks & { onBack?: () => void }> = ({ onBack, ...links }) => {
+export const ConnectionsPage: React.FC<ManageLinks & { onBack?: () => void; embedded?: boolean }> = ({ onBack, embedded, ...links }) => {
   const [data, setData] = useState<ConnectionsList | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -778,6 +787,7 @@ export const ConnectionsPage: React.FC<ManageLinks & { onBack?: () => void }> = 
         onUnlockVault={() => setUnlocking(true)}
         onAddComposio={addComposio}
         onBack={onBack}
+        embedded={embedded}
         {...links}
       />
       {unlocking && (

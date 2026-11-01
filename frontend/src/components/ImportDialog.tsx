@@ -334,7 +334,7 @@ export const DoneView: React.FC<{ applied: Applied; undo: UndoState; onUndo: (fo
         {extras.length > 0 && <p className="text-[11px] text-zinc-500">Also {extras.join(', ')}.</p>}
       </div>
       <Notes items={applied.warnings.map((n) => n.message)} tone="warn" label="Worth a look" />
-      <p className="text-[11px] text-zinc-400">Give them an account and tools in Space settings when you’re ready. Skills and routines are there to review.</p>
+      <p className="text-[11px] text-zinc-400">Give them an account and tools in Settings › This space when you’re ready. Skills and routines are there to review.</p>
       <p className="text-[11px] text-zinc-400">Tools you add to this space later will be on for these bots too.</p>
       {undo.kind === 'confirm_edited' && (
         <div role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">

@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, KeyRound, Loader2, Users, ChevronDown, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, CalendarClock, ShieldOff, ListChecks, Split, Hand, Plug, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, ShieldOff, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
 import { canRunNow, engineTip, isUsable } from '../engines';
-import { STATUS_DOT, statusOf, statusText, type BotStatus } from '../botStatus';
+import { statusOf, statusText, type BotStatus } from '../botStatus';
 import { EnginesApi, useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
 import { Space, spaceSummary } from '../spaces';
@@ -69,7 +69,6 @@ export interface SidebarProps {
   onOpenSpaceSettings: () => void;
   onOpenArchived: () => void;
   onOpenSearch: () => void;
-  onOpenRoutines: () => void;
   /** Phones show one tab at a time, full width. */
   section?: SidebarSection;
   phone?: boolean;
@@ -96,20 +95,17 @@ export interface SidebarProps {
   onCreateTeam: () => void;
   /** Opens the new-channel form. */
   onCreateChannel?: () => void;
-  /** "While you were away": unseen count for the badge, whether it's open, and how to open it. */
-  awayCount?: number;
-  awayActive?: boolean;
-  looseActive?: boolean;
-  connectionsActive?: boolean;
-  onOpenConnections?: () => void;
-  onOpenLooseEnds?: () => void;
+  /** Inbox: unseen count for the badge, whether it's open, and how to open it. */
+  inboxCount?: number;
+  inboxActive?: boolean;
+  onOpenInbox?: () => void;
+  /** Parallel Universe, behind "More". */
   parallelActive?: boolean;
   onOpenParallel?: () => void;
   /** Shows the Mission board row; the server's mission_board setting decides. */
   missionBoard?: boolean;
   missionsActive?: boolean;
   onOpenMissions?: () => void;
-  onOpenAway?: () => void;
   /** Opens Space settings → Accounts from the footer. */
   onOpenAccounts?: () => void;
   /** Opens Accounts at "Sign in with Claude", when Claude being signed out is why nothing runs. */
@@ -132,6 +128,93 @@ export const memberIdsOf = (t: Team): string[] =>
     ? (JSON.parse(t.member_kwants || '[]') as string[])
     : [];
 
+/**
+ * The bot list: one group per team (its members, lead first), then the bots in no team. A bot in
+ * two teams shows under each, because that's where you look for it.
+ */
+export function botGroups(teams: Team[], kwants: Kwant[]): Array<{ team: Team | null; bots: Kwant[] }> {
+  const byId = new Map(kwants.map((k) => [k.id, k]));
+  const placed = new Set<string>();
+  const groups: Array<{ team: Team | null; bots: Kwant[] }> = teams.map((t) => {
+    const ids = memberIdsOf(t);
+    const ordered = [...ids.filter((id) => id === t.lead_kwant_id), ...ids.filter((id) => id !== t.lead_kwant_id)];
+    const bots = ordered.map((id) => byId.get(id)).filter((k): k is Kwant => !!k);
+    for (const k of bots) placed.add(k.id);
+    return { team: t, bots };
+  });
+  groups.push({ team: null, bots: kwants.filter((k) => !placed.has(k.id)) });
+  return groups;
+}
+
+/** "More": the places used less often, in a small menu. */
+const MoreMenu: React.FC<{
+  className: string;
+  active: boolean;
+  items: Array<{ label: string; icon: React.ReactNode; active?: boolean; onClick: () => void }>;
+}> = ({ className, active, items }) => {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+  const menuId = React.useId();
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setOpen(false);
+      ref.current?.querySelector<HTMLElement>('button')?.focus();
+    };
+    const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('mousedown', onDown);
+    ref.current?.querySelector<HTMLElement>('[role=menuitem]')?.focus();
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('mousedown', onDown);
+    };
+  }, [open]);
+  return (
+    <div ref={ref} className="relative" data-more-menu>
+      <button
+        type="button"
+        onClick={() => {
+          playSfx('click');
+          setOpen((v) => !v);
+        }}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        className={className}
+      >
+        <MoreHorizontal size={15} className={active ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
+        <span className="truncate flex-1">More</span>
+        <ChevronDown size={12} className={`shrink-0 text-zinc-500 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
+      </button>
+      {open && (
+        <div id={menuId} role="menu" aria-label="More" className="absolute left-0 right-0 top-full mt-1 z-30 rounded-lg border border-zinc-700/70 bg-zinc-900 p-1 shadow-xl">
+          {items.map((it) => (
+            <button
+              key={it.label}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                it.onClick();
+              }}
+              aria-current={it.active ? 'page' : undefined}
+              className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                it.active ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
+              }`}
+            >
+              <span className={it.active ? 'text-sky-400' : 'text-zinc-500'}>{it.icon}</span>
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const Sidebar: React.FC<SidebarProps> = ({
   space,
   spaces,
@@ -140,7 +223,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSpaceSettings,
   onOpenArchived,
   onOpenSearch,
-  onOpenRoutines,
   section = 'all',
   phone = false,
   kwants,
@@ -161,18 +243,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSummonKwant,
   onCreateTeam,
   onCreateChannel,
-  awayCount = 0,
-  awayActive = false,
-  looseActive = false,
-  connectionsActive = false,
-  onOpenConnections,
+  inboxCount = 0,
+  inboxActive = false,
+  onOpenInbox,
   parallelActive = false,
   onOpenParallel,
   missionBoard = false,
   missionsActive = false,
   onOpenMissions,
-  onOpenLooseEnds,
-  onOpenAway,
   onOpenAccounts,
   onSignInClaude,
   enginesRefreshKey = 0,
@@ -190,7 +268,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Nothing can run and Claude only needs signing in: the footer goes straight to that.
   const offerClaude = readyCount === 0 && !!onSignInClaude && claudeNeedsSignIn(engines.engines);
   const canRun = canRunNow(engines.engines);
-  const [teamsOpen, setTeamsOpen] = useState(true);
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -249,43 +326,323 @@ export const Sidebar: React.FC<SidebarProps> = ({
     </button>
   );
 
+  // One row per bot: avatar with its status dot, name, what it is doing, and its actions. In a
+  // team the lead is marked and others can be removed; on phones those sit in a sheet.
+  const botRow = (k: Kwant, team?: Team) => {
+    const active = !isChannel && selectedId === k.id;
+    const status = statusOf(k.id, botStatus, canRun);
+    const isLead = !!team && k.id === team.lead_kwant_id;
+    const memberIds = team ? memberIdsOf(team) : [];
+    return (
+      <div
+        key={`${team?.id ?? 'none'}:${k.id}`}
+        role="button"
+        tabIndex={0}
+        onClick={() => onSelectKwant(k)}
+        onKeyDown={(e) => e.key === 'Enter' && onSelectKwant(k)}
+        data-bot-row={k.id}
+        className={`group/fleet w-full flex items-center gap-2.5 px-2 py-1.5 rounded-xl text-left cursor-pointer transition-all ${
+          active ? 'bg-zinc-800/90 text-zinc-100 shadow-sm border border-zinc-700/60' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40 border border-transparent'
+        }`}
+      >
+        <span className="shrink-0" title={status === 'cant_run' ? "Can't run yet: no account works here" : statusText(k.name, status)}>
+          <ModernAvatar role={k.avatar_sprite} name={k.name} size={28} status={status} kwantId={k.id} />
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1">
+            {/* The full name; what it runs on is in the tooltip */}
+            <span className="text-xs font-semibold text-zinc-200 truncate" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
+              {k.name}
+            </span>
+            {isLead && (
+              <span className="shrink-0 flex items-center gap-0.5 text-[9px] uppercase tracking-wide text-amber-300/90" title={`Leads @${team!.name}`}>
+                <Crown size={10} aria-hidden="true" />
+                lead
+              </span>
+            )}
+            {needsYou[k.id] > 0 && (
+              <span
+                className="shrink-0 inline-flex items-center gap-1 px-1.5 py-px rounded-full text-[10px] font-medium bg-amber-400/15 text-amber-200 border border-amber-400/30"
+                title={`${k.name} needs you in the browser`}
+              >
+                <Hand size={10} aria-hidden="true" />
+                Needs you{needsYou[k.id] > 1 ? ` · ${needsYou[k.id]}` : ''}
+              </span>
+            )}
+            {approvalsOff(k) && <ApprovalsOffBadge compact title={`${k.name} acts without asking. Payments still ask you.`} />}
+            {!phone && (
+              <span className="ml-auto flex items-center gap-0.5">
+                {onEditKwant && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEditKwant(k);
+                    }}
+                    className="opacity-0 group-hover/fleet:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
+                    title={`Edit or delete ${k.name}`}
+                    aria-label={`Edit or delete ${k.name}`}
+                  >
+                    <Pencil size={11} />
+                  </button>
+                )}
+                {team && !isLead && onUpdateTeamMembers && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onUpdateTeamMembers(team, memberIds.filter((id) => id !== k.id));
+                    }}
+                    className="opacity-0 group-hover/fleet:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-rose-300 hover:bg-rose-500/10 transition-all"
+                    title={`Remove ${k.name} from @${team.name}`}
+                    aria-label={`Remove ${k.name} from @${team.name}`}
+                  >
+                    <X size={11} />
+                  </button>
+                )}
+              </span>
+            )}
+          </div>
+          {busyKwants[k.id] ? (
+            <p className="text-[11px] text-sky-300 truncate" title={busyKwants[k.id]}>
+              {busyKwants[k.id]}
+            </p>
+          ) : (
+            <p className="text-[11px] text-zinc-500 truncate">{k.title}</p>
+          )}
+        </div>
+        {/* Phones: one button at the row's end; in a team it opens the member's actions */}
+        {phone && team && (onEditKwant || (onUpdateTeamMembers && !isLead)) && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              playSfx('click');
+              setMemberMenu({ team, kwant: k });
+            }}
+            aria-haspopup="dialog"
+            aria-label={`More for ${k.name}`}
+            className="-mr-1 shrink-0 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 active:bg-zinc-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+          >
+            <MoreHorizontal size={16} />
+          </button>
+        )}
+        {phone && !team && onEditKwant && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEditKwant(k);
+            }}
+            className="shrink-0 -my-1 rounded-lg text-zinc-400 hover:text-sky-300 hover:bg-sky-500/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+            title={`Edit or delete ${k.name}`}
+            aria-label={`Edit or delete ${k.name}`}
+          >
+            <Pencil size={16} />
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  // A team's chat row: opens the team chat; collapses its members, opens its settings.
+  const teamRow = (t: Team, withMembers: boolean) => {
+    const active = isTeamActive(t);
+    const count = memberIdsOf(t).length;
+    const expanded = withMembers && !collapsedTeams.has(t.id);
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => onSelectTeam(t)}
+        onKeyDown={(e) => e.key === 'Enter' && onSelectTeam(t)}
+        data-team-row={t.id}
+        title={`Open the @${t.name} team chat`}
+        className={`w-full flex items-center justify-between px-1.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left group cursor-pointer ${
+          active ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50' : 'text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/50 border border-transparent'
+        }`}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          {withMembers && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleTeam(t.id);
+              }}
+              aria-expanded={expanded}
+              aria-label={expanded ? `Hide @${t.name} members` : `Show @${t.name} members`}
+              className="p-0.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700/60"
+            >
+              <ChevronDown size={12} className={`transition-transform duration-150 ${expanded ? '' : '-rotate-90'}`} />
+            </button>
+          )}
+          <Users size={14} className={active ? 'text-sky-400' : 'text-zinc-500 group-hover:text-zinc-400'} aria-hidden="true" />
+          <span className="truncate">@{t.name}</span>
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {(!expanded || !withMembers) && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full tabular-nums bg-zinc-800/80 text-zinc-400 border border-zinc-800" title={`${count} ${count === 1 ? 'member' : 'members'}`}>
+              {count}
+            </span>
+          )}
+          {onManageTeam && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                playSfx('click');
+                onManageTeam(t);
+              }}
+              className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100 p-1 hover:text-zinc-100 hover:bg-zinc-700/60 rounded transition-all text-zinc-400"
+              title={`Team settings for @${t.name}`}
+              aria-label={`Team settings for @${t.name}`}
+            >
+              <Settings2 size={12} />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const addMember = (t: Team) => {
+    const memberIds = memberIdsOf(t);
+    const candidates = kwants.filter((k) => !memberIds.includes(k.id));
+    if (!onUpdateTeamMembers) return null;
+    if (addingTo !== t.id) {
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            setAddingTo(t.id);
+            playSfx('click');
+          }}
+          className="w-full flex items-center gap-2 px-2 py-1 rounded-md text-[11px] text-sky-400/90 hover:text-sky-300 hover:bg-sky-500/10 transition-colors"
+        >
+          <span className="w-[18px] h-[18px] flex items-center justify-center rounded border border-dashed border-sky-500/40">
+            <Plus size={11} />
+          </span>
+          <span>Add member</span>
+        </button>
+      );
+    }
+    return (
+      <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/90 p-1 space-y-0.5">
+        <div className="flex items-center justify-between px-1.5 pt-0.5 pb-1 text-[10px] uppercase tracking-wider text-zinc-500">
+          <span>Add to @{t.name}</span>
+          <button type="button" onClick={() => setAddingTo(null)} className="p-0.5 rounded hover:text-zinc-200 hover:bg-zinc-700/60" title="Cancel" aria-label="Cancel">
+            <X size={11} />
+          </button>
+        </div>
+        {candidates.map((k) => (
+          <button
+            key={k.id}
+            type="button"
+            onClick={() => {
+              onUpdateTeamMembers(t, [...memberIds, k.id]);
+              setAddingTo(null);
+            }}
+            className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-[11px] text-zinc-300 hover:bg-sky-500/10 hover:text-zinc-100 text-left"
+          >
+            <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} kwantId={k.id} />
+            <span className="truncate flex-1">{k.name}</span>
+            <span className="text-[10px] text-zinc-500 truncate max-w-[80px]">{k.title}</span>
+          </button>
+        ))}
+        {candidates.length === 0 && <div className="px-1.5 py-1 text-[11px] text-zinc-500">Every bot is already in this team.</div>}
+        <button
+          type="button"
+          onClick={() => {
+            setAddingTo(null);
+            onSummonKwant(t);
+          }}
+          className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-[11px] text-sky-400 hover:bg-sky-500/10 border-t border-zinc-800 mt-0.5 pt-1.5"
+        >
+          <UserPlus size={13} />
+          <span>Create a new bot…</span>
+        </button>
+      </div>
+    );
+  };
+
+  const groups = botGroups(teams, kwants);
+  const headButton = (label: string, title: string, onClick: () => void) =>
+    phone ? (
+      phoneAdd(title, onClick)
+    ) : (
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20 transition-all normal-case tracking-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+        title={title}
+      >
+        <Plus size={11} />
+        <span>{label}</span>
+      </button>
+    );
+
   return (
     <aside
       aria-label={`${space.name} chats and kwant bots`}
       className={`${phone ? 'w-full flex-1 min-h-0' : 'w-64 h-full border-r border-zinc-800/80'} bg-zinc-900/40 flex flex-col select-none flex-shrink-0`}
     >
-      {/* The open space: tap to switch, create or open its settings */}
+      {/* The open space. Desktop switches spaces on the rail, so this is its name and settings;
+          phones have no rail, so here it is their one switcher. */}
       <div className="relative p-2 border-b border-zinc-800/60">
-        <button
-          type="button"
-          onClick={() => {
-            playSfx('click');
-            setSwitcherOpen((v) => !v);
-          }}
-          data-space-toggle
-          aria-haspopup="menu"
-          aria-expanded={switcherOpen}
-          className="w-full flex items-center gap-2.5 px-1.5 py-1.5 rounded-lg text-left hover:bg-zinc-800/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-        >
-          <SpaceTile space={space} size={32} />
-          <span className="flex-1 min-w-0">
-            <span className="block text-sm font-semibold text-zinc-100 truncate">{space.name}</span>
-            <span className="block text-[11px] text-zinc-500 truncate">{spaceSummary(space.counts)}</span>
-          </span>
-          <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
-        </button>
+        {phone ? (
+          <button
+            type="button"
+            onClick={() => {
+              playSfx('click');
+              setSwitcherOpen((v) => !v);
+            }}
+            data-space-toggle
+            aria-haspopup="menu"
+            aria-expanded={switcherOpen}
+            className="w-full flex items-center gap-2.5 px-1.5 py-1.5 rounded-lg text-left hover:bg-zinc-800/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+          >
+            <SpaceTile space={space} size={32} />
+            <span className="flex-1 min-w-0">
+              <span className="block text-sm font-semibold text-zinc-100 truncate">{space.name}</span>
+              <span className="block text-[11px] text-zinc-500 truncate">{spaceSummary(space.counts)}</span>
+            </span>
+            <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+          </button>
+        ) : (
+          <div className="flex items-center gap-2.5 px-1.5 py-1.5" data-space-header>
+            <SpaceTile space={space} size={32} />
+            <span className="flex-1 min-w-0">
+              <h1 className="text-sm font-semibold text-zinc-100 truncate">{space.name}</h1>
+              <span className="block text-[11px] text-zinc-500 truncate">{spaceSummary(space.counts)}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                playSfx('click');
+                onOpenSpaceSettings();
+              }}
+              data-space-settings-open
+              aria-label={`Settings for ${space.name}`}
+              title={`Settings for ${space.name}`}
+              className="shrink-0 p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+            >
+              <Settings size={15} aria-hidden="true" />
+            </button>
+          </div>
+        )}
         {offLine && (
           <button
             type="button"
             onClick={onOpenSpaceSettings}
-            title="Bots here act without asking, including deletions, publishing and sign-ins. Payments still ask you. Change it in Space settings."
+            title="Bots here act without asking, including deletions, publishing and sign-ins. Payments still ask you. Change it in Settings › This space."
             className="mt-1 w-full flex items-center gap-1.5 px-2 py-1 rounded-md border border-amber-500/30 bg-amber-500/10 text-[11px] font-medium text-amber-200 hover:bg-amber-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400"
           >
             <ShieldOff size={12} aria-hidden="true" className="shrink-0" />
             <span className="truncate">{offLine}</span>
           </button>
         )}
-        {switcherOpen && (
+        {phone && switcherOpen && (
           <SpaceSwitcher
             spaces={spaces}
             currentId={space.id}
@@ -301,24 +658,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       <div className="flex-1 overflow-y-auto p-2 space-y-4">
         {showChats && (
-        <div className="space-y-0.5">
+        <div className="space-y-0.5" data-utility-rows>
           <button type="button" onClick={onOpenSearch} className={navRow(false)}>
             <Search size={15} className="text-zinc-500" aria-hidden="true" />
             <span className="truncate flex-1">Search {space.name}</span>
             {!phone && <kbd className="shrink-0 text-[10px] font-sans text-zinc-500">{isMac ? '⌘K' : 'Ctrl K'}</kbd>}
           </button>
-          {onOpenAway && !phone && (
+          {/* Phones have Inbox as a tab */}
+          {onOpenInbox && !phone && (
           <button
             type="button"
-            onClick={onOpenAway}
-            aria-current={awayActive ? 'page' : undefined}
-            className={navRow(awayActive)}
+            onClick={onOpenInbox}
+            aria-current={inboxActive ? 'page' : undefined}
+            className={navRow(inboxActive)}
           >
-            <Inbox size={15} className={awayActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
-            <span className="truncate flex-1">While you were away</span>
-            {awayCount > 0 && (
+            <Inbox size={15} className={inboxActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
+            <span className="truncate flex-1">Inbox</span>
+            {inboxCount > 0 && (
               <span className="shrink-0 min-w-[18px] px-1.5 py-px rounded-full bg-amber-500 text-zinc-950 text-[10px] font-semibold text-center">
-                {badgeText(awayCount)}
+                {badgeText(inboxCount)}
                 <span className="sr-only"> new</span>
               </span>
             )}
@@ -330,29 +688,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span className="truncate flex-1">Mission board</span>
           </button>
           )}
-          {onOpenLooseEnds && (
-          <button type="button" onClick={onOpenLooseEnds} aria-current={looseActive ? 'page' : undefined} className={navRow(looseActive)}>
-            <ListChecks size={15} className={looseActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
-            <span className="truncate flex-1">Loose ends</span>
-          </button>
-          )}
           {onOpenParallel && (
-          <button type="button" onClick={onOpenParallel} aria-current={parallelActive ? 'page' : undefined} className={navRow(parallelActive)}>
-            <Split size={15} className={parallelActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
-            <span className="truncate flex-1">Parallel Universe</span>
-          </button>
+            <MoreMenu
+              className={navRow(parallelActive)}
+              active={parallelActive}
+              items={[{ label: 'Parallel Universe', icon: <Split size={15} aria-hidden="true" />, active: parallelActive, onClick: onOpenParallel }]}
+            />
           )}
-          {onOpenConnections && (
-          <button type="button" onClick={onOpenConnections} aria-current={connectionsActive ? 'page' : undefined} className={navRow(connectionsActive)}>
-            <Plug size={15} className={connectionsActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
-            <span className="truncate flex-1">Connections</span>
-          </button>
-          )}
-          <button type="button" onClick={onOpenRoutines} className={navRow(false)}>
-            <CalendarClock size={15} className="text-zinc-500" aria-hidden="true" />
-            <span className="truncate flex-1">Routines</span>
-          </button>
-          <InstallAppButton className={navRow(false)} />
         </div>
         )}
 
@@ -361,17 +703,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div>
           <div className={sectionHead}>
             <span>Channels</span>
-            {onCreateChannel && kwants.length > 0 && (phone ? phoneAdd(`New channel in ${space.name}`, onCreateChannel) :
-              <button
-                type="button"
-                onClick={onCreateChannel}
-                className="flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20 transition-all normal-case tracking-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-                title={`New channel in ${space.name}`}
-              >
-                <Plus size={11} />
-                <span>New channel</span>
-              </button>
-            )}
+            {onCreateChannel && kwants.length > 0 && headButton('New channel', `New channel in ${space.name}`, onCreateChannel)}
           </div>
           <div className="mt-1 space-y-0.5">
             {displayChannels.map((c) => {
@@ -400,377 +732,62 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         )}
 
-        {/* Teams Section */}
-        {showChats && (
+        {/* Phones' Chats tab: team chats are chats too; their members live on the Bots tab */}
+        {section === 'chats' && teams.length > 0 && (
         <div>
           <div className={sectionHead}>
-            <button
-              type="button"
-              onClick={() => setTeamsOpen(!teamsOpen)}
-              className="flex items-center gap-1 hover:text-zinc-300 transition-colors"
-            >
-              <ChevronDown
-                size={12}
-                className={`transition-transform duration-150 ${teamsOpen ? '' : '-rotate-90'}`}
-              />
-              <span>Teams ({teams.length})</span>
-            </button>
-            {phone ? phoneAdd(`New team in ${space.name}`, onCreateTeam) : (
-            <button
-              type="button"
-              onClick={onCreateTeam}
-              className="flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20 transition-all normal-case tracking-normal"
-              title={`New team in ${space.name}`}
-            >
-              <Plus size={11} />
-              <span>New team</span>
-            </button>
-            )}
+            <span>Team chats</span>
           </div>
-
-          {teamsOpen && (
-            <div className="mt-1 space-y-0.5">
-              {teams.map((t) => {
-                const active = isTeamActive(t);
-                const memberIds = memberIdsOf(t);
-                const members = memberIds
-                  .map((id) => kwants.find((k) => k.id === id))
-                  .filter((k): k is Kwant => !!k);
-                const candidates = kwants.filter((k) => !memberIds.includes(k.id));
-                const expanded = !collapsedTeams.has(t.id);
-                const picking = addingTo === t.id;
-
-                return (
-                  <div key={t.id}>
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => onSelectTeam(t)}
-                      onKeyDown={(e) => e.key === 'Enter' && onSelectTeam(t)}
-                      className={`w-full flex items-center justify-between px-1.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left group cursor-pointer ${
-                        active
-                          ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50'
-                          : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 border border-transparent'
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleTeam(t.id);
-                          }}
-                          className="p-0.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700/60"
-                          title={expanded ? 'Hide members' : 'Show members'}
-                        >
-                          <ChevronDown
-                            size={12}
-                            className={`transition-transform duration-150 ${expanded ? '' : '-rotate-90'}`}
-                          />
-                        </button>
-                        <Users size={14} className={active ? 'text-sky-400' : 'text-zinc-500 group-hover:text-zinc-400'} />
-                        <span className="truncate">@{t.name}</span>
-                      </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        {!expanded && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full tabular-nums bg-zinc-800/80 text-zinc-400 border border-zinc-800">
-                            {memberIds.length}
-                          </span>
-                        )}
-                        {onManageTeam && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              playSfx('click');
-                              onManageTeam(t);
-                            }}
-                            className="opacity-0 group-hover:opacity-100 max-md:opacity-100 p-1 hover:text-zinc-100 hover:bg-zinc-700/60 rounded transition-all text-zinc-400"
-                            title={`Team settings for @${t.name}`}
-                          >
-                            <Settings2 size={12} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {expanded && (
-                      <div className="ml-[18px] pl-2 border-l border-zinc-800 mt-0.5 mb-1.5 space-y-0.5">
-                        {members.map((k) => {
-                          const isLead = k.id === t.lead_kwant_id;
-                          const memberActive = !isChannel && selectedId === k.id;
-                          return (
-                            <div
-                              key={k.id}
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => onSelectKwant(k)}
-                              onKeyDown={(e) => e.key === 'Enter' && onSelectKwant(k)}
-                              className={`group/member flex items-center gap-2 px-1.5 ${phone ? 'py-0' : 'py-1'} rounded-md cursor-pointer text-[11px] transition-colors ${
-                                memberActive ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
-                              }`}
-                              title={busyKwants[k.id] ? `Chat with ${k.name} · ${busyKwants[k.id]}` : `Chat with ${k.name}`}
-                            >
-                              <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} kwantId={k.id} />
-                              <span className="truncate flex-1">
-                                {k.name}
-                                {busyKwants[k.id] && <span className="sr-only"> ({busyKwants[k.id]})</span>}
-                              </span>
-                              {needsYou[k.id] > 0 && (
-                                <span className="shrink-0 inline-flex text-amber-300" role="img" aria-label="Needs you in the browser" title="Needs you in the browser">
-                                  <Hand size={11} />
-                                </span>
-                              )}
-                              {botStatus[k.id] && (
-                                <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${STATUS_DOT[botStatus[k.id]].replace('border-2', 'border')}`} title={statusText(k.name, botStatus[k.id])} aria-hidden="true" />
-                              )}
-                              {phone ? (
-                                <>
-                                  {isLead && (
-                                    <span className="shrink-0 flex items-center gap-0.5 text-[9px] uppercase tracking-wide text-amber-300/90" title="Team lead">
-                                      <Crown size={10} aria-hidden="true" />
-                                      lead
-                                    </span>
-                                  )}
-                                  {(onEditKwant || (onUpdateTeamMembers && !isLead)) && (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        playSfx('click');
-                                        setMemberMenu({ team: t, kwant: k });
-                                      }}
-                                      aria-haspopup="dialog"
-                                      aria-label={`More for ${k.name}`}
-                                      className="-mr-1 shrink-0 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 active:bg-zinc-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
-                                    >
-                                      <MoreHorizontal size={16} />
-                                    </button>
-                                  )}
-                                </>
-                              ) : (
-                                <>
-                              {onEditKwant && (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onEditKwant(k);
-                                  }}
-                                  className="opacity-0 group-hover/member:opacity-100 max-sm:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
-                                  title={`Edit or delete ${k.name}`}
-                          aria-label={`Edit or delete ${k.name}`}
-                                >
-                                  <Pencil size={11} />
-                                </button>
-                              )}
-                              {isLead ? (
-                                <span className="flex items-center gap-0.5 text-[9px] uppercase tracking-wide text-amber-300/90" title="Team lead">
-                                  <Crown size={10} />
-                                  lead
-                                </span>
-                              ) : (
-                                onUpdateTeamMembers && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      onUpdateTeamMembers(t, memberIds.filter((id) => id !== k.id));
-                                    }}
-                                    className="opacity-0 group-hover/member:opacity-100 max-sm:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-rose-300 hover:bg-rose-500/10 transition-all"
-                                    title={`Remove ${k.name} from @${t.name}`}
-                                  >
-                                    <X size={11} />
-                                  </button>
-                                )
-                              )}
-                                </>
-                              )}
-                            </div>
-                          );
-                        })}
-
-                        {onUpdateTeamMembers && !picking && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setAddingTo(t.id);
-                              playSfx('click');
-                            }}
-                            className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-[11px] text-sky-400/90 hover:text-sky-300 hover:bg-sky-500/10 transition-colors"
-                          >
-                            <span className="w-[18px] h-[18px] flex items-center justify-center rounded border border-dashed border-sky-500/40">
-                              <Plus size={11} />
-                            </span>
-                            <span>Add member</span>
-                          </button>
-                        )}
-
-                        {onUpdateTeamMembers && picking && (
-                          <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/90 p-1 space-y-0.5">
-                            <div className="flex items-center justify-between px-1.5 pt-0.5 pb-1 text-[10px] uppercase tracking-wider text-zinc-500">
-                              <span>Add to @{t.name}</span>
-                              <button
-                                type="button"
-                                onClick={() => setAddingTo(null)}
-                                className="p-0.5 rounded hover:text-zinc-200 hover:bg-zinc-700/60"
-                                title="Cancel"
-                              >
-                                <X size={11} />
-                              </button>
-                            </div>
-                            {candidates.map((k) => (
-                              <button
-                                key={k.id}
-                                type="button"
-                                onClick={() => {
-                                  onUpdateTeamMembers(t, [...memberIds, k.id]);
-                                  setAddingTo(null);
-                                }}
-                                className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-[11px] text-zinc-300 hover:bg-sky-500/10 hover:text-zinc-100 text-left"
-                              >
-                                <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} kwantId={k.id} />
-                                <span className="truncate flex-1">{k.name}</span>
-                                <span className="text-[10px] text-zinc-500 truncate max-w-[80px]">{k.title}</span>
-                              </button>
-                            ))}
-                            {candidates.length === 0 && (
-                              <div className="px-1.5 py-1 text-[11px] text-zinc-500">Every bot is already in this team.</div>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setAddingTo(null);
-                                onSummonKwant(t);
-                              }}
-                              className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-[11px] text-sky-400 hover:bg-sky-500/10 border-t border-zinc-800 mt-0.5 pt-1.5"
-                            >
-                              <UserPlus size={13} />
-                              <span>Create a new bot…</span>
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {teams.length === 0 && (
-                <div className="px-2.5 py-1.5 text-[11px] text-zinc-500 italic">
-                  No teams in {space.name} yet.
-                </div>
-              )}
-            </div>
-          )}
+          <div className="mt-1 space-y-0.5">
+            {teams.map((t) => (
+              <React.Fragment key={t.id}>{teamRow(t, false)}</React.Fragment>
+            ))}
+          </div>
         </div>
-
         )}
 
-        {/* Every bot in this space */}
+        {/* Every bot once, grouped by team; bots in no team last */}
         {showBots && (
-        <div>
+        <div data-bot-list>
           <div className={sectionHead}>
-            <h2>Kwant bots ({kwants.length})</h2>
-            {phone ? phoneAdd(`New bot in ${space.name}`, () => onSummonKwant()) : (
-            <button
-              type="button"
-              onClick={() => onSummonKwant()}
-              className="flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20 transition-all normal-case tracking-normal"
-              title={`New bot in ${space.name}`}
-            >
-              <Plus size={11} />
-              <span>New bot</span>
-            </button>
-            )}
+            <h2>Bots ({kwants.length})</h2>
+            <span className="flex items-center gap-1">
+              {headButton('New team', `New team in ${space.name}`, onCreateTeam)}
+              {headButton('New bot', `New bot in ${space.name}`, () => onSummonKwant())}
+            </span>
           </div>
-          <div className="mt-1 space-y-1">
-            {kwants.length === 0 && (
+          <div className="mt-1 space-y-2">
+            {kwants.length === 0 && teams.length === 0 && (
               <div className="px-2.5 py-1.5 text-[11px] text-zinc-500">No bots in {space.name} yet.</div>
             )}
-            {kwants.map((k) => {
-              const active = !isChannel && selectedId === k.id;
-              return (
-                <div
-                  key={k.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onSelectKwant(k)}
-                  onKeyDown={(e) => e.key === 'Enter' && onSelectKwant(k)}
-                  className={`group/fleet w-full flex items-center gap-3 p-2 rounded-xl text-left cursor-pointer transition-all ${
-                    active
-                      ? 'bg-zinc-800/90 text-zinc-100 shadow-sm border border-zinc-700/60'
-                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40'
-                  }`}
-                >
-                  <span className="shrink-0" title={statusOf(k.id, botStatus, canRun) === 'cant_run' ? "Can't run yet: no account works here" : undefined}>
-                    <ModernAvatar
-                      role={k.avatar_sprite}
-                      name={k.name}
-                      size={32}
-                      status={statusOf(k.id, botStatus, canRun)}
-                      kwantId={k.id}
-                    />
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-1">
-                      {/* The full name; what it runs on is in the tooltip */}
-                      <span className="text-xs font-semibold text-zinc-200 truncate" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
-                        {k.name}
-                      </span>
-                      {needsYou[k.id] > 0 && (
-                        <span
-                          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-px rounded-full text-[10px] font-medium bg-amber-400/15 text-amber-200 border border-amber-400/30"
-                          title={`${k.name} needs you in the browser`}
-                        >
-                          <Hand size={10} aria-hidden="true" />
-                          Needs you{needsYou[k.id] > 1 ? ` · ${needsYou[k.id]}` : ''}
-                        </span>
-                      )}
-                      {approvalsOff(k) && <ApprovalsOffBadge compact title={`${k.name} acts without asking. Payments still ask you.`} />}
-                      {onEditKwant && !phone && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onEditKwant(k);
-                          }}
-                          className="ml-auto opacity-0 group-hover/fleet:opacity-100 max-sm:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
-                          title={`Edit or delete ${k.name}`}
-                          aria-label={`Edit or delete ${k.name}`}
-                        >
-                          <Pencil size={11} />
-                        </button>
-                      )}
+            {groups.map((g) =>
+              g.team ? (
+                <div key={g.team.id} data-team-group={g.team.id}>
+                  {teamRow(g.team, true)}
+                  {!collapsedTeams.has(g.team.id) && (
+                    <div className="ml-[13px] pl-1.5 border-l border-zinc-800 mt-0.5 space-y-0.5">
+                      {g.bots.map((k) => botRow(k, g.team!))}
+                      {addMember(g.team)}
                     </div>
-                    {busyKwants[k.id] ? (
-                      <p className="text-[11px] text-sky-300 truncate mt-0.5" title={busyKwants[k.id]}>
-                        {busyKwants[k.id]}
-                      </p>
-                    ) : (
-                      <p className="text-[11px] text-zinc-400 truncate mt-0.5">{k.title}</p>
-                    )}
-                  </div>
-                  {/* Phones: the edit button sits at the row's end so it doesn't stretch the name line */}
-                  {onEditKwant && phone && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onEditKwant(k);
-                      }}
-                      className="shrink-0 -my-1 rounded-lg text-zinc-400 hover:text-sky-300 hover:bg-sky-500/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
-                      title={`Edit or delete ${k.name}`}
-                      aria-label={`Edit or delete ${k.name}`}
-                    >
-                      <Pencil size={16} />
-                    </button>
                   )}
                 </div>
-              );
-            })}
+              ) : (
+                g.bots.length > 0 && (
+                  <div key="no-team" data-team-group="none">
+                    {teams.length > 0 && (
+                      <div className="px-2 pt-1 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">No team</div>
+                    )}
+                    <div className="space-y-0.5">{g.bots.map((k) => botRow(k))}</div>
+                  </div>
+                )
+              ),
+            )}
           </div>
         </div>
         )}
+
+        {/* Desktop: a one-time tip; Settings › All spaces keeps "Install app" for later */}
+        {section === 'all' && <InstallAppButton tip className={navRow(false)} />}
       </div>
 
       {/* Footer: what this space's bots run on, from the real checks */}

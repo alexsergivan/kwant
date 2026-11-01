@@ -55,7 +55,7 @@ export interface AwayViewProps {
 const actionBtn =
   'inline-flex items-center gap-1.5 min-h-[36px] sm:min-h-[30px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400';
 
-/** The "While you were away" page: what's waiting on you, what finished and what failed. */
+/** The Inbox's New tab (once "While you were away"): what's waiting on you, what finished and what failed. */
 export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice = null, busy = null, now = Date.now(), onRefresh, onBack, onOpen, onAnswer, onResolve }) => {
   const renderItem = (item: AwayItem) => {
     const { label, tone } = itemLabel(item);
@@ -131,7 +131,7 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
           </button>
         )}
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold text-zinc-100 truncate">While you were away</h2>
+          <h2 className="text-sm font-semibold text-zinc-100 truncate">Inbox</h2>
           <p className="text-[11px] text-zinc-400 truncate mt-0.5">
             {data ? windowLabel(data.since, now) : 'What your bots need, finished and failed'}
           </p>

@@ -1,10 +1,10 @@
-// The app shell: the spaces, the rail, space dialogs and App settings. Everything inside a space
+// The app shell: the spaces, the rail and space dialogs. Everything inside a space
 // lives in <SpaceApp key={space.id}>, so switching remounts it: fresh state, a fresh event stream
 // for the new space, and nothing from the old space can flash.
-import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { SpaceApp, SpaceTarget } from './App';
-import type { SpaceSettingsTab } from './components/SpaceSettings';
+import { SpaceView, sameView } from './nav';
 import { ArchivedSpacesModal, NewSpaceModal, SpaceRail } from './components/Spaces';
 import { Toasts, Toast } from './components/Toasts';
 import { InstallHint } from './components/InstallHint';
@@ -26,8 +26,6 @@ import {
 import { NotifyEvent, TOAST_KINDS, browserNotifyEnabled, notificationPermission, shouldShowOsNotification } from './continuity';
 import { isNotificationOpen, resyncPushOnLoad, showDeviceNotification, targetFromQuery } from './push';
 
-const SettingsModal = lazy(() => import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal })));
-
 const POLL_MS = 15000;
 
 export const App: React.FC = () => {
@@ -37,11 +35,17 @@ export const App: React.FC = () => {
   // Where to land in the space being opened (a link, a notification, the last chat there).
   const [target, setTarget] = useState<SpaceTarget | null>(null);
   const [creating, setCreating] = useState<Space[] | null>(null);
-  // Space settings tab the next space opens on: Accounts right after "Add accounts next".
-  const [startTab, setStartTab] = useState<SpaceSettingsTab | null>(null);
+  // Where the next space opens instead of a chat: its address (/inbox, /settings/accounts…), or
+  // Accounts right after "Add accounts next".
+  const [startView, setStartView] = useState<SpaceView | null>(null);
+  // A view for the open space to show: the rail's gear, Back and Forward.
+  const [viewRequest, setViewRequest] = useState<{ view: SpaceView | null; seq: number } | null>(null);
+  const requestView = useCallback((view: SpaceView | null) => setViewRequest((r) => ({ view, seq: (r?.seq ?? 0) + 1 })), []);
+  // The view the open space shows (null: a chat), as last reported.
+  const viewRef = useRef<SpaceView | null>(null);
+  // The open chat, the address to return to when the view closes.
+  const chatRef = useRef<SpaceTarget | null>(null);
   const [showArchived, setShowArchived] = useState(false);
-  const [appSettingsOpen, setAppSettingsOpen] = useState(false);
-  const [tokensUsed, setTokensUsed] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastIdRef = useRef(0);
   const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
@@ -61,14 +65,17 @@ export const App: React.FC = () => {
   }, []);
 
   /** Opens a space: the request scope changes before the new space renders. */
-  const open = useCallback((id: string, to?: SpaceTarget | null, replace = false) => {
+  const open = useCallback((id: string, to?: SpaceTarget | null, replace = false, view: SpaceView | null = null) => {
     const t = to ?? lastChat(id) ?? null;
-    setStartTab(null);
+    setStartView(view);
+    setViewRequest(null);
+    viewRef.current = view;
+    chatRef.current = t;
     setCurrentSpace(id);
     rememberSpace(id);
     setTarget(t);
     setCurrentId(id);
-    const path = spacePath(id, t ?? undefined);
+    const path = spacePath(id, t ?? undefined, view ?? undefined);
     if (window.location.pathname !== path) {
       if (replace) window.history.replaceState(null, '', path);
       else window.history.pushState(null, '', path);
@@ -84,8 +91,10 @@ export const App: React.FC = () => {
       const route = q ? { spaceId: q.spaceId, channelId: q.channelId ?? undefined, botId: q.botId ?? undefined } : parseSpacePath(window.location.pathname);
       const s = pickSpace(list, route.spaceId, lastSpace());
       if (!s) return;
-      const fromUrl = route.spaceId === s.id && (route.channelId || route.botId) ? { channelId: route.channelId, botId: route.botId } : null;
-      open(s.id, fromUrl, true);
+      const here = route.spaceId === s.id;
+      const fromUrl = here && (route.channelId || route.botId) ? { channelId: route.channelId, botId: route.botId } : null;
+      // An old address (/away, /loose-ends, /connections…) opens its new place, rewritten in place.
+      open(s.id, fromUrl, true, here && 'view' in route ? route.view ?? null : null);
     });
   }, [reload, open]);
 
@@ -93,15 +102,26 @@ export const App: React.FC = () => {
   useEffect(() => {
     const onPop = () => {
       const route = parseSpacePath(window.location.pathname);
-      if (route.spaceId && route.spaceId !== currentRef.current && spaces?.some((s) => s.id === route.spaceId)) {
+      if (!route.spaceId || !spaces?.some((s) => s.id === route.spaceId)) return;
+      const view = route.view ?? null;
+      if (route.spaceId !== currentRef.current) {
         setCurrentSpace(route.spaceId);
         setTarget({ channelId: route.channelId, botId: route.botId });
+        setStartView(view);
+        setViewRequest(null);
+        viewRef.current = view;
         setCurrentId(route.spaceId);
+        return;
+      }
+      // Same space: Back from the Inbox or Settings goes back to the chat, and Forward again.
+      if (!sameView(view, viewRef.current)) {
+        viewRef.current = view;
+        requestView(view);
       }
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
-  }, [spaces]);
+  }, [spaces, requestView]);
 
   // Unread counts for the other spaces.
   useEffect(() => {
@@ -228,17 +248,26 @@ export const App: React.FC = () => {
     <div className="h-[var(--kwnt-app-height,100dvh)] w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden font-sans pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
       <AppUpdateBanner />
       <div className="flex-1 min-h-0 flex">
-        <SpaceRail spaces={spaces} currentId={current.id} onSwitch={switchTo} onCreate={openCreate} onOpenAppSettings={() => setAppSettingsOpen(true)} />
+        <SpaceRail spaces={spaces} currentId={current.id} onSwitch={switchTo} onCreate={openCreate} onOpenAppSettings={() => requestView({ kind: 'settings', scope: 'app' })} />
         <SpaceApp
           key={current.id}
           space={current}
           spaces={spaces}
           initialTarget={target}
-          initialSettingsTab={startTab}
+          initialView={startView}
+          viewRequest={viewRequest}
+          onViewChange={(v) => {
+            const kindChanged = (v?.kind ?? null) !== (viewRef.current?.kind ?? null);
+            viewRef.current = v;
+            const path = spacePath(current.id, chatRef.current ?? lastChat(current.id) ?? undefined, v ?? undefined);
+            if (window.location.pathname === path) return;
+            // Opening or leaving the Inbox or Settings is a step Back undoes; moving between their tabs isn't.
+            if (kindChanged) window.history.pushState(null, '', path);
+            else window.history.replaceState(null, '', path);
+          }}
           onSwitchSpace={switchTo}
           onCreateSpace={openCreate}
           onOpenArchived={() => setShowArchived(true)}
-          onOpenAppSettings={() => setAppSettingsOpen(true)}
           onSpacesChanged={reload}
           onSpaceArchived={(s) => {
             reload().then((list) => {
@@ -250,10 +279,12 @@ export const App: React.FC = () => {
           }}
           onChatChange={(t) => {
             rememberChat(current.id, t);
+            chatRef.current = t;
+            // The Inbox or Settings keeps its own address over the chat underneath.
+            if (viewRef.current) return;
             const path = spacePath(current.id, t);
             if (window.location.pathname !== path) window.history.replaceState(null, '', path);
           }}
-          onTokensUsed={setTokensUsed}
         />
       </div>
 
@@ -264,8 +295,7 @@ export const App: React.FC = () => {
           onCreated={(s, addAccounts) => {
             setCreating(null);
             setSpaces((prev) => (prev ? [...prev, s] : [s]));
-            open(s.id, null);
-            if (addAccounts) setStartTab('accounts');
+            open(s.id, null, false, addAccounts ? { kind: 'settings', scope: 'space', tab: 'accounts' } : null);
             reload();
           }}
         />
@@ -281,9 +311,6 @@ export const App: React.FC = () => {
           }}
         />
       )}
-      <Suspense fallback={null}>
-        <SettingsModal isOpen={appSettingsOpen} onClose={() => setAppSettingsOpen(false)} tokensUsed={tokensUsed} />
-      </Suspense>
       <Toasts toasts={toasts} onDismiss={dismissToast} position="top" />
       <InstallHint />
     </div>

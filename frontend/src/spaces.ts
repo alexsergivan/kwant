@@ -1,6 +1,7 @@
 // Spaces: separate sets of bots, teams, channels and accounts. The open space rides on every
 // `/api` call as `?space=` (added by the fetch wrapper in auth.ts) and on the event stream.
 
+import { parseView, viewSegment, type SpaceView } from './nav';
 import { serverReason } from './routeReason';
 
 export interface SpaceCounts {
@@ -151,25 +152,39 @@ export function withSpace(url: string, origin: string, spaceId: string | null): 
 /** The event stream for one space. */
 export const eventsUrl = (spaceId: string | null) => (spaceId ? `/api/events?space=${encodeURIComponent(spaceId)}` : '/api/events');
 
-// ---- Addresses: /s/<space>/c/<channel>, /s/<space>/b/<bot> ----
+// ---- Addresses: /s/<space>/c/<channel>, /s/<space>/b/<bot>, /s/<space>/<view> ----
 
 export interface SpaceRoute {
   spaceId: string | null;
   channelId?: string;
   botId?: string;
+  /** Inbox, Mission board, Parallel Universe or Settings (see nav.ts). */
+  view?: SpaceView;
+  /** The address used an old name for the view; rewrite it to `spacePath(...)`. */
+  legacy?: boolean;
 }
 
 export function parseSpacePath(path: string): SpaceRoute {
-  const m = path.match(/^\/s\/([^/]+)(?:\/(c|b)\/([^/]+))?\/?$/);
+  const m = path.match(/^\/s\/([^/]+)(?:\/(.*?))?\/?$/);
   if (!m) return { spaceId: null };
   const spaceId = decodeURIComponent(m[1]);
-  if (m[2] === 'c') return { spaceId, channelId: decodeURIComponent(m[3]) };
-  if (m[2] === 'b') return { spaceId, botId: decodeURIComponent(m[3]) };
-  return { spaceId };
+  const rest = m[2] ?? '';
+  const chat = rest.match(/^(c|b)\/([^/]+)$/);
+  if (chat?.[1] === 'c') return { spaceId, channelId: decodeURIComponent(chat[2]) };
+  if (chat?.[1] === 'b') return { spaceId, botId: decodeURIComponent(chat[2]) };
+  const v = rest ? parseView(rest) : null;
+  if (v) return v.legacy ? { spaceId, view: v.view, legacy: true } : { spaceId, view: v.view };
+  // An address this version doesn't know still opens the space, and is rewritten.
+  return rest ? { spaceId, legacy: true } : { spaceId };
 }
 
-export function spacePath(spaceId: string, target?: { channelId?: string | null; botId?: string | null }): string {
+export function spacePath(
+  spaceId: string,
+  target?: { channelId?: string | null; botId?: string | null } | null,
+  view?: SpaceView | null,
+): string {
   const base = `/s/${encodeURIComponent(spaceId)}`;
+  if (view) return `${base}/${viewSegment(view)}`;
   if (target?.channelId) return `${base}/c/${encodeURIComponent(target.channelId)}`;
   if (target?.botId) return `${base}/b/${encodeURIComponent(target.botId)}`;
   return base;

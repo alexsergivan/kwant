@@ -31,11 +31,11 @@ test('a chat that no longer exists is gone', () => {
   assert.equal(planOpenTarget({ channel_id: null, kwant_id: null }, shown(), exists), 'gone');
 });
 
-test("App's openTarget closes the board and Loose ends when the chat is already selected", () => {
+test("App's openTarget closes the board and Inbox when the chat is already selected", () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const reveal = app.match(/const revealChat = \(\) => \{([\s\S]*?)\n  \};/);
   assert.ok(reveal, 'revealChat exists');
-  for (const call of ['setShowMissions(false)', 'setShowLoose(false)', 'setShowAway(false)', "setPhoneView('chat')"]) {
+  for (const call of ["setPage('chat')", "setPhoneView('chat')"]) {
     assert.ok(reveal[1].includes(call), `revealChat calls ${call}`);
   }
   const open = app.match(/const openTarget = \(t: ChatTarget\): boolean => \{([\s\S]*?)\n  \};/);
