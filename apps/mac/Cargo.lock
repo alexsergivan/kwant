@@ -2560,7 +2560,7 @@ dependencies = [
 
 [[package]]
 name = "kwant"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "dirs 5.0.1",
  "kwnt",

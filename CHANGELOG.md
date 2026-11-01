@@ -8,7 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.0] - 2026-11-01
+
 ### Added
+- **Flight School: bots earn more freedom, and only you grant it (Mission Control Phase C4).** With
+  `flight_school` on (off by default), each bot gets a scorecard per kind of work: verified tasks,
+  first-try rate and what it still needs for the next tier. A bot that qualifies can ask for a higher
+  tier; the request shows on the board under "Needs you" and in the bot's settings with its scorecard,
+  and you Grant or Decline it (with an optional reason). Only you can decide; a bot gets a 403. If two
+  tabs answer at once, one wins and the other says someone got there first. Taking a tier back is still
+  one tap and applies at once. Payments and high-risk approvals always ask you, whatever the tier.
+- **Truth Ledger on (Mission Control Phase C2).** With `truth_ledger` set to `on`, bots read their memory
+  from the shared list of facts. When two facts disagree (for example "4 GB" vs "12 GB" of RAM) they are
+  flagged as disputed until you settle them: the board shows both side by side with why they clash,
+  and you pick "Keep this one" or "Not a conflict". Facts are labelled Unconfirmed or Disputed, show
+  their evidence and the tasks that rely on them, and a task resting on a changed or disputed fact says
+  so. Only you can confirm, reject or settle facts. With the ledger `off` or `shadow`, what bots see is
+  byte-for-byte what 0.5.1 showed them, checked against a saved copy.
+- **Insights: verified results per week and their cost.** Under the week strip, the board shows verified
+  results per active week over the last 8 weeks, and the cost of each verified result. Failed runs count
+  in the cost. When some runs reported no cost it says so ("Based on N verified results that reported a
+  cost; M runs reported none"), and with no reported cost at all it says "Not reported", never $0.
 - **kwant.si blog, ready for posts.** `scripts/build_site.py` now builds a blog from Markdown files in
   `site-src/blog/` (static, no new dependencies, CSP unchanged): `/blog/` lists the posts, each post has
   breadcrumbs, reading time, related posts and a try-kwant box, plus BlogPosting and breadcrumb JSON-LD,
