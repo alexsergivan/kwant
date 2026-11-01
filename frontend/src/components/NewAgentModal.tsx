@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { TagListInput } from './TagListInput';
 import { X, Sparkles, Pencil, ChevronRight, Brain, CalendarClock, UserRound, ListChecks, Trash2, Gauge } from 'lucide-react';
 import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
 import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
@@ -37,6 +38,9 @@ export interface AgentFormData {
   /** Pinned LLM profile; null uses the engine's default. */
   profile_id?: string | null;
   profile_failover?: boolean;
+  /** What routing sends it ("Good for") and keeps away from it ("Not for"). */
+  covers?: string[];
+  avoids?: string[];
 }
 
 interface NewAgentModalProps {
@@ -115,6 +119,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [mcpIds, setMcpIds] = useState<string[] | undefined>(undefined);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [failover, setFailover] = useState(true);
+  const [covers, setCovers] = useState<string[]>([]);
+  const [avoids, setAvoids] = useState<string[]>([]);
   // Follows the prop until the person changes this bot's approvals here.
   const [toolsRunFree, setToolsRunFree] = useState(approvalsOff);
   useEffect(() => setToolsRunFree(approvalsOff), [approvalsOff, isOpen]);
@@ -142,6 +148,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setMcpIds(undefined);
     setProfileId(initial?.profile_id ?? null);
     setFailover(initial?.profile_failover ?? true);
+    setCovers(initial?.covers ?? []);
+    setAvoids(initial?.avoids ?? []);
     let cancelled = false;
     // If a list can't load, the picker stays hidden and nothing is saved: saving an empty
     // list would switch every server off for this kwant.
@@ -201,6 +209,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
       profile_id:
         profiles.length === 0 ? undefined : engine && engineProfiles.some((p) => p.id === profileId) ? profileId : null,
       profile_failover: failover,
+      // Only once loaded (edit): older servers leave them out, and a new bot has none yet.
+      ...(isEdit && initial?.covers ? { covers, avoids } : {}),
     });
 
     setSubmitting(false);
@@ -485,6 +495,26 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none"
             />
           </div>
+
+          {isEdit && initial?.covers && (
+            <div className="space-y-3">
+              <TagListInput
+                label="Good for"
+                hint="what to send this bot"
+                placeholder="e.g. taxes, invoices — Enter to add"
+                value={covers}
+                onChange={setCovers}
+              />
+              <TagListInput
+                label="Not for"
+                hint="what never to send it"
+                placeholder="e.g. legal advice — Enter to add"
+                value={avoids}
+                onChange={setAvoids}
+                tone="bad"
+              />
+            </div>
+          )}
 
           {isEdit && initial && name.trim() !== initial.name && (
             <p className="text-[11px] text-zinc-500">

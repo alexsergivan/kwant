@@ -32,6 +32,9 @@ export interface Kwant {
   /** Its own approvals setting, and what it comes to with the space's; absent on older servers. */
   approvals?: 'inherit' | 'ask' | 'smart' | 'off';
   approvals_effective?: 'ask' | 'smart' | 'off';
+  /** "Good for" / "Not for" phrases routing reads; absent on older servers. */
+  covers?: string[];
+  avoids?: string[];
 }
 
 export interface Channel {
