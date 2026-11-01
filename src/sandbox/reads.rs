@@ -23,9 +23,11 @@ fn fnv1a(parts: &[&str]) -> u64 {
 
 /// What a read shows, as a short hex string: the address, title, text, every control (not only
 /// the ones listed) and the `find` words that picked them.
+/// A control's "new" mark doesn't count: it says what changed since the list before, so a re-read
+/// of an unchanged page drops it and still reads the same.
 pub fn page_hash(url: &str, title: &str, text: &str, controls: &[String], find: &str) -> String {
     let mut parts = vec![url, title, text, find];
-    parts.extend(controls.iter().map(String::as_str));
+    parts.extend(controls.iter().map(|c| super::browser::unmarked(c)));
     format!("{:016x}", fnv1a(&parts))
 }
 
@@ -43,7 +45,8 @@ pub fn find_words(find: &str) -> Vec<String> {
 
 /// Picks at most `cap` of the page's control lines. Without `find` words they keep page order
 /// (topmost first). With them, the lines naming the most of those words come first, ties in page
-/// order. Ref numbers are part of each line, so they stay what the page gave them. The note says
+/// order, except that controls new since the page's last list (marked `*`) come first among equal
+/// scores. Ref numbers are part of each line, so they stay what the page gave them. The note says
 /// what was left out, for the bot to ask again with other words.
 pub fn pick_controls(lines: &[String], find: &str, cap: usize) -> (Vec<String>, Option<String>) {
     let words = find_words(find);
@@ -57,8 +60,8 @@ pub fn pick_controls(lines: &[String], find: &str, cap: usize) -> (Vec<String>, 
                 matched += 1;
             }
         }
-        // Stable: equal scores keep page order
-        order.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+        // Stable: equal scores keep page order, new controls first
+        order.sort_by_key(|(score, line)| (std::cmp::Reverse(*score), !line.starts_with(super::browser::NEW_MARK)));
     }
     let shown: Vec<String> = order.iter().take(cap).map(|(_, l)| (*l).clone()).collect();
     let total = lines.len();
@@ -169,6 +172,24 @@ mod tests {
         let (shown, note) = pick_controls(&all, "zebra", 2);
         assert_eq!(shown, all[..2]);
         assert_eq!(note.unwrap(), "No control matches \"zebra\"; showing them in page order.");
+    }
+
+    #[test]
+    fn new_controls_come_first_among_equal_matches_and_dont_change_the_hash() {
+        let all = vec![
+            "[1] option \"Small\"".to_string(),
+            "[2] button \"Size\"".to_string(),
+            "*[3] option \"Medium\"".to_string(),
+            "*[4] option \"Large size\"".to_string(),
+        ];
+        // "size" matches 2 and 4 once each: the new one first; then 3 (new) before 1
+        let (shown, _) = pick_controls(&all, "size", 40);
+        assert_eq!(shown, vec![all[3].clone(), all[1].clone(), all[2].clone(), all[0].clone()]);
+        // Without find, page order as before
+        assert_eq!(pick_controls(&all, "", 40).0, all);
+        // The same page read again (nothing new any more) hashes the same
+        let plain: Vec<String> = all.iter().map(|l| l.trim_start_matches('*').to_string()).collect();
+        assert_eq!(page_hash("u", "t", "x", &all, ""), page_hash("u", "t", "x", &plain, ""));
     }
 
     #[test]

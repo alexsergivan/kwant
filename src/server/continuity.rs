@@ -551,7 +551,7 @@ fn browser_tools() -> Vec<Value> {
         }),
         json!({
             "name": BROWSER_PAGE,
-            "description": "Read the page your browser shows now: url, title, visible text and clickable controls, numbered for browser_act. If nothing changed since your last look at it (a read or an action's answer), it says so instead of sending the page again. On a page with many controls only 40 are listed: give find to list the ones you look for first.",
+            "description": "Read the page your browser shows now: url, title, visible text and clickable controls, numbered for browser_act (a leading * marks one that appeared since your last look). If nothing changed since your last look at it (a read or an action's answer), it says so instead of sending the page again. On a page with many controls only 40 are listed: give find to list the ones you look for first.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -589,7 +589,7 @@ fn browser_tools() -> Vec<Value> {
         }),
         json!({
             "name": BROWSER_ACT,
-            "description": "Do one thing on the current page and get the page back. click clicks a control by its ref, the number in the page's clickable list ([3] button \"Add to cart\"), or by its visible label in text; if the ref is gone, hidden or covered nothing is clicked and you get a fresh list. type types into the field with that ref, or the focused field; key presses a key (Enter, Tab, Escape, ArrowDown…); scroll scrolls by delta_y pixels (negative is up).",
+            "description": "Do one thing on the current page and get the page back. click clicks a control by its ref, the number in the page's clickable list ([3] button \"Add to cart\"), or by its visible label in text; a line starting with * (*[12] option \"Large\") is a control that appeared since your last look, e.g. the options a click opened; if the ref is gone, hidden or covered nothing is clicked and you get a fresh list. type types into the field with that ref, or the focused field; key presses a key (Enter, Tab, Escape, ArrowDown…); scroll scrolls by delta_y pixels (negative is up).",
             "inputSchema": {
                 "type": "object",
                 "properties": {

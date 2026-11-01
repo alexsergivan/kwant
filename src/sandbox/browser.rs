@@ -149,11 +149,18 @@ const CLICKABLES_JS: &str = r#"function (needle, probe) {
       reg = { gen: 0 };
       try { Object.defineProperty(window, Symbol.for('kwnt.refs'), { value: reg }); } catch (e) {}
     }
+    // A control is new when its element wasn't in this page's previous list (a dropdown's
+    // options, a dialog's buttons). The first list of a page, and one after the address changed
+    // (other than its #fragment), marks nothing
+    var here = location.href.split('#')[0];
+    var before = reg.items && reg.href === here ? new Set(reg.items.map(function (i) { return i.el; })) : null;
     reg.gen += 1;
+    reg.href = here;
     reg.items = items.map(function (i) { return { el: i.el, label: i.label }; });
     reg.labelOf = labelOf;
     return { gen: reg.gen, items: items.map(function (i, k) {
       return { ref: k + 1, label: i.label, name: i.name, role: i.role, onTop: i.onTop,
+               new: !!before && !before.has(i.el),
                context: twins[i.name].length > 1 ? contextOf(i.el, i.name, twins[i.name]) : '' };
     }) };
   }
@@ -328,13 +335,13 @@ impl ClickTarget {
     /// with a listed ref (`[3] button "Add to cart"`, copied whole from the list) is that ref.
     pub fn from_args(args: &Value) -> Option<ClickTarget> {
         let r = &args["ref"];
-        let num = r.as_u64().or_else(|| r.as_str().and_then(|t| t.trim().trim_start_matches('[').trim_end_matches(']').parse().ok()));
+        let num = r.as_u64().or_else(|| r.as_str().and_then(|t| unmarked(t.trim()).trim_start_matches('[').trim_end_matches(']').parse().ok()));
         if let Some(n) = num.and_then(|n| u32::try_from(n).ok()).filter(|n| *n > 0) {
             return Some(ClickTarget::Ref(n));
         }
         let text = args["text"].as_str().map(str::trim).filter(|t| !t.is_empty())?;
         // Only a whole copied line: a bare "[1]" is a footnote link's label (Wikipedia)
-        if let Some((n, rest)) = text.strip_prefix('[').and_then(|t| t.split_once(']')) {
+        if let Some((n, rest)) = unmarked(text).strip_prefix('[').and_then(|t| t.split_once(']')) {
             if let Some(n) = n.trim().parse::<u32>().ok().filter(|n| *n > 0 && rest.contains('"')) {
                 return Some(ClickTarget::Ref(n));
             }
@@ -344,17 +351,27 @@ impl ClickTarget {
 }
 
 /// One line of the control list: `[3] button "Add to cart" · Sauce Labs Backpack`. The context
-/// (nearby text) is only there when several controls share a name.
+/// (nearby text) is only there when several controls share a name. A control that wasn't in the
+/// page's previous list starts with [`NEW_MARK`]: `*[12] option "Large"`.
 pub fn ref_line(item: &Value) -> Option<String> {
     let r = item["ref"].as_u64()?;
     let name = item["name"].as_str().filter(|n| !n.is_empty()).or(item["label"].as_str())?;
     let role = item["role"].as_str().filter(|r| !r.is_empty()).unwrap_or("button");
-    let mut line = format!("[{r}] {role} \"{name}\"");
+    let mark = if item["new"].as_bool() == Some(true) { NEW_MARK } else { "" };
+    let mut line = format!("{mark}[{r}] {role} \"{name}\"");
     if let Some(ctx) = item["context"].as_str().filter(|c| !c.is_empty()) {
         line.push_str(" · ");
         line.push_str(ctx);
     }
     Some(line)
+}
+
+/// Marks a control line as new since the page's previous list (see [`ref_line`]).
+pub const NEW_MARK: &str = "*";
+
+/// `line` without its [`NEW_MARK`], to compare lines across reads.
+pub fn unmarked(line: &str) -> &str {
+    line.strip_prefix(NEW_MARK).unwrap_or(line)
 }
 
 /// Refuses an address that is a file on the computer before it reaches Chrome, so it is never
@@ -1774,6 +1791,8 @@ mod ref_tests {
         assert_eq!(t(json!({"ref": "7"})), Some(ClickTarget::Ref(7)));
         assert_eq!(t(json!({"ref": "[7]", "text": "Login"})), Some(ClickTarget::Ref(7)), "ref wins over text");
         assert_eq!(t(json!({"text": "[4] button \"Add to cart\" · Backpack"})), Some(ClickTarget::Ref(4)), "a whole copied line");
+        assert_eq!(t(json!({"text": "*[5] option \"Large\""})), Some(ClickTarget::Ref(5)), "a copied new line");
+        assert_eq!(t(json!({"ref": "*5"})), Some(ClickTarget::Ref(5)));
         assert_eq!(t(json!({"text": "[1]"})), Some(ClickTarget::Text("[1]".into())), "a footnote link stays a label");
         assert_eq!(t(json!({"text": "  Login "})), Some(ClickTarget::Text("Login".into())));
         assert_eq!(t(json!({"ref": 0, "text": "Login"})), Some(ClickTarget::Text("Login".into())));
@@ -1790,5 +1809,7 @@ mod ref_tests {
             Some("[1] field \"Username\""));
         assert_eq!(line(json!({"ref": 2, "label": "Menu"})).as_deref(), Some("[2] button \"Menu\""));
         assert_eq!(line(json!({"label": "No ref"})), None);
+        assert_eq!(line(json!({"ref": 12, "role": "option", "name": "Large", "new": true})).as_deref(), Some("*[12] option \"Large\""));
+        assert_eq!(line(json!({"ref": 12, "role": "option", "name": "Large", "new": false})).as_deref(), Some("[12] option \"Large\""));
     }
 }

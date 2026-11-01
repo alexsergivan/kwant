@@ -436,7 +436,7 @@ impl TurnInput {
                 Your browser session is displayed live in the user's right panel; the user can browse in it too.\n\
                 Never open a host desktop browser (no `open <url>`, `xdg-open`, etc.) and don't use the shell or curl for it. Use ONLY your `{tools}` tools:\n\
                 - `browser_open` (url): open a page.\n\
-                - `browser_page` (optional find): read the page (url, title, text, clickable controls numbered like [3] button \"Add to cart\"). It says \"unchanged\" if nothing changed since you last saw it; on a page with many controls, find (words for what you look for) lists the matching ones first.\n\
+                - `browser_page` (optional find): read the page (url, title, text, clickable controls numbered like [3] button \"Add to cart\"; *[12] marks one that just appeared, e.g. an opened menu's options). It says \"unchanged\" if nothing changed since you last saw it; on a page with many controls, find (words for what you look for) lists the matching ones first.\n\
                 - `browser_act` (action click + ref, type + text (+ ref), key + key, scroll + delta_y): click a control by its number from the clickable list, type into that field (or the focused one), press a key, scroll. If a ref is gone or covered, nothing is clicked and you get a fresh list.\n\
                 - `browser_screenshot` (optional width, e.g. 390 phone / 1280 desktop): see the page as a picture, for layout, colours and spacing.\n\
                 - `browser_cite` (text: the exact words from the page, or block: an id from `browser_page` with blocks): checks the quote is on the page word for word and once, and returns {{quote, url, link}}; the link opens the page with the quote highlighted. When you answer facts you read on the web, back each with its cite link. If a quote is refused, quote the page exactly or quote more; never quote from memory.\n\
@@ -451,7 +451,7 @@ impl TurnInput {
                 Browser API: {api}\n\
                 Never open a host desktop browser (no `open <url>`, `xdg-open`, etc.). Use ONLY these commands (the full API, do not search for more):\n\
                 - Open a page: curl -sS -X POST '{api}/navigate' -H 'Content-Type: application/json' -d '{{\"url\":\"<url>\"}}'\n\
-                - Read the page (url, title, text, clickable controls numbered like [3] button \"Add to cart\", and a hash): curl -sS '{api}/page'. Add ?since=<hash of your last read> to get only \"unchanged\" when nothing changed, and &find=<words> on a page with many controls to list the matching ones first.\n\
+                - Read the page (url, title, text, clickable controls numbered like [3] button \"Add to cart\"; *[12] marks one that just appeared, and a hash): curl -sS '{api}/page'. Add ?since=<hash of your last read> to get only \"unchanged\" when nothing changed, and &find=<words> on a page with many controls to list the matching ones first.\n\
                 - Click a control by its number from the clickable list: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"click\",\"ref\":3}}' (if it is gone or covered, nothing is clicked and you get a fresh list)\n\
                 - Type into a field by its number (leave out ref for the focused field): curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"type\",\"ref\":5,\"text\":\"<text>\"}}'\n\
                 - Press a key: curl -sS -X POST '{api}/act' -H 'Content-Type: application/json' -d '{{\"action\":\"key\",\"key\":\"Enter\"}}'\n\

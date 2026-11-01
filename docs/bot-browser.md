@@ -22,6 +22,18 @@ Otherwise nothing is clicked and the error says why (`gone`, `hidden`, `now read
 "Cookie banner"`, `no list of refs yet` after a reload); the page state returned with it is a fresh
 list. The payment floor judges the element the ref points to.
 
+### New controls
+
+A control that wasn't in the page's previous list starts with `*`: `*[12] option "Large"`. Identity
+is the element itself (the kept refs), not its label, so a renamed button isn't new and a second
+"Add to cart" that just appeared is. The first list of a page marks nothing, nor does the first list
+after a reload, a navigation, or an address change other than its `#fragment` (the registry keeps
+the address it was made for). Every list compares against the one before it, whoever asked for it,
+so a read right after an action's answer marks nothing. With `find`, new controls come first among
+equally matching ones; without it, page order stays. The mark doesn't count towards `hash`, so a
+re-read of an unchanged page is still `unchanged`. A copied `*[12] …` line works as a ref.
+(Idea from browser-use's `_assign_interactive_indices_and_mark_new_nodes`.)
+
 Limits: the page can read or change the list like anything else on it; another page read between
 the payment check and the click renumbers it (one bot drives one browser, so rare).
 

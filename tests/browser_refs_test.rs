@@ -36,6 +36,11 @@ const SHOP_PAGE: &str = "<!doctype html><title>shop</title>\
 <div id=banner style='display:none;position:fixed;inset:0;background:#fff'>Cookie banner</div>";
 const CARD_PAGE: &str = "<!doctype html><title>card</title><form onsubmit=\"return false\">\
 <input autocomplete=cc-number placeholder='Card number'><button type=submit>Continue</button></form>";
+const MENU_PAGE: &str = "<!doctype html><title>menu</title>\
+<button onclick=\"var m=document.getElementById('menu');m.innerHTML='<button role=option>Small</button><button role=option>Large</button>'\">Size</button>\
+<button onclick=\"document.getElementById('dlg').showModal()\">Open dialog</button>\
+<a href='#bottom' onclick=\"document.getElementById('menu').insertAdjacentHTML('beforeend','<button>Extra</button>')\">Jump</a><div id=menu></div>\
+<dialog id=dlg><p>Sure?</p><button>Confirm</button><button onclick=\"this.closest('dialog').close()\">Cancel</button></dialog>";
 const PLAIN_PAGE: &str = "<!doctype html><title>plain</title><button>Continue</button>";
 
 /// A small HTTP server for the pages above on 127.0.0.1, so the test needs no network.
@@ -52,6 +57,7 @@ async fn serve() -> String {
                 let page = match path.as_str() {
                     "/shop" => SHOP_PAGE,
                     "/card" => CARD_PAGE,
+                    "/menu" => MENU_PAGE,
                     _ => PLAIN_PAGE,
                 };
                 let reply = format!(
@@ -123,6 +129,7 @@ async fn get_page(app: &Router, bot: &str) -> Value {
 fn ref_of(page: &Value, needle: &str) -> u64 {
     let lines = page["clickable"].as_array().expect("a clickable list");
     let line = lines.iter().filter_map(Value::as_str).find(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle} in {page}"));
+    let line = line.trim_start_matches('*');
     line[1..line.find(']').unwrap()].parse().unwrap()
 }
 
@@ -244,4 +251,68 @@ async fn saucedemo_by_refs() {
     assert!(page["error"].is_null(), "{page}");
     assert!(page["clickable"].to_string().contains("Remove"), "{page}");
     eprintln!("{}", page["clickable"]);
+}
+
+fn lines(page: &Value) -> Vec<String> {
+    page["clickable"].as_array().expect("a clickable list").iter().filter_map(Value::as_str).map(str::to_string).collect()
+}
+fn marked(page: &Value) -> Vec<String> {
+    lines(page).into_iter().filter(|l| l.starts_with('*')).collect()
+}
+
+#[tokio::test]
+async fn controls_that_just_appeared_are_marked_new_and_nothing_else() {
+    if computer::local_chrome_path().is_none() {
+        eprintln!("skipped: no Chrome or Chromium installed");
+        return;
+    }
+    let e = setup().await;
+    let _chrome = ChromeGuard(e.tmp.path().join("local-chrome"));
+    let base = serve().await;
+    let ctrl = open(&e, &format!("{base}/menu")).await;
+
+    // The first read of a page marks nothing
+    let page = get_page(&e.app, &e.bot.id).await;
+    assert!(marked(&page).is_empty(), "{page}");
+
+    // Opening the dropdown marks exactly its options
+    let (_, page) = post_act(&e.app, &e.bot.id, json!({"action": "click", "ref": ref_of(&page, "Size")})).await;
+    let new = marked(&page);
+    assert_eq!(new.len(), 2, "{page}");
+    assert!(new[0].contains(r#"option "Small""#) && new[1].contains(r#"option "Large""#), "{new:?}");
+    assert!(lines(&page).iter().any(|l| l.contains(r#"button "Size""#) && !l.starts_with('*')), "{page}");
+    // A copied new line clicks as its ref
+    let large = lines(&page).into_iter().find(|l| l.contains("Large")).unwrap();
+    let (status, _) = post_act(&e.app, &e.bot.id, json!({"action": "click_text", "text": large})).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A re-read with no change marks nothing, and with since it is still "unchanged"
+    let page = get_page(&e.app, &e.bot.id).await;
+    assert!(marked(&page).is_empty(), "{page}");
+    let again = get_page(&e.app, &e.bot.id).await;
+    assert_eq!(page["hash"], again["hash"]);
+
+    // A dialog: only its buttons are new; with find, new ones come first among equal matches
+    let (_, page) = post_act(&e.app, &e.bot.id, json!({"action": "click", "ref": ref_of(&page, "Open dialog")})).await;
+    let new = marked(&page);
+    assert!(new.iter().any(|l| l.contains("Confirm")) && new.iter().any(|l| l.contains("Cancel")), "{page}");
+    assert!(new.iter().all(|l| l.contains("Confirm") || l.contains("Cancel")), "{new:?}");
+
+    // Swapping the dropdown's options for new elements with the same names marks them again
+    eval(&ctrl, "document.getElementById('dlg').close(); var m=document.getElementById('menu'); m.innerHTML=m.innerHTML").await;
+    let req = Request::builder().uri(format!("/api/sandbox/{}/page?find=large", e.bot.id)).body(Body::empty()).unwrap();
+    let resp = e.app.clone().oneshot(req).await.unwrap();
+    let page: Value = serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let all = lines(&page);
+    assert!(all[0].starts_with('*') && all[0].contains("Large"), "{all:?}");
+
+    // A #fragment change keeps the list (what the click added is still new); a reload forgets it
+    let page = get_page(&e.app, &e.bot.id).await;
+    let (_, page) = post_act(&e.app, &e.bot.id, json!({"action": "click", "ref": ref_of(&page, "Jump")})).await;
+    assert!(page["url"].as_str().unwrap().ends_with("#bottom"), "{page}");
+    let new = marked(&page);
+    assert!(new.len() == 1 && new[0].contains(r#"button "Extra""#), "{page}");
+    open(&e, &format!("{base}/menu")).await;
+    let page = get_page(&e.app, &e.bot.id).await;
+    assert!(marked(&page).is_empty(), "a reload marks nothing: {page}");
 }

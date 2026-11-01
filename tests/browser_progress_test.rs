@@ -132,6 +132,7 @@ async fn each_action_says_what_changed_and_a_loop_is_stopped() {
     assert_eq!(page["changed"], "New: \"Slow done\".", "{page}");
     // Typing changes no text, but it is a change
     let search = page["clickable"].as_array().unwrap().iter().filter_map(Value::as_str).find(|l| l.contains("Search")).unwrap();
+    let search = search.trim_start_matches('*');
     let search: u32 = search[1..search.find(']').unwrap()].parse().unwrap();
     let page = act(&e, json!({"action": "type", "ref": search, "text": "boots"})).await;
     assert!(page["changed"].as_str().unwrap().starts_with("No new text"), "{page}");

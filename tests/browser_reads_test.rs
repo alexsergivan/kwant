@@ -108,6 +108,7 @@ fn controls(page: &Value) -> Vec<String> {
 }
 
 fn ref_of(line: &str) -> u64 {
+    let line = line.trim_start_matches('*');
     line[1..line.find(']').unwrap()].parse().unwrap()
 }
 
