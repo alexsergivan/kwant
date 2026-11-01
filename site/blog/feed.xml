@@ -7,6 +7,7 @@
     <language>en</language>
     <lastBuildDate>Sat, 31 Oct 2026 08:00:00 +0000</lastBuildDate>
     <atom:link href="https://kwant.si/blog/feed.xml" rel="self" type="application/rss+xml"/>
+    <item><title>Claude Code scheduled tasks: cloud vs desktop vs /loop</title><link>https://kwant.si/blog/claude-code-scheduled-tasks-compared</link><guid isPermaLink="true">https://kwant.si/blog/claude-code-scheduled-tasks-compared</guid><pubDate>Sat, 31 Oct 2026 08:00:00 +0000</pubDate><description>Claude Code can schedule work in the cloud, on your desktop or inside a session. Here is how the three differ, plus a self-hosted AI agent option.</description><category>claude-code</category><category>scheduled-tasks</category><category>routines</category><category>self-hosted</category><category>comparison</category></item>
     <item><title>Run Claude Code on a VPS and reach it from your phone</title><link>https://kwant.si/blog/claude-code-on-a-vps</link><guid isPermaLink="true">https://kwant.si/blog/claude-code-on-a-vps</guid><pubDate>Sat, 31 Oct 2026 08:00:00 +0000</pubDate><description>Three ways to run Claude Code on a VPS and reach it from your phone: SSH and tmux, Anthropic's Remote Control, or a self-hosted AI agent team with kwant.</description><category>claude-code</category><category>vps</category><category>self-hosted</category><category>how-to</category><category>ai-agents</category></item>
   </channel>
 </rss>

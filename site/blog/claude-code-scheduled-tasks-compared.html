@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code scheduled tasks: cloud vs desktop vs /loop · kwant</title>
+<meta name="description" content="Claude Code can schedule work in the cloud, on your desktop or inside a session. Here is how the three differ, plus a self-hosted AI agent option.">
+<meta name="theme-color" content="#f4f1ff">
+<meta name="color-scheme" content="light">
+<link rel="canonical" href="https://kwant.si/blog/claude-code-scheduled-tasks-compared">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="kwant">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Claude Code scheduled tasks: cloud vs desktop vs /loop · kwant">
+<meta property="og:description" content="Claude Code can schedule work in the cloud, on your desktop or inside a session. Here is how the three differ, plus a self-hosted AI agent option.">
+<meta property="og:url" content="https://kwant.si/blog/claude-code-scheduled-tasks-compared">
+<meta property="og:image" content="https://kwant.si/assets/og/blog-claude-code-scheduled-tasks-compared.png?v=2a4f6ad47a">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Claude Code scheduled tasks: Cloud, desktop or /loop, plus a self-hosted option.">
+<meta property="article:published_time" content="2026-10-31">
+<meta property="article:modified_time" content="2026-10-31">
+<meta property="article:tag" content="claude-code">
+<meta property="article:tag" content="scheduled-tasks">
+<meta property="article:tag" content="routines">
+<meta property="article:tag" content="self-hosted">
+<meta property="article:tag" content="comparison">
+<link rel="alternate" type="application/rss+xml" title="kwant blog" href="https://kwant.si/blog/feed.xml">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Claude Code scheduled tasks: cloud vs desktop vs /loop · kwant">
+<meta name="twitter:description" content="Claude Code can schedule work in the cloud, on your desktop or inside a session. Here is how the three differ, plus a self-hosted AI agent option.">
+<meta name="twitter:image" content="https://kwant.si/assets/og/blog-claude-code-scheduled-tasks-compared.png?v=2a4f6ad47a">
+<meta name="twitter:image:alt" content="Claude Code scheduled tasks: Cloud, desktop or /loop, plus a self-hosted option.">
+<link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png?v=ac1a1e97c4" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
+<link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css?v=5897fe22ac">
+</head>
+<body class="page-blog">
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart">Docs</a>
+      <a href="/blog/" aria-current="page">Blog</a>
+      <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<section class="page-head post-head">
+  <div class="wrap">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">kwant</a> <span aria-hidden="true">/</span> <a href="/blog/">Blog</a></nav>
+    <p class="kicker">claude-code, scheduled-tasks, routines, self-hosted, comparison</p>
+    <h1>Claude Code scheduled tasks: cloud vs desktop vs /loop</h1>
+    <p class="lede">Claude Code can schedule work in the cloud, on your desktop or inside a session. Here is how the three differ, plus a self-hosted AI agent option.</p>
+    <p class="post-meta">The kwant team · <time datetime="2026-10-31">October 31, 2026</time> · 6 min read</p>
+  </div>
+</section>
+
+<div class="wrap">
+  <article class="prose solo post">
+<p>If you search for how to run Claude Code on a schedule, you will meet three names for what looks like one feature: scheduled tasks, routines and <code>/loop</code>. They are not the same thing, and picking the wrong one means a job that silently doesn't run when your laptop is shut. This post lays out Anthropic's three options from its own documentation, then adds a fourth that doesn't depend on Anthropic's cloud: routines in kwant, a self-hosted AI agent team.</p>
+<p>Everything about Claude Code below comes from Anthropic's docs, read on 2026-10-31. The feature is new and changing, so check the linked pages before you decide.</p>
+<h2 id="the-short-answer">The short answer</h2>
+<ul><li>Job must run while your computer is off: <strong>cloud scheduled tasks</strong>.</li><li>Job needs your local files and tools, and your computer is on: <strong>desktop scheduled tasks</strong>.</li><li>Quick polling while you're working in a session: <strong><code>/loop</code></strong>.</li><li>You want scheduled bots on your own machine or server, not on Anthropic's cloud, and you want several bots working together: <strong>kwant routines</strong>.</li></ul>
+<h2 id="what-changed-routines-are-now-scheduled-tasks">What changed: routines are now "scheduled tasks"</h2>
+<p>Anthropic's cloud feature used to be called routines. Its docs now describe it as <a href="https://code.claude.com/docs/en/routines" rel="noopener">"scheduled tasks, formerly routines"</a>, and say the earlier name "still appears". The same page calls the feature a research preview, meaning its behaviour and limits may change. That is why searches still mix the two names.</p>
+<p>This matters because kwant also has something called routines. They are a different thing: kwant routines run inside kwant on your own machine or server, and kwant isn't affiliated with Anthropic.</p>
+<h2 id="cloud-scheduled-tasks">Cloud scheduled tasks</h2>
+<p>A cloud scheduled task is a saved Claude Code configuration (a prompt, one or more repositories and a set of connectors) that runs on Anthropic-managed cloud infrastructure, "so they keep working when your laptop is closed". They can run on a schedule, on API calls or on GitHub events. They're available on Pro, Max, Ultra, Team and Enterprise plans, and you create them at claude.ai/code/routines, in the Desktop app, or with <code>/schedule</code> in the CLI (<a href="https://code.claude.com/docs/en/routines" rel="noopener">Anthropic docs</a>).</p>
+<p>Per the <a href="https://code.claude.com/docs/en/scheduled-tasks" rel="noopener">comparison table</a> in Anthropic's docs, cloud tasks don't need your machine on, have no access to your local files (each run gets a fresh clone), and have a minimum interval of one hour.</p>
+<p><strong>Pick this if</strong> the job is repo work that should run reliably without your computer, such as a nightly review or a PR check.</p>
+<h2 id="desktop-scheduled-tasks">Desktop scheduled tasks</h2>
+<p>Desktop tasks run on your machine, with access to your local files, and need that machine to be on. The minimum interval is one minute when Claude sets it and one hour in the forms (<a href="https://code.claude.com/docs/en/scheduled-tasks" rel="noopener">Anthropic docs</a>).</p>
+<p><strong>Pick this if</strong> the job needs local files or tools and your computer is on when it runs.</p>
+<h2 id="loop">/loop</h2>
+<p><code>/loop</code> re-runs a prompt on an interval while a Claude Code session stays open. The minimum interval is one minute. It is meant for quick polling, like checking a deployment or watching a PR, and it is session-scoped: it needs an open session (<a href="https://code.claude.com/docs/en/scheduled-tasks" rel="noopener">Anthropic docs</a>).</p>
+<p><strong>Pick this if</strong> you're at your desk and want something checked every few minutes for the next hour.</p>
+<h2 id="comparison-table">Comparison table</h2>
+<div class="table-wrap"><table><thead><tr><th scope="col"></th><th scope="col">Cloud</th><th scope="col">Desktop</th><th scope="col">/loop</th></tr></thead><tbody><tr><td>Runs on</td><td>Anthropic-managed cloud by default</td><td>Your machine</td><td>Your machine</td></tr><tr><td>Needs your machine on</td><td>No</td><td>Yes</td><td>Yes</td></tr><tr><td>Needs an open session</td><td>No</td><td>No</td><td>Yes</td></tr><tr><td>Access to local files</td><td>No (fresh clone)</td><td>Yes</td><td>Yes</td></tr><tr><td>Minimum interval</td><td>1 hour</td><td>1 minute when Claude sets it, 1 hour in the forms</td><td>1 minute</td></tr></tbody></table></div>
+<p>Source: Anthropic's <a href="https://code.claude.com/docs/en/scheduled-tasks" rel="noopener">"Compare scheduling options"</a>, as of 2026-10-31.</p>
+<h2 id="a-self-hosted-option-kwant-routines">A self-hosted option: kwant routines</h2>
+<p><a href="https://kwant.si/">kwant</a> is an open-source (AGPL-3.0) team of AI agents that you run on your own laptop, VPS or Docker. A <a href="https://kwant.si/docs/routines">routine</a> sends a prompt to one of your bots on a schedule and posts the answer in a channel, the bot's direct chat or a thread.</p>
+<p>What a kwant routine gives you, per its docs:</p>
+<ul><li><strong>Schedules:</strong> Once, Daily, Weekly, Monthly, Every… (from every 5 minutes up to every week) and a Custom cron rule.</li><li><strong>Run now</strong>, a history of the last 200 runs, and an on/off switch for each routine.</li><li><strong>Follow-ups:</strong> a bot can set itself a one-off check-back, for example to look at a deploy in an hour.</li><li><strong>Notifications:</strong> a ping on your device or an HTTPS webhook such as ntfy, and a "While you were away" list of what finished or failed.</li></ul>
+<p>Routines run on your own machine, so they run while that machine is on. A small server that stays up avoids the sleeping-laptop problem; the <a href="https://kwant.si/docs/install">install guide</a> shows a systemd setup.</p>
+<p>kwant isn't a drop-in replacement for Anthropic's cloud tasks. Its routines start on a schedule or with Run now, not on GitHub events, and you look after the machine. What it adds is several bots working as a team, with approvals you control: three approval modes, plus optional <a href="https://kwant.si/docs/flight-school">Flight School</a> tiers (Observe, Sandbox, Act) that set how much each bot may do on its own on board tasks (<a href="https://kwant.si/docs/approvals">approvals</a>).</p>
+<h3 id="new-in-kwant-0-5-routines-that-say-what-a-good-run-is">New in kwant 0.5: routines that say what a good run is</h3>
+<p>The kwant 0.5 release notes describe routines that can carry a Flight School class, a description of a good result and checks, so with the Mission board switched on, a run that passes its checks counts as verified. The same release adds a setting that suggests routines from tasks you repeat. It's off by default, and nothing is created until you accept (<a href="https://github.com/alexsergivan/kwant/blob/main/CHANGELOG.md" rel="noopener">release notes</a>, "Mac 0.5.0", 2026-10-31).</p>
+<h2 id="which-should-you-use">Which should you use?</h2>
+<div class="table-wrap"><table><thead><tr><th scope="col">Your situation</th><th scope="col">Use</th></tr></thead><tbody><tr><td>Repo job that must run when your computer is off</td><td>Cloud scheduled tasks</td></tr><tr><td>Job that needs local files, computer is on</td><td>Desktop scheduled tasks</td></tr><tr><td>Watching something for the next hour</td><td><code>/loop</code></td></tr><tr><td>Scheduled work on your own server, with several bots and approvals</td><td>kwant routines</td></tr><tr><td>You want the least to maintain</td><td>Cloud scheduled tasks</td></tr></tbody></table></div>
+<p>A note on the name: "kwant" here is the open-source AI agent team at kwant.si, not the Kwant physics package or Kwant.ai. It isn't affiliated with or endorsed by Anthropic.</p>
+<p>To try kwant routines, start with the <a href="https://kwant.si/docs/quickstart">quickstart</a> and the <a href="https://kwant.si/docs/routines">routines guide</a>.</p>
+    <aside class="post-cta" aria-label="Try kwant">
+      <p><strong>Try kwant.</strong> A self-hosted team of AI agents in one binary, free and open source.</p>
+      <p class="cta"><a class="btn btn-violet" href="/docs/install">Install kwant</a> <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">See it on GitHub</a></p>
+    </aside>
+  </article>
+  <aside class="related" aria-labelledby="related-title"><h2 id="related-title">Related posts</h2><div class="post-grid"><article class="post-card"><h3><a href="/blog/claude-code-on-a-vps">Run Claude Code on a VPS and reach it from your phone</a></h3><p>Three ways to run Claude Code on a VPS and reach it from your phone: SSH and tmux, Anthropic&#x27;s Remote Control, or a self-hosted AI agent team with kwant.</p><p class="post-meta">The kwant team · <time datetime="2026-10-31">October 31, 2026</time> · 7 min read</p><ul class="tags" aria-label="Tags"><li>claude-code</li><li>vps</li><li>self-hosted</li><li>how-to</li><li>ai-agents</li></ul></article></div></aside>
+</div>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="foot-brand">
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
+      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="https://github.com/alexsergivan/kwant" rel="noopener">Toss one our way <span aria-hidden="true">⭐</span></a></p>
+    </div>
+    <nav aria-label="Product">
+      <h2>Product</h2>
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart">Quickstart</a>
+      <a href="/docs/install">Install &amp; run</a>
+      <a href="/self-hosted-ai-agents">Self-hosted AI agents</a>
+      <a href="/blog/">Blog</a>
+      <a href="/docs/mcp">MCP tools</a>
+    </nav>
+    <nav aria-label="Using kwant">
+      <h2>Using kwant</h2>
+      <a href="/docs/spaces">Spaces</a>
+      <a href="/docs/accounts">Accounts</a>
+      <a href="/docs/approvals">Approvals</a>
+      <a href="/docs/routines">Routines</a>
+    </nav>
+    <nav aria-label="Project">
+      <h2>Project</h2>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+      <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Issues</a>
+      <a href="https://github.com/alexsergivan/kwant/blob/main/SECURITY.md" rel="noopener">Security</a>
+    </nav>
+    <nav aria-label="Legal">
+      <h2>Legal</h2>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms of use</a>
+      <a href="/terms#license">License</a>
+    </nav>
+    <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+    <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
+  </div>
+</footer>
+<script src="../assets/js/site.js?v=c490c973ba" defer></script>
+<script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"BlogPosting","@id":"https://kwant.si/blog/claude-code-scheduled-tasks-compared#post","headline":"Claude Code scheduled tasks: cloud vs desktop vs /loop","description":"Claude Code can schedule work in the cloud, on your desktop or inside a session. Here is how the three differ, plus a self-hosted AI agent option.","url":"https://kwant.si/blog/claude-code-scheduled-tasks-compared","mainEntityOfPage":"https://kwant.si/blog/claude-code-scheduled-tasks-compared","image":"https://kwant.si/assets/og/blog-claude-code-scheduled-tasks-compared.png?v=2a4f6ad47a","inLanguage":"en","datePublished":"2026-10-31","dateModified":"2026-10-31","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"wordCount":1138,"isPartOf":{"@id":"https://kwant.si/blog/#blog"},"about":{"@id":"https://kwant.si/#app"},"keywords":["claude-code","scheduled-tasks","routines","self-hosted","comparison"]},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://kwant.si/blog/"},{"@type":"ListItem","position":3,"name":"Claude Code scheduled tasks: cloud vs desktop vs /loop","item":"https://kwant.si/blog/claude-code-scheduled-tasks-compared"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
+</body>
+</html>

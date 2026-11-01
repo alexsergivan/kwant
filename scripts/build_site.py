@@ -82,6 +82,7 @@ DOC_GROUPS = [
         ("mission-board", "Mission board"),
         ("routines", "Routines & bot actions"),
         ("memory-skills", "Memory, skills & search"),
+        ("truth-ledger", "Truth Ledger"),
         ("loose-ends", "Loose ends & letters"),
         ("parallel-universe", "Parallel Universe"),
     ]),

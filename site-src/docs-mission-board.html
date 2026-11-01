@@ -1,5 +1,5 @@
 title: Mission board: AI agent tasks with proof
-description: One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Performance shows who does well.
+description: One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Insights shows verified results and their cost.
 card_title: Mission board, checkpoints & AutoFix
 path: docs/mission-board.html
 nav: mission-board
@@ -106,6 +106,19 @@ card_art: avatar:tech_lead
   <div class="frame">{{shot:v3-change-approval|A proposed change in Needs you: the bot explains why, shows the task's acceptance before and after, with Approve and apply, and Reject.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>Only you can approve a change to how a task is checked.</figcaption>
 </figure>
+
+<h2 id="insights">Insights: verified results and their cost</h2>
+<p>New in 0.6. At the top of the board, under the week's numbers, kwant shows two measures:</p>
+<figure>
+  <div class="frame">{{shot:v6-board|The top of the Mission board: the week's numbers (8 verified, 0 false successes), then verified per active week, 5.8 on average over the last 8 weeks, as a bar chart, and cost per verified result, $0.23, from $1.36 over 8 settled tasks this week, failed runs included, with a note that it is based on 6 verified results that reported a cost and 2 runs reported none. Below, a fact dispute and a bot's request for a higher Flight School tier.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Verified results per week, and what each one cost.</figcaption>
+</figure>
+<ul>
+  <li><strong>Verified per active week</strong>: how many tasks were verified each week over the last 8 weeks, and the average over the weeks that had any.</li>
+  <li><strong>Cost per verified result</strong>: what this week's settled tasks cost, failed runs included, divided by the verified results that reported a cost.</li>
+  <li><strong>Never a fake $0.</strong> When some runs didn't report a cost, it says so ("Based on 6 verified results that reported a cost; 2 runs reported none"). When none did, it says <strong>Not reported</strong>.</li>
+</ul>
+<p>The same "Needs you" area holds <a href="truth-ledger.html#disputes">fact conflicts</a> to settle (with the Truth Ledger on) and <a href="flight-school.html#requests">Flight School requests</a> from bots asking for a higher tier.</p>
 
 <h2 id="performance">Performance</h2>
 <p>Under the board, on <strong>All work</strong>, a <strong>Performance</strong> section shows how each bot's finished work goes, per kind of work and per bot, or <strong>By model</strong>:</p>

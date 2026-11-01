@@ -1,5 +1,5 @@
 title: Flight School: earned freedom for AI agents
-description: Set each bot's tier per kind of work: Observe, Sandbox or Act. Tiers only add approval cards, payments always ask, and you can revoke one in a click.
+description: Set each bot's tier per kind of work: Observe, Sandbox or Act. Bots earn a step up with a scorecard, only you grant it, payments always ask, and you can revoke a tier in a click.
 card_title: Flight School
 path: docs/flight-school.html
 nav: flight-school
@@ -38,7 +38,36 @@ card_art: avatar:qa
 <ul>
   <li><strong>Kind of work.</strong> Every task on the <a href="mission-board.html">Mission board</a> has one, <code>general</code> unless you or the planning bot set another. You can change it from the task's panel.</li>
   <li><strong>Revoke.</strong> One click moves a tier one step down. It applies from the bot's next action; an action already allowed and running finishes.</li>
-  <li><strong>Only you</strong> can change a tier. A bot can see its own, but can't raise it.</li>
+  <li><strong>Only you</strong> can change a tier. A bot can see its own and <a href="#requests">ask for a step up</a>, but can't raise it.</li>
+</ul>
+
+<h2 id="scorecards">Scorecards: freedom a bot has earned</h2>
+<p>New in 0.6. Each bot has a scorecard for each kind of work, built from the board's own records of the last 30 days: how many of its tasks were verified, how many on the first try, and how many failed a check or had a call you denied. Open it with <strong>Scorecard</strong> next to a kind of work in the bot's settings.</p>
+<figure>
+  <div class="frame">{{shot:v6-scorecard-panel|QA's settings, Flight School tier section: Sandbox for all work with a Revoke to Observe button, a request from QA for Act on release notes with Grant Act and Decline buttons, and rows for General and Release notes, each with a Scorecard link.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A request shows in the bot's settings too, next to the tiers it would change.</figcaption>
+</figure>
+<p>The scorecard also says what the bot still needs for the next tier:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Step up</th><th>What the last 30 days must show</th></tr></thead>
+  <tbody>
+    <tr><td>Observe → Sandbox</td><td>At least 5 verified tasks of that kind, and no denied call in the last 5.</td></tr>
+    <tr><td>Sandbox → Act</td><td>At least 10 verified, at least 70% of them on the first try, none of them a false success, and no denied call in the last 10.</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="requests">When a bot asks for more</h2>
+<p>A bot that qualifies can ask you for the next tier, with a reason. The request shows on the <a href="mission-board.html">Mission board</a> under <strong>Needs you</strong> and in the bot's settings, with the scorecard it had when it asked.</p>
+<figure>
+  <div class="frame">{{shot:v6-tier-request|The Mission board's Needs you section: QA asks for Act on release notes, Sandbox to Act. Its reason says 12 release-note drafts were verified in the last month, 10 on the first try. The scorecard shows 12 of 13 settled verified, 10 of 12 on the first try, none denied in its last 10, and "Qualifies to ask for Act. Only you can grant it." Below are Grant Act and Decline buttons.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The request carries its scorecard. Payments still ask, whatever the tier.</figcaption>
+</figure>
+<ul>
+  <li><strong>Grant</strong> moves the bot up one tier for that kind of work. <strong>Decline</strong> takes an optional reason, and the bot can't ask for the same step again for 7 days.</li>
+  <li><strong>Only you decide.</strong> kwant refuses a bot that tries to grant itself, and refuses a request from a bot that doesn't qualify yet, saying what's missing.</li>
+  <li>If you answer in two tabs at once, the first answer counts and the other tab says someone got there first.</li>
+  <li>A request that stops qualifying while it waits, for example after a denied call, is closed and says why.</li>
+  <li>Revoking stays one click, and applies from the bot's next action.</li>
 </ul>
 
 <h2 id="sandbox">What Sandbox asks about</h2>

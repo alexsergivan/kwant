@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mission board: AI agent tasks with proof · kwant</title>
-<meta name="description" content="One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Performance shows who does well.">
+<meta name="description" content="One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Insights shows verified results and their cost.">
 <meta name="theme-color" content="#f4f1ff">
 <meta name="color-scheme" content="light">
 <link rel="canonical" href="https://kwant.si/docs/mission-board">
@@ -12,7 +12,7 @@
 <meta property="og:site_name" content="kwant">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="Mission board: AI agent tasks with proof · kwant">
-<meta property="og:description" content="One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Performance shows who does well.">
+<meta property="og:description" content="One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Insights shows verified results and their cost.">
 <meta property="og:url" content="https://kwant.si/docs/mission-board">
 <meta property="og:image" content="https://kwant.si/assets/og/docs-mission-board.png?v=cb9229cc7c">
 <meta property="og:image:type" content="image/png">
@@ -20,10 +20,10 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Mission board, checkpoints &amp; AutoFix: A task is Verified only when a check passes, never on a bot&#x27;s word.">
 <meta property="article:published_time" content="2026-10-28">
-<meta property="article:modified_time" content="2026-10-30">
+<meta property="article:modified_time" content="2026-11-01">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Mission board: AI agent tasks with proof · kwant">
-<meta name="twitter:description" content="One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Performance shows who does well.">
+<meta name="twitter:description" content="One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Insights shows verified results and their cost.">
 <meta name="twitter:image" content="https://kwant.si/assets/og/docs-mission-board.png?v=cb9229cc7c">
 <meta name="twitter:image:alt" content="Mission board, checkpoints &amp; AutoFix: A task is Verified only when a check passes, never on a bot&#x27;s word.">
 <link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
@@ -31,7 +31,7 @@
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=c0c2b1a93c">
+<link rel="stylesheet" href="../assets/css/site.css?v=5897fe22ac">
 </head>
 <body class="page-docs">
 <a class="skip" href="#main">Skip to content</a>
@@ -52,7 +52,7 @@
     <h2>Docs</h2>
     <div class="docs-group"><h3>Get started</h3><ul><li><a href="/docs/quickstart">Quickstart</a></li><li><a href="/docs/install">Install &amp; run</a></li></ul></div>
     <div class="docs-group"><h3>Using kwant</h3><ul><li><a href="/docs/spaces">Spaces</a></li><li><a href="/docs/bots-and-teams">Bots &amp; teams</a></li><li><a href="/docs/accounts">Accounts &amp; profiles</a></li><li><a href="/docs/models">Models &amp; routing</a></li><li><a href="/docs/approvals">Approvals &amp; passwords</a></li><li><a href="/docs/flight-school">Flight School</a></li></ul></div>
-    <div class="docs-group"><h3>Works on its own</h3><ul><li><a href="/docs/mission-board" aria-current="page">Mission board</a></li><li><a href="/docs/routines">Routines &amp; bot actions</a></li><li><a href="/docs/memory-skills">Memory, skills &amp; search</a></li><li><a href="/docs/loose-ends">Loose ends &amp; letters</a></li><li><a href="/docs/parallel-universe">Parallel Universe</a></li></ul></div>
+    <div class="docs-group"><h3>Works on its own</h3><ul><li><a href="/docs/mission-board" aria-current="page">Mission board</a></li><li><a href="/docs/routines">Routines &amp; bot actions</a></li><li><a href="/docs/memory-skills">Memory, skills &amp; search</a></li><li><a href="/docs/truth-ledger">Truth Ledger</a></li><li><a href="/docs/loose-ends">Loose ends &amp; letters</a></li><li><a href="/docs/parallel-universe">Parallel Universe</a></li></ul></div>
     <div class="docs-group"><h3>Connect</h3><ul><li><a href="/docs/mcp">MCP tools</a></li><li><a href="/docs/browser">Browser</a></li></ul></div>
   </nav>
   <article class="prose">
@@ -157,6 +157,19 @@
   <figcaption>Only you can approve a change to how a task is checked.</figcaption>
 </figure>
 
+<h2 id="insights">Insights: verified results and their cost</h2>
+<p>New in 0.6. At the top of the board, under the week's numbers, kwant shows two measures:</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v6-board-2880.webp?v=4651681f4c" data-caption="The top of the Mission board: the week&#x27;s numbers (8 verified, 0 false successes), then verified per active week, 5.8 on average over the last 8 weeks, as a bar chart, and cost per verified result, $0.23, from $1.36 over 8 settled tasks this week, failed runs included, with a note that it is based on 6 verified results that reported a cost and 2 runs reported none. Below, a fact dispute and a bot&#x27;s request for a higher Flight School tier."><img src="../assets/media/v6-board-1440.webp?v=b16dec0e00" srcset="../assets/media/v6-board-1440.webp?v=b16dec0e00 1440w, ../assets/media/v6-board-2880.webp?v=4651681f4c 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The top of the Mission board: the week&#x27;s numbers (8 verified, 0 false successes), then verified per active week, 5.8 on average over the last 8 weeks, as a bar chart, and cost per verified result, $0.23, from $1.36 over 8 settled tasks this week, failed runs included, with a note that it is based on 6 verified results that reported a cost and 2 runs reported none. Below, a fact dispute and a bot&#x27;s request for a higher Flight School tier."></a></div>
+  <figcaption>Verified results per week, and what each one cost.</figcaption>
+</figure>
+<ul>
+  <li><strong>Verified per active week</strong>: how many tasks were verified each week over the last 8 weeks, and the average over the weeks that had any.</li>
+  <li><strong>Cost per verified result</strong>: what this week's settled tasks cost, failed runs included, divided by the verified results that reported a cost.</li>
+  <li><strong>Never a fake $0.</strong> When some runs didn't report a cost, it says so ("Based on 6 verified results that reported a cost; 2 runs reported none"). When none did, it says <strong>Not reported</strong>.</li>
+</ul>
+<p>The same "Needs you" area holds <a href="/docs/truth-ledger#disputes">fact conflicts</a> to settle (with the Truth Ledger on) and <a href="/docs/flight-school#requests">Flight School requests</a> from bots asking for a higher tier.</p>
+
 <h2 id="performance">Performance</h2>
 <p>Under the board, on <strong>All work</strong>, a <strong>Performance</strong> section shows how each bot's finished work goes, per kind of work and per bot, or <strong>By model</strong>:</p>
 <ul>
@@ -222,7 +235,7 @@
 </footer>
 <script src="../assets/js/site.js?v=c490c973ba" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/mission-board#article","headline":"Mission board: AI agent tasks with proof","description":"One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Performance shows who does well.","url":"https://kwant.si/docs/mission-board","mainEntityOfPage":"https://kwant.si/docs/mission-board","image":"https://kwant.si/assets/og/docs-mission-board.png?v=cb9229cc7c","inLanguage":"en","datePublished":"2026-10-28","dateModified":"2026-10-30","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Mission board","item":"https://kwant.si/docs/mission-board"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/mission-board#article","headline":"Mission board: AI agent tasks with proof","description":"One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Insights shows verified results and their cost.","url":"https://kwant.si/docs/mission-board","mainEntityOfPage":"https://kwant.si/docs/mission-board","image":"https://kwant.si/assets/og/docs-mission-board.png?v=cb9229cc7c","inLanguage":"en","datePublished":"2026-10-28","dateModified":"2026-11-01","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Mission board","item":"https://kwant.si/docs/mission-board"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

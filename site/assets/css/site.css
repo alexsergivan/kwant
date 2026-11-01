@@ -135,6 +135,13 @@ section { padding: 104px 0; }
 .new-list a:focus-visible { outline: 2px solid var(--v5); outline-offset: 2px; }
 .new-list b { display: block; font-size: 15px; }
 .new-list span { display: block; margin-top: 2px; color: var(--muted); font-size: 14px; line-height: 1.4; }
+/* "New in 0.6": three cards, each with a real screenshot crop on top */
+.new-shots .wrap { flex-direction: column; align-items: stretch; gap: 14px; }
+.new-shots .new-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.new-shots .new-list a { padding: 10px 10px 16px; }
+.new-shots .new-list img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; margin-bottom: 12px; background: #140f26; border-radius: 8px; }
+.new-shots .new-list b, .new-shots .new-list span { padding: 0 4px; }
+.new-note { margin: 0; color: var(--muted); font-size: 14px; }
 /* "More in kwant": the same strip lower on the home page, pointing at the sections that moved to the features page */
 .new-strip.more-strip { margin-top: 0; padding: 0; }
 .more-strip .wrap { flex-wrap: wrap; }
@@ -439,7 +446,10 @@ td code { white-space: nowrap; }
   .compare td::before { content: attr(data-label); color: var(--dim); font-weight: 600; font-size: 14px; }
   .post-cta, .post-card { padding: 18px; }
   .post-list, .related { padding-bottom: 72px; }
-  .new-list { grid-template-columns: 1fr; gap: 8px; }
+  .new-list, .new-shots .new-list { grid-template-columns: 1fr; gap: 8px; }
+  .new-shots .new-list a { display: grid; grid-template-columns: 112px minmax(0, 1fr); column-gap: 12px; align-content: start; padding: 10px; }
+  .new-shots .new-list img { grid-row: span 2; margin: 0; }
+  .new-shots .new-list b, .new-shots .new-list span { padding: 0; }
   section.new-strip { margin-top: -24px; padding: 0 0 24px; }
   body { font-size: 16px; }
   .wrap { width: calc(100% - 40px); }

@@ -1,0 +1,45 @@
+title: Truth Ledger: shared facts your AI agents agree on
+description: With the Truth Ledger on, kwant bots read their notes from one list of facts. Conflicting facts are flagged until you settle them, and notes from outside text wait for you. Off by default.
+card_title: Truth Ledger
+path: docs/truth-ledger.html
+nav: truth-ledger
+card: Conflicting facts are flagged until you settle them. Off by default.
+card_art: avatar:research
+---
+<p class="kicker">Docs</p>
+<h1>Truth Ledger: one list of facts, and you settle the conflicts</h1>
+<p class="intro">Bots remember things: a server's size, where the release checklist lives, which branch deploys. When two of those notes disagree, a bot can't know which one is right. With the Truth Ledger on, kwant notices the conflict, labels both sides, and asks you to decide.</p>
+
+<h2 id="on">Turn it on</h2>
+<p>The Truth Ledger is new in 0.6 and off by default. With it off, bots see exactly what they saw in 0.5, byte for byte. There's no switch in Settings yet: turn it on from the computer kwant runs on, with the address and port you use for kwant:</p>
+<pre><code>curl -X POST http://127.0.0.1:8799/api/settings \
+  -H 'content-type: application/json' \
+  -d '{"truth_ledger": "on"}'</code></pre>
+<p>From another machine, or with Docker, also send your token: add <code>-H "Authorization: Bearer YOUR_TOKEN"</code>, where <code>kwnt token --raw</code> on the kwant computer prints the token. Only you can change it: a bot is refused. Send <code>"off"</code> to switch it off again. Facts and open conflicts are kept for when you turn it back on.</p>
+<p>The facts list and conflicts show on the <a href="mission-board.html">Mission board</a>, so switch that on too.</p>
+
+<h2 id="facts">What bots read</h2>
+<ul>
+  <li><strong>Their own notes</strong>, as before, but only notes still in force: a note you rejected, or one that was replaced, drops out.</li>
+  <li><strong>What your team knows:</strong> facts shared with a bot's team or the whole space, once you've accepted them.</li>
+  <li><strong>Labels.</strong> A note a bot wrote after reading a web page, a file or another tool is <strong>Unconfirmed</strong> until you confirm it. A note in a conflict is <strong>Disputed</strong>. Bots see the label next to the note, so they know to treat it with care.</li>
+</ul>
+<p>Bots can propose a fact for their team or the whole space. It waits as Unconfirmed until you confirm it, and a bot can't propose one in a turn where it read outside text.</p>
+
+<h2 id="disputes">When two facts disagree</h2>
+<p>kwant compares facts as they're written: two facts about the same thing that carry different numbers ("4 GB" vs "16 GB" of RAM), or where one says the opposite of the other, are flagged. The board shows both side by side, with why they clash.</p>
+<figure>
+  <div class="frame">{{shot:v6-truth-ledger|The Mission board's Facts section: "Needs you: one dispute to settle". Two facts disagree: "The production server has 16 GB of RAM." and "The production server has 4 GB of RAM.", each with a Keep this one button, and a Not a conflict button. Below, the facts list with In force, Unconfirmed and Disputed filters.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Until you choose, bots see both facts, labelled disputed.</figcaption>
+</figure>
+<ul>
+  <li><strong>Keep this one</strong> keeps that fact; the other is replaced by it.</li>
+  <li><strong>Not a conflict</strong> keeps both, and that pair isn't raised again.</li>
+  <li>A task that relies on a disputed or changed fact moves to <strong>Needs you</strong> and says so.</li>
+  <li>If one side is backed by a check kwant ran and passed, and the other isn't, kwant can settle it on that evidence. Evidence never overrules a fact you wrote or a decision you made.</li>
+</ul>
+<p>The check is simple and fast, not an AI judgement: it misses conflicts said in different words ("Deploys happen on Fridays" vs "We never ship on Friday"), and can flag two facts that don't really clash. Dismiss those once with Not a conflict.</p>
+
+<h2 id="list">The facts list</h2>
+<p>Under the conflicts, <strong>Show facts</strong> lists the facts in force. Filter by <strong>Unconfirmed</strong> or <strong>Disputed</strong>, and open <strong>Details</strong> to see the tasks that rely on a fact, its evidence and, if it expires, when bots stop reading it. Unconfirmed facts have <strong>Confirm</strong> and <strong>Reject</strong>.</p>
+<p>Only you can confirm, reject or settle facts. See also <a href="memory-skills.html#memory">Memory</a>.</p>

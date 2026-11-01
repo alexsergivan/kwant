@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-06">New in 0.6</a></li>
         <li><a href="#new-05">New in 0.5</a></li>
         <li><a href="#discovery">Suggested routines</a></li>
         <li><a href="#new-teams">Hand-offs &amp; review</a></li>
@@ -38,6 +39,35 @@ card_art: team
     </div>
   </div>
 </nav>
+
+<section id="new-06" class="fgroup alt">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.6 · Mission Control</p>
+      <h2>Freedom bots earn, facts they agree on, results you can count</h2>
+      <p>Bots ask for more freedom when their record earns it, conflicting facts wait for you, and the board counts verified results and what each one cost. Flight School and the Truth Ledger are off by default.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="tier-requests">
+        <span class="shot">{{shot:v6-tier-request|The Mission board's Needs you section: QA asks for Act on release notes, Sandbox to Act. Its reason says 12 release-note drafts were verified in the last month, 10 on the first try. The scorecard shows 12 of 13 settled verified, 10 of 12 on the first try, none denied in its last 10, and "Qualifies to ask for Act. Only you can grant it." Below are Grant Act and Decline buttons.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Bots ask, only you grant</h3><p>A bot whose scorecard qualifies can ask for a higher tier for one kind of work. The request waits under Needs you with its scorecard, and you Grant or Decline it. A bot can never grant itself, revoking is still one tap, and payments always ask.</p></div>
+      </article>
+      <article class="card" id="scorecards">
+        <span class="shot">{{shot:v6-scorecard-panel|QA's settings, Flight School tier section: Sandbox for all work with a Revoke to Observe button, a request from QA for Act on release notes with Grant Act and Decline buttons, and rows for General and Release notes, each with a Scorecard link.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A scorecard per kind of work</h3><p>Verified tasks, first-try rate and what a bot still needs for the next tier, over the last 30 days. The same request and scorecards show in the bot's settings.</p></div>
+      </article>
+      <article class="card" id="truth-ledger-on">
+        <span class="shot">{{shot:v6-truth-ledger|The Mission board's Facts section: "Needs you: one dispute to settle". Two facts disagree: "The production server has 16 GB of RAM." and "The production server has 4 GB of RAM.", each with a Keep this one button, and a Not a conflict button. Below, the facts list with In force, Unconfirmed and Disputed filters.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Truth Ledger: conflicts wait for you</h3><p>When two facts disagree, both are flagged Disputed until you pick Keep this one or Not a conflict. Facts show their evidence and the tasks that rely on them. Off by default, and with it off bots see exactly what they saw in 0.5.</p></div>
+      </article>
+      <article class="card" id="insights-06">
+        <span class="shot">{{shot:v6-board|The top of the Mission board: the week's numbers (8 verified, 0 false successes), then verified per active week, 5.8 on average over the last 8 weeks, as a bar chart, and cost per verified result, $0.23, from $1.36 over 8 settled tasks this week, failed runs included, with a note that it is based on 6 verified results that reported a cost and 2 runs reported none. Below, a fact dispute and a bot's request for a higher Flight School tier.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Insights: verified per week, and the cost</h3><p>Verified results per active week over the last 8 weeks, and the cost of each one, failed runs included. A missing cost is said plainly, never shown as $0.</p></div>
+      </article>
+    </div>
+    <p class="section-foot"><a class="more-link" href="docs/flight-school.html#requests">Tier requests docs →</a> <a class="more-link" href="docs/truth-ledger.html">Truth Ledger docs →</a> <a class="more-link" href="docs/mission-board.html#insights">Insights docs →</a></p>
+  </div>
+</section>
 
 <section id="new-05" class="fgroup">
   <div class="wrap">
@@ -69,7 +99,7 @@ card_art: team
       <li id="suggested"><h3>Suggested routines (off by default)</h3><p>Turn on "Suggest routines from repeated tasks" in Settings → Mission board. kwant looks at the board tasks you made over the last 120 days and finds ones you ask for daily, on weekdays, weekly or monthly. At most 2 new suggestions a day, each with its schedule, first run, checks and the tasks it came from.</p></li>
       <li id="accept"><h3>Accept or dismiss</h3><p>Accept opens the routine form so you can change it first. Dismiss hides a suggestion for 30 days. Routines made this way carry a "Suggested for you" badge.</p></li>
       <li id="good-run"><h3>Routines know what a good run is</h3><p>A routine can carry a Flight School class, a description of a good result and checks. A run that passes its checks is verified on its own. Only you set the class and the checks.</p></li>
-      <li id="truth-ledger"><h3>Truth Ledger preview (off by default)</h3><p>A <code>truth_ledger</code> setting, off by default, shows every bot note as a fact with where it came from. Notes a bot wrote after reading a web page, a file or another tool wait as proposed until you accept or reject them. Nothing the bots see changes yet.</p></li>
+      <li id="truth-ledger"><h3>Truth Ledger (off by default)</h3><p>A preview in 0.5. Since 0.6, when you turn it on, bots read their notes from the shared list of facts. Notes a bot wrote after reading a web page, a file or another tool stay Unconfirmed until you confirm them, and conflicting facts wait for you. <a href="docs/truth-ledger.html">Truth Ledger docs</a>.</p></li>
       <li id="star"><h3>A star, asked once</h3><p>After real use, a small card asks for a GitHub star, with Maybe later and Don't ask again. It never shows on first run or while a bot needs you, and nothing is sent anywhere.</p></li>
     </ul>
     <p class="section-foot"><a class="more-link" href="docs/routines.html#suggested">Suggested routines docs →</a></p>
@@ -160,7 +190,7 @@ card_art: team
       <li><h3>No marking its own homework</h3><p>A check a bot adds to its own task waits for your OK before it counts.</p></li>
       <li><h3>Change approvals</h3><p>A bot can propose changing a check or the acceptance. You see before and after, and nothing changes until you approve.</p></li>
       <li><h3>"May be invalid"</h3><p>When a file a verified task relied on changes, the task and those built on it are flagged for you to keep or redo.</p></li>
-      <li><h3>Insights</h3><p>Tasks verified this week, false successes, what needs you now, and what AutoFix fixed.</p></li>
+      <li><h3>Insights</h3><p>Tasks verified this week, false successes, what needs you now and what AutoFix fixed, plus verified results per active week and the cost of each one.</p></li>
       <li><h3>On a phone</h3><p>One column at a time, with tabs that count the tasks in each.</p></li>
     </ul>
     <p class="section-foot"><a class="more-link" href="docs/mission-board.html">Mission board docs →</a></p>
