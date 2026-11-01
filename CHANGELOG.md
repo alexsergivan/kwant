@@ -8,6 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.2] - 2026-11-01
+
+### Changed
+- **The Mission board is on from the start.** New installs, and installs that never changed the
+  setting, now show the board, give bots the mission tools and put hand-offs, routine runs and Loose
+  Ends on it. If you switched it off, it stays off (**Settings → Mission board**). Bots propose a
+  mission only when you ask for a plan or tracked work, never for an ordinary request. A finished
+  hand-off goes to Review and the bot that handed it out checks it in the turn it already takes when
+  the result comes back (one reminder at most). Flight School, the Truth Ledger, AutoFix, automation
+  suggestions and the auditor keep their own switches and stay off until you turn them on.
+- **Pick one way to start.** Adding an account now opens with three choices: Sign in with Claude,
+  Sign in with ChatGPT (through Codex) or Paste an API key (Anthropic, OpenAI or xAI). Engines that
+  aren't installed are folded under "Not available on this computer" with an Install link, and their
+  switches appear only once something works.
+- **A welcome in the first chat.** An empty chat shows your bots, says that Laya picks who answers and
+  has one Add an account button. Suggested prompts wait until an account works.
+- **Replies start with one line.** A bot's reply shows its name and the time, with a Details arrow
+  for the model, account, tokens and steps ("Details · a step failed" when one did). The note about
+  when an engine shares its thinking is gone.
+- **A cleaner bot list.** The Laya and engine tags are gone from every row in the sidebar and the
+  phone's Bots tab, so names get the room; the engine is in the name's tooltip.
+- **New installs start in "My space"** (violet, with a house). Existing spaces keep their name, icon and
+  colour. The setup banner and the bar above the app no longer look like warnings.
+- Line icons instead of emoji for Bot browser and Pin. "Out of quota until 8:15 PM" in your local time
+  instead of a raw timestamp. A tool's command line sits behind Details in Connections. Monospace only
+  for code.
+
 ## [Mac 0.6.1] - 2026-11-01
 
 ### Added
