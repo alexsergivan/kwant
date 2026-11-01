@@ -13,6 +13,7 @@ pub mod scrub;
 use crate::db::continuity::{clean_memory_text, MAX_INSTRUCTIONS_CHARS, MAX_MEMORIES_PER_KWANT, MAX_MEMORY_CHARS};
 use crate::db::skills::{clean_skill_name, clean_skill_text, MAX_PENDING_PER_KWANT, MAX_SKILL_DESCRIPTION_CHARS};
 use crate::routines::Schedule;
+use crate::sandbox::site_guard;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -123,6 +124,14 @@ pub struct BotSpec {
     /// Files the bot had: "not imported, re-attach these".
     #[serde(default)]
     pub knowledge_files: Vec<String>,
+    /// Which sites the bot's browser may open (see [`crate::sandbox::site_guard`]); kept so a
+    /// bot never loses its limits on the way out and back in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_allowed_sites: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_blocked_sites: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub browser_block_private_network: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -485,6 +494,21 @@ pub fn suspicious(text: &str) -> Vec<&'static str> {
     found
 }
 
+/// A bot's browser site rules in words, or `None` when it has none.
+fn site_limits(bot: &BotSpec) -> Option<String> {
+    let mut parts = Vec::new();
+    if !bot.browser_allowed_sites.is_empty() {
+        parts.push(format!("only {}", bot.browser_allowed_sites.join(", ")));
+    }
+    if !bot.browser_blocked_sites.is_empty() {
+        parts.push(format!("never {}", bot.browser_blocked_sites.join(", ")));
+    }
+    if bot.browser_block_private_network {
+        parts.push("no local or private network addresses".to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
 /// Checks and tidies `bundle` for a space whose bots are called `existing` (any case). Pure: the
 /// same input always gives the same result, so apply re-runs it on what the preview returned.
 pub fn normalize(mut bundle: Bundle, existing: &[String]) -> Checked {
@@ -582,6 +606,15 @@ pub fn normalize(mut bundle: Bundle, existing: &[String]) -> Checked {
         }
         if !bot.knowledge_files.is_empty() {
             dropped.push(Notice::new(who, format!("Files aren't brought over: {}. Attach them again if the bot needs them.", bot.knowledge_files.join(", "))));
+        }
+        for (field, list) in [(site_guard::ALLOWED, &mut bot.browser_allowed_sites), (site_guard::BLOCKED, &mut bot.browser_blocked_sites)] {
+            match site_guard::normalize_sites(list, field) {
+                Ok(sites) => *list = sites,
+                Err(e) => problems.push(Notice::new(who, format!("{}'s {e}. Fix it in the file, then try the import again.", bot.name))),
+            }
+        }
+        if let Some(limits) = site_limits(bot) {
+            warnings.push(Notice::new(who, format!("Its browser is limited: {limits}. Change this in the bot's settings after importing.")));
         }
         if !bot.starters.is_empty() {
             dropped.push(Notice::new(who, format!("{} conversation starter(s): kwant has no place for them yet.", bot.starters.len())));
