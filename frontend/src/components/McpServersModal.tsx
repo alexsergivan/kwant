@@ -57,7 +57,7 @@ import {
   readOAuthMessage,
   isBlankRequired,
 } from '../mcp';
-import { inMacApp, leaveForSignIn, pollUntil, signInChanged } from '../externalLinks';
+import { inDesktopApp, leaveForSignIn, pollUntil, signInChanged } from '../externalLinks';
 
 interface McpServersModalProps {
   isOpen: boolean;
@@ -386,7 +386,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   const popupWatch = useRef<number | null>(null);
   /** Mac app: stops watching the server for a sign-in finished in the browser. */
   const signInWatch = useRef<(() => void) | null>(null);
-  const macApp = inMacApp();
+  const macApp = inDesktopApp();
 
   const refresh = useCallback(async (): Promise<McpServer[] | null> => {
     try {

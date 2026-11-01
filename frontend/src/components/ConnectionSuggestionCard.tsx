@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ExternalLink, Link2, Loader2, Plug } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { inMacApp } from '../externalLinks';
+import { inDesktopApp } from '../externalLinks';
 import {
   CardState,
   ConnectApi,
@@ -173,7 +173,7 @@ export interface ConnectionSuggestionCardProps {
 export const ConnectionSuggestionCard: React.FC<ConnectionSuggestionCardProps> = ({ api = defaultConnectApi, ...props }) => {
   const [state, setState] = useState<CardState>(() => initialState(props.meta));
   const stopRef = useRef<(() => void) | null>(null);
-  const mac = inMacApp();
+  const mac = inDesktopApp();
 
   // An app connected earlier (or from another card) shows as connected when the card appears.
   useEffect(() => {

@@ -24,6 +24,17 @@ A Tauri v2 shell around kwant. The app links the `kwnt` crate and runs the same 
 - `kwant --check` starts kwant headless on a free port with a throwaway data dir, waits for
   `/api/health` and exits 0. CI runs it on the built app.
 
+**On Linux** (first builds, beta) the same code runs with these differences, all behind
+`cfg(target_os = "macos")` so the Mac app is unchanged:
+- links open with `xdg-open` instead of `/usr/bin/open`;
+- the page sees `window.__KWANT_APP__ = 'linux'` (the frontend treats `'mac'` and `'linux'` alike,
+  `frontend/src/externalLinks.ts` `DESKTOP_APPS`);
+- the tray shows the coloured app icon (`icons/32x32.png`), not the black menu-bar template, and
+  the approval count next to it shows only where the panel draws AppIndicator labels;
+- a second launch from the app menu focuses the running window (`tauri-plugin-single-instance`,
+  over D-Bus; without a session bus it starts normally), the way a Dock click does on macOS;
+- `$SHELL` falls back to `/bin/bash` for the login PATH, and the log is `~/.kwnt/desktop-app.log`.
+
 This crate is its own Cargo workspace with its own `Cargo.lock`, so Tauri never enters the build
 of the `kwnt` crate.
 

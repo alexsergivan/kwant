@@ -1,6 +1,6 @@
 /**
  * Sign-ins that leave kwant. In a browser they open in a popup or, when it is blocked, in this
- * tab, and kwnt's callback page brings the tab back. The Mac app's window only ever shows kwant
+ * tab, and kwnt's callback page brings the tab back. The desktop app's window only ever shows kwant
  * (apps/mac/src/links.rs): every outside page opens in the default browser, with no opener and
  * no way to come back by itself, so the app watches the server for the finished sign-in instead.
  */
@@ -11,17 +11,22 @@ export const OAUTH_RETURN_KEY = 'kwnt-mcp-oauth-return';
 
 type AppWindow = { __KWANT_APP__?: unknown };
 
-/** True inside the kwant Mac app, which marks its window with `__KWANT_APP__ = 'mac'`. */
-export const inMacApp = (w: unknown = typeof window !== 'undefined' ? window : undefined): boolean =>
-  !!w && (w as AppWindow).__KWANT_APP__ === 'mac';
+/** The marks the desktop app sets on its window (apps/mac/src/main.rs APP_MARK), one per OS. */
+export const DESKTOP_APPS: readonly string[] = ['mac', 'linux'];
+
+/** True inside the kwant desktop app, which marks its window with `__KWANT_APP__ = 'mac'` or `'linux'`. */
+export const inDesktopApp = (w: unknown = typeof window !== 'undefined' ? window : undefined): boolean => {
+  const mark = w ? (w as AppWindow).__KWANT_APP__ : undefined;
+  return typeof mark === 'string' && DESKTOP_APPS.includes(mark);
+};
 
 /**
  * Goes to a sign-in page from this tab. In a browser the tab leaves kwant and the callback page
- * returns it; in the Mac app the navigation is turned into the default browser and the window
+ * returns it; in the desktop app the navigation is turned into the default browser and the window
  * stays where it is.
  */
 export function leaveForSignIn(url: string, w: Window = window): void {
-  if (!inMacApp(w)) {
+  if (!inDesktopApp(w)) {
     try {
       w.sessionStorage.setItem(OAUTH_RETURN_KEY, '1');
     } catch {

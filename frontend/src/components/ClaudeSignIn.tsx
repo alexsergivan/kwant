@@ -3,7 +3,7 @@ import { AlertTriangle, ExternalLink, Loader2, LogIn, LogOut, RotateCcw } from '
 import { ClaudeLoginError, ClaudeLoginSession, claudeLoginApi, isClaudeSignInUrl, isLoginActive, loginFailure } from '../claudeLogin';
 import type { EngineInfo } from '../engines';
 import { playSfx } from '../audio/chiptune';
-import { inMacApp } from '../externalLinks';
+import { inDesktopApp } from '../externalLinks';
 
 const POLL_MS = 2000;
 
@@ -17,7 +17,7 @@ const link = 'inline-flex items-center gap-1 font-medium text-sky-300 underline 
  *  `noopener` would make window.open return null, so the opener is cut by hand before navigating. */
 function openBlankTab(): Window | null {
   // The Mac app opens no second window; the link below opens in the default browser.
-  if (inMacApp()) return null;
+  if (inDesktopApp()) return null;
   try {
     const tab = window.open('about:blank', '_blank');
     if (tab) tab.opener = null;
@@ -73,7 +73,7 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
     playSfx('click');
     const t = openBlankTab();
     tab.current = t;
-    toBrowser.current = inMacApp();
+    toBrowser.current = inDesktopApp();
     setBlocked(!t && !toBrowser.current);
     setBusy('start');
     setError(null);
@@ -233,7 +233,7 @@ export const ClaudeSignIn: React.FC<{ onSignedIn: () => void; focusRequest?: num
           </p>
           {url && (
             <p className="text-[11px] text-zinc-400">
-              {blocked ? 'Your browser didn’t open a new tab. ' : inMacApp() ? 'Opened claude.ai in your browser. ' : 'Closed the tab? '}
+              {blocked ? 'Your browser didn’t open a new tab. ' : inDesktopApp() ? 'Opened claude.ai in your browser. ' : 'Closed the tab? '}
               <a href={url} target="_blank" rel="noopener noreferrer" className={link} onClick={() => setBlocked(false)}>
                 {blocked ? 'Open claude.ai to sign in' : 'Open claude.ai again'} <ExternalLink size={10} aria-hidden="true" />
               </a>

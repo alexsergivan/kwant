@@ -6,7 +6,7 @@
 
 import { parseMetaObject } from './questions';
 import { ConnectionsError, connectionsApi } from './connections';
-import { inMacApp, pollUntil } from './externalLinks';
+import { inDesktopApp, pollUntil } from './externalLinks';
 
 /** Whether the space's Composio connector could start a sign-in when the bot posted the card. */
 export type ComposioReady = 'ready' | 'off' | 'needs_key' | 'not_added';
@@ -115,7 +115,7 @@ export function startConnect(
   {
     api = defaultConnectApi,
     win = window as unknown as OpenWin,
-    mac = inMacApp(),
+    mac = inDesktopApp(),
     everyMs,
     forMs,
   }: { api?: ConnectApi; win?: OpenWin; mac?: boolean; everyMs?: number; forMs?: number } = {},
@@ -123,7 +123,7 @@ export function startConnect(
   let stop: (() => void) | null = null;
   let cancelled = false;
   // Open the tab now, while the click still counts as the person's; the address comes after the fetch.
-  // The Mac app opens no second window: its outside links go to the default browser.
+  // The desktop app opens no second window: its outside links go to the default browser.
   const tab = mac ? null : win.open('', '_blank');
   if (tab) tab.opener = null;
   onState({ phase: 'opening' });

@@ -54,11 +54,21 @@ pub fn new_window(url: &Url, port: u16) -> Link {
     }
 }
 
-/// Opens the address in the default browser (macOS `open`). Only http(s) and mailto reach here.
+/// The program that hands an address to the default browser: `open` on macOS, `xdg-open`
+/// (looked up on PATH) on Linux desktops.
+pub const fn browser_opener() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "/usr/bin/open"
+    } else {
+        "xdg-open"
+    }
+}
+
+/// Opens the address in the default browser ([`browser_opener`]). Only http(s) and mailto reach here.
 pub fn open_in_browser(url: &Url) {
     let url = url.as_str().to_string();
     std::thread::spawn(
-        move || match std::process::Command::new("/usr/bin/open").arg(&url).status() {
+        move || match std::process::Command::new(browser_opener()).arg(&url).status() {
             Ok(s) if s.success() => {}
             Ok(s) => tracing::warn!(status = %s, "the browser didn't open the link"),
             Err(e) => tracing::warn!(error = %e, "couldn't open the link in the browser"),
@@ -117,6 +127,14 @@ mod tests {
         assert_eq!(nav("javascript:alert(1)"), Link::Drop);
         assert_eq!(nav("vscode://file/x"), Link::Drop);
         assert_eq!(nav("tauri://evil/index.html"), Link::Drop);
+    }
+
+    #[test]
+    fn links_open_with_the_desktop_s_own_opener() {
+        #[cfg(target_os = "macos")]
+        assert_eq!(browser_opener(), "/usr/bin/open");
+        #[cfg(target_os = "linux")]
+        assert_eq!(browser_opener(), "xdg-open");
     }
 
     #[test]

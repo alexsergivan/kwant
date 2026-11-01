@@ -106,7 +106,7 @@ import { personFetch } from './auth';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, showDeviceNotification } from './push';
-import { inMacApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
+import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
 // so both load right after start-up and opening them never waits.
@@ -1775,7 +1775,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Same flow as the servers screen: the window opens inside the click, the address comes after.
   // In the Mac app the sign-in opens in the default browser and the server is watched instead.
   const handleSuggestionSignIn = async (serverId: string): Promise<string | void> => {
-    const macApp = inMacApp();
+    const macApp = inDesktopApp();
     const popup = macApp ? null : window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
     const before = macApp ? await mcpSignIn(serverId).catch(() => undefined) : undefined;
     let url: string;

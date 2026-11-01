@@ -7,7 +7,7 @@ const source = await readFile(new URL('../src/externalLinks.ts', import.meta.url
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
 });
-const { OAUTH_RETURN_KEY, inMacApp, leaveForSignIn, signInChanged, pollUntil, mcpSignIn } = await import(
+const { OAUTH_RETURN_KEY, DESKTOP_APPS, inDesktopApp, leaveForSignIn, signInChanged, pollUntil, mcpSignIn } = await import(
   `data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`
 );
 
@@ -29,12 +29,21 @@ test('the callback page and the app agree on the return mark', async () => {
   assert.match(rust, new RegExp(`RETURN_KEY: &str = "${OAUTH_RETURN_KEY}"`));
 });
 
-test('only the Mac app’s mark counts as the Mac app', () => {
-  assert.equal(inMacApp(fakeWindow('mac')), true);
-  assert.equal(inMacApp(fakeWindow()), false);
-  assert.equal(inMacApp(fakeWindow('windows')), false);
-  assert.equal(inMacApp(fakeWindow(true)), false);
-  assert.equal(inMacApp(undefined), false);
+test('only the desktop app’s marks count as the desktop app', () => {
+  assert.equal(inDesktopApp(fakeWindow('mac')), true);
+  assert.equal(inDesktopApp(fakeWindow('linux')), true);
+  assert.equal(inDesktopApp(fakeWindow()), false);
+  assert.equal(inDesktopApp(fakeWindow('windows')), false);
+  assert.equal(inDesktopApp(fakeWindow(true)), false);
+  assert.equal(inDesktopApp(fakeWindow('includes')), false);
+  assert.equal(inDesktopApp(undefined), false);
+});
+
+test('every mark the desktop app sets is one the page knows', async () => {
+  const rust = await readFile(new URL('../../apps/mac/src/main.rs', import.meta.url), 'utf8');
+  const marks = [...rust.matchAll(/__KWANT_APP__ = '(\w+)'/g)].map((m) => m[1]);
+  assert.deepEqual(marks.sort(), ['linux', 'mac']);
+  for (const mark of marks) assert.ok(DESKTOP_APPS.includes(mark), mark);
 });
 
 test('a browser tab that leaves to sign in is marked so the callback brings it back', () => {

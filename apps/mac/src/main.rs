@@ -1,5 +1,5 @@
-//! kwant for Mac: the kwant server in this process, its UI in a window, and a menu-bar icon.
-//! Closing the window keeps kwant running; Quit in the menu stops it.
+//! kwant for Mac (and Linux): the kwant server in this process, its UI in a window, and a
+//! menu-bar (tray) icon. Closing the window keeps kwant running; Quit in the menu stops it.
 
 mod links;
 mod startup;
@@ -16,6 +16,32 @@ use tauri::{
 };
 
 const MAIN: &str = "main";
+
+/// Tells kwant's page it runs in the app, so sign-ins say "finish in your browser". The page
+/// knows these marks (frontend/src/externalLinks.ts DESKTOP_APPS).
+#[cfg(target_os = "macos")]
+const APP_MARK: &str = "window.__KWANT_APP__ = 'mac';";
+#[cfg(not(target_os = "macos"))]
+const APP_MARK: &str = "window.__KWANT_APP__ = 'linux';";
+
+/// The menu icon. macOS tints a black template icon for the menu bar; Linux panels show the
+/// picture as it is, so they get the coloured app icon (a black glyph vanishes on dark panels).
+#[cfg(target_os = "macos")]
+const TRAY_ICON: &[u8] = include_bytes!("../icons/tray-template.png");
+#[cfg(not(target_os = "macos"))]
+const TRAY_ICON: &[u8] = include_bytes!("../icons/32x32.png");
+
+/// The shell asked for the login PATH when `$SHELL` is unset.
+#[cfg(target_os = "macos")]
+const FALLBACK_SHELL: &str = "/bin/zsh";
+#[cfg(not(target_os = "macos"))]
+const FALLBACK_SHELL: &str = "/bin/bash";
+
+/// The app's own log in the data dir.
+#[cfg(target_os = "macos")]
+const LOG_FILE: &str = "mac-app.log";
+#[cfg(not(target_os = "macos"))]
+const LOG_FILE: &str = "desktop-app.log";
 
 /// The running server, when this app started one (not when it attached to another kwant).
 struct Server {
@@ -70,7 +96,14 @@ fn main() {
         }
     };
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // A second launch from the app menu focuses this window instead of opening another kwant.
+    // (macOS does this itself: a second click on the app reaches RunEvent::Reopen.)
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        open_window(app)
+    }));
+    let app = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Target { port })
         .setup(move |app| {
@@ -100,10 +133,10 @@ fn main() {
     });
 }
 
-/// Finder starts apps with a bare PATH, so the claude, codex and grok CLIs would be missing.
-/// Runs before any thread exists, so setting the variable is safe.
+/// Finder (and a Linux app menu) starts apps with a bare PATH, so the claude, codex and grok CLIs
+/// would be missing. Runs before any thread exists, so setting the variable is safe.
 fn fix_path() {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| FALLBACK_SHELL.to_string());
     let login = startup::login_shell_path(&shell, Duration::from_secs(3));
     let current = std::env::var("PATH").unwrap_or_default();
     let home = dirs::home_dir().unwrap_or_default();
@@ -157,8 +190,7 @@ fn open_window(handle: &tauri::AppHandle) {
         .title("kwant")
         .inner_size(1280.0, 820.0)
         .min_inner_size(900.0, 600.0)
-        // Tells kwant's page it runs in the app, so sign-ins say "finish in your browser"
-        .initialization_script("window.__KWANT_APP__ = 'mac';")
+        .initialization_script(APP_MARK)
         // The window only shows kwant; every other page opens in the default browser
         .on_navigation(move |url| match links::navigation(url, port) {
             links::Link::Stay => true,
@@ -208,10 +240,10 @@ fn build_tray(handle: &tauri::AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(handle, "quit", "Quit kwant", true, Some("CmdOrCtrl+Q"))?;
     let separator = PredefinedMenuItem::separator(handle)?;
     let menu = Menu::with_items(handle, &[&open, &status, &separator, &quit])?;
-    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
+    let icon = tauri::image::Image::from_bytes(TRAY_ICON)?;
     let tray = TrayIconBuilder::with_id("kwant")
         .icon(icon)
-        .icon_as_template(true)
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip("kwant")
         .menu(&menu)
         .show_menu_on_left_click(true)
@@ -310,13 +342,14 @@ fn check() -> i32 {
     }
 }
 
-/// Logs go to ~/.kwnt/mac-app.log: an app opened from Finder has no terminal.
+/// Logs go to ~/.kwnt/mac-app.log (desktop-app.log on Linux): an app opened from Finder or an
+/// app menu has no terminal.
 fn init_logging(data_dir: &std::path::Path) {
     let _ = std::fs::create_dir_all(data_dir);
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(data_dir.join("mac-app.log"));
+        .open(data_dir.join(LOG_FILE));
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     match file {

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { AlertTriangle, CheckCircle2, ExternalLink, Globe, KeyRound, Loader2, MinusCircle, Monitor, Plug } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { Suggestion, SuggestionMeta, failureText, inputKey, inputLabel, installPayload, runsLine, suggestionView } from '../mcpSuggestions';
-import { inMacApp } from '../externalLinks';
+import { inDesktopApp } from '../externalLinks';
 
 export interface McpSuggestionCardProps {
   meta: SuggestionMeta;
@@ -246,7 +246,7 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
                 className="inline-flex items-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3.5 rounded-xl text-sm font-medium bg-amber-500 text-zinc-950 hover:bg-amber-400 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
               >
                 {busy === 'signin' && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
-                {busy === 'signin' ? (inMacApp() ? 'Finish signing in in your browser…' : 'Waiting for sign-in…') : signInError ? 'Try signing in again' : 'Sign in'}
+                {busy === 'signin' ? (inDesktopApp() ? 'Finish signing in in your browser…' : 'Waiting for sign-in…') : signInError ? 'Try signing in again' : 'Sign in'}
               </button>
               {signInError && (
                 <span role="alert" className="text-rose-300 break-words">
