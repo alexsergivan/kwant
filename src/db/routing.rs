@@ -12,6 +12,29 @@ use uuid::Uuid;
 pub const MAX_SCOPE_ENTRIES: usize = 20;
 /// Characters one entry keeps.
 pub const MAX_SCOPE_ENTRY_CHARS: usize = 60;
+/// Examples of each kind a space keeps; past it, the oldest go.
+pub const MAX_ROUTE_EXAMPLES: i64 = 200;
+/// Characters of a message an example keeps.
+const MAX_EXAMPLE_CHARS: usize = 500;
+
+/// A person's message and the bot that should answer it, or that the Concierge did answer.
+#[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
+pub struct RouteExample {
+    pub id: String,
+    pub space_id: String,
+    pub message_id: String,
+    pub text: String,
+    pub kwant_id: String,
+    /// "correction" (the person said who should have answered), "ask" (the person chose on a
+    /// card) or "concierge" (no specialist fit; counted for hire suggestions).
+    pub source: String,
+    /// When a hire was suggested from this request; it isn't counted again.
+    pub hire_suggested_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// What routing learns from: corrections and choices the person made.
+pub const LEARNED_SOURCES: [&str; 2] = ["correction", "ask"];
 
 /// What a bot is for and not for, in the person's words ("restaurants", "travel"). Empty lists
 /// leave routing as it was.
@@ -101,6 +124,19 @@ impl Database {
                 reason TEXT NOT NULL,
                 created_at TIMESTAMP NOT NULL
             )",
+            // What the person taught routing, and what the Concierge answered (for hire suggestions)
+            "CREATE TABLE IF NOT EXISTS route_examples (
+                id TEXT PRIMARY KEY,
+                space_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                text TEXT NOT NULL,
+                kwant_id TEXT NOT NULL,
+                source TEXT NOT NULL CHECK (source IN ('correction', 'ask', 'concierge')),
+                hire_suggested_at TIMESTAMP,
+                created_at TIMESTAMP NOT NULL,
+                UNIQUE (message_id, source)
+            )",
+            "CREATE INDEX IF NOT EXISTS idx_route_examples_space ON route_examples (space_id, source, created_at)",
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
@@ -201,6 +237,66 @@ impl Database {
         Ok(done.rows_affected() == 1)
     }
 
+    /// Records `message_id` → `kwant_id` (a later one for the same message and kind replaces it),
+    /// then drops the space's oldest examples of that kind past [`MAX_ROUTE_EXAMPLES`].
+    pub async fn add_route_example(&self, space_id: &str, message_id: &str, text: &str, kwant_id: &str, source: &str) -> Result<(), DbError> {
+        let text: String = text.chars().take(MAX_EXAMPLE_CHARS).collect();
+        sqlx::query(
+            "INSERT INTO route_examples (id, space_id, message_id, text, kwant_id, source, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(message_id, source) DO UPDATE SET kwant_id = ?5, text = ?4, created_at = ?7",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(space_id)
+        .bind(message_id)
+        .bind(&text)
+        .bind(kwant_id)
+        .bind(source)
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await?;
+        let kinds: &[&str] = if source == "concierge" { &["concierge"] } else { &LEARNED_SOURCES };
+        let placeholders = vec!["?"; kinds.len()].join(", ");
+        let sql = format!(
+            "DELETE FROM route_examples WHERE id IN (SELECT id FROM route_examples WHERE space_id = ? AND source IN ({placeholders})
+             ORDER BY created_at DESC LIMIT -1 OFFSET ?)"
+        );
+        let mut q = sqlx::query(&sql).bind(space_id);
+        for k in kinds {
+            q = q.bind(*k);
+        }
+        q.bind(MAX_ROUTE_EXAMPLES).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// The space's corrections and choices, newest first.
+    pub async fn learned_examples(&self, space_id: &str) -> Result<Vec<RouteExample>, DbError> {
+        Ok(sqlx::query_as("SELECT * FROM route_examples WHERE space_id = ?1 AND source IN ('correction', 'ask') ORDER BY created_at DESC")
+            .bind(space_id)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// Requests the Concierge answered in the space since `since`, newest first.
+    pub async fn concierge_examples(&self, space_id: &str, since: DateTime<Utc>) -> Result<Vec<RouteExample>, DbError> {
+        Ok(sqlx::query_as("SELECT * FROM route_examples WHERE space_id = ?1 AND source = 'concierge' AND created_at >= ?2 ORDER BY created_at DESC")
+            .bind(space_id)
+            .bind(since)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// Marks the Concierge requests a hire was suggested from.
+    pub async fn mark_hire_suggested(&self, message_ids: &[String]) -> Result<(), DbError> {
+        for id in message_ids {
+            sqlx::query("UPDATE route_examples SET hire_suggested_at = ?2 WHERE message_id = ?1 AND source = 'concierge'")
+                .bind(id)
+                .bind(Utc::now())
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn handed_back(&self, user_message_id: &str) -> Result<bool, DbError> {
         let row: Option<(String,)> =
             sqlx::query_as("SELECT id FROM route_handbacks WHERE user_message_id = ?1").bind(user_message_id).fetch_optional(&self.pool).await?;
@@ -219,5 +315,24 @@ mod tests {
         assert!(clean_scope_list(&["x".repeat(61)]).is_err());
         let many: Vec<String> = (0..21).map(|i| format!("t{i}")).collect();
         assert!(clean_scope_list(&many).is_err());
+    }
+
+    #[tokio::test]
+    async fn examples_are_capped_per_space_and_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        for i in 0..(MAX_ROUTE_EXAMPLES + 5) {
+            db.add_route_example("s1", &format!("m{i}"), "corn dogs", "k1", if i % 2 == 0 { "correction" } else { "ask" }).await.unwrap();
+        }
+        db.add_route_example("s1", "c1", "corn dogs", "conc", "concierge").await.unwrap();
+        db.add_route_example("s2", "o1", "tax", "k2", "correction").await.unwrap();
+        let learned = db.learned_examples("s1").await.unwrap();
+        assert_eq!(learned.len() as i64, MAX_ROUTE_EXAMPLES);
+        assert!(!learned.iter().any(|e| e.message_id == "m0"), "the oldest went");
+        assert_eq!(db.concierge_examples("s1", Utc::now() - chrono::Duration::days(14)).await.unwrap().len(), 1);
+        assert_eq!(db.learned_examples("s2").await.unwrap().len(), 1);
+        // A second correction of the same message replaces the first
+        db.add_route_example("s2", "o1", "tax", "k3", "correction").await.unwrap();
+        assert_eq!(db.learned_examples("s2").await.unwrap()[0].kwant_id, "k3");
     }
 }

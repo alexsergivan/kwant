@@ -15,7 +15,7 @@ use crate::db::models::{Kwant, MessageExtra, NewMessage};
 use crate::db::routing::RouteChoice;
 use crate::db::spaces::SpaceId;
 use crate::drivers::events::RuntimeEvent;
-use crate::router::team::{Hints, ROUTE_AT};
+use crate::router::team::{Hints, Learned, ROUTE_AT};
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -27,10 +27,19 @@ use serde_json::{json, Value};
 
 pub const HAND_BACK: &str = "hand_back";
 
-/// The space's covers/avoids lists for routing among `members`.
-pub(super) async fn hints_for(state: &AppState, members: &[Kwant]) -> Hints {
+/// The space's covers/avoids lists for routing among `members`, and what the person taught it.
+pub(super) async fn hints_for(state: &AppState, space: &SpaceId, members: &[Kwant]) -> Hints {
     let ids: Vec<String> = members.iter().map(|k| k.id.clone()).collect();
-    Hints { scopes: state.db.scopes_for(&ids).await.unwrap_or_default() }
+    let learned = state
+        .db
+        .learned_examples(space.as_str())
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| ids.contains(&e.kwant_id))
+        .map(|e| Learned::new(&e.kwant_id, &e.text))
+        .collect();
+    Hints { scopes: state.db.scopes_for(&ids).await.unwrap_or_default(), learned }
 }
 
 fn error(status: StatusCode, msg: &str) -> Response {
@@ -190,6 +199,10 @@ pub async fn resolve_route(State(state): State<AppState>, headers: HeaderMap, Pa
         let _ = state.db.set_message_meta(mid, &meta).await;
     }
     let _ = state.event_sender.send(RuntimeEvent::RouteChoiceUpdated { choice: meta });
+    // The person's pick teaches routing (a general answer says nothing about the bots)
+    if !body.general {
+        learn(&state, &space, &c.user_message_id, &kwant.id, "ask").await;
+    }
     let candidates = offered.len() + 1;
     let mut routing = super::routes::routing_meta(&kwant, &reason, candidates, false, &[], "ask");
     routing["route_choice_id"] = json!(c.id);
@@ -200,6 +213,48 @@ pub async fn resolve_route(State(state): State<AppState>, headers: HeaderMap, Pa
         }
     });
     Json(json!({"status": "dispatched", "user_message_id": c.user_message_id, "kwant": kwant.name, "kwant_id": kwant.id})).into_response()
+}
+
+/// Saves "messages like `message_id` go to `kwant_id`" for routing to learn from.
+async fn learn(state: &AppState, space: &SpaceId, message_id: &str, kwant_id: &str, source: &str) {
+    let Ok(Some(m)) = state.db.get_message(message_id).await else { return };
+    if let Err(e) = state.db.add_route_example(space.as_str(), message_id, &m.text, kwant_id, source).await {
+        tracing::warn!(error = %e, "could not save a routing example");
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CorrectionBody {
+    pub message_id: String,
+    pub kwant_id: String,
+}
+
+/// `POST /api/route-corrections` `{message_id, kwant_id}`: the person says who should have
+/// answered their channel message; similar messages go to that bot from now on (basis
+/// "learned"). Person only. It doesn't rerun the message.
+pub async fn correct_route(State(state): State<AppState>, headers: HeaderMap, Json(body): Json<CorrectionBody>) -> Response {
+    if let Err(r) = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person corrects routing").await {
+        return r;
+    }
+    let msg = match state.db.get_message(&body.message_id).await {
+        Ok(Some(m)) => m,
+        _ => return error(StatusCode::NOT_FOUND, "no such message"),
+    };
+    let (Some(channel_id), None, "user") = (msg.channel_id.as_deref(), msg.thread_id.as_deref(), msg.sender_role.as_str()) else {
+        return error(StatusCode::BAD_REQUEST, "only your own messages in a channel can be corrected");
+    };
+    let Ok(Some(channel)) = state.db.get_channel(channel_id).await else {
+        return error(StatusCode::NOT_FOUND, "the channel is gone");
+    };
+    let space = SpaceId::new(&channel.space_id);
+    let all = state.db.list_kwants(&space).await.unwrap_or_default();
+    let concierge = super::concierge::id(&state, &space, &all).await;
+    let members = super::routes::routing_members(&channel, &all, concierge.as_deref());
+    let Some(kwant) = members.iter().find(|k| k.id == body.kwant_id) else {
+        return error(StatusCode::BAD_REQUEST, "that bot doesn't answer in this channel");
+    };
+    learn(&state, &space, &msg.id, &kwant.id, "correction").await;
+    Json(json!({"status": "learned", "message_id": msg.id, "kwant_id": kwant.id, "kwant": kwant.name})).into_response()
 }
 
 pub fn tool() -> Value {
@@ -302,7 +357,7 @@ async fn next_after_handback(
     concierge: Option<&str>,
 ) -> Option<(Kwant, f32)> {
     if !members.is_empty() {
-        let hints = hints_for(state, members).await;
+        let hints = hints_for(state, space, members).await;
         let lead = if channel.lead_kwant_id == from.id { members[0].id.clone() } else { channel.lead_kwant_id.clone() };
         let route = state.router.route_channel_query_hinted(text, &channel.name, &lead, members, None, &hints).await;
         if route.fit >= ROUTE_AT {
