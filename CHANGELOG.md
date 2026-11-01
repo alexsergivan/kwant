@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.1] - 2026-11-01
+
+### Added
+- **Linux app (beta).** The desktop app now also comes for Linux on x86_64, as a `.deb`
+  (`kwant_amd64.deb`, Ubuntu 22.04+ or Debian 12+) and an AppImage (`kwant_x86_64.AppImage`), in the
+  same GitHub release as the Mac app. It updates itself in the app like the Mac app does: it checks the
+  same signed `latest.json`, which now also lists `linux-x86_64-appimage` and `linux-x86_64-deb`, and
+  refuses an update whose signature doesn't match. The `.deb` asks for your password to install an
+  update. Beta: tested in containers on Ubuntu 22.04, Ubuntu 24.04 and Debian 12, not yet on real
+  desktops, so the tray icon, Wayland and HiDPI may vary. No ARM Linux and no Windows yet.
+
 ## [Mac 0.6.0] - 2026-11-01
 
 ### Added
