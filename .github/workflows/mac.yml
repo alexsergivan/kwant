@@ -12,6 +12,11 @@ name: mac
 # Pull requests and manual runs never see the release key: they sign with a throwaway key, so the
 # same steps run without the secret. A full release needs a non-empty "## [Mac x.y.z]" CHANGELOG section,
 # which becomes the update's notes.
+#
+# Linux: a tag also builds the Linux .deb and AppImage (linux.yml, called below) and the release
+# carries them next to the Mac files, with linux-x86_64-* entries added after the darwin-* ones in
+# the same latest.json. There is never a separate Linux release: it would become "latest" and hide
+# the Mac latest.json from installed Macs.
 on:
   workflow_dispatch:
   pull_request:
@@ -335,9 +340,19 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # Same packages as linux.yml builds on pull requests, signed with the release key on tags.
+  linux:
+    name: linux
+    needs: version
+    if: startsWith(github.ref, 'refs/tags/mac-v')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/linux.yml
+    secrets: inherit
+
   release:
     name: release
-    needs: [version, dmg]
+    needs: [version, dmg, linux]
     if: startsWith(github.ref, 'refs/tags/mac-v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -367,11 +382,24 @@ jobs:
           cp "$tarball" kwant_universal.app.tar.gz
           cp "$tarball.sig" kwant_universal.app.tar.gz.sig
           assets=(kwant_universal.dmg kwant_universal.dmg.sha256 kwant_universal.app.tar.gz kwant_universal.app.tar.gz.sig)
+          # Linux (from linux.yml): the updater downloads the package itself and checks its .sig
+          deb=$(find dist -type f -name '*_amd64.deb' | head -1)
+          appimage=$(find dist -type f -name '*_amd64.AppImage' | head -1)
+          test -n "$deb" && test -f "$deb.sig" && test -n "$appimage" && test -f "$appimage.sig"
+          cp "$deb" kwant_amd64.deb
+          cp "$deb.sig" kwant_amd64.deb.sig
+          cp "$appimage" kwant_x86_64.AppImage
+          cp "$appimage.sig" kwant_x86_64.AppImage.sig
+          for f in kwant_amd64.deb kwant_x86_64.AppImage; do sha256sum "$f" > "$f.sha256"; done
+          assets+=(kwant_amd64.deb kwant_amd64.deb.sig kwant_amd64.deb.sha256 kwant_x86_64.AppImage kwant_x86_64.AppImage.sig kwant_x86_64.AppImage.sha256)
+          dl="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
           # Installed apps read releases/latest/download/latest.json, which only ever resolves to the
           # newest full release; a prerelease gets no latest.json, so it's never offered as an update
           if [ "$PRERELEASE" != "true" ]; then
             python3 scripts/mac_latest_json.py --version "$VERSION" --signature kwant_universal.app.tar.gz.sig \
-              --url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/kwant_universal.app.tar.gz" > latest.json
+              --url "$dl/kwant_universal.app.tar.gz" \
+              --linux linux-x86_64-appimage kwant_x86_64.AppImage.sig "$dl/kwant_x86_64.AppImage" \
+              --linux linux-x86_64-deb kwant_amd64.deb.sig "$dl/kwant_amd64.deb" > latest.json
             cat latest.json
             assets+=(latest.json)
           fi
@@ -390,6 +418,10 @@ jobs:
           The app runs kwant on your Mac with the same data folder as \`kwnt serve\` (\`~/.kwnt\`) and stays in the menu bar when you close the window.
 
           SHA-256: \`$(cut -d' ' -f1 kwant_universal.dmg.sha256)\`
+
+          **Linux (beta, x86_64):** \`kwant_amd64.deb\` for Ubuntu 22.04 or later and Debian 12 (\`sudo apt install ./kwant_amd64.deb\`), or \`kwant_x86_64.AppImage\` for other distros with a GTK desktop (\`chmod +x\` it and run it). Both update themselves in the app.
+
+          SHA-256: \`$(cut -d' ' -f1 kwant_amd64.deb.sha256)\` (.deb), \`$(cut -d' ' -f1 kwant_x86_64.AppImage.sha256)\` (AppImage)
           NOTES
           sed -i 's/^          //' notes.md
           flags=()

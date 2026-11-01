@@ -2,13 +2,16 @@ name: linux
 
 # Builds kwant for Linux (x86_64): a .deb and an AppImage, from the same apps/mac Tauri app.
 # tauri.linux.conf.json switches the bundle targets; the Mac config and mac.yml are untouched.
-# Pull requests and manual runs only: the packages are a workflow artifact, proving the app builds,
-# installs and starts. Releases still come from mac.yml (mac-v* tags); Linux joins them later, in
-# the same GitHub release, so the one latest.json keeps working for installed Macs.
+# On pull requests and manual runs the packages are only a workflow artifact, proving the app builds,
+# installs and starts. A mac-v* tag runs this from mac.yml (workflow_call), and mac.yml's release
+# job puts the packages in the same GitHub release as the Mac app, with one latest.json for both,
+# so installed Macs keep finding their updates.
 #
 # Built on ubuntu-22.04 so the AppImage runs on distros with glibc 2.35 or newer. The updater
-# artifacts (.AppImage.sig, .deb.sig) are signed with a throwaway key: no PR code sees the release key.
+# artifacts (.AppImage.sig, .deb.sig) are signed with a throwaway key on pull requests and manual
+# runs; only tag builds get the release key, so no PR code ever runs with it.
 on:
+  workflow_call:
   workflow_dispatch:
   pull_request:
     paths:
@@ -21,7 +24,8 @@ permissions:
 
 concurrency:
   group: linux-${{ github.ref }}
-  cancel-in-progress: true
+  # never cancel a release half-way
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -56,19 +60,34 @@ jobs:
         working-directory: apps/mac
         run: cargo test --locked
       - name: Throwaway updater key
+        if: ${{ !startsWith(github.ref, 'refs/tags/mac-v') }}
         run: |
           set -euo pipefail
           openssl rand -hex 16 > "$RUNNER_TEMP/ci-updater.password"
           npx --yes @tauri-apps/cli@2.12.4 signer generate --ci -w "$RUNNER_TEMP/ci-updater.key" -p "$(cat "$RUNNER_TEMP/ci-updater.password")" > /dev/null
           cp "$RUNNER_TEMP/ci-updater.key.pub" "$RUNNER_TEMP/updater.pub"
+      - name: Release updater key
+        if: startsWith(github.ref, 'refs/tags/mac-v')
+        run: python3 -c 'import json; print(json.load(open("apps/mac/tauri.conf.json"))["plugins"]["updater"]["pubkey"])' > "$RUNNER_TEMP/updater.pub"
       - name: Build the .deb and AppImage
         working-directory: apps/mac
         timeout-minutes: 30
+        env:
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/mac-v') }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ startsWith(github.ref, 'refs/tags/mac-v') && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/mac-v') && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: |
           set -euo pipefail
-          TAURI_SIGNING_PRIVATE_KEY=$(cat "$RUNNER_TEMP/ci-updater.key")
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(cat "$RUNNER_TEMP/ci-updater.password")
-          export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          if [ "$IS_TAG" = "true" ]; then
+            if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+              echo "::error::the repository secret TAURI_SIGNING_PRIVATE_KEY is missing, so installed apps couldn't verify this release"
+              exit 1
+            fi
+          else
+            TAURI_SIGNING_PRIVATE_KEY=$(cat "$RUNNER_TEMP/ci-updater.key")
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(cat "$RUNNER_TEMP/ci-updater.password")
+            export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
           npx --yes @tauri-apps/cli@2.12.4 build --ci --bundles deb,appimage \
             --config '{"bundle":{"createUpdaterArtifacts":true}}' -- --locked
       # The installed app only accepts an update whose signature matches the key built into it and

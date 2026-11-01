@@ -135,5 +135,93 @@ class Cli(unittest.TestCase):
         self.assertTrue(m.changelog_section(text, "0.1.1"))
 
 
+# What scripts/mac_latest_json.py wrote at main 72a8ac5 (Mac 0.6.0) for the inputs in MacBytes.
+# Installed Macs parse this file; adding Linux must not change a byte of it.
+MAC_ONLY_GOLDEN = """{
+  "version": "0.1.2",
+  "notes": "### Added\\n- **In-app updates.** \u201cquotes\u201d and \u00fcn\u00efcode.",
+  "pub_date": "2026-10-27T10:00:00Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "c2lnbmF0dXJl",
+      "url": "https://github.com/alexsergivan/kwant/releases/download/mac-v0.1.2/kwant_universal.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "c2lnbmF0dXJl",
+      "url": "https://github.com/alexsergivan/kwant/releases/download/mac-v0.1.2/kwant_universal.app.tar.gz"
+    }
+  }
+}
+"""
+
+DL = "https://github.com/alexsergivan/kwant/releases/download/mac-v0.1.2/"
+
+
+class MacBytes(unittest.TestCase):
+    """The Linux entries are extra keys after the Mac ones; the Mac part of the file stays as it was."""
+
+    def feed(self, *linux):
+        with tempfile.TemporaryDirectory() as d:
+            cl, sig = os.path.join(d, "CHANGELOG.md"), os.path.join(d, "a.sig")
+            with open(cl, "w", encoding="utf-8") as f:
+                f.write("## [Mac 0.1.2] - 2026-10-27\n\n### Added\n- **In-app updates.** \u201cquotes\u201d and \u00fcn\u00efcode.\n")
+            with open(sig, "w", encoding="utf-8") as f:
+                f.write("c2lnbmF0dXJl\n")
+            args = ["--version", "0.1.2", "--signature", sig, "--url", DL + "kwant_universal.app.tar.gz",
+                    "--changelog", cl, "--pub-date", "2026-10-27T10:00:00Z"]
+            for key, name in linux:
+                path = os.path.join(d, name + ".sig")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(f"sig-of-{name}\n")
+                args += ["--linux", key, path, DL + name]
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = m.main(args)
+            self.assertEqual(code, 0, err.getvalue())
+            return out.getvalue()
+
+    def test_mac_only_feed_is_byte_identical_to_main(self):
+        self.assertEqual(self.feed(), MAC_ONLY_GOLDEN)
+
+    def test_adding_linux_leaves_every_darwin_entry_byte_identical(self):
+        both = self.feed(("linux-x86_64-appimage", "kwant_x86_64.AppImage"), ("linux-x86_64-deb", "kwant_amd64.deb"))
+        doc = json.loads(both)
+        self.assertEqual(list(doc["platforms"]),
+                         ["darwin-aarch64", "darwin-x86_64", "linux-x86_64-appimage", "linux-x86_64-deb"])
+        self.assertEqual(doc["platforms"]["linux-x86_64-appimage"],
+                         {"signature": "sig-of-kwant_x86_64.AppImage", "url": DL + "kwant_x86_64.AppImage"})
+        self.assertEqual(doc["platforms"]["linux-x86_64-deb"],
+                         {"signature": "sig-of-kwant_amd64.deb", "url": DL + "kwant_amd64.deb"})
+        # drop the Linux keys and the file is, byte for byte, the Mac-only one
+        for key in m.LINUX_PLATFORMS:
+            del doc["platforms"][key]
+        self.assertEqual(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", MAC_ONLY_GOLDEN)
+        # and the darwin lines are a verbatim prefix of the file a Mac downloads
+        cut = MAC_ONLY_GOLDEN.rindex('    }\n  }\n}\n') + len("    }")
+        self.assertTrue(both.startswith(MAC_ONLY_GOLDEN[:cut] + ",\n"), both)
+
+    def test_no_bare_linux_key_and_no_unknown_key(self):
+        for key in ("linux-x86_64", "linux-aarch64-appimage", "darwin-aarch64", "windows-x86_64-nsis"):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                m.latest_json("0.1.2", "s", URL, "n", "2026-10-27T10:00:00Z", {key: ("s", URL)})
+
+    def test_bad_linux_entries_are_refused(self):
+        for sig, url in [("  \n", URL), ("s", "http://example.com/kwant.deb")]:
+            with self.subTest(sig=sig, url=url), self.assertRaises(ValueError):
+                m.latest_json("0.1.2", "s", URL, "n", "2026-10-27T10:00:00Z", {"linux-x86_64-deb": (sig, url)})
+
+    def test_a_platform_given_twice_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            cl, sig = os.path.join(d, "CHANGELOG.md"), os.path.join(d, "a.sig")
+            open(cl, "w").write(CHANGELOG)
+            open(sig, "w").write("s")
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                code = m.main(["--version", "0.1.2", "--signature", sig, "--url", URL, "--changelog", cl,
+                               "--linux", "linux-x86_64-deb", sig, URL, "--linux", "linux-x86_64-deb", sig, URL])
+            self.assertEqual(code, 1)
+            self.assertIn("twice", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
