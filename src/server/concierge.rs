@@ -17,6 +17,12 @@ pub const TITLE: &str = "Generalist for everyday questions";
 pub const INSTRUCTIONS: &str = "You answer the questions in #general that none of the specialist bots in this space \
     are for: everyday questions, recommendations, quick facts, planning and anything general. Answer directly and \
     briefly. When a question clearly belongs to a specialist here, say who in one line and answer what you can.";
+/// What it covers, seeded when it is made so the person sees (and can edit) what it is for. Role
+/// scoring never picks it, so these only describe it.
+pub const COVERS: &[&str] = &[
+    "everyday questions", "recommendations", "food", "restaurants", "travel", "places", "events", "quick facts",
+    "planning", "shopping", "general knowledge",
+];
 pub const SOUL: &str = "Warm, quick and plain-spoken. You'd rather give a useful short answer than a long hedge.";
 
 fn key(space: &SpaceId) -> String {
@@ -90,6 +96,8 @@ pub async fn for_no_match(app: &AppState, space: &SpaceId, channel_id: &str, all
         return None;
     }
     let _ = app.db.set_setting(&key(space), &id).await;
+    let covers: Vec<String> = COVERS.iter().map(|c| c.to_string()).collect();
+    let _ = app.db.set_scope(&id, Some(&covers), None).await;
     let new = NewBotAction {
         space_id: space.as_str().to_string(),
         kwant_id: id.clone(),
