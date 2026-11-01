@@ -504,12 +504,16 @@ mod tests {
         );
     }
 
+    /// Written by `install` and renamed into place, as in tests/common/exe.rs: a file this test
+    /// binary had open for writing fails to run with "Text file busy" while another test forks.
     #[cfg(unix)]
     fn fake_cli(dir: &Path, script: &str) -> String {
-        use std::os::unix::fs::PermissionsExt;
         let path = dir.join("fake-cli");
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (src, staged) = (dir.join("fake-cli.body"), dir.join("fake-cli.staged"));
+        std::fs::write(&src, format!("#!/bin/sh\n{script}\n")).unwrap();
+        let status = std::process::Command::new("install").arg("-m").arg("755").arg(&src).arg(&staged).status().unwrap();
+        assert!(status.success(), "install {} failed: {status}", staged.display());
+        std::fs::rename(&staged, &path).unwrap();
         path.to_string_lossy().into_owned()
     }
 
