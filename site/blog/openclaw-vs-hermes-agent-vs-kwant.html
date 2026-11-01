@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenClaw vs Hermes Agent vs kwant: self-hosted AI agents · kwant</title>
+<meta name="description" content="A fair look at OpenClaw, Hermes Agent and kwant, three self-hosted AI agents. What each is built for, where each is the better pick, and how they install.">
+<meta name="theme-color" content="#f4f1ff">
+<meta name="color-scheme" content="light">
+<link rel="canonical" href="https://kwant.si/blog/openclaw-vs-hermes-agent-vs-kwant">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="kwant">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="OpenClaw vs Hermes Agent vs kwant: self-hosted AI agents · kwant">
+<meta property="og:description" content="A fair look at OpenClaw, Hermes Agent and kwant, three self-hosted AI agents. What each is built for, where each is the better pick, and how they install.">
+<meta property="og:url" content="https://kwant.si/blog/openclaw-vs-hermes-agent-vs-kwant">
+<meta property="og:image" content="https://kwant.si/assets/og/blog-openclaw-vs-hermes-agent-vs-kwant.png?v=9aa173965e">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="OpenClaw vs Hermes Agent vs kwant: OpenClaw, Hermes Agent or kwant: which one for what?">
+<meta property="article:published_time" content="2026-11-01">
+<meta property="article:modified_time" content="2026-11-01">
+<meta property="article:tag" content="openclaw">
+<meta property="article:tag" content="hermes-agent">
+<meta property="article:tag" content="kwant">
+<meta property="article:tag" content="self-hosted">
+<meta property="article:tag" content="comparison">
+<meta property="article:tag" content="ai-agents">
+<link rel="alternate" type="application/rss+xml" title="kwant blog" href="https://kwant.si/blog/feed.xml">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="OpenClaw vs Hermes Agent vs kwant: self-hosted AI agents · kwant">
+<meta name="twitter:description" content="A fair look at OpenClaw, Hermes Agent and kwant, three self-hosted AI agents. What each is built for, where each is the better pick, and how they install.">
+<meta name="twitter:image" content="https://kwant.si/assets/og/blog-openclaw-vs-hermes-agent-vs-kwant.png?v=9aa173965e">
+<meta name="twitter:image:alt" content="OpenClaw vs Hermes Agent vs kwant: OpenClaw, Hermes Agent or kwant: which one for what?">
+<link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png?v=ac1a1e97c4" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
+<link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css?v=d51acd966e">
+</head>
+<body class="page-blog">
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart">Docs</a>
+      <a href="/blog/" aria-current="page">Blog</a>
+      <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<section class="page-head post-head">
+  <div class="wrap">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">kwant</a> <span aria-hidden="true">/</span> <a href="/blog/">Blog</a></nav>
+    <p class="kicker">openclaw, hermes-agent, kwant, self-hosted, comparison, ai-agents</p>
+    <h1>OpenClaw vs Hermes Agent vs kwant: self-hosted AI agents</h1>
+    <p class="lede">A fair look at OpenClaw, Hermes Agent and kwant, three self-hosted AI agents. What each is built for, where each is the better pick, and how they install.</p>
+    <p class="post-meta">The kwant team · <time datetime="2026-11-01">November 1, 2026</time> · 8 min read</p>
+  </div>
+</section>
+
+<div class="wrap">
+  <article class="prose solo post">
+<p>OpenClaw and Hermes Agent are the two names that come up most when people look for a self-hosted AI agent. kwant, the open-source AI agent team we build at kwant.si, is a much smaller project. This post compares the three using what each project says about itself, and it says plainly where OpenClaw or Hermes Agent is the better pick. We are one of the three, so treat our own paragraphs with that in mind, and check the linked sources.</p>
+<p>Every fact about OpenClaw and Hermes Agent below comes from their own repositories and docs, read on November 1, 2026. Star counts and latest versions are from GitHub on the same day.</p>
+<h2 id="the-short-answer">The short answer</h2>
+<ul><li>You want your agent inside the chat apps you already use, with native apps on every platform: <strong>OpenClaw</strong>.</li><li>You want an agent that builds up skills and memory from experience and can run on several kinds of backend, including serverless ones: <strong>Hermes Agent</strong>.</li><li>You want a team of several bots on your own machine, with leads, hand-offs, approvals and a task board, and you're happy with the CLIs you already use: <strong>kwant</strong>.</li></ul>
+<h2 id="what-each-one-is">What each one is</h2>
+<p><strong>OpenClaw</strong> describes itself as "an open-source AI assistant that runs on your own computer and meets you in the channels you already use: Discord, iMessage, Slack, Teams, Telegram, WhatsApp, and 20+ more, plus native apps for macOS, iOS, Android, Windows, and Linux." One Gateway is the local control plane, and it can run as a personal assistant on a laptop or as a shared team deployment. Models and agent harnesses (Claude, Codex, local models) are plugins you can swap. The project is developed in the open by the OpenClaw Foundation, an independent 501(c)(3), under the MIT licence. Latest release v2026.10.9 (October 29, 2026); 393,569 stars on GitHub. (<a href="https://github.com/openclaw/openclaw" rel="noopener">source</a>, as of Nov 1, 2026)</p>
+<p><strong>Hermes Agent</strong> describes itself as "the self-improving AI agent built by Nous Research", with a built-in learning loop: it creates skills from experience, improves them during use, and searches its own past conversations. It has a built-in cron scheduler with delivery to any platform, can spawn subagents, and offers six built-in terminal backends (local, Docker, SSH, Modal, Daytona and Vercel Sandbox). It works with many model providers, including Nous Portal and OpenRouter. It installs on Linux, macOS, native Windows and Android (Termux), and there is also a Hermes Desktop app. MIT licence. Latest release v0.22.5 (October 23, 2026); 259,223 stars. (<a href="https://github.com/NousResearch/hermes-agent" rel="noopener">source</a>, as of Nov 1, 2026)</p>
+<p><strong>kwant</strong> is an open-source (AGPL-3.0, with a commercial option) self-hosted team of AI bots in one binary. Bots share channels and teams and hand work to each other with @mentions. It runs on your laptop, a VPS or Docker, and has a Mac app and a web app that works on a phone. Latest release: Mac app 0.6.0 (November 1, 2026); 16 stars on GitHub. (<a href="https://kwant.si/">kwant.si</a>, <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>, as of Nov 1, 2026)</p>
+<h2 id="comparison-table">Comparison table</h2>
+<figure class="compare">
+<table>
+<caption>As each project describes itself, checked November 1, 2026</caption>
+<thead><tr><th scope="col"></th><th scope="col">OpenClaw</th><th scope="col">Hermes Agent</th><th scope="col">kwant</th></tr></thead>
+<tbody>
+<tr><th scope="row">Built around</th><td data-label="OpenClaw"><span>One assistant reached through chat channels</span></td><td data-label="Hermes Agent"><span>One self-improving agent with a learning loop</span></td><td data-label="kwant"><span>A team of bots with leads and hand-offs</span></td></tr>
+<tr><th scope="row">How you talk to it</th><td data-label="OpenClaw"><span>Messaging channels (Discord, iMessage, Slack, Teams, Telegram, WhatsApp and 20+ more), Control UI, CLI, TUI</span></td><td data-label="Hermes Agent"><span>TUI, Hermes Desktop, and one gateway for Telegram, Discord, Slack, WhatsApp, Signal and email</span></td><td data-label="kwant"><span>Web app, Mac app</span></td></tr>
+<tr><th scope="row">From your phone</th><td data-label="OpenClaw"><span>Native iOS and Android apps, or any of its chat channels</span></td><td data-label="Hermes Agent"><span>Its chat channels; Termux install on Android</span></td><td data-label="kwant"><span>The web app, in the phone's browser</span></td></tr>
+<tr><th scope="row">Where it runs</th><td data-label="OpenClaw"><span>Your computer (macOS, Linux, Windows); one Gateway can serve a team</span></td><td data-label="Hermes Agent"><span>Local, Docker, SSH, Modal, Daytona or Vercel Sandbox backends</span></td><td data-label="kwant"><span>Laptop, VPS or Docker; Mac app</span></td></tr>
+<tr><th scope="row">Models</th><td data-label="OpenClaw"><span>Swappable Claude, Codex or local models</span></td><td data-label="Hermes Agent"><span>Many providers (Nous Portal, OpenRouter, OpenAI, your own endpoint)</span></td><td data-label="kwant"><span>Claude, Codex or Grok CLI logins, API keys, local Ollama, or any OpenAI-compatible server</span></td></tr>
+<tr><th scope="row">Scheduling</th><td data-label="OpenClaw"><span>Built-in scheduler ("Automations") that can deliver to a chat channel or webhook</span></td><td data-label="Hermes Agent"><span>Built-in cron scheduler with delivery to any platform</span></td><td data-label="kwant"><span>Routines and cron rules, on your own machine</span></td></tr>
+<tr><th scope="row">Approvals and safety</th><td data-label="OpenClaw"><span>Exec approvals with allowlists; tools run on the host for the main session unless you configure sandboxing</span></td><td data-label="Hermes Agent"><span>Dangerous-command approval (manual, smart or off) and container isolation</span></td><td data-label="kwant"><span>Three approval modes (ask, smart, off); payments always ask; optional Flight School tiers</span></td></tr>
+<tr><th scope="row">Licence</th><td data-label="OpenClaw"><span>MIT</span></td><td data-label="Hermes Agent"><span>MIT</span></td><td data-label="kwant"><span>AGPL-3.0, commercial option</span></td></tr>
+<tr><th scope="row">Latest release (Nov 1, 2026)</th><td data-label="OpenClaw"><span>v2026.10.9</span></td><td data-label="Hermes Agent"><span>v0.22.5</span></td><td data-label="kwant"><span>Mac 0.6.0</span></td></tr>
+<tr><th scope="row">GitHub stars (Nov 1, 2026)</th><td data-label="OpenClaw"><span>393,569</span></td><td data-label="Hermes Agent"><span>259,223</span></td><td data-label="kwant"><span>16</span></td></tr>
+</tbody>
+</table>
+</figure>
+<h2 id="pick-openclaw-if">Pick OpenClaw if…</h2>
+<ul><li>You want to message your agent from WhatsApp, iMessage, Telegram or Slack. kwant's interface is its own web and Mac apps, so it isn't the pick for that.</li><li>You want native apps on macOS, iOS, Android, Windows and Linux. kwant's desktop app is Mac only today.</li><li>You want a very large community around the project. By GitHub stars, OpenClaw is far larger than kwant (393,569 against 16), and that is a real advantage for help, plugins and examples.</li></ul>
+<p>Check the <a href="https://docs.openclaw.ai/gateway/security" rel="noopener">OpenClaw security guide</a> before you connect other people: the README notes that tools run on the host for the main session unless you configure sandboxing.</p>
+<h2 id="pick-hermes-agent-if">Pick Hermes Agent if…</h2>
+<ul><li>You want an agent that learns: skills created from experience, searchable past sessions, a model of you across sessions.</li><li>You want to run it somewhere other than your own box, such as a Docker container, over SSH, or on Modal, Daytona or Vercel Sandbox.</li><li>You want a built-in scheduler that delivers results to a chat platform.</li><li>You're on Windows. Hermes Agent installs natively there; kwant doesn't have a Windows app yet.</li></ul>
+<p>kwant also has memory and skills: bots remember what matters, and a skill a bot proposes is only used once you approve it (<a href="https://kwant.si/docs/memory-skills">memory and skills</a>). Learning is the centre of Hermes Agent's design, though, and we don't claim kwant matches it.</p>
+<h2 id="pick-kwant-if">Pick kwant if…</h2>
+<ul><li>You want several bots with different roles, working as a team: a lead, @mention hand-offs, and a task board (off until you switch it on) where a task counts as Verified only when its checks pass (<a href="https://kwant.si/docs/bots-and-teams">bots and teams</a>, <a href="https://kwant.si/docs/mission-board">mission board</a>).</li><li>You want to decide how much each bot may do without asking: three <a href="https://kwant.si/docs/approvals">approval modes</a>, plus optional <a href="https://kwant.si/docs/flight-school">Flight School</a> tiers (Observe, Sandbox, Act) per bot and per kind of work on board tasks. Since 0.6, each bot gets a scorecard, and a bot that qualifies can ask for a higher tier, which only you can grant. In every mode, anything that looks like a payment asks first.</li><li>You want your bots to agree on facts. kwant 0.6 adds an optional Truth Ledger: when two facts disagree, such as "4 GB" and "12 GB" of RAM, they're flagged until you settle them. Like Flight School, it's off by default (<a href="https://kwant.si/docs/truth-ledger">Truth Ledger docs</a>).</li><li>You want your bots to run on the CLIs and accounts you already have, with several accounts per engine and failover (<a href="https://kwant.si/docs/accounts">accounts</a>).</li><li>You want routines that run on your own machine (<a href="https://kwant.si/docs/routines">routines</a>).</li></ul>
+<p>kwant's own docs are direct about limits: its middle approval mode "guards against accidents. It isn't a sandbox." And it has the smallest community of the three, by a wide margin.</p>
+<h2 id="install-effort">Install effort</h2>
+<ul><li><strong>OpenClaw:</strong> <code>curl -fsSL https://openclaw.ai/install.sh | bash</code> on macOS, Linux or WSL2, or <code>iwr -useb https://openclaw.ai/install.ps1 | iex</code> in Windows PowerShell. The installer provides Node.js if needed. If you already manage Node (24.22.1+ or 26.12.1+), <code>npm install -g openclaw@latest --allow-scripts=openclaw</code> (leave out the last flag on npm 11.15 and earlier). (<a href="https://github.com/openclaw/openclaw" rel="noopener">source</a>, as of Nov 1, 2026)</li><li><strong>Hermes Agent:</strong> <code>curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash</code> on Linux, macOS or WSL2, or <code>iex (irm https://hermes-agent.nousresearch.com/install.ps1)</code> in Windows PowerShell. Android has its own Termux guide. (<a href="https://github.com/NousResearch/hermes-agent" rel="noopener">source</a>, as of Nov 1, 2026)</li><li><strong>kwant:</strong> download the Mac app (a universal .dmg, signed ad hoc and not notarized by Apple, so macOS asks you to click Open Anyway the first time), or on a server use Docker Compose or build the binary. The binary build needs Rust and Node on the build machine; the machine that runs it needs no Node.js. See the <a href="https://kwant.si/docs/install">install guide</a>.</li></ul>
+<h2 id="what-we-haven-t-compared">What we haven't compared</h2>
+<p>We did not test any of the three side by side, and we have not measured speed, cost or reliability. We left out hosted products, and agent frameworks you program yourself such as CrewAI. If we have a detail wrong about OpenClaw or Hermes Agent, their repositories are the authority.</p>
+<h2 id="so-which-one">So which one?</h2>
+<p>If you are choosing one assistant and want it in your chat apps, start with OpenClaw. If you want an agent that learns and can live on several backends, start with Hermes Agent. If you want a team of bots with approvals on your own machine, try kwant. They don't exclude each other.</p>
+<p>A note on the name: "kwant" here is the open-source AI agent team at kwant.si, not the Kwant physics package or Kwant.ai. It isn't affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. See also <a href="https://kwant.si/self-hosted-ai-agents">self-hosted AI agents</a> for what running your own agent team involves.</p>
+    <aside class="post-cta" aria-label="Try kwant">
+      <p><strong>Try kwant.</strong> A self-hosted team of AI agents in one binary, free and open source.</p>
+      <p class="cta"><a class="btn btn-violet" href="/docs/install">Install kwant</a> <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">See it on GitHub</a></p>
+    </aside>
+  </article>
+  <aside class="related" aria-labelledby="related-title"><h2 id="related-title">Related posts</h2><div class="post-grid"><article class="post-card"><h3><a href="/blog/claude-code-scheduled-tasks-compared">Claude Code scheduled tasks: cloud vs desktop vs /loop</a></h3><p>Claude Code can schedule work in the cloud, on your desktop or inside a session. Here is how the three differ, plus a self-hosted AI agent option.</p><p class="post-meta">The kwant team · <time datetime="2026-10-31">October 31, 2026</time> · 6 min read</p><ul class="tags" aria-label="Tags"><li>claude-code</li><li>scheduled-tasks</li><li>routines</li><li>self-hosted</li><li>comparison</li></ul></article><article class="post-card"><h3><a href="/blog/claude-code-on-a-vps">Run Claude Code on a VPS and reach it from your phone</a></h3><p>Three ways to run Claude Code on a VPS and reach it from your phone: SSH and tmux, Anthropic&#x27;s Remote Control, or a self-hosted AI agent team with kwant.</p><p class="post-meta">The kwant team · <time datetime="2026-10-31">October 31, 2026</time> · 7 min read</p><ul class="tags" aria-label="Tags"><li>claude-code</li><li>vps</li><li>self-hosted</li><li>how-to</li><li>ai-agents</li></ul></article></div></aside>
+</div>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="foot-brand">
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
+      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="https://github.com/alexsergivan/kwant" rel="noopener">Toss one our way <span aria-hidden="true">⭐</span></a></p>
+    </div>
+    <nav aria-label="Product">
+      <h2>Product</h2>
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart">Quickstart</a>
+      <a href="/docs/install">Install &amp; run</a>
+      <a href="/self-hosted-ai-agents">Self-hosted AI agents</a>
+      <a href="/blog/">Blog</a>
+      <a href="/docs/mcp">MCP tools</a>
+    </nav>
+    <nav aria-label="Using kwant">
+      <h2>Using kwant</h2>
+      <a href="/docs/spaces">Spaces</a>
+      <a href="/docs/accounts">Accounts</a>
+      <a href="/docs/approvals">Approvals</a>
+      <a href="/docs/routines">Routines</a>
+    </nav>
+    <nav aria-label="Project">
+      <h2>Project</h2>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+      <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Issues</a>
+      <a href="https://github.com/alexsergivan/kwant/blob/main/SECURITY.md" rel="noopener">Security</a>
+    </nav>
+    <nav aria-label="Legal">
+      <h2>Legal</h2>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms of use</a>
+      <a href="/terms#license">License</a>
+    </nav>
+    <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+    <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
+  </div>
+</footer>
+<script src="../assets/js/site.js?v=c490c973ba" defer></script>
+<script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"BlogPosting","@id":"https://kwant.si/blog/openclaw-vs-hermes-agent-vs-kwant#post","headline":"OpenClaw vs Hermes Agent vs kwant: self-hosted AI agents","description":"A fair look at OpenClaw, Hermes Agent and kwant, three self-hosted AI agents. What each is built for, where each is the better pick, and how they install.","url":"https://kwant.si/blog/openclaw-vs-hermes-agent-vs-kwant","mainEntityOfPage":"https://kwant.si/blog/openclaw-vs-hermes-agent-vs-kwant","image":"https://kwant.si/assets/og/blog-openclaw-vs-hermes-agent-vs-kwant.png?v=9aa173965e","inLanguage":"en","datePublished":"2026-11-01","dateModified":"2026-11-01","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"wordCount":1677,"isPartOf":{"@id":"https://kwant.si/blog/#blog"},"about":{"@id":"https://kwant.si/#app"},"keywords":["openclaw","hermes-agent","kwant","self-hosted","comparison","ai-agents"]},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://kwant.si/blog/"},{"@type":"ListItem","position":3,"name":"OpenClaw vs Hermes Agent vs kwant: self-hosted AI agents","item":"https://kwant.si/blog/openclaw-vs-hermes-agent-vs-kwant"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
+</body>
+</html>

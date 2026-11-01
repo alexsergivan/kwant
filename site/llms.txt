@@ -47,6 +47,7 @@ Key facts:
 
 ## Blog
 - [Blog: guides and comparisons for self-hosted AI agents](https://kwant.si/blog/): Guides, comparisons and notes on running a self-hosted team of AI agents with kwant.
+- [OpenClaw vs Hermes Agent vs kwant: self-hosted AI agents](https://kwant.si/blog/openclaw-vs-hermes-agent-vs-kwant): A fair look at OpenClaw, Hermes Agent and kwant, three self-hosted AI agents. What each is built for, where each is the better pick, and how they install.
 - [Claude Code scheduled tasks: cloud vs desktop vs /loop](https://kwant.si/blog/claude-code-scheduled-tasks-compared): Claude Code can schedule work in the cloud, on your desktop or inside a session. Here is how the three differ, plus a self-hosted AI agent option.
 - [Run Claude Code on a VPS and reach it from your phone](https://kwant.si/blog/claude-code-on-a-vps): Three ways to run Claude Code on a VPS and reach it from your phone: SSH and tmux, Anthropic's Remote Control, or a self-hosted AI agent team with kwant.
 

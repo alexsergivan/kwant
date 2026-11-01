@@ -396,6 +396,8 @@ td code { white-space: nowrap; }
 .compare tbody th { background: none; white-space: normal; font: 600 15px var(--sans); }
 .compare td { min-width: 120px; }
 .compare tbody tr:last-child th { border-bottom: 0; }
+.compare-home .compare { max-width: 1000px; }
+.compare-links { margin: 16px 0 0; color: var(--muted); font-size: 15px; }
 .mark { display: inline-block; width: 1.2em; font-weight: 700; text-align: center; }
 .mark-yes { color: #1f8a46; }
 .mark-no { color: #b42346; }
