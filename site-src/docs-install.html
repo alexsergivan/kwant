@@ -19,6 +19,15 @@ card_art: avatar:devops
 <p><a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download the Mac app</a> (a universal <code>.dmg</code> for Apple silicon and Intel), open it and drag kwant to Applications. It runs its own kwant bots on your Mac, with the same data folder as <code>kwnt serve</code> (<code>~/.kwnt</code>), and keeps running in the menu bar when you close the window.</p>
 <p class="note warn">The app is signed ad hoc, not notarized by Apple, so macOS stops it the first time with “Apple could not verify…”. Click Done, open <b>System Settings › Privacy &amp; Security</b>, scroll down and click <b>Open Anyway</b> next to kwant. On macOS 14 or earlier, right-click the app and choose <b>Open</b> instead. After that it opens normally.</p>
 
+<h2 id="linux">The Linux app <span class="beta">beta</span></h2>
+<p>On Linux (x86_64) there's a desktop app too. Like the Mac app, it runs its own kwant bots, uses the same data folder (<code>~/.kwnt</code>) and puts an icon in the tray.</p>
+<ul>
+  <li><strong>Ubuntu 22.04 or newer, Debian 12 or newer:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">download the <code>.deb</code></a>, then install it with <code>sudo apt install ./kwant_amd64.deb</code>. apt installs what it needs with it.</li>
+  <li><strong>Other distributions:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">download the AppImage</a>, then <code>chmod +x kwant_x86_64.AppImage</code> and run it. It needs a normal GTK desktop and FUSE.</li>
+</ul>
+<p>Updates arrive in the app, which checks each one's signature before installing it. With the <code>.deb</code>, your system asks for your password to install the update. To remove the <code>.deb</code>, run <code>sudo apt remove kwant</code>; your data in <code>~/.kwnt</code> stays.</p>
+<p class="note warn"><strong>The Linux app is a beta.</strong> We've tested it in clean installs of Ubuntu 22.04, Ubuntu 24.04 and Debian 12, but not yet on real desktops, so the tray icon, Wayland and HiDPI screens may behave differently on yours. It's x86_64 only for now: no ARM builds. Something wrong? <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Open an issue</a>.</p>
+
 <h2 id="app">Install the web app</h2>
 <p>kwant bots also installs from the browser, so it opens in its own window. In Chrome or Edge, click <b>Install app</b> in the sidebar (or the install icon in the address bar). In Safari on a Mac, choose <b>File › Add to Dock</b>. On a phone, kwant shows how. Browsers only install pages served over https or from <code>127.0.0.1</code>, so a server needs an <a href="#proxy">HTTPS reverse proxy</a> first.</p>
 

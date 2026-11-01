@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Install &amp; run: On your own computer, on a VPS with systemd, or with Docker Compose.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-10-29">
+<meta property="article:modified_time" content="2026-11-01">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Install kwnt: self-host AI agents on a VPS or Docker · kwant">
 <meta name="twitter:description" content="Build the kwnt binary and run your AI bots on your laptop, on a VPS with systemd, or with Docker Compose behind an HTTPS reverse proxy.">
@@ -31,7 +31,7 @@
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=d51acd966e">
+<link rel="stylesheet" href="../assets/css/site.css?v=653cdf5d1c">
 </head>
 <body class="page-docs">
 <a class="skip" href="#main">Skip to content</a>
@@ -68,6 +68,15 @@
 <h2 id="mac">The Mac app</h2>
 <p><a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download the Mac app</a> (a universal <code>.dmg</code> for Apple silicon and Intel), open it and drag kwant to Applications. It runs its own kwant bots on your Mac, with the same data folder as <code>kwnt serve</code> (<code>~/.kwnt</code>), and keeps running in the menu bar when you close the window.</p>
 <p class="note warn">The app is signed ad hoc, not notarized by Apple, so macOS stops it the first time with “Apple could not verify…”. Click Done, open <b>System Settings › Privacy &amp; Security</b>, scroll down and click <b>Open Anyway</b> next to kwant. On macOS 14 or earlier, right-click the app and choose <b>Open</b> instead. After that it opens normally.</p>
+
+<h2 id="linux">The Linux app <span class="beta">beta</span></h2>
+<p>On Linux (x86_64) there's a desktop app too. Like the Mac app, it runs its own kwant bots, uses the same data folder (<code>~/.kwnt</code>) and puts an icon in the tray.</p>
+<ul>
+  <li><strong>Ubuntu 22.04 or newer, Debian 12 or newer:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">download the <code>.deb</code></a>, then install it with <code>sudo apt install ./kwant_amd64.deb</code>. apt installs what it needs with it.</li>
+  <li><strong>Other distributions:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">download the AppImage</a>, then <code>chmod +x kwant_x86_64.AppImage</code> and run it. It needs a normal GTK desktop and FUSE.</li>
+</ul>
+<p>Updates arrive in the app, which checks each one's signature before installing it. With the <code>.deb</code>, your system asks for your password to install the update. To remove the <code>.deb</code>, run <code>sudo apt remove kwant</code>; your data in <code>~/.kwnt</code> stays.</p>
+<p class="note warn"><strong>The Linux app is a beta.</strong> We've tested it in clean installs of Ubuntu 22.04, Ubuntu 24.04 and Debian 12, but not yet on real desktops, so the tray icon, Wayland and HiDPI screens may behave differently on yours. It's x86_64 only for now: no ARM builds. Something wrong? <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Open an issue</a>.</p>
 
 <h2 id="app">Install the web app</h2>
 <p>kwant bots also installs from the browser, so it opens in its own window. In Chrome or Edge, click <b>Install app</b> in the sidebar (or the install icon in the address bar). In Safari on a Mac, choose <b>File › Add to Dock</b>. On a phone, kwant shows how. Browsers only install pages served over https or from <code>127.0.0.1</code>, so a server needs an <a href="#proxy">HTTPS reverse proxy</a> first.</p>
@@ -215,7 +224,7 @@ docker compose exec kwnt kwnt doctor</code></pre>
 </footer>
 <script src="../assets/js/site.js?v=c490c973ba" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/install#article","headline":"Install kwnt: self-host AI agents on a VPS or Docker","description":"Build the kwnt binary and run your AI bots on your laptop, on a VPS with systemd, or with Docker Compose behind an HTTPS reverse proxy.","url":"https://kwant.si/docs/install","mainEntityOfPage":"https://kwant.si/docs/install","image":"https://kwant.si/assets/og/docs-install.png?v=8675f78476","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-29","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Install & run","item":"https://kwant.si/docs/install"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/install#article","headline":"Install kwnt: self-host AI agents on a VPS or Docker","description":"Build the kwnt binary and run your AI bots on your laptop, on a VPS with systemd, or with Docker Compose behind an HTTPS reverse proxy.","url":"https://kwant.si/docs/install","mainEntityOfPage":"https://kwant.si/docs/install","image":"https://kwant.si/assets/og/docs-install.png?v=8675f78476","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-01","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Install & run","item":"https://kwant.si/docs/install"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

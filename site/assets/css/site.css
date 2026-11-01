@@ -46,6 +46,7 @@ kbd { display: inline-block; padding: 0 5px; font-size: 0.82em; line-height: 1.5
 .btn-violet:hover { background: var(--v5); color: #fff; }
 .btn-soft { background: #fff; color: var(--v4); border-color: var(--line-2); box-shadow: 0 3px 0 var(--line); }
 .btn-soft:hover { border-color: var(--v6); color: var(--v3); }
+.beta { padding: 1px 6px; border: 1px solid currentColor; border-radius: 6px; font: 600 11px var(--sans); letter-spacing: .04em; text-transform: uppercase; vertical-align: middle; opacity: .8; }
 .btn:active { transform: translateY(2px); box-shadow: none; }
 .cta { display: flex; flex-wrap: wrap; gap: 12px; }
 

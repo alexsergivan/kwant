@@ -29,7 +29,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=d51acd966e">
+<link rel="stylesheet" href="assets/css/site.css?v=653cdf5d1c">
 </head>
 <body class="page-home">
 <a class="skip" href="#main">Skip to content</a>
@@ -53,9 +53,10 @@
       <p class="lede">They share chats, pass work to each other and get it done on their own, on a schedule or while you're away. It runs on your laptop or a VPS.</p>
       <div class="cta cta-one">
         <a class="btn btn-violet" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download for Mac</a>
-        <p class="cta-alt"><a href="/docs/quickstart">Linux, a VPS or Docker? Get started <span aria-hidden="true">→</span></a></p>
+        <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">Download for Linux <span class="beta">beta</span></a>
+        <p class="cta-alt"><a href="/docs/quickstart">A VPS or Docker? Get started <span aria-hidden="true">→</span></a></p>
       </div>
-      <p class="mac-dl">Free, for Apple silicon and Intel. <a href="/docs/install#mac">First open</a> needs one extra step.</p>
+      <p class="mac-dl">Free, for Apple silicon and Intel. <a href="/docs/install#mac">First open</a> needs one extra step. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="/docs/install#linux">how to install</a>).</p>
       <div class="install" data-tabs><div class="install-top"><span class="install-k" aria-hidden="true">Install</span><div class="tabs" role="tablist" aria-label="Install with"><button type="button" role="tab" id="hero-t-src" aria-controls="hero-p-src" aria-selected="true">macOS · Linux</button><button type="button" role="tab" id="hero-t-docker" aria-controls="hero-p-docker" aria-selected="false" tabindex="-1">Docker</button></div></div><div class="cmd" role="tabpanel" id="hero-p-src" aria-labelledby="hero-t-src"><span class="p" aria-hidden="true">$</span><code>git clone https://github.com/alexsergivan/kwant &amp;&amp; cd kwant &amp;&amp; make run</code><button type="button" class="copy-cmd" aria-label="Copy the macOS · Linux install command">copy</button></div><div class="cmd" role="tabpanel" id="hero-p-docker" aria-labelledby="hero-t-docker" hidden><span class="p" aria-hidden="true">$</span><code>git clone https://github.com/alexsergivan/kwant &amp;&amp; cd kwant &amp;&amp; docker compose up -d --build</code><button type="button" class="copy-cmd" aria-label="Copy the Docker install command">copy</button></div></div>
       <p class="proof">0.6.1 released Nov 1 <span aria-hidden="true">·</span> <a href="https://github.com/alexsergivan/kwant/releases" rel="noopener">12 releases since Oct 25</a> <span aria-hidden="true">·</span> <a href="https://github.com/alexsergivan/kwant" rel="noopener">AGPL-3.0, open source</a></p>
     </div>
@@ -296,6 +297,7 @@
           <a class="btn btn-violet" href="/docs/quickstart">Read the quickstart</a>
           <a class="btn btn-soft" href="/docs/install">Run it on a server</a>
           <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download for Mac</a>
+          <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">Download for Linux <span class="beta">beta</span></a>
         </div>
         <p class="mac-dl">The Mac app isn't notarized by Apple yet, so macOS stops it the first time. <a href="/docs/install#mac">How to open it</a>.</p>
         <div class="star-ask">

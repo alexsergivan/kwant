@@ -9,6 +9,7 @@ Key facts:
 - License: AGPL-3.0, with commercial licenses available (contact@kwant.si).
 - Source: https://github.com/alexsergivan/kwant
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
+- Linux app (beta, x86_64): https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb (Ubuntu 22.04+, Debian 12+) or https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage
 - The program you install and run is called `kwnt` (`kwnt serve`).
 - No telemetry: kwant sends nothing to its developers. The kwant.si website sets no cookies and counts page views with
   Cloudflare's cookie-free Web Analytics.
