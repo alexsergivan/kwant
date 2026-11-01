@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="MCP tools: Give bots tools through MCP servers, with per-bot access and approvals.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-10-29">
+<meta property="article:modified_time" content="2026-11-01">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="MCP tools for AI agents: a self-hosted client · kwant">
 <meta name="twitter:description" content="Connect Model Context Protocol servers to your kwant bots, with per-bot access, masked secrets, OAuth sign-in and approval before risky tool calls.">
@@ -81,8 +81,8 @@
 <p>Bots can search the official MCP Registry and post a suggestion card in the chat. A suggestion installs nothing: you install it, with one click, and only exact versions from the default npm and PyPI registries, Docker images or HTTPS endpoints qualify. Cards for servers that would run on your computer say so.</p>
 
 <h2 id="composio">Composio (optional)</h2>
-<p><a href="https://composio.dev" rel="noopener">Composio</a> gives your bots Gmail, Slack, Notion, Linear and many more apps through one MCP server. Open <strong>Connections → Optional connectors → Composio → Add</strong>, then paste the MCP address from your Composio dashboard (an https address on composio.dev) and your Composio API key. It's added switched off, so switch it on when you're ready.</p>
-<div class="note warn"><strong>Composio keeps those app sign-ins on its own servers,</strong> not in kwant's vault. The Connections page says so next to the button.</div>
+<p><a href="https://composio.dev" rel="noopener">Composio</a> gives your bots Gmail, Slack, Notion, Linear and many more apps through one MCP server. Open <strong>Settings → This space → Connections → Optional connectors → Composio → Add</strong>, then paste the MCP address from your Composio dashboard (an https address on composio.dev) and your Composio API key. It's added switched off, so switch it on when you're ready.</p>
+<div class="note warn"><strong>Composio keeps those app sign-ins on its own servers,</strong> not in kwant's vault. The Connections tab says so next to the button.</div>
 
 <h2 id="approvals">Approvals for tools</h2>
 <p>MCP tool calls follow the bot's <a href="/docs/approvals#modes">approval mode</a>. Under "Ask only when risky", tools the server marks read-only and not destructive run without a card. That's the server's own claim, and if kwant can't check it, the call asks. Every call a bot makes is recorded on its reply.</p>
@@ -153,7 +153,7 @@ curl -X POST http://127.0.0.1:8799/api/mcp/servers \
 </footer>
 <script src="../assets/js/site.js?v=c490c973ba" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/mcp#article","headline":"MCP tools for AI agents: a self-hosted client","description":"Connect Model Context Protocol servers to your kwant bots, with per-bot access, masked secrets, OAuth sign-in and approval before risky tool calls.","url":"https://kwant.si/docs/mcp","mainEntityOfPage":"https://kwant.si/docs/mcp","image":"https://kwant.si/assets/og/docs-mcp.png?v=1e10ed37cf","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-29","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"MCP tools","item":"https://kwant.si/docs/mcp"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/mcp#article","headline":"MCP tools for AI agents: a self-hosted client","description":"Connect Model Context Protocol servers to your kwant bots, with per-bot access, masked secrets, OAuth sign-in and approval before risky tool calls.","url":"https://kwant.si/docs/mcp","mainEntityOfPage":"https://kwant.si/docs/mcp","image":"https://kwant.si/assets/og/docs-mcp.png?v=1e10ed37cf","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-01","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"MCP tools","item":"https://kwant.si/docs/mcp"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

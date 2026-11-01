@@ -52,7 +52,11 @@ test('names, colours and the summary line', () => {
   assert.equal(m.firstUnusedColor([{ color: 'amber' }]), '#10b981', "the server's Default is 'amber'");
   assert.equal(m.spaceColor({ id: 'spc_default', color: 'amber' }), '#f59e0b');
   assert.equal(m.spaceIcon({ icon: 'box' }), '📦');
-  assert.equal(m.spaceSummary({ bots: 1, ready_accounts: 0, unread: 0 }), '1 kwant bot · 0 accounts ready');
+  assert.equal(m.spaceSummary({ bots: 1, ready_accounts: 0, unread: 0 }), '1 bot · no account yet');
+  assert.equal(m.spaceSummary({ bots: 4, ready_accounts: 3, unread: 0 }), '4 bots · 3 accounts');
+  assert.equal(m.spaceSummaryTitle({ bots: 4, ready_accounts: 0, unread: 0 }), '4 kwant bots · no account signed in yet');
+  // QA b: the sidebar header shows about 25 characters before it cuts off
+  for (const c of [{ bots: 12, ready_accounts: 0 }, { bots: 12, ready_accounts: 10 }]) assert.ok(m.spaceSummary(c).length <= 24, m.spaceSummary(c));
 });
 
 test('Laya says who she picked, from how many bots, in which space', () => {

@@ -236,3 +236,37 @@ test('Inbox has New and Loose ends tabs, with the badge on New', () => {
   assert.doesNotMatch(loose, /Back to chats/, 'no back button on desktop');
   assert.match(ui.inbox({ tab: 'new', onTab: noop, onBack: noop, newPage: '', loosePage: '' }), /Back to chats/);
 });
+
+// ---------------------------------------------------------------------------
+// Follow-ups from Rigel's #204 QA
+
+test('QA a: a long bot name wraps to two lines instead of cutting off at ~20 characters', () => {
+  const long = 'Customer-Success-Manager-Extraordinaire';
+  const props = { ...base, kwants: [...kwants, bot('k4', long)], teams: [{ ...teams[0], member_kwants: ['k2', 'k1', 'k4'] }] };
+  for (const phone of [false, true]) {
+    const html = ui.sidebar({ ...props, phone });
+    const names = [...html.matchAll(/<span data-bot-name="[^"]*" class="([^"]*)"[^>]*>([^<]*)</g)];
+    assert.ok(names.length >= 4, `every bot row has a name (phone=${phone})`);
+    for (const [, cls, name] of names) {
+      assert.match(cls, /\bline-clamp-2\b/, name);
+      assert.match(cls, /overflow-wrap:anywhere/, `${name}: a name with no spaces still breaks`);
+      assert.doesNotMatch(cls, /\btruncate\b/, name);
+    }
+    assert.ok(names.some(([, , n]) => n === long), 'the team member row shows the whole name');
+  }
+});
+
+test('QA c: Grok has an Install link under "Not available on this computer"', async () => {
+  const engines = await loadBundled(`export { INSTALL_URL } from './src/engines';`);
+  assert.equal(engines.INSTALL_URL.grok, 'https://x.ai/cli', "xAI's Grok CLI page, which serves the install.sh setup.rs uses");
+  for (const id of ['claude', 'codex', 'ollama', 'grok']) assert.match(engines.INSTALL_URL[id], /^https:\/\//, id);
+});
+
+test('QA d: nothing tells the person to look in Settings → Profiles any more', () => {
+  const turn = readFileSync(new URL('../../src/server/profile_turn.rs', import.meta.url), 'utf8');
+  assert.doesNotMatch(turn, /Settings → Profiles/);
+  assert.match(turn, /Sign in again \(or update the key\) under Settings › This space › Accounts\./);
+  for (const f of ['App.tsx', 'components/SettingsModal.tsx', 'components/EnginesPanel.tsx', 'components/ModelPicker.tsx', 'automationDiscovery.ts']) {
+    assert.doesNotMatch(src(f), /Settings (?:→|›|>) Profiles/, f);
+  }
+});

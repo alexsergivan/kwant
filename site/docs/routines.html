@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Routines &amp; bot actions: Schedule work, let bots set things up with an Undo, and decide who hires.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-10-31">
+<meta property="article:modified_time" content="2026-11-01">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Scheduled AI agents: routines &amp; cron · kwant">
 <meta name="twitter:description" content="Schedule bot work with routines, cron rules and follow-ups that run on your own machine, with an Undo on every change bots make.">
@@ -62,7 +62,7 @@
 <div class="note"><strong>Not Anthropic's Routines.</strong> kwant routines run inside kwant on your own machine or server. They aren't the Routines feature of Anthropic's Claude Code, and kwant isn't affiliated with Anthropic.</div>
 
 <h2 id="routines">Routines</h2>
-<p>A routine sends a prompt to a bot on a schedule and posts the answer in a channel, the bot's direct chat or a thread. Create one with <strong>New routine</strong> in a bot's Routines tab or under <strong>Space settings → Routines</strong>, or ask a bot to do it.</p>
+<p>A routine sends a prompt to a bot on a schedule and posts the answer in a channel, the bot's direct chat or a thread. Create one with <strong>New routine</strong> in a bot's Routines tab or under <strong>Settings → This space → Routines</strong>, or ask a bot to do it.</p>
 <figure>
   <div class="frame"><a class="zoom" href="../assets/media/v2-routines-2880.webp?v=168ab24be4" data-caption="The routines panel: a Monday metrics digest, a paused competitor price scan whose last run failed, a weekday morning release check and a follow-up, each with Run now, History, Edit and Delete."><img src="../assets/media/v2-routines-1440.webp?v=34b043d179" srcset="../assets/media/v2-routines-1440.webp?v=34b043d179 1440w, ../assets/media/v2-routines-2880.webp?v=168ab24be4 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The routines panel: a Monday metrics digest, a paused competitor price scan whose last run failed, a weekday morning release check and a follow-up, each with Run now, History, Edit and Delete."></a></div>
 </figure>
@@ -86,7 +86,7 @@
 <p>A routine can carry a <a href="/docs/flight-school">Flight School</a> class, a description of a good result and checks. Each run's board task gets them, with the checks already approved, so a run that passes its checks is verified on its own. Only you set the class and the checks. Routines without them run as before.</p>
 
 <h2 id="suggested">Suggested routines</h2>
-<p>kwant can notice tasks you ask for on a rhythm and offer a routine for them. It's <strong>off by default</strong>: turn on <strong>Suggest routines from repeated tasks</strong> in <strong>Settings → Mission board</strong>, and pick how many new suggestions a day (0–10, 2 by default).</p>
+<p>kwant can notice tasks you ask for on a rhythm and offer a routine for them. It's <strong>off by default</strong>: turn on <strong>Suggest routines from repeated tasks</strong> in <strong>Settings → All spaces → Mission board</strong>, and pick how many new suggestions a day (0–10, 2 by default).</p>
 <ul>
   <li><strong>What it looks at:</strong> the board tasks you made over the last 120 days, asked for daily, on weekdays, weekly on up to three days or monthly, in your time zone. Tasks made by bots, routines, hand-offs or chats never count.</li>
   <li><strong>What qualifies:</strong> habits that were mostly verified, mostly done by one bot and not already covered by a routine.</li>
@@ -119,11 +119,11 @@
   <li>Each space sets its rule: <strong>Ask me each time</strong>, or <strong>Hire at once</strong> with at most 3 automatic hires per 24 hours.</li>
 </ul>
 <figure>
-  <div class="frame"><a class="zoom" href="../assets/media/v2-hire-policy-2880.webp?v=e878d9dcba" data-caption="Space settings, Kwant bots tab: the bot list with Export and Edit, and the hiring rule, Ask me each time or Hire at once, with 0 of 3 automatic hires used in 24 hours."><img src="../assets/media/v2-hire-policy-1440.webp?v=da0ca814b1" srcset="../assets/media/v2-hire-policy-1440.webp?v=da0ca814b1 1440w, ../assets/media/v2-hire-policy-2880.webp?v=e878d9dcba 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Space settings, Kwant bots tab: the bot list with Export and Edit, and the hiring rule, Ask me each time or Hire at once, with 0 of 3 automatic hires used in 24 hours."></a></div>
+  <div class="frame"><a class="zoom" href="../assets/media/v2-hire-policy-2880.webp?v=e878d9dcba" data-caption="Settings, This space, Kwant bots tab: the bot list with Export and Edit, and the hiring rule, Ask me each time or Hire at once, with 0 of 3 automatic hires used in 24 hours."><img src="../assets/media/v2-hire-policy-1440.webp?v=da0ca814b1" srcset="../assets/media/v2-hire-policy-1440.webp?v=da0ca814b1 1440w, ../assets/media/v2-hire-policy-2880.webp?v=e878d9dcba 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings, This space, Kwant bots tab: the bot list with Export and Edit, and the hiring rule, Ask me each time or Hire at once, with 0 of 3 automatic hires used in 24 hours."></a></div>
 </figure>
 
-<h2 id="away">While you were away</h2>
-<p>Open <strong>While you were away</strong> from the sidebar (the badge counts what's new) or the inbox tab on a phone. It lists what changed since you last marked it seen, or the last 7 days the first time.</p>
+<h2 id="away">Inbox: what happened while you were away</h2>
+<p>Open <strong>Inbox</strong> from the sidebar (the badge counts what's new) or the Inbox tab on a phone. Its <strong>New</strong> tab lists what changed since you last marked it seen, or the last 7 days the first time; <strong>Loose ends</strong> is the second tab (see <a href="/docs/loose-ends">Loose ends &amp; letters</a>).</p>
 <ul>
   <li><strong>Waiting on you:</strong> questions and approvals, which you can answer right there.</li>
   <li><strong>Finished:</strong> handoffs and routine runs that are done.</li>
@@ -179,7 +179,7 @@
 </footer>
 <script src="../assets/js/site.js?v=c490c973ba" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/routines#article","headline":"Scheduled AI agents: routines & cron","description":"Schedule bot work with routines, cron rules and follow-ups that run on your own machine, with an Undo on every change bots make.","url":"https://kwant.si/docs/routines","mainEntityOfPage":"https://kwant.si/docs/routines","image":"https://kwant.si/assets/og/docs-routines.png?v=7be758aed4","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-31","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Routines & bot actions","item":"https://kwant.si/docs/routines"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/routines#article","headline":"Scheduled AI agents: routines & cron","description":"Schedule bot work with routines, cron rules and follow-ups that run on your own machine, with an Undo on every change bots make.","url":"https://kwant.si/docs/routines","mainEntityOfPage":"https://kwant.si/docs/routines","image":"https://kwant.si/assets/og/docs-routines.png?v=7be758aed4","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-01","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Routines & bot actions","item":"https://kwant.si/docs/routines"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

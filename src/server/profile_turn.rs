@@ -397,7 +397,7 @@ fn reason(failure: &ProviderFailure) -> String {
 /// Shown while the turn moves on: "Work ran out of usage until 17:00 UTC; switching to Personal."
 pub fn switch_notice(from: &LlmProfile, to: &LlmProfile, failure: &ProviderFailure) -> String {
     format!(
-        "🔁 {} profile \"{}\" {}; switching to \"{}\".",
+        "🔁 {} account \"{}\" {}; switching to \"{}\".",
         from.engine,
         from.name,
         reason(failure),
@@ -405,7 +405,7 @@ pub fn switch_notice(from: &LlmProfile, to: &LlmProfile, failure: &ProviderFailu
     )
 }
 
-/// The reply when every profile tried refused the turn.
+/// The reply when every account tried refused the turn.
 pub fn give_up_notice(
     kwant_name: &str,
     last: &LlmProfile,
@@ -413,16 +413,16 @@ pub fn give_up_notice(
     tried: usize,
 ) -> String {
     let fix = match failure.class {
-        FailClass::Quota => "Add another profile or wait for the limit to reset.",
-        _ => "Sign in again (or update the key) under Settings → Profiles.",
+        FailClass::Quota => "Add another account under Settings › This space › Accounts, or wait for the limit to reset.",
+        _ => "Sign in again (or update the key) under Settings › This space › Accounts.",
     };
     let which = if tried > 1 {
         format!(
-            "All {tried} {} profiles tried are unavailable; the last, \"{}\",",
+            "All {tried} {} accounts tried are unavailable; the last, \"{}\",",
             last.engine, last.name
         )
     } else {
-        format!("The {} profile \"{}\"", last.engine, last.name)
+        format!("The {} account \"{}\"", last.engine, last.name)
     };
     format!("⚠️ [{kwant_name}] {which} {}. {fix}", reason(failure))
 }
@@ -451,6 +451,25 @@ mod tests {
             created_at: None,
             space_id: "spc_default".into(),
         }
+    }
+
+    #[test]
+    fn give_up_points_to_where_accounts_and_keys_live() {
+        // QA d: the old Profiles page is gone; keys and sign-ins are in Settings › This space › Accounts
+        let p = profile("p1", "Work", "api", 0, true);
+        let auth = ProviderFailure { class: FailClass::Auth, retry_at: None, detail: "401".into() };
+        let quota = ProviderFailure { class: FailClass::Quota, retry_at: None, detail: String::new() };
+        for t in [
+            give_up_notice("Ann", &p, &auth, 1),
+            give_up_notice("Ann", &p, &auth, 2),
+            give_up_notice("Ann", &p, &quota, 1),
+            switch_notice(&p, &profile("p2", "Personal", "subscription", 1, false), &auth),
+        ] {
+            assert!(!t.to_lowercase().contains("profile"), "{t}");
+        }
+        let wrong_key = give_up_notice("Ann", &p, &auth, 1);
+        assert!(wrong_key.contains("Settings › This space › Accounts"), "{wrong_key}");
+        assert!(give_up_notice("Ann", &p, &quota, 1).contains("Settings › This space › Accounts"));
     }
 
     fn report(id: EngineId, enabled: bool, status: EngineStatus) -> EngineReport {

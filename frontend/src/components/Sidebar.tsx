@@ -7,7 +7,7 @@ import { canRunNow, engineTip, isUsable } from '../engines';
 import { statusOf, statusText, type BotStatus } from '../botStatus';
 import { EnginesApi, useEngines } from '../useEngines';
 import { claudeNeedsSignIn } from '../claudeLogin';
-import { Space, spaceSummary } from '../spaces';
+import { Space, spaceSummary, spaceSummaryTitle } from '../spaces';
 import { SpaceSwitcher, SpaceTile } from './Spaces';
 import { isMac } from './LayaStatus';
 import { ApprovalsOffBadge } from './ApprovalsSetting';
@@ -341,7 +341,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onClick={() => onSelectKwant(k)}
         onKeyDown={(e) => e.key === 'Enter' && onSelectKwant(k)}
         data-bot-row={k.id}
-        className={`group/fleet w-full flex items-center gap-2.5 px-2 py-1.5 rounded-xl text-left cursor-pointer transition-all ${
+        className={`group/fleet relative w-full flex items-center gap-2.5 px-2 py-1.5 rounded-xl text-left cursor-pointer transition-all ${
           active ? 'bg-zinc-800/90 text-zinc-100 shadow-sm border border-zinc-700/60' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40 border border-transparent'
         }`}
       >
@@ -349,13 +349,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <ModernAvatar role={k.avatar_sprite} name={k.name} size={28} status={status} kwantId={k.id} />
         </span>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1">
-            {/* The full name; what it runs on is in the tooltip */}
-            <span className="text-xs font-semibold text-zinc-200 truncate" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
+          <div className="flex items-start gap-1">
+            {/* The full name, on up to two lines (QA a); what it runs on is in the tooltip */}
+            <span data-bot-name className="min-w-0 text-xs font-semibold leading-4 text-zinc-200 line-clamp-2 [overflow-wrap:anywhere]" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
               {k.name}
             </span>
             {isLead && (
-              <span className="shrink-0 flex items-center gap-0.5 text-[9px] uppercase tracking-wide text-amber-300/90" title={`Leads @${team!.name}`}>
+              <span className="shrink-0 flex items-center gap-0.5 h-4 text-[9px] uppercase tracking-wide text-amber-300/90" title={`Leads @${team!.name}`}>
                 <Crown size={10} aria-hidden="true" />
                 lead
               </span>
@@ -370,8 +370,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             )}
             {approvalsOff(k) && <ApprovalsOffBadge compact title={`${k.name} acts without asking. Payments still ask you.`} />}
+            {/* Over the row's right edge, so a long name gets the full width until you hover */}
             {!phone && (
-              <span className="ml-auto flex items-center gap-0.5">
+              <span className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-zinc-800/95 opacity-0 group-hover/fleet:opacity-100 focus-within:opacity-100 empty:hidden">
                 {onEditKwant && (
                   <button
                     type="button"
@@ -546,8 +547,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-[11px] text-zinc-300 hover:bg-sky-500/10 hover:text-zinc-100 text-left"
           >
             <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} kwantId={k.id} />
-            <span className="truncate flex-1">{k.name}</span>
-            <span className="text-[10px] text-zinc-500 truncate max-w-[80px]">{k.title}</span>
+            <span className="flex-1 min-w-0 line-clamp-2 [overflow-wrap:anywhere]" title={k.name}>{k.name}</span>
+            <span className="shrink-0 text-[10px] text-zinc-500 truncate max-w-[80px]">{k.title}</span>
           </button>
         ))}
         {candidates.length === 0 && <div className="px-1.5 py-1 text-[11px] text-zinc-500">Every bot is already in this team.</div>}
@@ -605,7 +606,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <SpaceTile space={space} size={32} />
             <span className="flex-1 min-w-0">
               <span className="block text-sm font-semibold text-zinc-100 truncate">{space.name}</span>
-              <span className="block text-[11px] text-zinc-500 truncate">{spaceSummary(space.counts)}</span>
+              <span className="block text-[11px] text-zinc-500 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
             </span>
             <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
           </button>
@@ -614,7 +615,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <SpaceTile space={space} size={32} />
             <span className="flex-1 min-w-0">
               <h1 className="text-sm font-semibold text-zinc-100 truncate">{space.name}</h1>
-              <span className="block text-[11px] text-zinc-500 truncate">{spaceSummary(space.counts)}</span>
+              <span className="block text-[11px] text-zinc-500 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
             </span>
             <button
               type="button"

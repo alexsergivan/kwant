@@ -65,7 +65,7 @@
 </figure>
 
 <h2 id="on">On from the start</h2>
-<p>The board is on from the start. To hide it, turn off <strong>Settings → Mission board → Show the Mission board</strong>. Turning it off hides the board and stops new tasks; nothing is deleted.</p>
+<p>The board is on from the start. To hide it, turn off <strong>Settings → All spaces → Mission board → Show the Mission board</strong>. Turning it off hides the board and stops new tasks; nothing is deleted.</p>
 
 <h2 id="columns">The columns</h2>
 <div class="table-wrap"><table>
@@ -114,7 +114,7 @@
 <p>Since 0.3.0 nothing has a token limit by default: tasks, missions and requests that hand work around run until they're done. A task or mission shows plain usage, such as "64.9k tokens used".</p>
 <ul>
   <li><strong>Set a limit</strong> next to Cost on a task, or under a mission's cost, offers 50k, 200k, 1M or a custom amount. A task stopped by its limit offers <strong>Remove limit and continue</strong> and <strong>Raise limit</strong>.</li>
-  <li><strong>Settings → Usage</strong> sets defaults: <strong>Token limits</strong> for new tasks and missions, and <strong>Hand-offs per request</strong> for the tokens one request may spend on bots handing work to each other. Both start at <strong>No limit</strong>. With a limit set, a request pauses there and offers <strong>Continue</strong>.</li>
+  <li><strong>Settings → All spaces → Usage</strong> sets defaults: <strong>Token limits</strong> for new tasks and missions, and <strong>Hand-offs per request</strong> for the tokens one request may spend on bots handing work to each other. Both start at <strong>No limit</strong>. With a limit set, a request pauses there and offers <strong>Continue</strong>.</li>
   <li>Updating to 0.4.0 switches off a hand-off limit still at the old 200k default, once. A number you set yourself stays.</li>
 </ul>
 <p>What stops runaway loops are the hand-off caps: one bot can be asked up to 4 times per message, and one message can start up to 16 hand-offs. Past that, the chat shows "Paused after 16 hand-offs so it doesn't loop. Continue?" with a <strong>Continue</strong> button, or you can type "continue".</p>
@@ -137,7 +137,7 @@
 <p>Checkpoints stay on your server.</p>
 
 <h2 id="autofix">AutoFix</h2>
-<p>When a task fails, its panel says why in plain words and what to fix. Turn on AutoFix in <strong>Settings → Mission board → Retry failed tasks with AutoFix</strong> and it plans a retry that fits the failure:</p>
+<p>When a task fails, its panel says why in plain words and what to fix. Turn on AutoFix in <strong>Settings → All spaces → Mission board → Retry failed tasks with AutoFix</strong> and it plans a retry that fits the failure:</p>
 <ul>
   <li><strong>A temporary error</strong>, like a timeout or an overloaded service: it waits 1, then 5, then 25 minutes and tries again.</li>
   <li><strong>A failed check</strong>: it runs the task again and passes along what the check said.</li>
@@ -179,7 +179,7 @@
 <p>Filter by kind of work, bot and period (30 days, 90 days or all time). A group with fewer than 5 tasks says "few tasks", so a lucky streak doesn't look like a trend. It's report-only: the numbers never change which bot gets work, and only you can see them. Tasks finished before the update are counted too.</p>
 
 <h2 id="auditor">Swarm Auditor and open risks</h2>
-<p>The Auditor is off by default. Turn it on in <strong>Settings → Mission board → Challenge important work with an audit</strong>. Then a task gets one challenge when it reaches Review if it's high or urgent priority, or if no outside check will judge it:</p>
+<p>The Auditor is off by default. Turn it on in <strong>Settings → All spaces → Mission board → Challenge important work with an audit</strong>. Then a task gets one challenge when it reaches Review if it's high or urgent priority, or if no outside check will judge it:</p>
 <ol>
   <li>A teammate from outside the owner's lead loop lists concrete risks, each with evidence.</li>
   <li>The owner answers once.</li>

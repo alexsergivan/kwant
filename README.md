@@ -22,7 +22,7 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **A team, not a chat tab.** Each bot has its own role, voice ("soul") and model. Bots @mention each other to hand work on, a team lead runs short discussions and posts one summary, and the [Laya](#laya-model-router) router picks who answers and with which model and effort.
 - **Spaces.** Separate spaces for work, a side project and home. Each has its own bots, teams, channels, routines, accounts, approval rule and hiring rule.
 - **Every account you have.** Several accounts per engine: Claude, Codex or Grok CLI logins, Anthropic, OpenAI or xAI keys, and your own OpenAI- or Anthropic-compatible server. Set a default and a priority order. When an account runs out of usage, the turn moves to the next one and the chat says so. You can pin a bot to one account.
-- **Works while you're away.** Routines on a schedule (bots can set them up when you ask, with an Undo button), follow-ups bots schedule for themselves, and a *While you were away* page with what's waiting on you, what finished and what failed.
+- **Works while you're away.** Routines on a schedule (bots can set them up when you ask, with an Undo button), follow-ups bots schedule for themselves, and an **Inbox** with what's waiting on you, what finished and what failed.
 - **Autonomous, with a safety net you control.** Ordinary work runs without stopping. On *Ask only when risky*, the default for new spaces, only risky steps such as `git push`, network calls, unknown commands or changes outside the bot's folder show an approval card with the exact command: *Allow once*, *Always allow* or *Deny*. Per space or per bot, switch to ask every time or don't ask.
 - **Loose ends and letters.** kwant reads your chats and, if you add them, an IMAP inbox and your GitHub issues and pull requests, read-only, and finds what you started and never finished. Photograph a bill or a form and it pulls out the sender, the ask and the deadline and drafts a reply. It never sends anything.
 - **Parallel Universe.** Compare up to three ways to deploy an app with local container tests and dated price estimates. Every number is tagged as verified, an estimate or speculation. No cloud account and no spending.
@@ -34,15 +34,15 @@ See every feature, with screenshots, on [kwant.si/features](https://kwant.si/fea
 <table>
   <tr>
     <td width="50%"><img src="docs/media/spaces.webp" alt="The space rail with three spaces, Trailhead, Pixel Quest and Home, each with its own icon and colour. Trailhead is open on #general with a weekly digest posted by a routine."><br><sub><b>Spaces</b>: each with its own bots, channels and routines.</sub></td>
-    <td width="50%"><img src="docs/media/accounts.webp" alt="Space settings, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in."><br><sub><b>Accounts</b>: several per engine, with a default and fallbacks.</sub></td>
+    <td width="50%"><img src="docs/media/accounts.webp" alt="Settings, This space, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in."><br><sub><b>Accounts</b>: several per engine, with a default and fallbacks.</sub></td>
   </tr>
   <tr>
     <td><img src="docs/media/approval.webp" alt="An approval card: TechLead wants to create a pull request on GitHub, with the full arguments shown and Deny, Allow Once and Always Allow buttons."><br><sub><b>Approvals</b>: see exactly what a bot wants to run.</sub></td>
     <td><img src="docs/media/routine.webp" alt="QA set up a routine when asked to check overnight checkout errors every morning: weekdays at 08:30, posting in the direct chat, with Undo, Edit and Pause buttons."><br><sub><b>Routines</b>: ask for "every morning" and get one, with Undo.</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/media/away.webp" alt="While you were away. Waiting on you: a question with answer buttons. Finished: a handoff and a weekly digest. Failed or stuck: a price scan blocked with a 403 and a smoke test that stopped at 9 of 22."><br><sub><b>While you were away</b>: what's waiting, finished or failed.</sub></td>
-    <td><img src="docs/media/loose-ends.webp" alt="Loose ends with Open, Waiting and Snoozed tabs. The top case is a letter from a water company, with the quote it's based on and a draft reply."><br><sub><b>Loose ends</b>: evidence and a draft. It never sends.</sub></td>
+    <td><img src="docs/media/away.webp" alt="While you were away. Waiting on you: a question with answer buttons. Finished: a handoff and a weekly digest. Failed or stuck: a price scan blocked with a 403 and a smoke test that stopped at 9 of 22."><br><sub><b>Inbox</b>: what's waiting, finished or failed.</sub></td>
+    <td><img src="docs/media/loose-ends.webp" alt="Loose ends with Open, Waiting and Snoozed tabs. The top case is a letter from a water company, with the quote it's based on and a draft reply."><br><sub><b>Loose ends</b>, the Inbox's second tab: evidence and a draft. It never sends.</sub></td>
   </tr>
 </table>
 
@@ -59,7 +59,7 @@ Screenshots come from a demo space with sample data.
 - **At least one AI account.** Any one of these is enough:
   - the [`claude`](https://docs.anthropic.com/en/docs/claude-code) CLI, installed. You don't need to sign it in first: kwant has a **Sign in with Claude** button;
   - the `codex` or `grok` CLI, signed in on the same machine (`codex login`, `grok login`);
-  - an Anthropic, OpenAI or xAI API key, which you add in the app under **Space settings → Accounts**.
+  - an Anthropic, OpenAI or xAI API key, which you add in the app under **Settings → This space → Accounts**.
 - Optional: **Docker** for VM mode and the bots' shared browser, and [`uv`](https://docs.astral.sh/uv/) or `python3` for the Laya router.
 
 `kwnt doctor` (`cargo run -- doctor` from a clone) checks all of these and prints the install command for whatever is missing on your machine; `kwnt setup` installs it (see [Without Docker](#without-docker-kwnt-setup)).
@@ -93,9 +93,9 @@ The app is signed ad hoc, not notarized by Apple, so macOS stops it the first ti
 
 ### Install the web app
 
-In Chrome or Edge, click **Install app** in the sidebar; in Safari on a Mac, **File → Add to Dock**; on a phone, kwant shows how. Browsers only install pages served over https or from `127.0.0.1`.
+In Chrome or Edge, click **Install app** in **Settings → All spaces** (the sidebar also offers it once, as a tip); in Safari on a Mac, **File → Add to Dock**; on a phone, kwant shows how. Browsers only install pages served over https or from `127.0.0.1`.
 
-To get notifications on your phone with kwant closed, install it (on an iPhone, add it to the Home Screen first) and turn on **Settings → Notifications → Notify me on this device**. kwant then sends a Web Push notification for each kind you've ticked there, such as an approval or a question. It goes through your browser's push service (Google's for Chrome on Android, Apple's on an iPhone), encrypted so that service can't read it. Signing a browser out under **Signed-in devices** stops its notifications.
+To get notifications on your phone with kwant closed, install it (on an iPhone, add it to the Home Screen first) and turn on **Settings → All spaces → Notifications → Notify me on this device**. kwant then sends a Web Push notification for each kind you've ticked there, such as an approval or a question. It goes through your browser's push service (Google's for Chrome on Android, Apple's on an iPhone), encrypted so that service can't read it. Signing a browser out under **Signed-in devices** stops its notifications.
 
 More in the [quickstart](https://kwant.si/docs/quickstart) and [install](https://kwant.si/docs/install) docs.
 
@@ -155,7 +155,7 @@ docker compose exec kwnt claude auth login            # sign a CLI in (codex log
 docker compose exec kwnt kwnt signin-link            # a one-time sign-in link and QR code (15 minutes)
 ```
 
-Or skip the CLIs and add an Anthropic, OpenAI or xAI API key in the app under **Space settings → Accounts**. CLI sign-ins live in the `kwnt-home` volume and data in `kwnt-data`, so both survive rebuilds.
+Or skip the CLIs and add an Anthropic, OpenAI or xAI API key in the app under **Settings → This space → Accounts**. CLI sign-ins live in the `kwnt-home` volume and data in `kwnt-data`, so both survive rebuilds.
 
 **HTTPS:** the UI is published on `127.0.0.1:8799` only. Put a TLS proxy in front, e.g. [Caddy](https://caddyserver.com) with this `Caddyfile`, and tell kwnt its address:
 

@@ -10,6 +10,7 @@ import {
   spaceIcon,
   spaceNameError,
   spaceSummary,
+  spaceSummaryTitle,
   spacesApi,
 } from '../spaces';
 
@@ -150,7 +151,7 @@ export const SpaceSwitcher: React.FC<SwitcherProps> = ({ spaces, currentId, onSw
             <SpaceTile space={s} size={28} />
             <span className="flex-1 min-w-0">
               <span className="block font-medium truncate">{s.name}</span>
-              <span className="block text-[11px] text-zinc-500 truncate">{spaceSummary(s.counts)}</span>
+              <span className="block text-[11px] text-zinc-500 truncate" title={spaceSummaryTitle(s.counts)}>{spaceSummary(s.counts)}</span>
             </span>
             {!active && (s.counts?.unread ?? 0) > 0 && (
               <span className="min-w-[18px] px-1.5 py-px rounded-full bg-rose-500 text-white text-[10px] font-semibold text-center">{badge(s.counts.unread)}</span>

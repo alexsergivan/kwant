@@ -107,6 +107,7 @@ export const INSTALL_URL: Partial<Record<EngineId, string>> = {
   claude: 'https://docs.claude.com/en/docs/claude-code/setup',
   codex: 'https://github.com/openai/codex#quickstart',
   ollama: 'https://ollama.com/download',
+  grok: 'https://x.ai/cli',
 };
 
 /** Whether only CLIs can run things right now (so "no API keys needed" is true). */

@@ -100,11 +100,19 @@ export function spaceNameError(name: string, taken: string[]): string | null {
   return null;
 }
 
-/** "6 kwant bots · 2 accounts ready" under the space name. */
+/** "6 bots · 2 accounts" under the space name: short enough for the sidebar header (QA b). */
 export function spaceSummary(c: SpaceCounts | undefined): string {
   if (!c) return '';
+  const bots = `${c.bots} ${c.bots === 1 ? 'bot' : 'bots'}`;
+  const accounts = c.ready_accounts === 0 ? 'no account yet' : `${c.ready_accounts} ${c.ready_accounts === 1 ? 'account' : 'accounts'}`;
+  return `${bots} · ${accounts}`;
+}
+
+/** The long form, for the subtitle's tooltip. */
+export function spaceSummaryTitle(c: SpaceCounts | undefined): string {
+  if (!c) return '';
   const bots = `${c.bots} kwant ${c.bots === 1 ? 'bot' : 'bots'}`;
-  const accounts = `${c.ready_accounts} ${c.ready_accounts === 1 ? 'account' : 'accounts'} ready`;
+  const accounts = c.ready_accounts === 0 ? 'no account signed in yet' : `${c.ready_accounts} ${c.ready_accounts === 1 ? 'account' : 'accounts'} ready to use`;
   return `${bots} · ${accounts}`;
 }
 
