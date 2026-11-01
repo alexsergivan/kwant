@@ -585,6 +585,108 @@ export function formatTokens(n: number): string {
 }
 const trim = (x: number) => (Math.abs(x) >= 100 ? String(Math.round(x)) : x.toFixed(1).replace(/\.0$/, ''));
 
+/** A dollar amount as people read it: "$0.33", "$12", "<$0.01". Null stays null, never "$0". */
+export function usdText(n: number | null | undefined): string | null {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return null;
+  if (n === 0) return '$0.00';
+  if (n < 0.01) return '<$0.01';
+  if (n < 100) return `$${n.toFixed(2)}`;
+  return `$${Math.round(n).toLocaleString('en-US')}`;
+}
+
+export interface WeekBar {
+  /** "Oct 25" for the week's last day. */
+  label: string;
+  verified: number;
+  active: boolean;
+  /** 0–1 against the busiest week. */
+  height: number;
+  /** One line for screen readers and the tooltip. */
+  text: string;
+}
+
+export interface MeasuresView {
+  /** Verified per active week, one decimal, or "—" with no active week. */
+  headline: string;
+  headlineSub: string;
+  weeks: WeekBar[];
+  /** "$0.33", "Not reported" (cost unknown) or "—" (nothing settled). */
+  cost: string;
+  costSub: string;
+  /** Set when some settled runs reported no cost: what the figure is based on instead. */
+  costWarning: string | null;
+  /** The bars for one summary line, e.g. "0, 0, 1, 3, 0, 2, 4, 2". */
+  trendText: string;
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** The day a rolling week ends on, as "Oct 25". The last week ends now, so it reads "This week". */
+export function weekLabel(endIso: string, last: boolean, timeZone?: string): string {
+  if (last) return 'This week';
+  const d = new Date(endIso);
+  if (Number.isNaN(d.getTime())) return '';
+  // The week runs up to `end`, exclusive: label it with its last whole day.
+  const day = new Date(d.getTime() - 1);
+  return `Week to ${day.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(timeZone ? { timeZone } : {}) })}`;
+}
+
+/**
+ * The Phase C measures (verified per active week and cost per verified result), or null on a server
+ * that doesn't send them, so the board looks as before.
+ */
+export function measuresView(i: Insights | null | undefined, timeZone?: string): MeasuresView | null {
+  if (!i || !Array.isArray(i.verified_weekly) || i.verified_weekly.length === 0) return null;
+  const weeks = i.verified_weekly;
+  const max = Math.max(1, ...weeks.map((w) => w.verified));
+  const bars: WeekBar[] = weeks.map((w, n) => {
+    const label = weekLabel(w.end, n === weeks.length - 1, timeZone);
+    const text = `${label}: ${w.verified} verified${w.active ? '' : ', no activity'}`;
+    return { label, verified: w.verified, active: w.active, height: w.verified / max, text };
+  });
+  const active = i.active_weeks ?? weeks.filter((w) => w.active).length;
+  const per = i.verified_per_active_week;
+  const headline = typeof per === 'number' && active > 0 ? per.toFixed(1).replace(/\.0$/, '') : '—';
+  const headlineSub =
+    active > 0
+      ? `Average over ${plural(active, 'active week')} of the last ${weeks.length}`
+      : `No task activity in the last ${weeks.length} weeks yet`;
+
+  const settled = i.settled_7d ?? 0;
+  const unpriced = i.unpriced_7d ?? 0;
+  const verified = i.verified_observed_7d ?? i.verified_7d;
+  // The divisor of the per-result cost: verified tasks that reported one.
+  const priced = i.verified_priced_7d ?? verified;
+  const perCost = usdText(i.cost_per_verified_7d_usd);
+  const total = usdText(i.cost_7d_usd);
+  let cost: string;
+  let costSub: string;
+  if (perCost) {
+    cost = perCost;
+    costSub = `${total ?? '$0.00'} over ${plural(settled, 'settled task')} this week, failed runs included`;
+  } else if (settled === 0) {
+    cost = '—';
+    costSub = 'No tasks settled this week';
+  } else if (total && verified === 0) {
+    // Money went out but nothing was verified: there's no "per result" to show, so show what it cost.
+    cost = '—';
+    costSub = `${total} spent on ${plural(settled, 'settled task')} with nothing verified yet`;
+  } else if (total) {
+    // Some runs reported a cost, but none of the verified ones did: no honest per-result figure.
+    cost = 'Not reported';
+    costSub = `None of the ${plural(verified, 'verified result')} reported a cost; ${total} came from other runs`;
+  } else {
+    cost = 'Not reported';
+    costSub = `None of the ${plural(settled, 'settled task')} this week reported a cost`;
+  }
+  // With runs missing a cost, the figure is an estimate from the priced ones: say what it rests on.
+  const costWarning =
+    unpriced > 0 && perCost
+      ? `Based on ${plural(priced, 'verified result')} that reported a cost; ${plural(unpriced, 'run')} reported none.`
+      : null;
+  return { headline, headlineSub, weeks: bars, cost, costSub, costWarning, trendText: weeks.map((w) => w.verified).join(', ') };
+}
+
 /** "12.4k of 50k tokens"; "64.9k tokens used" when there's no limit (budget 0). */
 export function costText(spent: number, budget: number): string {
   return budget > 0 ? `${formatTokens(spent)} of ${formatTokens(budget)} tokens` : `${formatTokens(spent)} tokens used`;

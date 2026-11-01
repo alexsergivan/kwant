@@ -139,6 +139,7 @@ import {
   eventText,
   formatBytes,
   formatTokens,
+  measuresView,
   groupByColumn,
   missionStatusLabel,
   missionsApi,
@@ -450,6 +451,75 @@ export const InsightsStrip: React.FC<{
           </div>
         ))}
       </dl>
+    </section>
+  );
+};
+
+/**
+ * Phase C measures: verified tasks per active week over 8 weeks, and what one verified result cost.
+ * Renders nothing on a server that doesn't send them. An unknown cost is never shown as $0.
+ */
+export const MeasuresPanel: React.FC<{ insights: Insights | null; timeZone?: string }> = ({ insights, timeZone }) => {
+  const headId = useId();
+  const v = measuresView(insights, timeZone);
+  if (!v) return null;
+  return (
+    <section aria-labelledby={headId} className={`${card} px-3 py-2.5`} data-measures>
+      <h3 id={headId} className="sr-only">
+        Measures
+      </h3>
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_minmax(0,12rem)] sm:items-end">
+        <dl className="min-w-0" data-measure="per-week">
+          <dt className="text-[11px] text-zinc-400">Verified per active week</dt>
+          <dd className="text-lg font-semibold tabular-nums text-emerald-300">{v.headline}</dd>
+          <dd className="text-[10px] text-zinc-400">{v.headlineSub}</dd>
+        </dl>
+
+        <figure className="min-w-0" data-measure="trend">
+          <ol
+            className="flex h-14 items-end gap-1"
+            aria-label={`Verified tasks per week, oldest first: ${v.trendText}`}
+            data-weeks={v.weeks.length}
+          >
+            {v.weeks.map((w, n) => (
+              <li key={n} className="flex h-full flex-1 flex-col justify-end" title={w.text} data-week={w.verified} data-active={w.active}>
+                <span className="sr-only">{w.text}</span>
+                <span
+                  aria-hidden="true"
+                  className={`block w-full rounded-sm ${
+                    w.verified > 0
+                      ? n === v.weeks.length - 1
+                        ? 'bg-emerald-400'
+                        : 'bg-emerald-500/60'
+                      : w.active
+                        ? 'bg-zinc-600'
+                        : 'border-t border-dashed border-zinc-700'
+                  }`}
+                  style={{ height: w.verified > 0 ? `${Math.max(8, Math.round(w.height * 100))}%` : w.active ? '2px' : '0' }}
+                />
+              </li>
+            ))}
+          </ol>
+          <figcaption className="mt-1 flex justify-between text-[10px] text-zinc-500" aria-hidden="true">
+            <span>8 weeks ago</span>
+            <span>This week</span>
+          </figcaption>
+        </figure>
+
+        <dl className="min-w-0" data-measure="cost">
+          <dt className="text-[11px] text-zinc-400">Cost per verified result</dt>
+          <dd className={`text-lg font-semibold tabular-nums ${/^[<$]/.test(v.cost) ? 'text-zinc-100' : 'text-zinc-400'}`} data-cost={v.cost}>
+            {v.cost}
+          </dd>
+          <dd className="text-[10px] text-zinc-400">{v.costSub}</dd>
+          {v.costWarning && (
+            <dd className="mt-0.5 flex items-start gap-1 text-[10px] text-amber-300" data-cost-warning>
+              <AlertTriangle size={11} className="mt-px shrink-0" aria-hidden="true" />
+              <span>{v.costWarning}</span>
+            </dd>
+          )}
+        </dl>
+      </div>
     </section>
   );
 };
@@ -2644,6 +2714,7 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
               {liveShown && <LiveStrip bots={liveShown} teams={teams} workingCards={workingCards} now={now} onOpen={onOpenLive} />}
 
               <InsightsStrip insights={insights} needsYou={needsYouCount(tasks)} />
+              <MeasuresPanel insights={insights} />
               <FactsLedger names={names} taskTitles={taskTitles} onOpenTask={openTaskById} now={now} />
 
               <TierRequests names={names} now={now} />
