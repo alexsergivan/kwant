@@ -179,6 +179,11 @@ pub struct UpdateKwantRequest {
     binding: ProfileBinding,
     #[serde(flatten)]
     browser: BrowserSitesUpdate,
+    /// Left out: the list stays as it is. `[]` clears it.
+    #[serde(default)]
+    covers: Option<Vec<String>>,
+    #[serde(default)]
+    avoids: Option<Vec<String>>,
 }
 
 type SiteList = Option<Vec<String>>;
@@ -337,6 +342,8 @@ pub async fn update_kwant(
     check_binding(&state, &space, &payload.binding, &payload.base.preferred_model)
         .await
         .map_err(IntoResponse::into_response)?;
+    let covers = payload.covers.as_deref().map(crate::db::routing::clean_scope_list).transpose().map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("covers: {e}")))?;
+    let avoids = payload.avoids.as_deref().map(crate::db::routing::clean_scope_list).transpose().map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("avoids: {e}")))?;
     let clash = format!("a bot called {} already exists in this space", payload.base.name);
     match state.db.update_kwant(&id, &payload.base).await {
         Ok(Some(_)) => {}
@@ -349,6 +356,9 @@ pub async fn update_kwant(
         .set_browser_sites(&id, allowed_sites.as_deref(), blocked_sites.as_deref(), payload.browser.browser_block_private_network)
         .await
         .map_err(|e| db_error(&e, ""))?;
+    if covers.is_some() || avoids.is_some() {
+        state.db.set_scope(&id, covers.as_deref(), avoids.as_deref()).await.map_err(|e| db_error(&e, ""))?;
+    }
     kwant_view_json(&state, &id).await.map_err(IntoResponse::into_response)
 }
 
@@ -917,10 +927,25 @@ pub(super) async fn run_routine_turn(
     thread_id: Option<String>,
     prompt: String,
 ) -> Result<Option<String>, String> {
+    run_routed_turn(state, kwant, channel_id, thread_id, prompt, None, Vec::new()).await
+}
+
+/// [`run_routine_turn`] with the routing card for the reply (`meta.routing`) and extra stop keys
+/// (the person's message): a channel message the person routed by choosing a bot, or one a bot
+/// handed back (see [`super::rerouting`]).
+pub(super) async fn run_routed_turn(
+    state: &AppState,
+    kwant: &Kwant,
+    channel_id: Option<String>,
+    thread_id: Option<String>,
+    prompt: String,
+    routing: Option<serde_json::Value>,
+    stop_keys: Vec<String>,
+) -> Result<Option<String>, String> {
     let context_key = thread_id.clone().or_else(|| channel_id.clone()).unwrap_or_else(|| kwant.id.clone());
-    let job = state.turns.start_job([context_key.clone()]);
+    let job = state.turns.start_job(std::iter::once(context_key.clone()).chain(stop_keys));
     let scope = scope_for(state, kwant, channel_id, thread_id, &job, 0).await?;
-    let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts::default()).await;
+    let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts { routing, ..TurnOpts::default() }).await;
     let reply = continue_once_if_capped(&scope, kwant, reply, false).await;
     match reply {
         Ok(text) => {
@@ -3241,6 +3266,8 @@ async fn send_chat_inner(
     } else {
         // Target single Kwant
         let mut routing = None;
+        // A close call the person settles on a card: (channel, the two bots offered, why)
+        let mut asking: Option<(crate::db::models::Channel, Vec<Kwant>, String)> = None;
         let target_kwant = if let Some(kname) = kwant_mention {
             all_kwants
                 .iter()
@@ -3279,6 +3306,7 @@ async fn send_chat_inner(
                 let members = routing_members(&channel, &all_kwants, concierge.as_deref());
 
                 if channel.routing_mode == "auto" && members.len() > 1 {
+                    let hints = super::rerouting::hints_for(&state, &members).await;
                     let context_id = payload.channel_id.clone();
                     let _ = state.event_sender.send(RuntimeEvent::RoutingStarted {
                         context_id: context_id.clone(),
@@ -3289,12 +3317,13 @@ async fn send_chat_inner(
                         None => {
                             state
                                 .router
-                                .route_channel_query_after(
+                                .route_channel_query_hinted(
                                     &payload.prompt,
                                     &channel.name,
                                     &channel.lead_kwant_id,
                                     &members,
                                     last_speaker.as_deref(),
+                                    &hints,
                                 )
                                 .await
                         }
@@ -3305,16 +3334,31 @@ async fn send_chat_inner(
                     let mut route = route;
                     let mut chosen = members.iter().find(|k| k.id == route.kwant_id).cloned().or(lead);
                     let removed = matches!(super::concierge::state(&state, &space, &all_kwants).await, super::concierge::State::Removed);
-                    if crate::router::team::settle(&route, general, !removed) == crate::router::team::Settle::Concierge {
-                        if let Some(c) = super::concierge::for_no_match(&state, &space, &channel.id, &all_kwants).await {
-                            route.reason = format!(
-                                "Nothing in your message fits a specialist here, so {} answers it",
-                                c.name
-                            );
-                            route.basis = "concierge".into();
-                            route.kwant_id = c.id.clone();
-                            chosen = Some(c);
+                    match crate::router::team::settle(&route, general, !removed) {
+                        crate::router::team::Settle::Concierge => {
+                            if let Some(c) = super::concierge::for_no_match(&state, &space, &channel.id, &all_kwants).await {
+                                route.reason = format!(
+                                    "Nothing in your message fits a specialist here, so {} answers it",
+                                    c.name
+                                );
+                                route.basis = "concierge".into();
+                                route.kwant_id = c.id.clone();
+                                chosen = Some(c);
+                            }
                         }
+                        crate::router::team::Settle::Ask(ids) => {
+                            let offered: Vec<Kwant> =
+                                ids.iter().filter_map(|id| members.iter().find(|k| &k.id == id).cloned()).collect();
+                            if offered.len() == 2 {
+                                route.reason = format!(
+                                    "This could be for {} or {}, so you're asked who answers",
+                                    offered[0].name, offered[1].name
+                                );
+                                route.basis = "ask".into();
+                                asking = Some((channel.clone(), offered, route.reason.clone()));
+                            }
+                        }
+                        crate::router::team::Settle::Route => {}
                     }
                     if let Some(ref k) = chosen {
                         routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms, &route.basis));
@@ -3346,6 +3390,12 @@ async fn send_chat_inner(
         }
         .ok_or(StatusCode::BAD_REQUEST)?;
 
+        if let Some((channel, offered, reason)) = asking {
+            // No turn until the person chooses (POST /api/route-choices/:id/resolve)
+            drop(job);
+            let v = super::rerouting::ask(&state, &space, &channel, &all_kwants, &saved_user_msg.id, &payload.prompt, &offered, &reason).await?;
+            return Ok(Json(v));
+        }
         let team_keys = active_team.as_ref().map(|t| (t.id.clone(), t.name.clone()));
         execute_single_turn(
             state.clone(),
@@ -3369,7 +3419,7 @@ async fn send_chat_inner(
 
 /// The bots role scoring picks from in `channel`: its members without the Concierge, which only
 /// answers what no one else fits (see `super::concierge`).
-fn routing_members(channel: &crate::db::models::Channel, all_kwants: &[Kwant], concierge: Option<&str>) -> Vec<Kwant> {
+pub(super) fn routing_members(channel: &crate::db::models::Channel, all_kwants: &[Kwant], concierge: Option<&str>) -> Vec<Kwant> {
     channel_members(channel, all_kwants).into_iter().filter(|k| Some(k.id.as_str()) != concierge).collect()
 }
 
@@ -3388,7 +3438,7 @@ fn channel_members(channel: &crate::db::models::Channel, all_kwants: &[Kwant]) -
 }
 
 /// A reply's `meta.routing`: who Laya picked for a channel or team message and why.
-fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String], basis: &str) -> serde_json::Value {
+pub(super) fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String], basis: &str) -> serde_json::Value {
     json!({
         "basis": basis,
         "kwant_id": kwant.id,

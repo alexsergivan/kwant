@@ -117,6 +117,10 @@ pub enum RuntimeEvent {
     /// whole proposal with its `card`. See `crate::db::hires` and docs/bot-actions.md → "Hiring".
     #[serde(rename = "hire_updated", alias = "HireUpdated")]
     HireUpdated { hire: Value },
+    /// A close call the person was asked to settle was asked or settled; `choice` is its card's
+    /// meta (see `crate::server::rerouting`).
+    #[serde(rename = "route_choice_updated", alias = "RouteChoiceUpdated")]
+    RouteChoiceUpdated { choice: Value },
     /// Flight School (C4): a bot proposed a tier, or the person granted, declined or kwant marked
     /// a proposal stale. `capability` is `{space_id, kwant_id, task_class, proposal?}`; clients
     /// reload `GET /api/capabilities`. See docs/mission-control.md §14.
