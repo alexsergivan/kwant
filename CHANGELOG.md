@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.3] - 2026-11-01
+
+### Changed
+- **One Inbox.** "While you were away" is now the **Inbox**, with the unread badge, and Loose ends is its second tab.
+  The top of the sidebar is Search, Inbox, Mission board and **More** (Parallel Universe). Install app is a tip you
+  can dismiss. Old links and bookmarks open the new places.
+- **One bot list.** Bots are listed once, grouped by team with the lead first and bots without a team at the end.
+  Long names wrap to two lines instead of being cut off, and Edit and Remove appear when you point at a row.
+- **One space switcher.** The rail on the left switches spaces. The header shows the space's name, a short line
+  ("4 bots · no account yet") and a gear for its settings. The phone has one switcher.
+- **One Settings.** Settings has two tabs. **This space** holds its accounts, API keys, the Ollama address, Routines
+  and Connections. **All spaces** holds usage, the Mission board, notifications, Flight School, the computer,
+  signed-in devices and Install app. The gear in the header opens This space and the gear on the rail opens All spaces.
+- Grok has an Install link when it isn't on this computer. When an account fails, the reply now points to
+  **Settings › This space › Accounts**.
+
 ## [Mac 0.6.2] - 2026-11-01
 
 ### Changed
