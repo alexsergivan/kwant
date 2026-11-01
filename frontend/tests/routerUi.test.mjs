@@ -165,7 +165,7 @@ test('send: "asking" means a card is waiting, not an error', () => {
   assert.equal(m.isAskingReply(null), false);
 });
 
-test('wrong bot: each reply resends the person\'s latest saved message before it, not thread or unsaved ones', () => {
+test('wrong bot: a reply without routing.message_id falls back to the person\'s latest saved message before it, not thread or unsaved ones', () => {
   const q = m.questionsOfReplies([
     { id: 'u1', sender_role: 'user', text: 'corn dog recipe' },
     { id: 'r1', sender_role: 'kwant' },
@@ -189,6 +189,37 @@ test('wrong bot: each reply resends the person\'s latest saved message before it
   assert.deepEqual(m.rerouteTargetsFor({ name: 'general', lead_kwant_id: 'a', member_kwants: [] }, kwants).map((k) => k.name), ['Atlas', 'Chef']);
   assert.deepEqual(m.rerouteTargetsFor({ name: 'seo', lead_kwant_id: 'a', member_kwants: [] }, kwants).map((k) => k.name), ['Atlas']);
   assert.deepEqual(m.rerouteTargetsFor(null, kwants), []);
+});
+
+const routed = (id) => JSON.stringify({ routing: { kwant_name: 'Chef', basis: 'keywords', message_id: id } });
+
+test('wrong bot: routing.message_id picks that exact message, even with a newer one before the reply', () => {
+  const q = m.questionsOfReplies([
+    { id: 'u1', sender_role: 'user', text: 'corn dog recipe' },
+    { id: 'u2', sender_role: 'user', text: 'also, what wine goes with it?' },
+    { id: 'r1', sender_role: 'kwant', meta: routed('u1') },
+    { id: 'r2', sender_role: 'kwant', meta: routed('u2') },
+    { id: 'r3', sender_role: 'kwant', meta: JSON.stringify({ routing: { kwant_name: 'Chef' } }) },
+  ]);
+  assert.equal(q.get('r1').text, 'corn dog recipe');
+  assert.equal(q.get('r2').text, 'also, what wine goes with it?');
+  // No id (a reply saved before the server recorded it): the nearest earlier message
+  assert.equal(q.get('r3').id, 'u2');
+  assert.equal(m.answeredMessageId(routed('u1')), 'u1');
+  assert.equal(m.answeredMessageId('{"routing":{}}'), null);
+  assert.equal(m.answeredMessageId('not json'), null);
+  assert.equal(m.answeredMessageId(null), null);
+});
+
+test('wrong bot: a recorded id that isn\'t loaded, or is a thread message, gets no "Wrong bot?" instead of a guess', () => {
+  const q = m.questionsOfReplies([
+    { id: 'u2', sender_role: 'user', text: 'newer' },
+    { id: 'r1', sender_role: 'kwant', meta: routed('u-paged-out') },
+    { id: 'u3', sender_role: 'user', thread_id: 't1' },
+    { id: 'r2', sender_role: 'kwant', meta: routed('u3') },
+  ]);
+  assert.equal(q.has('r1'), false);
+  assert.equal(q.has('r2'), false);
 });
 
 test('covers / avoids: trimmed, case-insensitive duplicates dropped, at most 20 of 60 characters', () => {
