@@ -239,6 +239,28 @@ claim conflict), 403 (bot token on a person route).
 `failed`. `interventions_7d` counts person actions on tasks (verify, reject, block, unblock, retry,
 cancel, check approval).
 
+**Measures (Phase C).** The north star and its cost, for the space. Counts only: nothing here
+changes routing, budgets or who gets work.
+
+```
+{"verified_weekly": [{"start": "…", "end": "…", "verified": 0, "active": false}, …],  // 8, oldest first
+ "active_weeks": 0, "verified_per_active_week": null,
+ "cost_7d_usd": null, "cost_per_verified_7d_usd": null,
+ "verified_observed_7d": 0, "settled_7d": 0, "unpriced_7d": 0}
+```
+
+- `verified_weekly` is 8 rolling weeks ending now. A task counts once in each week it reached
+  `verified` in, the `verified_7d` rule, so the last entry always equals `verified_7d`. A week is
+  `active` when any task in the space had an event in it. `verified_per_active_week` is the total over
+  the active weeks, one decimal, or null with none: verified tasks per active space per week.
+- Cost comes from the Performance Market observations (§17) of tasks that settled in the last 7 days:
+  the owner's reported model cost inside its claims. `cost_7d_usd` sums every settled task, verified,
+  failed or cancelled-after-running, and `cost_per_verified_7d_usd` divides it by the verified ones
+  (`verified_observed_7d`), so failures are part of what an outcome costs. Both are null when nothing
+  reported a cost; `cost_per_verified_7d_usd` is also null with no verified task. `unpriced_7d` counts
+  settled tasks whose engine reported no cost: when it is above 0 the cost undercounts, and the panel
+  should say so. Costs are rounded to 6 decimals.
+
 ## 7. Live events (SSE `/api/events`)
 
 ```

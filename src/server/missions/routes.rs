@@ -334,6 +334,16 @@ pub async fn insights(State(state): State<AppState>, Scope(space): Scope) -> Res
     let blocked_minutes = blocked_minutes(&events, &still_blocked, since, chrono::Utc::now());
     let per = if verified.is_empty() { Value::Null } else { json!(tokens / verified.len() as i64) };
     let (autofix_7d, failures_by_class_7d) = super::autofix::insights(&state, space.as_str(), since).await;
+    let now = chrono::Utc::now();
+    let weekly = match state.db.space_events_since(&space, now - chrono::Duration::weeks(WEEKS)).await {
+        Ok(e) => verified_weekly(&e, now),
+        Err(e) => return internal(e),
+    };
+    let observed = match state.db.observations(space.as_str(), since, None, None).await {
+        Ok(o) => o,
+        Err(e) => return internal(e),
+    };
+    let cost = outcome_cost(&observed);
     Json(json!({
         "verified_7d": verified.len(),
         "false_success_7d": false_success,
@@ -345,8 +355,79 @@ pub async fn insights(State(state): State<AppState>, Scope(space): Scope) -> Res
         "tokens_per_verified_7d": per,
         "autofix_7d": autofix_7d,
         "failures_by_class_7d": failures_by_class_7d,
+        "verified_weekly": weekly.weeks,
+        "active_weeks": weekly.active,
+        "verified_per_active_week": weekly.per_active,
+        "cost_7d_usd": cost.total,
+        "cost_per_verified_7d_usd": cost.per_verified,
+        "verified_observed_7d": cost.verified,
+        "settled_7d": cost.settled,
+        "unpriced_7d": cost.unpriced,
     }))
     .into_response()
+}
+
+/// How many weeks the Insights trend covers.
+pub const WEEKS: i64 = 8;
+
+pub struct Weekly {
+    /// Oldest first; the last entry is the 7 days ending now, the same window as `verified_7d`.
+    pub weeks: Vec<Value>,
+    /// Weeks with any task activity in the space.
+    pub active: usize,
+    /// Verified tasks per active week, one decimal; null with no active week.
+    pub per_active: Value,
+}
+
+/// Verified tasks per rolling week over the last [`WEEKS`] weeks. A task counts once per week it
+/// reached `verified` in (the `verified_7d` rule); a week is active when any task in the space had
+/// an event in it.
+pub fn verified_weekly(events: &[TaskEvent], now: chrono::DateTime<chrono::Utc>) -> Weekly {
+    let mut weeks = Vec::new();
+    let (mut active, mut total) = (0, 0);
+    for i in (0..WEEKS).rev() {
+        let end = now - chrono::Duration::weeks(i);
+        let start = end - chrono::Duration::weeks(1);
+        let inside: Vec<_> = events.iter().filter(|e| e.created_at >= start && (i == 0 || e.created_at < end)).collect();
+        let verified: std::collections::HashSet<&str> = inside
+            .iter()
+            .filter(|e| matches!(e.kind.as_str(), "state" | "lease_expired" | "budget") && e.to_state.as_deref() == Some("verified"))
+            .map(|e| e.task_id.as_str())
+            .collect();
+        let is_active = !inside.is_empty();
+        active += usize::from(is_active);
+        total += verified.len();
+        weeks.push(json!({"start": start, "end": end, "verified": verified.len(), "active": is_active}));
+    }
+    let per_active = if active == 0 { Value::Null } else { json!((total as f64 / active as f64 * 10.0).round() / 10.0) };
+    Weekly { weeks, active, per_active }
+}
+
+pub struct OutcomeCost {
+    /// Reported model cost of every task that settled in the window, verified or not; null when
+    /// none reported a cost.
+    pub total: Value,
+    /// `total` over the verified ones: what one verified outcome cost, failures included.
+    pub per_verified: Value,
+    pub verified: usize,
+    pub settled: usize,
+    /// Settled tasks whose model calls reported no cost (so `total` undercounts them).
+    pub unpriced: usize,
+}
+
+/// Cost per verified outcome from the settled tasks' performance observations.
+pub fn outcome_cost(observed: &[crate::db::performance::Observation]) -> OutcomeCost {
+    let priced: Vec<f64> = observed.iter().filter_map(|o| o.cost_usd).collect();
+    let verified = observed.iter().filter(|o| o.result == "verified").count();
+    let sum: f64 = priced.iter().sum();
+    let round = |x: f64| json!((x * 1_000_000.0).round() / 1_000_000.0);
+    OutcomeCost {
+        total: if priced.is_empty() { Value::Null } else { round(sum) },
+        per_verified: if priced.is_empty() || verified == 0 { Value::Null } else { round(sum / verified as f64) },
+        verified,
+        settled: observed.len(),
+        unpriced: observed.len() - priced.len(),
+    }
 }
 
 /// Minutes tasks spent in `blocked` between `since` and `now`, from the state events in that
@@ -881,5 +962,65 @@ mod tests {
         // d: blocked the whole window with no event in it
         assert_eq!(blocked_minutes(&events, &["c", "d"], since, now), 30 + 120 + 10 + 7 * 24 * 60);
         assert_eq!(blocked_minutes(&[], &[], since, now), 0);
+    }
+
+    #[test]
+    fn verified_weekly_buckets_rolling_weeks_and_counts_active_ones() {
+        let now = Utc.with_ymd_and_hms(2026, 11, 1, 12, 0, 0).unwrap();
+        let events = vec![
+            // this week: a verified twice (once), b verified, c only moved
+            ev("a", "review", "verified", now - Duration::days(1)),
+            ev("a", "review", "verified", now - Duration::hours(2)),
+            ev("b", "review", "verified", now),
+            ev("c", "ready", "working", now - Duration::days(3)),
+            // just over a week back: the previous week
+            ev("d", "review", "verified", now - Duration::weeks(1) - Duration::minutes(1)),
+            // three weeks back: activity, nothing verified
+            ev("e", "ready", "blocked", now - Duration::days(17)),
+            // older than the 8 weeks: ignored
+            ev("f", "review", "verified", now - Duration::weeks(9)),
+        ];
+        let w = verified_weekly(&events, now);
+        let got: Vec<(u64, bool)> = w.weeks.iter().map(|x| (x["verified"].as_u64().unwrap(), x["active"].as_bool().unwrap())).collect();
+        assert_eq!(got, vec![(0, false), (0, false), (0, false), (0, false), (0, false), (0, true), (1, true), (2, true)]);
+        assert_eq!((w.active, w.per_active.clone()), (3, json!(1.0)));
+        assert_eq!(w.weeks[7]["end"], json!(now));
+        let none = verified_weekly(&[], now);
+        assert_eq!((none.weeks.len(), none.active, none.per_active), (8, 0, Value::Null));
+    }
+
+    #[test]
+    fn outcome_cost_spreads_failures_over_verified_outcomes() {
+        let o = |result: &str, cost: Option<f64>| crate::db::performance::Observation {
+            id: 0,
+            task_id: String::new(),
+            space_id: String::new(),
+            mission_id: None,
+            task_class: "general".into(),
+            kwant_id: String::new(),
+            engine: String::new(),
+            model: String::new(),
+            started_at: None,
+            finished_at: Utc::now(),
+            latency_ms: 0,
+            runs: 1,
+            fresh_tokens: 0,
+            cost_usd: cost,
+            result: result.into(),
+            approvals: 0,
+            check_approvals: 0,
+            unblocks: 0,
+            retries: 0,
+            autofix_attempts: 0,
+            interventions: 0,
+            source: "live".into(),
+            created_at: Utc::now(),
+        };
+        let c = outcome_cost(&[o("verified", Some(0.1)), o("verified", Some(0.2)), o("failed", Some(0.3)), o("verified", None)]);
+        assert_eq!((c.total, c.per_verified, c.verified, c.settled, c.unpriced), (json!(0.6), json!(0.2), 3, 4, 1));
+        let c = outcome_cost(&[o("failed", Some(0.3))]);
+        assert_eq!((c.total, c.per_verified), (json!(0.3), Value::Null), "no verified outcome: no per-outcome cost");
+        let c = outcome_cost(&[o("verified", None)]);
+        assert_eq!((c.total, c.per_verified, c.unpriced), (Value::Null, Value::Null, 1));
     }
 }

@@ -414,6 +414,17 @@ export interface Insights {
   /** AutoFix over the last 7 days (older servers leave these out). */
   autofix_7d?: { attempts: number; succeeded: number; tokens: number };
   failures_by_class_7d?: Partial<Record<FailureClass, number>>;
+  /** Measures (older servers leave these out): 8 rolling weeks, oldest first; the last is `verified_7d`. */
+  verified_weekly?: Array<{ start: string; end: string; verified: number; active: boolean }>;
+  active_weeks?: number;
+  verified_per_active_week?: number | null;
+  /** Reported model cost of tasks settled in the last 7 days; null when none reported one. */
+  cost_7d_usd?: number | null;
+  cost_per_verified_7d_usd?: number | null;
+  verified_observed_7d?: number;
+  settled_7d?: number;
+  /** Settled tasks with no reported cost: above 0, the cost undercounts. */
+  unpriced_7d?: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -311,3 +311,40 @@ async fn the_report_groups_with_a_wilson_interval_and_flags_small_groups() {
     let (s, _) = call(&e.app, "GET", "/api/performance", Some(&token), None).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
 }
+
+/// Insights measures (Phase C): weekly verified tasks with the active weeks, and cost per verified
+/// outcome from the settled tasks' observations. Counts only.
+#[tokio::test]
+async fn insights_counts_verified_tasks_per_week_and_cost_per_verified_outcome() {
+    let e = setup().await;
+    let db = &e.state.db;
+    let empty = person(&e, "GET", "/api/missions/insights", None).await;
+    assert_eq!(empty["verified_weekly"].as_array().map(Vec::len), Some(8), "{empty}");
+    assert_eq!((empty["active_weeks"].as_u64(), &empty["verified_per_active_week"]), (Some(0), &Value::Null), "{empty}");
+    assert_eq!((&empty["cost_7d_usd"], &empty["cost_per_verified_7d_usd"], empty["settled_7d"].as_u64()), (&Value::Null, &Value::Null, Some(0)));
+
+    // Two tasks verified this week through the real flow (each run reports $0.25)
+    for title in ["One", "Two"] {
+        let tid = id(&person(&e, "POST", "/api/tasks", Some(json!({"title": title, "owner_kwant_id": e.bot.id}))).await);
+        to_review(&e, &tid).await;
+        person(&e, "POST", &format!("/api/tasks/{tid}/verify"), Some(json!({"note": "ok"}))).await;
+        observed(&e, &tid, "verified").await;
+    }
+    // This week also settled a failed task that cost $0.15 and one whose calls reported no cost;
+    // an observation from 10 days ago is outside the window
+    db.store_observation(&NewObservation { cost_usd: Some(0.15), ..obs(1, "general", &e.bot.id, "m1", "failed", 1) }, "live").await.unwrap();
+    db.store_observation(&obs(2, "general", &e.bot.id, "m1", "unverified", 2), "live").await.unwrap();
+    db.store_observation(&NewObservation { cost_usd: Some(9.0), ..obs(3, "general", &e.bot.id, "m1", "verified", 10) }, "live").await.unwrap();
+
+    let v = person(&e, "GET", "/api/missions/insights", None).await;
+    let weeks: Vec<(u64, bool)> = v["verified_weekly"].as_array().unwrap().iter().map(|w| (w["verified"].as_u64().unwrap(), w["active"].as_bool().unwrap())).collect();
+    assert_eq!(weeks[..7], [(0, false); 7], "{v}");
+    assert_eq!(weeks[7], (2, true), "{v}");
+    assert_eq!(v["verified_weekly"][7]["verified"], v["verified_7d"], "the last week is the verified_7d window");
+    assert_eq!((v["active_weeks"].as_u64(), v["verified_per_active_week"].as_f64()), (Some(1), Some(2.0)), "{v}");
+    // $0.25 + $0.25 verified + $0.15 failed, over the two verified outcomes
+    assert_eq!((v["cost_7d_usd"].as_f64(), v["cost_per_verified_7d_usd"].as_f64()), (Some(0.65), Some(0.325)), "{v}");
+    assert_eq!((v["verified_observed_7d"].as_u64(), v["settled_7d"].as_u64(), v["unpriced_7d"].as_u64()), (Some(2), Some(4), Some(1)), "{v}");
+    // The old fields are unchanged
+    assert_eq!(v["verified_7d"], 2);
+}
