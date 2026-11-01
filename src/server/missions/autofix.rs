@@ -582,7 +582,7 @@ fn soon(state: &AppState, a: &Attempt) {
 /// mission's runner slot is taken.
 async fn busy(state: &AppState, task_id: &str) -> bool {
     let Ok(Some(task)) = state.db.get_task(task_id).await else { return false };
-    if task.mission_id.as_deref().is_some_and(super::runner::is_running) {
+    if task.mission_id.as_deref().is_some_and(|m| super::runner::is_running(state, m)) {
         return true;
     }
     let claim = match state.db.open_claim(task_id).await.ok().flatten() {
@@ -647,7 +647,7 @@ async fn execute(state: &AppState, a: &Attempt) {
         }
         if let Some(mid) = &task.mission_id {
             if let Ok(Some(m)) = state.db.get_mission(mid).await {
-                if m.status == "active" && !super::runner::is_running(mid) {
+                if m.status == "active" && !super::runner::is_running(state, mid) {
                     let _ = super::runner::run_mission(state, &m, 1).await;
                 }
             }

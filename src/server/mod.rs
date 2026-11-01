@@ -115,6 +115,8 @@ pub struct AppState {
     pub push: Arc<push::Push>,
     /// The Mac app's in-app update; unsupported (and never changing) anywhere else.
     pub app_update: Arc<crate::app_update::UpdateHub>,
+    /// Missions with a runner turn going (at most `missions::runner::MAX_RUNNING`).
+    pub mission_runs: Arc<missions::runner::RunningMissions>,
 }
 
 impl AppState {
@@ -163,6 +165,7 @@ impl AppState {
             setup: Default::default(),
             push: Arc::new(push::Push::load(&config_data_dir)),
             app_update: crate::app_update::UpdateHub::shared(),
+            mission_runs: Arc::default(),
         }
     }
 

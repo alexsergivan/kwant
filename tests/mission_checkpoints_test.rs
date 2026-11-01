@@ -247,7 +247,7 @@ async fn cli_bot(e: &Env) -> String {
 async fn cli_run(e: &Env, mid: &str, tid: &str) {
     // An earlier runner turn of this mission may still be ending after its hand-in
     for _ in 0..200 {
-        if !kwnt::server::missions::runner::is_running(mid) {
+        if !kwnt::server::missions::runner::is_running(&e.state, mid) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

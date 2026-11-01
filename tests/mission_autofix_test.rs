@@ -259,9 +259,9 @@ async fn cli_mission(e: &Env, budget: i64) -> (String, String) {
 }
 
 /// Waits until the mission's runner turn is over and its spend has landed.
-async fn runner_idle(mid: &str) {
+async fn runner_idle(state: &AppState, mid: &str) {
     for _ in 0..300 {
-        if !runner::is_running(mid) {
+        if !runner::is_running(state, mid) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -337,7 +337,7 @@ async fn a_failing_check_is_retried_with_its_diagnostics_until_the_attempts_run_
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    runner_idle(&mid).await;
+    runner_idle(&e.state, &mid).await;
     let t = task(&e, &tid).await;
     assert_eq!((t["state"].as_str(), t["attempts"].as_i64()), (Some("failed"), Some(3)), "{t}");
     let fs = failures(&e, &tid).await;
@@ -430,7 +430,7 @@ async fn a_retry_over_the_recovery_budget_is_skipped_and_only_autofix_turns_coun
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    runner_idle(&mid).await;
+    runner_idle(&e.state, &mid).await;
     let t = task(&e, &tid).await;
     // The first turn was a plain run: none of it is recovery; the AutoFix retry's turn is
     assert_eq!(t["spent_tokens"], 2 * PER_TURN, "{t}");

@@ -7,20 +7,28 @@ use crate::db::missions::{ClaimRefused, Mission, Task, TaskChange};
 use crate::server::routes::{scope_for, turn_once, TurnOpts};
 use crate::server::AppState;
 use std::collections::HashSet;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 
 pub const MAX_RUNNING: usize = 2;
 pub const PURPOSE: &str = "mission";
 
-/// Missions with a runner turn going.
-static RUNNING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+/// Missions with a runner turn going, one set per server (`AppState::mission_runs`), so two
+/// servers in one process (as tests run them) never take each other's slots.
+#[derive(Default)]
+pub struct RunningMissions(Mutex<HashSet<String>>);
+
+impl RunningMissions {
+    fn set(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 /// Holds a mission's runner slot; frees it when dropped.
-struct Slot(String);
+struct Slot(Arc<RunningMissions>, String);
 
 impl Slot {
-    fn take(mission_id: &str) -> Result<Slot, &'static str> {
-        let mut set = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+    fn take(running: &Arc<RunningMissions>, mission_id: &str) -> Result<Slot, &'static str> {
+        let mut set = running.set();
         if set.contains(mission_id) {
             return Err("a runner turn is already going for this mission");
         }
@@ -28,18 +36,18 @@ impl Slot {
             return Err("two missions are already running; it starts when one finishes");
         }
         set.insert(mission_id.to_string());
-        Ok(Slot(mission_id.to_string()))
+        Ok(Slot(running.clone(), mission_id.to_string()))
     }
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+        self.0.set().remove(&self.1);
     }
 }
 
-pub fn is_running(mission_id: &str) -> bool {
-    RUNNING.lock().unwrap_or_else(|e| e.into_inner()).contains(mission_id)
+pub fn is_running(state: &AppState, mission_id: &str) -> bool {
+    state.mission_runs.set().contains(mission_id)
 }
 
 /// One scheduler tick: leases that ran out go back to ready, then each active mission without a
@@ -56,7 +64,7 @@ pub async fn tick(state: &AppState) {
     for m in state.db.active_missions().await.unwrap_or_default() {
         // Evidence drift, at most every 10 minutes per mission (Phase B1)
         super::graph::scan_if_due(state, &m).await;
-        if is_running(&m.id) {
+        if is_running(state, &m.id) {
             continue;
         }
         let _ = run_mission(state, &m, 1).await;
@@ -66,7 +74,7 @@ pub async fn tick(state: &AppState) {
 /// Starts runner turns for up to `max` ready tasks of `mission` (one at a time, in the
 /// background). Returns `(task_id, kwant_id)` of each started, and why none were if so.
 pub async fn run_mission(state: &AppState, mission: &Mission, max: usize) -> (Vec<(String, String)>, Option<String>) {
-    let slot = match Slot::take(&mission.id) {
+    let slot = match Slot::take(&state.mission_runs, &mission.id) {
         Ok(s) => s,
         Err(why) => return (Vec::new(), Some(why.into())),
     };
@@ -225,4 +233,21 @@ pub async fn after_turn(state: &AppState, task_id: &str, err: Option<&str>, star
         (None, Some(what)) => super::autofix::record(state, task_id, "turn", "denied", &what, &format!("denied: {what}")).await,
         (None, None) => super::autofix::record(state, task_id, "turn", "stalled", "", "the runner turn ended without a review").await,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slots_are_per_server_and_freed_when_dropped() {
+        let (a, b) = (Arc::new(RunningMissions::default()), Arc::new(RunningMissions::default()));
+        let (one, _two) = (Slot::take(&a, "m1").unwrap(), Slot::take(&a, "m2").unwrap());
+        assert!(Slot::take(&a, "m1").err().unwrap().contains("already going"));
+        assert!(Slot::take(&a, "m3").err().unwrap().contains("two missions"));
+        // Another server's missions don't count against this one's
+        assert!(Slot::take(&b, "m3").is_ok());
+        drop(one);
+        assert!(Slot::take(&a, "m3").is_ok());
+    }
 }

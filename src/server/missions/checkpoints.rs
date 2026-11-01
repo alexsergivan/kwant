@@ -44,7 +44,8 @@ pub const NOT_UNDONE: &str = "kwant can't undo these. Check them yourself.";
 /// A conflict no task's own calls account for (D11).
 pub const OUTSIDE: &str = "changed outside this task";
 
-/// One snapshot, prune or restore at a time: blob GC never races a snapshot writing blobs.
+/// One snapshot, prune, restore or restore plan at a time: blob GC never races a snapshot writing
+/// blobs, and a plan never sees a checkpoint without its run record.
 static STORE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub async fn enabled(state: &AppState) -> bool {
@@ -752,7 +753,10 @@ async fn running(state: &AppState, task: &Task) -> bool {
         && matches!(state.db.open_claim(&task.id).await, Ok(Some(c)) if c.expires_at > crate::db::missions::now_ms())
 }
 
+/// What restoring `c` would do. Holds STORE, so it never reads a run's `after_run` checkpoint
+/// before that run's paths are recorded (`note_run`), which would show no changes.
 pub async fn plan(state: &AppState, task: &Task, c: &Checkpoint) -> Result<Plan, PlanError> {
+    let _store = STORE.lock().await;
     let Some(manifest) = read_manifest(c) else { return Err(PlanError::NotRestorable) };
     let folder = PathBuf::from(&c.folder);
     let task_dir = root(state).join(&task.id);
