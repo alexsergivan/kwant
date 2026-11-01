@@ -246,7 +246,7 @@ changes routing, budgets or who gets work.
 {"verified_weekly": [{"start": "…", "end": "…", "verified": 0, "active": false}, …],  // 8, oldest first
  "active_weeks": 0, "verified_per_active_week": null,
  "cost_7d_usd": null, "cost_per_verified_7d_usd": null,
- "verified_observed_7d": 0, "settled_7d": 0, "unpriced_7d": 0}
+ "verified_observed_7d": 0, "verified_priced_7d": 0, "settled_7d": 0, "unpriced_7d": 0}
 ```
 
 - `verified_weekly` is 8 rolling weeks ending now. A task counts once in each week it reached
@@ -255,11 +255,13 @@ changes routing, budgets or who gets work.
   the active weeks, one decimal, or null with none: verified tasks per active space per week.
 - Cost comes from the Performance Market observations (§17) of tasks that settled in the last 7 days:
   the owner's reported model cost inside its claims. `cost_7d_usd` sums every settled task, verified,
-  failed or cancelled-after-running, and `cost_per_verified_7d_usd` divides it by the verified ones
-  (`verified_observed_7d`), so failures are part of what an outcome costs. Both are null when nothing
-  reported a cost; `cost_per_verified_7d_usd` is also null with no verified task. `unpriced_7d` counts
-  settled tasks whose engine reported no cost: when it is above 0 the cost undercounts, and the panel
-  should say so. Costs are rounded to 6 decimals.
+  failed or cancelled-after-running, and `cost_per_verified_7d_usd` divides it by the verified tasks
+  that reported a cost (`verified_priced_7d`, at most `verified_observed_7d`), so failures are part of
+  what an outcome costs and a verified task with no reported cost doesn't pull the figure down.
+  `cost_7d_usd` is null when nothing reported a cost; `cost_per_verified_7d_usd` is null when no
+  verified task reported one. `unpriced_7d` counts settled tasks (any result) whose engine reported no
+  cost: when it is above 0 the figures are an estimate from the priced tasks (an unpriced failure
+  isn't in the total), and the panel should say so. Costs are rounded to 6 decimals.
 
 ## 7. Live events (SSE `/api/events`)
 

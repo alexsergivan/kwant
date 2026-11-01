@@ -334,6 +334,8 @@ async fn insights_counts_verified_tasks_per_week_and_cost_per_verified_outcome()
     // an observation from 10 days ago is outside the window
     db.store_observation(&NewObservation { cost_usd: Some(0.15), ..obs(1, "general", &e.bot.id, "m1", "failed", 1) }, "live").await.unwrap();
     db.store_observation(&obs(2, "general", &e.bot.id, "m1", "unverified", 2), "live").await.unwrap();
+    // A verified task whose engine reported no cost: counted, but not in the per-outcome divisor
+    db.store_observation(&obs(4, "general", &e.bot.id, "m1", "verified", 3), "live").await.unwrap();
     db.store_observation(&NewObservation { cost_usd: Some(9.0), ..obs(3, "general", &e.bot.id, "m1", "verified", 10) }, "live").await.unwrap();
 
     let v = person(&e, "GET", "/api/missions/insights", None).await;
@@ -342,9 +344,14 @@ async fn insights_counts_verified_tasks_per_week_and_cost_per_verified_outcome()
     assert_eq!(weeks[7], (2, true), "{v}");
     assert_eq!(v["verified_weekly"][7]["verified"], v["verified_7d"], "the last week is the verified_7d window");
     assert_eq!((v["active_weeks"].as_u64(), v["verified_per_active_week"].as_f64()), (Some(1), Some(2.0)), "{v}");
-    // $0.25 + $0.25 verified + $0.15 failed, over the two verified outcomes
+    // $0.25 + $0.25 verified + $0.15 failed, over the two verified outcomes that reported a cost
+    // (over all three it would read $0.216667)
     assert_eq!((v["cost_7d_usd"].as_f64(), v["cost_per_verified_7d_usd"].as_f64()), (Some(0.65), Some(0.325)), "{v}");
-    assert_eq!((v["verified_observed_7d"].as_u64(), v["settled_7d"].as_u64(), v["unpriced_7d"].as_u64()), (Some(2), Some(4), Some(1)), "{v}");
+    assert_eq!(
+        (v["verified_observed_7d"].as_u64(), v["verified_priced_7d"].as_u64(), v["settled_7d"].as_u64(), v["unpriced_7d"].as_u64()),
+        (Some(3), Some(2), Some(5), Some(2)),
+        "{v}"
+    );
     // The old fields are unchanged
     assert_eq!(v["verified_7d"], 2);
 }

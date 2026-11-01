@@ -420,8 +420,11 @@ export interface Insights {
   verified_per_active_week?: number | null;
   /** Reported model cost of tasks settled in the last 7 days; null when none reported one. */
   cost_7d_usd?: number | null;
+  /** `cost_7d_usd` over `verified_priced_7d`; null when no verified task reported a cost. */
   cost_per_verified_7d_usd?: number | null;
   verified_observed_7d?: number;
+  /** Verified tasks that reported a cost: the divisor of `cost_per_verified_7d_usd`. */
+  verified_priced_7d?: number;
   settled_7d?: number;
   /** Settled tasks with no reported cost: above 0, the cost undercounts. */
   unpriced_7d?: number;

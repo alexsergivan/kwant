@@ -361,6 +361,7 @@ pub async fn insights(State(state): State<AppState>, Scope(space): Scope) -> Res
         "cost_7d_usd": cost.total,
         "cost_per_verified_7d_usd": cost.per_verified,
         "verified_observed_7d": cost.verified,
+        "verified_priced_7d": cost.verified_priced,
         "settled_7d": cost.settled,
         "unpriced_7d": cost.unpriced,
     }))
@@ -407,9 +408,13 @@ pub struct OutcomeCost {
     /// Reported model cost of every task that settled in the window, verified or not; null when
     /// none reported a cost.
     pub total: Value,
-    /// `total` over the verified ones: what one verified outcome cost, failures included.
+    /// `total` over the verified tasks that reported a cost: what one verified outcome cost,
+    /// failures included. A verified task with no reported cost is left out of the divisor, so it
+    /// can't pull the figure down.
     pub per_verified: Value,
     pub verified: usize,
+    /// Verified tasks that reported a cost: the divisor of `per_verified`.
+    pub verified_priced: usize,
     pub settled: usize,
     /// Settled tasks whose model calls reported no cost (so `total` undercounts them).
     pub unpriced: usize,
@@ -419,12 +424,14 @@ pub struct OutcomeCost {
 pub fn outcome_cost(observed: &[crate::db::performance::Observation]) -> OutcomeCost {
     let priced: Vec<f64> = observed.iter().filter_map(|o| o.cost_usd).collect();
     let verified = observed.iter().filter(|o| o.result == "verified").count();
+    let verified_priced = observed.iter().filter(|o| o.result == "verified" && o.cost_usd.is_some()).count();
     let sum: f64 = priced.iter().sum();
     let round = |x: f64| json!((x * 1_000_000.0).round() / 1_000_000.0);
     OutcomeCost {
         total: if priced.is_empty() { Value::Null } else { round(sum) },
-        per_verified: if priced.is_empty() || verified == 0 { Value::Null } else { round(sum / verified as f64) },
+        per_verified: if verified_priced == 0 { Value::Null } else { round(sum / verified_priced as f64) },
         verified,
+        verified_priced,
         settled: observed.len(),
         unpriced: observed.len() - priced.len(),
     }
@@ -1016,8 +1023,12 @@ mod tests {
             source: "live".into(),
             created_at: Utc::now(),
         };
+        // The unpriced verified task isn't in the divisor: 0.6 over the 2 priced verified, not 3
         let c = outcome_cost(&[o("verified", Some(0.1)), o("verified", Some(0.2)), o("failed", Some(0.3)), o("verified", None)]);
-        assert_eq!((c.total, c.per_verified, c.verified, c.settled, c.unpriced), (json!(0.6), json!(0.2), 3, 4, 1));
+        assert_eq!((c.total, c.per_verified, c.verified, c.verified_priced, c.settled, c.unpriced), (json!(0.6), json!(0.3), 3, 2, 4, 1));
+        // Priced failures but no priced verified task: no per-outcome figure, never a made-up one
+        let c = outcome_cost(&[o("failed", Some(0.3)), o("verified", None)]);
+        assert_eq!((c.total, c.per_verified, c.verified, c.verified_priced), (json!(0.3), Value::Null, 1, 0));
         let c = outcome_cost(&[o("failed", Some(0.3))]);
         assert_eq!((c.total, c.per_verified), (json!(0.3), Value::Null), "no verified outcome: no per-outcome cost");
         let c = outcome_cost(&[o("verified", None)]);
