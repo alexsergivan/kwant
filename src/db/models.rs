@@ -347,6 +347,13 @@ pub struct KwantView {
     /// Which sites the bot's browser may open.
     #[serde(flatten)]
     pub browser: super::browser_sites::BrowserSites,
+    #[serde(default)]
+    /// What the bot is for, in the person's words: routing counts these like words in its title.
+    pub covers: Vec<String>,
+    #[serde(default)]
+    /// What it is not for: a message with one of these words isn't routed to it by its role or
+    /// words (naming or @mentioning it still is).
+    pub avoids: Vec<String>,
 }
 
 /// One LLM account for an engine. Holds no secret: API keys live in `llm_profile_secrets`.

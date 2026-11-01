@@ -93,6 +93,7 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         }
         E::BotActionUpdated { action: v }
         | E::HireUpdated { hire: v }
+        | E::RouteChoiceUpdated { choice: v }
         | E::CapabilityChanged { capability: v }
         | E::FactChanged { fact: v }
         | E::FactDispute { dispute: v } => {
@@ -326,6 +327,7 @@ mod tests {
                 | E::McpSuggestionUpdated { .. }
                 | E::BotActionUpdated { .. }
                 | E::HireUpdated { .. }
+                | E::RouteChoiceUpdated { .. }
                 | E::CapabilityChanged { .. }
                 | E::FactChanged { .. }
                 | E::FactDispute { .. }
