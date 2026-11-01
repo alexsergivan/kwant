@@ -217,9 +217,17 @@ export function routineButtons(m: BotActionMeta): { edit: boolean; pause: boolea
 export type HireStatus = 'pending' | 'accepted' | 'auto_accepted' | 'denied' | 'undone';
 const HIRE_STATUSES: HireStatus[] = ['pending', 'accepted', 'auto_accepted', 'denied', 'undone'];
 
+/** One earlier request a "repeated" hire rests on. The server stores `{message_id, at, text}`;
+ *  older cards may hold bare ids. */
+export interface SimilarRequest {
+  message_id: string;
+  at: string | null;
+  text: string | null;
+}
+
 export type HireEvidence =
   | { basis: 'specialist'; needs: string[]; gap: string }
-  | { basis: 'repeated'; similar_requests: string[] }
+  | { basis: 'repeated'; similar_requests: SimilarRequest[] }
   | { basis: 'other'; text: string };
 
 /** `meta` of a hire proposal card (`kind: "hire_proposal"`). */
@@ -273,12 +281,28 @@ export interface Hire {
 
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x) : []);
 
+function similarRequests(v: unknown): SimilarRequest[] {
+  if (!Array.isArray(v)) return [];
+  const out: SimilarRequest[] = [];
+  for (const x of v) {
+    const o = typeof x === 'string' ? { message_id: x } : x && typeof x === 'object' ? (x as Record<string, unknown>) : null;
+    const id = o && typeof o.message_id === 'string' ? o.message_id : '';
+    if (!id || out.some((r) => r.message_id === id)) continue;
+    out.push({
+      message_id: id,
+      at: typeof o!.at === 'string' && o!.at ? (o!.at as string) : null,
+      text: typeof o!.text === 'string' && (o!.text as string).trim() ? (o!.text as string).trim() : null,
+    });
+  }
+  return out;
+}
+
 function parseEvidence(raw: unknown): HireEvidence | null {
   if (typeof raw === 'string') return raw.trim() ? { basis: 'other', text: raw.trim() } : null;
   if (!raw || typeof raw !== 'object') return null;
   const e = raw as Record<string, unknown>;
   if (e.basis === 'specialist') return { basis: 'specialist', needs: strs(e.needs), gap: str(e.gap) ?? '' };
-  if (e.basis === 'repeated') return { basis: 'repeated', similar_requests: strs(e.similar_requests) };
+  if (e.basis === 'repeated') return { basis: 'repeated', similar_requests: similarRequests(e.similar_requests) };
   return null;
 }
 
@@ -373,6 +397,14 @@ export function applyHire(map: Record<string, HireMeta>, h: Hire | null | undefi
 const NEEDS: Record<string, string> = { instructions: 'its own instructions', tools: 'its own tools', schedule: 'a schedule', model: 'a different model' };
 
 /** What the proposal rests on, in one sentence. */
+/** "Oct 28": when a past request was asked, short. */
+export function shortDate(at: string | null, now: Date = new Date()): string {
+  if (!at) return '';
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) });
+}
+
 export function evidenceText(e: HireEvidence | null, requestedByPerson: boolean): string {
   if (requestedByPerson) return 'You asked for this kind of bot.';
   if (!e) return '';

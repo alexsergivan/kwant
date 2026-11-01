@@ -2,7 +2,7 @@
 // `/api` call as `?space=` (added by the fetch wrapper in auth.ts) and on the event stream.
 
 import { parseView, viewSegment, type SpaceView } from './nav';
-import { serverReason } from './routeReason';
+import { pickedLine, serverReason } from './routeReason';
 
 export interface SpaceCounts {
   bots: number;
@@ -276,8 +276,16 @@ export interface RoutingMeta {
   candidate_count?: number | null;
   fallback?: boolean;
   matched_terms?: string[];
-  /** How the bot was picked: skills, keywords, only, lead, several or discuss; see routeReason.ts. */
+  /** How the bot was picked: skills, keywords, only, lead, several, discuss, concierge, ask, handback or learned; see routeReason.ts. */
   basis?: string;
+  /** How well the pick fits, 0–1; absent on older messages. */
+  fit?: number;
+  /** Basis "ask": the card the person answered. */
+  route_choice_id?: string;
+  /** Basis "handback": the id of the bot that said "not my area". */
+  handed_back_by?: string;
+  /** Basis "concierge": the person's similar earlier requests (message ids). */
+  similar_requests?: string[];
 }
 
 export function parseRoutingMeta(meta: string | null | undefined): RoutingMeta | null {
@@ -291,7 +299,14 @@ export function parseRoutingMeta(meta: string | null | undefined): RoutingMeta |
 }
 
 /** The server's own reason when it sends one, else "Laya picked Lin from 6 bots in Work · matched 'migration', 'SQLite'", or the keyword-fallback line. */
-export function routingLine(r: RoutingMeta, spaceName: string): string {
+export function routingLine(r: RoutingMeta, spaceName: string, nameOf?: (kwantId: string) => string | undefined): string {
+  const picked = pickedLine({
+    kwantName: r.kwant_name,
+    basis: r.basis,
+    reason: r.reason,
+    handedBackBy: r.handed_back_by ? nameOf?.(r.handed_back_by) : undefined,
+  });
+  if (picked) return picked;
   const n = typeof r.candidate_count === 'number' && r.candidate_count > 0 ? r.candidate_count : null;
   const pool = n ? `from ${n} ${n === 1 ? 'bot' : 'bots'} in ${spaceName}` : `in ${spaceName}`;
   const own = serverReason(r);
