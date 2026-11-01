@@ -5,7 +5,10 @@ A message in a channel without an @mention goes to the member that fits it best.
 
 ## Fit
 
-Each pick has a `fit` from 0 to 1, saved on the reply as `meta.routing.fit`.
+Each pick has a `fit` from 0 to 1, saved on the reply as `meta.routing.fit`. Every routed reply
+also saves `meta.routing.message_id`, the person's message it answers (for an ask card, the
+message the card was for; for a hand-back, the message handed on), so "Wrong bot?" corrects that
+message and not just the latest one.
 
 | Fit | What happens |
 |---|---|
