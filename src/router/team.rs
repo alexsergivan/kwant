@@ -607,12 +607,77 @@ pub fn pick_member_after<'a>(
 pub struct Hints {
     /// Each bot's covers/avoids lists, by bot id. A bot without one routes as before.
     pub scopes: std::collections::HashMap<String, crate::db::routing::Scope>,
+    /// Messages the person said should go to a bot (a correction or a choice on a card), newest first.
+    pub learned: Vec<Learned>,
+}
+
+/// A message routing learned: its words and the bot it belongs to.
+#[derive(Debug, Clone)]
+pub struct Learned {
+    pub kwant_id: String,
+    pub words: Vec<String>,
+}
+
+impl Learned {
+    pub fn new(kwant_id: &str, text: &str) -> Self {
+        Learned { kwant_id: kwant_id.to_string(), words: content_words(text) }
+    }
+}
+
+/// How much of the shorter message's words the longer one has, from 0 to 1, and how many words they
+/// share; [`LEARNED_AT`] and two shared words make two messages alike.
+pub fn word_overlap(a: &[String], b: &[String]) -> (f32, usize) {
+    let shared = a.iter().filter(|w| b.contains(w)).count();
+    let shorter = a.len().min(b.len());
+    if shorter == 0 {
+        return (0.0, 0);
+    }
+    (shared as f32 / shorter as f32, shared)
+}
+
+/// Two messages are alike: they share at least two words and [`LEARNED_AT`] of the shorter one's.
+pub fn alike(a: &[String], b: &[String]) -> bool {
+    let (overlap, shared) = word_overlap(a, b);
+    shared >= 2 && overlap >= LEARNED_AT
+}
+
+/// Share of words a message must have in common with a learned one to route like it.
+pub const LEARNED_AT: f32 = 0.6;
+
+/// A message's words for comparing it with another: no filler, plurals folded, each once.
+pub fn content_words(text: &str) -> Vec<String> {
+    let mut w = scope_words(text);
+    w.sort();
+    w.dedup();
+    w
 }
 
 impl Hints {
     /// The entries of `kwant`'s covers list that the message has every word of.
     fn covered(&self, kwant: &Kwant, words: &[String]) -> Vec<String> {
         self.scopes.get(&kwant.id).map(|s| s.covers.iter().filter(|e| entry_in(e, words)).map(|e| e.to_lowercase()).collect()).unwrap_or_default()
+    }
+
+    /// The member the most alike learned message belongs to, with how alike (see [`alike`]).
+    fn learned_pick<'a>(&self, prompt: &str, members: &'a [Kwant]) -> Option<(&'a Kwant, f32)> {
+        if self.learned.is_empty() {
+            return None;
+        }
+        let words = content_words(prompt);
+        let scoped = scope_words(prompt);
+        let mut best: Option<(&'a Kwant, f32, usize)> = None;
+        for l in &self.learned {
+            let Some(k) = members.iter().find(|k| k.id == l.kwant_id) else { continue };
+            if !alike(&words, &l.words) || self.avoids(k, &scoped) {
+                continue;
+            }
+            let (overlap, shared) = word_overlap(&words, &l.words);
+            // Newest first, so an equal match keeps the latest correction
+            if best.is_none_or(|(_, o, s)| (overlap, shared) > (o, s)) {
+                best = Some((k, overlap, shared));
+            }
+        }
+        best.map(|(k, o, _)| (k, o))
     }
 
     /// The message has every word of an entry in `kwant`'s avoids list.
@@ -714,6 +779,14 @@ pub fn pick_member_hinted<'a>(
             lead.name, lead.title
         );
         return Some(Pick { kwant: lead, basis: "team", reason, terms: vec![], fit: 1.0, choices: vec![] });
+    }
+
+    // 2b. The person said a message like this one should go to a bot (a correction or a choice on
+    //     a card): that bot, unless its avoids list keeps it out
+    if let Some((k, overlap)) = hints.learned_pick(prompt, members) {
+        let reason = format!("{} ({}) answers messages like this one: you chose it for a similar message", k.name, k.title);
+        let fit = (ROUTE_AT + (1.0 - ROUTE_AT) * overlap).min(1.0);
+        return Some(Pick { kwant: k, basis: "learned", reason, terms: vec![], fit, choices: vec![] });
     }
 
     // 3. The request's words belong to a role
@@ -1627,7 +1700,7 @@ mod fit_tests {
             covers: covers.iter().map(|s| s.to_string()).collect(),
             avoids: avoids.iter().map(|s| s.to_string()).collect(),
         };
-        Hints { scopes: [(id.to_string(), scope)].into_iter().collect() }
+        Hints { scopes: [(id.to_string(), scope)].into_iter().collect(), ..Hints::default() }
     }
 
     /// Two bots with the same role and the same words: a close call, so the person is asked to
@@ -1674,5 +1747,27 @@ mod fit_tests {
         assert_ne!(p.kwant.id, "k-script", "{p:?}");
         let p = pick_member_hinted("Scriptwriter, a hook for this fantasy book", "k-lead", &members, None, "channel lead", None, &h).unwrap();
         assert_eq!(p.kwant.id, "k-script", "{p:?}");
+    }
+
+    /// The person chose the Scriptwriter for a message no title points to: a similar one routes
+    /// there too (basis "learned"), an unlike one doesn't, and @naming another bot still wins.
+    #[test]
+    fn a_learned_example_routes_a_similar_message() {
+        let members = general();
+        let learned = Hints { learned: vec![Learned::new("k-script", "Can you draft the monthly book club newsletter?")], ..Hints::default() };
+        let prompt = "Draft this month's book club newsletter please";
+        let before = pick_member_hinted(prompt, "k-lead", &members, None, "channel lead", None, &Hints::default()).unwrap();
+        assert_ne!(before.kwant.id, "k-script", "{before:?}");
+        let p = pick_member_hinted(prompt, "k-lead", &members, None, "channel lead", None, &learned).unwrap();
+        assert_eq!((p.kwant.id.as_str(), p.basis), ("k-script", "learned"), "{p:?}");
+        assert!(p.fit >= ROUTE_AT, "{p:?}");
+        let p = pick_member_hinted("Why do the book pages load slowly?", "k-lead", &members, None, "channel lead", None, &learned).unwrap();
+        assert_ne!(p.basis, "learned", "{p:?}");
+        let p = pick_member_hinted("@Atlas draft the book club newsletter", "k-lead", &members, None, "channel lead", None, &learned).unwrap();
+        assert_eq!(p.kwant.id, "k-seo");
+        // A bot that isn't in the channel isn't picked
+        let without = [members[0].clone(), members[2].clone()];
+        let p = pick_member_hinted(prompt, "k-lead", &without, None, "channel lead", None, &learned).unwrap();
+        assert_ne!(p.basis, "learned");
     }
 }

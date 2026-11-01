@@ -2,7 +2,8 @@
 //! with a card the person can undo), a clear specialist message doesn't, and once the person
 //! removes it, it is never made again. A fake claude CLI answers turns.
 //! Also the close calls the person settles on a card, a bot handing a message back, and the
-//! covers/avoids lists on the bot routes.
+//! covers/avoids lists on the bot routes; routing learning from the person's corrections and
+//! choices, and the Concierge suggesting a hire when similar requests keep coming.
 //! Its own test binary: it changes PATH.
 
 use axum::{
@@ -261,24 +262,25 @@ async fn a_close_call_asks_and_the_choice_answers() {
     let (s, _) = call_as(&app, &uri, &token, json!({"kwant_id": web})).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
 
+    // "Answer generally" in #general: the Concierge, made now
     let mut events = state.event_sender.subscribe();
-    let v = ok(&app, "POST", &uri, Some(json!({"kwant_id": web}))).await;
-    assert_eq!((v["status"].as_str(), v["kwant_id"].as_str()), (Some("dispatched"), Some(web.as_str())));
+    let v = ok(&app, "POST", &uri, Some(json!({"general": true}))).await;
+    let made = concierges(&state).await;
+    assert_eq!(made.len(), 1);
+    assert_eq!((v["status"].as_str(), v["kwant_id"].as_str()), (Some("dispatched"), Some(made[0].as_str())));
     let routing = next_reply_routing(&state, &mut events, &general).await;
-    assert_eq!((routing["basis"].as_str(), routing["kwant_id"].as_str()), (Some("ask"), Some(web.as_str())), "{routing}");
+    assert_eq!(routing["basis"], "ask", "{routing}");
     let (s, _) = call(&app, "POST", &uri, Some(json!({"kwant_id": fe}))).await;
     assert_eq!(s, StatusCode::CONFLICT, "a second tap does nothing");
 
-    // "Answer generally" in #general: the Concierge, made now
+    // A general answer teaches routing nothing, so a similar message asks again; the pick answers
     let v = ok(&app, "POST", "/api/chat/send", Some(json!({"channel_id": general, "prompt": "Is the CSS grid off on the button?", "sender_id": "user"}))).await;
     assert_eq!(v["status"], "asking", "{v}");
     let mut events = state.event_sender.subscribe();
-    let v = ok(&app, "POST", &format!("/api/route-choices/{}/resolve", v["route_choice_id"].as_str().unwrap()), Some(json!({"general": true}))).await;
-    let made = concierges(&state).await;
-    assert_eq!(made.len(), 1);
-    assert_eq!(v["kwant_id"].as_str(), Some(made[0].as_str()));
+    let v = ok(&app, "POST", &format!("/api/route-choices/{}/resolve", v["route_choice_id"].as_str().unwrap()), Some(json!({"kwant_id": web}))).await;
+    assert_eq!((v["status"].as_str(), v["kwant_id"].as_str()), (Some("dispatched"), Some(web.as_str())));
     let routing = next_reply_routing(&state, &mut events, &general).await;
-    assert_eq!(routing["basis"], "ask", "{routing}");
+    assert_eq!((routing["basis"].as_str(), routing["kwant_id"].as_str()), (Some("ask"), Some(web.as_str())), "{routing}");
     assert_eq!(state.db.get_scope(&made[0]).await.unwrap().covers.len(), kwnt::server::concierge::COVERS.len());
 }
 
@@ -331,4 +333,90 @@ async fn covers_and_avoids_are_read_and_updated() {
     let list = ok(&app, "GET", "/api/kwants", None).await;
     let listed = list.as_array().unwrap().iter().find(|k| k["id"] == id).unwrap().clone();
     assert_eq!(listed["avoids"], json!(["wine"]));
+}
+
+/// The person's last message in `channel`.
+async fn last_user_message(state: &AppState, channel: &str) -> String {
+    let msgs = state.db.list_messages(channel, 50).await.unwrap();
+    msgs.iter().rev().find(|m| m.sender_role == "user").expect("a message").id.clone()
+}
+
+/// "This should have gone to X": a similar message goes to X from now on (basis "learned"), and so
+/// does one like a message the person settled on a card.
+#[tokio::test]
+async fn corrections_and_choices_teach_routing() {
+    let (app, state, _tmp) = setup().await;
+    let script = ok(&app, "POST", "/api/kwants", Some(specialist("Scriptwriter", "TikTok Scriptwriter", "Scripts and hooks for book videos."))).await["id"].as_str().unwrap().to_string();
+    let atlas = ok(&app, "POST", "/api/kwants", Some(specialist("Atlas", "Technical SEO", "Crawl errors and sitemaps."))).await["id"].as_str().unwrap().to_string();
+    only(&app, &state, &[&script, &atlas]).await;
+    let general = state.db.general_channel(&SpaceId::default_space()).await.unwrap().expect("#general").id;
+
+    let (to, _) = routed_to(&app, &state, &general, "Can you draft the monthly book club newsletter?").await;
+    assert_ne!(to, script);
+    let msg = last_user_message(&state, &general).await;
+    // Person only, own channel messages only, bots of the channel only
+    let token = turn_token(&state, &atlas, &general).await;
+    let (s, _) = call_as(&app, "/api/route-corrections", &token, json!({"message_id": msg, "kwant_id": script})).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    let reply = state.db.list_messages(&general, 50).await.unwrap().into_iter().rev().find(|m| m.sender_role == "kwant").unwrap().id;
+    let (s, _) = call(&app, "POST", "/api/route-corrections", Some(json!({"message_id": reply, "kwant_id": script}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _) = call(&app, "POST", "/api/route-corrections", Some(json!({"message_id": msg, "kwant_id": "nope"}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let v = ok(&app, "POST", "/api/route-corrections", Some(json!({"message_id": msg, "kwant_id": script}))).await;
+    assert_eq!((v["status"].as_str(), v["kwant"].as_str()), (Some("learned"), Some("Scriptwriter")));
+
+    let (to, basis) = routed_to(&app, &state, &general, "Draft this month's book club newsletter please").await;
+    assert_eq!((to.as_str(), basis.as_deref()), (script.as_str(), Some("learned")));
+    let (to, basis) = routed_to(&app, &state, &general, "Best place to eat corn dogs in Munich tomorrow?").await;
+    assert_ne!(to, script, "an unlike message isn't affected");
+    assert_eq!(basis.as_deref(), Some("concierge"));
+
+    // A choice on a card teaches it too
+    let fe = ok(&app, "POST", "/api/kwants", Some(specialist("Bea", "Frontend engineer", "You build the app's pages."))).await["id"].as_str().unwrap().to_string();
+    let web = ok(&app, "POST", "/api/kwants", Some(specialist("Cy", "Web developer", "You build websites."))).await["id"].as_str().unwrap().to_string();
+    let v = ok(&app, "POST", "/api/chat/send", Some(json!({"channel_id": general, "prompt": "The button CSS is off on mobile Safari", "sender_id": "user"}))).await;
+    assert_eq!(v["status"], "asking", "{v}");
+    let mut events = state.event_sender.subscribe();
+    ok(&app, "POST", &format!("/api/route-choices/{}/resolve", v["route_choice_id"].as_str().unwrap()), Some(json!({"kwant_id": web}))).await;
+    next_reply_routing(&state, &mut events, &general).await;
+    let (to, basis) = routed_to(&app, &state, &general, "The button CSS looks off on Safari again").await;
+    assert_eq!((to.as_str(), basis.as_deref()), (web.as_str(), Some("learned")));
+    let _ = fe;
+}
+
+/// The third similar request the Concierge gets in 14 days carries the ids of all three
+/// (`meta.routing.similar_requests`) so it can propose one hire; the fourth doesn't ask again.
+#[tokio::test]
+async fn the_concierge_suggests_a_hire_on_the_third_similar_request() {
+    let (app, state, _tmp) = setup().await;
+    let script = ok(&app, "POST", "/api/kwants", Some(specialist("Scriptwriter", "TikTok Scriptwriter", "Scripts and hooks for book videos."))).await["id"].as_str().unwrap().to_string();
+    let atlas = ok(&app, "POST", "/api/kwants", Some(specialist("Atlas", "Technical SEO", "Crawl errors and sitemaps."))).await["id"].as_str().unwrap().to_string();
+    only(&app, &state, &[&script, &atlas]).await;
+    let general = state.db.general_channel(&SpaceId::default_space()).await.unwrap().expect("#general").id;
+
+    let mut ids = Vec::new();
+    for (i, prompt) in [
+        "Where is the best street food in Munich?",
+        "What's the weather tomorrow?",
+        "Good street food markets in Munich?",
+        "Best street food stalls in Munich this weekend?",
+        "Any street food festival in Munich soon?",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut events = state.event_sender.subscribe();
+        ok(&app, "POST", "/api/chat/send", Some(json!({"channel_id": general, "prompt": prompt, "sender_id": "user"}))).await;
+        let routing = next_reply_routing(&state, &mut events, &general).await;
+        assert_eq!(routing["basis"], "concierge", "{prompt}: {routing}");
+        let similar = &routing["similar_requests"];
+        if i != 1 {
+            ids.push(last_user_message(&state, &general).await);
+        }
+        match i {
+            3 => assert_eq!(similar, &json!(ids), "the third similar request"),
+            _ => assert!(similar.is_null(), "{prompt}: {routing}"),
+        }
+    }
 }

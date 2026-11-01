@@ -41,3 +41,23 @@ Returns `{status: "dispatched", user_message_id, kwant, kwant_id}`; the event
 A routed bot can call `hand_back {reason}` ("not my area"). The message goes on once (basis
 `handback`, with `handed_back_by`) to the next member that fits (fit ≥ 0.6), else the Concierge,
 else the lead. A message takes at most one hop; a second `hand_back` is refused.
+
+## Learning from the person
+
+`POST /api/route-corrections {message_id, kwant_id}` (person only): "this should have gone to X".
+The message must be the person's own, in a channel (not a thread), and X a bot that answers there;
+otherwise 400. Returns `{status: "learned", message_id, kwant_id, kwant}`; nothing is rerun. A pick on
+an ask card (not "Answer generally") is saved the same way.
+
+A later message that shares at least two words and 60% of the shorter message's words with a saved
+one goes to that bot (basis `learned`, fit 0.6–1.0), unless its avoids list matches or the message
+@names someone. A space keeps its latest 200 examples.
+
+## The Concierge suggests a hire
+
+Every message the Concierge answers is counted. On the third similar one (same word test) within
+14 days, `meta.routing.similar_requests` lists the three message ids, oldest first, and the
+Concierge's turn asks it to call `propose_hire` once with `evidence: {basis: "repeated",
+similar_requests}`. The usual hire policy applies (a role the person denied is refused, the card
+asks). Those messages aren't counted again, and nothing is suggested while a Concierge proposal is
+pending.
