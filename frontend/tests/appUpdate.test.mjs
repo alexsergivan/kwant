@@ -357,7 +357,7 @@ test('app_update is saved in the Mac app and never sent to a server without it',
 test('App settings shows the switch only when the update API is supported', () => {
   const s = src('components/SettingsModal.tsx');
   assert.match(s, /const appUpdates = useAppUpdate\(\)\.model\.status !== null;/);
-  assert.match(s, /notifyKindsFor\(appUpdates, !!proactive, !!discovery\)\.map/);
-  assert.match(s, /notify_on: notifyOnToSave\(notifyOn, appUpdates, !!proactive, !!discovery\)/);
+  assert.match(s, /notifyKindsFor\(appUpdates, !!proactive, !!discovery(, [^)]+)?\)\.map/);
+  assert.match(s, /notify_on: notifyOnToSave\(notifyOn, appUpdates, !!proactive, !!discovery(, [^)]+)?\)/);
   assert.doesNotMatch(s, /\{NOTIFY_KINDS\.map/);
 });

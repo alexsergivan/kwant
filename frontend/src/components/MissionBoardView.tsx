@@ -34,6 +34,7 @@ import {
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { ModernAvatar } from './ModernAvatar';
 import { PerformancePanel } from './PerformancePanel';
+import { TierRequests } from './TierProposals';
 import { RisksSection } from './RisksSection';
 import { AuditWaiting, Risk, RiskResolution, TaskRisks, auditCardPlace, auditLive, auditWaiting, openRiskCounts, riskBadgeText, riskResolvedText } from '../auditor';
 import { awayApi } from '../away';
@@ -2627,6 +2628,8 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
               {liveShown && <LiveStrip bots={liveShown} teams={teams} workingCards={workingCards} now={now} onOpen={onOpenLive} />}
 
               <InsightsStrip insights={insights} needsYou={needsYouCount(tasks)} />
+
+              <TierRequests names={names} now={now} />
 
               {visibleMissions.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2">

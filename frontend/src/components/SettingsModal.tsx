@@ -459,7 +459,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           openai_api_key: openaiKey,
           ollama_url: ollamaUrl,
           notify_webhook_url: webhookUrl.trim(),
-          notify_on: notifyOnToSave(notifyOn, appUpdates, !!proactive, !!discovery),
+          notify_on: notifyOnToSave(notifyOn, appUpdates, !!proactive, !!discovery, flightSchool !== null),
           ...(limits
             ? {
                 max_turns_per_agent: Number(limits.max_turns_per_agent),
@@ -1089,7 +1089,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
             <div className="space-y-1.5" role="group" aria-labelledby="notify-kinds-label">
               <p id="notify-kinds-label" className="text-xs font-medium text-zinc-400">Tell me when</p>
-              {notifyKindsFor(appUpdates, !!proactive, !!discovery).map((k) => (
+              {notifyKindsFor(appUpdates, !!proactive, !!discovery, !!flightSchool?.flight_school).map((k) => (
                 <label key={k.id} className="flex items-center gap-2 text-[11px] text-zinc-300">
                   <input
                     type="checkbox"

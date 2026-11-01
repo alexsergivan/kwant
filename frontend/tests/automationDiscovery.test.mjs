@@ -263,8 +263,8 @@ test('the automation_suggested notification: a toggle where the server has it, a
   assert.match(app, /n\.kind === 'automation_suggested'\) setIsRoutinesOpen\(true\)/, 'a tapped notification opens Routines');
   assert.doesNotMatch(readFileSync(new URL('../src/missions.ts', import.meta.url), 'utf8'), /automation_suggested/, 'not on the Needs-you list');
   const settings = readFileSync(new URL('../src/components/SettingsModal.tsx', import.meta.url), 'utf8');
-  assert.match(settings, /notifyKindsFor\(appUpdates, !!proactive, !!discovery\)/);
-  assert.match(settings, /notifyOnToSave\(notifyOn, appUpdates, !!proactive, !!discovery\)/);
+  assert.match(settings, /notifyKindsFor\(appUpdates, !!proactive, !!discovery[,)]/);
+  assert.match(settings, /notifyOnToSave\(notifyOn, appUpdates, !!proactive, !!discovery[,)]/);
   assert.match(settings, /\.\.\.\(discovery \?\? \{\}\)/, 'the switch and cap are saved');
 });
 

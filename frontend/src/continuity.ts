@@ -142,21 +142,32 @@ export const WORK_AHEAD_KIND: { id: NotifyKind; label: string } = { id: 'work_ah
 /** Sent by servers with Automation Discovery (`automation_discovery` in GET /api/settings). Not a Needs-you item. */
 export const AUTOMATION_SUGGESTED_KIND: { id: NotifyKind; label: string } = { id: 'automation_suggested', label: 'A routine was suggested' };
 
+/** Sent by servers with Flight School (C4) when a bot asks for a higher tier. A Needs-you item. */
+export const TIER_PROPOSED_KIND: { id: NotifyKind; label: string } = { id: 'tier_proposed', label: 'A bot asks for a higher tier' };
+
 /**
  * The checkboxes under "Tell me when": App updates only in the Mac app, work ahead and suggested
- * routines only where the server has them.
+ * routines only where the server has them, tier requests only with Flight School on.
  */
-export const notifyKindsFor = (appUpdates: boolean, workAhead = false, discovery = false) => [
+export const notifyKindsFor = (appUpdates: boolean, workAhead = false, discovery = false, tiers = false) => [
   ...NOTIFY_KINDS,
+  ...(tiers ? [TIER_PROPOSED_KIND] : []),
   ...(workAhead ? [WORK_AHEAD_KIND] : []),
   ...(discovery ? [AUTOMATION_SUGGESTED_KIND] : []),
   ...(appUpdates ? [APP_UPDATE_KIND] : []),
 ];
 
-/** What to save: never a kind the server doesn't know (it would refuse the whole list). */
-export const notifyOnToSave = (on: NotifyKind[], appUpdates: boolean, workAhead = false, discovery = false) =>
+/**
+ * What to save: never a kind the server doesn't know (it would refuse the whole list). `flightSchool`
+ * is whether the server has Flight School at all: a hidden tier-request choice is kept while it's off.
+ */
+export const notifyOnToSave = (on: NotifyKind[], appUpdates: boolean, workAhead = false, discovery = false, flightSchool = false) =>
   on.filter(
-    (k) => (k !== APP_UPDATE_KIND.id || appUpdates) && (k !== WORK_AHEAD_KIND.id || workAhead) && (k !== AUTOMATION_SUGGESTED_KIND.id || discovery),
+    (k) =>
+      (k !== APP_UPDATE_KIND.id || appUpdates) &&
+      (k !== WORK_AHEAD_KIND.id || workAhead) &&
+      (k !== AUTOMATION_SUGGESTED_KIND.id || discovery) &&
+      (k !== TIER_PROPOSED_KIND.id || flightSchool),
   );
 
 /** Kinds also shown as an in-app toast while kwnt is visible (the others only matter in the background). */
@@ -168,6 +179,7 @@ export const TOAST_KINDS: NotifyKind[] = [
   'question_asked',
   'human_step',
   'automation_suggested',
+  'tier_proposed',
 ];
 
 export interface NotifyEvent {

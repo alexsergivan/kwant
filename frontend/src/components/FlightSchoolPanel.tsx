@@ -1,8 +1,9 @@
-// A bot's Flight School tiers (Phase C3, docs/mission-control.md §14): one tier for all its work, one
-// per kind of work, where each comes from, a one-click Revoke, and the recent changes. Only shown with
-// Flight School on; on a server without it, or with it off, this renders nothing.
+// A bot's Flight School tiers (Phase C3/C4, docs/mission-control.md §14): one tier for all its work,
+// one per kind of work, where each comes from, a one-click Revoke, its scorecard per kind of work, the
+// tiers it is asking for, and the recent changes. Only shown with Flight School on; on a server without
+// it, or with it off, this renders nothing. Changes made elsewhere arrive live (`capability_changed`).
 
-import React, { useEffect, useId, useState } from 'react';
+import React, { useCallback, useEffect, useId, useState } from 'react';
 import { AlertTriangle, GraduationCap, Loader2 } from 'lucide-react';
 import {
   ANY_CLASS,
@@ -15,17 +16,27 @@ import {
   capabilityEventText,
   classLabel,
   fromText,
+  isOpenProposal,
   isTier,
+  openProposals,
+  ProposalDecision,
+  Scorecard,
+  TierProposal,
   revokeTarget,
   toClass,
   validClass,
 } from '../flightSchool';
-import { ago, capabilitiesApi } from '../missions';
+import { ago, capabilitiesApi, onMission } from '../missions';
+import { ProposalCard, ScorecardDisclosure, useProposalDecisions } from './TierProposals';
 
 export interface CapabilitiesApi {
   get: (kwantId: string) => Promise<Capabilities>;
   set: (kwantId: string, taskClass: string, tier: Tier) => Promise<CapabilityChange>;
   revoke: (kwantId: string, taskClass: string, toTier: Tier) => Promise<CapabilityChange>;
+  scorecard: (kwantId: string, taskClass: string) => Promise<Scorecard>;
+  proposals: (status?: string, kwantId?: string) => Promise<TierProposal[]>;
+  grant: (id: string, key: string) => Promise<ProposalDecision>;
+  decline: (id: string, key: string, note?: string) => Promise<ProposalDecision>;
 }
 
 const select =
@@ -67,8 +78,19 @@ export const FlightSchoolPanel: React.FC<{
   const [note, setNote] = useState<string | null>(null);
   const [newClass, setNewClass] = useState('');
   const [newTier, setNewTier] = useState<Tier>('sandbox');
+  // Bumped by a live change so open scorecards read again.
+  const [version, setVersion] = useState(0);
+  // Decided here this session, shown with what happened until the panel closes.
+  const [decided, setDecided] = useState<TierProposal[]>([]);
   const allId = useId();
   const newId = useId();
+
+  const reload = useCallback(() => {
+    api
+      .get(kwantId)
+      .then(setCaps)
+      .catch(() => {});
+  }, [api, kwantId]);
 
   useEffect(() => {
     if (initial !== undefined) return;
@@ -83,8 +105,43 @@ export const FlightSchoolPanel: React.FC<{
     };
   }, [kwantId, initial, api]);
 
+  // A grant, decline, revoke or new request from another tab, device or the bot itself.
+  useEffect(
+    () =>
+      onMission('capability_changed', ({ capability }) => {
+        if (capability.kwant_id !== kwantId) return;
+        reload();
+        setVersion((v) => v + 1);
+      }),
+    [kwantId, reload],
+  );
+
+  const onDecided = useCallback(
+    (p: TierProposal, d: ProposalDecision | null) => {
+      if (d) {
+        setCaps(d.capabilities);
+        setDecided((cur) => [d.proposal, ...cur.filter((x) => x.id !== p.id)]);
+      } else {
+        // 409: someone else decided. Keep the card with the conflict, and read what holds now.
+        setDecided((cur) => [p, ...cur.filter((x) => x.id !== p.id)]);
+        api.get(kwantId).then(
+          (c) => {
+            setCaps(c);
+            const now = c.proposals?.find((x) => x.id === p.id);
+            if (now) setDecided((cur) => cur.map((x) => (x.id === p.id ? now : x)));
+          },
+          () => {},
+        );
+      }
+    },
+    [api, kwantId],
+  );
+  const decisions = useProposalDecisions(api, onDecided);
+
   // Nothing while loading, on an older server, or with Flight School off: the bot's settings look as before.
   if (!caps || !caps.flight_school) return null;
+  const decidedIds = new Set(decided.map((p) => p.id));
+  const asking = [...openProposals(caps.proposals ?? []).filter((p) => !decidedIds.has(p.id)), ...decided];
 
   const change = async (run: () => Promise<CapabilityChange>, done: string) => {
     setBusy(true);
@@ -97,8 +154,8 @@ export const FlightSchoolPanel: React.FC<{
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Couldn’t change the tier.');
-      // There's no live update for tiers: read them again so the screen shows what holds.
-      api.get(kwantId).then(setCaps).catch(() => {});
+      // Read them again so the screen shows what holds.
+      reload();
       return false;
     } finally {
       setBusy(false);
@@ -139,6 +196,23 @@ export const FlightSchoolPanel: React.FC<{
       </div>
       <p className="text-[11px] text-zinc-500">{TIER_HINTS[caps.default_tier]}</p>
 
+      {asking.length > 0 && (
+        <ul className="space-y-2" aria-label={`Tiers ${kwantName} is asking for`} data-bot-proposals={asking.filter(isOpenProposal).length}>
+          {asking.map((p) => (
+            <ProposalCard
+              key={p.id}
+              proposal={p}
+              bot={kwantName}
+              now={now}
+              busy={decisions.busyId === p.id}
+              error={decisions.errors[p.id] ?? null}
+              onGrant={decisions.grant}
+              onDecline={decisions.decline}
+            />
+          ))}
+        </ul>
+      )}
+
       <ul className="divide-y divide-zinc-800 rounded-lg border border-zinc-800" aria-label="Tier per kind of work">
         {caps.effective.map((e) => (
           <li key={e.task_class} className="flex flex-wrap items-center gap-2 px-2.5 py-2" data-class={e.task_class} data-tier={e.tier} data-from={e.from}>
@@ -148,6 +222,7 @@ export const FlightSchoolPanel: React.FC<{
             </span>
             <TierSelect label={`Tier for ${classLabel(e.task_class)}`} value={e.tier} disabled={busy} onChange={(t) => setTier(e.task_class, t)} />
             <RevokeButton what={classLabel(e.task_class)} tier={e.tier} disabled={busy} onRevoke={(to) => revoke(e.task_class, to)} />
+            {e.task_class !== ANY_CLASS && <ScorecardDisclosure kwantId={kwantId} taskClass={e.task_class} api={api} version={version} />}
           </li>
         ))}
       </ul>

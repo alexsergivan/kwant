@@ -6,7 +6,7 @@
 
 import { PersonCancelledError, personFetch } from './auth';
 import { relativeTime } from './away';
-import { Capabilities, CapabilityChange, ENGINE_CANT_SANDBOX, TaskTier, Tier } from './flightSchool';
+import { Capabilities, CapabilityChange, CapabilityChangedEvent, ENGINE_CANT_SANDBOX, ProposalDecision, ProposalStatus, Scorecard, TaskTier, Tier, TierProposal } from './flightSchool';
 import type { Risk, RiskResolution, TaskRisks } from './auditor';
 
 export type TaskState = 'backlog' | 'ready' | 'working' | 'needs_you' | 'review' | 'verified' | 'blocked' | 'failed' | 'cancelled';
@@ -1479,7 +1479,11 @@ export const ACTION_DONE: Record<TaskAction, string> = {
 // ---------------------------------------------------------------------------
 // Live updates: App's EventSource re-broadcasts `task_updated` and `mission_updated` here.
 
-export type MissionEvent = { type: 'task_updated'; data: { task: Task } } | { type: 'mission_updated'; data: { mission: Mission } };
+export type MissionEvent =
+  | { type: 'task_updated'; data: { task: Task } }
+  | { type: 'mission_updated'; data: { mission: Mission } }
+  /** Flight School C4: a bot asked for a tier, or a proposal was granted, declined or went stale. */
+  | { type: 'capability_changed'; data: { capability: CapabilityChangedEvent } };
 
 const bus = typeof EventTarget !== 'undefined' ? new EventTarget() : null;
 
@@ -1538,7 +1542,8 @@ const sentence = (s: string) => {
 export function errorFrom(status: number, answer: unknown): MissionError {
   const a = answer && typeof answer === 'object' ? (answer as Record<string, unknown>) : {};
   const err = typeof a.error === 'string' && a.error.trim() ? sentence(a.error) : null;
-  const code = typeof a.code === 'string' && a.code ? a.code : null;
+  // A 409 without a `code` may name the state it found instead (Flight School proposals).
+  const code = typeof a.code === 'string' && a.code ? a.code : status === 409 && typeof a.status === 'string' && a.status ? a.status : null;
   if (status === 403) return new MissionError('Only you can change tasks on the board.', 403);
   if (status === 404 && !err) return new MissionError('This server doesn’t have the Mission board yet. Update the app and try again.', 404);
   return new MissionError(err ?? `Something went wrong (HTTP ${status}).`, status, code);
@@ -1643,6 +1648,17 @@ export const capabilitiesApi = {
   set: (kwantId: string, task_class: string, tier: Tier) => call<CapabilityChange>('/api/capabilities', 'POST', { kwant_id: kwantId, task_class, tier }),
   revoke: (kwantId: string, task_class: string, to_tier: Tier) =>
     call<CapabilityChange>(`/api/capabilities/${enc(kwantId)}/revoke`, 'POST', { task_class, to_tier }),
+  /** C4: one bot's live scorecard for a kind of work (the server defaults to general). */
+  scorecard: (kwantId: string, taskClass: string) => call<Scorecard>(`/api/capabilities/${enc(kwantId)}/scorecard?class=${enc(taskClass)}`),
+  /** C4: the space's proposals, newest first; stale ones are marked on read. */
+  proposals: (status?: ProposalStatus, kwantId?: string) => {
+    const q = [status ? `status=${status}` : '', kwantId ? `kwant_id=${enc(kwantId)}` : ''].filter(Boolean).join('&');
+    return call<{ proposals: TierProposal[] }>(`/api/capabilities/proposals${q ? `?${q}` : ''}`).then((r) => r.proposals);
+  },
+  /** Person only. The same key replays the first answer; a 409 carries the state found as `code`. */
+  grant: (id: string, key: string) => call<ProposalDecision>(`/api/capabilities/proposals/${enc(id)}/grant`, 'POST', {}, { 'Idempotency-Key': key }),
+  decline: (id: string, key: string, note?: string) =>
+    call<ProposalDecision>(`/api/capabilities/proposals/${enc(id)}/decline`, 'POST', note ? { note } : {}, { 'Idempotency-Key': key }),
 };
 
 /** Where a task came from in the app: a channel, a bot's thread, or a bot's direct chat. */

@@ -344,6 +344,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Opens the chat of a bot's newest open browser step; false when it has none.
   const openHumanStepRef = useRef<(kwantId: string) => boolean>(() => false);
   const openTargetRef = useRef<(t: ChatTarget) => boolean>(() => false);
+  // A tier request is decided on the board's Needs-you list.
+  const openBoardForTier = () => {
+    setShowMissions(true);
+    setShowConnections(false);
+    setShowLoose(false);
+    setShowParallel(false);
+    setShowAway(false);
+    setPhoneView('chat');
+  };
   const showNotification = (n: NotifyEvent) => {
     // Another space's news is the shell's to show, with a way to switch there.
     if (n.space_id && n.space_id !== space.id) return;
@@ -351,7 +360,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
     // Failed routines and finished or slow delegations show in the app; the OS notification is for a hidden tab.
     if (!document.hidden && (TOAST_KINDS as string[]).includes(n.kind)) {
-      if (n.kind !== 'routine_failed' && n.kind !== 'skill_proposed' && n.kind !== 'automation_suggested' && openCtxRef.current === (n.channel_id ?? n.kwant_id)) return;
+      if (n.kind !== 'routine_failed' && n.kind !== 'skill_proposed' && n.kind !== 'automation_suggested' && n.kind !== 'tier_proposed' && openCtxRef.current === (n.channel_id ?? n.kwant_id)) return;
       const id = ++toastIdRef.current;
       const action =
         n.kind === 'routine_failed'
@@ -360,6 +369,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             ? { label: 'Review', onClick: () => openSkillsRef.current(n.kwant_id) }
             : n.kind === 'automation_suggested'
               ? { label: 'Review', onClick: () => setIsRoutinesOpen(true) }
+              : n.kind === 'tier_proposed'
+              ? { label: 'Review', onClick: openBoardForTier }
               : n.kind === 'question_asked'
               ? { label: 'Answer', onClick: () => openQuestionRef.current(n.kwant_id) || openTargetRef.current(target) }
               : n.kind === 'human_step'
@@ -378,6 +389,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
     // A suggested routine is decided in Routines, not in the bot's chat
     else if (n.kind === 'automation_suggested') setIsRoutinesOpen(true);
+    else if (n.kind === 'tier_proposed') openBoardForTier();
     else if (n.kind === 'human_step' && openHumanStepRef.current(n.kwant_id)) {
       setIsVmPaneOpen(true);
       // A CAPTCHA lands straight in the solve view
@@ -927,6 +939,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             break;
           case 'mission_updated':
             if (event.data?.mission) emitMission({ type: 'mission_updated', data: { mission: event.data.mission } });
+            break;
+          case 'capability_changed':
+          case 'CapabilityChanged':
+            if (event.data?.capability?.kwant_id) emitMission({ type: 'capability_changed', data: { capability: event.data.capability } });
             break;
           case 'routine_run':
           case 'RoutineRun':
