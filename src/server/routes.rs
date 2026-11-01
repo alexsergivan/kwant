@@ -383,6 +383,13 @@ pub async fn delete_kwant(State(state): State<AppState>, headers: axum::http::He
     if let Err(r) = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person deletes a bot").await {
         return r;
     }
+    remove_bot(&state, &id).await
+}
+
+/// [`delete_kwant`] once it is known the person asked for it (also their Undo of a Concierge card).
+pub(super) async fn remove_bot(state: &AppState, id: &str) -> Response {
+    let state = state.clone();
+    let id = id.to_string();
     let bot = match state.db.get_kwant(&id).await {
         Ok(Some(b)) => b,
         Ok(None) => return api_error(StatusCode::NOT_FOUND, "bot not found"),
@@ -2896,7 +2903,8 @@ async fn send_chat_inner(
             // A plain "…?" reply gives way when the message clearly belongs to another bot
             if !a.card {
                 if let Ok(Some(channel)) = state.db.get_channel(cid).await {
-                    let members = channel_members(&channel, &all_kwants);
+                    let concierge = super::concierge::id(&state, &space, &all_kwants).await;
+                    let members = routing_members(&channel, &all_kwants, concierge.as_deref());
                     if channel.routing_mode == "auto" && members.len() > 1 {
                         let route = state
                             .router
@@ -3267,7 +3275,8 @@ async fn send_chat_inner(
                     .find(|k| k.id == channel.lead_kwant_id)
                     .or_else(|| all_kwants.first())
                     .cloned();
-                let members = channel_members(&channel, &all_kwants);
+                let concierge = super::concierge::id(&state, &space, &all_kwants).await;
+                let members = routing_members(&channel, &all_kwants, concierge.as_deref());
 
                 if channel.routing_mode == "auto" && members.len() > 1 {
                     let context_id = payload.channel_id.clone();
@@ -3290,9 +3299,28 @@ async fn send_chat_inner(
                                 .await
                         }
                     };
-                    let chosen = members.iter().find(|k| k.id == route.kwant_id).cloned().or(lead);
+                    let general = channel.name == "general";
+                    // #general leans to the Concierge when nothing fits (made now, the first time,
+                    // unless the person removed it); anywhere else the pick stands
+                    let mut route = route;
+                    let mut chosen = members.iter().find(|k| k.id == route.kwant_id).cloned().or(lead);
+                    let removed = matches!(super::concierge::state(&state, &space, &all_kwants).await, super::concierge::State::Removed);
+                    if crate::router::team::settle(&route, general, !removed) == crate::router::team::Settle::Concierge {
+                        if let Some(c) = super::concierge::for_no_match(&state, &space, &channel.id, &all_kwants).await {
+                            route.reason = format!(
+                                "Nothing in your message fits a specialist here, so {} answers it",
+                                c.name
+                            );
+                            route.basis = "concierge".into();
+                            route.kwant_id = c.id.clone();
+                            chosen = Some(c);
+                        }
+                    }
                     if let Some(ref k) = chosen {
                         routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms, &route.basis));
+                        if let Some(m) = routing.as_mut() {
+                            m["fit"] = json!(route.fit);
+                        }
                         let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                             context_id,
                             kwant_id: k.id.clone(),
@@ -3337,6 +3365,12 @@ async fn send_chat_inner(
             "kwant": target_kwant.name
         })))
     }
+}
+
+/// The bots role scoring picks from in `channel`: its members without the Concierge, which only
+/// answers what no one else fits (see `super::concierge`).
+fn routing_members(channel: &crate::db::models::Channel, all_kwants: &[Kwant], concierge: Option<&str>) -> Vec<Kwant> {
+    channel_members(channel, all_kwants).into_iter().filter(|k| Some(k.id.as_str()) != concierge).collect()
 }
 
 /// The bots a channel message can be routed to. #general is the hub for every agent, including
