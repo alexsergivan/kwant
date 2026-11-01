@@ -750,3 +750,63 @@ async fn routine_outcomes_are_exported_and_checks_only_when_secret_free() {
         assert_eq!((r["task_class"].clone(), r["acceptance"].clone(), r["checks"].clone()), (json!("reporting"), json!("report.md exists"), json!([])), "{r}");
     }
 }
+
+/// A bot's browser site rules survive being created with them, exported and imported (kwant's
+/// copy of a bot), and a bad entry is refused on create and on import, naming it.
+#[tokio::test]
+async fn browser_site_rules_survive_create_export_and_import() {
+    let e = setup().await;
+    let a = new_space(&e, "Source").await;
+    let b = new_space(&e, "Copy").await;
+    let bot = |name: &str, sites: Value| {
+        let mut v = json!({"name": name, "title": "Researcher", "persona_prompt": "Reads.", "avatar_sprite": "default",
+            "driver_type": "api", "preferred_model": "auto"});
+        v.as_object_mut().unwrap().extend(sites.as_object().unwrap().clone());
+        v
+    };
+    let rules = json!({"browser_allowed_sites": ["https://Wikipedia.org/wiki/Cat", "github.com"],
+        "browser_blocked_sites": ["en.wikipedia.org"], "browser_block_private_network": true});
+    let want = json!({"browser_allowed_sites": ["wikipedia.org", "github.com"],
+        "browser_blocked_sites": ["en.wikipedia.org"], "browser_block_private_network": true});
+    let fields = |v: &Value| json!({"browser_allowed_sites": v["browser_allowed_sites"],
+        "browser_blocked_sites": v["browser_blocked_sites"], "browser_block_private_network": v["browser_block_private_network"]});
+
+    // Create: normalized like PUT; a bad entry is a 400 naming it, and no bot is made
+    let (status, made) = json_call(&e.app, "POST", &format!("/api/kwants?space={a}"), bot("Limited", rules.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    assert_eq!(fields(&made), want);
+    let id = made["id"].as_str().unwrap().to_string();
+    let (status, err) = json_call(&e.app, "POST", &format!("/api/kwants?space={a}"), bot("Bad", json!({"browser_blocked_sites": ["a*b.com"]}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
+    assert!(err.to_string().contains("a*b.com") && err.to_string().contains("browser_blocked_sites"), "{err}");
+    assert_eq!(e.state.db.list_kwants(&SpaceId::new(a.clone())).await.unwrap().len(), 1);
+    // A bot made without them has none, and its export carries no site fields at all
+    let (status, plain) = json_call(&e.app, "POST", &format!("/api/kwants?space={a}"), bot("Plain", json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{plain}");
+    assert_eq!(fields(&plain), json!({"browser_allowed_sites": [], "browser_blocked_sites": [], "browser_block_private_network": false}));
+    let (_, plain_out) = get(&e.app, &format!("/api/kwants/{}/export?space={a}", plain["id"].as_str().unwrap())).await;
+    assert!(!plain_out["bots"][0].as_object().unwrap().keys().any(|k| k.starts_with("browser_")), "{plain_out}");
+
+    // Export → import into another space: the copy has the same rules, and the preview says so
+    let (status, out) = get(&e.app, &format!("/api/kwants/{id}/export?space={a}")).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(fields(&out["bots"][0]), want);
+    let (status, p) = send(&e.app, "POST", &format!("/api/import/preview?space={b}&filename=bot.kwant.json"), "application/octet-stream", out.to_string().into_bytes()).await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    assert!(p["warnings"].to_string().contains("Its browser is limited: only wikipedia.org, github.com; never en.wikipedia.org; no local or private network addresses"), "{p}");
+    let (status, v) = apply(&e.app, &b, &p["bundle"], &[]).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    let copy = e.state.db.list_kwants(&SpaceId::new(b.clone())).await.unwrap()[0].id.clone();
+    let sites = e.state.db.browser_sites(&copy).await.unwrap();
+    assert_eq!(serde_json::to_value(&sites).unwrap(), want);
+
+    // A bundle with a bad entry stops the import, naming it
+    let mut bad = out.clone();
+    bad["bots"][0]["browser_allowed_sites"] = json!(["ok.com", "*."]);
+    let (status, p) = send(&e.app, "POST", &format!("/api/import/preview?space={b}&filename=bot.kwant.json"), "application/octet-stream", bad.to_string().into_bytes()).await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    assert!(p["problems"].to_string().contains("browser_allowed_sites: \\\"*.\\\" isn't a site"), "{p}");
+    let (status, v) = apply(&e.app, &b, &bad, &[]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(e.state.db.list_kwants(&SpaceId::new(b.clone())).await.unwrap().len(), 1);
+}
