@@ -206,6 +206,32 @@ async fn a_reply_asking_to_pick_is_decided_with_a_teammate_and_can_be_changed() 
     assert!(block.len() <= kwnt::server::decide::MAX_BLOCK_BYTES);
 }
 
+/// The decided reply to a routed message keeps the held reply's routing, so it still shows why that
+/// bot answered and "Wrong bot?". In QA two of twelve Concierge answers lost it this way.
+#[tokio::test]
+async fn a_decided_reply_keeps_the_routing_of_the_held_one() {
+    let env = setup().await;
+    let mut rx = env.state.event_sender.subscribe();
+    let prompt = "make three directions for the hero CHOICE";
+    env.say(prompt).await;
+    let reply = env.wait_for_reply().await;
+    assert_eq!(reply.text, "I checked contrast on A and C and went with B: Wax seal. Change it any time.", "the decided reply");
+    let m = meta(&reply);
+    assert!(m["decide_first"]["held_turn_id"].is_string(), "{m}");
+
+    let mut routed = None;
+    while let Ok(e) = rx.try_recv() {
+        if let RuntimeEvent::RoutingDecided { kwant_id, basis, .. } = e.unscoped() {
+            routed = Some((kwant_id.clone(), basis.clone()));
+        }
+    }
+    let (kwant_id, basis) = routed.expect("the message was routed, not @mentioned");
+    let asked = env.messages().await.into_iter().find(|m| m.text == prompt).expect("the person's message");
+    assert_eq!(m["routing"]["kwant_id"].as_str(), Some(kwant_id.as_str()), "{m}");
+    assert_eq!(m["routing"]["basis"].as_str(), basis.as_deref(), "{m}");
+    assert_eq!(m["routing"]["message_id"].as_str(), Some(asked.id.as_str()), "{m}");
+}
+
 #[tokio::test]
 async fn an_ask_about_sending_is_posted_as_is() {
     let env = setup().await;

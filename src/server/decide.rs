@@ -691,7 +691,12 @@ pub(super) async fn decide(scope: &TurnScope, kwant: &Kwant, mut held: Held) -> 
     let hook = HookSlot::default();
     let mut opts = TurnOpts::default();
     (opts.quiet_failure, opts.purpose, opts.hook) = (true, Some(PURPOSE.into()), Some(hook.clone()));
-    opts.extra_meta = Some(json!({"decide_first": {"consulted": consulted, "held_turn_id": held.turn_id, "kwant_id": kwant.id}}));
+    let mut extra = json!({"decide_first": {"consulted": consulted, "held_turn_id": held.turn_id, "kwant_id": kwant.id}});
+    // The decided reply answers the same routed message: it keeps the routing line and "Wrong bot?"
+    if let Some(routing) = held.meta.as_ref().map(|m| &m["routing"]).filter(|r| !r.is_null()) {
+        extra["routing"] = routing.clone();
+    }
+    opts.extra_meta = Some(extra);
     let reply = turn_once(scope, kwant, decide_prompt(&held.text, &gate, &views), opts).await;
     let saved = hook.lock().ok().and_then(|mut h| h.saved.take());
     match (reply, saved) {
