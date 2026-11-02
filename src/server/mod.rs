@@ -48,6 +48,7 @@ pub mod waiting;
 pub mod decide;
 pub mod work_ahead;
 pub mod missions;
+pub mod goals;
 pub mod app_update_routes;
 
 use crate::broker::PermissionBroker;

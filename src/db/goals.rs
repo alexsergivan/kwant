@@ -47,6 +47,7 @@ const TABLES: &[&str] = &[
         checking_since INTEGER,
         fail_streak INTEGER NOT NULL DEFAULT 0,
         error_runs INTEGER NOT NULL DEFAULT 0,
+        unknown_since INTEGER,
         version INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
@@ -99,8 +100,8 @@ const TABLES: &[&str] = &[
 
 const GOAL_SELECT: &str = "SELECT id, space_id, title, description, kwant_id, folder, status, status_reason, mode,
     interval_minutes, confirm_failures, budget_tokens, max_fixes_per_day, priority, created_by, approved_by, approved_at,
-    paused_at, next_check_at, last_checked_at, checking_since, fail_streak, error_runs, version, created_at,
-    updated_at FROM goals";
+    paused_at, next_check_at, last_checked_at, checking_since, fail_streak, error_runs, unknown_since, version,
+    created_at, updated_at FROM goals";
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 pub struct Goal {
@@ -134,6 +135,8 @@ pub struct Goal {
     pub fail_streak: i64,
     /// Runs in a row where every check errored (the backoff).
     pub error_runs: i64,
+    /// When the goal last became `unknown` (None while it isn't): the 24-hour "can't check" notice.
+    pub unknown_since: Option<i64>,
     pub version: i64,
     pub created_at: i64,
     pub updated_at: i64,
@@ -175,7 +178,8 @@ pub struct Observation {
     pub check_id: String,
     /// What the check did: `passed`, `failed` or `error`.
     pub status: String,
-    /// What that says about the check: `met`, `not_met` or `unknown`.
+    /// What that says about the check, judged by its predicate: `passed`, `failed` or `unknown`
+    /// (an error, or output the predicate can't read).
     pub verdict: String,
     /// The metric's value as seen (`503`, `412`, `found`), redacted; None for the file kinds or
     /// when the check couldn't run.
@@ -353,6 +357,8 @@ impl Database {
         for stmt in TABLES {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        // A database made by the first goals build (never released) lacks this column
+        let _ = sqlx::query("ALTER TABLE goals ADD COLUMN unknown_since INTEGER").execute(&self.pool).await;
         Ok(())
     }
 
@@ -520,8 +526,9 @@ impl Database {
         sqlx::query(
             "UPDATE goals SET title = ?, description = ?, kwant_id = ?, folder = ?, status = ?, status_reason = ?, mode = ?,
              interval_minutes = ?, confirm_failures = ?, budget_tokens = ?, max_fixes_per_day = ?, priority = ?,
-             paused_at = ?, next_check_at = ?, fail_streak = ?, error_runs = ?, version = version + 1, updated_at = ?
-             WHERE id = ?",
+             paused_at = ?, next_check_at = ?, fail_streak = ?, error_runs = ?,
+             unknown_since = CASE WHEN ? = 'unknown' THEN COALESCE(unknown_since, ?) ELSE NULL END,
+             version = version + 1, updated_at = ? WHERE id = ?",
         )
         .bind(&g.title)
         .bind(&g.description)
@@ -539,6 +546,8 @@ impl Database {
         .bind(g.next_check_at)
         .bind(g.fail_streak)
         .bind(g.error_runs)
+        .bind(&g.status)
+        .bind(now)
         .bind(now)
         .bind(id)
         .execute(&mut *tx)
@@ -666,6 +675,7 @@ impl Database {
         let mut tx = self.begin_write().await?;
         let r = sqlx::query(
             "UPDATE goals SET status = ?, status_reason = ?, fail_streak = ?, error_runs = ?, next_check_at = ?,
+             unknown_since = CASE WHEN ? = 'unknown' THEN COALESCE(unknown_since, ?) ELSE NULL END,
              checking_since = NULL, updated_at = ? WHERE id = ? AND checking_since = ? AND version = ?",
         )
         .bind(&u.status)
@@ -673,6 +683,8 @@ impl Database {
         .bind(u.fail_streak)
         .bind(u.error_runs)
         .bind(u.next_check_at)
+        .bind(&u.status)
+        .bind(now)
         .bind(now)
         .bind(id)
         .bind(lease)
@@ -728,7 +740,7 @@ impl Database {
             tx.rollback().await?;
             return Ok(None);
         }
-        sqlx::query("UPDATE goals SET status = ?, status_reason = ?, updated_at = ? WHERE id = ?")
+        sqlx::query("UPDATE goals SET status = ?, status_reason = ?, unknown_since = NULL, updated_at = ? WHERE id = ?")
             .bind(status)
             .bind(reason)
             .bind(now)
@@ -800,6 +812,58 @@ impl Database {
         )
         .fetch_all(&self.pool)
         .await?)
+    }
+
+    /// Deletes drafts created before `before` (nobody approved them: they expire silently after
+    /// 7 days, plan B.0 rule 4), with their rows. Returns `(id, space_id)` of each.
+    pub async fn expire_drafts(&self, before: i64) -> Result<Vec<(String, String)>, DbError> {
+        let mut tx = self.begin_write().await?;
+        let gone: Vec<(String, String)> = sqlx::query_as("SELECT id, space_id FROM goals WHERE status = 'draft' AND created_at < ?").bind(before).fetch_all(&mut *tx).await?;
+        for (id, _) in &gone {
+            sqlx::query("DELETE FROM goals WHERE id = ? AND status = 'draft'").bind(id).execute(&mut *tx).await?;
+            for table in ["goal_checks", "goal_observations", "goal_events", "goal_fix_tasks"] {
+                sqlx::query(&format!("DELETE FROM {table} WHERE goal_id = ?")).bind(id).execute(&mut *tx).await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(gone)
+    }
+
+    /// Goals `unknown` since `before` or longer that haven't had the "can't check" notice for
+    /// this stretch of unknown.
+    pub async fn goals_unknown_since(&self, before: i64) -> Result<Vec<Goal>, DbError> {
+        Ok(sqlx::query_as::<_, Goal>(&format!(
+            "{GOAL_SELECT} WHERE status = 'unknown' AND unknown_since IS NOT NULL AND unknown_since <= ? AND NOT EXISTS (
+                SELECT 1 FROM goal_events e WHERE e.goal_id = goals.id AND e.kind = 'notified'
+                AND e.created_at >= goals.unknown_since AND json_extract(e.detail, '$.kind') = 'cant_check')"
+        ))
+        .bind(before)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Notices sent about the goal since `since` (the cap counts a rolling 24 hours).
+    pub async fn goal_notices_since(&self, goal_id: &str, since: i64) -> Result<i64, DbError> {
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM goal_events WHERE goal_id = ? AND kind = 'notified' AND created_at >= ?")
+            .bind(goal_id)
+            .bind(since)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n)
+    }
+
+    /// Whether the person was told the goal broke since it was last met (so a recovery is worth
+    /// a notice).
+    pub async fn told_broken(&self, goal_id: &str) -> Result<bool, DbError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM goal_events WHERE goal_id = ? AND kind = 'notified' AND json_extract(detail, '$.kind') = 'broken'
+             AND id > COALESCE((SELECT MAX(id) FROM goal_events WHERE goal_id = ? AND kind = 'met'), 0) LIMIT 1",
+        )
+        .bind(goal_id)
+        .bind(goal_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
     }
 }
 
