@@ -30,7 +30,7 @@ const m = await loadBundled(`
   export { REGISTRY, resolveBlock } from './src/components/results/registry';
   export { FIXTURES } from './src/components/results/fixtures';
   export { blockCsv, blockMarkdown, blockRows } from './src/components/results/exporters';
-  export { COMPOSE_PREFILL_EVENT, evidenceText } from './src/components/results/SmartResult';
+  export { COMPOSE_PREFILL_EVENT, evidenceText, withPrefill } from './src/components/results/SmartResult';
   export { shortList } from './src/components/results/Comparison';
 `);
 const { React, createRoot } = m;
@@ -619,4 +619,16 @@ test('a reply’s HTML is shown as text, in plain markdown and next to a block',
   assert.equal(v.host.querySelector('b'), null);
   assert.match(v.host.textContent, /<b>bold<\/b>/);
   assert.equal(window.__pwned, undefined);
+});
+
+test('Ask about this: asking again for the same line leaves the composer as it is (SR-U-18)', () => {
+  const line = 'About Basic in your Plan table: ';
+  assert.equal(m.withPrefill('', line), line);
+  assert.equal(m.withPrefill('Hi', line), `Hi\n${line}`);
+  assert.equal(m.withPrefill(`Hi\n${line}`, line), `Hi\n${line}`);
+  assert.equal(m.withPrefill(line, line), line);
+  // another row still goes on its own line
+  assert.equal(m.withPrefill(line, 'About Pro in your Plan table: '), `${line.trimEnd()}\nAbout Pro in your Plan table: `);
+  // the person typed after the line: the line comes back below it
+  assert.equal(m.withPrefill(`${line}and why?`, line), `${line}and why?\n${line}`);
 });

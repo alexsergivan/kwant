@@ -47,7 +47,7 @@ import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from 
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
 import { SmartActionsSlot } from './results/SmartActions';
-import { COMPOSE_PREFILL_EVENT } from './results/SmartResult';
+import { COMPOSE_PREFILL_EVENT, withPrefill } from './results/SmartResult';
 import { FilesPreviewOnly } from './results/Files';
 
 /** A swipeable chip row whose right fade edge (phones only, see .kw-scroll-row) goes away once
@@ -914,7 +914,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const prefill = (e: Event) => {
       const text = (e as CustomEvent<{ text?: unknown }>).detail?.text;
       if (typeof text !== 'string' || !text) return;
-      setInputVal((prev) => (prev.trim() ? `${prev.trimEnd()}\n${text}` : text));
+      setInputVal((prev) => withPrefill(prev, text));
       requestAnimationFrame(() => {
         const el = textareaRef.current;
         if (!el) return;
