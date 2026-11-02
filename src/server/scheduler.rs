@@ -807,6 +807,7 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
             super::waiting::run_due(&state, Utc::now()).await;
             super::work_ahead::scan(&state, Utc::now(), false).await;
             super::missions::runner::tick(&state).await;
+            super::goals_remediation::tick(&state).await;
             let next = [
                 state.db.next_routine_due().await.ok().flatten(),
                 state.db.next_parked_due().await.ok().flatten(),

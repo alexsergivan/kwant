@@ -12,6 +12,7 @@ pub mod engine_login;
 pub mod auth;
 pub mod signin;
 pub mod continuity;
+pub mod goals_remediation;
 pub mod model_usage;
 pub mod budget;
 pub mod scheduler;

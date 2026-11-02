@@ -196,6 +196,12 @@ impl Database {
         Ok(n)
     }
 
+    /// Clears a Not now (the person ran the fix after all, or chose Always fix).
+    pub async fn clear_goal_decline(&self, id: i64) -> Result<bool, DbError> {
+        let r = sqlx::query("UPDATE goal_mission_links SET declined_at = NULL WHERE id = ? AND declined_at IS NOT NULL").bind(id).execute(&self.pool).await?;
+        Ok(r.rows_affected() == 1)
+    }
+
     /// The kind of the goal's newest notice, sent or settled silently.
     pub async fn last_goal_notice_kind(&self, goal_id: &str) -> Result<Option<String>, DbError> {
         let row: Option<(String,)> = sqlx::query_as("SELECT kind FROM goal_notices WHERE goal_id = ? ORDER BY id DESC LIMIT 1").bind(goal_id).fetch_optional(&self.pool).await?;
@@ -245,6 +251,24 @@ impl Database {
     pub async fn set_goal_from_task(&self, task_id: &str, goal_id: &str, now: i64) -> Result<bool, DbError> {
         let r = sqlx::query("INSERT OR IGNORE INTO goal_from_tasks (task_id, goal_id, created_at) VALUES (?, ?, ?)").bind(task_id).bind(goal_id).bind(now).execute(&self.pool).await?;
         Ok(r.rows_affected() == 1)
+    }
+
+    /// Approved watch-mode goals that are failing: they get one notice per incident, no mission.
+    pub async fn goals_failing_in_watch(&self) -> Result<Vec<String>, DbError> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM goals WHERE status = 'not_met' AND mode = 'watch' AND approved_at IS NOT NULL AND paused_at IS NULL ORDER BY id").fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Active "Restore: …" missions kwant made that no goal link points at, older than `before`
+    /// (milliseconds): left by a crash between the plan and the link.
+    pub async fn unlinked_restore_missions(&self, before: i64) -> Result<Vec<super::missions::Mission>, DbError> {
+        Ok(sqlx::query_as::<_, super::missions::Mission>(
+            "SELECT * FROM missions WHERE created_by = 'kwant' AND status = 'active' AND title LIKE 'Restore: %'
+             AND (CAST(strftime('%s', created_at) AS INTEGER) * 1000) < ? AND id NOT IN (SELECT mission_id FROM goal_mission_links)",
+        )
+        .bind(before)
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     /// Approved goals of one folder of a space.
