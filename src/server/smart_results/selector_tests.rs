@@ -397,3 +397,17 @@ fn a_long_run_of_recommending_prose_names_no_pick() {
     let too_much = format!("I recommend Team. {}", "We recommend reading the docs. ".repeat(300));
     assert_eq!(highlight(&too_much), None);
 }
+
+/// Found by the bullet-list cross-check (index-check, Z129 and K20).
+#[test]
+fn bullet_lists_end_where_the_chat_ends_them() {
+    // `3.` after a bullet item: lazy text or a new numbered list; either way no later bullet
+    // list is sure of its number
+    let text = "- a\n- b\n3. c\n4. d\n\n- [ ] x task\n- [ ] y task\n- [ ] z task\n";
+    assert!(candidates(text).iter().all(|b| b.source().ordered != Some(false)), "{:?}", candidates(text));
+    // A fence opened on the marker line belongs to the item, and the list isn't offered
+    let text = "- ```\n  [ ] a\n  ```\n\nLaunch:\n\n- [ ] x task\n- [ ] y task\n- [ ] z task\n";
+    let Some(Block::Steps(s)) = first(text) else { panic!("{:?}", first(text)) };
+    assert_eq!((s.variant, s.source.index), (Variant::Checklist, Some(1)));
+    assert_eq!(first("Steps:\n1. ```\n2. b\n3. c\n"), None);
+}

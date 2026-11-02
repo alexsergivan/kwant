@@ -317,6 +317,10 @@ fn parse(text: &str) -> Doc<'_> {
                                     l.clean = false;
                                 }
                                 doc.unsure_nested(i, content);
+                                fence = item_fence(content, item_offset);
+                                if fence.is_some() {
+                                    doc.lists[list].clean = false;
+                                }
                                 state = at(list, item_offset, false);
                                 break;
                             }
@@ -330,8 +334,9 @@ fn parse(text: &str) -> Doc<'_> {
                                     state = State::None;
                                     continue;
                                 }
-                                // Lazy text, or a new list: CommonMark readers differ
+                                // Lazy text, or a new list that ends this one: CommonMark readers differ
                                 doc.unsure_ol(i);
+                                doc.unsure_ul(i);
                                 doc.lists[list].clean = false;
                                 state = at(list, offset, false);
                                 break;
@@ -478,15 +483,23 @@ fn parse(text: &str) -> Doc<'_> {
                     }
                     if let Some(m) = ordered_marker(rest, indent) {
                         doc.unsure_nested(i, m.content);
-                        let l = doc.new_list(i, true, m.delim, m.number, m.content, prev, heading);
+                        let mut l = doc.new_list(i, true, m.delim, m.number, m.content, prev, heading);
+                        if fence_open(m.content).is_some() {
+                            l.clean = false;
+                        }
                         doc.lists.push(l);
+                        fence = item_fence(m.content, m.offset);
                         state = State::List { list: doc.lists.len() - 1, offset: m.offset, blank: false };
                         break;
                     }
                     if let Some(b) = bullet_marker(rest, indent) {
                         doc.unsure_nested(i, b.content);
-                        let l = doc.new_list(i, false, rest.as_bytes()[0], 0, b.content, prev, heading);
+                        let mut l = doc.new_list(i, false, rest.as_bytes()[0], 0, b.content, prev, heading);
+                        if fence_open(b.content).is_some() {
+                            l.clean = false;
+                        }
                         doc.lists.push(l);
+                        fence = item_fence(b.content, b.offset);
                         state = State::Bullet { list: doc.lists.len() - 1, offset: b.offset, blank: false };
                         break;
                     }
@@ -519,6 +532,11 @@ fn parse(text: &str) -> Doc<'_> {
         }
     }
     doc
+}
+
+/// A code fence opened on a list item's marker line, closed by the item's end or its own fence.
+fn item_fence(content: &str, offset: usize) -> Option<Fence> {
+    fence_open(content).map(|(ch, len)| Fence { ch, len, inside: Some(offset) })
 }
 
 /// The indentation in columns (a tab counts to the next multiple of 4) and the rest of the line.
