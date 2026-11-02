@@ -283,7 +283,7 @@ fn check_urls(text: &str, links: &[String]) -> Result<(), String> {
         }
     }
     for word in text.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']')) {
-        let word = word.trim_end_matches(|c| matches!(c, '.' | ',' | ';' | ':' | '!' | '?'));
+        let word = word.trim_end_matches(['.', ',', ';', ':', '!', '?']);
         if !(word.starts_with("http://") || word.starts_with("https://")) {
             continue;
         }

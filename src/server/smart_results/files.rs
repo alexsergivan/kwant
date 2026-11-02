@@ -140,7 +140,7 @@ fn decode(bytes: &[u8]) -> Option<String> {
 }
 
 fn utf16(bytes: &[u8], read: fn([u8; 2]) -> u16) -> Option<String> {
-    let units: Vec<u16> = bytes.chunks_exact(2).map(|c| read([c[0], c[1]])).collect();
+    let units: Vec<u16> = bytes.chunks(2).filter(|c| c.len() == 2).map(|c| read([c[0], c[1]])).collect();
     String::from_utf16(&units).ok()
 }
 

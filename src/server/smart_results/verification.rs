@@ -92,7 +92,7 @@ fn status(stored: &str) -> &'static str {
 fn label(c: &OutcomeCheck) -> String {
     let spec = redact_value(&c.spec_value());
     let main = ["command", "url", "path"].iter().find_map(|k| spec.get(k).and_then(|v| v.as_str())).unwrap_or("");
-    safe(&format!("{} {}", c.kind, main).trim().to_string(), MAX_LABEL)
+    safe(format!("{} {}", c.kind, main).trim(), MAX_LABEL)
 }
 
 /// `text` cut to `max` characters (with an ellipsis), angle brackets turned into look-alike quote

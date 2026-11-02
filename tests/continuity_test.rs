@@ -996,6 +996,15 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(init["result"]["protocolVersion"], "2025-03-26");
+    // present_result: a call that fits is noted, one without `source` is refused with the reason
+    let fits = json!({"type": "steps", "source": {"kind": "markdown_list", "index": 0},
+        "data": {"items": ["One", "Two", "Three"]}});
+    let (_, noted) = call(&app, "POST", "/api/mcp/self", Some(tool("present_result", fits)), &[("authorization", &auth)]).await;
+    assert_ne!(noted["result"]["isError"], json!(true), "{noted}");
+    let unsourced = json!({"type": "comparison", "data": {"columns": [], "rows": []}});
+    let (_, refused) = call(&app, "POST", "/api/mcp/self", Some(tool("present_result", unsourced)), &[("authorization", &auth)]).await;
+    assert_eq!(refused["result"]["isError"], json!(true), "{refused}");
+    assert!(text(&refused).contains("source"), "{refused}");
     let (_, list) = call(
         &app,
         "POST",
@@ -1020,6 +1029,7 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
             "memory_search",
             "skill_propose",
             "skill_get",
+            "present_result",
             "mcp_search",
             "mcp_suggest",
             "page_source",
