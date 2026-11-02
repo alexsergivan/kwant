@@ -104,6 +104,19 @@ fn in_link(chars: &[char], at: usize) -> bool {
     close.is_some_and(|c| chars[c] == ']' && chars.get(c + 1) == Some(&'('))
 }
 
+/// Whether `text` links the account `@name` (`https://www.tiktok.com/@munichspots/…`,
+/// `[@munichspots](…)`, see [`in_link`]). A reply that then names it as plain `@munichspots` means
+/// that account, not a teammate.
+pub fn links_handle(text: &str, name: &str) -> bool {
+    let chars: Vec<char> = text.to_lowercase().chars().collect();
+    let tag: Vec<char> = format!("@{}", name.to_lowercase()).chars().collect();
+    (0..chars.len()).any(|at| {
+        chars[at..].starts_with(&tag)
+            && in_link(&chars, at)
+            && !chars.get(at + tag.len()).is_some_and(|&c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    })
+}
+
 fn is_team_mention(token: &str) -> bool {
     if token.contains('-') {
         return true;
@@ -406,6 +419,17 @@ mod tests {
         // Mentions next to a slash, or in brackets that aren't a link, still count
         assert_eq!(handoff_targets("@Growth/@Security, please", &names), vec![2, 3]);
         assert_eq!(handoff_targets("[@Analyst] and/or @Community", &names), vec![1, 0]);
+    }
+
+    /// QA on 0.6.4 (M1-2): a reply named the account the person linked as plain "@munichspots".
+    #[test]
+    fn a_linked_account_is_found_by_its_handle() {
+        let link = "Like https://www.tiktok.com/@munichspots/video/7273068214848982304?";
+        assert!(links_handle(link, "munichspots") && links_handle(link, "MunichSpots"));
+        assert!(links_handle("by [@munichspots](https://www.tiktok.com/@munichspots)", "munichspots"));
+        assert!(!links_handle(link, "munich") && !links_handle(link, "munichspots2"));
+        // Plain mentions don't link an account
+        assert!(!links_handle("Ask @munichspots, or @Analyst", "munichspots"));
     }
 
     /// Oleks's screenshot (2026-10-24): "Handing off now: @Social revise …, @Writer draft Pillar 1 …"

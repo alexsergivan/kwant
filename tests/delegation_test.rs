@@ -1178,6 +1178,25 @@ async fn mentions_that_hand_nothing_on_are_said_in_the_channel() {
     assert!(!delegated_growth, "over the limit, Growth isn't asked");
 }
 
+/// QA on 0.6.4 (M1-2): a reply that named the TikTok account the person linked as plain
+/// "@munichspots" got "Not sent to munichspots: no teammate has that name here". Another unknown
+/// name in the same reply is still said, for the lead's reply and for another bot's.
+#[tokio::test]
+async fn an_account_the_person_linked_is_not_said_as_an_unknown_teammate() {
+    let env = setup().await;
+    let channel = team_channel_with(&env, "tiktok-links", &[&env.lead, &env.specialist]).await;
+    let link = "https://www.tiktok.com/@munichspots/video/7273068214848982304";
+    for (n, bot) in [(1, &env.lead), (2, &env.specialist)] {
+        let who = name(&env, bot).await;
+        say_in(&env, &channel, &format!("@{who} A hook like {link} REPLYTAG:hook{n} MENTION:munichspots+Marketer")).await;
+        wait_for("the unknown-name notice", || async { refusals(&channel_messages(&env, &channel).await).len() == n }).await;
+        let replied = channel_messages(&env, &channel).await.iter().any(|m| m.sender_id == who && m.text.contains(&format!("answer hook{n} @munichspots")));
+        assert!(replied, "{who} answered");
+    }
+    let notes = refusals(&channel_messages(&env, &channel).await);
+    assert_eq!(notes, vec!["Not sent to Marketer: no teammate has that name here".to_string(); 2]);
+}
+
 /// Rigel's ping-pong (2026-10-21): two bots naming each other ran all 8 rounds of a request. One
 /// teammate is handed work by mention at most [`per_bot_limit`] times per user message; the next
 /// mention starts nothing and leaves one Continue notice.

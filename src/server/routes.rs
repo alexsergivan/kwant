@@ -1065,7 +1065,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
         let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
         let found = crate::router::handoff_mentions(text, &names);
         let deps = crate::router::handoff_dependencies(text, &names);
-        skipped.extend(found.unknown.into_iter().map(|n| (n, String::new())));
+        skipped.extend(unknown_mentions(found.unknown, user_prompt, text));
         skipped.extend(found.in_code_block.iter().map(|&i| (scope.teammates[i].name.clone(), IN_CODE_BLOCK.to_string())));
         for &i in &found.targets {
             let k = &scope.teammates[i];
@@ -1283,6 +1283,14 @@ async fn report_skipped(scope: &TurnScope, skipped: Vec<(String, String)>) {
     }
 }
 
+/// `@name`s that match no teammate, for [`report_skipped`] (an empty reason), less the accounts the
+/// person's message or the reply links: "I based this on @munichspots" after a TikTok link names
+/// that account, it doesn't hand anything on (QA on 0.6.4, M1-2).
+fn unknown_mentions(unknown: Vec<String>, user_prompt: &str, reply: &str) -> Vec<(String, String)> {
+    let linked = |n: &str| crate::router::links_handle(user_prompt, n) || crate::router::links_handle(reply, n);
+    unknown.into_iter().filter(|n| !linked(n)).map(|n| (n, String::new())).collect()
+}
+
 /// "Not sent to A, B: why" for refused mentions grouped by reason; `None` when there are none.
 pub fn refusal_line(groups: &[(String, Vec<String>)]) -> Option<String> {
     let parts: Vec<String> = groups.iter().map(|(why, names)| format!("{}: {why}", names.join(", "))).collect();
@@ -1358,7 +1366,7 @@ pub(super) async fn delegate_mentions(
         .into_iter()
         .map(|(d, p)| (scope.teammates[d].id.clone(), scope.teammates[p].id.clone()))
         .collect();
-    let mut skipped: Vec<(String, String)> = found.unknown.into_iter().map(|n| (n, String::new())).collect();
+    let mut skipped = unknown_mentions(found.unknown, user_prompt, text);
     skipped.extend(found.in_code_block.iter().map(|&i| (scope.teammates[i].name.clone(), IN_CODE_BLOCK.to_string())));
     // The lead hears a relayed result anyway, and a bot can't hand work to itself
     let speaker = relay.map_or(lead.id.as_str(), |r| r.from.id.as_str());
