@@ -336,7 +336,14 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     }
                     match &item.preview {
                         None | Some(super::FilePreview::Image) => {}
-                        Some(super::FilePreview::Table { columns, rows }) => {
+                        Some(super::FilePreview::Table { columns, rows, truncated, total_rows, total_cols }) => {
+                            // A total only exists on a cut preview and is never below what is shown
+                            if (total_rows.is_some() || total_cols.is_some()) && !*truncated {
+                                return Err("file totals on a complete preview".into());
+                            }
+                            if total_rows.is_some_and(|n| n < rows.len() as u64) || total_cols.is_some_and(|n| n < columns.len() as u64) {
+                                return Err("a file total below the preview".into());
+                            }
                             if columns.is_empty() || columns.len() > 8 {
                                 return Err(format!("{} file columns", columns.len()));
                             }
@@ -359,7 +366,12 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                                 }
                             }
                         }
-                        Some(super::FilePreview::Text { excerpt }) => {
+                        Some(super::FilePreview::Text { excerpt, truncated, total_lines }) => {
+                            if let Some(n) = total_lines {
+                                if !*truncated || *n < excerpt.lines().count() as u64 {
+                                    return Err("a file line total".into());
+                                }
+                            }
                             if excerpt.chars().count() > 4000 || has_html(excerpt) {
                                 return Err("a file excerpt".into());
                             }

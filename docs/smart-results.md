@@ -199,7 +199,26 @@ posted. Provenance `kwant_data` with `ref` `task:<id>`.
 attachment must be a row of this bot's own share (`source` "agent", `kwant_id` = sender, same
 channel, direct chat and thread, not yet tied to a message) or the whole block is dropped. At most
 10 files. Previews: CSV/TSV up to 1 MB as a table (8 columns by 20 rows, quote-aware), text and
-markdown up to 20 lines, inline images as `image`; anything else is a row with no preview. Bytes
+markdown up to 20 lines, inline images as `image`; anything else is a row with no preview. A file
+over 1 MB is previewed from its first megabyte (up to the last whole line); one with no whole line
+in that megabyte has no preview.
+
+A cut preview says so, so a 20-row preview is never read as the whole file. Three optional fields
+sit on the preview object (`kind` `table` or `text`) and are left out of the JSON when the preview
+is complete, so old fixtures stay valid:
+
+  | field | on | meaning |
+  |---|---|---|
+  | `truncated: true` | table, text | the file has more rows, columns or lines than the preview shows, or was cut at the 1 MB read cap |
+  | `total_rows`, `total_cols` | table | records after the header, and header width, counted exactly |
+  | `total_lines` | text | lines in the file, counted exactly |
+
+Totals come with `truncated` and only when counted exactly: a file cut at the 1 MB cap has
+`truncated: true` and no totals (the renderer shows "Showing first 20 rows" without a count), and
+so does a table with a row over 1,000 fields or a cell over 100 KB. A total is never below what the
+preview shows. Per-cell and per-line cuts (300 characters) do not set `truncated`. Example:
+`{"kind":"table","columns":[...],"rows":[...20 rows],"truncated":true,"total_rows":143,"total_cols":5}`
+shows as "Showing 20 of 143 rows". Bytes
 are read only through `attachments::blob_path` (a sha256 hex string under the attachments
 directory). A message of only inline images gets no block, since the chat draws them already. The
 block carries ids and previews only; downloads go through the existing authorized attachment

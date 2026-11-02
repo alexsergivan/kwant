@@ -433,6 +433,10 @@ mod tests {
         assert_eq!(preview["rows"].as_array().unwrap().len(), 20, "at most 20 rows");
         assert_eq!(preview["rows"][0][1], "say \"hi\"\nline2", "quoted fields are read as CSV");
         assert!(!preview.to_string().contains("<b>"), "cells are never markup");
+        // Cut: 40 records and 9 columns, counted exactly
+        assert_eq!(preview["truncated"], true);
+        assert_eq!(preview["total_rows"], 40);
+        assert_eq!(preview["total_cols"], 9);
         assert_eq!(block["items"][0]["attachment_id"], a.id);
         assert_eq!(m.text, "Shared a file");
     }
@@ -444,15 +448,73 @@ mod tests {
         let txt = f.shared("notes.txt", "text/plain", lines.as_bytes(), "k1", Some("k1")).await;
         let pdf = f.shared("a.pdf", "application/pdf", b"%PDF-1.4 hi", "k1", Some("k1")).await;
         let bad = f.shared("bad.csv", "text/csv", &[0xff, 0xfe, 0x00, 0xd8, 0x61], "k1", Some("k1")).await;
-        let big = f.shared("big.csv", "text/csv", &vec![b'a'; 1_100_000], "k1", Some("k1")).await;
+        let big = f.shared("big.csv", "text/csv", &vec![b'a'; 1_100_000], "k1", Some("k1")).await; // one 1.1 MB line: nothing whole to show
         let m = f.card("k1", "k1", &[&txt, &pdf, &bad, &big]).await;
         let items = m.results.unwrap()["blocks"][0]["items"].clone();
         assert_eq!(items[0]["preview"]["kind"], "text");
         assert_eq!(items[0]["preview"]["excerpt"].as_str().unwrap().lines().count(), 20);
+        assert_eq!(items[0]["preview"]["truncated"], true, "a cut text preview says so");
+        assert_eq!(items[0]["preview"]["total_lines"], 50);
         assert!(items[1]["preview"].is_null(), "a PDF is a file row only");
         assert!(items[2]["preview"].is_null(), "invalid text has no preview");
-        assert!(items[3]["preview"].is_null(), "a CSV over 1 MB has no preview");
+        assert!(items[3]["preview"].is_null(), "a file over 1 MB with no whole line has no preview");
         assert_eq!(items[1]["mime"], "application/pdf");
+    }
+
+    #[tokio::test]
+    async fn a_complete_preview_has_no_truncation_fields() {
+        let f = Fixture::new().await;
+        let mut csv = String::from("a,b,c\n");
+        for i in 0..20 {
+            csv.push_str(&format!("{i},x,y\n"));
+        }
+        let table = f.shared("exact.csv", "text/csv", csv.as_bytes(), "k1", Some("k1")).await;
+        let text = f.shared("short.txt", "text/plain", b"one\ntwo\n", "k1", Some("k1")).await;
+        let m = f.card("k1", "k1", &[&table, &text]).await;
+        let items = m.results.unwrap()["blocks"][0]["items"].clone();
+        let t = items[0]["preview"].as_object().unwrap();
+        assert_eq!(t["rows"].as_array().unwrap().len(), 20, "exactly 20 records is complete");
+        let x = items[1]["preview"].as_object().unwrap();
+        for obj in [t, x] {
+            for key in ["truncated", "total_rows", "total_cols", "total_lines"] {
+                assert!(!obj.contains_key(key), "{key} is left out of a complete preview");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_csv_cut_by_columns_alone_says_so() {
+        let f = Fixture::new().await;
+        let a = f.shared("wide.csv", "text/csv", b"a,b,c,d,e,f,g,h,i,j\n1,2,3,4,5,6,7,8,9,10\n", "k1", Some("k1")).await;
+        let m = f.card("k1", "k1", &[&a]).await;
+        let p = m.results.unwrap()["blocks"][0]["items"][0]["preview"].clone();
+        assert_eq!((p["truncated"].clone(), p["total_rows"].clone(), p["total_cols"].clone()), (json!(true), json!(1), json!(10)));
+    }
+
+    #[tokio::test]
+    async fn a_file_over_the_1mb_cap_is_cut_with_no_totals() {
+        let f = Fixture::new().await;
+        let mut csv = String::from("id,name\n");
+        let mut n = 0;
+        while csv.len() < 1_100_000 {
+            csv.push_str(&format!("{n},some name for row {n}\n"));
+            n += 1;
+        }
+        let big = f.shared("big.csv", "text/csv", csv.as_bytes(), "k1", Some("k1")).await;
+        let long_text: String = (0..60_000).map(|i| format!("line number {i}\n")).collect();
+        assert!(long_text.len() > 1_048_576);
+        let text = f.shared("log.txt", "text/plain", long_text.as_bytes(), "k1", Some("k1")).await;
+        let m = f.card("k1", "k1", &[&big, &text]).await;
+        let items = m.results.unwrap()["blocks"][0]["items"].clone();
+        let t = items[0]["preview"].as_object().unwrap();
+        assert_eq!(t["kind"], "table");
+        assert_eq!(t["rows"].as_array().unwrap().len(), 20);
+        assert_eq!(t["truncated"], true);
+        assert!(!t.contains_key("total_rows") && !t.contains_key("total_cols"), "a cut read is never counted");
+        let x = items[1]["preview"].as_object().unwrap();
+        assert_eq!(x["truncated"], true);
+        assert!(!x.contains_key("total_lines"));
+        assert_eq!(x["excerpt"].as_str().unwrap().lines().count(), 20);
     }
 
     #[tokio::test]

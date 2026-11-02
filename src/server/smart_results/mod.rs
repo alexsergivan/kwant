@@ -462,11 +462,33 @@ pub struct Verification {
 /// What a file's preview shows: a CSV/TSV table (at most 20 rows by 8 columns), the first lines of
 /// a text file, or the image itself (drawn from the authorized attachment route). `None` is a file
 /// row with no preview.
+///
+/// A preview that was cut says so, so a 20-row preview is never read as the whole file. The extra
+/// fields are all optional and left out of the JSON for a complete preview (old fixtures stay
+/// valid): `truncated: true` is set whenever the file has more than the preview shows, and
+/// `total_rows` (records after the header) and `total_cols` (CSV/TSV) or `total_lines` (text) are
+/// added only when kwant counted them exactly (never below what the preview shows); a file cut
+/// at the 1 MB read cap gets `truncated` and no totals.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FilePreview {
-    Table { columns: Vec<String>, rows: Vec<Vec<String>> },
-    Text { excerpt: String },
+    Table {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        truncated: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total_rows: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total_cols: Option<u64>,
+    },
+    Text {
+        excerpt: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        truncated: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total_lines: Option<u64>,
+    },
     Image,
 }
 
