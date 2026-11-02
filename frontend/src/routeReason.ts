@@ -1,7 +1,20 @@
 // The line under "Sending your question to X" on Laya's routing card: why that bot, in words that
 // match how it was actually picked.
 
-export type RouteBasis = 'skills' | 'lead' | 'keywords' | 'only' | 'several' | 'discuss' | 'team' | 'asked' | 'last';
+export type RouteBasis =
+  | 'skills'
+  | 'lead'
+  | 'keywords'
+  | 'only'
+  | 'several'
+  | 'discuss'
+  | 'team'
+  | 'asked'
+  | 'last'
+  | 'concierge'
+  | 'ask'
+  | 'handback'
+  | 'learned';
 
 export interface RouteReasonInput {
   kwantName?: string;
@@ -9,6 +22,29 @@ export interface RouteReasonInput {
   basis?: string;
   fallback?: boolean;
   matchedTerms?: string[];
+  /** Basis "handback": the name of the bot that said it wasn't their area. */
+  handedBackBy?: string;
+}
+
+/** "Lin handed this back (…), so Ada takes it": the server's handback sentence starts with the name. */
+const handbackName = (reason?: string) => reason?.match(/^(\S+) handed this back\b/)?.[1];
+
+/** The fixed line for the router's newer picks (Concierge, ask card, hand-back, learned), or null for
+ *  any other basis. These always use the app's own wording, never the server's longer sentence. */
+export function pickedLine(r: RouteReasonInput): string | null {
+  const name = r.kwantName || 'another bot';
+  switch (r.basis) {
+    case 'concierge':
+      return 'No specialist fits, answering generally.';
+    case 'ask':
+      return `You picked ${name}.`;
+    case 'handback':
+      return `${r.handedBackBy || handbackName(r.reason) || 'The first bot'} said it’s not their area, so ${name} took it.`;
+    case 'learned':
+      return `You sent a message like this to ${name} before.`;
+    default:
+      return null;
+  }
 }
 
 /** True when the server wrote its own sentence for this pick. Older servers say "Laya picked …" for
@@ -20,6 +56,8 @@ export function serverReason(r: { reason?: string; basis?: string }): string | n
 }
 
 export function routeReasonText(r: RouteReasonInput): string | null {
+  const picked = pickedLine(r);
+  if (picked) return picked;
   const own = serverReason(r);
   if (own) return own;
   const name = r.kwantName || 'the team lead';

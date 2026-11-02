@@ -525,6 +525,11 @@ async fn the_concierge_suggests_a_hire_on_the_third_similar_request() {
     assert_eq!(evidence["basis"], "repeated");
     let on_card: Vec<&str> = evidence["similar_requests"].as_array().unwrap().iter().map(|r| r["message_id"].as_str().unwrap()).collect();
     assert_eq!(on_card, ids.iter().map(String::as_str).collect::<Vec<_>>());
+    for r in evidence["similar_requests"].as_array().unwrap() {
+        let quoted = r["text"].as_str().unwrap_or_default();
+        assert!(!quoted.is_empty() && quoted.chars().count() <= 160, "the card quotes each past request: {r}");
+        assert!(r["at"].is_string(), "with when it was asked: {r}");
+    }
     let msgs = state.db.list_messages(&general, 100).await.unwrap();
     assert!(
         msgs.iter().any(|m| m.meta.as_deref().is_some_and(|x| x.contains("hire_proposal") && x.contains(&card.id))),

@@ -167,7 +167,9 @@ async fn check_evidence(state: &AppState, space: &SpaceId, raw: &Value) -> Resul
                 match state.db.message_space_and_sender(id).await {
                     Ok(Some((s, role))) if &s == space && role == "user" => {
                         let at = state.db.message_created_at(id).await.ok().flatten();
-                        found.push(json!({"message_id": id, "at": at}));
+                        // The card quotes them, so the person sees what the proposal rests on.
+                        let text = state.db.get_message(id).await.ok().flatten().map(|m| quote(&m.text));
+                        found.push(json!({"message_id": id, "at": at, "text": text}));
                     }
                     Ok(Some((s, _))) if &s == space => {
                         return Err(format!("Message {id} isn't a request from the person; give the person's own messages."))
@@ -1014,4 +1016,14 @@ pub async fn put_policy(State(state): State<AppState>, headers: HeaderMap, Path(
         Ok(v) => Json(v).into_response(),
         Err(r) => r,
     }
+}
+
+/// One past request for the hire card: first line-ish, at most 160 characters.
+fn quote(text: &str) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= 160 {
+        return flat;
+    }
+    let cut: String = flat.chars().take(159).collect();
+    format!("{}…", cut.trim_end())
 }
