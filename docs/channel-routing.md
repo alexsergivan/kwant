@@ -54,6 +54,9 @@ Returns `{status: "dispatched", user_message_id, kwant, kwant_id}`; the event
 A routed bot can call `hand_back {reason}` ("not my area"). The message goes on once (basis
 `handback`, with `handed_back_by`) to the next member that fits (fit ≥ 0.6), else the Concierge,
 else the lead. A message takes at most one hop; a second `hand_back` is refused.
+The message handed on is the one the bot's turn was routed (`TurnOrigin::message_id`, the same id
+as its reply's `routing.message_id`), not the channel's newest message. A turn with no routed
+message (an @mention, a DM) can't hand back.
 
 ## Learning from the person
 
