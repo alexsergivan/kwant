@@ -8,6 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.4] - 2026-11-02
+
+### Added
+- **Laya picks the right bot more often.** A message goes to a bot only when its words fit that bot's role, name,
+  title or description, and in #general a question no specialist fits goes to the Concierge.
+  On a close call between two bots you get a card to pick one, or "Answer generally". Each routed reply says in
+  plain words why that bot answered, and a bot can hand back a message that isn't its area.
+- **"Wrong bot?"** under a routed reply sends your message to the bot you choose. Laya remembers the correction, so a
+  similar message later goes there too.
+- **Good for / Not for.** Tell Laya what each bot should and shouldn't get, on the create form and in the bot's
+  settings. The lists are kept when a bot is copied, exported or imported.
+- **Browser sites.** In a bot's settings, choose which sites its browser may open, which it never opens, and whether
+  it may reach local and private network addresses. A bot can't change its own rules.
+
+### Changed
+- When a team lead hands work to several teammates, it waits for every result and answers once, even when it hands
+  off in separate steps or you press Stop.
+- Escape keeps what you typed: an editor in Settings with unsaved changes stays open, and the bot editor and
+  Manage team close on Escape. Desktop Settings sits beside the space rail, and removing a team member asks first.
+
+### Fixed
+- Saving two things at once no longer fails now and then with "database is locked".
+- A link such as tiktok.com/@name is no longer taken for an @mention of a teammate.
+- The updater uses a newer zip library, which clears three security alerts. They affected only Windows builds,
+  which kwant doesn't ship yet.
+
 ## [Mac 0.6.3] - 2026-11-01
 
 ### Changed
