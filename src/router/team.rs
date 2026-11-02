@@ -726,13 +726,26 @@ pub fn pick_member_hinted<'a>(
     last_speaker: Option<&str>,
     hints: &Hints,
 ) -> Option<Pick<'a>> {
-    let only = match members {
-        [] => return None,
-        [one] => Some(one),
-        _ => None,
-    };
-    if let Some(k) = only {
+    if let [k] = members {
         return Some(Pick { kwant: k, basis: "only", reason: format!("{} is the only bot here that can answer", k.name), terms: vec![], fit: 1.0, choices: vec![] });
+    }
+    pick_by_words(prompt, lead_kwant_id, members, laya, lead_word, last_speaker, hints)
+}
+
+/// [`pick_member_hinted`] without its shortcut for a lone bot: how well the message fits even the
+/// only one, as when a handed-back message has one other bot to go to.
+#[allow(clippy::too_many_arguments)]
+pub fn pick_by_words<'a>(
+    prompt: &str,
+    lead_kwant_id: &str,
+    members: &'a [Kwant],
+    laya: Option<LayaGuess<'a>>,
+    lead_word: &str,
+    last_speaker: Option<&str>,
+    hints: &Hints,
+) -> Option<Pick<'a>> {
+    if members.is_empty() {
+        return None;
     }
     let words = tokens(prompt);
     let lead = lead_of(lead_kwant_id, members);
@@ -1842,6 +1855,21 @@ mod fit_tests {
         // A plural matches its singular entry
         let p = pick_member_hinted("Any restaurants near the venue?", "k-seo", &members, None, "channel lead", None, &h).unwrap();
         assert_eq!(p.kwant.id, "k-lead", "{p:?}");
+    }
+
+    /// A lone bot gets every message, but [`pick_by_words`] still says whether the message is its
+    /// work: a handed-back message goes on to the only other bot just then.
+    #[test]
+    fn a_lone_bot_is_still_scored_on_the_words() {
+        let script = [bot("k-script", "Scriptwriter", "TikTok Scriptwriter", "Scripts and hooks for book videos.")];
+        let baby = "Is it safe for my baby to crawl on hardwood floors?";
+        let p = pick_member_hinted(baby, "k-script", &script, None, "channel lead", None, &Hints::default()).unwrap();
+        assert_eq!((p.basis, p.fit), ("only", 1.0));
+        let p = pick_by_words(baby, "k-script", &script, None, "channel lead", None, &Hints::default()).unwrap();
+        assert!(p.fit < ROUTE_AT, "{p:?}");
+        let p = pick_by_words("Write a TikTok hook about the lantern parade", "k-script", &script, None, "channel lead", None, &Hints::default()).unwrap();
+        assert!(p.fit >= ROUTE_AT, "{p:?}");
+        assert!(pick_by_words(baby, "k-script", &[], None, "channel lead", None, &Hints::default()).is_none());
     }
 
     /// An entry of a bot's avoids list keeps role and word matching off it; naming it still works.

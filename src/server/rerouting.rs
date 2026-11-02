@@ -387,7 +387,11 @@ async fn next_after_handback(
     if !members.is_empty() {
         let hints = hints_for(state, space, members).await;
         let lead = if channel.lead_kwant_id == from.id { members[0].id.clone() } else { channel.lead_kwant_id.clone() };
-        let route = state.router.route_channel_query_hinted(text, &channel.name, &lead, members, None, &hints).await;
+        let mut route = state.router.route_channel_query_hinted(text, &channel.name, &lead, members, None, &hints).await;
+        if route.basis == "only" {
+            // The router gives the only bot left everything (fit 1), even what isn't its work
+            route.fit = crate::router::team::pick_by_words(text, &lead, members, None, "channel lead", None, &hints).map_or(0.0, |p| p.fit);
+        }
         if route.fit >= ROUTE_AT {
             if let Some(k) = members.iter().find(|k| k.id == route.kwant_id) {
                 return Some((k.clone(), route.fit));

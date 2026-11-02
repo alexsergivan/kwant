@@ -396,6 +396,32 @@ async fn a_hand_back_passes_on_the_message_it_answers_not_the_newest() {
     assert!(err && text.contains("already handed back"), "{text}");
 }
 
+/// The only other bot here takes a handed-back message only when it fits it; else the Concierge
+/// does. Live on 0.6.4, Atlas handed back a baby question it got for "crawl", and the
+/// Scriptwriter took it and answered it as not its area either.
+#[tokio::test]
+async fn a_hand_back_skips_the_only_other_bot_when_it_doesnt_fit() {
+    let (app, state, _tmp) = setup().await;
+    let script = ok(&app, "POST", "/api/kwants", Some(specialist("Scriptwriter", "TikTok Scriptwriter", "Scripts and hooks for book videos."))).await["id"].as_str().unwrap().to_string();
+    let atlas = ok(&app, "POST", "/api/kwants", Some(specialist("Atlas", "Technical SEO", "Crawl errors and sitemaps."))).await["id"].as_str().unwrap().to_string();
+    only(&app, &state, &[&script, &atlas]).await;
+    let general = state.db.general_channel(&SpaceId::default_space()).await.unwrap().expect("#general").id;
+    let (to, basis) = routed_to(&app, &state, &general, "Is it safe for my baby to crawl on hardwood floors?").await;
+    assert_eq!((to.as_str(), basis.as_deref()), (atlas.as_str(), Some("keywords")));
+    let asked = last_user_message(&state, &general).await;
+    assert!(concierges(&state).await.is_empty());
+
+    let token = answering_token(&state, &atlas, &general, Some(&asked)).await;
+    let mut events = state.event_sender.subscribe();
+    let (text, err) = hand_back(&app, &token, "Baby safety isn't technical SEO").await;
+    assert!(!err, "{text}");
+    let made = concierges(&state).await;
+    assert_eq!(made.len(), 1, "the Concierge, made now: {text}");
+    let routing = next_reply_routing(&state, &mut events, &general).await;
+    assert_eq!((routing["basis"].as_str(), routing["kwant_id"].as_str()), (Some("handback"), Some(made[0].as_str())), "{routing}");
+    assert_eq!(routing["message_id"], asked.as_str());
+}
+
 /// A turn the router picked from the message's words is told the person didn't choose the bot and
 /// that it may hand the message back. An @mention, the Concierge and the hand-back turn aren't (QA
 /// on 0.6.4: without being told, the live model handed back 0 of 3 off-topic messages).
