@@ -372,6 +372,8 @@ impl Database {
     /// Replaces a card message's text, so bots reading the history see the decision too.
     pub async fn set_message_text(&self, id: &str, text: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE messages SET text = ? WHERE id = ?").bind(text).bind(id).execute(&self.pool).await?;
+        // A block copied from the old text no longer matches it
+        sqlx::query("DELETE FROM message_results WHERE message_id = ?").bind(id).execute(&self.pool).await?;
         Ok(())
     }
 

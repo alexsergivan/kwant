@@ -539,7 +539,10 @@ pub async fn list_messages(
         (None, None) => db.list_messages(&channel_or_kwant_id, limit).await.map(Some),
     };
     match rows {
-        Ok(Some(rows)) => Ok(Json(rows)),
+        Ok(Some(mut rows)) => {
+            db.attach_results(&mut rows).await;
+            Ok(Json(rows))
+        }
         Ok(None) => Err(err(StatusCode::NOT_FOUND, "That message isn't in this chat.")),
         Err(_) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Could not load messages.")),
     }

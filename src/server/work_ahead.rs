@@ -282,6 +282,7 @@ mod tests {
             created_at: Some(Utc::now() - Duration::hours(hours_ago)),
             thread_id: None,
             meta: meta.map(str::to_string),
+            results: None,
         }
     }
 

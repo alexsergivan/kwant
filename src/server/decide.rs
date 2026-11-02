@@ -818,9 +818,11 @@ pub async fn change(
     if state.db.set_message_meta(&message_id, &meta).await.is_err() {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "could not save the change");
     }
-    let Ok(Some(updated)) = state.db.get_message(&message_id).await else {
+    let Ok(Some(mut updated)) = state.db.get_message(&message_id).await else {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "could not load the message");
     };
+    // The broadcast replaces the chat's copy, so it carries the reply's block too
+    state.db.attach_results(std::slice::from_mut(&mut updated)).await;
     let context = msg.thread_id.as_deref().or(msg.channel_id.as_deref()).or(msg.direct_kwant_id.as_deref()).unwrap_or("");
     if let Ok(Some(space)) = state.db.space_of_context(context).await {
         let kwant_id = meta["decide_first"]["kwant_id"].as_str().map(str::to_string);

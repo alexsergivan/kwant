@@ -49,6 +49,7 @@ pub mod decide;
 pub mod work_ahead;
 pub mod missions;
 pub mod app_update_routes;
+pub mod smart_results;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;

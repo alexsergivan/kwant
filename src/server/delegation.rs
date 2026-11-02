@@ -1601,7 +1601,10 @@ pub async fn thread_messages(State(state): State<AppState>, Path(id): Path<Strin
         Err(_) => return internal(),
     }
     match state.db.list_messages(&id, 100).await {
-        Ok(m) => Json(m).into_response(),
+        Ok(mut m) => {
+            state.db.attach_results(&mut m).await;
+            Json(m).into_response()
+        }
         Err(_) => internal(),
     }
 }
