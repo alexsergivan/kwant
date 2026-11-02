@@ -784,6 +784,11 @@ pub struct PlanTask {
     pub checks: Vec<PlanCheck>,
     /// Flight School's class (D10); `general` when left out.
     pub task_class: Option<String>,
+    /// Created on hold, so the runner won't claim it until the person runs it (`POST
+    /// /api/tasks/:id/run`). Set by kwant's own plans (a goal's remediation); never read from a
+    /// bot's JSON.
+    #[serde(skip)]
+    pub held: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -792,6 +797,11 @@ pub struct PlanCheck {
     #[serde(default)]
     pub spec: Value,
     pub required: Option<bool>,
+    /// The check is one the person approved on a goal, shown verbatim: it is recorded as the
+    /// person's (so an `http` check of a private address runs, as it does for the goal). Set by
+    /// kwant's own plans; never read from a bot's JSON.
+    #[serde(skip)]
+    pub goal_approved: bool,
 }
 
 /// Who made a plan, and so whether its `command` checks are approved with the mission.
@@ -937,7 +947,7 @@ pub async fn create_plan(
             .checks
             .iter()
             .zip(ok)
-            .map(|(c, ok)| if c.kind == "http" { validate_check("http", &c.spec, false).unwrap_or(false) || by.active } else { ok })
+            .map(|(c, ok)| if c.kind == "http" { validate_check("http", &c.spec, false).unwrap_or(false) || by.active || c.goal_approved } else { ok })
             .collect();
         approvals.push(ok);
     }
@@ -996,6 +1006,10 @@ pub async fn create_plan(
         if let Some(class) = t.task_class.as_deref().filter(|c| *c != crate::db::flight_school::DEFAULT_CLASS) {
             state.db.set_task_class(&row.id, class, by.created_by).await.map_err(|e| e.to_string())?;
         }
+        // Held before anything is promoted, so the runner can never claim it in between
+        if t.held {
+            state.db.set_task_hold(&row.id, true).await.map_err(|e| e.to_string())?;
+        }
         for (c, approved) in t.checks.iter().zip(&approvals[i]) {
             state
                 .db
@@ -1005,9 +1019,9 @@ pub async fn create_plan(
                     spec: c.spec.clone(),
                     required: c.required.unwrap_or(true),
                     approved: *approved,
-                    requested_by: by.created_by.into(),
+                    requested_by: if c.goal_approved { "person" } else { by.created_by }.into(),
                     // The person made the plan or approves it before anything runs
-                    approved_by: Some(if by.created_by == "person" { "person" } else { "mission" }.into()),
+                    approved_by: Some(if by.created_by == "person" || c.goal_approved { "person" } else { "mission" }.into()),
                 })
                 .await
                 .map_err(|e| e.to_string())?;

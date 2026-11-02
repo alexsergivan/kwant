@@ -36,6 +36,7 @@ pub mod foundry;
 pub mod automation;
 pub mod truth_ledger;
 pub mod goals;
+pub mod goal_missions;
 pub mod routing;
 pub mod smart_results;
 
@@ -207,6 +208,8 @@ impl Database {
         db.migrate_automation_discovery().await?;
         // 0.6.5: Goals, their checks, observations, timeline and fix-task links (add-only)
         db.migrate_goals().await?;
+        // 0.6.5: the missions a goal opened to restore itself, notices and re-checks (add-only)
+        db.migrate_goal_missions().await?;
         // Phase C1: the Truth Ledger mirrors memory (add-only). Last, so no later step rebuilds
         // a table its triggers or lookups depend on
         db.migrate_truth_ledger().await?;
