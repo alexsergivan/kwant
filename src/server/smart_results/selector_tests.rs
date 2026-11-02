@@ -319,10 +319,56 @@ fn odd_input_never_panics() {
 
 #[test]
 fn pathological_text_stays_fast() {
+    // Labels found all over the prose but never as whole names, recommending prose over the scan
+    // cap (100 lines) and just under it (8 lines), link brackets that never close
     let labels = (0..50).map(|i| format!("| {} | {i} |\n", "a".repeat(150 + i))).collect::<String>();
-    let prose = format!("{} best.\n", "a".repeat(990)).repeat(120);
-    let text = format!("| Name | N |\n|---|---|\n{labels}\n{prose}{}", "](".repeat(5_000));
+    for lines in [100, 8] {
+        let prose = format!("{} best.\n", "a".repeat(990)).repeat(lines);
+        let text = format!("| Name | N |\n|---|---|\n{labels}\n{prose}{}", "](".repeat(2_000));
+        assert!(text.len() < MAX_REPLY);
+        let start = std::time::Instant::now();
+        let c = comparison_of(&text);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "{lines}: {:?}", start.elapsed());
+        assert_eq!(c.highlight_row, None);
+    }
+    // Hundreds of tables cost no more than a few
+    let many = format!("{PLANS}\n").repeat(1_000) + "We recommend Team.\n";
+    assert!(many.len() < MAX_REPLY);
     let start = std::time::Instant::now();
-    let _ = compute(&text);
+    assert_eq!(candidates(&many).len(), MAX_TRIES);
     assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
+}
+
+#[test]
+fn huge_ragged_tables_nested_lists_and_pipe_walls_stay_fast() {
+    // The block is worked out inside the message insert, so no reply under the size cap may be slow
+    let header = "| a | b | c | d | e | f | g | h |\n|---|---|---|---|---|---|---|---|\n";
+    let ragged = (0..2_500).map(|i| "| x ".repeat(7 + i % 3) + "|\n").collect::<String>();
+    let nested =
+        (0..5_000).map(|i| format!("{}{} x\n", "   ".repeat(i % 12), if i % 2 == 0 { "1." } else { "-" })).collect::<String>();
+    let cases = [
+        ("ragged table", format!("{header}{ragged}")),
+        ("nested lists", format!("Steps:\n\n{nested}")),
+        ("pipe wall", "|".repeat(MAX_REPLY - 1)),
+        ("pipe lines", format!("{header}{}", "|||||||||\n".repeat(12_000))),
+        ("tiny tables", "| a |\n|---|\n\n".repeat(9_000)),
+        ("escaped pipes", format!("{header}{}", "| \\| ".repeat(25_000))),
+    ];
+    for (what, text) in cases {
+        assert!(text.len() < MAX_REPLY, "{what}: {} bytes", text.len());
+        let start = std::time::Instant::now();
+        let set = compute(&text);
+        let took = start.elapsed();
+        eprintln!("{what}: {took:?}");
+        assert!(took < std::time::Duration::from_secs(1), "{what}: {took:?}");
+        assert_eq!(set, None, "{what}");
+    }
+}
+
+#[test]
+fn a_long_run_of_recommending_prose_names_no_pick() {
+    let some = format!("I recommend Team. {}", "We recommend reading the docs. ".repeat(100));
+    assert_eq!(highlight(&some).as_deref(), Some("r1"));
+    let too_much = format!("I recommend Team. {}", "We recommend reading the docs. ".repeat(300));
+    assert_eq!(highlight(&too_much), None);
 }

@@ -5,6 +5,7 @@
 //! - `CALLTOOL:<tool>:<base64 json args>` in the prompt: call that tool and reply with its text
 //!   (the last marker counts, and each marker runs once: later turns see it again in history).
 //! - `REPLYTAG:<tag>`: reply "answer <tag>" (after any tool call).
+//! - `REPLYTEXT:<base64 text>`: reply exactly that text (say, a markdown table), and nothing else.
 //! - `QUOTAONCE:<tag>` / `QUOTAALWAYS`: fail with Claude's usage-limit error, once / every time.
 //! - `CAPPED:<tag>` / `CAPALWAYS:<tag>`: end at the model-call cap; the continuation doesn't / does too.
 //!
@@ -57,6 +58,12 @@ if cap:
     else:
         text = "partial " + cap[-1] + note
     print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": text}))
+    sys.exit(0)
+# REPLYTEXT:<base64>: reply exactly that text
+rt = re.findall(r"REPLYTEXT:([A-Za-z0-9+/=]+)", prompt)
+if rt:
+    print(json.dumps({"type": "result", "is_error": False, "num_turns": 1,
+        "result": base64.b64decode(rt[-1]).decode()}))
     sys.exit(0)
 reply = []
 m = ([None] + list(re.finditer(r"CALLTOOL:([a-z_]+):([A-Za-z0-9+/=]+)", prompt)))[-1]

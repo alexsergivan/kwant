@@ -7,6 +7,7 @@
 //! raw HTML, tabs, a table run straight into a paragraph or another block) marks the reply
 //! uncertain from that line on, and no block is offered at or after it.
 
+use std::cell::OnceCell;
 use std::collections::HashSet;
 
 use super::validate::has_html;
@@ -19,10 +20,21 @@ pub fn candidates(text: &str) -> Vec<Block> {
         return Vec::new();
     }
     let doc = parse(text);
-    let tables = doc.tables.iter().filter(|t| t.start < doc.tables_unsure_at).filter_map(|t| comparison(t, &doc.prose));
-    let lists = doc.lists.iter().filter(|l| l.start < doc.lists_unsure_at).filter_map(steps);
+    // Read the prose for a pick once, and only when there is a table
+    let said = OnceCell::new();
+    let tables = doc
+        .tables
+        .iter()
+        .filter(|t| t.start < doc.tables_unsure_at)
+        .filter_map(|t| comparison(t, said.get_or_init(|| recommending(&doc.prose)).as_deref()))
+        .take(MAX_TRIES);
+    let lists = doc.lists.iter().filter(|l| l.start < doc.lists_unsure_at).filter_map(steps).take(MAX_TRIES);
     tables.map(Block::Comparison).chain(lists.map(Block::Steps)).collect()
 }
+
+/// Candidates offered per type: the first that passes its checks is used, and a reply with more
+/// tables or lists than this doesn't cost more.
+const MAX_TRIES: usize = 4;
 
 // Reading the markdown
 
@@ -693,7 +705,9 @@ fn table_start<'a>(lines: &[&'a str], i: usize) -> Option<Vec<&'a str>> {
 
 // Comparison
 
-fn comparison(t: &Table, prose: &[&str]) -> Option<Comparison> {
+/// `said`: the reply's recommending sentences ([`recommending`]); `None` means no row is
+/// highlighted.
+fn comparison(t: &Table, said: Option<&[String]>) -> Option<Comparison> {
     let cols = t.header.len();
     if !t.clean || !(2..=8).contains(&cols) || !(3..=50).contains(&t.rows.len()) {
         return None;
@@ -728,7 +742,7 @@ fn comparison(t: &Table, prose: &[&str]) -> Option<Comparison> {
         .map(|(i, r)| Row { id: format!("r{i}"), cells: r.iter().map(|c| c.to_string()).collect() })
         .collect();
     let labels: Vec<&str> = t.rows.iter().map(|r| r[0]).collect();
-    let pick = pick(&labels, prose);
+    let pick = said.and_then(|said| pick(&labels, said));
     Some(Comparison {
         id: "b0".into(),
         source: Source { kind: "markdown_table".into(), index: t.index },
@@ -857,15 +871,36 @@ const HEDGES: [&str; 23] = [
     "worse", "if", "otherwise", "depends", "depending", "cannot", "second", "runner", "alternatively", "but",
 ];
 
-/// Recommending sentences longer than this (in characters), or more label matches than
-/// [`MAX_MATCHES`] in a reply, and no row is highlighted: it keeps the search cheap and the pick
-/// plain.
-const MAX_SENTENCE: usize = 1_000;
-const MAX_MATCHES: usize = 1_000;
+/// More recommending text than this in a reply (in characters), or more label hits than
+/// [`MAX_HITS`] while looking for a table's pick, and no row is highlighted: it keeps the search
+/// cheap and the pick plain.
+const MAX_SCANNED: usize = 8_000;
+const MAX_HITS: usize = 1_000;
 
-/// The one row whose first-column label a recommending sentence outside the table names; `None`
-/// when no row or more than one is named.
-fn pick(labels: &[&str], prose: &[&str]) -> Option<usize> {
+/// The sentences of the reply's prose that recommend something ([`recommends`]), without
+/// emphasis, code marks or link targets; `None` when they run past [`MAX_SCANNED`] characters.
+fn recommending(prose: &[&str]) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let mut total = 0;
+    for line in prose {
+        let line = plain(line);
+        for sentence in sentences(&line) {
+            if !recommends(sentence) {
+                continue;
+            }
+            total += sentence.chars().count();
+            if total > MAX_SCANNED {
+                return None;
+            }
+            out.push(sentence.to_string());
+        }
+    }
+    Some(out)
+}
+
+/// The one row whose first-column label a recommending sentence (`said`, outside the table)
+/// names; `None` when no row or more than one is named.
+fn pick(labels: &[&str], said: &[String]) -> Option<usize> {
     // Short labels match case exactly, longer ones ignore case
     let labels: Vec<(usize, String, bool)> = labels
         .iter()
@@ -883,35 +918,22 @@ fn pick(labels: &[&str], prose: &[&str]) -> Option<usize> {
         })
         .collect();
     let mut named = HashSet::new();
-    let mut matches = 0;
-    for line in prose {
-        let line = plain(line);
-        for sentence in sentences(&line) {
-            if !recommends(sentence) {
-                continue;
+    let mut hits = 0;
+    for sentence in said {
+        let folded: String = sentence.chars().map(fold).collect();
+        let (at, folded_at) = (char_positions(sentence), char_positions(&folded));
+        let mut found: Vec<(usize, usize, usize)> = Vec::new();
+        for (r, label, exact) in &labels {
+            let (h, pos) = if *exact { (sentence.as_str(), &at) } else { (folded.as_str(), &folded_at) };
+            for (start, end) in occurrences(h, label, *exact, &mut hits)? {
+                found.push((pos[start], pos[end], *r));
             }
-            if sentence.chars().count() > MAX_SENTENCE {
-                return None;
-            }
-            let folded: String = sentence.chars().map(fold).collect();
-            let (at, folded_at) = (char_positions(sentence), char_positions(&folded));
-            let mut found: Vec<(usize, usize, usize)> = Vec::new();
-            for (r, label, exact) in &labels {
-                let (h, pos) = if *exact { (sentence, &at) } else { (folded.as_str(), &folded_at) };
-                for (start, end) in occurrences(h, label, *exact) {
-                    found.push((pos[start], pos[end], *r));
-                }
-                if matches + found.len() > MAX_MATCHES {
-                    return None;
-                }
-            }
-            matches += found.len();
-            // `Pro` inside `Pro Max` names `Pro Max`
-            for &(start, end, r) in &found {
-                let inside = found.iter().any(|&(s2, e2, _)| s2 <= start && end <= e2 && e2 - s2 > end - start);
-                if !inside {
-                    named.insert(r);
-                }
+        }
+        // `Pro` inside `Pro Max` names `Pro Max`
+        for &(start, end, r) in &found {
+            let inside = found.iter().any(|&(s2, e2, _)| s2 <= start && end <= e2 && e2 - s2 > end - start);
+            if !inside {
+                named.insert(r);
             }
         }
     }
@@ -961,15 +983,20 @@ fn recommends(sentence: &str) -> bool {
 /// Where `label` appears in `h` as a whole name, as byte ranges: neighbours may not be letters,
 /// digits or `_ + # -`, and a following `.` must end the sentence (so `Node` doesn't match
 /// `Node.js`). With `exact` (a short label matched case for case), a lone `A` or `I` opening the
-/// sentence is the word, not the label.
-fn occurrences(h: &str, label: &str, exact: bool) -> Vec<(usize, usize)> {
+/// sentence is the word, not the label. Every place `label` is found counts toward `hits`, whole
+/// name or not; `None` past [`MAX_HITS`].
+fn occurrences(h: &str, label: &str, exact: bool, hits: &mut usize) -> Option<Vec<(usize, usize)>> {
     let joins = |c: char| c.is_alphanumeric() || matches!(c, '_' | '+' | '#' | '-');
     let mut out = Vec::new();
     if label.is_empty() {
-        return out;
+        return Some(out);
     }
     let mut from = 0;
     while let Some(at) = h[from..].find(label) {
+        *hits += 1;
+        if *hits > MAX_HITS {
+            return None;
+        }
         let start = from + at;
         let end = start + label.len();
         from = start + h[start..].chars().next().map_or(1, char::len_utf8);
@@ -987,7 +1014,7 @@ fn occurrences(h: &str, label: &str, exact: bool) -> Vec<(usize, usize)> {
         }
         out.push((start, end));
     }
-    out
+    Some(out)
 }
 
 /// Text without emphasis or code marks, links reduced to their text: for matching only.
