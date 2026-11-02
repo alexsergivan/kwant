@@ -36,6 +36,10 @@ export interface Kwant {
   /** "Good for" / "Not for" phrases routing reads; absent on older servers. */
   covers?: string[];
   avoids?: string[];
+  /** Which sites its own browser may open (browser-borrowed/contract.md); absent on older servers. */
+  browser_allowed_sites?: string[];
+  browser_blocked_sites?: string[];
+  browser_block_private_network?: boolean;
 }
 
 export interface Channel {
