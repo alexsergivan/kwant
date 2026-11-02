@@ -1934,6 +1934,8 @@ export const TaskDetailBody: React.FC<{
   onResolveFlag?: (f: OpenFlag, choice: ResolveChoice) => void;
   /** Copy a verified task to redo it, with the reason typed. */
   onFork?: (reason: string) => void;
+  /** The task belongs to a remediation mission (it has a goal): that goal already exists, so no "Keep this true". */
+  inGoalMission?: boolean;
   /** GET /api/tasks/:id/failures, oldest first. */
   failures?: TaskFailure[];
   /** Proposed workflow changes for this task. */
@@ -1972,6 +1974,7 @@ export const TaskDetailBody: React.FC<{
   onOpenTask,
   onResolveFlag,
   onFork,
+  inGoalMission = false,
   failures = [],
   changes = [],
   onRunHeld,
@@ -2114,7 +2117,7 @@ export const TaskDetailBody: React.FC<{
             </div>
           </form>
         )}
-        {t.state === 'verified' && !forking && <KeepTrueBox task={t} checks={detail.checks} names={names} />}
+        {t.state === 'verified' && !forking && !inGoalMission && <KeepTrueBox task={t} checks={detail.checks} names={names} />}
       </div>
 
       {flags.length > 0 && (
@@ -3632,6 +3635,7 @@ export const MissionBoardPage: React.FC<{
               onApproveCheck={approveCheck}
               onResolveFlag={resolveFlag}
               onFork={forkTask}
+              inGoalMission={!!missionGoalLink(missions.find((m) => m.id === detail.task.mission_id) ?? {})}
               failures={failures}
               changes={changes}
               onRunHeld={runHeld}

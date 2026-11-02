@@ -60,7 +60,7 @@ import {
   openGoal,
   priorityLabel,
   scheduleText,
-  shownStatus,
+  displayStatus,
   sortGoals,
   specLines,
   spentText,
@@ -125,6 +125,8 @@ const VERDICT_ICON = { met: CheckCircle2, not_met: XCircle, unknown: CircleHelp 
 const errText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback);
 const botName = (id: string | null, names: Record<string, string>) => (id ? names[id] ?? 'a bot' : null);
 const spin = 'animate-spin motion-reduce:animate-none';
+/** A goal as the server has it: the strip swaps `status` for what it draws, and that must never be saved back. */
+const rawOf = (g: Goal): Goal => ({ ...g, status: g.raw_status ?? g.status, raw_status: undefined });
 
 export const GoalStatusPill: React.FC<{ status: string }> = ({ status }) => {
   const look = goalStatusLook(status);
@@ -286,7 +288,9 @@ const GoalButtons: React.FC<{ goal: Goal; busy: boolean; onAction: (a: GoalActio
 
 /**
  * The one decision of an incident (B.0 rule 2): what broke and since when, the bot's diagnosis, and
- * Fix it. The diagnosis is the bot's report, shown as text and marked as such.
+ * Fix it / Not now / Always fix this goal. The diagnosis is the bot's report, shown as text and marked as such.
+ * No buttons before there is a diagnosis (D5): until then the bot is still looking, and a decision without
+ * its reason would only be a question. If it gives up, the card says so and offers the buttons anyway.
  */
 export const DecisionCard: React.FC<{
   goal: Goal;
@@ -294,59 +298,74 @@ export const DecisionCard: React.FC<{
   names: Record<string, string>;
   now: number;
   busy: boolean;
-  /** On the strip only: hide this decision until the next one. */
-  onNotNow?: () => void;
   onAction: (a: GoalAction) => void;
   compact?: boolean;
-}> = ({ goal: g, decision: { diagnosis: d }, names, now, busy, onNotNow, onAction, compact = false }) => {
+}> = ({ goal: g, decision: { diagnosis: d, phase, taskId }, names, now, busy, onAction, compact = false }) => {
   const bot = botName(g.kwant_id, names) ?? 'The bot';
   const since = clockText(d.since, now);
   const report = !!(d.cause || d.proposed_fix || d.summary);
+  const looking = phase === 'looking';
   return (
-    <div role="group" aria-label={`Decision: ${g.title}`} className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-2.5 space-y-1.5 text-[11px]" data-goal-decision={g.id}>
+    <div role="group" aria-label={`Decision: ${g.title}`} className={`rounded-lg border p-2.5 space-y-1.5 text-[11px] ${looking ? 'border-zinc-700 bg-zinc-900/60' : 'border-amber-500/30 bg-amber-500/5'}`} data-goal-decision={g.id} data-decision-phase={phase}>
       <p className={`text-zinc-100 ${wrap}`} data-decision-observed>
         {d.observed ?? 'A required check is failing'}
         {since ? ` since ${since}` : ''}.
       </p>
-      {report ? (
-        <div className="space-y-1" data-decision-report>
-          {d.cause && (
-            <p className={`text-zinc-300 ${wrap} ${compact ? 'line-clamp-2' : ''}`}>
-              <span className="text-zinc-500">Likely cause: </span>
-              {d.cause}
-            </p>
-          )}
-          {d.proposed_fix && (
-            <p className={`text-zinc-300 ${wrap} ${compact ? 'line-clamp-2' : ''}`}>
-              <span className="text-zinc-500">Proposed fix: </span>
-              {d.proposed_fix}
-            </p>
-          )}
-          {!d.cause && !d.proposed_fix && d.summary && (
-            <blockquote className={`border-l-2 border-zinc-700 pl-2 text-zinc-300 whitespace-pre-wrap ${wrap} ${compact ? 'line-clamp-3' : ''}`}>{d.summary}</blockquote>
-          )}
-          <p className="text-[10px] text-zinc-500">From {bot}’s look into it (its report, not instructions).</p>
-        </div>
+      {looking ? (
+        <p className="text-zinc-400" data-decision-looking>
+          {bot} is looking into it{since ? ` (since ${since})` : ''}. You’ll get one decision with what it found.
+        </p>
       ) : (
-        <p className="text-zinc-400">{bot} is looking into it. The fix waits for you.</p>
+        <>
+          {report ? (
+            <div className="space-y-1" data-decision-report>
+              {d.cause && (
+                <p className={`text-zinc-300 ${wrap} ${compact ? 'line-clamp-2' : ''}`}>
+                  <span className="text-zinc-500">Likely cause: </span>
+                  {d.cause}
+                </p>
+              )}
+              {d.proposed_fix && (
+                <p className={`text-zinc-300 ${wrap} ${compact ? 'line-clamp-2' : ''}`}>
+                  <span className="text-zinc-500">Proposed fix: </span>
+                  {d.proposed_fix}
+                </p>
+              )}
+              {!d.cause && !d.proposed_fix && d.summary && (
+                <blockquote className={`border-l-2 border-zinc-700 pl-2 text-zinc-300 whitespace-pre-wrap ${wrap} ${compact ? 'line-clamp-3' : ''}`}>{d.summary}</blockquote>
+              )}
+              <p className="text-[10px] text-zinc-500">From {bot}’s look into it (its report, not instructions).</p>
+            </div>
+          ) : (
+            <p className="text-zinc-400" data-decision-failed>
+              {bot} couldn’t finish looking into it. The fix waits for you.
+            </p>
+          )}
+          {taskId && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+              <button type="button" disabled={busy} onClick={() => onAction('fix')} className={goodBtn} data-goal-fix>
+                {busy ? <Loader2 size={12} className={spin} aria-hidden="true" /> : <Wrench size={12} aria-hidden="true" />} Fix it
+              </button>
+              <button type="button" disabled={busy} onClick={() => onAction('not_now')} className={quietBtn} data-goal-not-now>
+                Not now
+              </button>
+              {g.mode !== 'fix' && (
+                <button type="button" disabled={busy} onClick={() => onAction('always')} title="Fix it now, and next time without asking" className={quietBtn} data-goal-always>
+                  Always fix this goal
+                </button>
+              )}
+            </div>
+          )}
+        </>
       )}
-      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-        <button type="button" disabled={busy} onClick={() => onAction('fix')} className={goodBtn} data-goal-fix>
-          {busy ? <Loader2 size={12} className={spin} aria-hidden="true" /> : <Wrench size={12} aria-hidden="true" />} Fix it
-        </button>
-        {onNotNow && (
-          <button type="button" disabled={busy} onClick={onNotNow} className={quietBtn} data-goal-not-now>
-            Not now
-          </button>
-        )}
-        {g.mode !== 'fix' && (
-          <button type="button" disabled={busy} onClick={() => onAction('always')} title="Fix it now, and next time without asking" className={quietBtn} data-goal-always>
-            Always fix this goal
-          </button>
-        )}
-      </div>
     </div>
   );
+};
+
+/** What a goal says after the person chose Not now: not a request, so no amber and no counting (D1, D3). */
+export const declinedText = (at: string | null, now: number): string => {
+  const when = clockText(at, now);
+  return `${when ? `You chose Not now at ${when}.` : 'Not now.'} The fix waits; it’s dropped if this recovers.`;
 };
 
 /**
@@ -362,22 +381,23 @@ export const GoalRow: React.FC<{
   now?: number;
   error?: string | null;
   busy?: boolean;
-  /** Show the incident's decision here (Fix it / Not now). */
-  decision?: Extract<GoalDecision, { kind: 'run' }> | null;
+  /** The incident's decision: Fix it / Not now here, or what Not now left behind. */
+  decision?: Extract<GoalDecision, { kind: 'run' | 'declined' }> | null;
   /** Past the first three on a phone, until "Show all". */
   hideOnPhone?: boolean;
   onOpen: (g: Goal) => void;
   onOpenTask?: (id: string) => void;
   onAction?: (a: GoalAction) => void;
-  onNotNow?: () => void;
-}> = ({ goal: g, names, titles = {}, now = Date.now(), error = null, busy = false, decision = null, hideOnPhone = false, onOpen, onOpenTask, onAction, onNotNow }) => {
+}> = ({ goal: g, names, titles = {}, now = Date.now(), error = null, busy = false, decision = null, hideOnPhone = false, onOpen, onOpenTask, onAction }) => {
   const id = useId();
   const draft = g.status === 'draft';
   const proposer = g.created_by && g.created_by !== 'person' ? names[g.created_by] ?? null : null;
   const work = currentWorkText(g, titles);
   const broken = !draft && !work && (g.status === 'not_met' || g.status === 'unknown' || g.status === 'needs_you') ? g.checks.find((c) => c.required && checkLook(c, g.interval_minutes, now).verdict !== 'met') : undefined;
   const fixTask = g.open_fix_task && !g.open_mission ? g.open_fix_task : null;
-  const wide = !!(decision && onAction);
+  const run = decision?.kind === 'run' ? decision : null;
+  const declined = decision?.kind === 'declined' ? decision : null;
+  const wide = !!(run && onAction);
   return (
     <li
       aria-labelledby={`${id}-t`}
@@ -403,6 +423,10 @@ export const GoalRow: React.FC<{
         {wide ? null : draft ? (
           <p className="mt-0.5 truncate text-[11px] text-zinc-400" data-goal-line="draft">
             {proposer ? `${proposer} proposed this.` : 'A bot proposed this.'} Nothing runs until you approve it.
+          </p>
+        ) : declined ? (
+          <p className={`mt-0.5 text-[11px] text-zinc-400 ${wrap}`} data-goal-line="declined">
+            {declinedText(declined.at, now)}
           </p>
         ) : g.status === 'needs_you' ? (
           <p className="mt-0.5 truncate text-[11px] text-amber-200" data-goal-line="needs-you">
@@ -431,7 +455,12 @@ export const GoalRow: React.FC<{
           </p>
         )}
       </div>
-      {wide && decision && onAction && <DecisionCard goal={g} decision={decision} names={names} now={now} busy={busy} onNotNow={onNotNow} onAction={onAction} compact />}
+      {wide && run && onAction && <DecisionCard goal={g} decision={run} names={names} now={now} busy={busy} onAction={onAction} compact />}
+      {declined?.taskId && onAction && (
+        <button type="button" disabled={busy} onClick={() => onAction('fix')} className={`${quietBtn} relative z-10 shrink-0`} data-goal-fix data-goal-fix-quiet>
+          {busy && <Loader2 size={12} className={spin} aria-hidden="true" />} Fix it
+        </button>
+      )}
       {error && (
         <p className={`text-[11px] text-rose-300 ${wrap}`} data-goal-error>
           {error}
@@ -1067,12 +1096,14 @@ export const GoalDetailBody: React.FC<{
   onAction: (a: GoalAction) => void;
   onOpenTask?: (id: string) => void;
   onOpenMission?: (id: string) => void;
-}> = ({ detail: d, names, titles = {}, now, busy, error, onAction, onOpenTask, onOpenMission }) => {
-  const g: Goal = { ...d.goal, checks: d.checks.length ? d.checks : d.goal.checks };
-  g.status = shownStatus(g, now);
+  /** The held task this person already said Not now to on this device. */
+  notNowTask?: string | null;
+}> = ({ detail: d, names, titles = {}, now, busy, error, onAction, onOpenTask, onOpenMission, notNowTask = null }) => {
+  const raw: Goal = { ...d.goal, checks: d.checks.length ? d.checks : d.goal.checks };
+  const g: Goal = { ...raw, raw_status: raw.status, status: displayStatus(raw, d.events, now, notNowTask) };
   const draft = g.status === 'draft';
   const look = goalStatusLook(g.status);
-  const decision = goalDecision(g, d.events, now);
+  const decision = goalDecision(g, d.events, now, notNowTask);
   const work = currentWorkText(g, titles);
   const missions = d.missions;
   return (
@@ -1087,6 +1118,16 @@ export const GoalDetailBody: React.FC<{
       </div>
 
       {decision?.kind === 'run' && <DecisionCard goal={g} decision={decision} names={names} now={now} busy={busy} onAction={onAction} />}
+      {decision?.kind === 'declined' && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900/60 px-3 py-2 text-[11px]" data-goal-declined>
+          <p className={`min-w-0 flex-1 text-zinc-300 ${wrap}`}>{declinedText(decision.at, now)}</p>
+          {decision.taskId && (
+            <button type="button" disabled={busy} onClick={() => onAction('fix')} className={quietBtn} data-goal-fix data-goal-fix-quiet>
+              Fix it
+            </button>
+          )}
+        </div>
+      )}
       {decision?.kind === 'needs_you' && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] space-y-1" data-goal-needs-you>
           <p className={`text-amber-200 ${wrap}`}>{decision.text}.</p>
@@ -1223,6 +1264,8 @@ export const KeepTrueBox: React.FC<{
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [made, setMade] = useState<Goal | null>(null);
+  // The server sends the same goal back for a repeat (200): then it was kept true before this tap.
+  const [already, setAlready] = useState(false);
   const keys = useRef<{ make?: string; approve?: string }>({});
   const busyRef = useRef(false);
   const yesRef = useRef<HTMLButtonElement>(null);
@@ -1238,9 +1281,12 @@ export const KeepTrueBox: React.FC<{
     setBusy(true);
     setError(null);
     try {
+      const tapped = Date.now();
       let g = await api.fromTask(task.id, (keys.current.make ??= newIdempotencyKey()));
       if (g.status === 'draft') g = await api.approve(g.id, (keys.current.approve ??= newIdempotencyKey()));
       keys.current = {};
+      const made_at = Date.parse(g.created_at);
+      setAlready(!Number.isNaN(made_at) && made_at < tapped - 2000);
       setMade(g);
       setOpen(false);
     } catch (e) {
@@ -1253,7 +1299,8 @@ export const KeepTrueBox: React.FC<{
   if (made)
     return (
       <p role="status" className={`flex flex-wrap items-center gap-x-2 text-[11px] text-emerald-300 ${wrap}`} data-keep-true-done>
-        <CheckCircle2 size={13} aria-hidden="true" /> Goal added: “{made.title}”. It’s checked every {intervalLabel(made.interval_minutes)}.
+        <CheckCircle2 size={13} aria-hidden="true" />{' '}
+        {already ? `Already kept true: “${made.title}”.` : `Goal added: “${made.title}”. It’s checked every ${intervalLabel(made.interval_minutes)}.`}
         <button type="button" onClick={() => onOpenGoal(made.id)} className={linkBtn} data-keep-true-open>
           Open goal
         </button>
@@ -1394,6 +1441,9 @@ export const GoalsStrip: React.FC<{
   const [formError, setFormError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [drafting, setDrafting] = useState<{ bot: string; text: string; at: number; known: string[] } | null>(null);
+  // Detail reads for list rows that don't carry their incident (D8): the strip can show the decision without the drawer.
+  const [reads, setReads] = useState<Record<string, GoalDetail>>({});
+  const reading = useRef<Set<string>>(new Set());
   const keys = useRef<Record<string, string>>({});
   // A double press sends once: state updates land after the second click's handler has run.
   const busyRef = useRef(false);
@@ -1414,6 +1464,7 @@ export const GoalsStrip: React.FC<{
       (list) => {
         if (!alive.current) return;
         setGoals(list);
+        setReads({});
         setUnsupported(false);
         setLoadError(null);
         setReloading(false);
@@ -1454,6 +1505,27 @@ export const GoalsStrip: React.FC<{
   useEffect(() => {
     if (!initial) reload();
   }, [initial, reload]);
+
+  // D8: until the list rows carry `open_mission`, read the detail for up to 3 goals that may have a decision.
+  useEffect(() => {
+    if (!goals) return;
+    const want = goals
+      .filter((g) => g.mode !== 'watch' && ['not_met', 'fixing', 'needs_you'].includes(g.status) && !g.has_mission_info && !reads[g.id] && !reading.current.has(g.id))
+      .slice(0, 3);
+    for (const g of want) {
+      reading.current.add(g.id);
+      api.get(g.id).then(
+        (d) => {
+          reading.current.delete(g.id);
+          if (alive.current) setReads((cur) => ({ ...cur, [g.id]: d }));
+        },
+        () => {
+          // Leave it as the list says; the next list read tries again.
+          reading.current.delete(g.id);
+        },
+      );
+    }
+  }, [goals, reads, api]);
 
   useEffect(() => {
     if (panel?.kind === 'goal') {
@@ -1514,17 +1586,36 @@ export const GoalsStrip: React.FC<{
 
   const upsert = (g: Goal) => setGoals((cur) => (cur ? (cur.some((x) => x.id === g.id) ? cur.map((x) => (x.id === g.id ? { ...x, ...g, checks: g.checks.length ? g.checks : x.checks } : x)) : [g, ...cur]) : [g]));
 
-  const hideDecision = (g: Goal) => {
-    const task = heldFixTask(g);
-    if (!task) return;
+  const setHidden = (id: string, task: string | null) =>
     setNotNow((cur) => {
-      const next = { ...cur, [g.id]: task };
+      const { [id]: _was, ...rest } = cur;
+      const next = task ? { ...rest, [id]: task } : rest;
       writeJson(NOT_NOW_KEY, next);
       return next;
     });
+
+  /**
+   * Not now (D1): hidden at once on this device, and sent to the server so it holds everywhere and the
+   * bot stops asking. A server without the route (404/405) or no connection keeps the local hide only.
+   * Silent on every surface: no notice, no toast (G-Q-28).
+   */
+  const declineIncident = async (g: Goal) => {
+    const task = heldFixTask(g);
+    if (!task) return;
+    setHidden(g.id, task);
+    const key = (keys.current[`not_now:${g.id}`] ??= newIdempotencyKey());
+    try {
+      upsert(rawOf(await api.notNow(g.id, key)));
+      delete keys.current[`not_now:${g.id}`];
+    } catch (e) {
+      if (e instanceof GoalError && (e.status === 404 || e.status === 405 || e.status === 0)) return;
+      setHidden(g.id, null);
+      setErrors((x) => ({ ...x, [g.id]: errText(e, 'Couldn’t save that. Try again.') }));
+    }
   };
 
-  const act = async (g: Goal, a: GoalAction) => {
+  const act = async (shown: Goal, a: GoalAction) => {
+    const g = rawOf(shown);
     if (a === 'edit') {
       setFormError(null);
       // Edit needs the checks; a list without them gets the detail first.
@@ -1540,7 +1631,7 @@ export const GoalsStrip: React.FC<{
       return;
     }
     if (a === 'not_now') {
-      hideDecision(g);
+      void declineIncident(g);
       return;
     }
     if (busyRef.current) return;
@@ -1562,18 +1653,30 @@ export const GoalsStrip: React.FC<{
       } else if (a === 'pause' || a === 'resume') {
         upsert(await api.update(g.id, { paused: a === 'pause' }));
       } else if (a === 'fix' || a === 'always') {
-        const task = heldFixTask(g);
-        if (a === 'always') upsert(await api.update(g.id, { mode: 'fix' }));
+        let task = heldFixTask(g);
+        let after: Goal = g;
+        if (a === 'always') {
+          try {
+            // Applies to the open incident too (G-Q-12): the server may release the held fix itself, so look again.
+            after = rawOf(await api.alwaysFix(g.id, key));
+            task = heldFixTask((await api.get(g.id).catch(() => null))?.goal ?? after) ?? null;
+          } catch (e) {
+            if (!(e instanceof GoalError && (e.status === 404 || e.status === 405))) throw e;
+            after = rawOf(await api.update(g.id, { mode: 'fix' }));
+          }
+        }
         if (task) {
           await api.runFix(task, key);
           upsert({
             ...g,
-            ...(a === 'always' ? { mode: 'fix' as const } : {}),
+            ...after,
+            mode: a === 'always' ? 'fix' : g.mode,
             status: 'fixing',
             open_mission: g.open_mission ? { ...g.open_mission, run_task_id: null } : null,
             open_fix_task: g.open_fix_task ? { ...g.open_fix_task, held: false } : null,
           });
-        }
+        } else if (a === 'always') upsert(after);
+        setHidden(g.id, null);
         setNotice(a === 'always' ? `“${g.title}” now gets fixed without asking. Fixing it now.` : `Fixing “${g.title}”. Its checks confirm the fix.`);
         reload();
       } else if (a === 'delete' || a === 'dismiss') {
@@ -1669,7 +1772,13 @@ export const GoalsStrip: React.FC<{
       }
     : undefined;
 
-  const sorted = goals ? sortGoals(goals.map((g) => ({ ...g, status: shownStatus(g, now) }))) : [];
+  // What each row draws: the detail read where the list has no incident info (D8), then the display status (D3, D6).
+  const merged = (goals ?? []).map((g) => {
+    const r = reads[g.id];
+    return r ? { ...g, ...r.goal, checks: g.checks.length ? g.checks : r.goal.checks } : g;
+  });
+  const eventsOf = (id: string) => reads[id]?.events ?? (detail && detail.goal.id === id ? detail.events : []);
+  const sorted = sortGoals(merged.map((g) => ({ ...g, raw_status: g.status, status: displayStatus(g, eventsOf(g.id), now, notNow[g.id] ?? null) })));
   const drafts = sorted.filter((g) => g.status === 'draft').length;
   const panelTitle =
     panel?.kind === 'new'
@@ -1710,6 +1819,7 @@ export const GoalsStrip: React.FC<{
           detail={detail}
           names={names}
           titles={titles}
+          notNowTask={notNow[detail.goal.id] ?? null}
           now={now}
           busy={busyId === detail.goal.id}
           error={errors[detail.goal.id] ?? null}
@@ -1775,8 +1885,8 @@ export const GoalsStrip: React.FC<{
   const cap = !open && phone ? PHONE_CAP : Infinity;
   const hiddenCount = sorted.length - Math.min(visible.length, cap);
   const decisionFor = (g: Goal) => {
-    const d = goalDecision(g, [], now);
-    return d?.kind === 'run' && notNow[g.id] !== d.taskId ? d : null;
+    const d = goalDecision(g, eventsOf(g.id), now, notNow[g.id] ?? null);
+    return d?.kind === 'run' || d?.kind === 'declined' ? d : null;
   };
   const toggle = () => {
     setOpen(!open);
@@ -1841,7 +1951,6 @@ export const GoalsStrip: React.FC<{
                 onOpen={(x) => setPanel({ kind: 'goal', id: x.id })}
                 onOpenTask={openTask}
                 onAction={(a) => void act(g, a)}
-                onNotNow={() => hideDecision(g)}
               />
             );
           })}

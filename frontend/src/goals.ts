@@ -113,6 +113,12 @@ export interface Goal {
   /** Status waiting: the goal whose fix runs first in the same folder. */
   waiting_for: string | null;
   waiting_title: string | null;
+  /** The Investigate report, when the server puts it on the goal itself (it comes before the mission's and the timeline's). */
+  diagnosis: GoalReport | null;
+  /** True when the row carries an `open_mission` key at all (null counts), so the strip needn't read the detail to know. */
+  has_mission_info: boolean;
+  /** Set by the strip when it swaps `status` for what it draws: the server's own word. */
+  raw_status?: string;
   /** 1 high, 2 normal (default), 3 low. */
   priority: number;
   mode: GoalMode;
@@ -137,6 +143,13 @@ export interface Goal {
   /** The open remediation mission, when the list or the detail includes it. */
   open_mission: GoalMission | null;
   spent_tokens: number | null;
+}
+
+/** The Investigate result: what the bot found and what it proposes. Untrusted text. */
+export interface GoalReport {
+  summary: string | null;
+  cause: string | null;
+  proposed_fix: string | null;
 }
 
 export interface GoalDetail {
@@ -255,6 +268,8 @@ export function parseFixTask(v: unknown): GoalFixTask | null {
 }
 
 function diagnosisFrom(v: unknown): Pick<GoalMission, 'summary' | 'cause' | 'proposed_fix'> {
+  // A bare string is the whole report (Juno: `diagnosis` is a string, or {summary, cause, proposed_fix}).
+  if (typeof v === 'string') return { summary: s(v), cause: null, proposed_fix: null };
   const d = rec(v);
   return {
     summary: s(d.summary) ?? s(d.investigate_summary) ?? s(d.report),
@@ -281,6 +296,12 @@ export function parseGoalMission(v: unknown): GoalMission | null {
   };
 }
 /** Open: not closed, and not a finished mission. */
+/** A goal's own `diagnosis`, or null when there is none. */
+function parseReport(v: unknown): GoalReport | null {
+  const r = diagnosisFrom(v);
+  return r.summary || r.cause || r.proposed_fix ? r : null;
+}
+
 export const isOpenMission = (m: Pick<GoalMission, 'closed_at' | 'status'>) => !m.closed_at && m.status !== 'done' && m.status !== 'cancelled';
 
 const OPEN_TASK_STATES = new Set(['backlog', 'ready', 'working', 'needs_you', 'review', 'blocked']);
@@ -308,8 +329,11 @@ export function parseGoal(v: unknown): Goal | null {
     folder: s(g.folder),
     status: s(g.status) ?? 'unknown',
     status_reason: s(g.status_reason),
-    waiting_for: s(g.waiting_for),
+    // The list sends `waiting_for` only on the detail read; on a list row `status_reason` is that goal's id (Juno, 21:33).
+    waiting_for: s(g.waiting_for) ?? (s(g.status) === 'waiting' ? s(g.status_reason) : null),
     waiting_title: s(g.waiting_title),
+    diagnosis: parseReport(g.diagnosis),
+    has_mission_info: 'open_mission' in g,
     priority: prio >= 1 && prio <= 3 ? Math.round(prio) : 2,
     mode: mode && MODES.includes(mode) ? mode : 'suggest',
     interval_minutes: n(g.interval_minutes, 60),
@@ -361,6 +385,7 @@ export function parseGoalDetail(v: unknown): GoalDetail | null {
       open_fix_task: goal.open_fix_task ?? fix.find(isOpenTask) ?? null,
       open_mission: missions.find(isOpenMission) ?? goal.open_mission,
       spent_tokens: typeof spent === 'number' ? spent : null,
+      has_mission_info: true,
     },
     checks: allChecks,
     events,
@@ -558,6 +583,7 @@ const NEEDS_YOU_REASONS: Record<string, string> = {
   fix_failed: 'the fix didn’t work',
   max_attempts: 'the fixes so far didn’t bring it back',
   conflict: 'fixing another goal broke it, so nothing runs on its own',
+  declined: 'you chose Not now',
   unknown_24h: 'it couldn’t be checked for a day',
 };
 
@@ -927,11 +953,20 @@ export interface Diagnosis {
   summary: string | null;
 }
 
+/** How far the bot's look into an incident has got: no report yet, a report, or it couldn't finish. */
+export type DiagnosisPhase = 'looking' | 'ready' | 'failed';
+
 export type GoalDecision =
   | { kind: 'approve' }
-  | { kind: 'run'; taskId: string; diagnosis: Diagnosis }
+  /** One decision per incident. `taskId` is the held Fix; without a report (`looking`) there are no buttons yet. */
+  | { kind: 'run'; taskId: string | null; phase: DiagnosisPhase; diagnosis: Diagnosis }
+  /** The person chose Not now: not a request, so nothing asks for them (B.0 rule 1). */
+  | { kind: 'declined'; taskId: string | null; at: string | null }
   | { kind: 'needs_you'; text: string }
   | null;
+
+/** Past this long without a report or a failure, the bot is taken to have stopped looking (D5). */
+export const LOOK_TIMEOUT_MS = 30 * 60_000;
 
 /** The check that broke the goal: a failed required check, else any required check not OK. */
 export function brokenCheck(g: Pick<Goal, 'checks' | 'interval_minutes'>, now: number = Date.now()): GoalCheck | null {
@@ -948,17 +983,34 @@ export function desiredVsObserved(c: GoalCheck): string {
 export function goalDiagnosis(g: Goal, events: GoalEvent[] = [], now: number = Date.now()): Diagnosis {
   const c = brokenCheck(g, now);
   const m = g.open_mission;
+  const own = g.diagnosis;
   const inv = [...events].reverse().find((e) => e.kind === 'investigated');
   const d = inv?.detail ?? {};
   const broke = [...events].reverse().find((e) => e.kind === 'not_met');
+  // goal.diagnosis, then open_mission.diagnosis, then the `investigated` event (D4).
+  const pick = (k: 'summary' | 'cause' | 'proposed_fix', ...alt: string[]) => own?.[k] ?? m?.[k] ?? alt.map((a) => s(d[a])).find(Boolean) ?? null;
   return {
     observed: c ? `${goalCheckName(c)}: ${desiredVsObserved(c)}` : null,
     // When it broke, not when it was last seen: no time at all beats a wrong "since 4 min ago".
     since: broke?.created_at ?? m?.opened_at ?? g.open_fix_task?.created_at ?? null,
-    cause: m?.cause ?? s(d.cause) ?? s(d.likely_cause),
-    proposed_fix: m?.proposed_fix ?? s(d.proposed_fix) ?? s(d.fix),
-    summary: m?.summary ?? s(d.summary) ?? s(d.report),
+    cause: pick('cause', 'cause', 'likely_cause'),
+    proposed_fix: pick('proposed_fix', 'proposed_fix', 'fix'),
+    summary: pick('summary', 'summary', 'report'),
   };
+}
+
+/**
+ * Where the bot's look into the open incident stands (D5): a report (or an `investigated` event) means ready;
+ * an event that says it failed, or 30 minutes since the mission opened with neither, means it couldn't finish.
+ */
+export function diagnosisPhase(g: Goal, events: GoalEvent[] = [], now: number = Date.now()): DiagnosisPhase {
+  const inv = [...events].reverse().find((e) => e.kind === 'investigated');
+  const failed = !!inv && (inv.detail.failed === true || inv.detail.failed === 'true' || inv.detail.status === 'failed');
+  if (failed) return 'failed';
+  const d = goalDiagnosis(g, events, now);
+  if (d.cause || d.proposed_fix || d.summary || inv) return 'ready';
+  const opened = Date.parse(g.open_mission?.opened_at ?? '');
+  return !Number.isNaN(opened) && now - opened > LOOK_TIMEOUT_MS ? 'failed' : 'looking';
 }
 
 /** The task a "Fix it" releases: the held remediation's run task, else a held v1 fix task. */
@@ -968,13 +1020,43 @@ export function heldFixTask(g: Pick<Goal, 'open_mission' | 'open_fix_task'>): st
   return null;
 }
 
-/** What the person is asked, if anything. One per goal: approve a draft, run the held fix, or the Needs you reason. */
-export function goalDecision(g: Goal, events: GoalEvent[] = [], now: number = Date.now()): GoalDecision {
-  if (g.status === 'draft') return { kind: 'approve' };
-  if (g.status === 'needs_you') return { kind: 'needs_you', text: needsYouText(g.status_reason) };
+/** The server's own word for the goal's status (the strip may have swapped `status` for what it draws). */
+export const serverStatus = (g: Pick<Goal, 'status' | 'raw_status'>): string => g.raw_status ?? g.status;
+
+/**
+ * What the person is asked, if anything. One per goal: approve a draft, decide on the incident, or the Needs
+ * you reason. A decision the person already made (Not now) is `declined`: shown, but not a request.
+ * `notNowTask`: the held task this person already said Not now to on this device.
+ */
+export function goalDecision(g: Goal, events: GoalEvent[] = [], now: number = Date.now(), notNowTask: string | null = null): GoalDecision {
+  const status = serverStatus(g);
+  if (status === 'draft') return { kind: 'approve' };
   const task = heldFixTask(g);
-  if (task && (g.status === 'not_met' || g.status === 'fixing')) return { kind: 'run', taskId: task, diagnosis: goalDiagnosis(g, events, now) };
-  return null;
+  if (status === 'needs_you' && (g.status_reason ?? '').trim().toLowerCase() === 'declined') return { kind: 'declined', taskId: task, at: g.updated_at || null };
+  if (status === 'needs_you') return { kind: 'needs_you', text: needsYouText(g.status_reason) };
+  if (status !== 'not_met' && status !== 'fixing') return null;
+  // A fix that actually runs has no decision: fix mode (kwant fixes on its own) or a task already released.
+  if (g.mode === 'fix' || (!task && !g.open_mission)) return null;
+  if (task && notNowTask === task) return { kind: 'declined', taskId: task, at: null };
+  const phase = diagnosisPhase(g, events, now);
+  // No held fix and a report already in (or given up on): the fix was released and is running.
+  if (!task && phase !== 'looking') return null;
+  return { kind: 'run', taskId: task, phase, diagnosis: goalDiagnosis(g, events, now) };
+}
+
+/**
+ * The status the strip draws (D3, D6): everything `shownStatus` does, plus
+ * - `needs_you` for `declined` reads Failing: the person chose it, so it isn't a request;
+ * - in suggest mode with the Fix held, Failing while the bot looks and Needs you once the decision is ready;
+ *   Fixing only while a fix actually runs (fix mode, or after Fix it).
+ */
+export function displayStatus(g: Goal, events: GoalEvent[] = [], now: number = Date.now(), notNowTask: string | null = null): string {
+  const shown = shownStatus({ ...g, status: serverStatus(g) }, now);
+  if (shown !== 'needs_you' && shown !== 'not_met' && shown !== 'fixing') return shown;
+  const d = goalDecision({ ...g, status: shown, raw_status: undefined }, events, now, notNowTask);
+  if (d?.kind === 'declined') return 'not_met';
+  if (d?.kind === 'run' && g.mode === 'suggest') return d.taskId && d.phase !== 'looking' ? 'needs_you' : 'not_met';
+  return shown;
 }
 
 /** "Restore: kwant.si is up · Active" for the goal's current work, or null. */
@@ -1110,6 +1192,10 @@ export const goalsApi = {
     call('/api/goals/draft', 'POST', body, key).then((v) => parseGoal(rec(v).goal ?? v)),
   /** "Keep this true" on a verified task: the server copies its title and outcome checks into a goal. */
   fromTask: (taskId: string, key: string) => call('/api/goals', 'POST', { from_task: taskId }, key).then(needGoal),
+  /** "Not now": holds on every device and stops the asking for this incident. Silent; returns the goal. */
+  notNow: (id: string, key: string) => call(`/api/goals/${enc(id)}/remediation/not-now`, 'POST', {}, key).then(needGoal),
+  /** "Always fix this goal": the goal switches to fix mode; the held fix may or may not be released by the server. */
+  alwaysFix: (id: string, key: string) => call(`/api/goals/${enc(id)}/remediation/always-fix`, 'POST', {}, key).then(needGoal),
   /** Release the held fix ("Fix it"). The same key never starts it twice. */
   runFix: (taskId: string, key: string) => missionsApi.runHeld(taskId, key).then(() => true),
 };
