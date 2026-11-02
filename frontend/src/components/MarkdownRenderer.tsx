@@ -3,6 +3,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check, Terminal } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
+import { HastNode, blockAt, hastText, rehypeSmartIndex, resultBlocks } from '../smartResults';
+import type { ReplyPart, ReplySource } from './results/registry';
+import { SmartResult } from './results/SmartResult';
 
 interface CodeBlockProps {
   language?: string;
@@ -80,17 +83,98 @@ interface MarkdownRendererProps {
   content: string;
   className?: string;
   isStreaming?: boolean;
+  /** The message's `results` (Smart Results). Only for a final bot reply. */
+  results?: unknown;
+  messageId?: string;
+}
+
+// Smart Results: hand the reply's own rendered cells or items to the block, which checks them against
+// its data (results/registry.ts). Any mismatch and the table or list renders as plain markdown.
+type MdElement = React.ReactElement<{ node?: HastNode; children?: React.ReactNode }>;
+const elementsOf = (children: React.ReactNode) => React.Children.toArray(children).filter(React.isValidElement) as MdElement[];
+const tagOf = (el: MdElement) => el.props.node?.tagName ?? (typeof el.type === 'string' ? el.type : '');
+const shown = (el: MdElement) => React.Children.map(el.props.children, formatTextMentions);
+const part = (el: MdElement, node: React.ReactNode = shown(el)): ReplyPart => ({ node, text: hastText(el.props.node) });
+const hasClass = (n: HastNode | undefined, c: string) => {
+  const cls = n?.properties?.className;
+  return Array.isArray(cls) ? cls.includes(c) : cls === c;
+};
+const isTaskItem = (n: HastNode | undefined) => hasClass(n, 'task-list-item');
+
+const checkClass = 'mt-[5px] h-3.5 w-3.5 shrink-0 rounded-sm accent-sky-500';
+
+/** A task item's content without its checkbox or the space after it. */
+function taskContent(children: React.ReactNode): React.ReactNode[] {
+  const out = React.Children.toArray(children).filter((c) => !(React.isValidElement(c) && tagOf(c as MdElement) === 'input'));
+  if (typeof out[0] === 'string') out[0] = out[0].replace(/^\s+/, '');
+  return out;
+}
+
+function tableSource(children: React.ReactNode): ReplySource | null {
+  let head: ReplyPart[] | null = null;
+  const body: ReplyPart[][] = [];
+  for (const section of elementsOf(children)) {
+    const tag = tagOf(section);
+    if (tag !== 'thead' && tag !== 'tbody') return null;
+    for (const tr of elementsOf(section.props.children)) {
+      if (tagOf(tr) !== 'tr') return null;
+      const cells = elementsOf(tr.props.children).map((el) => part(el));
+      if (tag === 'thead') {
+        if (head) return null;
+        head = cells;
+      } else body.push(cells);
+    }
+  }
+  return head ? { kind: 'table', head, body } : null;
+}
+
+function listSource(node: HastNode, children: React.ReactNode): ReplySource {
+  const lis = elementsOf(children).filter((el) => tagOf(el) === 'li');
+  const task = lis.length > 0 && lis.every((li) => isTaskItem(li.props.node));
+  // A loose list wraps each item in <p>; unwrap it so the item reads as one line of text.
+  const inline = (li: MdElement): React.ReactNode => {
+    const kids = elementsOf(li.props.children);
+    const content = task ? taskContent(shown(li)) : shown(li);
+    if (!kids.length || kids.some((el) => tagOf(el) !== 'p' && tagOf(el) !== 'input')) return content;
+    const ps = kids.filter((el) => tagOf(el) === 'p');
+    return ps.flatMap((p, i) => {
+      const c = task && i === 0 ? taskContent(shown(p)) : shown(p);
+      return i ? [' ', c] : [c];
+    });
+  };
+  const start = Number(node.properties?.start);
+  return {
+    kind: 'list',
+    items: lis.map((li) => part(li, inline(li))),
+    start: Number.isInteger(start) && start >= 0 ? start : 1,
+    ordered: node.tagName === 'ol',
+    task,
+  };
 }
 
 export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   content,
   className = '',
   isStreaming = false,
+  results,
+  messageId,
 }) => {
+  // Never while streaming: the block appears when the final message arrives.
+  const smart = !isStreaming && !!messageId && resultBlocks(results).length > 0;
+  const slot = smart ? blockAt(results, { kind: 'slot' }) : null;
+
+  const listView = (node: HastNode | undefined, children: React.ReactNode, plain: React.ReactElement) => {
+    if (!smart || !node || node.data?.smartTop !== true || typeof node.data.smartIndex !== 'number') return plain;
+    const raw = blockAt(results, { kind: 'list', index: node.data.smartIndex, ordered: node.tagName === 'ol' });
+    if (!raw) return plain;
+    return <SmartResult raw={raw} reply={listSource(node, children)} messageId={messageId as string} fallback={plain} />;
+  };
+
   return (
     <div className={`markdown-content text-sm leading-relaxed text-zinc-200 ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={smart ? [rehypeSmartIndex as never] : undefined}
         components={{
           // Pre element pass-through to let CodeBlock handle layout
           pre: ({ children }) => <>{children}</>,
@@ -121,13 +205,19 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           },
 
           // Tables
-          table: ({ children }) => (
-            <div className="my-3.5 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950/70 shadow-sm">
-              <table className="w-full text-left border-collapse text-xs font-sans">
-                {children}
-              </table>
-            </div>
-          ),
+          table: ({ node, children }) => {
+            const plain = (
+              <div className="my-3.5 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950/70 shadow-sm">
+                <table className="w-full text-left border-collapse text-xs font-sans">
+                  {children}
+                </table>
+              </div>
+            );
+            const index = (node as HastNode | undefined)?.data?.smartIndex;
+            const raw = smart && typeof index === 'number' ? blockAt(results, { kind: 'table', index }) : null;
+            const reply = raw ? tableSource(children) : null;
+            return raw && reply ? <SmartResult raw={raw} reply={reply} messageId={messageId as string} fallback={plain} /> : plain;
+          },
           thead: ({ children }) => (
             <thead className="bg-zinc-900/90 text-zinc-200 border-b border-zinc-800 font-medium">
               {children}
@@ -193,22 +283,43 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
             </em>
           ),
 
-          // Lists
-          ul: ({ children }) => (
-            <ul className="list-disc list-outside pl-5 my-2.5 space-y-1 text-zinc-300">
-              {children}
-            </ul>
-          ),
-          ol: ({ children }) => (
-            <ol className="list-decimal list-outside pl-5 my-2.5 space-y-1 text-zinc-300">
-              {children}
-            </ol>
-          ),
-          li: ({ children }) => (
-            <li className="leading-relaxed pl-0.5">
-              {React.Children.map(children, formatTextMentions)}
-            </li>
-          ),
+          // Lists. A GFM task list keeps its boxes in the bullet's place, read-only until it becomes a
+          // checklist block (results/Steps.tsx draws the same box).
+          ul: ({ node, children }) => {
+            const task = hasClass(node as HastNode | undefined, 'contains-task-list');
+            const plain = (
+              <ul className={`${task ? 'list-none pl-1' : 'list-disc list-outside pl-5'} my-2.5 space-y-1 text-zinc-300`}>
+                {children}
+              </ul>
+            );
+            return listView(node as HastNode | undefined, children, plain);
+          },
+          ol: ({ node, children }) => {
+            const task = hasClass(node as HastNode | undefined, 'contains-task-list');
+            const plain = (
+              <ol className={`${task ? 'list-none pl-1' : 'list-decimal list-outside pl-5'} my-2.5 space-y-1 text-zinc-300`}>
+                {children}
+              </ol>
+            );
+            return listView(node as HastNode | undefined, children, plain);
+          },
+          li: ({ node, children }) =>
+            isTaskItem(node as HastNode | undefined) ? (
+              <li className="flex items-start gap-2 leading-relaxed">
+                {React.Children.toArray(children).filter((c) => React.isValidElement(c) && tagOf(c as MdElement) === 'input')}
+                <span className="min-w-0 [overflow-wrap:anywhere]">{React.Children.map(taskContent(children), formatTextMentions)}</span>
+              </li>
+            ) : (
+              <li className="leading-relaxed pl-0.5">
+                {React.Children.map(children, formatTextMentions)}
+              </li>
+            ),
+          input: ({ node: _node, ...props }) =>
+            props.type === 'checkbox' ? (
+              <input type="checkbox" checked={!!props.checked} disabled readOnly className={checkClass} />
+            ) : (
+              <input {...props} />
+            ),
 
           // Quotes & Dividers
           blockquote: ({ children }) => (
@@ -233,6 +344,15 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       >
         {content}
       </ReactMarkdown>
+      {slot && (
+        <SmartResult
+          raw={slot}
+          reply={null}
+          messageId={messageId as string}
+          fallback={null}
+          renderText={(md) => <MarkdownRenderer content={md} />}
+        />
+      )}
 
       {isStreaming && (
         <span className="inline-block w-1.5 h-4 ml-0.5 align-middle bg-sky-400 animate-pulse rounded-sm" />
