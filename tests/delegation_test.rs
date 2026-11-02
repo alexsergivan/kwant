@@ -727,10 +727,14 @@ async fn follow_ups_and_restarts_report_in_the_origin_chat() {
     };
     let (_, open) = env.state.db.create_delegation(&left_open("Cut short")).await.unwrap();
     delegation::interrupt_open(&env.state).await;
-    wait_for("the restarted delegation to complete", || async { delegation_status(&env, &open.id).await == "completed" }).await;
+    // Its result is posted just after it's marked completed
+    wait_for("the restarted delegation's result in the lead's chat", || async {
+        delegation_status(&env, &open.id).await == "completed"
+            && env.state.db.list_messages(&env.lead, 30).await.unwrap().iter().any(|m| m.text.contains("answer restarted"))
+    })
+    .await;
     let lead_chat = env.state.db.list_messages(&env.lead, 30).await.unwrap();
     assert!(lead_chat.iter().any(|m| m.text.contains("Cut short") && m.text.contains("retrying it once now")));
-    assert!(lead_chat.iter().any(|m| m.text.contains("answer restarted")));
     // Its prompt warns that the cut-short run may have done part of the work; a first run's doesn't
     let rerun = prompts_with("Task: Cut short");
     assert!(!rerun.is_empty() && rerun.iter().all(|p| p.contains(delegation::RESTARTED_NOTE)), "{rerun:?}");

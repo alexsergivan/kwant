@@ -215,6 +215,16 @@ impl Database {
         Ok(Self { pool })
     }
 
+    /// A transaction that holds SQLite's write lock from the start, for one that reads before it
+    /// writes. A plain `pool.begin()` only asks for the lock at its first write, and SQLite fails
+    /// that write at once with "database is locked" when another connection is writing: the busy
+    /// timeout doesn't apply to a transaction that has already read. This one waits for the lock
+    /// (up to the busy timeout) at `BEGIN` instead. Roll it back rather than drop it when giving
+    /// up, so the lock is free before the caller returns.
+    async fn begin_write(&self) -> Result<sqlx::Transaction<'static, Sqlite>, sqlx::Error> {
+        self.pool.begin_with("BEGIN IMMEDIATE").await
+    }
+
     async fn seed_defaults(&self) -> Result<(), DbError> {
         // Starters seeded before souls existed get one, unless the user has rewritten them
         for (name, _, persona_prompt, soul, _) in STARTERS {
@@ -606,13 +616,14 @@ impl Database {
         let members_json = serde_json::to_string(&input.member_kwants)?;
         self.check_members(space, &input.lead_kwant_id, &input.member_kwants).await?;
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let (clash,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM teams WHERE space_id = ? AND name = ? COLLATE NOCASE")
             .bind(space.as_str())
             .bind(&input.name)
             .fetch_one(&mut *tx)
             .await?;
         if clash > 0 {
+            tx.rollback().await?;
             return Err(DbError::Conflict(format!("a team called {} already exists in this space", input.name)));
         }
         sqlx::query(

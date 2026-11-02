@@ -506,17 +506,19 @@ impl Database {
         let text = clean_memory_text(text)?;
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let (count,): (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM kwant_memories WHERE kwant_id = ?")
                 .bind(kwant_id)
                 .fetch_one(&mut *tx)
                 .await?;
         if count >= MAX_MEMORIES_PER_KWANT {
+            tx.rollback().await?;
             return Err(MemoryError::TooMany);
         }
         let pinned_by = pinned.then(|| source.to_string());
         if pinned && pinned_count(&mut tx, kwant_id).await? >= MAX_PINNED_PER_KWANT {
+            tx.rollback().await?;
             return Err(MemoryError::TooManyPinned);
         }
         if let Some(turn_id) = outside_turn {
@@ -605,8 +607,9 @@ impl Database {
         .execute(&mut *tx)
         .await?;
         if res.rows_affected() == 0 {
-            // Rolls the provenance row back with it
-            drop(tx);
+            // Rolls the provenance row back with it. Awaited, not dropped: a dropped transaction
+            // rolls back in the background and can still hold the write lock after we return
+            tx.rollback().await?;
             return Err(self.why_agent_cannot_touch(kwant_id, id).await);
         }
         // Unchanged text fires no mirror; the marker must not outlive this write
