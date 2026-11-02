@@ -83,7 +83,7 @@ test('a block being streamed in is hidden, including a half-typed tag', () => {
 
 test('the chat renders the cleaned text and keeps client-read chips read-only', () => {
   assert.match(src, /messageDecisions\(msg\.text, msg\.meta\)/);
-  assert.match(src, /<MarkdownRenderer content=\{text\} \/>/);
+  assert.match(src, /<MarkdownRenderer content=\{text\} results=\{msg\.results\} messageId=\{msg\.id\} \/>/);
   assert.match(src, /onChangeDecision && !shownDecisions\?\.readOnly/);
   assert.match(src, /hideStreamingDecisions\(stripDiscussionMarkers\(streamingText\)\)/);
   assert.match(src, /handleCopy\(text, msg\.id\)/);

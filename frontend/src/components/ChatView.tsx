@@ -46,6 +46,8 @@ import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhea
 import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
+import { SmartActionsSlot } from './results/SmartActions';
+import { COMPOSE_PREFILL_EVENT } from './results/SmartResult';
 
 /** A swipeable chip row whose right fade edge (phones only, see .kw-scroll-row) goes away once
  *  it is scrolled to the end, or when everything already fits. */
@@ -89,6 +91,8 @@ export interface ChatMessage {
   /** JSON string kwnt sets on messages it writes itself, e.g. delegation notes. */
   meta?: string | null;
   created_at?: string | null;
+  /** Smart Results blocks for a bot reply; null or absent while the setting is off. */
+  results?: unknown;
 }
 
 /** The open chat's turn is waiting for a free slot. */
@@ -904,6 +908,25 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   };
 
+  // "Ask about this" on a Smart Results row, card or finding: fill in the composer, never send.
+  useEffect(() => {
+    const prefill = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: unknown }>).detail?.text;
+      if (typeof text !== 'string' || !text) return;
+      setInputVal((prev) => (prev.trim() ? `${prev.trimEnd()}\n${text}` : text));
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+        el.style.height = 'auto';
+        el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+      });
+    };
+    window.addEventListener(COMPOSE_PREFILL_EVENT, prefill);
+    return () => window.removeEventListener(COMPOSE_PREFILL_EVENT, prefill);
+  }, []);
+
   const handlePromptSuggestion = (prompt: string) => {
     setInputVal(prompt);
     playSfx('click');
@@ -1110,7 +1133,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             ) : workAhead ? (
               <WorkAheadBody messageId={msg.id} text={text} />
             ) : (
-              <MarkdownRenderer content={text} />
+              <MarkdownRenderer content={text} results={msg.results} messageId={msg.id} />
             )}
           </div>
           )}
@@ -1129,7 +1152,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {/* Copy action */}
           {!isUser && !filesOnly && (
-            <div className="mt-1.5 flex items-center gap-2 text-zinc-500 text-xs max-w-full min-w-0">
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-zinc-500 text-xs max-w-full min-w-0">
               <button
                 type="button"
                 onClick={() => handleCopy(text, msg.id)}
@@ -1149,6 +1172,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   </>
                 )}
               </button>
+              {msg.results != null && <SmartActionsSlot messageId={msg.id} />}
             </div>
           )}
         </div>

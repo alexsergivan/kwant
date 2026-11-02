@@ -238,3 +238,33 @@
     padding-top: 1rem;
   }
 }
+
+/* Smart results: the "Pick in this reply" label in a table row. It sits in whatever room is left on the
+   first cell's first line and adds no width (inline-size containment), so the table keeps the streamed
+   reply's exact geometry. Short of room it says "Pick"; with almost none, the row's tint and bar show
+   the pick and the full label stays for screen readers. */
+.smart-pick {
+  container-type: inline-size;
+  overflow: clip;
+  white-space: nowrap;
+}
+.smart-pick-short {
+  display: none;
+}
+@container (max-width: 7rem) {
+  .smart-pick-full {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border-width: 0;
+  }
+}
+@container (min-width: 2.5rem) and (max-width: 7rem) {
+  .smart-pick-short {
+    display: inline-block;
+  }
+}
