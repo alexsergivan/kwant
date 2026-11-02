@@ -15,6 +15,7 @@ import { approvalsOff, spaceOffLine } from '../approvalMode';
 import { teamChannelOf } from '../teamChannel';
 import { layaRoutes } from '../channels';
 import { InstallAppButton } from './InstallAppButton';
+import { trapFocusTarget } from '../imports';
 
 export interface Kwant {
   id: string;
@@ -273,6 +274,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [switcherOpen, setSwitcherOpen] = useState(false);
   /** Phones: the member whose actions sheet is open, and whether "Remove" is waiting for a confirm. */
   const [memberMenu, setMemberMenu] = useState<{ team: Team; kwant: Kwant; confirmRemove?: boolean } | null>(null);
+  // Cancel, Escape or Remove: focus goes back to the member's ✕ (or ⋯ on phones), or to the bot's
+  // row when it has left the team.
+  const asideRef = React.useRef<HTMLElement>(null);
+  const memberReturn = React.useRef<{ team: string; kwant: string } | null>(null);
+  const closeMemberMenu = () => {
+    if (memberMenu) memberReturn.current = { team: memberMenu.team.id, kwant: memberMenu.kwant.id };
+    setMemberMenu(null);
+  };
+  React.useLayoutEffect(() => {
+    const r = memberReturn.current;
+    if (memberMenu || !r) return;
+    memberReturn.current = null;
+    const box = asideRef.current;
+    (box?.querySelector<HTMLElement>(`[data-member-opener="${r.team}:${r.kwant}"]`) ?? box?.querySelector<HTMLElement>(`[data-bot-row="${r.kwant}"]`))?.focus();
+  }, [memberMenu]);
   const closeSwitcher = useCallback(() => setSwitcherOpen(false), []);
   const showChats = section !== 'bots';
   const showBots = section !== 'chats';
@@ -340,7 +356,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         role="button"
         tabIndex={0}
         onClick={() => onSelectKwant(k)}
-        onKeyDown={(e) => e.key === 'Enter' && onSelectKwant(k)}
+        // Only the row's own Enter: Enter on its ✕ or Edit is for that button, not for opening the chat.
+        onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && onSelectKwant(k)}
         data-bot-row={k.id}
         className={`group/fleet relative w-full flex items-center gap-2.5 px-2 py-1.5 rounded-xl text-left cursor-pointer transition-all ${
           active ? 'bg-zinc-800/90 text-zinc-100 shadow-sm border border-zinc-700/60' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40 border border-transparent'
@@ -393,6 +410,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <button
                     type="button"
                     data-remove-member={k.id}
+                    data-member-opener={`${team!.id}:${k.id}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       // Asks first, like the phone sheet: a stray click can't take a bot out of its team.
@@ -425,6 +443,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               playSfx('click');
               setMemberMenu({ team, kwant: k });
             }}
+            data-member-opener={`${team.id}:${k.id}`}
             aria-haspopup="dialog"
             aria-label={`More for ${k.name}`}
             className="-mr-1 shrink-0 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 active:bg-zinc-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
@@ -460,7 +479,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         role="button"
         tabIndex={0}
         onClick={() => onSelectTeam(t)}
-        onKeyDown={(e) => e.key === 'Enter' && onSelectTeam(t)}
+        onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && onSelectTeam(t)}
         data-team-row={t.id}
         title={`Open the @${t.name} team chat`}
         className={`w-full flex items-center justify-between px-1.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left group cursor-pointer ${
@@ -589,6 +608,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
+      ref={asideRef}
       aria-label={`${space.name} chats and kwant bots`}
       className={`${phone ? 'w-full flex-1 min-h-0' : 'w-64 h-full border-r border-zinc-800/80'} bg-zinc-900/40 flex flex-col select-none flex-shrink-0`}
     >
@@ -832,7 +852,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           kwant={memberMenu.kwant}
           isLead={memberMenu.kwant.id === memberMenu.team.lead_kwant_id}
           confirmRemove={!!memberMenu.confirmRemove}
-          onClose={() => setMemberMenu(null)}
+          onClose={closeMemberMenu}
           onChat={() => {
             setMemberMenu(null);
             onSelectKwant(memberMenu.kwant);
@@ -849,7 +869,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onUpdateTeamMembers &&
             (() => {
               const { team, kwant } = memberMenu;
-              setMemberMenu(null);
+              closeMemberMenu();
               onUpdateTeamMembers(team, memberIdsOf(team).filter((id) => id !== kwant.id));
             })
           }
@@ -882,6 +902,16 @@ const MemberSheet: React.FC<{
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>('button')?.focus();
   }, [confirmRemove]);
+  // Tab stays inside the sheet.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Tab' || !ref.current) return;
+    const items = Array.from(ref.current.querySelectorAll<HTMLElement>('button:not([disabled])'));
+    const to = trapFocusTarget(items.length, items.indexOf(document.activeElement as HTMLElement), e.shiftKey);
+    if (to !== null) {
+      e.preventDefault();
+      items[to]?.focus();
+    }
+  };
   const item = 'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400';
   const titleId = `member-sheet-${kwant.id}`;
   return (
@@ -891,6 +921,7 @@ const MemberSheet: React.FC<{
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        onKeyDown={onKeyDown}
         className="kw-sheet w-full max-h-[80vh] overflow-y-auto rounded-t-2xl bg-zinc-900 border-t border-zinc-800 p-3 shadow-2xl md:max-w-sm md:rounded-2xl md:border"
       >
         <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-zinc-700 md:hidden" aria-hidden="true" />

@@ -54,6 +54,7 @@ export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, on
             <button
               type="button"
               onClick={() => onSwitch(s.id)}
+              data-rail-space={s.id}
               aria-current={active ? 'true' : undefined}
               aria-label={`${s.name}${unread ? `, ${unread} unread` : ''}`}
               title={`${s.name}${i < 9 ? ` (Ctrl/⌘ ${i + 1})` : ''}`}
@@ -87,6 +88,7 @@ export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, on
     <button
       type="button"
       onClick={onOpenAppSettings}
+      data-settings-opener
       aria-label="Settings (all spaces)"
       title="Settings (all spaces)"
       className="w-10 h-10 rounded-xl text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 flex items-center justify-center transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"

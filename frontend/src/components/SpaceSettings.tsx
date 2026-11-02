@@ -123,11 +123,20 @@ export const SpaceSettings: React.FC<Props> = (p) => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+  // Focus starts on the title (from the gear, Ctrl/⌘ 1–9 or a link), unless a tab already focused
+  // something inside, or a space was picked on the rail, which keeps focus there.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const a = document.activeElement;
+    if (rootRef.current?.contains(a) || a?.closest('[data-rail-space]')) return;
+    rootRef.current?.querySelector<HTMLElement>('#space-settings-title')?.focus();
+  }, []);
 
   return (
     // A full-screen dialog on phones. On desktop it fills the space's area beside the space rail,
     // which stays clickable: picking another space keeps Settings open there.
     <div
+      ref={rootRef}
       role={p.isPhone ? 'dialog' : 'region'}
       aria-modal={p.isPhone ? true : undefined}
       aria-labelledby="space-settings-title"
@@ -140,7 +149,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
           <button type="button" onClick={onClose} aria-label="Back to chats" className="p-1.5 -ml-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800">
             <ArrowLeft size={17} />
           </button>
-          <h2 id="space-settings-title" className="text-sm font-semibold truncate">Settings</h2>
+          <h2 id="space-settings-title" tabIndex={-1} className="text-sm font-semibold truncate focus:outline-none">Settings</h2>
         </div>
         {/* Which settings: this space's, or the ones every space shares */}
         <div role="tablist" aria-label="Settings scope" className="mx-3 md:mx-2 mb-3 grid grid-cols-2 gap-1 rounded-lg bg-zinc-900 border border-zinc-800 p-0.5">

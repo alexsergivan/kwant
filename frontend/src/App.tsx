@@ -4,6 +4,7 @@ import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
 import { InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
+import { useSettingsCover } from './settingsFocus';
 import { FirstRunWelcome } from './components/FirstRunWelcome';
 import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } from './components/ChatView';
@@ -302,6 +303,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const engines = useEngines(true);
   const canRun = canRunNow(engines.engines);
   const offerClaude = canRun === false && claudeNeedsSignIn(engines.engines);
+  // The sidebar and chat under Settings: inert while it's open (the space rail stays usable).
+  const contentRef = useRef<HTMLDivElement>(null);
+  useSettingsCover(!!spaceSettingsTab, contentRef);
   const closeSpaceSettings = () => {
     setSpaceSettingsTab(null);
     setSettingsClosedCount((n) => n + 1);
@@ -3046,67 +3050,69 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       {/* The open space's colour, so it's clear where a message goes */}
       <div className="h-[3px] shrink-0 opacity-60" style={{ background: spaceColor(space) }} aria-hidden="true" />
 
-      {isPhone ? (
-        <>
-          {showPhoneList || needsSetup ? (
-            <div className="flex-1 min-h-0 flex flex-col">
-              {needsSetup ? (
-                <>
-                  {sidebar('chats')}
-                  {setupChecklist}
-                </>
-              ) : (
-                sidebar(phoneTab === 'bots' ? 'bots' : 'chats')
-              )}
-            </div>
-          ) : (
-            <div className="flex-1 min-h-0 flex">{mainPane}</div>
-          )}
-          {(showPhoneList || needsSetup) && (
-            <nav aria-label={`${space.name} sections`} className="shrink-0 grid grid-cols-4 border-t border-zinc-800 bg-zinc-900/95 pb-[env(safe-area-inset-bottom)]">
-              {phoneTabs.map((t) => {
-                const active = t.id === phoneTab;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    aria-current={active ? 'page' : undefined}
-                    onClick={() => {
-                      playSfx('click');
-                      if (t.id === 'inbox') {
-                        showPage('inbox');
-                        return;
-                      }
-                      if (t.id === 'space') {
-                        // Nothing can run yet: the fix is in Accounts, so start there
-                        openSpaceSettings(canRun === false ? 'accounts' : 'general');
-                        return;
-                      }
-                      setPhoneTab(t.id);
-                    }}
-                    className={`relative flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500 ${
-                      active ? 'text-sky-300' : 'text-zinc-400 hover:text-zinc-200'
-                    }`}
-                  >
-                    {t.icon}
-                    {t.label}
-                    {!!t.badge && (
-                      <span className="absolute top-1 left-1/2 ml-2 min-w-[16px] px-1 rounded-full bg-amber-500 text-zinc-950 text-[9px] font-semibold text-center">
-                        {badgeText(t.badge)}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
-          )}
-        </>
-      ) : (
-        <div className="flex-1 min-h-0 flex overflow-hidden">
-          {sidebar('all')}
-          {mainPane}
-        </div>
-      )}
+      <div ref={contentRef} className={`flex-1 min-h-0 flex ${isPhone ? 'flex-col' : 'overflow-hidden'}`}>
+        {isPhone ? (
+          <>
+            {showPhoneList || needsSetup ? (
+              <div className="flex-1 min-h-0 flex flex-col">
+                {needsSetup ? (
+                  <>
+                    {sidebar('chats')}
+                    {setupChecklist}
+                  </>
+                ) : (
+                  sidebar(phoneTab === 'bots' ? 'bots' : 'chats')
+                )}
+              </div>
+            ) : (
+              <div className="flex-1 min-h-0 flex">{mainPane}</div>
+            )}
+            {(showPhoneList || needsSetup) && (
+              <nav aria-label={`${space.name} sections`} className="shrink-0 grid grid-cols-4 border-t border-zinc-800 bg-zinc-900/95 pb-[env(safe-area-inset-bottom)]">
+                {phoneTabs.map((t) => {
+                  const active = t.id === phoneTab;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      aria-current={active ? 'page' : undefined}
+                      onClick={() => {
+                        playSfx('click');
+                        if (t.id === 'inbox') {
+                          showPage('inbox');
+                          return;
+                        }
+                        if (t.id === 'space') {
+                          // Nothing can run yet: the fix is in Accounts, so start there
+                          openSpaceSettings(canRun === false ? 'accounts' : 'general');
+                          return;
+                        }
+                        setPhoneTab(t.id);
+                      }}
+                      className={`relative flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500 ${
+                        active ? 'text-sky-300' : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      {t.icon}
+                      {t.label}
+                      {!!t.badge && (
+                        <span className="absolute top-1 left-1/2 ml-2 min-w-[16px] px-1 rounded-full bg-amber-500 text-zinc-950 text-[9px] font-semibold text-center">
+                          {badgeText(t.badge)}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </nav>
+            )}
+          </>
+        ) : (
+          <>
+            {sidebar('all')}
+            {mainPane}
+          </>
+        )}
+      </div>
 
       {/* New bot */}
       <Suspense fallback={null}>
