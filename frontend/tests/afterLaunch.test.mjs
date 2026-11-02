@@ -42,6 +42,7 @@ const m = await loadBundled(`
   export { SpaceApp } from './src/App';
   export { ManageTeamModal } from './src/components/ManageTeamModal';
   export { RestoreSection } from './src/components/MissionBoardView';
+  export { isTextField } from './src/escape';
 `);
 const { React } = m;
 const noop = () => {};
@@ -161,6 +162,22 @@ test('after launch 1: the space rename keeps a changed name on Escape; Settings 
   await key('Escape');
   assert.equal(settingsOpen(), false, 'unchanged: Escape closes Settings');
   v.unmount();
+});
+
+test('after launch 1: telling a text field apart needs no global Element (test pages without one threw on every focus)', () => {
+  const was = g.Element;
+  delete g.Element;
+  try {
+    assert.equal(m.isTextField(document.createElement('textarea')), true);
+    assert.equal(m.isTextField(document.createElement('input')), true);
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    assert.equal(m.isTextField(box), false);
+    assert.equal(m.isTextField(document.createElement('button')), false);
+    assert.equal(m.isTextField(null), false);
+  } finally {
+    g.Element = was;
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -12,8 +12,11 @@ import { trapFocusTarget } from './imports';
 
 const TEXT_TYPES = new Set(['text', 'search', 'url', 'email', 'password', 'tel', 'number']);
 type TextField = HTMLInputElement | HTMLTextAreaElement;
-export const isTextField = (el: EventTarget | null): el is TextField =>
-  el instanceof Element && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && TEXT_TYPES.has((el as HTMLInputElement).type)));
+// By tag name, not `instanceof Element`: that needs the page's own Element, which a test page may not share.
+export const isTextField = (el: EventTarget | null): el is TextField => {
+  const tag = (el as Element | null)?.tagName;
+  return tag === 'TEXTAREA' || (tag === 'INPUT' && TEXT_TYPES.has((el as HTMLInputElement).type));
+};
 
 /** Props for an inline editor's root (usually its form). `close` is left out for one that stays on screen. */
 export function editorProps(unsaved: boolean, close?: () => void) {
