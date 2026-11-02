@@ -38,10 +38,8 @@ fn labeled(item: &str) -> Option<Labeled<'_>> {
             (label, r.strip_prefix(' ')?, true, ':')
         } else if let Some(r) = after.strip_prefix(" – ").or_else(|| after.strip_prefix(" - ")) {
             (label, r, true, '–')
-        } else if let Some(r) = after.strip_prefix(" — ") {
-            (label, r, true, '—')
         } else {
-            return None;
+            (label, after.strip_prefix(" — ")?, true, '—')
         }
     } else {
         let at = [": ", " – ", " — "].iter().filter_map(|sep| item.find(sep).map(|i| (i, *sep))).min()?;
@@ -315,7 +313,7 @@ fn refs(t: &str) -> Vec<Ref> {
             continue;
         }
         let name = path.rsplit('/').next().unwrap_or(path);
-        let ext = name.rsplit_once('.').map(|(stem, ext)| (stem, ext));
+        let ext = name.rsplit_once('.');
         let good_ext = ext.is_some_and(|(stem, ext)| {
             !stem.is_empty() && (1..=8).contains(&ext.len()) && ext.bytes().all(|b| b.is_ascii_alphanumeric()) && ext.bytes().any(|b| b.is_ascii_alphabetic())
         });

@@ -168,11 +168,11 @@ impl Doc<'_> {
             self.ul_unsure_at
         }
     }
-    fn new_list<'a>(&mut self, line: usize, ordered: bool, delim: u8, number: u64, first: &'a str, intro: Option<&'a str>, heading: Option<&'a str>) -> List<'a> {
+    fn new_list<'a>(&mut self, line: usize, ordered: bool, delim: u8, number: u64, first: &'a str) -> List<'a> {
         let count = if ordered { &mut self.ol_count } else { &mut self.ul_count };
         let index = *count;
         *count += 1;
-        List { index, ordered, start: line, clean: !first.is_empty(), delim, number, items: vec![first], intro, heading }
+        List { index, ordered, start: line, clean: !first.is_empty(), delim, number, items: vec![first], intro: None, heading: None }
     }
 }
 
@@ -483,7 +483,8 @@ fn parse(text: &str) -> Doc<'_> {
                     }
                     if let Some(m) = ordered_marker(rest, indent) {
                         doc.unsure_nested(i, m.content);
-                        let mut l = doc.new_list(i, true, m.delim, m.number, m.content, prev, heading);
+                        let mut l = doc.new_list(i, true, m.delim, m.number, m.content);
+                        (l.intro, l.heading) = (prev, heading);
                         if fence_open(m.content).is_some() {
                             l.clean = false;
                         }
@@ -494,7 +495,8 @@ fn parse(text: &str) -> Doc<'_> {
                     }
                     if let Some(b) = bullet_marker(rest, indent) {
                         doc.unsure_nested(i, b.content);
-                        let mut l = doc.new_list(i, false, rest.as_bytes()[0], 0, b.content, prev, heading);
+                        let mut l = doc.new_list(i, false, rest.as_bytes()[0], 0, b.content);
+                        (l.intro, l.heading) = (prev, heading);
                         if fence_open(b.content).is_some() {
                             l.clean = false;
                         }
