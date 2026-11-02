@@ -1,61 +1,125 @@
-//! The selector: the first comparison table, else the first steps list, of a reply.
+//! The reader and the selectors: every table and top-level list of a reply that could be shown as
+//! a block, in priority order.
 //!
 //! A line-by-line reading of CommonMark + GFM that is exact for the shapes bots write (top-level
-//! pipe tables and numbered lists, fenced code) and abstains on the rest. `index` must name the
-//! same table or list the chat's remark-gfm renders, so anything that could make the count
-//! uncertain (a table or numbered list inside a quote or a bullet item, a list nested in a list,
-//! raw HTML, tabs, a table run straight into a paragraph or another block) marks the reply
-//! uncertain from that line on, and no block is offered at or after it.
+//! pipe tables, numbered and bullet lists, fenced code) and abstains on the rest. `index` must name
+//! the same table or list the chat's remark-gfm renders (smart-results-goals/index-rule.md), so
+//! anything that could make a count uncertain (a table or list inside a quote or an item, raw
+//! HTML, tabs, a table run straight into a paragraph or another block, footnotes) marks that count
+//! uncertain from that line on, and no block of that kind is offered at or after it.
 
 use std::cell::OnceCell;
 use std::collections::HashSet;
 
 use super::validate::has_html;
-use super::{Block, Column, Comparison, Provenance, Row, Source, Step, Steps, MAX_REPLY, PICK_REASON};
+use super::{chart, items};
+use super::{Block, Column, Comparison, Provenance, Role, Row, Source, Steps, Variant, MAX_REPLY, PICK_REASON};
 
-/// Every block `text` could show, in priority order and unchecked (see [`super::compute`]): each
-/// qualifying table as a comparison, then each qualifying numbered list as steps, earliest first.
+/// The order types win in when a reply has more than one candidate (plan §A.2), best first.
+/// `present_result`, `verification` and `files` come from typed sources, not from these selectors.
+pub const PRIORITY: &[&str] =
+    &["present_result", "verification", "chart", "comparison", "metrics", "findings", "cards", "steps", "facts", "files"];
+
+/// Where `block` stands in [`PRIORITY`] (lower wins); steps rank timeline, then checklist, then
+/// plain steps.
+pub fn rank(block: &Block) -> (usize, u8) {
+    let at = PRIORITY.iter().position(|t| *t == block.kind()).unwrap_or(PRIORITY.len());
+    let sub = match block {
+        Block::Steps(s) => match s.variant {
+            Variant::Timeline => 0,
+            Variant::Checklist => 1,
+            Variant::Steps => 2,
+        },
+        _ => 0,
+    };
+    (at, sub)
+}
+
+/// Every block `text` could show, unchecked (see [`super::compute`]): each qualifying table and
+/// top-level list as the one type it reads as, sorted by [`rank`], earliest in the text on a tie.
 pub fn candidates(text: &str) -> Vec<Block> {
     if text.len() > MAX_REPLY {
         return Vec::new();
     }
     let doc = parse(text);
-    // Read the prose for a pick once, and only when there is a table
+    // Read the prose for a pick once, and only when a table needs it
     let said = OnceCell::new();
-    let tables = doc
-        .tables
-        .iter()
-        .filter(|t| t.start < doc.tables_unsure_at)
-        .filter_map(|t| comparison(t, said.get_or_init(|| recommending(&doc.prose)).as_deref()))
-        .take(MAX_TRIES);
-    let lists = doc.lists.iter().filter(|l| l.start < doc.lists_unsure_at).filter_map(steps).take(MAX_TRIES);
-    tables.map(Block::Comparison).chain(lists.map(Block::Steps)).collect()
+    let said = || said.get_or_init(|| recommending(&doc.prose)).as_deref();
+    let mut found: Vec<(usize, Block)> = Vec::new();
+    let tables = doc.tables.iter().filter(|t| t.clean && t.start < doc.tables_unsure_at).take(MAX_TRIES);
+    for t in tables {
+        if let Some(b) = table_block(t, &said) {
+            found.push((t.start, b));
+        }
+    }
+    let lists = doc.lists.iter().filter(|l| l.clean && l.start < doc.list_unsure_at(l.ordered)).take(MAX_TRIES);
+    for l in lists {
+        if let Some(b) = list_block(l) {
+            found.push((l.start, b));
+        }
+    }
+    found.sort_by_key(|(start, b)| (rank(b), *start));
+    found.into_iter().map(|(_, b)| b).collect()
 }
 
-/// Candidates offered per type: the first that passes its checks is used, and a reply with more
-/// tables or lists than this doesn't cost more.
-const MAX_TRIES: usize = 4;
+/// A table as the one type it reads as: a line chart, a bar chart, metrics, else a comparison.
+fn table_block<'s>(t: &Table, said: &impl Fn() -> Option<&'s [String]>) -> Option<Block> {
+    if let Some(c) = chart::line(t) {
+        return Some(Block::Chart(c));
+    }
+    if let Some(c) = chart::bar(t) {
+        // A named pick makes it a comparison
+        let labels: Vec<&str> = t.rows.iter().map(|r| r[0]).collect();
+        if said().and_then(|said| pick(&labels, said)).is_none() {
+            return Some(Block::Chart(c));
+        }
+    }
+    if let Some(m) = chart::metrics_table(t) {
+        return Some(Block::Metrics(m));
+    }
+    comparison(t, said()).map(Block::Comparison)
+}
+
+/// A top-level list as the one type it reads as, in priority order.
+fn list_block(l: &List) -> Option<Block> {
+    items::metrics(l)
+        .map(Block::Metrics)
+        .or_else(|| items::findings(l).map(Block::Findings))
+        .or_else(|| items::cards(l).map(Block::Cards))
+        .or_else(|| items::timeline(l).map(Block::Steps))
+        .or_else(|| items::checklist(l).map(Block::Steps))
+        .or_else(|| steps(l).map(Block::Steps))
+        .or_else(|| items::facts(l).map(Block::Facts))
+}
+
+/// Tables (lists) looked at per reply: a reply with more doesn't cost more.
+const MAX_TRIES: usize = 8;
 
 // Reading the markdown
 
-struct Table<'a> {
-    index: usize,
-    start: usize,
-    clean: bool,
-    header: Vec<&'a str>,
-    rows: Vec<Vec<&'a str>>,
+pub(super) struct Table<'a> {
+    pub index: usize,
+    pub start: usize,
+    pub clean: bool,
+    pub header: Vec<&'a str>,
+    pub rows: Vec<Vec<&'a str>>,
 }
 
-struct List<'a> {
-    index: usize,
-    start: usize,
-    clean: bool,
-    delim: u8,
-    number: u64,
-    items: Vec<&'a str>,
+pub(super) struct List<'a> {
+    /// Counted among lists of its own kind (numbered or bullet).
+    pub index: usize,
+    pub ordered: bool,
+    pub start: usize,
+    /// One line per item, no item empty, nothing nested.
+    pub clean: bool,
+    /// `.` or `)` for a numbered list, `-`, `*` or `+` for a bullet list.
+    pub delim: u8,
+    /// The first item's number; 0 for a bullet list.
+    pub number: u64,
+    pub items: Vec<&'a str>,
     /// The non-blank line just before the list, and the latest heading above it.
-    intro: Option<&'a str>,
-    heading: Option<&'a str>,
+    pub intro: Option<&'a str>,
+    pub heading: Option<&'a str>,
 }
 
 #[derive(Default)]
@@ -64,21 +128,51 @@ struct Doc<'a> {
     lists: Vec<List<'a>>,
     /// Lines outside code, HTML and tables, where a pick can be named.
     prose: Vec<&'a str>,
-    /// The first line from which table (list) counts may differ from the chat's.
+    /// The first line from which table (numbered list, bullet list) counts may differ from the
+    /// chat's.
     tables_unsure_at: usize,
-    lists_unsure_at: usize,
+    ol_unsure_at: usize,
+    ul_unsure_at: usize,
+    ol_count: usize,
+    ul_count: usize,
 }
 
 impl Doc<'_> {
     fn unsure_tables(&mut self, line: usize) {
         self.tables_unsure_at = self.tables_unsure_at.min(line);
     }
-    fn unsure_lists(&mut self, line: usize) {
-        self.lists_unsure_at = self.lists_unsure_at.min(line);
+    fn unsure_ol(&mut self, line: usize) {
+        self.ol_unsure_at = self.ol_unsure_at.min(line);
+    }
+    fn unsure_ul(&mut self, line: usize) {
+        self.ul_unsure_at = self.ul_unsure_at.min(line);
     }
     fn unsure(&mut self, line: usize) {
         self.unsure_tables(line);
-        self.unsure_lists(line);
+        self.unsure_ol(line);
+        self.unsure_ul(line);
+    }
+    /// Nested lists of either kind start in `s` (after quote and list markers).
+    fn unsure_nested(&mut self, line: usize, s: &str) {
+        if has_ordered_marker(s) {
+            self.unsure_ol(line);
+        }
+        if has_bullet_marker(s) {
+            self.unsure_ul(line);
+        }
+    }
+    fn list_unsure_at(&self, ordered: bool) -> usize {
+        if ordered {
+            self.ol_unsure_at
+        } else {
+            self.ul_unsure_at
+        }
+    }
+    fn new_list<'a>(&mut self, line: usize, ordered: bool, delim: u8, number: u64, first: &'a str, intro: Option<&'a str>, heading: Option<&'a str>) -> List<'a> {
+        let count = if ordered { &mut self.ol_count } else { &mut self.ul_count };
+        let index = *count;
+        *count += 1;
+        List { index, ordered, start: line, clean: !first.is_empty(), delim, number, items: vec![first], intro, heading }
     }
 }
 
@@ -89,8 +183,8 @@ enum State {
     Table(usize),
     /// A top-level ordered list; `offset` is the current item's content column.
     List { list: usize, offset: usize, blank: bool },
-    /// A bullet list, read only as far as it can hide tables and numbered lists.
-    Bullet { offset: usize, blank: bool },
+    /// A top-level bullet list.
+    Bullet { list: usize, offset: usize, blank: bool },
     Quote,
     Html,
     Code,
@@ -105,7 +199,13 @@ struct Fence {
 
 fn parse(text: &str) -> Doc<'_> {
     let lines: Vec<&str> = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l)).collect();
-    let mut doc = Doc { tables_unsure_at: usize::MAX, lists_unsure_at: usize::MAX, ..Doc::default() };
+    let mut doc = Doc { tables_unsure_at: usize::MAX, ol_unsure_at: usize::MAX, ul_unsure_at: usize::MAX, ..Doc::default() };
+    // The chat takes the last `[DECISIONS]` block still in a reply out of it, code or not, and
+    // trims and rejoins the rest (frontend/src/decideFirst.ts takeDecisionsBlock): no line of it
+    // is sure to read the same there
+    if lines.iter().any(|l| l.to_ascii_lowercase().contains("[decisions]")) {
+        doc.unsure(0);
+    }
     let mut state = State::None;
     let mut fence: Option<Fence> = None;
     let mut heading: Option<&str> = None;
@@ -175,44 +275,69 @@ fn parse(text: &str) -> Doc<'_> {
                         in_table = true;
                     }
                 }
-                State::List { list, offset, blank: after_blank } => {
+                State::List { list, offset, blank: after_blank } | State::Bullet { list, offset, blank: after_blank } => {
+                    let ordered = matches!(state, State::List { .. });
+                    let at = |list, offset, blank| {
+                        if ordered {
+                            State::List { list, offset, blank }
+                        } else {
+                            State::Bullet { list, offset, blank }
+                        }
+                    };
                     if blank {
-                        state = State::List { list, offset, blank: true };
+                        state = at(list, offset, true);
                         break;
                     }
                     if indent >= offset {
                         // More of the current item: a second paragraph, nested blocks or code
                         doc.lists[list].clean = false;
                         let inner = after_cols(line, offset);
-                        if has_ordered_marker(inner) {
-                            doc.unsure_lists(i);
-                        }
+                        doc.unsure_nested(i, inner);
                         if let Some((ch, len)) = fence_open(inner.trim_start()) {
                             fence = Some(Fence { ch, len, inside: Some(offset) });
                         }
-                        state = State::List { list, offset, blank: false };
+                        state = at(list, offset, false);
                         break;
                     }
                     if indent <= 3 {
-                        if let Some(m) = ordered_marker(rest, indent) {
-                            if m.delim == doc.lists[list].delim {
-                                let l = &mut doc.lists[list];
-                                l.items.push(m.content);
-                                if m.content.is_empty() {
-                                    l.clean = false;
-                                }
-                                if has_ordered_marker(m.content) {
-                                    doc.unsure_lists(i);
-                                }
-                                state = State::List { list, offset: m.offset, blank: false };
-                                break;
-                            }
-                            // `1.` then `1)`: a new list
+                        if thematic_break(rest) {
                             state = State::None;
                             continue;
                         }
-                        if thematic_break(rest)
-                            || bullet_marker(rest, indent).is_some()
+                        let item = if ordered {
+                            ordered_marker(rest, indent).map(|m| (m.delim, m.content, m.offset))
+                        } else {
+                            bullet_marker(rest, indent).map(|b| (rest.as_bytes()[0], b.content, b.offset))
+                        };
+                        if let Some((delim, content, item_offset)) = item {
+                            if delim == doc.lists[list].delim {
+                                let l = &mut doc.lists[list];
+                                l.items.push(content);
+                                if content.is_empty() {
+                                    l.clean = false;
+                                }
+                                doc.unsure_nested(i, content);
+                                state = at(list, item_offset, false);
+                                break;
+                            }
+                            // `1.` then `1)`, or `-` then `*`: a new list
+                            state = State::None;
+                            continue;
+                        }
+                        if !ordered {
+                            if let Some(m) = ordered_marker(rest, indent) {
+                                if after_blank || (m.number == 1 && !m.content.is_empty()) {
+                                    state = State::None;
+                                    continue;
+                                }
+                                // Lazy text, or a new list: CommonMark readers differ
+                                doc.unsure_ol(i);
+                                doc.lists[list].clean = false;
+                                state = at(list, offset, false);
+                                break;
+                            }
+                        }
+                        if (ordered && bullet_marker(rest, indent).is_some())
                             || atx_heading(rest).is_some()
                             || fence_open(rest).is_some()
                             || rest.starts_with('>')
@@ -228,73 +353,24 @@ fn parse(text: &str) -> Doc<'_> {
                     }
                     // A lazy continuation line of the item's paragraph
                     doc.lists[list].clean = false;
-                    if has_ordered_marker(rest) {
-                        doc.unsure_lists(i);
-                    }
-                    state = State::List { list, offset, blank: false };
-                }
-                State::Bullet { offset, blank: after_blank } => {
-                    if blank {
-                        state = State::Bullet { offset, blank: true };
-                        break;
-                    }
-                    if indent >= offset {
-                        let inner = after_cols(line, offset);
-                        if has_ordered_marker(inner) {
-                            doc.unsure_lists(i);
-                        }
-                        if let Some((ch, len)) = fence_open(inner.trim_start()) {
-                            fence = Some(Fence { ch, len, inside: Some(offset) });
-                        }
-                        state = State::Bullet { offset, blank: false };
-                        break;
-                    }
-                    if indent <= 3 {
-                        if thematic_break(rest) {
-                            state = State::None;
-                            continue;
-                        }
-                        if let Some(b) = bullet_marker(rest, indent) {
-                            if has_ordered_marker(b.content) {
-                                doc.unsure_lists(i);
-                            }
-                            state = State::Bullet { offset: b.offset, blank: false };
-                            break;
-                        }
-                        if let Some(m) = ordered_marker(rest, indent) {
-                            if after_blank || (m.number == 1 && !m.content.is_empty()) {
-                                state = State::None;
-                                continue;
-                            }
-                            // Lazy text, or a new list: CommonMark readers differ
-                            doc.unsure_lists(i);
-                            state = State::Bullet { offset, blank: false };
-                            break;
-                        }
-                        if atx_heading(rest).is_some() || fence_open(rest).is_some() || rest.starts_with('>') || html_start(rest) {
-                            state = State::None;
-                            continue;
-                        }
-                    }
-                    if after_blank {
-                        state = State::None;
-                        continue;
-                    }
-                    state = State::Bullet { offset, blank: false };
+                    doc.unsure_nested(i, rest);
+                    state = at(list, offset, false);
                 }
                 State::Quote => {
                     if blank {
                         state = State::None;
                     } else if indent <= 3 && rest.starts_with('>') {
-                        if has_ordered_marker(rest) {
-                            doc.unsure_lists(i);
-                        }
+                        doc.unsure_nested(i, rest);
                     } else if indent <= 3 && block_start(rest) {
                         if let Some(m) = ordered_marker(rest, indent) {
                             if m.number != 1 || m.content.is_empty() {
-                                doc.unsure_lists(i);
+                                doc.unsure_ol(i);
                                 break;
                             }
+                        }
+                        if bullet_marker(rest, indent).is_some_and(|b| b.content.is_empty()) {
+                            doc.unsure_ul(i);
+                            break;
                         }
                         state = State::None;
                         continue;
@@ -316,9 +392,7 @@ fn parse(text: &str) -> Doc<'_> {
                     }
                     prose = false;
                     code = true;
-                    if has_ordered_marker(rest) {
-                        doc.unsure_lists(i);
-                    }
+                    doc.unsure_nested(i, rest);
                 }
                 State::Para => {
                     if blank {
@@ -372,8 +446,10 @@ fn parse(text: &str) -> Doc<'_> {
                         state = State::Code;
                         prose = false;
                         code = true;
-                        if has_ordered_marker(rest) || fence_open(rest).is_some() {
-                            doc.unsure_lists(i);
+                        doc.unsure_nested(i, rest);
+                        if fence_open(rest).is_some() {
+                            doc.unsure_ol(i);
+                            doc.unsure_ul(i);
                         }
                         break;
                     }
@@ -390,9 +466,7 @@ fn parse(text: &str) -> Doc<'_> {
                         break;
                     }
                     if rest.starts_with('>') {
-                        if has_ordered_marker(rest) {
-                            doc.unsure_lists(i);
-                        }
+                        doc.unsure_nested(i, rest);
                         state = State::Quote;
                         break;
                     }
@@ -403,28 +477,17 @@ fn parse(text: &str) -> Doc<'_> {
                         break;
                     }
                     if let Some(m) = ordered_marker(rest, indent) {
-                        let index = doc.lists.len();
-                        if has_ordered_marker(m.content) {
-                            doc.unsure_lists(i);
-                        }
-                        doc.lists.push(List {
-                            index,
-                            start: i,
-                            clean: !m.content.is_empty(),
-                            delim: m.delim,
-                            number: m.number,
-                            items: vec![m.content],
-                            intro: prev,
-                            heading,
-                        });
-                        state = State::List { list: index, offset: m.offset, blank: false };
+                        doc.unsure_nested(i, m.content);
+                        let l = doc.new_list(i, true, m.delim, m.number, m.content, prev, heading);
+                        doc.lists.push(l);
+                        state = State::List { list: doc.lists.len() - 1, offset: m.offset, blank: false };
                         break;
                     }
                     if let Some(b) = bullet_marker(rest, indent) {
-                        if has_ordered_marker(b.content) {
-                            doc.unsure_lists(i);
-                        }
-                        state = State::Bullet { offset: b.offset, blank: false };
+                        doc.unsure_nested(i, b.content);
+                        let l = doc.new_list(i, false, rest.as_bytes()[0], 0, b.content, prev, heading);
+                        doc.lists.push(l);
+                        state = State::Bullet { list: doc.lists.len() - 1, offset: b.offset, blank: false };
                         break;
                     }
                     if let Some(header) = table_start(&lines, i) {
@@ -444,6 +507,9 @@ fn parse(text: &str) -> Doc<'_> {
         if !in_table && !code && delimiter_like(line) {
             // A table this reader didn't take as top-level (in a quote or an item, or orphaned)
             doc.unsure_tables(i);
+        }
+        if !code && footnote_like(line) {
+            doc.unsure(i);
         }
         if prose && !has_pipe(line) {
             doc.prose.push(line);
@@ -619,6 +685,21 @@ fn has_ordered_marker(s: &str) -> bool {
     true
 }
 
+/// Whether a bullet list starts in `s`, after any quote and numbered-list markers.
+fn has_bullet_marker(s: &str) -> bool {
+    let mut s = s.trim_start();
+    for _ in 0..32 {
+        if let Some(r) = s.strip_prefix('>') {
+            s = r.trim_start();
+        } else if let Some(m) = ordered_marker(s, 0).filter(|m| !m.content.is_empty()) {
+            s = m.content;
+        } else {
+            return !thematic_break(s) && bullet_marker(s, 0).is_some();
+        }
+    }
+    true
+}
+
 fn has_pipe(line: &str) -> bool {
     let bytes = line.as_bytes();
     let mut i = 0;
@@ -687,7 +768,33 @@ fn delimiter_like(line: &str) -> bool {
             break;
         }
     }
-    s.contains('|') && s.contains('-') && s.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
+    if !s.contains('|') {
+        // A one-column table needs no pipe when its delimiter has a colon (`Pro` over `--:`);
+        // `---` under a line is a heading
+        let cell = s.trim();
+        let dashes = cell.strip_prefix(':').unwrap_or(cell);
+        let dashes = dashes.strip_suffix(':').unwrap_or(dashes);
+        return cell.contains(':') && !dashes.is_empty() && dashes.bytes().all(|b| b == b'-');
+    }
+    s.contains('-') && s.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
+}
+
+/// A footnote definition (`[^1]: ...`) once indentation and quote or list markers are gone. The
+/// client numbers what is inside it where it stands, but renders it at the end of the reply.
+fn footnote_like(line: &str) -> bool {
+    let mut s = line.trim_start();
+    for _ in 0..32 {
+        if let Some(r) = s.strip_prefix('>') {
+            s = r.trim_start();
+        } else if let Some(r) = s.strip_prefix("- ").or_else(|| s.strip_prefix("* ")).or_else(|| s.strip_prefix("+ ")) {
+            s = r.trim_start();
+        } else if let Some(m) = ordered_marker(s, 0).filter(|m| !m.content.is_empty()) {
+            s = m.content;
+        } else {
+            break;
+        }
+    }
+    s.strip_prefix("[^").is_some_and(|r| r.contains("]:"))
 }
 
 /// The header cells when lines `i` and `i + 1` open a GFM table.
@@ -695,8 +802,12 @@ fn table_start<'a>(lines: &[&'a str], i: usize) -> Option<Vec<&'a str>> {
     let header = lines[i];
     let delimiter = *lines.get(i + 1)?;
     let (h_indent, h_rest) = lead(header);
-    let (d_indent, _) = lead(delimiter);
+    let (d_indent, d_rest) = lead(delimiter);
     if h_indent > 3 || d_indent > 3 || !has_pipe(h_rest) {
+        return None;
+    }
+    // `- | -` is a bullet item to the client, not a delimiter row
+    if d_rest.starts_with("- ") || d_rest.starts_with("-\t") {
         return None;
     }
     let cells = split_cells(h_rest);
@@ -732,7 +843,8 @@ fn comparison(t: &Table, said: Option<&[String]>) -> Option<Comparison> {
     let columns = (0..cols)
         .map(|c| {
             let (numeric, unit) = numeric_column(t.rows.iter().map(|r| r[c]));
-            Column { key: format!("c{c}"), label: t.header[c].to_string(), numeric, unit }
+            let role = if c == 0 { Role::Label } else { header_role(t.header[c]) };
+            Column { key: format!("c{c}"), label: t.header[c].to_string(), numeric, unit, role: Some(role) }
         })
         .collect();
     let rows = t
@@ -745,18 +857,29 @@ fn comparison(t: &Table, said: Option<&[String]>) -> Option<Comparison> {
     let pick = said.and_then(|said| pick(&labels, said));
     Some(Comparison {
         id: "b0".into(),
-        source: Source { kind: "markdown_table".into(), index: t.index },
+        title: None,
+        source: Source::table(t.index),
         columns,
         rows,
         highlight_row: pick.map(|r| format!("r{r}")),
         highlight_reason: pick.map(|_| PICK_REASON.to_string()),
-        provenance: Provenance { kind: "reply_text".into() },
+        provenance: Provenance::reply_text(),
     })
+}
+
+/// Pros / Cons / Advantages / Drawbacks / Notes headers name what a column holds.
+fn header_role(header: &str) -> Role {
+    match plain(header).trim().to_lowercase().as_str() {
+        "pros" | "advantages" => Role::Pros,
+        "cons" | "drawbacks" | "disadvantages" => Role::Cons,
+        "notes" | "note" => Role::Note,
+        _ => Role::Value,
+    }
 }
 
 /// Numeric when at least 80% of the cells are a number with the same prefix or suffix (that
 /// affix is the unit; none counts as an affix too).
-fn numeric_column<'a>(cells: impl Iterator<Item = &'a str>) -> (bool, Option<String>) {
+pub(super) fn numeric_column<'a>(cells: impl Iterator<Item = &'a str>) -> (bool, Option<String>) {
     let mut counts: Vec<(Option<&str>, usize)> = Vec::new();
     let mut total = 0;
     for cell in cells {
@@ -781,7 +904,12 @@ fn numeric_column<'a>(cells: impl Iterator<Item = &'a str>) -> (bool, Option<Str
 
 /// `Some(affix)` when `cell` is a number with at most one affix: a prefix of up to 4 letters or
 /// currency signs (`EUR 12`, `$12`) or a suffix of up to 10 (`12 EUR`, `-4%`, `4.5/5`).
-fn number_affix(cell: &str) -> Option<Option<&str>> {
+pub(super) fn number_affix(cell: &str) -> Option<Option<&str>> {
+    number_parts(cell).map(|(affix, _)| affix)
+}
+
+/// [`number_affix`], and the number as written (`1,299.00`, `-4`).
+pub(super) fn number_parts(cell: &str) -> Option<(Option<&str>, &str)> {
     let mut s = cell.trim();
     loop {
         let before = s;
@@ -812,29 +940,29 @@ fn number_affix(cell: &str) -> Option<Option<&str>> {
         return None;
     }
     match (prefix.is_empty(), suffix.is_empty()) {
-        (true, true) => Some(None),
+        (true, true) => Some((None, number)),
         (false, true) => {
             let ok = prefix.chars().count() <= 4
                 && prefix.chars().all(|c| c.is_alphabetic() || currency(c) || c == '.')
                 && prefix.chars().any(|c| c != '.');
-            ok.then_some(Some(prefix))
+            ok.then_some((Some(prefix), number))
         }
         (true, false) => {
             let out_of = suffix.strip_prefix('/').is_some_and(|d| (1..=3).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_digit()));
             let unit = suffix.chars().all(|c| c.is_alphabetic() || currency(c) || "%‰°/²³µ'\".".contains(c))
                 && suffix.chars().any(|c| c != '.');
-            (suffix.chars().count() <= 10 && (out_of || unit)).then_some(Some(suffix))
+            (suffix.chars().count() <= 10 && (out_of || unit)).then_some((Some(suffix), number))
         }
         (false, false) => None,
     }
 }
 
-fn currency(c: char) -> bool {
+pub(super) fn currency(c: char) -> bool {
     matches!(c, '$' | '¢' | '£' | '¤' | '¥' | '֏' | '؋' | '৳' | '฿' | '៛' | '﷼') || ('\u{20A0}'..='\u{20CF}').contains(&c)
 }
 
 /// `1299`, `12.5`, `12,5`, `1,299.00` or `1.299,00`, with an optional sign; at most 15 digits.
-fn is_number(n: &str) -> bool {
+pub(super) fn is_number(n: &str) -> bool {
     let n = n.strip_prefix(['+', '-', '−']).unwrap_or(n);
     let digits = n.bytes().filter(u8::is_ascii_digit).count();
     if digits == 0 || digits > 15 {
@@ -1018,7 +1146,7 @@ fn occurrences(h: &str, label: &str, exact: bool, hits: &mut usize) -> Option<Ve
 }
 
 /// Text without emphasis or code marks, links reduced to their text: for matching only.
-fn plain(s: &str) -> String {
+pub(super) fn plain(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
@@ -1059,7 +1187,7 @@ const NOT_STEPS: [&str; 24] = [
 ];
 
 fn steps(l: &List) -> Option<Steps> {
-    if !l.clean || l.number != 1 || !(3..=15).contains(&l.items.len()) {
+    if !l.clean || !l.ordered || l.number != 1 || !(3..=15).contains(&l.items.len()) {
         return None;
     }
     if l.items.iter().any(|t| t.is_empty() || t.chars().count() > 300 || is_task(t) || has_html(t)) {
@@ -1077,20 +1205,16 @@ fn steps(l: &List) -> Option<Steps> {
     if !(numbered || introduced) {
         return None;
     }
-    Some(Steps {
-        id: "b0".into(),
-        source: Source { kind: "markdown_list".into(), index: l.index },
-        items: l.items.iter().enumerate().map(|(i, t)| Step { id: format!("s{i}"), text: t.to_string() }).collect(),
-        provenance: Provenance { kind: "reply_text".into() },
-    })
+    let items = l.items.iter().map(|t| (t.to_string(), None, None)).collect();
+    Some(items::steps_block(l, Variant::Steps, items))
 }
 
-fn words(s: &str) -> Vec<String> {
+pub(super) fn words(s: &str) -> Vec<String> {
     let lower: String = s.chars().map(fold).collect();
     lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
 }
 
-fn is_task(item: &str) -> bool {
+pub(super) fn is_task(item: &str) -> bool {
     ["[ ]", "[x]", "[X]"].iter().any(|t| item.strip_prefix(t).is_some_and(|r| r.is_empty() || r.starts_with(' ')))
 }
 
