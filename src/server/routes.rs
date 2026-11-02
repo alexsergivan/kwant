@@ -1423,6 +1423,7 @@ pub(super) async fn delegate_mentions(
         targets.insert(at, k);
     }
     let mut started: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut created = Vec::new();
     let mut sent = 0;
     let user = truncate_chars(user_prompt.trim(), 3000);
     let task = match relay {
@@ -1523,14 +1524,20 @@ pub(super) async fn delegate_mentions(
             after,
             relayed_from: relay.map(|r| r.source.id.clone()),
         };
-        match super::delegation::start(&scope.state, req).await {
-            Ok(d) => {
-                started.insert(specialist.id.clone(), d.id);
+        match super::delegation::create(&scope.state, req).await {
+            Ok(c) => {
+                started.insert(specialist.id.clone(), c.delegation.id.clone());
                 sent += 1;
                 room -= 1;
+                created.push(c);
             }
             Err((_, why)) => skipped.push((specialist.name.clone(), why.trim_end_matches('.').to_string())),
         }
+    }
+    // Only now, with the whole round created: a teammate that finished while the next one was
+    // being created resumed the lead without it (CI on 8f41657: the Continue notice left out SEO)
+    for c in created {
+        c.start(&scope.state).await;
     }
     report_skipped(scope, skipped).await;
     if !capped.is_empty() {

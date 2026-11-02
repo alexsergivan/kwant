@@ -159,6 +159,47 @@ pub struct StartRequest {
 /// Checks a request, creates the thread and the delegation, and starts the specialist's turn
 /// in the background. Returns at once; the error is a message fit for the user or the agent.
 pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (StatusCode, String)> {
+    Ok(create(state, req).await?.start(state).await)
+}
+
+/// A delegation [`create`] made whose turn hasn't started yet.
+pub(super) struct Created {
+    pub delegation: Delegation,
+    next: Next,
+}
+
+enum Next {
+    /// The specialist's turn (lead, specialist)
+    Run(Box<(Kwant, Kwant)>),
+    /// Nothing while it waits for this delegation, unless that already ended
+    Wait(String),
+}
+
+impl Created {
+    /// Starts the specialist's turn in the background, or for a task that waits, lets it go on if
+    /// what it waits for ended meanwhile.
+    pub(super) async fn start(self, state: &AppState) -> Delegation {
+        let Created { delegation: d, next } = self;
+        match next {
+            Next::Run(pair) => {
+                let (lead, specialist) = *pair;
+                spawn_run(state, d.clone(), lead, specialist);
+                d
+            }
+            Next::Wait(prereq) => {
+                if !state.db.get_delegation(&prereq).await.ok().flatten().is_some_and(|p| p.is_open()) {
+                    release_dependents(state, &prereq).await;
+                }
+                state.db.get_delegation(&d.id).await.ok().flatten().unwrap_or(d)
+            }
+        }
+    }
+}
+
+/// [`start`] without starting the turn: a round of hand-offs creates every delegation before any
+/// runs, so one that finishes at once can't report to the lead while a sibling doesn't exist yet
+/// (see `finished_batch`).
+pub(super) async fn create(state: &AppState, req: StartRequest) -> Result<Created, (StatusCode, String)> {
     let bad = |m: &str| Err((StatusCode::BAD_REQUEST, m.to_string()));
     if req.lead.id == req.specialist.id {
         return bad("A bot can't delegate to itself.");
@@ -326,16 +367,11 @@ pub async fn start(state: &AppState, req: StartRequest) -> Result<Delegation, (S
     emit_thread(state, &thread);
     emit_delegation(state, &d);
     tracing::info!(delegation = %d.id, lead = %req.lead.id, specialist = %req.specialist.id, depth = d.depth, after = ?d.after_delegation_id, "delegation started");
-    if let Some(p) = prereq {
-        // It may have ended while this one was being set up
-        if !state.db.get_delegation(&p.id).await.ok().flatten().is_some_and(|p| p.is_open()) {
-            release_dependents(state, &p.id).await;
-        }
-        return Ok(state.db.get_delegation(&d.id).await.ok().flatten().unwrap_or(d));
-    }
-
-    spawn_run(state, d.clone(), req.lead, req.specialist);
-    Ok(d)
+    let next = match prereq {
+        Some(p) => Next::Wait(p.id),
+        None => Next::Run(Box::new((req.lead, req.specialist))),
+    };
+    Ok(Created { delegation: d, next })
 }
 
 /// Starts a delegation's run in the background. A plain function, so the futures of [`run`] and
