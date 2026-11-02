@@ -58,6 +58,28 @@ fn gaps_are_null_never_zero_and_mixed_units_never_chart() {
 }
 
 #[test]
+fn series_in_different_units_never_share_one_axis() {
+    // SR-R-13: bare numbers whose headers name two units stay off one Y axis
+    let line = |h: &str| table(h, &rows(5, |i| format!("| {} 2025 | 1{i}0 | {}.{i} |", MONTHS[i], 3 + i % 2)));
+    assert_ne!(kind(&line("| Month | Price (EUR) | Rating (1-5) |")), Some("chart"));
+    assert_ne!(kind(&line("| Month | Price [EUR] | Rating |")), Some("chart"));
+    assert_ne!(kind(&line("| Month | Price (€) | Cost (EUR) |")), Some("chart"));
+    // A cell unit against a header unit that differs
+    let t = table("| Month | Price | Rating (1-5) |", &rows(5, |i| format!("| {} 2025 | €1{i} | 4.{i} |", MONTHS[i])));
+    assert_ne!(kind(&t), Some("chart"));
+    let bar = table("| Shop | Price (EUR) | Rating (1-5) |", &rows(5, |i| format!("| Shop{} | 1{i}0 | 4.{i} |", MONTHS[i])));
+    assert_ne!(kind(&bar), Some("chart"));
+    // One unit, named in the headers or the cells, still charts
+    for h in ["| Month | Revenue (EUR) | Cost (eur) |", "| Month | Signups | Paid |"] {
+        let Some(Block::Chart(c)) = first(&line(h)) else { panic!("{h}: {:?}", first(&line(h))) };
+        assert_eq!(c.series.len(), 2, "{h}");
+    }
+    let t = table("| Month | Revenue (€) | Cost |", &rows(5, |i| format!("| {} 2025 | 1{i}0 | €2{i} |", MONTHS[i])));
+    let Some(Block::Chart(c)) = first(&t) else { panic!("{:?}", first(&t)) };
+    assert_eq!(c.series.len(), 2);
+}
+
+#[test]
 fn ambiguous_locale_numbers_abstain() {
     // `1,299` alone is 1299 or 1.299: no chart, and never a misread scale
     let t = table("| Month | Cost |", &rows(5, |i| format!("| {} 2025 | 1,2{i}9 |", MONTHS[i])));

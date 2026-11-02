@@ -119,6 +119,9 @@ gap tokens such as `-` or `n/a`):
   Week N, Day N, a year 1900–2100);
 - bar: 5–20 rows, a text first column, 1–2 series, and no pick named in the prose; 2–4 rows stay
   a comparison.
+- A series' unit is the affix its cells share, or for bare numbers the bracketed end of its
+  header (`Price (EUR)`, `Rating [1-5]`). Series whose units differ are never drawn on one Y
+  axis: the table is not a chart (SR-R-13). Units compare as written, so `€` and `EUR` differ.
 - Numbers are read with both `,` and `.` as the decimal mark; when the readings disagree for the
   column (`1,299` alone), there is no chart.
 

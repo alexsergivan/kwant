@@ -37,8 +37,9 @@ fn chart(t: &Table, kind: ChartKind, series: std::ops::RangeInclusive<usize>) ->
     for c in 1..cols {
         columns.push(series_values(t.rows.iter().map(|r| r[c]))?);
     }
-    // One axis: every series in the same unit
-    if columns.windows(2).any(|w| w[0].0 != w[1].0) {
+    // One axis: every series in the same unit, from its cells or else its header (SR-R-13)
+    let units: Vec<_> = (1..cols).map(|c| column_unit(columns[c - 1].0, t.header[c])).collect();
+    if units.windows(2).any(|w| w[0] != w[1]) {
         return None;
     }
     let series = (1..cols)
@@ -70,6 +71,23 @@ fn chart(t: &Table, kind: ChartKind, series: std::ops::RangeInclusive<usize>) ->
         summary: None,
         provenance: Provenance::reply_text(),
     })
+}
+
+/// The unit a column's numbers are in: the affix its cells share (`$`, `%`, `ms`), or for bare
+/// numbers the bracketed end of its header (`Price (EUR)`, `Rating [1-5]`). Compared as written,
+/// so `€` and `EUR` count as two units and the chart abstains.
+fn column_unit(affix: Option<&str>, header: &str) -> Option<String> {
+    if let Some(a) = affix {
+        return Some(a.trim().to_lowercase());
+    }
+    let h = header.trim().trim_matches(['*', '_', '`']).trim();
+    let (open, close) = match h.chars().last()? {
+        ')' => ('(', ')'),
+        ']' => ('[', ']'),
+        _ => return None,
+    };
+    let inner = h[..h.len() - close.len_utf8()].rsplit_once(open)?.1.trim();
+    (!inner.is_empty()).then(|| inner.to_lowercase())
 }
 
 /// Labels and cells a chart can show as they are: none empty in the header, none over 200
