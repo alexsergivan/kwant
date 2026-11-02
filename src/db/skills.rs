@@ -342,7 +342,7 @@ impl Database {
         let kwant_id = edit.kwant_id.clone().unwrap_or(skill.kwant_id.clone());
         self.check_skill_owner(&SpaceId::new(&skill.space_id), kwant_id.as_deref()).await?;
         let now = Utc::now();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         // The revised skill steps aside; any other live skill with the target name blocks approval
         if let Some(old) = &skill.replaces_id {
             sqlx::query("UPDATE skills SET status = 'superseded', updated_at = ? WHERE id = ? AND status IN ('enabled', 'disabled')")
@@ -361,6 +361,7 @@ impl Database {
         .fetch_optional(&mut *tx)
         .await?;
         if clash.is_some() {
+            tx.rollback().await?;
             return Err(SkillError::Conflict(format!("a skill called {} already exists; rename this one or disable that one first", text.name)));
         }
         sqlx::query(

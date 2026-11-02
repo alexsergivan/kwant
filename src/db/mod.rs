@@ -709,12 +709,13 @@ impl Database {
         };
         self.check_members(&space, &input.lead_kwant_id, &input.member_kwants).await?;
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let Some((old_name,)): Option<(String,)> = sqlx::query_as("SELECT name FROM teams WHERE id = ?")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await?
         else {
+            tx.rollback().await?;
             return Ok(None);
         };
         let new_channel = format!("team-{}", input.name);
@@ -726,6 +727,7 @@ impl Database {
             .await?;
         let chat = match (chat, taken) {
             (Some(chat), Some((other,))) if chat != other => {
+                tx.rollback().await?;
                 return Err(DbError::Conflict(format!(
                     "a channel called #{new_channel} already exists; rename or delete it first"
                 )));
@@ -774,12 +776,13 @@ impl Database {
     /// Deletes the team and keeps its chat, history and all, as an ordinary channel renamed to
     /// `archived-team-<name>` (see [`archive_team_chat`]), in the same transaction.
     pub async fn delete_team(&self, id: &str) -> Result<bool, DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let Some((space, name)): Option<(String, String)> = sqlx::query_as("SELECT space_id, name FROM teams WHERE id = ?")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await?
         else {
+            tx.rollback().await?;
             return Ok(false);
         };
         let space = SpaceId::new(space);

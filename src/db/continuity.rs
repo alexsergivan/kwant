@@ -664,7 +664,7 @@ impl Database {
         id: &str,
         change: PinChange,
     ) -> Result<Memory, MemoryError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let row: Option<(String, Option<String>)> =
             sqlx::query_as("SELECT source, pinned_by FROM kwant_memories WHERE id = ? AND kwant_id = ?")
                 .bind(id)
@@ -672,21 +672,25 @@ impl Database {
                 .fetch_optional(&mut *tx)
                 .await?;
         let Some((source, pinned_by)) = row else {
+            tx.rollback().await?;
             return Err(MemoryError::NotFound);
         };
         if !change.by_person {
             if source == "user" {
+                tx.rollback().await?;
                 return Err(MemoryError::PersonWritten);
             }
             if pinned_by.as_deref() == Some("user") && !change.pinned {
+                tx.rollback().await?;
                 return Err(MemoryError::PersonPinned);
             }
         }
         if change.pinned == pinned_by.is_some() {
-            drop(tx);
+            tx.rollback().await?;
             return self.get_memory(id).await;
         }
         if change.pinned && pinned_count(&mut tx, kwant_id).await? >= MAX_PINNED_PER_KWANT {
+            tx.rollback().await?;
             return Err(MemoryError::TooManyPinned);
         }
         let by = change.pinned.then_some(if change.by_person { "user" } else { "agent" });

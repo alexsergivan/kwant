@@ -158,7 +158,7 @@ impl Database {
     /// so the caller can delete the blobs nothing else uses.
     pub async fn document_delete(&self, case_id: &str) -> Result<Vec<super::attachments::Attachment>, DbError> {
         let context = format!("document:{case_id}");
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let attachments: Vec<super::attachments::Attachment> =
             sqlx::query_as("SELECT * FROM attachments WHERE context_id = ?").bind(&context).fetch_all(&mut *tx).await?;
         sqlx::query("DELETE FROM attachments WHERE context_id = ?").bind(&context).execute(&mut *tx).await?;

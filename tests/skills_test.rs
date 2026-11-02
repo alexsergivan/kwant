@@ -293,3 +293,34 @@ async fn skills_migration_is_idempotent_and_additive() {
     let db = kwnt::db::Database::init(tmp.path()).await.unwrap();
     assert_eq!(db.list_skills(&kwnt::db::spaces::SpaceId::default_space(), None, Some("enabled")).await.unwrap().len(), 1);
 }
+
+/// Approving while another connection writes waits for it instead of a 500 "database error": the
+/// approval checks the name for a clash before it writes, and SQLite fails a transaction's first
+/// write at once when the lock is taken after it has read. Seen as a flake here, behind the
+/// proposing turn's writes.
+#[tokio::test]
+async fn approving_waits_for_another_write_instead_of_failing() {
+    use std::time::{Duration, Instant};
+    let env = setup().await;
+    let text = kwnt::db::skills::SkillText { name: "lock-wait".into(), description: "Wait for the lock".into(), body: "1. wait".into() };
+    let pending = env.state.db.propose_skill(&env.a, text).await.unwrap();
+
+    // Another connection holds the write lock for 300 ms
+    let other = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", env.tmp.path().join("data").join("kwnt.db").display()))
+        .await
+        .unwrap();
+    let tx = other.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let writer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        tx.commit().await.unwrap();
+    });
+
+    let started = Instant::now();
+    let (s, v) = call(&env.app, "POST", &format!("/api/skills/{}/approve", pending.id), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "enabled");
+    assert!(started.elapsed() >= Duration::from_millis(250), "the lock was held during the approval");
+    writer.await.unwrap();
+}
