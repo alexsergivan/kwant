@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { TagListInput } from './TagListInput';
-import { X, Sparkles, Pencil, ChevronRight, Brain, CalendarClock, UserRound, ListChecks, Trash2, Gauge } from 'lucide-react';
+import { X, Sparkles, Pencil, ChevronRight, Brain, CalendarClock, UserRound, ListChecks, Trash2, Gauge, Globe } from 'lucide-react';
 import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
 import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
 import { playSfx } from '../audio/chiptune';
@@ -17,6 +17,7 @@ import type { Channel, Kwant } from './Sidebar';
 import { BotApprovalsSetting } from './ApprovalsSetting';
 import { FlightSchoolPanel } from './FlightSchoolPanel';
 import { useEscapeLayer } from '../escape';
+import { BrowserSites, FieldErrorKey, SITE_LIMITS, changedSites, fieldError, sitesOf, sitesSummary } from '../browserSites';
 
 export type EditTab = 'profile' | 'memory' | 'skills' | 'routines' | 'usage';
 const EDIT_TABS: Array<{ id: EditTab; label: string; Icon: typeof Brain }> = [
@@ -42,6 +43,10 @@ export interface AgentFormData {
   /** What routing sends it ("Good for") and keeps away from it ("Not for"). */
   covers?: string[];
   avoids?: string[];
+  /** Which sites its own browser may open; absent on older servers. Sent only when changed. */
+  browser_allowed_sites?: string[];
+  browser_blocked_sites?: string[];
+  browser_block_private_network?: boolean;
 }
 
 interface NewAgentModalProps {
@@ -84,7 +89,7 @@ interface NewAgentModalProps {
   approvalsOff?: boolean;
 }
 
-type ProfileFields = { name: string; title: string; roleStyle: string; model: string; prompt: string; soul: string; profileId: string | null; failover: boolean; covers: string; avoids: string };
+type ProfileFields = { name: string; title: string; roleStyle: string; model: string; prompt: string; soul: string; profileId: string | null; failover: boolean; covers: string; avoids: string; sites: string };
 
 export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   isOpen,
@@ -124,6 +129,12 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [failover, setFailover] = useState(true);
   const [covers, setCovers] = useState<string[]>([]);
   const [avoids, setAvoids] = useState<string[]>([]);
+  // The site rules as the bot has them (null: this server has none), and as edited here.
+  const [sitesBase, setSitesBase] = useState<BrowserSites | null>(null);
+  const [sites, setSites] = useState<BrowserSites | null>(null);
+  const [sitesOpen, setSitesOpen] = useState(false);
+  // A 400 that names one list ("browser_allowed_sites: …"), shown next to that list.
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldErrorKey, string>>>({});
   // Follows the prop until the person changes this bot's approvals here.
   const [toolsRunFree, setToolsRunFree] = useState(approvalsOff);
   useEffect(() => setToolsRunFree(approvalsOff), [approvalsOff, isOpen]);
@@ -138,7 +149,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
 
   // The profile as it opened (or as a preset filled it in): Escape keeps the editor open while it differs.
   const [base, setBase] = useState<ProfileFields | null>(null);
-  const current: ProfileFields = { name, title, roleStyle, model, prompt, soul, profileId, failover, covers: covers.join('\n'), avoids: avoids.join('\n') };
+  const current: ProfileFields = { name, title, roleStyle, model, prompt, soul, profileId, failover, covers: covers.join('\n'), avoids: avoids.join('\n'), sites: JSON.stringify(sites) };
   const unsaved = !!base && (Object.keys(base) as (keyof ProfileFields)[]).some((k) => base[k] !== current[k]);
   const rootRef = useRef<HTMLDivElement>(null);
   useEscapeLayer(rootRef, isOpen, onClose, {
@@ -164,6 +175,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
       failover: initial?.profile_failover ?? true,
       covers: (initial?.covers ?? []).join('\n'),
       avoids: (initial?.avoids ?? []).join('\n'),
+      sites: JSON.stringify(sitesOf(initial)),
     });
     setName(initial?.name ?? '');
     setTitle(initial?.title ?? '');
@@ -180,6 +192,10 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setFailover(initial?.profile_failover ?? true);
     setCovers(initial?.covers ?? []);
     setAvoids(initial?.avoids ?? []);
+    setSitesBase(sitesOf(initial));
+    setSites(sitesOf(initial));
+    setSitesOpen(false);
+    setFieldErrors({});
     let cancelled = false;
     // If a list can't load, the picker stays hidden and nothing is saved: saving an empty
     // list would switch every server off for this kwant.
@@ -223,6 +239,16 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
 
   if (!isOpen) return null;
 
+  const fieldInputId = (field: FieldErrorKey) => `agent-${field.replace(/_/g, '-')}`;
+  const listProps = (field: FieldErrorKey, set: (next: string[]) => void) => ({
+    inputId: fieldInputId(field),
+    serverError: fieldErrors[field] ?? null,
+    onChange: (next: string[]) => {
+      set(next);
+      if (fieldErrors[field]) setFieldErrors(({ [field]: _gone, ...rest }) => rest);
+    },
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
@@ -233,6 +259,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
 
     setSubmitting(true);
     setError(null);
+    setFieldErrors({});
     playSfx('click');
 
     const err = await onSubmit({
@@ -248,13 +275,23 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
       profile_id:
         profiles.length === 0 ? undefined : engine && engineProfiles.some((p) => p.id === profileId) ? profileId : null,
       profile_failover: failover,
-      // Only once loaded (edit): older servers leave them out, and a new bot has none yet.
-      ...(isEdit && initial?.covers ? { covers, avoids } : {}),
+      // Editing: only once loaded, since older servers leave them out. Creating: always.
+      ...(!isEdit || initial?.covers ? { covers, avoids } : {}),
+      ...(isEdit && sitesBase && sites ? changedSites(sitesBase, sites) : {}),
     });
 
     setSubmitting(false);
     if (err) {
-      setError(err);
+      const named = fieldError(err);
+      if (!named) {
+        setError(err);
+        return;
+      }
+      // Nothing was saved: show why next to the list, and take focus there.
+      setFieldErrors({ [named.field]: named.text });
+      setError('Nothing was saved. Fix the entry marked above, then save again.');
+      if (named.field.startsWith('browser_')) setSitesOpen(true);
+      setTimeout(() => document.getElementById(fieldInputId(named.field))?.focus(), 0);
       return;
     }
     onClose();
@@ -514,6 +551,60 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
             <KwantToolsPicker model={model} selected={mcpIds} onChange={setMcpIds} onManageServers={onManageServers} approvalsOff={toolsRunFree} />
           )}
 
+          {isEdit && sites && (
+            <details
+              className="group rounded-lg border border-zinc-800 bg-zinc-950/40"
+              open={sitesOpen}
+              onToggle={(e) => setSitesOpen((e.currentTarget as HTMLDetailsElement).open)}
+              data-browser-sites
+            >
+              <summary className="flex items-center gap-2 px-3 py-2 min-h-[40px] cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500">
+                <Globe size={13} className="flex-shrink-0 text-zinc-500" aria-hidden="true" />
+                <span className="text-xs font-medium text-zinc-400">Browser sites</span>
+                <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500" data-sites-summary>
+                  · {sitesSummary(sites)}
+                </span>
+                <ChevronRight size={13} className="flex-shrink-0 text-zinc-500 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
+              </summary>
+              <div className="space-y-3 px-3 pb-3 pt-1">
+                <p className="text-[11px] text-zinc-500 leading-snug">
+                  Which sites this bot's own browser may open. <span className="font-mono text-zinc-400">example.com</span> includes
+                  its subdomains; <span className="font-mono text-zinc-400">*.example.com</span> only the subdomains. Your own
+                  browsing isn't limited.
+                </p>
+                <TagListInput
+                  label="Allowed sites"
+                  hint={sites.browser_allowed_sites.length ? 'only these' : 'empty: any site'}
+                  placeholder="e.g. wikipedia.org — Enter to add"
+                  value={sites.browser_allowed_sites}
+                  limits={SITE_LIMITS}
+                  {...listProps('browser_allowed_sites', (next) => setSites({ ...sites, browser_allowed_sites: next }))}
+                />
+                <TagListInput
+                  label="Blocked sites"
+                  hint="never these, even if allowed"
+                  placeholder="e.g. facebook.com — Enter to add"
+                  value={sites.browser_blocked_sites}
+                  limits={SITE_LIMITS}
+                  tone="bad"
+                  {...listProps('browser_blocked_sites', (next) => setSites({ ...sites, browser_blocked_sites: next }))}
+                />
+                <label className="flex items-start gap-2 text-[11px] text-zinc-400">
+                  <input
+                    type="checkbox"
+                    checked={sites.browser_block_private_network}
+                    onChange={(e) => setSites({ ...sites, browser_block_private_network: e.target.checked })}
+                    className="mt-0.5 accent-sky-500"
+                  />
+                  <span>
+                    Block local and private network addresses
+                    <span className="block text-zinc-500">localhost, 192.168.x.x, 10.x.x.x and names that point to them, such as your router</span>
+                  </span>
+                </label>
+              </div>
+            </details>
+          )}
+
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">Persona & Instructions</label>
             <textarea
@@ -538,23 +629,28 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
             />
           </div>
 
-          {isEdit && initial?.covers && (
+          {(!isEdit || initial?.covers) && (
             <div className="space-y-3">
               <TagListInput
                 label="Good for"
                 hint="what to send this bot"
                 placeholder="e.g. taxes, invoices — Enter to add"
                 value={covers}
-                onChange={setCovers}
+                {...listProps('covers', setCovers)}
               />
               <TagListInput
                 label="Not for"
                 hint="what never to send it"
                 placeholder="e.g. legal advice — Enter to add"
                 value={avoids}
-                onChange={setAvoids}
+                {...listProps('avoids', setAvoids)}
                 tone="bad"
               />
+              {!isEdit && (
+                <p className="text-[11px] text-zinc-500 leading-snug">
+                  Channels use these to pick who answers. Optional; you can change them later in the bot's settings.
+                </p>
+              )}
             </div>
           )}
 

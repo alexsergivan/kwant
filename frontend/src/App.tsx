@@ -2109,6 +2109,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           preferred_model: agentData.preferred_model,
           ...(agentData.profile_id !== undefined ? { profile_id: agentData.profile_id } : {}),
           ...(agentData.profile_failover !== undefined ? { profile_failover: agentData.profile_failover } : {}),
+          ...(agentData.covers?.length ? { covers: agentData.covers } : {}),
+          ...(agentData.avoids?.length ? { avoids: agentData.avoids } : {}),
         }),
       });
 
