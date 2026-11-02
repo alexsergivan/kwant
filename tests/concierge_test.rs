@@ -387,8 +387,8 @@ async fn a_hand_back_passes_on_the_message_it_answers_not_the_newest() {
     assert_eq!(routing["message_id"], a.as_str(), "A was handed on, not the newer B");
     assert!(state.db.handed_back(&a).await.unwrap() && !state.db.handed_back(&b).await.unwrap());
     let prompts = std::fs::read_to_string(fake_cli().join("prompts.log")).unwrap_or_default();
-    assert!(prompts.contains(&format!("{a_text}\n\n(kwnt routing note: Scriptwriter handed")), "the hand-back turn's prompt is A's text");
-    assert!(!prompts.contains("sitemap\n\n(kwnt routing note"), "B was never handed on");
+    assert!(prompts.contains(&format!("{a_text}\n\n(kwant routing note: Scriptwriter handed")), "the hand-back turn's prompt is A's text");
+    assert!(!prompts.contains("sitemap\n\n(kwant routing note"), "B was never handed on");
 
     // Still one hop for A
     let token = answering_token(&state, &atlas, &general, Some(&a)).await;

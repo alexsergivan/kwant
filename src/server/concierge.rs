@@ -166,10 +166,11 @@ pub fn similar_ids(text: &str, message_id: &str, recent: &[crate::db::routing::R
 /// specialist through the hire policy, which still refuses a role the person turned down.
 pub fn hire_note(ids: &[&str]) -> String {
     format!(
-        "(kwnt routing note: this is request {} of a kind you have answered in the last {SIMILAR_WINDOW_DAYS} days; message \
+        "{} this is request {} of a kind you have answered in the last {SIMILAR_WINDOW_DAYS} days; message \
         ids: {}. Answer it first. Then, if one specialist bot would clearly do this kind of request better, call \
         propose_hire once with evidence {{\"basis\": \"repeated\", \"similar_requests\": [those ids]}}. Check hire_status \
         first and don't propose a role the person turned down. If propose_hire refuses, don't retry.)",
+        crate::drivers::ROUTING_NOTE,
         ids.len(),
         ids.join(", ")
     )
@@ -217,5 +218,17 @@ mod hire_tests {
         // A two-letter acronym isn't filler: three requests to review a PR are one kind
         let recent = vec![ex("m2", "PR review please", false), ex("m1", "Review my PR", false)];
         assert_eq!(similar_ids("Can you review this PR?", "m3", &recent), vec!["m1", "m2", "m3"]);
+    }
+
+    /// The Concierge's turn has the person's message once: its prompt is the message plus this
+    /// note, so history drops the copy (it didn't while the note began "(kwnt").
+    #[test]
+    fn the_hire_note_doesnt_repeat_the_message_in_history() {
+        let asked = "Best street food stalls in Munich this weekend?";
+        let note = hire_note(&["m1", "m2", "m3"]);
+        assert!(note.starts_with(crate::drivers::ROUTING_NOTE), "{note}");
+        let mut history = vec![crate::drivers::tests::said("user", asked)];
+        crate::drivers::drop_current_message(&mut history, &format!("{asked}\n\n{note}"));
+        assert!(history.is_empty(), "the prompt carries the message once");
     }
 }

@@ -15,6 +15,7 @@ use crate::db::models::{Kwant, MessageExtra, NewMessage};
 use crate::db::routing::RouteChoice;
 use crate::db::spaces::SpaceId;
 use crate::drivers::events::RuntimeEvent;
+use crate::drivers::ROUTING_NOTE;
 use crate::router::team::{Hints, Learned, ROUTE_AT};
 use axum::{
     extract::{Path, State},
@@ -44,7 +45,7 @@ pub(super) fn routed_note(routing: &Value, team_channel: bool) -> Option<String>
     // Not "if another bot would do it better": a bot that sees no better teammate (the Concierge is
     // made when needed) answers what isn't its area instead of handing it back
     Some(format!(
-        "(kwant routing note: kwnt picked you for this message from its words; the person didn't choose you. If it isn't \
+        "{ROUTING_NOTE} kwnt picked you for this message from its words; the person didn't choose you. If it isn't \
         your area, call {HAND_BACK} with a one-line reason instead of answering: kwnt passes it to a better fit or a \
         generalist, even one you can't see here, and tells you if there's no one. If it is your area, answer it.)"
     ))
@@ -355,10 +356,7 @@ pub(super) async fn hand_back(state: &AppState, from_id: &str, channel_id: &str,
     let mut routing = super::routes::routing_meta(&to, &why, members.len() + 1, false, &[], "handback", &msg.id);
     routing["fit"] = json!(fit);
     routing["handed_back_by"] = json!(from.id);
-    let prompt = format!(
-        "{}\n\n(kwnt routing note: {} handed this message to you as not their area: {reason}. Answer it.)",
-        msg.text, from.name
-    );
+    let prompt = handback_prompt(&msg.text, &from.name, reason);
     tracing::info!(from = %from.id, to = %to.id, message = %msg.id, "a bot handed a message back");
     let (st, k, um) = (state.clone(), to.clone(), msg.id.clone());
     let ch = channel.id.clone();
@@ -368,6 +366,11 @@ pub(super) async fn hand_back(state: &AppState, from_id: &str, channel_id: &str,
         }
     });
     Ok(to.name)
+}
+
+/// The handed-back turn's prompt: the person's message, then a note saying who handed it on and why.
+fn handback_prompt(text: &str, from: &str, reason: &str) -> String {
+    format!("{text}\n\n{ROUTING_NOTE} {from} handed this message to you as not their area: {reason}. Answer it.)")
 }
 
 /// Who takes a handed-back message: the next best member when it fits (at least [`ROUTE_AT`]),
@@ -455,6 +458,18 @@ mod tests {
         }];
         let note = routed_note(&routing("keywords", "matched"), false).unwrap();
         crate::drivers::drop_current_message(&mut history, &format!("{asked}\n\n{note}"));
+        assert!(history.is_empty(), "the prompt carries the message once");
+    }
+
+    /// The next bot's turn has the handed-back message once: its prompt is the message plus the
+    /// note, so history drops the copy (it didn't while this note began "(kwnt").
+    #[test]
+    fn a_handed_back_message_isnt_repeated_in_history() {
+        let asked = "Plan a lantern parade route for Saturday";
+        let prompt = handback_prompt(asked, "Scriptwriter", "Lantern parades are not book scripts");
+        assert!(prompt.starts_with(&format!("{asked}\n\n{ROUTING_NOTE} Scriptwriter handed")), "{prompt}");
+        let mut history = vec![crate::drivers::tests::said("user", asked)];
+        crate::drivers::drop_current_message(&mut history, &prompt);
         assert!(history.is_empty(), "the prompt carries the message once");
     }
 }

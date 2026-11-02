@@ -95,15 +95,21 @@ pub fn drop_current_message(history: &mut Vec<crate::db::models::Message>, promp
     let text = last.text.trim();
     let is_current = !text.is_empty()
         && prompt.trim_start().strip_prefix(text).is_some_and(|rest| {
-            rest.trim().is_empty() || KWANT_PROMPT_SUFFIXES.iter().any(|s| rest.starts_with(s))
+            rest.trim().is_empty()
+                || rest.strip_prefix("\n\n").is_some_and(|block| KWANT_PROMPT_SUFFIXES.iter().any(|s| block.starts_with(s)))
         });
     if last.sender_role == "user" && is_current {
         history.pop();
     }
 }
 
-/// Blocks kwant adds after the person's own words in a turn's prompt (attachments, routing note).
-const KWANT_PROMPT_SUFFIXES: [&str; 2] = ["\n\n[Attached files]", "\n\n(kwant routing note:"];
+/// How every note kwant adds to a routed turn's prompt begins (routed, hand-back, hire, team
+/// building). A note that begins any other way makes the person's message show twice.
+pub const ROUTING_NOTE: &str = "(kwant routing note:";
+
+/// Blocks kwant adds after the person's own words in a turn's prompt, after a blank line
+/// (attachments, routing note).
+const KWANT_PROMPT_SUFFIXES: [&str; 2] = ["[Attached files]", ROUTING_NOTE];
 
 /// Frames text another bot wrote, wherever it reaches a bot (history, handoffs, delegated tasks
 /// and their results), so it is never mistaken for the person's own words or authority.
@@ -746,8 +752,8 @@ pub fn create_driver_for_kwant(kwant: &Kwant) -> Box<dyn Driver> {
 }
 
 #[cfg(test)]
-mod tests {
-    fn said(role: &str, text: &str) -> crate::db::models::Message {
+pub(crate) mod tests {
+    pub(crate) fn said(role: &str, text: &str) -> crate::db::models::Message {
         crate::db::models::Message {
             id: text.into(),
             channel_id: None,

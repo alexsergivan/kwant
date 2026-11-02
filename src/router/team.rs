@@ -1943,4 +1943,15 @@ mod fit_tests {
         assert_eq!(content_words("Is it ok to ship a 3D build at 10?"), ["3d", "build", "ship"]);
         assert!(alike(&content_words("Why is CI red on my PR?"), &content_words("CI red again on the PR")));
     }
+
+    /// The note follows the person's message in the lead's prompt and begins like every routing
+    /// note, so the message isn't repeated in the lead's history.
+    #[test]
+    fn the_team_building_note_doesnt_repeat_the_message_in_history() {
+        assert!(TEAM_BUILDING_NOTE.starts_with(crate::drivers::ROUTING_NOTE));
+        let asked = "Create a team to launch the podcast";
+        let mut history = vec![crate::drivers::tests::said("user", asked)];
+        crate::drivers::drop_current_message(&mut history, &format!("{asked}\n\n{TEAM_BUILDING_NOTE}"));
+        assert!(history.is_empty(), "the prompt carries the message once");
+    }
 }
