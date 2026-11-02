@@ -187,11 +187,46 @@ test('after launch 2: over Settings, Escape closes a clean bot editor only, and 
   assert.ok(botEditor(), 'a changed bot stays open');
   assert.equal(q('#agent-name').value, 'Ada2');
   assert.ok(settingsOpen());
+  // Focus leaves the name and comes back before it's typed back as it was.
+  botEditor().querySelector('textarea').focus();
+  await key('Escape');
+  assert.ok(botEditor(), 'still changed with focus elsewhere: kept');
   await type(q('#agent-name'), 'Ada');
   await key('Escape');
   assert.ok(!botEditor(), 'changed back: Escape closes it again');
   focused(edit, 'focus');
   v.unmount();
+});
+
+test('after launch 2: on a phone, where Settings is itself a dialog, Escape closes the bot editor and Manage team over it', async () => {
+  const was = window.matchMedia;
+  window.matchMedia = (media) => ({ matches: media === '(max-width: 767px)', media, addEventListener() {}, removeEventListener() {} });
+  try {
+    const v = await settingsAt('bots');
+    assert.equal(q('[data-space-settings]')?.getAttribute('role'), 'dialog', 'phone Settings is a dialog');
+    const edit = button('Edit Ada');
+    edit.focus();
+    await click(edit);
+    assert.ok(botEditor(), 'the bot editor is open');
+    await key('Escape');
+    assert.ok(!botEditor(), 'Escape closes the editor');
+    assert.ok(settingsOpen(), 'and only the editor');
+    focused(edit, 'focus is back on Edit Ada');
+    v.unmount();
+
+    const t = await settingsAt('teams');
+    const manage = button('Manage @Ship');
+    manage.focus();
+    await click(manage);
+    assert.ok(teamDialog(), 'Manage team is open');
+    await key('Escape');
+    assert.ok(!teamDialog(), 'Escape closes Manage team');
+    assert.ok(settingsOpen(), 'and only Manage team');
+    focused(manage, 'focus is back on Manage @Ship');
+    t.unmount();
+  } finally {
+    window.matchMedia = was;
+  }
 });
 
 test('after launch 2: over Settings, Escape closes a clean Manage team only and focus goes back to Manage; a change keeps it open', async () => {

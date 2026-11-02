@@ -5,7 +5,7 @@
 // unsaved and otherwise does nothing. Either way it calls preventDefault, which every layer
 // around it respects. Editors also mark their root `data-editor`, plus `data-unsaved` while they
 // hold changes, so Escape pressed elsewhere in the layer keeps them too. Text typed into any other
-// field counts as unsaved while focus stays in that field.
+// field counts as unsaved while focus stays in that field, until it's back to what it first held.
 import type React from 'react';
 import { RefObject, useEffect, useRef } from 'react';
 import { trapFocusTarget } from './imports';
@@ -30,24 +30,28 @@ export function editorProps(unsaved: boolean, close?: () => void) {
   };
 }
 
-/** The field focus is in and what it held when focus got there. */
-type Typing = { el: TextField; value: string } | null;
+/** The field focus is in, what it held when focus got there, and what it held the first time. */
+type Typing = { el: TextField; value: string; first?: string } | null;
 
 /** Whether Escape would lose something in `root`: a marked editor, or text typed into the focused field. */
 export function keepsText(root: Element, typing: Typing): boolean {
   if (root.querySelector('[data-unsaved]')) return true;
   if (!typing) return false;
-  const { el, value } = typing;
-  return el.isConnected && root.contains(el) && !el.closest('[data-editor]') && el.value !== value;
+  const { el, value, first = value } = typing;
+  return el.isConnected && root.contains(el) && !el.closest('[data-editor]') && el.value !== value && el.value !== first;
 }
 
 const FOCUSABLE = 'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
 const FOLLOWING = 4; // Node.DOCUMENT_POSITION_FOLLOWING
 
-/** A dialog that came after `root` in the page (opened from it, so above it), such as Tools over the bot editor. */
+/**
+ * A dialog that came after `root` in the page (opened from it, so above it), such as Tools over the
+ * bot editor. Layers don't count: the stack already orders them, and phone Settings is a dialog
+ * that comes after the bot editor in the page but sits under it.
+ */
 function dialogAbove(root: Element): boolean {
   return [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].some(
-    (d) => d !== root && !root.contains(d) && !d.contains(root) && !!(root.compareDocumentPosition(d) & FOLLOWING),
+    (d) => d !== root && !root.contains(d) && !d.contains(root) && !d.hasAttribute('data-escape-layer') && !!(root.compareDocumentPosition(d) & FOLLOWING),
   );
 }
 
@@ -84,10 +88,14 @@ export function useEscapeLayer(rootRef: RefObject<HTMLElement>, open: boolean, c
     const me = {};
     layers.push(me);
     const root = rootRef.current;
+    root?.setAttribute('data-escape-layer', '');
     const modal = !!latest.current.opts.modal;
     let typing: Typing = null;
+    const firstSeen = new Map<TextField, string>();
     const track = (el: Element | null) => {
-      if (isTextField(el)) typing = { el, value: el.value };
+      if (!isTextField(el)) return;
+      if (!firstSeen.has(el)) firstSeen.set(el, el.value);
+      typing = { el, value: el.value, first: firstSeen.get(el) };
     };
     const onFocus = (e: FocusEvent) => track(e.target as Element);
     root?.addEventListener('focusin', onFocus);
@@ -118,6 +126,7 @@ export function useEscapeLayer(rootRef: RefObject<HTMLElement>, open: boolean, c
     window.addEventListener('keydown', onKey);
     return () => {
       layers.splice(layers.indexOf(me), 1);
+      root?.removeAttribute('data-escape-layer');
       root?.removeEventListener('focusin', onFocus);
       window.removeEventListener('keydown', onKey);
       timers.forEach((t) => window.clearTimeout(t));
