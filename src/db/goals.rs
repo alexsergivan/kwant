@@ -572,7 +572,7 @@ impl Database {
             tx.rollback().await?;
             return Ok(false);
         }
-        for table in ["goal_checks", "goal_observations", "goal_events", "goal_fix_tasks", "goal_mission_links", "goal_notices", "goal_from_tasks"] {
+        for table in ["goal_checks", "goal_observations", "goal_events", "goal_fix_tasks", "goal_mission_links", "goal_from_tasks"] {
             sqlx::query(&format!("DELETE FROM {table} WHERE goal_id = ?")).bind(id).execute(&mut *tx).await?;
         }
         sqlx::query("DELETE FROM goal_rechecks WHERE goal_id = ? OR after_goal_id = ?").bind(id).bind(id).execute(&mut *tx).await?;

@@ -760,6 +760,7 @@ async fn goal_view(state: &AppState, goal: &Goal) -> serde_json::Value {
     crate::server::goals::goal_json(state, goal, 200).await
 }
 
+#[allow(clippy::result_large_err)]
 async fn load(state: &AppState, id: &str) -> Result<Goal, Response> {
     match state.db.get_goal(id).await {
         Ok(Some(g)) if g.approved_at.is_some() => Ok(g),
@@ -788,6 +789,7 @@ pub async fn not_now(State(state): State<AppState>, headers: HeaderMap, Path(id)
     crate::server::missions::graph::idempotent(&state, &headers, route, || do_not_now(&state, &id)).await
 }
 
+#[allow(clippy::result_large_err)]
 async fn do_not_now(state: &AppState, id: &str) -> Result<serde_json::Value, Response> {
     let goal = load(state, id).await?;
     if goal.mode == "watch" {
@@ -814,6 +816,7 @@ pub async fn always_fix(State(state): State<AppState>, headers: HeaderMap, Path(
     crate::server::missions::graph::idempotent(&state, &headers, route, || do_always_fix(&state, &id)).await
 }
 
+#[allow(clippy::result_large_err)]
 async fn do_always_fix(state: &AppState, id: &str) -> Result<serde_json::Value, Response> {
     let goal = load(state, id).await?;
     let edited = state
@@ -885,6 +888,7 @@ pub async fn from_task_route(state: &AppState, space: &crate::db::spaces::SpaceI
 }
 
 /// The goal for `task_id` and whether this call made it.
+#[allow(clippy::result_large_err)]
 pub async fn goal_from_task(state: &AppState, space: &crate::db::spaces::SpaceId, task_id: &str) -> Result<(Goal, bool), Response> {
     let task = match state.db.get_task(task_id).await.map_err(internal)? {
         Some(t) if t.space_id == space.as_str() => t,
