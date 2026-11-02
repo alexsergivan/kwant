@@ -419,6 +419,8 @@ test('checklist: a task list whose ticks start from the reply’s [x], with the 
   assert.equal(boxes[0].className, sBoxes[0].className.replace(' rounded-sm accent-sky-500', ' cursor-pointer rounded-sm accent-sky-500') + ' focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/70 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-900', 'the same box, now clickable');
   assert.doesNotMatch(block.textContent, /^\s*\d\./m, 'no numbers on a checklist');
   assert.equal(block.querySelector('label code')?.textContent, 'docs', 'the reply’s markdown');
+  assert.deepEqual([...block.querySelectorAll('label')].map((l) => l.textContent), [...streamed.host.querySelectorAll('li > span')].map((s) => s.textContent), 'every item keeps its text');
+  assert.ok([...block.querySelectorAll('label')].every((l) => l.textContent.length > 10));
   await click(boxes[0]);
   assert.equal(localStorage.getItem('kwnt:steps:mk:b-check'), '["c1"]');
   await click(boxes[0]);

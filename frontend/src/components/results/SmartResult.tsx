@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Copy } from 'lucide-react';
 import type { SmartBlock } from '../../smartResults';
 import { readDoneSteps } from '../../smartResults';
@@ -76,6 +76,9 @@ const FORMATS: Format[] = ['Markdown', 'CSV', 'JSON'];
 /** Copy data: one button, a three-item menu. Arrow keys move, Escape closes and returns focus. */
 const CopyData: React.FC<{ block: SmartBlock; messageId: string }> = ({ block, messageId }) => {
   const [open, setOpen] = useState(false);
+  // The menu lines up with the button's left edge, or with its right edge when it would leave the screen.
+  const [flip, setFlip] = useState(false);
+  const menu = useRef<HTMLSpanElement>(null);
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
   const menuId = useId();
   const wrap = useRef<HTMLSpanElement>(null);
@@ -83,6 +86,11 @@ const CopyData: React.FC<{ block: SmartBlock; messageId: string }> = ({ block, m
   const items = useRef<(HTMLButtonElement | null)[]>([]);
   const timer = useRef<number>();
 
+  useLayoutEffect(() => {
+    if (!open) return setFlip(false);
+    const r = menu.current?.getBoundingClientRect();
+    if (r && r.right > window.innerWidth - 8) setFlip(true);
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     items.current[0]?.focus();
@@ -153,11 +161,12 @@ const CopyData: React.FC<{ block: SmartBlock; messageId: string }> = ({ block, m
       </span>
       {open && (
         <span
+          ref={menu}
           id={menuId}
           role="menu"
           aria-label="Copy data as"
           onKeyDown={onMenuKey}
-          className="absolute bottom-full left-0 z-20 mb-1 flex min-w-[8rem] flex-col rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-lg"
+          className={`absolute bottom-full ${flip ? 'right-0' : 'left-0'} z-20 mb-1 flex min-w-[8rem] flex-col rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-lg`}
         >
           {FORMATS.map((f, i) => (
             <button

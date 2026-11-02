@@ -135,7 +135,8 @@ function listSource(node: HastNode, children: React.ReactNode): ReplySource {
   const inline = (li: MdElement): React.ReactNode => {
     const kids = elementsOf(li.props.children);
     const content = task ? taskContent(shown(li)) : shown(li);
-    if (!kids.length || kids.some((el) => tagOf(el) !== 'p' && tagOf(el) !== 'input')) return content;
+    // A tight task item's only element is its checkbox: that is not a loose item.
+    if (!kids.some((el) => tagOf(el) === 'p') || kids.some((el) => tagOf(el) !== 'p' && tagOf(el) !== 'input')) return content;
     const ps = kids.filter((el) => tagOf(el) === 'p');
     return ps.flatMap((p, i) => {
       const c = task && i === 0 ? taskContent(shown(p)) : shown(p);
