@@ -469,7 +469,7 @@ test('fixtures: one per block type, every block well formed; Pixel’s types ren
       assert.ok(v.host.querySelector('[data-smart-frame]'), `${name} renders`);
     }
   }
-  assert.deepEqual(Object.keys(m.REGISTRY).sort(), ['comparison', 'steps']);
+  assert.deepEqual(Object.keys(m.REGISTRY).sort(), ['cards', 'chart', 'comparison', 'facts', 'files', 'findings', 'metrics', 'steps', 'verification']);
 });
 
 test('a slot block renders after the reply with its title; Show as text gives its data as markdown', async () => {

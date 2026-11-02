@@ -14,6 +14,13 @@ import type { BlockOf, BlockType, SmartBlock } from '../../smartResults';
 import { matchKey, validComparison, validSteps } from '../../smartResults';
 import { Comparison } from './Comparison';
 import { Steps } from './Steps';
+import { Chart, validChart } from './Chart';
+import { Metrics, validMetrics } from './Metrics';
+import { Facts, validFacts } from './Facts';
+import { Cards, validCards } from './Cards';
+import { Findings, validFindings } from './Findings';
+import { Verification, validVerification } from './Verification';
+import { Files, validFiles } from './Files';
 
 /** One cell or list item of the reply as react-markdown drew it, plus its plain text for matching. */
 export interface ReplyPart {
@@ -65,7 +72,13 @@ const stepsMatches = (block: BlockOf<'steps'>, reply: ReplySource) => {
 export const REGISTRY: { [T in BlockType]?: Renderer<BlockOf<T>> } = {
   comparison: { validate: validComparison, matches: comparisonMatches, Component: Comparison },
   steps: { validate: validSteps, matches: stepsMatches, Component: Steps },
-  // Iris (smart-results-renderers): chart, metrics, facts, cards, findings, verification, files.
+  chart: { validate: validChart, Component: Chart },
+  metrics: { validate: validMetrics, Component: Metrics },
+  facts: { validate: validFacts, Component: Facts },
+  cards: { validate: validCards, Component: Cards },
+  findings: { validate: validFindings, Component: Findings },
+  verification: { validate: validVerification, Component: Verification },
+  files: { validate: validFiles, Component: Files },
 };
 
 const count = (block: SmartBlock): number | null => {
