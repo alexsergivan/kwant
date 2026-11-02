@@ -4,8 +4,8 @@
 //! - Ask: a fit from [`ASK_FROM`] up to [`ROUTE_AT`] with two candidates posts a card offering
 //!   those two bots and a general answer (the Concierge in #general, else the channel lead). The
 //!   message waits; `POST /api/route-choices/:id/resolve` (person only) runs the chosen bot's turn.
-//! - Hand-back: the `hand_back` tool, in a channel turn, sends the person's last message on to the
-//!   next best bot here, else the Concierge (or the lead). One hop per message, ever.
+//! - Hand-back: the `hand_back` tool, in a routed channel turn, sends the message that turn answers
+//!   on to the next best bot here, else the Concierge (or the lead). One hop per message, ever.
 //!
 //! Contract: /home/maus/shared/ship-software-safely/router-concierge/contract.md
 
@@ -260,7 +260,7 @@ pub async fn correct_route(State(state): State<AppState>, headers: HeaderMap, Js
 pub fn tool() -> Value {
     json!({
         "name": HAND_BACK,
-        "description": "Hand the person's last message in this channel back when it is clearly not your area, so kwnt sends it \
+        "description": "Hand the person's message you were routed in this channel back when it is clearly not your area, so kwnt sends it \
             to the bot here that fits it best (or a generalist). Use it only when someone else is clearly better placed, not to \
             avoid work. It works once per message. After it succeeds, end your turn with one short line saying who takes it; \
             don't answer the request yourself.",
@@ -289,14 +289,19 @@ pub async fn tool_call(state: &AppState, scope: &SelfScope, args: &Value) -> Too
     let Some(channel_id) = origin.channel_id.clone() else {
         return ("hand_back works only for a message the person sent in a channel.".into(), true);
     };
-    match hand_back(state, &scope.kwant_id, &channel_id, &reason).await {
+    // The message this turn answers, never just the newest one: in a busy channel that can be
+    // another person's message routed to someone else
+    let Some(message_id) = origin.message_id.clone() else {
+        return ("hand_back works only for a message kwnt routed to you; this one was sent to you directly, so answer it.".into(), true);
+    };
+    match hand_back(state, &scope.kwant_id, &channel_id, &message_id, &reason).await {
         Ok(to) => (format!("Handed to {to}. End your turn now with one short line saying {to} will take it; don't answer the request."), false),
         Err(why) => (why, true),
     }
 }
 
-/// Sends the person's latest message in `channel_id` on from `from_id`; returns who takes it.
-pub(super) async fn hand_back(state: &AppState, from_id: &str, channel_id: &str, reason: &str) -> Result<String, String> {
+/// Sends the person's message `message_id` in `channel_id` on from `from_id`; returns who takes it.
+pub(super) async fn hand_back(state: &AppState, from_id: &str, channel_id: &str, message_id: &str, reason: &str) -> Result<String, String> {
     let Ok(Some(channel)) = state.db.get_channel(channel_id).await else {
         return Err("Could not find this channel.".into());
     };
@@ -304,9 +309,9 @@ pub(super) async fn hand_back(state: &AppState, from_id: &str, channel_id: &str,
         return Err("Could not find you.".into());
     };
     let space = SpaceId::new(&from.space_id);
-    let messages = state.db.list_messages(channel_id, 50).await.unwrap_or_default();
-    let Some(msg) = messages.iter().rev().find(|m| m.sender_role == "user") else {
-        return Err("There's no message from the person here to hand back.".into());
+    let msg = match state.db.get_message(message_id).await {
+        Ok(Some(m)) if m.sender_role == "user" && m.channel_id.as_deref() == Some(channel_id) => m,
+        _ => return Err("Could not find the person's message you were answering, so it can't be handed back.".into()),
     };
     if state.db.handed_back(&msg.id).await.unwrap_or(true) {
         return Err("This message was already handed back once; answer it as well as you can.".into());

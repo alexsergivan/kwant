@@ -2287,6 +2287,7 @@ async fn run_kwant_turn_inner(
                     team_id: scope.team_context.as_ref().map(|t| t.id.clone()),
                     member_ids: scope.teammates.iter().map(|k| k.id.clone()).collect(),
                     depth: scope.delegation_depth,
+                    message_id: opts.routing.as_ref().and_then(|r| r["message_id"].as_str()).map(str::to_string),
                 }),
                 cancel: Some(cancel_token.clone()),
                 turn_id: Some(tag.turn_id.clone()),
@@ -3437,7 +3438,6 @@ fn channel_members(channel: &crate::db::models::Channel, all_kwants: &[Kwant]) -
         .collect()
 }
 
-/// A reply's `meta.routing`: who Laya picked for a channel or team message and why.
 /// The `meta.routing` a routed reply carries. `message_id` is the person's message it answers,
 /// so "Wrong bot?" corrects and resends that message, not just the latest one.
 pub(super) fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String], basis: &str, message_id: &str) -> serde_json::Value {

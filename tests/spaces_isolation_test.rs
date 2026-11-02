@@ -321,6 +321,7 @@ async fn delegation_without_a_member_list_stays_in_the_leads_space() {
             team_id: None,
             member_ids: Vec::new(),
             depth: 0,
+            message_id: None,
         }),
         cancel: None,
         turn_id: None,

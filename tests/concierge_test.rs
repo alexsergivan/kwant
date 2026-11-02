@@ -36,10 +36,13 @@ const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1" in
   auth) echo '{"loggedIn":true}'; exit 0 ;;
 esac
+printf '%s\n' "$*" >> "$(dirname "$0")/prompts.log"
 echo '{"type":"result","is_error":false,"num_turns":1,"result":"answer ok"}'
 "#;
 
-fn fake_cli() {
+/// Installs the fake claude CLI once; returns its folder (it logs every turn's arguments to
+/// `prompts.log` there).
+fn fake_cli() -> &'static PathBuf {
     static DONE: OnceLock<PathBuf> = OnceLock::new();
     DONE.get_or_init(|| {
         let bin = tempfile::tempdir().unwrap().keep().join("bin");
@@ -53,7 +56,7 @@ fn fake_cli() {
         }
         std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
         bin
-    });
+    })
 }
 
 async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -219,11 +222,16 @@ async fn call_as(app: &Router, uri: &str, token: &str, body: Value) -> (StatusCo
 
 /// A turn of `bot` in `channel` with its own tools; returns the turn token.
 async fn turn_token(state: &AppState, bot: &str, channel: &str) -> String {
+    answering_token(state, bot, channel, None).await
+}
+
+/// [`turn_token`] for a turn kwnt routed the person's message `message_id` to.
+async fn answering_token(state: &AppState, bot: &str, channel: &str, message_id: Option<&str>) -> String {
     let k = state.db.get_kwant(bot).await.unwrap().unwrap();
     let scope = SelfScope {
         kwant_id: k.id.clone(),
         kwant_name: k.name.clone(),
-        origin: Some(TurnOrigin { channel_id: Some(channel.into()), ..Default::default() }),
+        origin: Some(TurnOrigin { channel_id: Some(channel.into()), message_id: message_id.map(str::to_string), ..Default::default() }),
         turn_id: Some(format!("turn-{bot}")),
         ..Default::default()
     };
@@ -329,7 +337,13 @@ async fn a_hand_back_takes_one_hop() {
     assert_eq!(to, script);
     let asked = last_user_message(&state, &general).await;
 
+    // A turn that wasn't routed a message (an @mention, a DM) has nothing to hand back
     let token = turn_token(&state, &script, &general).await;
+    let (text, err) = hand_back(&app, &token, "Not mine").await;
+    assert!(err && text.contains("routed to you"), "{text}");
+    assert!(!state.db.handed_back(&asked).await.unwrap());
+
+    let token = answering_token(&state, &script, &general, Some(&asked)).await;
     let (text, err) = hand_back(&app, &token, "").await;
     assert!(err, "a reason is required: {text}");
     let mut events = state.event_sender.subscribe();
@@ -341,7 +355,43 @@ async fn a_hand_back_takes_one_hop() {
     assert_eq!(routing["message_id"], asked.as_str());
 
     // One hop: Atlas can't bounce it on
-    let token = turn_token(&state, &atlas, &general).await;
+    let token = answering_token(&state, &atlas, &general, Some(&asked)).await;
+    let (text, err) = hand_back(&app, &token, "Not mine either").await;
+    assert!(err && text.contains("already handed back"), "{text}");
+}
+
+/// In a busy channel a hand-back passes on the message the bot was answering, not the person's
+/// newest one: A goes to the Scriptwriter, B to Atlas, then the Scriptwriter hands A back.
+#[tokio::test]
+async fn a_hand_back_passes_on_the_message_it_answers_not_the_newest() {
+    let (app, state, _tmp) = setup().await;
+    let script = ok(&app, "POST", "/api/kwants", Some(specialist("Scriptwriter", "TikTok Scriptwriter", "Scripts and hooks for book videos."))).await["id"].as_str().unwrap().to_string();
+    let atlas = ok(&app, "POST", "/api/kwants", Some(specialist("Atlas", "Technical SEO", "Crawl errors and sitemaps."))).await["id"].as_str().unwrap().to_string();
+    only(&app, &state, &[&script, &atlas]).await;
+    let general = state.db.general_channel(&SpaceId::default_space()).await.unwrap().expect("#general").id;
+    let a_text = "Write a TikTok hook about the sitemap launch party";
+    let (to, _) = routed_to(&app, &state, &general, a_text).await;
+    assert_eq!(to, script);
+    let a = last_user_message(&state, &general).await;
+    let (to, _) = routed_to(&app, &state, &general, "Fix the crawl errors in our sitemap").await;
+    assert_eq!(to, atlas);
+    let b = last_user_message(&state, &general).await;
+    assert_ne!(a, b);
+
+    let token = answering_token(&state, &script, &general, Some(&a)).await;
+    let mut events = state.event_sender.subscribe();
+    let (text, err) = hand_back(&app, &token, "This is about the sitemap, not a script").await;
+    assert!(!err, "{text}");
+    let routing = next_reply_routing(&state, &mut events, &general).await;
+    assert_eq!((routing["basis"].as_str(), routing["kwant_id"].as_str()), (Some("handback"), Some(atlas.as_str())), "{routing}");
+    assert_eq!(routing["message_id"], a.as_str(), "A was handed on, not the newer B");
+    assert!(state.db.handed_back(&a).await.unwrap() && !state.db.handed_back(&b).await.unwrap());
+    let prompts = std::fs::read_to_string(fake_cli().join("prompts.log")).unwrap_or_default();
+    assert!(prompts.contains(&format!("{a_text}\n\n(kwnt routing note: Scriptwriter handed")), "the hand-back turn's prompt is A's text");
+    assert!(!prompts.contains("sitemap\n\n(kwnt routing note"), "B was never handed on");
+
+    // Still one hop for A
+    let token = answering_token(&state, &atlas, &general, Some(&a)).await;
     let (text, err) = hand_back(&app, &token, "Not mine either").await;
     assert!(err && text.contains("already handed back"), "{text}");
 }
