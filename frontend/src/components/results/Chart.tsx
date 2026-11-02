@@ -1,4 +1,4 @@
-import React, { useId, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ChartBlock, ChartPoint, ChartSeries, inRange, isNum, isObj, isText, optText, parseCommon, uniqueIds } from '../../smartResults';
 import type { RendererProps } from './registry';
 
@@ -20,6 +20,8 @@ export function validChart(raw: unknown): ChartBlock | null {
     series.push({ key: s.key, label: s.label, unit });
   }
   if (!inRange(b.points, 3, 60) || !uniqueIds(b.points)) return null;
+  // A bar chart needs 5 or more rows (plan §A.3); a smaller table stays a comparison.
+  if (b.chart_kind === 'bar' && (b.points as unknown[]).length < 5) return null;
   const points: ChartPoint[] = [];
   for (const p of b.points as Record<string, unknown>[]) {
     if (!isText(p.x)) return null;
@@ -43,10 +45,8 @@ export function validChart(raw: unknown): ChartBlock | null {
   };
 }
 
-const WIDTH = 640;
 const HEIGHT = 260;
 const PAD = { top: 16, right: 16, bottom: 36, left: 44 };
-const PLOT_W = WIDTH - PAD.left - PAD.right;
 const PLOT_H = HEIGHT - PAD.top - PAD.bottom;
 
 // Up to 4 series: told apart by shape/pattern as well as colour, never colour alone.
@@ -116,6 +116,21 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
   const uid = useId();
   const [view, setView] = useState<'chart' | 'table'>('chart');
   const [active, setActive] = useState<{ seriesIdx: number; pointIdx: number } | null>(null);
+  // Drawn at the card's real width (1 SVG unit = 1 px) so axis text stays readable on a 390 px phone.
+  const svgBox = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(640);
+  useEffect(() => {
+    const el = svgBox.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const measure = () => setWidth(Math.max(240, Math.round(el.clientWidth)) || 640);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [view]);
+  const WIDTH = width;
+  const narrow = width < 480;
+  const PLOT_W = WIDTH - PAD.left - PAD.right;
 
   const allValues = block.points.flatMap((p) => p.values).filter((v): v is number => v !== null);
   const dataMin = allValues.length ? Math.min(0, ...allValues) : 0;
@@ -126,11 +141,12 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
   const yScale = (v: number) => PAD.top + PLOT_H - ((v - yMin) / (yMax - yMin || 1)) * PLOT_H;
 
   const n = block.points.length;
-  const xStep = n > 1 ? PLOT_W / (n - 1) : 0;
-  const xPos = (i: number) => PAD.left + (n > 1 ? i * xStep : PLOT_W / 2);
+  // Bars sit in equal bands so none touches the axis; lines run edge to edge.
+  const isBar = block.chart_kind === 'bar';
+  const xStep = isBar ? PLOT_W / n : n > 1 ? PLOT_W / (n - 1) : 0;
+  const xPos = (i: number) => (isBar ? PAD.left + (i + 0.5) * xStep : PAD.left + (n > 1 ? i * xStep : PLOT_W / 2));
 
-  const desktopEvery = Math.max(1, Math.ceil(n / 10));
-  const mobileEvery = Math.max(1, Math.ceil(n / 4));
+  const labelEvery = Math.max(1, Math.ceil(n / (narrow ? 4 : 10)));
 
   const activePoint = active ? block.points[active.pointIdx] : null;
   const activeSeries = active ? block.series[active.seriesIdx] : null;
@@ -139,8 +155,8 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
 
   const headers = [block.x.label, ...block.series.map((s) => (s.unit ? `${s.label} (${s.unit})` : s.label))];
 
-  const groupWidth = block.chart_kind === 'bar' ? Math.min(xStep * 0.7, 56) : 0;
-  const barWidth = block.chart_kind === 'bar' ? groupWidth / block.series.length : 0;
+  const groupWidth = isBar ? Math.min(xStep * 0.7, 56) : 0;
+  const barWidth = isBar ? groupWidth / block.series.length : 0;
 
   return (
     <div data-smart-result="chart" data-block-id={block.id} className="my-3.5 rounded-xl border border-zinc-800 bg-zinc-950/70 p-3.5 shadow-sm">
@@ -177,6 +193,7 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
 
       {view === 'chart' ? (
         <>
+          <div ref={svgBox}>
           <svg
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
             role="img"
@@ -197,7 +214,7 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
             {ticks.map((t) => (
               <g key={t}>
                 <line x1={PAD.left} x2={WIDTH - PAD.right} y1={yScale(t)} y2={yScale(t)} stroke="#27272a" strokeWidth={1} />
-                <text x={PAD.left - 8} y={yScale(t)} textAnchor="end" dominantBaseline="middle" fontSize={10} fill="#71717a">
+                <text x={PAD.left - 8} y={yScale(t)} textAnchor="end" dominantBaseline="middle" fontSize={11} fill="#71717a">
                   {fmtTick(t)}
                 </text>
               </g>
@@ -207,18 +224,16 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
 
             {/* X labels, thinned out so 390 px never clips. */}
             {block.points.map((p, i) => {
-              const showDesktop = i % desktopEvery === 0 || i === n - 1;
-              if (!showDesktop) return null;
-              const showMobile = i % mobileEvery === 0 || i === n - 1;
+              const gap = (n - 1) % labelEvery;
+              if (i % labelEvery !== 0 && !(i === n - 1 && gap * 2 >= labelEvery)) return null;
               return (
                 <text
                   key={p.id}
                   x={xPos(i)}
                   y={HEIGHT - PAD.bottom + 16}
-                  textAnchor="middle"
-                  fontSize={10}
+                  textAnchor={!isBar && i === n - 1 && n > 1 ? 'end' : 'middle'}
+                  fontSize={11}
                   fill="#a1a1aa"
-                  className={showMobile ? '' : 'hidden sm:inline'}
                 >
                   {p.x.length > 10 ? `${p.x.slice(0, 9)}…` : p.x}
                 </text>
@@ -312,6 +327,7 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
                   </g>
                 ))}
           </svg>
+          </div>
           <div aria-live="polite" className="mt-1 h-4 text-[11px] text-zinc-400">
             {active && activeSeries
               ? `${activeSeries.label} at ${activePoint?.x}: ${activeCell || (activeValue !== null && activeValue !== undefined ? fmtTick(activeValue) : '—')}${

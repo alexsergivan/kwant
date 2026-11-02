@@ -28,7 +28,7 @@ export const Metrics: React.FC<RendererProps<MetricsBlock>> = ({ block }) => (
           </div>
           <div className="mt-0.5 flex items-baseline gap-1 text-lg font-semibold text-zinc-100 [overflow-wrap:anywhere]">
             <span>{item.value_text}</span>
-            {item.unit && <span className="text-xs font-normal text-zinc-500">{item.unit}</span>}
+            {item.unit && !item.value_text.includes(item.unit) && <span className="text-xs font-normal text-zinc-500">{item.unit}</span>}
           </div>
           {item.note && <div className="mt-0.5 text-[11px] leading-snug text-zinc-500 [overflow-wrap:anywhere]">{item.note}</div>}
         </li>

@@ -101,7 +101,7 @@ test('every point is keyboard-reachable and announces its value on focus, via ar
 test('bar points are also keyboard-reachable with a value label', async () => {
   const host = await mount(barBlock());
   const bars = [...host.querySelectorAll('rect[role="button"][tabindex="0"]')];
-  assert.equal(bars.length, 4);
+  assert.equal(bars.length, 5);
   assert.equal(bars[0].getAttribute('aria-label'), 'Visits at Search: 4,120');
 });
 
@@ -120,4 +120,10 @@ test('up to 4 series are told apart by marker shape as well as colour', async ()
   const legend = host.querySelectorAll('svg[aria-hidden="true"]');
   assert.equal(legend.length, 2, 'one legend swatch per series');
   assert.notEqual(legend[0].innerHTML, legend[1].innerHTML, 'each series gets a distinct marker shape, not colour alone');
+});
+
+test('a bar chart needs 5 rows; a smaller one falls back to markdown', () => {
+  const b = barBlock();
+  assert.ok(m.validChart(b));
+  assert.equal(m.validChart({ ...b, points: b.points.slice(0, 4) }), null);
 });

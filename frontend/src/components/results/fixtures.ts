@@ -75,6 +75,7 @@ const barRows = [
   ['Newsletter', '1,980'],
   ['Social', '1,310'],
   ['Referral', '640'],
+  ['Direct', '520'],
 ];
 const chartBar: Fixture = {
   reply: `Where October's visits came from:\n\n${table(['Channel', 'Visits'], barRows)}`,

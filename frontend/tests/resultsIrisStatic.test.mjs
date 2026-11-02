@@ -50,7 +50,7 @@ test('every renderer is a bare block tagged with its own type and block id, noth
 test('metrics: two tiles per row on a phone, unit and note shown verbatim', () => {
   assert.match(m.html.metrics, /grid-cols-2/);
   assert.match(m.html.metrics, /EUR 18,400/);
-  assert.match(m.html.metrics, />EUR</, 'unit is separate from the value text');
+  assert.doesNotMatch(m.html.metrics, />EUR</, 'a unit the value text already carries is not repeated');
   assert.match(m.html.metrics, /up 8% vs September/);
 });
 
