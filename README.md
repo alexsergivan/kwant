@@ -1,29 +1,46 @@
 # kwant
 
-**Your own team of AI bots, in one self-hosted binary.**
+**Your own team of AI bots that check each other's work before saying "done".**
 
 [![CI](https://github.com/alexsergivan/kwant/actions/workflows/ci.yml/badge.svg)](https://github.com/alexsergivan/kwant/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](#license)
 [![Docs](https://img.shields.io/badge/docs-kwant.si-orange.svg)](https://kwant.si/docs/quickstart)
 [![As seen on Open Source Alternatives](https://www.opensourcealternatives.to/badge-osa.svg)](https://www.opensourcealternatives.to)
 
-kwant gives you a team of bots that share chats, hand work to each other with an @mention and get it done on their own, on a schedule or while you're away. Keep separate spaces for work and home, each with its own bots and accounts. Run it on your laptop or a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.
+kwant gives you a team of bots that share chats, hand work to each other with an @mention and get it done on their own, on a schedule or while you're away. Each message goes to the bot that fits, and the reply says why. Work shows up as cards on a Mission board, and a task turns **Verified** only when kwant runs the check itself, never on a bot's word. Keep separate spaces for work and home, each with its own bots and accounts. Run it as an app on your Mac or Linux, or on a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.
 
 It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the binary.
 
 ![A kwant channel: Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen.](docs/media/handoff.webp)
 
-**Website and docs: [kwant.si](https://kwant.si)** · **[Download for Mac](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg)**
+**Website and docs: [kwant.si](https://kwant.si)** · **[Download for Mac](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg)** · **Linux (beta): [.deb](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb) or [AppImage](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage)**
+
+---
+
+## New in 0.6
+
+- **The right bot answers, and says why** (0.6.4). kwant picks the bot by its [rules](docs/channel-routing.md): a name or @mention, small talk to the last speaker, what you taught it, then the words in your message. In `#general`, a question no bot fits goes to the Concierge. One line under the reply says why that bot answers. **Wrong bot?** sends your message to the bot you pick, and kwant remembers it for next time. On a close call between two bots, you choose.
+- **Rules per bot** (0.6.4). **Good for** and **Not for** lists say what each bot should and shouldn't get. **Browser sites** sets which sites its browser may open, which it never opens, and whether it may reach your local network.
+- **One Inbox, one bot list, one Settings** (0.6.3). The Inbox shows what's waiting on you, what finished and what failed, with Loose ends as its second tab. Bots are listed once, grouped by team. Settings has two tabs: This space and All spaces.
+- **Linux app (beta)** (0.6.1). A `.deb` and an AppImage for x86_64 that update themselves with signed updates, like the Mac app.
+- **Mission board on by default** (0.6.2). Hand-offs, routine runs and loose ends show up as cards, and a finished hand-off goes to Review.
+- **Insights** (0.6.0). Verified results per week and what each one cost. When a run reports no cost, the board says "Not reported", never $0.
+- **Flight School and Truth Ledger** (0.6.0, off until you turn them on). Bots earn more freedom per kind of work with scorecards, and only you grant it. Facts that disagree show side by side for you to settle.
+
+Every change is in the [CHANGELOG](CHANGELOG.md).
 
 ---
 
 ## Why kwant
 
-- **A team, not a chat tab.** Each bot has its own role, voice ("soul") and model. Bots @mention each other to hand work on, a team lead runs short discussions and posts one summary, and the [Laya](#laya-model-router) router picks who answers and with which model and effort.
+- **A team, not a chat tab.** Each bot has its own role, voice ("soul") and model. Bots @mention each other to hand work on, and a team lead runs short discussions and posts one summary. In a channel, kwant picks the bot that fits each message and shows why. The [Laya](#laya-model-router) router picks the model and effort for bots set to `auto`.
+- **"Done" means checked.** The [Mission board](docs/mission-control.md) turns work into cards, one per hand-off. A card turns **Verified** only when kwant runs the check itself, such as a test or a file check, and the card keeps the receipt. Files a bot attaches are evidence to look at, never proof on their own.
+- **Facts with sources.** Bots back web facts with a link that opens the page at the exact quote. kwant checks the quote is on the page word for word and refuses one that isn't.
 - **Spaces.** Separate spaces for work, a side project and home. Each has its own bots, teams, channels, routines, accounts, approval rule and hiring rule.
 - **Every account you have.** Several accounts per engine: Claude, Codex or Grok CLI logins, Anthropic, OpenAI or xAI keys, and your own OpenAI- or Anthropic-compatible server. Set a default and a priority order. When an account runs out of usage, the turn moves to the next one and the chat says so. You can pin a bot to one account.
-- **Works while you're away.** Routines on a schedule (bots can set them up when you ask, with an Undo button), follow-ups bots schedule for themselves, and an **Inbox** with what's waiting on you, what finished and what failed.
-- **Autonomous, with a safety net you control.** Ordinary work runs without stopping. On *Ask only when risky*, the default for new spaces, only risky steps such as `git push`, network calls, unknown commands or changes outside the bot's folder show an approval card with the exact command: *Allow once*, *Always allow* or *Deny*. Per space or per bot, switch to ask every time or don't ask.
+- **Works while you're away.** Routines on a schedule (bots can set them up when you ask, with an Undo button), follow-ups bots schedule for themselves, and an **Inbox** with what's waiting on you, what finished and what failed. Turn on Automation Discovery and kwant suggests a routine for a task you keep asking for, which you accept or dismiss.
+- **Autonomous, with a safety net you control.** Ordinary work runs without stopping. On *Ask only when risky*, the default for new spaces, only risky steps such as `git push`, network calls, unknown commands or changes outside the bot's folder show an approval card with the exact command: *Allow once*, *Always allow* or *Deny*. Per space or per bot, switch to ask every time or don't ask. **Payments always ask**, in every mode: a payment command in the shell, or a checkout in the bot's browser, even behind a plain "Continue". Turn on Flight School and each bot earns more freedom per kind of work, but only you grant it.
+- **Rules per bot.** Say what each bot is good for and what it should never get, and which sites its browser may open. Blocked sites always win.
 - **Loose ends and letters.** kwant reads your chats and, if you add them, an IMAP inbox and your GitHub issues and pull requests, read-only, and finds what you started and never finished. Photograph a bill or a form and it pulls out the sender, the ask and the deadline and drafts a reply. It never sends anything.
 - **Parallel Universe.** Compare up to three ways to deploy an app with local container tests and dated price estimates. Every number is tagged as verified, an estimate or speculation. No cloud account and no spending.
 - **No telemetry.** kwant sends nothing to us, and its interface loads nothing from other servers. The one download you don't set up yourself is the [Laya](#laya-model-router) router on first start: its Python packages and its model from PyPI and Hugging Face (`--no-laya` turns it off). Everything else goes only to the AI providers and services you add.
@@ -33,15 +50,23 @@ See every feature, with screenshots, on [kwant.si/features](https://kwant.si/fea
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/media/spaces.webp" alt="The space rail with three spaces, Trailhead, Pixel Quest and Home, each with its own icon and colour. Trailhead is open on #general with a weekly digest posted by a routine."><br><sub><b>Spaces</b>: each with its own bots, channels and routines.</sub></td>
-    <td width="50%"><img src="docs/media/accounts.webp" alt="Settings, This space, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in."><br><sub><b>Accounts</b>: several per engine, with a default and fallbacks.</sub></td>
+    <td width="50%"><img src="docs/media/who-answers.webp" alt="In #general, a customer wore her new boots on one muddy trail and wants to return them. Support answers, and the line under its name says why: it shares words with the message (customer, refunds, returns), Laya picked the same bot, chosen from 7 bots. Wrong bot? is open, listing Lead, Frontend, Backend, QA, Researcher and Marketer."><br><sub><b>Who answers</b>: the bot that fits, and why. <b>Wrong bot?</b> teaches it.</sub></td>
+    <td width="50%"><img src="docs/media/mission-board.webp" alt="The Mission board: 8 verified this week, 0 false successes, a cost of $0.23 per verified result and a chart of verified results per week. Below, two facts disagree (16 GB and 4 GB of RAM) with a Keep this one button on each, and QA asks for the Act tier on release notes, with Grant and Decline."><br><sub><b>Mission board</b>: verified results, their cost and what needs you (with Truth Ledger and Flight School on).</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/media/approval.webp" alt="An approval card: TechLead wants to create a pull request on GitHub, with the full arguments shown and Deny, Allow Once and Always Allow buttons."><br><sub><b>Approvals</b>: see exactly what a bot wants to run.</sub></td>
+    <td><img src="docs/media/verified.webp" alt="A task, Weekly load-test report, with its Evidence receipt: Verified: file contains passed, checked by kwant. The check: load-test/report.md has p95. Below are the files the team attached, which never mark a task verified on their own, and the activity log."><br><sub><b>Verified</b>: only when kwant runs the check, with a receipt.</sub></td>
+    <td><img src="docs/media/payment.webp" alt="TechLead wants to run a curl command to api.stripe.com to pay a domain renewal. The approval card says: This looks like a payment. Payments always ask you, even with approvals off. Deny and Allow Once."><br><sub><b>Payments always ask</b>, in every approval mode.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/bot-rules.webp" alt="A bot's settings. Good for: competitor pricing, gear reviews, market sizing. Not for: customer emails, refunds. Browser sites: only 3 sites, never 2 sites, no local network."><br><sub><b>Rules per bot</b>: Good for, Not for and Browser sites.</sub></td>
+    <td><img src="docs/media/inbox.webp" alt="The Inbox, with New and Loose ends tabs. Waiting on you: Designer asks which hero image should ship on the landing page, with two answer buttons. Nothing finished, failed or got stuck since you last looked."><br><sub><b>Inbox</b>: what's waiting on you, what finished and what failed.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/media/spaces.webp" alt="The space rail with three spaces, Trailhead, Pixel Quest and Home, each with its own icon and colour. Trailhead is open on #general with a weekly digest posted by a routine."><br><sub><b>Spaces</b>: each with its own bots, channels and routines.</sub></td>
+    <td><img src="docs/media/accounts.webp" alt="Settings, This space, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in."><br><sub><b>Accounts</b>: several per engine, with a default and fallbacks.</sub></td>
+  </tr>
+  <tr>
     <td><img src="docs/media/routine.webp" alt="QA set up a routine when asked to check overnight checkout errors every morning: weekdays at 08:30, posting in the direct chat, with Undo, Edit and Pause buttons."><br><sub><b>Routines</b>: ask for "every morning" and get one, with Undo.</sub></td>
-  </tr>
-  <tr>
-    <td><img src="docs/media/away.webp" alt="While you were away. Waiting on you: a question with answer buttons. Finished: a handoff and a weekly digest. Failed or stuck: a price scan blocked with a 403 and a smoke test that stopped at 9 of 22."><br><sub><b>Inbox</b>: what's waiting, finished or failed.</sub></td>
     <td><img src="docs/media/loose-ends.webp" alt="Loose ends with Open, Waiting and Snoozed tabs. The top case is a letter from a water company, with the quote it's based on and a draft reply."><br><sub><b>Loose ends</b>, the Inbox's second tab: evidence and a draft. It never sends.</sub></td>
   </tr>
 </table>
@@ -76,7 +101,7 @@ Open **http://127.0.0.1:8799**. If no account works yet, kwant shows a **Get rea
 
 The binary embeds `frontend/dist`, so on a fresh clone `cargo build`, `cargo test` and `cargo run -- serve` fail to compile until you've run `make run` or `make frontend` once.
 
-**The first start takes a few minutes:** kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer meanwhile, picked by keyword. To skip Laya, run `cargo run -- serve --no-laya`.
+**The first start takes a few minutes:** kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer meanwhile, and the routing rules still pick who answers. To skip Laya, run `cargo run -- serve --no-laya`.
 
 ### Build a release binary
 
@@ -90,6 +115,15 @@ make build                 # web app + cargo build --release
 [Download the Mac app](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg) (a universal `.dmg` for Apple silicon and Intel) and drag kwant to Applications. It runs its own kwant on your Mac, with the same `~/.kwnt` data folder as `kwnt serve`, and stays in the menu bar when you close the window. Build it yourself from [`apps/mac`](apps/mac/README.md).
 
 The app is signed ad hoc, not notarized by Apple, so macOS stops it the first time. Click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. On macOS 14 or earlier, right-click the app and choose **Open** instead.
+
+### On Linux: the app (beta)
+
+The Linux app is for x86_64. Like the Mac app, it runs its own kwant, uses the same `~/.kwnt` data folder and puts an icon in the tray.
+
+- **Ubuntu 22.04 or newer, Debian 12 or newer:** download [`kwant_amd64.deb`](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb), then run `sudo apt install ./kwant_amd64.deb`.
+- **Other distributions:** download [`kwant_x86_64.AppImage`](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage), then `chmod +x kwant_x86_64.AppImage` and run it. It needs a normal GTK desktop and FUSE.
+
+Updates arrive in the app, which checks each one's signature before it installs it; with the `.deb`, your system asks for your password. `sudo apt remove kwant` removes the `.deb`, and your data in `~/.kwnt` stays. It's a beta: tested in containers on Ubuntu 22.04, Ubuntu 24.04 and Debian 12, not yet on real desktops, so the tray icon, Wayland and HiDPI may vary. There's no ARM Linux or Windows app yet.
 
 ### Install the web app
 
@@ -145,7 +179,7 @@ systemctl enable --now kwnt
 
 ### VPS in 5 minutes (Docker Compose)
 
-One command starts everything kwant needs: kwnt, **Laya** (picks which bot answers, model baked in) and a private **Chromium** for the bots (VM mode), with no Docker socket mounted. You need Docker with Compose and about 4 GB of free RAM (Chromium is capped at 1.5 GB).
+One command starts everything kwant needs: kwnt, the **Laya** router (with its model baked in) and a private **Chromium** for the bots (VM mode), with no Docker socket mounted. You need Docker with Compose and about 4 GB of free RAM (Chromium is capped at 1.5 GB).
 
 ```bash
 git clone https://github.com/alexsergivan/kwant.git && cd kwant
@@ -183,7 +217,8 @@ One line per platform, each followed by `kwnt doctor`:
 
 | Platform | Install | Then |
 |---|---|---|
-| Mac app | Download the `.dmg` from [Releases](https://github.com/alexsergivan/kwant/releases) (test builds for now) and open it | Run `kwnt doctor` |
+| Mac app | Download the `.dmg` from [Releases](https://github.com/alexsergivan/kwant/releases) and open it | Run `kwnt doctor` |
+| Linux app (beta, x86_64) | Download the `.deb` or the AppImage from [Releases](https://github.com/alexsergivan/kwant/releases) and [install it](#on-linux-the-app-beta) | Open **Setup** in the app |
 | Mac, command line | `git clone https://github.com/alexsergivan/kwant.git && cd kwant && make build && ./target/release/kwnt setup` (uses Homebrew when you have it) | Run `kwnt doctor` |
 | Linux desktop or server | The same clone and `make build`, then `kwnt setup`, or `sh scripts/install-linux-deps.sh --clis claude` on Debian/Ubuntu | Run `kwnt doctor` |
 | VPS with Docker | [Docker Compose](#vps-in-5-minutes-docker-compose) | Run `docker compose exec kwnt kwnt doctor` |
@@ -194,7 +229,7 @@ There's no prebuilt `kwnt` binary or Homebrew formula yet, so the command line n
 
 ## Laya model router
 
-[Laya](https://huggingface.co/convaiinnovations/laya) picks which bot answers in a channel, and which model and effort a bot uses when its model is `auto`. It runs as a small Python service, and **`kwnt serve` manages it for you**: on first run it installs `laya[serve]` into `~/.kwnt/laya/venv` (with `uv` when present, else `python3 -m venv`), starts it, and restarts it if it exits. The header shows its status. While Laya is unavailable, kwant routes by keyword and says so.
+[Laya](https://huggingface.co/convaiinnovations/laya) picks which model and effort a bot uses when its model is `auto`. When kwant picks which bot answers in a channel, Laya adds its own guess from the bots' titles, but it never picks a bot on its own: kwant's [routing rules](docs/channel-routing.md) do. It runs as a small Python service, and **`kwnt serve` manages it for you**: on first run it installs `laya[serve]` into `~/.kwnt/laya/venv` (with `uv` when present, else `python3 -m venv`), starts it, and restarts it if it exits. The header shows its status. While Laya is unavailable, the rules still pick the bot, the model and effort come from a keyword estimate, and the reason line under a reply says it was a keyword match.
 
 | Setting | `config.toml` | Environment | Default |
 |---|---|---|---|
@@ -210,12 +245,18 @@ The first start needs `huggingface.co`. Behind a proxy that blocks it, start kwa
 ## Documentation
 
 - What changed in each release: [CHANGELOG.md](CHANGELOG.md)
-- Website docs: [kwant.si/docs](https://kwant.si/docs/quickstart): quickstart, spaces, accounts, routines, approvals, loose ends, Parallel Universe, memory and skills, MCP.
+- Website docs: [kwant.si/docs](https://kwant.si/docs/quickstart): quickstart, install, spaces, bots and teams, Mission board, Flight School, Truth Ledger, models and routing, accounts, routines, approvals, the bots' browser, loose ends, Parallel Universe, memory and skills, MCP.
 - In this repo:
+  - [Channel routing: who answers](docs/channel-routing.md)
+  - [Mission Control and verified outcomes](docs/mission-control.md)
   - [Approvals](docs/approvals.md)
+  - [Payments always ask](docs/payments.md)
+  - [How bots use their browser](docs/bot-browser.md)
   - [Bot actions](docs/bot-actions.md)
   - [Browser service and VPS hosting](docs/browser-service.md)
   - [LLM profiles (accounts) and API access](docs/llm-profiles.md)
+  - [Connections API](docs/connections.md)
+  - [Live activity and human steps API](docs/live-activity.md)
   - [MCP API](docs/mcp-api.md)
   - [Saved passwords](docs/saved-passwords.md)
   - [Loose ends (zombie hunter)](docs/zombie-hunter.md)
