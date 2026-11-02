@@ -8,7 +8,7 @@ export const SmartActionsSlot: React.FC<{ messageId: string }> = ({ messageId })
 
 /** Same look as the message's "Copy markdown" button. */
 export const actionClass =
-  'px-2 py-1 rounded-md hover:bg-zinc-900 hover:text-zinc-300 transition-colors flex items-center gap-1.5 text-[11px] cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/70';
+  'px-2 py-1 rounded-md whitespace-nowrap shrink-0 hover:bg-zinc-900 hover:text-zinc-300 transition-colors flex items-center gap-1.5 text-[11px] cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/70';
 
 /**
  * A block's buttons go in its message's action row, so the reply itself keeps the streamed text's exact

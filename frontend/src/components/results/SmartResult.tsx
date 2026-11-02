@@ -190,7 +190,7 @@ const CopyData: React.FC<{ block: SmartBlock; messageId: string }> = ({ block, m
 /** The footer every block shares, in the message's action row: Evidence, Show as text, Copy data. */
 const Footer: React.FC<{ block: SmartBlock; messageId: string; asText: boolean; onToggle: () => void }> = ({ block, messageId, asText, onToggle }) => (
   <SmartActions messageId={messageId}>
-    <span className="px-1 text-[11px] text-zinc-500" data-evidence>
+    <span className="min-w-0 px-1 text-[11px] text-zinc-500" data-evidence>
       {evidenceText(block)}
     </span>
     <button type="button" aria-pressed={asText} onClick={onToggle} className={`${actionClass} ${asText ? 'bg-zinc-900 text-zinc-300' : ''}`}>
