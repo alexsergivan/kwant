@@ -15,9 +15,15 @@
 
 mod chart;
 mod items;
+mod compose;
+mod files;
+mod present_result;
 mod selector;
 mod validate;
+mod verification;
 
+pub use compose::compute_for_message;
+pub use present_result::{tools as present_result_tools, handles as present_result_handles, call as present_result_call};
 pub use selector::{candidates, rank, PRIORITY};
 pub use validate::validate;
 
@@ -26,7 +32,7 @@ use serde::{Deserialize, Serialize};
 /// The block types this build stores and serves. Taking a type out (a one-line release fallback)
 /// stops new blocks of it and hides stored ones (`results: null`); the chat then shows the
 /// reply's markdown.
-pub const ENABLED_TYPES: &[&str] = &["chart", "comparison", "metrics", "findings", "cards", "steps", "facts"];
+pub const ENABLED_TYPES: &[&str] = &["chart", "comparison", "metrics", "findings", "cards", "steps", "facts", "verification", "files"];
 /// The payload version this build writes and reads.
 pub const VERSION: u32 = 1;
 /// Largest stored payload, in bytes of JSON.
@@ -81,6 +87,8 @@ pub enum Block {
     Cards(Cards),
     Steps(Steps),
     Facts(Facts),
+    Verification(Verification),
+    Files(Files),
 }
 
 impl Block {
@@ -94,6 +102,8 @@ impl Block {
             Block::Cards(_) => "cards",
             Block::Steps(_) => "steps",
             Block::Facts(_) => "facts",
+            Block::Verification(_) => "verification",
+            Block::Files(_) => "files",
         }
     }
 
@@ -125,14 +135,17 @@ macro_rules! common {
             Block::Cards($b) => $e,
             Block::Steps($b) => $e,
             Block::Facts($b) => $e,
+            Block::Verification($b) => $e,
+            Block::Files($b) => $e,
         }
     };
 }
 use common;
 
 /// Which table or list of the reply a block stands for, or `slot` (no source in the text: the
-/// chat draws it after the reply). `index` counts in the order the chat renders them, from 0:
-/// tables in one count, numbered lists in another, bullet lists (`ordered: false`) in a third.
+/// chat draws it after the reply; `verification`, `files` and a `present_result` call use it and
+/// leave `index` out). `index` counts in the order the chat renders them, from 0: tables in one
+/// count, numbered lists in another, bullet lists (`ordered: false`) in a third.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Source {
     /// `markdown_table`, `markdown_list` or `slot`.
@@ -157,8 +170,8 @@ impl Source {
 }
 
 /// Where the values came from: copied from the reply (`reply_text`), declared by the bot with
-/// `present_result` and grounded against the reply (`bot_declared`, with `tool_call_id`), or typed
-/// kwant data (`kwant_data`, with `ref` "task:<id>" or "attachment:<id>").
+/// `present_result` and grounded against the reply (`bot_declared`, with `tool_call_id`), or read
+/// from kwant's own stored data (`kwant_data`, with `ref` "task:<id>" or "attachment:<id>").
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Provenance {
     pub kind: String,
@@ -171,6 +184,12 @@ pub struct Provenance {
 impl Provenance {
     pub fn reply_text() -> Self {
         Provenance { kind: "reply_text".into(), tool_call_id: None, reference: None }
+    }
+    pub fn kwant_data(reference: String) -> Self {
+        Provenance { kind: "kwant_data".into(), tool_call_id: None, reference: Some(reference) }
+    }
+    pub fn bot_declared(tool_call_id: String) -> Self {
+        Provenance { kind: "bot_declared".into(), tool_call_id: Some(tool_call_id), reference: None }
     }
 }
 
@@ -404,4 +423,71 @@ pub struct Findings {
     pub source: Source,
     pub items: Vec<Finding>,
     pub provenance: Provenance,
+}
+
+/// The task a `verification` block is about.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VerificationTarget {
+    pub kind: String,
+    pub id: String,
+    pub title: String,
+}
+
+/// One outcome check's stored result. `status` is `passed`, `failed`, `error` or `pending` (a
+/// check that has not finished: waiting for approval, queued or running). `label` and `excerpt`
+/// are redacted like the check's own stored output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Check {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    pub status: String,
+    pub excerpt: Option<String>,
+    pub checked_at: Option<String>,
+}
+
+/// A mission task's outcome checks, attached to its "Verified: ..." / "Failed: ..." report line.
+/// A snapshot taken when the report was posted; each check says when it was checked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Verification {
+    pub id: String,
+    pub title: Option<String>,
+    pub source: Source,
+    pub provenance: Provenance,
+    pub target: VerificationTarget,
+    pub checks: Vec<Check>,
+    pub summary: String,
+}
+
+/// What a file's preview shows: a CSV/TSV table (at most 20 rows by 8 columns), the first lines of
+/// a text file, or the image itself (drawn from the authorized attachment route). `None` is a file
+/// row with no preview.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FilePreview {
+    Table { columns: Vec<String>, rows: Vec<Vec<String>> },
+    Text { excerpt: String },
+    Image,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileItem {
+    pub id: String,
+    pub attachment_id: String,
+    pub name: String,
+    pub mime: String,
+    pub size_bytes: i64,
+    pub preview: Option<FilePreview>,
+}
+
+/// The files a bot shared with one message, and only those: each one is a stored attachment of
+/// this chat, shared by this bot. Bytes are served by the existing attachment routes, never from
+/// here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Files {
+    pub id: String,
+    pub title: Option<String>,
+    pub source: Source,
+    pub provenance: Provenance,
+    pub items: Vec<FileItem>,
 }

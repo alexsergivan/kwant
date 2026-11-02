@@ -78,6 +78,8 @@ pub enum DbError {
 #[derive(Clone, Debug)]
 pub struct Database {
     pool: Pool<Sqlite>,
+    /// Where attachments live (`<data_dir>/attachments`), for file previews in Smart Results.
+    data_dir: std::path::PathBuf,
 }
 
 /// Built-in kwants: (name, title, persona, soul, avatar).
@@ -153,7 +155,7 @@ impl Database {
         // The chat a card that outlived its turn resumes in (see `park_approval`)
         let _ = sqlx::query("ALTER TABLE approvals ADD COLUMN resume TEXT;").execute(&pool).await;
 
-        let db = Self { pool };
+        let db = Self { pool, data_dir: data_dir.to_path_buf() };
         db.migrate_profiles().await?;
         db.migrate_browser_sites().await?;
         db.migrate_continuity().await?;
@@ -217,7 +219,7 @@ impl Database {
             .connect(&conn_str)
             .await?;
         sqlx::query("PRAGMA synchronous = NORMAL;").execute(&pool).await?;
-        Ok(Self { pool })
+        Ok(Self { pool, data_dir: data_dir.to_path_buf() })
     }
 
     /// A transaction that holds SQLite's write lock from the start, for one that reads before it
@@ -484,7 +486,7 @@ impl Database {
     /// [`Self::insert_message`] into a thread and/or with kwnt's own `meta`.
     pub async fn insert_message_with(&self, input: &NewMessage, extra: &MessageExtra) -> Result<Message, DbError> {
         let mut conn = self.pool.acquire().await?;
-        insert_message_on(&mut conn, input, extra).await
+        insert_message_core(&mut conn, input, extra, Some(&self.data_dir.join("attachments"))).await
     }
 
     pub async fn get_message(&self, id: &str) -> Result<Option<Message>, DbError> {
@@ -1096,6 +1098,17 @@ pub(crate) async fn insert_message_on(
     input: &NewMessage,
     extra: &MessageExtra,
 ) -> Result<Message, DbError> {
+    insert_message_core(conn, input, extra, None).await
+}
+
+/// [`insert_message_on`] with the attachments directory, so a shared file's card can get a
+/// preview. Without it a file card has no block.
+async fn insert_message_core(
+    conn: &mut sqlx::SqliteConnection,
+    input: &NewMessage,
+    extra: &MessageExtra,
+    root: Option<&Path>,
+) -> Result<Message, DbError> {
     let id = Uuid::new_v4().to_string();
     let tools_json = input
         .tool_calls
@@ -1127,7 +1140,7 @@ pub(crate) async fn insert_message_on(
         .bind(&id)
         .fetch_one(&mut *conn)
         .await?;
-    msg.results = smart_results::store_on(conn, input, extra, &id).await;
+    msg.results = smart_results::store_on(conn, input, extra, &id, root).await;
     Ok(msg)
 }
 

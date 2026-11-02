@@ -73,6 +73,10 @@ fn read(version: i64, payload: &str) -> Option<Value> {
 /// chat draws as markdown inside its card.
 const REPLY_KINDS: &[&str] = &["delegation_result"];
 
+/// `meta.kind`s that are a card kwant builds from its own data and that have a block of their own:
+/// a mission task's report line (`verification`) and an agent's shared file (`files`).
+const DATA_KINDS: &[&str] = &["mission", "file"];
+
 /// Computes and stores the block set for a message just inserted on `conn` as `id`, and returns
 /// it for the message object. Only bot replies qualify: `sender_role` "kwant" and no `meta.kind`
 /// other than [`REPLY_KINDS`] (cards and kwnt's own posts have one; a reply's `ran_on`, `usage`
@@ -83,13 +87,14 @@ pub(super) async fn store_on(
     input: &NewMessage,
     extra: &MessageExtra,
     id: &str,
+    root: Option<&std::path::Path>,
 ) -> Option<Value> {
     let kind = extra.meta.as_ref().and_then(|m| m.get("kind"));
-    let card = kind.is_some_and(|k| !k.as_str().is_some_and(|k| REPLY_KINDS.contains(&k)));
+    let card = kind.is_some_and(|k| !k.as_str().is_some_and(|k| REPLY_KINDS.contains(&k) || DATA_KINDS.contains(&k)));
     if input.sender_role != "kwant" || card {
         return None;
     }
-    let set = sr::compute(&input.text)?;
+    let set = sr::compute_for_message(conn, input, extra, root).await?;
     let value = serde_json::to_value(&set).ok()?;
     let saved = sqlx::query("INSERT OR REPLACE INTO message_results (message_id, version, payload) VALUES (?, ?, ?)")
         .bind(id)

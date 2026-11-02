@@ -47,7 +47,7 @@ const MAX_SHARED_TEXT_BYTES: usize = 1024 * 1024;
 const MAX_NAME_CHARS: usize = 120;
 
 /// Raster images: the only types shown inline; everything else downloads.
-const INLINE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+pub(crate) const INLINE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 pub fn root(state: &AppState) -> PathBuf {
     state.config.data_dir.join("attachments")
