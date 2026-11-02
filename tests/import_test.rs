@@ -97,7 +97,7 @@ async fn row_counts(tmp: &TempDir) -> Vec<(String, i64)> {
     let url = format!("sqlite://{}?mode=ro", tmp.path().join("kwnt.db").display());
     let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
     let mut out = Vec::new();
-    for t in ["kwants", "skills", "routines", "kwant_memories", "teams", "channels", "kwant_mcp_disabled", "imports", "attachments"] {
+    for t in ["kwants", "skills", "routines", "kwant_memories", "teams", "channels", "kwant_mcp_disabled", "imports", "attachments", "kwant_scope"] {
         let (n,): (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {t}")).fetch_one(&pool).await.unwrap();
         out.push((t.to_string(), n));
     }
@@ -809,4 +809,92 @@ async fn browser_site_rules_survive_create_export_and_import() {
     let (status, v) = apply(&e.app, &b, &bad, &[]).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
     assert_eq!(e.state.db.list_kwants(&SpaceId::new(b.clone())).await.unwrap().len(), 1);
+}
+
+/// A bot's "Good for" / "Not for" lists (covers/avoids) survive being created with them, exported
+/// and imported (kwant's copy of a bot); create refuses a list PUT would refuse, and import drops
+/// such an entry with a note instead of stopping. Undo removes the copy's lists with it.
+#[tokio::test]
+async fn covers_and_avoids_survive_create_export_and_import() {
+    let e = setup().await;
+    let a = new_space(&e, "Source").await;
+    let b = new_space(&e, "Copy").await;
+    let bot = |name: &str, scope: Value| {
+        let mut v = json!({"name": name, "title": "Food guide", "persona_prompt": "Finds places to eat.", "avatar_sprite": "default",
+            "driver_type": "api", "preferred_model": "auto"});
+        v.as_object_mut().unwrap().extend(scope.as_object().unwrap().clone());
+        v
+    };
+    let lists = |v: &Value| json!({"covers": v["covers"], "avoids": v["avoids"]});
+    let listed = |all: &Value, id: &str| all.as_array().unwrap().iter().find(|k| k["id"] == id).cloned().unwrap_or(Value::Null);
+    let want = json!({"covers": ["Restaurants", "street food"], "avoids": ["legal advice"]});
+
+    // Create: cleaned like PUT (trimmed, repeats dropped ignoring case)
+    let (status, made) = json_call(&e.app, "POST", &format!("/api/kwants?space={a}"),
+        bot("Foodie", json!({"covers": ["  Restaurants ", "street food", "restaurants", ""], "avoids": ["legal advice"]}))).await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    assert_eq!(lists(&made), want);
+    let id = made["id"].as_str().unwrap().to_string();
+    let (_, all) = get(&e.app, &format!("/api/kwants?space={a}")).await;
+    assert_eq!(lists(&listed(&all, &id)), want, "{all}");
+
+    // A list PUT would refuse is a 400 naming it, and no bot is made
+    let too_many: Vec<String> = (0..21).map(|i| format!("topic {i}")).collect();
+    let (status, err) = json_call(&e.app, "POST", &format!("/api/kwants?space={a}"), bot("Many", json!({"covers": too_many}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
+    assert!(err.to_string().contains("covers: at most 20 entries"), "{err}");
+    let (status, err) = json_call(&e.app, "POST", &format!("/api/kwants?space={a}"), bot("Long", json!({"avoids": ["x".repeat(61)]}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
+    assert!(err.to_string().contains("avoids: each entry is at most 60 characters"), "{err}");
+    assert_eq!(e.state.db.list_kwants(&SpaceId::new(a.clone())).await.unwrap().len(), 1);
+
+    // A bot made without them has empty lists, no row, and its export carries neither field
+    let (status, plain) = json_call(&e.app, "POST", &format!("/api/kwants?space={a}"), bot("Plain", json!({"covers": [], "avoids": []}))).await;
+    assert_eq!(status, StatusCode::OK, "{plain}");
+    assert_eq!(lists(&plain), json!({"covers": [], "avoids": []}));
+    let plain_id = plain["id"].as_str().unwrap();
+    let (_, plain_out) = get(&e.app, &format!("/api/kwants/{plain_id}/export?space={a}")).await;
+    let keys = plain_out["bots"][0].as_object().unwrap();
+    assert!(!keys.contains_key("covers") && !keys.contains_key("avoids"), "{plain_out}");
+    assert!(e.state.db.scopes_for(&[plain_id.to_string()]).await.unwrap().is_empty(), "no row for empty lists");
+
+    // Export → import into another space: the copy has the same lists, and the preview says so
+    let (status, out) = get(&e.app, &format!("/api/kwants/{id}/export?space={a}")).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(lists(&out["bots"][0]), want);
+    let before = row_counts(&e.tmp).await;
+    let (status, p) = send(&e.app, "POST", &format!("/api/import/preview?space={b}&filename=bot.kwant.json"), "application/octet-stream", out.to_string().into_bytes()).await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    assert_eq!(row_counts(&e.tmp).await, before, "preview writes nothing");
+    assert!(p["warnings"].to_string().contains("Good for: Restaurants, street food. Not for: legal advice. Channels use this to pick who answers"), "{p}");
+    let (status, v) = apply(&e.app, &b, &p["bundle"], &[]).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    let copy = v["import"]["created"]["kwants"][0]["id"].as_str().unwrap().to_string();
+    let (_, all) = get(&e.app, &format!("/api/kwants?space={b}")).await;
+    assert_eq!(lists(&listed(&all, &copy)), want, "{all}");
+
+    // Undo takes the copy's lists with it
+    let import_id = v["import"]["id"].as_str().unwrap();
+    let (status, undone) = undo_call(&e, &format!("/api/imports/{import_id}/undo?space={b}"), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{undone}");
+    assert!(e.state.db.scopes_for(std::slice::from_ref(&copy)).await.unwrap().is_empty(), "undo leaves no lists behind");
+
+    // An entry the app wouldn't keep is dropped with a note; the rest import
+    let mut odd = out.clone();
+    let mut covers: Vec<String> = vec!["y".repeat(61), "Bistro\u{200B}s".into()];
+    covers.extend((0..21).map(|i| format!("topic {i}")));
+    odd["bots"][0]["covers"] = json!(covers);
+    let (status, p) = send(&e.app, "POST", &format!("/api/import/preview?space={b}&filename=bot.kwant.json"), "application/octet-stream", odd.to_string().into_bytes()).await;
+    assert_eq!(status, StatusCode::OK, "{p}");
+    assert_eq!(p["problems"], json!([]), "{p}");
+    let dropped = p["dropped"].to_string();
+    assert!(dropped.contains("\\\"Good for\\\" entry over 60 characters"), "{dropped}");
+    assert!(dropped.contains("\\\"Good for\\\" entry (over the 20-entry limit): topic 19") && dropped.contains("topic 20"), "{dropped}");
+    let kept = p["bundle"]["bots"][0]["covers"].as_array().unwrap();
+    assert_eq!((kept.len(), kept[0].as_str()), (20, Some("Bistros")), "{p}");
+    let (status, v) = apply(&e.app, &b, &p["bundle"], &[]).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    let copy = v["import"]["created"]["kwants"][0]["id"].as_str().unwrap();
+    let scope = e.state.db.get_scope(copy).await.unwrap();
+    assert_eq!((scope.covers.len(), scope.avoids.clone()), (20, vec!["legal advice".to_string()]));
 }

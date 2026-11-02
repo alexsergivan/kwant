@@ -261,7 +261,8 @@ impl Database {
     }
 
     /// Removes a kwant that [`Self::kwant_in_use`] cleared, with its memories, routines and
-    /// their runs, MCP opt-outs and channel/team memberships, in one transaction.
+    /// their runs, MCP opt-outs, covers/avoids lists and channel/team memberships, in one
+    /// transaction.
     pub async fn delete_unused_kwant(&self, id: &str) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
         for sql in [
@@ -270,6 +271,7 @@ impl Database {
             "DELETE FROM kwant_memories WHERE kwant_id = ?",
             "DELETE FROM kwant_mcp_disabled WHERE kwant_id = ?",
             "DELETE FROM kwant_mcp_servers WHERE kwant_id = ?",
+            "DELETE FROM kwant_scope WHERE kwant_id = ?",
         ] {
             sqlx::query(sql).bind(id).execute(&mut *tx).await?;
         }

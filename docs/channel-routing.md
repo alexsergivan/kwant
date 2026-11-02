@@ -31,11 +31,17 @@ Laya's titles-only guess is a tiebreaker only; it no longer picks a bot on its o
 
 ## covers / avoids
 
-`GET /api/kwants`, `GET /api/kwants/:id` and `PUT /api/kwants/:id` carry `covers: [string]` and
-`avoids: [string]` (at most 20 entries of 60 characters; trimmed, duplicates dropped ignoring
-case). On `PUT`, a list left out stays as it is and `[]` clears it. A covered entry counts double
-in scoring; an avoided entry keeps the bot out unless it is @mentioned. Empty lists change nothing.
-Only the Concierge gets defaults.
+`GET /api/kwants` (on every bot), `POST /api/kwants` and `PUT /api/kwants/:id` carry
+`covers: [string]` and `avoids: [string]` (at most 20 entries of 60 characters; trimmed,
+duplicates dropped ignoring case; a 400 `"covers: …"` / `"avoids: …"` refuses the whole request,
+and on create no bot is made). On `PUT`, a list left out stays as it is and `[]` clears it; on
+`POST` a list left out is empty. A covered entry counts double in scoring; an avoided entry keeps
+the bot out unless it is @mentioned. Empty lists change nothing. Only the Concierge gets defaults.
+
+A bot's export (`kwant.bundle/1`) carries `covers` and `avoids` when they aren't empty, and
+importing it restores them, so a copied bot is routed the same way. The import preview names them
+in a warning. An entry the app wouldn't keep (over 60 characters, or past 20) is dropped with a
+note in the preview rather than stopping the import, since the lists only steer routing.
 
 ## Asking
 
