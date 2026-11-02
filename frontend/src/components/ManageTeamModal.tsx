@@ -7,6 +7,7 @@ import { playSfx } from '../audio/chiptune';
 import { InstructionsField } from './Instructions';
 import { MAX_INSTRUCTIONS } from '../continuity';
 import { teamNameToSave } from '../teamChannel';
+import { useEscapeLayer } from '../escape';
 
 interface ManageTeamModalProps {
   isOpen: boolean;
@@ -92,6 +93,33 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
       setIsBrowsing(false);
     }
   };
+
+  // Escape closes Manage team when nothing differs from the saved team, and keeps it open otherwise.
+  const saved = team
+    ? {
+        name: team.name,
+        description: team.description || '',
+        instructions: team.instructions || '',
+        workspace: team.workspace_path ? `local:${team.workspace_path}` : team.repo_url ? `repo:${team.repo_url}` : 'default',
+        lead: team.lead_kwant_id || (kwants[0]?.id ?? ''),
+        members: [...memberIdsOf(team)].sort().join(','),
+      }
+    : null;
+  const edited = {
+    name,
+    description,
+    instructions,
+    workspace: workspaceType === 'local' ? `local:${workspacePath}` : workspaceType === 'repo' ? `repo:${repoUrl}` : 'default',
+    lead: leadKwantId,
+    members: [...memberIds].sort().join(','),
+  };
+  const unsaved = !!saved && (Object.keys(saved) as (keyof typeof saved)[]).some((k) => saved[k] !== edited[k]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEscapeLayer(rootRef, isOpen && !!team, onClose, {
+    modal: true,
+    unsaved,
+    fallback: () => [...document.querySelectorAll<HTMLElement>('[data-composer]')].find((el) => !el.closest('[inert]')),
+  });
 
   useEffect(() => {
     if (team) {
@@ -212,7 +240,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
 
   return (
     <div className="kw-dialog fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150">
-      <div role="dialog" aria-modal="true" aria-labelledby="manage-team-title" className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[94vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5">
+      <div ref={rootRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="manage-team-title" className="kw-dialog-panel outline-none bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[94vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-2.5">
@@ -225,6 +253,8 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
             </div>
           </div>
           <button
+            type="button"
+            aria-label="Close"
             onClick={() => {
               playSfx('click');
               onClose();
@@ -444,54 +474,58 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
             </select>
           </div>
 
-          {/* Members Roster Checklist */}
+          {/* Members Roster Checklist: each row is a toggle button (Tab to it, Space or Enter) */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-medium text-zinc-400">
+              <p id="team-roster-label" className="block text-xs font-medium text-zinc-400">
                 Team Roster ({memberIds.length}/{kwants.length} Assigned)
-              </label>
-              <span className="text-[11px] text-zinc-500">Click to add/remove</span>
+              </p>
+              <span className="text-[11px] text-zinc-500">Select a bot to add or remove it</span>
             </div>
-            <div className="space-y-1.5 max-h-48 overflow-y-auto p-1 bg-zinc-950/60 border border-zinc-800/80 rounded-xl">
+            <div role="group" aria-labelledby="team-roster-label" className="space-y-1.5 max-h-48 overflow-y-auto p-1 bg-zinc-950/60 border border-zinc-800/80 rounded-xl">
               {kwants.map((k) => {
                 const isMember = memberIds.includes(k.id);
                 const isLead = leadKwantId === k.id;
                 return (
-                  <div
+                  <button
+                    type="button"
                     key={k.id}
+                    aria-pressed={isMember}
+                    data-roster-row={k.id}
                     onClick={() => handleToggleMember(k.id)}
-                    className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${
+                    className={`w-full text-left flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-sky-400 ${
                       isMember
                         ? 'bg-zinc-800/70 border-sky-500/30 text-zinc-100'
                         : 'bg-zinc-900/30 border-zinc-800/40 text-zinc-400 hover:bg-zinc-800/30 hover:text-zinc-200'
                     }`}
                   >
-                    <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="flex items-center gap-2.5 min-w-0">
                       <ModernAvatar role={k.avatar_sprite} name={k.name} size={28} />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
+                      <span className="block min-w-0">
+                        <span className="flex items-center gap-1.5">
                           <span className="text-xs font-medium text-zinc-200 truncate">{k.name}</span>
                           {isLead && (
                             <span className="text-[9px] font-semibold uppercase px-1 py-0.2 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 flex items-center gap-0.5">
-                              <ShieldCheck size={9} />
+                              <ShieldCheck size={9} aria-hidden="true" />
                               Lead
                             </span>
                           )}
-                        </div>
-                        <p className="text-[10px] text-zinc-400 truncate">{k.title}</p>
-                      </div>
-                    </div>
+                        </span>
+                        <span className="block text-[10px] text-zinc-400 truncate">{k.title}</span>
+                      </span>
+                    </span>
 
-                    <div
-                      className={`w-5 h-5 rounded flex items-center justify-center border transition-all ${
+                    <span
+                      aria-hidden="true"
+                      className={`w-5 h-5 shrink-0 rounded flex items-center justify-center border transition-all ${
                         isMember
                           ? 'bg-sky-500 text-white border-sky-400'
                           : 'border-zinc-700 bg-zinc-900 text-transparent'
                       }`}
                     >
                       <Check size={13} strokeWidth={2.5} />
-                    </div>
-                  </div>
+                    </span>
+                  </button>
                 );
               })}
             </div>

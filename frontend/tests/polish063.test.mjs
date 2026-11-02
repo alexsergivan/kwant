@@ -191,7 +191,7 @@ test('4: Manage team names who Save will remove before it happens', async () => 
   const saved = [];
   const v = await mount(m.ManageTeamModal, { isOpen: true, team, kwants, onClose: noop, onUpdateTeam: async (id, d) => saved.push(d.member_kwants), onDeleteTeam: async () => {} });
   assert.equal(document.querySelector('[data-team-removals]'), null);
-  const row = [...document.querySelectorAll('div')].find((d) => d.className.includes('cursor-pointer') && d.textContent.includes('Customer-Success-Manager-Extraordinaire'));
+  const row = [...document.querySelectorAll('[data-roster-row]')].find((d) => d.textContent.includes('Customer-Success-Manager-Extraordinaire'));
   await click(row);
   assert.deepEqual(saved, [], 'unticking saves nothing');
   assert.match(document.querySelector('[data-team-removals]').textContent, /Saving removes Customer-Success-Manager-Extraordinaire from @Ship\./);

@@ -50,6 +50,7 @@ import {
 } from '../missions';
 import { FlightSchoolSettings, TIERS, TIER_HINTS, TIER_LABELS, Tier, parseFlightSchoolSettings } from '../flightSchool';
 import { DISCOVERY_CAPS, DISCOVERY_SETTING_EVENT, parseDiscoverySettings } from '../automationDiscovery';
+import { editorProps, isTextField } from '../escape';
 
 const RECOVERY_PCTS = [0, 10, 25, 50, 100];
 
@@ -299,6 +300,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Text typed into the form and not saved yet: Escape keeps it (and Settings) open.
+  const [typed, setTyped] = useState(false);
   // A 400 about the audit model shows next to that picker, not only at the bottom.
   const modelError = isAuditorModelError(saveError);
   // null until loaded (or from a server without the setting), and then left out of the save
@@ -347,7 +350,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   closeRef.current = onClose;
   useEffect(() => {
     if (!isOpen || embedded) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !e.defaultPrevented && closeRef.current();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [isOpen, embedded]);
@@ -470,6 +473,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
       if (res.ok) {
         setSaveSuccess(true);
+        setTyped(false);
         if (missionBoard !== null) window.dispatchEvent(new CustomEvent(MISSION_BOARD_SETTING_EVENT, { detail: missionBoard }));
         if (discovery) window.dispatchEvent(new CustomEvent(DISCOVERY_SETTING_EVENT, { detail: discovery }));
         if (webhookUrl.trim() && webhookUrl.trim() !== MASK) setWebhookUrl(MASK);
@@ -602,7 +606,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         )}
 
         {/* App settings form; API keys moved to Settings › This space › Accounts */}
-        <form onSubmit={handleSave} className="space-y-4">
+        <form onSubmit={handleSave} onChange={(e) => isTextField(e.target) && setTyped(true)} {...editorProps(typed)} className="space-y-4">
           {onOpenApiKeys && (
             <button
               type="button"
