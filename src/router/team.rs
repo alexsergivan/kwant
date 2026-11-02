@@ -651,10 +651,18 @@ pub const AT_MENTIONED: &str = "was @mentioned in your message";
 
 /// A message's words for comparing it with another: no filler, plurals folded, each once. Words
 /// under three letters ("a", "in", "is", "to") and [`NOT_CONTENT`] say nothing about what a message
-/// is for, so "Is it ok to deploy on a Friday?" and "Is it ok to freeze a cake?" share none.
+/// is for, so "Is it ok to deploy on a Friday?" and "Is it ok to freeze a cake?" share none. A
+/// two-letter word written in capitals is an acronym ("CI", "PR", "QA", "3D") and counts.
 pub fn content_words(text: &str) -> Vec<String> {
-    let mut w: Vec<String> =
-        scope_words(text).into_iter().filter(|w| w.chars().count() >= 3 && !NOT_CONTENT.contains(&w.as_str())).collect();
+    let acronyms: Vec<String> = text
+        .split(|c: char| !c.is_alphanumeric() && c != '-')
+        .filter(|w| w.chars().count() == 2 && w.chars().any(char::is_uppercase) && !w.chars().any(char::is_lowercase))
+        .map(str::to_lowercase)
+        .collect();
+    let mut w: Vec<String> = scope_words(text)
+        .into_iter()
+        .filter(|w| (w.chars().count() >= 3 || acronyms.contains(w)) && !NOT_CONTENT.contains(&w.as_str()))
+        .collect();
     w.sort();
     w.dedup();
     w
@@ -1925,5 +1933,14 @@ mod fit_tests {
         assert_ne!(p.basis, "learned", "{p:?}");
         let p = pick_member_hinted("Suggest a vegan substitute for eggs in brioche", "k-lead", &members, None, "channel lead", None, &learned).unwrap();
         assert_eq!((p.kwant.id.as_str(), p.basis), ("k-script", "learned"), "{p:?}");
+    }
+
+    /// A two-letter word in capitals is an acronym, not filler: a correction about a red CI run on
+    /// a PR still routes a rephrase of it, which would share only "red" without them.
+    #[test]
+    fn two_letter_acronyms_still_count() {
+        assert_eq!(content_words("Why is CI red on my PR?"), ["ci", "pr", "red"]);
+        assert_eq!(content_words("Is it ok to ship a 3D build at 10?"), ["3d", "build", "ship"]);
+        assert!(alike(&content_words("Why is CI red on my PR?"), &content_words("CI red again on the PR")));
     }
 }

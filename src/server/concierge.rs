@@ -214,5 +214,8 @@ mod hire_tests {
         let now = "Is it ok to freeze a cake?";
         let recent = vec![ex("m2", "Is it ok to swim in a lake?", false), ex("m1", "Is it ok to deploy on a Friday?", false)];
         assert_eq!(similar_ids(now, "m3", &recent), vec!["m3"]);
+        // A two-letter acronym isn't filler: three requests to review a PR are one kind
+        let recent = vec![ex("m2", "PR review please", false), ex("m1", "Review my PR", false)];
+        assert_eq!(similar_ids("Can you review this PR?", "m3", &recent), vec!["m1", "m2", "m3"]);
     }
 }
