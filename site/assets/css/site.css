@@ -136,9 +136,9 @@ section { padding: 104px 0; }
 .new-list a:focus-visible { outline: 2px solid var(--v5); outline-offset: 2px; }
 .new-list b { display: block; font-size: 15px; }
 .new-list span { display: block; margin-top: 2px; color: var(--muted); font-size: 14px; line-height: 1.4; }
-/* "New in 0.6": three cards, each with a real screenshot crop on top */
+/* "New in 0.6": four cards, each with a real screenshot crop on top */
 .new-shots .wrap { flex-direction: column; align-items: stretch; gap: 14px; }
-.new-shots .new-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.new-shots .new-list { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .new-shots .new-list a { padding: 10px 10px 16px; }
 .new-shots .new-list img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; margin-bottom: 12px; background: #140f26; border-radius: 8px; }
 .new-shots .new-list b, .new-shots .new-list span { padding: 0 4px; }
@@ -408,7 +408,7 @@ td code { white-space: nowrap; }
 /* Smaller screens */
 @media (max-width: 1000px) {
   .new-strip .wrap { flex-direction: column; align-items: stretch; gap: 12px; }
-  .new-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .new-list, .new-shots .new-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hero { padding-top: 48px; }
   .hero-grid, .nf-grid, .outro-panel, .phone-grid { grid-template-columns: minmax(0, 1fr); }
   .hero-crt, .nf-grid .crt { max-width: 640px; }

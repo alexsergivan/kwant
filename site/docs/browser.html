@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Browser: A bot browser shown live in the app: your own Chrome, or isolated in Docker.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-11-01">
+<meta property="article:modified_time" content="2026-11-02">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="AI agent browser: your Chrome or Docker · kwant">
 <meta name="twitter:description" content="Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.">
@@ -31,7 +31,7 @@
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=653cdf5d1c">
+<link rel="stylesheet" href="../assets/css/site.css?v=551831af86">
 </head>
 <body class="page-docs">
 <a class="skip" href="#main">Skip to content</a>
@@ -92,6 +92,23 @@
   <li><strong>No re-reading:</strong> reading a page that hasn't changed since the last look gives a one-line "unchanged". On a page with more than 40 controls, the bot can say what it looks for ("add to cart bike light") and the matches are listed first, with the same numbers.</li>
   <li><strong>Asks before paying:</strong> before a bot clicks or presses Enter or Space, kwant reads the page: the button the click would really hit, card number or CVC fields, a payment provider's card frame (Stripe, Braintree, Adyen, …) and forms that post to a checkout. Any of these gets the <a href="/docs/approvals">payment card</a> in every approval mode, even behind a plain "Continue". Bots using the browser through the shell leave that step to you.</li>
 </ul>
+
+<h2 id="sites">Browser sites: where each bot may go</h2>
+<p>Each bot can have its own rules for where its browser goes. Open the bot's settings and expand <strong>Browser sites</strong>:</p>
+<ul>
+  <li><strong>Allowed sites:</strong> when the list isn't empty, the bot's browser opens only these sites. <code>example.com</code> includes its subdomains; <code>*.example.com</code> means only the subdomains. A pasted address keeps just its site.</li>
+  <li><strong>Blocked sites:</strong> never opened, even if they're also allowed.</li>
+  <li><strong>Block local and private network addresses:</strong> refuses localhost, 192.168.x.x, 10.x.x.x and names that point to them, such as your router.</li>
+</ul>
+<p>Each list holds up to 200 entries. With both lists empty and the switch off, which is the default, nothing is checked. The rules hold in Local and VM mode for every page a bot's actions load: a page it opens, a link it clicks, a redirect, a form it submits and a new tab its page opens. A refused page isn't opened, and the bot is told which rule stopped it, for example "Not opened: tiktok.com is on this bot's blocked sites". Your own browsing, with Take Control, isn't limited.</p>
+<ul>
+  <li><strong>Only you set them:</strong> kwant takes a change to Browser sites from you, in the app or with your API token. A change sent with a bot's key is refused, for its own sites and for any other bot's. A bot that can run commands on the computer kwant runs on can still reach kwant directly, as it can for any setting only you may change. This lock covers Browser sites, not Good for and Not for.</li>
+  <li><strong>Whole pages only:</strong> the rules check the pages a bot loads, not what those pages load. A frame inside an allowed page, and a page's own images, scripts and requests, can come from anywhere.</li>
+</ul>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v64-browser-sites-2880.webp?v=5acfcf602e" data-caption="The Researcher&#x27;s settings with Browser sites open: allowed sites outdoorgearlab.com, rei.com and wikipedia.org; blocked sites facebook.com and tiktok.com; and &quot;Block local and private network addresses&quot; ticked. The summary line reads &quot;Only 3 sites, never 2 sites, no local network&quot;."><img src="../assets/media/v64-browser-sites-1440.webp?v=e3742365ca" srcset="../assets/media/v64-browser-sites-1440.webp?v=e3742365ca 1440w, ../assets/media/v64-browser-sites-2880.webp?v=5acfcf602e 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The Researcher&#x27;s settings with Browser sites open: allowed sites outdoorgearlab.com, rei.com and wikipedia.org; blocked sites facebook.com and tiktok.com; and &quot;Block local and private network addresses&quot; ticked. The summary line reads &quot;Only 3 sites, never 2 sites, no local network&quot;."></a></div>
+  <figcaption>The Researcher browses three sites, never two others, and nothing on your network.</figcaption>
+</figure>
 
 <h2 id="modes">Local or VM mode</h2>
 <p>Choose where bots' browser and shell commands run in <strong>Settings → All spaces → Computer for browsing and commands</strong>, or with the browser panel's mode toggle. Switching takes effect at once, without a restart.</p>
@@ -174,7 +191,7 @@ docker build -t kwnt-executor:v1 -f docker/executor.Dockerfile docker</code></pr
 </footer>
 <script src="../assets/js/site.js?v=c490c973ba" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/browser#article","headline":"AI agent browser: your Chrome or Docker","description":"Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.","url":"https://kwant.si/docs/browser","mainEntityOfPage":"https://kwant.si/docs/browser","image":"https://kwant.si/assets/og/docs-browser.png?v=7175e8f75c","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-01","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Browser","item":"https://kwant.si/docs/browser"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/browser#article","headline":"AI agent browser: your Chrome or Docker","description":"Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.","url":"https://kwant.si/docs/browser","mainEntityOfPage":"https://kwant.si/docs/browser","image":"https://kwant.si/assets/og/docs-browser.png?v=7175e8f75c","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-02","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Browser","item":"https://kwant.si/docs/browser"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

@@ -26,7 +26,7 @@ card_art: avatar:research
 <p>Each engine can have several accounts, with a default, a priority order and automatic failover when one runs out of usage. See <a href="accounts.html">Accounts &amp; profiles</a>.</p>
 
 <h2 id="laya">The Laya router</h2>
-<p><a href="https://huggingface.co/convaiinnovations/laya" rel="noopener">Laya</a> picks which bot answers in a channel, and which model and effort a bot set to auto uses. It's a small Python service, and <code>kwnt serve</code> manages it for you:</p>
+<p><a href="https://huggingface.co/convaiinnovations/laya" rel="noopener">Laya</a> helps pick which bot answers in a channel (see <a href="bots-and-teams.html#how-routing-picks">how kwant picks</a>), and picks which model and effort a bot set to auto uses. It's a small Python service, and <code>kwnt serve</code> manages it for you:</p>
 <ol>
   <li>On first run it installs <code>laya[serve]</code> into <code>~/.kwnt/laya/venv</code>, with <code>uv</code> when present or <code>python3 -m venv</code> otherwise.</li>
   <li>It starts <code>laya-serve</code> and downloads the English checkpoint (about 420 MB) on first start.</li>

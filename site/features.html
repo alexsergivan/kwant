@@ -29,7 +29,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=653cdf5d1c">
+<link rel="stylesheet" href="assets/css/site.css?v=551831af86">
 </head>
 <body class="page-features">
 <a class="skip" href="#main">Skip to content</a>
@@ -58,6 +58,7 @@
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-064">New in 0.6.4</a></li>
         <li><a href="#new-06">New in 0.6</a></li>
         <li><a href="#new-05">New in 0.5</a></li>
         <li><a href="#discovery">Suggested routines</a></li>
@@ -79,6 +80,40 @@
     </div>
   </div>
 </nav>
+
+<section id="new-064" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.6.4 · Who answers</p>
+      <h2>The right bot answers, says why, and learns when it's wrong</h2>
+      <p>In a channel, kwant picks the bot that fits your message and shows you why. Wrong bot? sends it on and teaches routing. Each bot also gets rules from you: what it's good for, what it's not for, and which sites its browser may open.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="reason-line">
+        <span class="shot"><a class="zoom" href="assets/media/v64-wrong-bot-2880.webp?v=a0f4a0120d" data-caption="In #general, a message about refunding boots that a customer wore once. Support answers, and its reason line reads &quot;Support (Customer Support Lead) shares words with your message: customer, refunds, returns; Laya picked the same bot. Chosen from 7 bots in Trailhead Outfitters.&quot; Wrong bot? is open below it, listing Lead, Frontend, Backend, QA, Researcher and Marketer, with &quot;Messages like this will go to the bot you pick from now on.&quot;"><img src="assets/media/v64-wrong-bot-1440.webp?v=0e47fec961" srcset="assets/media/v64-wrong-bot-1440.webp?v=0e47fec961 1440w, assets/media/v64-wrong-bot-2880.webp?v=a0f4a0120d 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="In #general, a message about refunding boots that a customer wore once. Support answers, and its reason line reads &quot;Support (Customer Support Lead) shares words with your message: customer, refunds, returns; Laya picked the same bot. Chosen from 7 bots in Trailhead Outfitters.&quot; Wrong bot? is open below it, listing Lead, Frontend, Backend, QA, Researcher and Marketer, with &quot;Messages like this will go to the bot you pick from now on.&quot;"></a></span>
+        <div class="card-body"><h3>Every answer says why, and Wrong bot? learns</h3><p>A reason line under the answer says why that bot took it. Wrong bot? lists the other bots: pick one and your message goes to it, and messages like it in that space go there from now on. Only you can make a correction.</p></div>
+      </article>
+      <article class="card" id="close-call">
+        <span class="shot"><a class="zoom" href="assets/media/v64-route-choice-2880.webp?v=0c5a3db12b" data-caption="In #general, &quot;Should warranty repairs go on the roadmap for spring?&quot; gets a card from Laya, the router: &quot;Who should answer this?&quot; with Lead (Product Lead), Support (Customer Support Lead) and Answer generally (Adds Concierge, a generalist, to answer). Below it: &quot;Nothing is answered until you choose.&quot;"><img src="assets/media/v64-route-choice-1440.webp?v=afdc6fc737" srcset="assets/media/v64-route-choice-1440.webp?v=afdc6fc737 1440w, assets/media/v64-route-choice-2880.webp?v=0c5a3db12b 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="In #general, &quot;Should warranty repairs go on the roadmap for spring?&quot; gets a card from Laya, the router: &quot;Who should answer this?&quot; with Lead (Product Lead), Support (Customer Support Lead) and Answer generally (Adds Concierge, a generalist, to answer). Below it: &quot;Nothing is answered until you choose.&quot;"></a></span>
+        <div class="card-body"><h3>A close call asks you</h3><p>When no bot clearly fits and two come close, a card asks who should answer, with both bots and Answer generally. Nothing is answered until you choose, and only you can choose. The bot you pick teaches routing too.</p></div>
+      </article>
+      <article class="card" id="good-for-not-for">
+        <span class="shot"><a class="zoom" href="assets/media/v64-bot-rules-2880.webp?v=48c38a74e4" data-caption="The Researcher&#x27;s settings: Good for lists competitor pricing, gear reviews and market sizing; Not for lists customer emails and refunds. Above them are the collapsed Browser sites row, which reads &quot;Only 3 sites, never 2 sites, no local network&quot;, and the persona and soul fields."><img src="assets/media/v64-bot-rules-1440.webp?v=24d829df1c" srcset="assets/media/v64-bot-rules-1440.webp?v=24d829df1c 1440w, assets/media/v64-bot-rules-2880.webp?v=48c38a74e4 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Researcher&#x27;s settings: Good for lists competitor pricing, gear reviews and market sizing; Not for lists customer emails and refunds. Above them are the collapsed Browser sites row, which reads &quot;Only 3 sites, never 2 sites, no local network&quot;, and the persona and soul fields."></a></span>
+        <div class="card-body"><h3>Good for and Not for</h3><p>List what a bot should take and what it shouldn't, on the New bot form or in its settings. Good for counts like its title when kwant picks. Not for keeps it out of picks by words, by what you taught and by small talk. Naming or @mentioning a bot still reaches it.</p></div>
+      </article>
+      <article class="card" id="browser-sites">
+        <span class="shot"><a class="zoom" href="assets/media/v64-browser-sites-2880.webp?v=5acfcf602e" data-caption="The Researcher&#x27;s settings with Browser sites open: allowed sites outdoorgearlab.com, rei.com and wikipedia.org; blocked sites facebook.com and tiktok.com; and &quot;Block local and private network addresses&quot; ticked. The summary line reads &quot;Only 3 sites, never 2 sites, no local network&quot;."><img src="assets/media/v64-browser-sites-1440.webp?v=e3742365ca" srcset="assets/media/v64-browser-sites-1440.webp?v=e3742365ca 1440w, assets/media/v64-browser-sites-2880.webp?v=5acfcf602e 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Researcher&#x27;s settings with Browser sites open: allowed sites outdoorgearlab.com, rei.com and wikipedia.org; blocked sites facebook.com and tiktok.com; and &quot;Block local and private network addresses&quot; ticked. The summary line reads &quot;Only 3 sites, never 2 sites, no local network&quot;."></a></span>
+        <div class="card-body"><h3>Browser sites for each bot</h3><p>Allow only some sites, block others, or keep a bot's browser off your local network. kwant checks each page the bot opens, follows or is sent to, and blocked wins over allowed. Only you set them: a change sent with a bot's key is refused.</p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li id="concierge"><h3>The Concierge in #general</h3><p>When no bot fits a message in #general, kwant adds a Concierge, a generalist, to answer it, with an undo. Remove it and those messages go to the channel lead instead.</p></li>
+      <li id="hand-back"><h3>Hand-back</h3><p>A bot picked by the words in your message can hand it back once, with a reason. The next bot that fits takes it, or else the Concierge or the lead, and the reason line says so.</p></li>
+      <li id="laya-routing"><h3>Laya's second opinion</h3><p>Laya reads your bots' titles and adds weight to a pick it agrees with. It never picks alone, and when it's offline the reason line says the pick was a keyword match.</p></li>
+    </ul>
+    <p class="section-foot"><a class="more-link" href="/docs/bots-and-teams#routing">Who answers docs →</a> <a class="more-link" href="/docs/bots-and-teams#good-for">Good for and Not for docs →</a> <a class="more-link" href="/docs/browser#sites">Browser sites docs →</a></p>
+  </div>
+</section>
 
 <section id="new-06" class="fgroup alt">
   <div class="wrap">
@@ -615,7 +650,7 @@
 </footer>
 <script src="assets/js/site.js?v=c490c973ba" defer></script>
 <script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-01","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-02","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

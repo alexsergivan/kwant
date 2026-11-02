@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-064">New in 0.6.4</a></li>
         <li><a href="#new-06">New in 0.6</a></li>
         <li><a href="#new-05">New in 0.5</a></li>
         <li><a href="#discovery">Suggested routines</a></li>
@@ -39,6 +40,40 @@ card_art: team
     </div>
   </div>
 </nav>
+
+<section id="new-064" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.6.4 · Who answers</p>
+      <h2>The right bot answers, says why, and learns when it's wrong</h2>
+      <p>In a channel, kwant picks the bot that fits your message and shows you why. Wrong bot? sends it on and teaches routing. Each bot also gets rules from you: what it's good for, what it's not for, and which sites its browser may open.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="reason-line">
+        <span class="shot">{{shot:v64-wrong-bot|In #general, a message about refunding boots that a customer wore once. Support answers, and its reason line reads "Support (Customer Support Lead) shares words with your message: customer, refunds, returns; Laya picked the same bot. Chosen from 7 bots in Trailhead Outfitters." Wrong bot? is open below it, listing Lead, Frontend, Backend, QA, Researcher and Marketer, with "Messages like this will go to the bot you pick from now on."|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Every answer says why, and Wrong bot? learns</h3><p>A reason line under the answer says why that bot took it. Wrong bot? lists the other bots: pick one and your message goes to it, and messages like it in that space go there from now on. Only you can make a correction.</p></div>
+      </article>
+      <article class="card" id="close-call">
+        <span class="shot">{{shot:v64-route-choice|In #general, "Should warranty repairs go on the roadmap for spring?" gets a card from Laya, the router: "Who should answer this?" with Lead (Product Lead), Support (Customer Support Lead) and Answer generally (Adds Concierge, a generalist, to answer). Below it: "Nothing is answered until you choose."|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A close call asks you</h3><p>When no bot clearly fits and two come close, a card asks who should answer, with both bots and Answer generally. Nothing is answered until you choose, and only you can choose. The bot you pick teaches routing too.</p></div>
+      </article>
+      <article class="card" id="good-for-not-for">
+        <span class="shot">{{shot:v64-bot-rules|The Researcher's settings: Good for lists competitor pricing, gear reviews and market sizing; Not for lists customer emails and refunds. Above them are the collapsed Browser sites row, which reads "Only 3 sites, never 2 sites, no local network", and the persona and soul fields.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Good for and Not for</h3><p>List what a bot should take and what it shouldn't, on the New bot form or in its settings. Good for counts like its title when kwant picks. Not for keeps it out of picks by words, by what you taught and by small talk. Naming or @mentioning a bot still reaches it.</p></div>
+      </article>
+      <article class="card" id="browser-sites">
+        <span class="shot">{{shot:v64-browser-sites|The Researcher's settings with Browser sites open: allowed sites outdoorgearlab.com, rei.com and wikipedia.org; blocked sites facebook.com and tiktok.com; and "Block local and private network addresses" ticked. The summary line reads "Only 3 sites, never 2 sites, no local network".|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Browser sites for each bot</h3><p>Allow only some sites, block others, or keep a bot's browser off your local network. kwant checks each page the bot opens, follows or is sent to, and blocked wins over allowed. Only you set them: a change sent with a bot's key is refused.</p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li id="concierge"><h3>The Concierge in #general</h3><p>When no bot fits a message in #general, kwant adds a Concierge, a generalist, to answer it, with an undo. Remove it and those messages go to the channel lead instead.</p></li>
+      <li id="hand-back"><h3>Hand-back</h3><p>A bot picked by the words in your message can hand it back once, with a reason. The next bot that fits takes it, or else the Concierge or the lead, and the reason line says so.</p></li>
+      <li id="laya-routing"><h3>Laya's second opinion</h3><p>Laya reads your bots' titles and adds weight to a pick it agrees with. It never picks alone, and when it's offline the reason line says the pick was a keyword match.</p></li>
+    </ul>
+    <p class="section-foot"><a class="more-link" href="docs/bots-and-teams.html#routing">Who answers docs →</a> <a class="more-link" href="docs/bots-and-teams.html#good-for">Good for and Not for docs →</a> <a class="more-link" href="docs/browser.html#sites">Browser sites docs →</a></p>
+  </div>
+</section>
 
 <section id="new-06" class="fgroup alt">
   <div class="wrap">

@@ -43,6 +43,23 @@ card_art: avatar:user
   <li><strong>Asks before paying:</strong> before a bot clicks or presses Enter or Space, kwant reads the page: the button the click would really hit, card number or CVC fields, a payment provider's card frame (Stripe, Braintree, Adyen, …) and forms that post to a checkout. Any of these gets the <a href="approvals.html">payment card</a> in every approval mode, even behind a plain "Continue". Bots using the browser through the shell leave that step to you.</li>
 </ul>
 
+<h2 id="sites">Browser sites: where each bot may go</h2>
+<p>Each bot can have its own rules for where its browser goes. Open the bot's settings and expand <strong>Browser sites</strong>:</p>
+<ul>
+  <li><strong>Allowed sites:</strong> when the list isn't empty, the bot's browser opens only these sites. <code>example.com</code> includes its subdomains; <code>*.example.com</code> means only the subdomains. A pasted address keeps just its site.</li>
+  <li><strong>Blocked sites:</strong> never opened, even if they're also allowed.</li>
+  <li><strong>Block local and private network addresses:</strong> refuses localhost, 192.168.x.x, 10.x.x.x and names that point to them, such as your router.</li>
+</ul>
+<p>Each list holds up to 200 entries. With both lists empty and the switch off, which is the default, nothing is checked. The rules hold in Local and VM mode for every page a bot's actions load: a page it opens, a link it clicks, a redirect, a form it submits and a new tab its page opens. A refused page isn't opened, and the bot is told which rule stopped it, for example "Not opened: tiktok.com is on this bot's blocked sites". Your own browsing, with Take Control, isn't limited.</p>
+<ul>
+  <li><strong>Only you set them:</strong> kwant takes a change to Browser sites from you, in the app or with your API token. A change sent with a bot's key is refused, for its own sites and for any other bot's. A bot that can run commands on the computer kwant runs on can still reach kwant directly, as it can for any setting only you may change. This lock covers Browser sites, not Good for and Not for.</li>
+  <li><strong>Whole pages only:</strong> the rules check the pages a bot loads, not what those pages load. A frame inside an allowed page, and a page's own images, scripts and requests, can come from anywhere.</li>
+</ul>
+<figure>
+  <div class="frame">{{shot:v64-browser-sites|The Researcher's settings with Browser sites open: allowed sites outdoorgearlab.com, rei.com and wikipedia.org; blocked sites facebook.com and tiktok.com; and "Block local and private network addresses" ticked. The summary line reads "Only 3 sites, never 2 sites, no local network".|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The Researcher browses three sites, never two others, and nothing on your network.</figcaption>
+</figure>
+
 <h2 id="modes">Local or VM mode</h2>
 <p>Choose where bots' browser and shell commands run in <strong>Settings → All spaces → Computer for browsing and commands</strong>, or with the browser panel's mode toggle. Switching takes effect at once, without a restart.</p>
 <div class="table-wrap"><table>

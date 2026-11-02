@@ -33,8 +33,21 @@ card_art: avatar:tech_lead
   <li><strong>Avatar:</strong> pick a pixel avatar style. The one you choose always wins over hints in the bot's name.</li>
 </ul>
 
+<h3 id="good-for">Good for and Not for</h3>
+<p>Both are on the New bot form and in the bot's settings. <strong>Good for</strong> says what to send the bot, such as <em>refunds</em> or <em>competitor pricing</em>. <strong>Not for</strong> says what never to send it. Channels read both when they <a href="#routing">pick who answers</a>.</p>
+<ul>
+  <li>Each list holds up to 20 entries of up to 60 characters.</li>
+  <li>An entry counts only when all its words are in the message: <em>gear reviews</em> needs both words. A plural doesn't matter, so <em>refunds</em> also matches "refund".</li>
+  <li>A Good for entry counts like a word of the bot's title.</li>
+  <li>Not for keeps the bot out of picks by small talk, by what you taught, by role words and by shared words. Naming the bot or @mentioning it still reaches it.</li>
+</ul>
+<figure>
+  <div class="frame">{{shot:v64-bot-rules|The Researcher's settings: Good for lists competitor pricing, gear reviews and market sizing; Not for lists customer emails and refunds. Above them are the collapsed Browser sites row, which reads "Only 3 sites, never 2 sites, no local network", and the persona and soul fields.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The Researcher takes pricing and reviews, never customer emails or refunds.</figcaption>
+</figure>
+
 <h3 id="edit">Edit a bot</h3>
-<p>Hover a bot in the sidebar and click the pencil, or use <strong>Edit</strong> in a direct chat's header. You can change its name, title, avatar, preferred model, persona and soul. A rename carries over to the bot's past messages. Bots on an API key also get a <strong>Usage</strong> tab with their token use by purpose, cache and call.</p>
+<p>Hover a bot in the sidebar and click the pencil, or use <strong>Edit</strong> in a direct chat's header. You can change its name, title, avatar, preferred model, persona and soul, what it's <a href="#good-for">good for and not for</a>, and its <a href="browser.html#sites">browser sites</a>. A rename carries over to the bot's past messages. Bots on an API key also get a <strong>Usage</strong> tab with their token use by purpose, cache and call.</p>
 
 <h3 id="status-dots">Status dots</h3>
 <p>The dot on each bot's avatar in the sidebar says what the bot is doing:</p>
@@ -62,7 +75,48 @@ card_art: avatar:tech_lead
 </figure>
 
 <h2 id="routing">Who answers</h2>
-<p>In a channel, kwant picks the bot whose persona fits your message best and shows the reason. The <a href="models.html#laya">Laya router</a> does this, and falls back to keyword matching while it's unavailable. Mention a bot (<code>@Designer</code>) to ask it directly. A message with exactly one @mention goes to that bot, even if it names others without an @: "@Frontend why didn't you answer QA" goes to Frontend. With two or more @mentions in a team, the lead answers and passes the work on.</p>
+<p>In a channel, kwant picks one bot to answer each message, and the line under that bot's name says why. A team's own chat works as before: the lead answers and hands parts on.</p>
+
+<h3 id="how-routing-picks">How it picks a bot</h3>
+<p>kwant goes down this list and stops at the first rule that picks a bot:</p>
+<ol>
+  <li><strong>You named a bot.</strong> One @mention (<code>@Designer</code>) or a bot's name ("Bea, can you…") goes to that bot, even if the message names others without an @: "@Frontend why didn't you answer QA" goes to Frontend. Two or more @mentions go to the lead, who answers and passes parts on.</li>
+  <li><strong>Small talk carries on.</strong> "Thanks" or "ok, go ahead" goes to the bot that spoke last.</li>
+  <li><strong>A request for a team</strong> ("hire a few bots for…") goes to the lead, who proposes the bots on one card for you to approve.</li>
+  <li><strong>What you taught it.</strong> A message like one you sent on with <a href="#wrong-bot">Wrong bot?</a> or settled on a <a href="#close-call">close-call card</a> goes to the bot you picked then.</li>
+  <li><strong>Words that belong to a role,</strong> such as "newsletter" for marketing.</li>
+  <li><strong>Shared words.</strong> The bot whose name, title, <a href="#good-for">Good for</a> list or persona shares the most words with your message. A word that several bots share counts for none of them.</li>
+  <li><strong>Nothing fits:</strong> in <code>#general</code> the <a href="#concierge">Concierge</a> answers. Anywhere else it's the bot that spoke last, or the channel lead.</li>
+</ol>
+<p>A bot's Not for list keeps it out of rules 2, 4, 5 and 6, and it never carries on as the last speaker. The <a href="models.html#laya">Laya router</a> reads the bots' titles and makes its own guess alongside. Laya never picks a bot alone: when it guesses the same bot, the pick is a little surer and the reason line says so. While Laya is off or still starting, the rules above still pick, and the reason line says it was a keyword match.</p>
+
+<h3 id="reason-line">The reason line</h3>
+<p>Under the name of a bot that kwant picked, one line says why it answers. For example: "Support (Customer Support Lead) shares words with your message: customer, refunds, returns; Laya picked the same bot. Chosen from 7 bots in Trailhead Outfitters." It names the rule that picked the bot and the words that matched, whether Laya agreed, and how many bots it chose from. On a phone the line shows its start, and a tap opens the rest.</p>
+
+<h3 id="wrong-bot">Wrong bot?</h3>
+<p>Click <strong>Wrong bot?</strong> at the end of the reason line to see the other bots here: every bot in <code>#general</code>, or the channel's members and lead. Pick one, and kwant does two things:</p>
+<ul>
+  <li>It learns that messages like this one go to that bot. This holds for the whole space.</li>
+  <li>It sends your message again to that bot, with an @mention.</li>
+</ul>
+<p>Only you can make a correction; a bot can't.</p>
+<figure>
+  <div class="frame">{{shot:v64-wrong-bot|In #general, a message about refunding boots that a customer wore once. Support answers, and its reason line reads "Support (Customer Support Lead) shares words with your message: customer, refunds, returns; Laya picked the same bot. Chosen from 7 bots in Trailhead Outfitters." Wrong bot? is open below it, listing Lead, Frontend, Backend, QA, Researcher and Marketer, with "Messages like this will go to the bot you pick from now on."|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Support answers and says why. Wrong bot? lists the others.</figcaption>
+</figure>
+
+<h3 id="close-call">Close calls: you choose</h3>
+<p>When no bot clearly fits and two come close, kwant doesn't guess. Laya posts a card that asks <strong>Who should answer this?</strong> with those two bots and <strong>Answer generally</strong>. Nothing is answered until you choose, and only you can choose. Picking a bot teaches routing, like Wrong bot? does. Answer generally goes to the Concierge in <code>#general</code>, or to the channel lead anywhere else.</p>
+<figure>
+  <div class="frame">{{shot:v64-route-choice|In #general, "Should warranty repairs go on the roadmap for spring?" gets a card from Laya, the router: "Who should answer this?" with Lead (Product Lead), Support (Customer Support Lead) and Answer generally (Adds Concierge, a generalist, to answer). Below it: "Nothing is answered until you choose."|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Warranty is Support's and the roadmap is the Lead's, so you choose.</figcaption>
+</figure>
+
+<h3 id="concierge">The Concierge</h3>
+<p>The first time a message in <code>#general</code> fits no bot, kwant makes the <strong>Concierge</strong>, a generalist for everyday questions, and shows a card you can undo. After that it answers what fits no one else in <code>#general</code>. It's never picked for its words, and Wrong bot? doesn't offer it. You can edit it like any bot. If you remove it, <code>#general</code> goes back to the lead and kwant doesn't make it again.</p>
+
+<h3 id="hand-back">Hand-back</h3>
+<p>A bot that kwant picked from your message's words, not one you named, may hand the message back if it isn't its area, with a one-line reason. The message goes to the next bot that fits well, else the Concierge, else the lead, and the new reason line says who handed it back and why. A message can be handed back only once, so it can't bounce between bots.</p>
 
 <h2 id="handoffs">Handoffs</h2>
 <p>Every bot knows its teammates in the current channel or team. When a reply @mentions a teammate, or <code>@everyone</code>, that teammate answers right after in the same chat. With the <a href="mission-board.html#lead-review">Mission board</a> on, each hand-off gets a card, and the bot that handed it out reviews the result.</p>
