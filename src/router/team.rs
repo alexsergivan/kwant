@@ -644,6 +644,11 @@ pub fn alike(a: &[String], b: &[String]) -> bool {
 /// Share of words a message must have in common with a learned one to route like it.
 pub const LEARNED_AT: f32 = 0.6;
 
+/// How a pick's reason ends when the person named the bot ("Atlas (Technical SEO) was named in
+/// your message"): the person chose it, even though its basis is "keywords" or "skills".
+pub const NAMED: &str = "was named in your message";
+pub const AT_MENTIONED: &str = "was @mentioned in your message";
+
 /// A message's words for comparing it with another: no filler, plurals folded, each once. Words
 /// under three letters ("a", "in", "is", "to") and [`NOT_CONTENT`] say nothing about what a message
 /// is for, so "Is it ok to deploy on a Friday?" and "Is it ok to freeze a cake?" share none.
@@ -760,7 +765,7 @@ pub fn pick_member_hinted<'a>(
         crate::router::handoff_mentions(prompt, &member_names).targets.into_iter().map(|i| &members[i]).collect();
     match at_named.as_slice() {
         [] => {}
-        [k] => return Some(chosen(k, vec![k.name.trim().to_lowercase()], "was @mentioned in your message", 1.0)),
+        [k] => return Some(chosen(k, vec![k.name.trim().to_lowercase()], AT_MENTIONED, 1.0)),
         several => {
             let terms = several.iter().map(|k| k.name.trim().to_lowercase()).collect();
             let reason = format!(
@@ -775,7 +780,7 @@ pub fn pick_member_hinted<'a>(
     //    Named without @ ("Bea, can you…")
     let named: Vec<&Kwant> = members.iter().filter(|m| words.iter().any(|w| *w == m.name.trim().to_lowercase())).collect();
     if let [k] = named.as_slice() {
-        return Some(chosen(k, vec![k.name.trim().to_lowercase()], "was named in your message", 1.0));
+        return Some(chosen(k, vec![k.name.trim().to_lowercase()], NAMED, 1.0));
     }
 
     // 1b. A greeting, thank-you or go-ahead ("ok go ahead") carries on with the bot that spoke last

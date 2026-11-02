@@ -27,6 +27,27 @@ use serde_json::{json, Value};
 
 pub const HAND_BACK: &str = "hand_back";
 
+/// Bases where kwnt's router picked the bot from the message's words (see [`routed_note`]).
+const PICKED_FROM_WORDS: [&str; 3] = ["keywords", "skills", "learned"];
+
+/// The note added to a channel turn whose bot kwnt's router picked from the message's words, so
+/// the bot knows the person didn't choose it and may hand the message back (once: see
+/// [`hand_back`]). `None` for every other turn: the person @mentioned or named the bot, a team
+/// channel, the lead or the Concierge taking what fits no one, a pick on a card, a hand-back.
+pub(super) fn routed_note(routing: &Value, team_channel: bool) -> Option<String> {
+    let basis = routing["basis"].as_str()?;
+    let reason = routing["reason"].as_str().unwrap_or_default();
+    let named = [crate::router::team::NAMED, crate::router::team::AT_MENTIONED].iter().any(|n| reason.contains(n));
+    if team_channel || named || !PICKED_FROM_WORDS.contains(&basis) || routing["message_id"].as_str().is_none() {
+        return None;
+    }
+    Some(format!(
+        "(kwant routing note: kwnt picked you for this message from its words; the person didn't choose you. If it is \
+        clearly not your area and another bot here would do it better, call {HAND_BACK} with a one-line reason instead \
+        of answering. Otherwise answer it.)"
+    ))
+}
+
 /// The space's covers/avoids lists for routing among `members`, and what the person taught it.
 pub(super) async fn hints_for(state: &AppState, space: &SpaceId, members: &[Kwant]) -> Hints {
     let ids: Vec<String> = members.iter().map(|k| k.id.clone()).collect();
@@ -383,4 +404,51 @@ async fn next_after_handback(
     }
     let lead = all.iter().find(|k| k.id == channel.lead_kwant_id && k.id != from.id && members.iter().any(|m| m.id == k.id));
     lead.cloned().map(|k| (k, 0.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only a channel turn the router picked from the message's words gets the note, and the
+    /// person's message isn't repeated in the bot's history because of it.
+    #[test]
+    fn only_a_turn_picked_from_the_words_gets_the_routed_note() {
+        let routing = |basis: &str, reason: &str| json!({"basis": basis, "reason": reason, "message_id": "m1"});
+        for basis in PICKED_FROM_WORDS {
+            let note = routed_note(&routing(basis, "Atlas (Technical SEO) matched: sitemap"), false).expect(basis);
+            assert!(note.contains(HAND_BACK), "{note}");
+            assert_eq!(routed_note(&routing(basis, "matched"), true), None, "a team channel");
+        }
+        for basis in ["several", "lead", "last", "team", "only", "concierge", "ask", "asked", "handback"] {
+            assert_eq!(routed_note(&routing(basis, "matched"), false), None, "{basis}");
+        }
+        for named in [
+            "Atlas (Technical SEO) was named in your message",
+            "Atlas (Technical SEO) was @mentioned in your message; Laya picked the same bot",
+        ] {
+            assert_eq!(routed_note(&routing("keywords", named), false), None, "{named}");
+        }
+        assert_eq!(routed_note(&json!({"basis": "keywords", "reason": "matched"}), false), None, "no message to hand back");
+        assert_eq!(routed_note(&Value::Null, false), None);
+
+        let asked = "Fix the sitemap for the launch";
+        let mut history = vec![crate::db::models::Message {
+            id: "m1".into(),
+            channel_id: Some("c".into()),
+            direct_kwant_id: None,
+            sender_role: "user".into(),
+            sender_id: "user".into(),
+            text: asked.into(),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 0,
+            created_at: None,
+            thread_id: None,
+            meta: None,
+        }];
+        let note = routed_note(&routing("keywords", "matched"), false).unwrap();
+        crate::drivers::drop_current_message(&mut history, &format!("{asked}\n\n{note}"));
+        assert!(history.is_empty(), "the prompt carries the message once");
+    }
 }

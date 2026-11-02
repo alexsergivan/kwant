@@ -927,6 +927,9 @@ fn execute_single_turn(
     } else if let Some(ids) = routing.as_ref().and_then(|r| r["similar_requests"].as_array()) {
         let ids: Vec<&str> = ids.iter().filter_map(serde_json::Value::as_str).collect();
         format!("{prompt}\n\n{}", super::concierge::hire_note(&ids))
+    } else if let Some(note) = routing.as_ref().and_then(|r| super::rerouting::routed_note(r, scope.team_keys.is_some())) {
+        // the router picked this bot from the message's words: it may hand it back once
+        format!("{prompt}\n\n{note}")
     } else {
         prompt.clone()
     };

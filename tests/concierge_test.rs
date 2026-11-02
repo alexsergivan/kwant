@@ -396,6 +396,51 @@ async fn a_hand_back_passes_on_the_message_it_answers_not_the_newest() {
     assert!(err && text.contains("already handed back"), "{text}");
 }
 
+/// A turn the router picked from the message's words is told the person didn't choose the bot and
+/// that it may hand the message back. An @mention, the Concierge and the hand-back turn aren't (QA
+/// on 0.6.4: without being told, the live model handed back 0 of 3 off-topic messages).
+#[tokio::test]
+async fn only_a_routed_turn_is_told_it_may_hand_back() {
+    let (app, state, _tmp) = setup().await;
+    let script = ok(&app, "POST", "/api/kwants", Some(specialist("Scriptwriter", "TikTok Scriptwriter", "Scripts and hooks for book videos."))).await["id"].as_str().unwrap().to_string();
+    let atlas = ok(&app, "POST", "/api/kwants", Some(specialist("Atlas", "Technical SEO", "Crawl errors and sitemaps."))).await["id"].as_str().unwrap().to_string();
+    only(&app, &state, &[&script, &atlas]).await;
+    let general = state.db.general_channel(&SpaceId::default_space()).await.unwrap().expect("#general").id;
+    let note = "(kwant routing note: kwnt picked you";
+    let log = || std::fs::read_to_string(fake_cli().join("prompts.log")).unwrap_or_default();
+
+    let routed = "Write a TikTok hook about the lantern parade";
+    let (to, basis) = routed_to(&app, &state, &general, routed).await;
+    assert_eq!((to.as_str(), basis.as_deref()), (script.as_str(), Some("keywords")));
+    assert!(log().contains(&format!("{routed}\n\n{note}")), "the routed turn is told");
+    let asked = last_user_message(&state, &general).await;
+
+    let named = "@Atlas check the lantern parade page";
+    let mut events = state.event_sender.subscribe();
+    ok(&app, "POST", "/api/chat/send", Some(json!({"channel_id": general, "prompt": named, "sender_id": "user"}))).await;
+    assert!(next_reply_routing(&state, &mut events, &general).await.is_null(), "an @mention isn't routed");
+    let (to, basis) = routed_to(&app, &state, &general, "Best place to watch the lantern parade in Munich tomorrow?").await;
+    assert_eq!((to.as_str(), basis.as_deref()), (concierges(&state).await[0].as_str(), Some("concierge")));
+    let prompts = log();
+    assert!(prompts.contains(named) && prompts.contains("Best place to watch the lantern parade in Munich tomorrow?"), "both turns ran");
+    assert!(!prompts.contains(&format!("{named}\n\n(kwant routing note")), "an @mention isn't told");
+    assert!(!prompts.contains("Munich tomorrow?\n\n(kwant routing note"), "the Concierge isn't told");
+
+    // The turn it is handed back to isn't told, and can't hand it on again
+    let token = answering_token(&state, &script, &general, Some(&asked)).await;
+    let mut events = state.event_sender.subscribe();
+    let (text, err) = hand_back(&app, &token, "Lantern parades are not book scripts").await;
+    assert!(!err, "{text}");
+    let routing = next_reply_routing(&state, &mut events, &general).await;
+    assert_eq!(routing["basis"], "handback", "{routing}");
+    let prompts = log();
+    assert!(prompts.contains("not their area: Lantern parades are not book scripts. Answer it.)"), "the hand-back turn ran");
+    assert!(!prompts.contains("not their area: Lantern parades are not book scripts. Answer it.)\n\n(kwant routing note"));
+    let token = answering_token(&state, routing["kwant_id"].as_str().unwrap(), &general, Some(&asked)).await;
+    let (text, err) = hand_back(&app, &token, "Not mine either").await;
+    assert!(err && text.contains("already handed back"), "{text}");
+}
+
 /// A TikTok link in the person's message names an account, not a teammate: "@munichspots" in it
 /// made the send fail with 400, as an @mention of a bot that isn't here.
 #[tokio::test]
