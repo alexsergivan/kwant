@@ -169,6 +169,8 @@ pub struct CreateKwantRequest {
     binding: ProfileBinding,
     #[serde(flatten)]
     browser: BrowserSitesUpdate,
+    #[serde(flatten)]
+    scope: ScopeUpdate,
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,14 +181,34 @@ pub struct UpdateKwantRequest {
     binding: ProfileBinding,
     #[serde(flatten)]
     browser: BrowserSitesUpdate,
-    /// Left out: the list stays as it is. `[]` clears it.
-    #[serde(default)]
-    covers: Option<Vec<String>>,
-    #[serde(default)]
-    avoids: Option<Vec<String>>,
+    #[serde(flatten)]
+    scope: ScopeUpdate,
 }
 
 type SiteList = Option<Vec<String>>;
+type ScopeList = Option<Vec<String>>;
+
+/// What the bot is for and not for ("Good for" / "Not for" in the app). Left out: the list stays
+/// as it is. `[]` clears it.
+#[derive(Debug, Default, Deserialize)]
+pub struct ScopeUpdate {
+    covers: Option<Vec<String>>,
+    avoids: Option<Vec<String>>,
+}
+
+impl ScopeUpdate {
+    /// The lists cleaned, or the 400 naming the list that's too long.
+    #[allow(clippy::result_large_err)]
+    fn cleaned(&self) -> Result<(ScopeList, ScopeList), Response> {
+        let clean = |list: &ScopeList, field: &str| {
+            list.as_deref()
+                .map(crate::db::routing::clean_scope_list)
+                .transpose()
+                .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("{field}: {e}")))
+        };
+        Ok((clean(&self.covers, "covers")?, clean(&self.avoids, "avoids")?))
+    }
+}
 
 /// Which sites the bot's browser may open; a field left out stays as it is.
 #[derive(Debug, Default, Deserialize)]
@@ -272,6 +294,7 @@ pub async fn create_kwant(
         return Err(api_error(StatusCode::BAD_REQUEST, &msg));
     }
     let (allowed_sites, blocked_sites) = payload.browser.normalized()?;
+    let (covers, avoids) = payload.scope.cleaned()?;
     validate_kwant_name(&state, &space, &mut payload.base.name, None).await?;
     check_binding(&state, &space, &payload.binding, &payload.base.preferred_model)
         .await
@@ -285,6 +308,9 @@ pub async fn create_kwant(
         .set_browser_sites(&kwant.id, allowed_sites.as_deref(), blocked_sites.as_deref(), payload.browser.browser_block_private_network)
         .await
         .map_err(|e| db_error(&e, ""))?;
+    if covers.iter().chain(avoids.iter()).any(|list| !list.is_empty()) {
+        state.db.set_scope(&kwant.id, covers.as_deref(), avoids.as_deref()).await.map_err(|e| db_error(&e, ""))?;
+    }
     ensure_general(&state, &space, &kwant.id).await;
     kwant_view_json(&state, &kwant.id).await.map_err(IntoResponse::into_response)
 }
@@ -342,8 +368,7 @@ pub async fn update_kwant(
     check_binding(&state, &space, &payload.binding, &payload.base.preferred_model)
         .await
         .map_err(IntoResponse::into_response)?;
-    let covers = payload.covers.as_deref().map(crate::db::routing::clean_scope_list).transpose().map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("covers: {e}")))?;
-    let avoids = payload.avoids.as_deref().map(crate::db::routing::clean_scope_list).transpose().map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("avoids: {e}")))?;
+    let (covers, avoids) = payload.scope.cleaned()?;
     let clash = format!("a bot called {} already exists in this space", payload.base.name);
     match state.db.update_kwant(&id, &payload.base).await {
         Ok(Some(_)) => {}
