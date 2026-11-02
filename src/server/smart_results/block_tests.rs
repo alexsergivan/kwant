@@ -336,3 +336,16 @@ fn every_new_type_passes_its_checks() {
         validate(&set, Some(&text)).unwrap_or_else(|e| panic!("{e:?}: {text}"));
     }
 }
+
+/// Ada's call (2026-11-02): a bare high/low weather list is two key-number tiles, never findings.
+/// Pinned so a later change can't quietly turn it into findings or drop a tile.
+#[test]
+fn a_bare_weather_list_is_two_metric_tiles() {
+    let text = "- High: 18C\n- Low: 9C\n";
+    let Some(Block::Metrics(m)) = first(text) else { panic!("{:?}", first(text)) };
+    let tiles: Vec<_> = m.items.iter().map(|i| (i.label.as_str(), i.value_text.as_str(), i.value, i.unit.as_deref())).collect();
+    assert_eq!(tiles, [("High", "18C", 18.0, Some("C")), ("Low", "9C", 9.0, Some("C"))]);
+    assert!(candidates(text).iter().all(|b| b.kind() != "findings"));
+    let set = compute(text).unwrap();
+    validate(&set, Some(text)).unwrap();
+}
