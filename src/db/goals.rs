@@ -740,9 +740,14 @@ impl Database {
             tx.rollback().await?;
             return Ok(None);
         }
-        sqlx::query("UPDATE goals SET status = ?, status_reason = ?, unknown_since = NULL, updated_at = ? WHERE id = ?")
+        sqlx::query(
+            "UPDATE goals SET status = ?, status_reason = ?,
+             unknown_since = CASE WHEN ? = 'unknown' THEN COALESCE(unknown_since, ?) ELSE NULL END, updated_at = ? WHERE id = ?",
+        )
             .bind(status)
             .bind(reason)
+            .bind(status)
+            .bind(now)
             .bind(now)
             .bind(id)
             .execute(&mut *tx)
@@ -829,12 +834,12 @@ impl Database {
         Ok(gone)
     }
 
-    /// Goals `unknown` since `before` or longer that haven't had the "can't check" notice for
-    /// this stretch of unknown.
+    /// Goals `unknown` since `before` or longer that haven't had the "can't check" notice (sent, or
+    /// held back by the cap) for this stretch of unknown.
     pub async fn goals_unknown_since(&self, before: i64) -> Result<Vec<Goal>, DbError> {
         Ok(sqlx::query_as::<_, Goal>(&format!(
             "{GOAL_SELECT} WHERE status = 'unknown' AND unknown_since IS NOT NULL AND unknown_since <= ? AND NOT EXISTS (
-                SELECT 1 FROM goal_events e WHERE e.goal_id = goals.id AND e.kind = 'notified'
+                SELECT 1 FROM goal_events e WHERE e.goal_id = goals.id AND e.kind IN ('notified', 'notice_capped')
                 AND e.created_at >= goals.unknown_since AND json_extract(e.detail, '$.kind') = 'cant_check')"
         ))
         .bind(before)
@@ -852,11 +857,11 @@ impl Database {
         Ok(n)
     }
 
-    /// Whether the person was told the goal broke since it was last met (so a recovery is worth
-    /// a notice).
+    /// Whether the person was told the goal broke, or that kwant can't check it, since it was last
+    /// met (so a recovery is worth a notice).
     pub async fn told_broken(&self, goal_id: &str) -> Result<bool, DbError> {
         let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM goal_events WHERE goal_id = ? AND kind = 'notified' AND json_extract(detail, '$.kind') = 'broken'
+            "SELECT 1 FROM goal_events WHERE goal_id = ? AND kind = 'notified' AND json_extract(detail, '$.kind') IN ('broken', 'cant_check')
              AND id > COALESCE((SELECT MAX(id) FROM goal_events WHERE goal_id = ? AND kind = 'met'), 0) LIMIT 1",
         )
         .bind(goal_id)
@@ -864,6 +869,21 @@ impl Database {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.is_some())
+    }
+
+    /// Met goals, not running, with a required check whose newest observation has expired (at or
+    /// before `now`) or that has none: they can't be called met any more.
+    pub async fn stale_met_goals(&self, now: i64) -> Result<Vec<String>, DbError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT g.id FROM goals g WHERE g.status = 'met' AND g.checking_since IS NULL AND EXISTS (
+                SELECT 1 FROM goal_checks c WHERE c.goal_id = g.id AND c.severity != 'advisory' AND COALESCE((
+                    SELECT o.expires_at FROM goal_observations o WHERE o.goal_id = g.id AND o.check_id = c.id ORDER BY o.id DESC LIMIT 1
+                ), 0) <= ?)",
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
     }
 }
 

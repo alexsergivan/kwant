@@ -840,6 +840,7 @@ pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     crate::documents::reminders::spawn(state.clone(), shutdown.clone());
     super::missions::listener::spawn(state.clone(), shutdown.clone());
     super::missions::foundry::spawn(state.clone(), shutdown.clone());
+    super::goals::runner::spawn(state.clone(), shutdown.clone());
     super::missions::discovery::spawn(state.clone(), shutdown.clone());
     spawn(state, shutdown);
 }

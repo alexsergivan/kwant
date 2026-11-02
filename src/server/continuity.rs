@@ -516,6 +516,7 @@ fn tool_list(scope: &SelfScope, board: bool) -> Value {
             list.extend(super::missions::tools::tools());
             list.push(super::missions::flight_school::tool());
             list.push(super::missions::flight_school::propose_tool());
+            list.push(super::goals::tool::tool());
         }
         list.extend(super::skills::tools());
         list.extend(super::mcp_suggest::tools());
@@ -1126,6 +1127,7 @@ async fn call_tool(
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
         n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
         n if super::missions::tools::handles(n) => super::missions::tools::call(state, scope, n, args).await,
+        super::goals::tool::TOOL => super::goals::tool::call(state, scope, args).await,
         "tier_status" => super::missions::flight_school::call_tool(state, &scope.kwant_id, args).await,
         "tier_propose" => super::missions::flight_school::call_propose(state, scope, args).await,
         "list_attachments" if scope.origin.is_some() => super::attachments::tool_list(state, scope).await,
