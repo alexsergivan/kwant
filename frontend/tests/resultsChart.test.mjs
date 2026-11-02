@@ -127,3 +127,44 @@ test('a bar chart needs 5 rows; a smaller one falls back to markdown', () => {
   assert.ok(m.validChart(b));
   assert.equal(m.validChart({ ...b, points: b.points.slice(0, 4) }), null);
 });
+
+test('series in different units abstain: one shared Y axis would flatten the smaller one (SR-R-13)', () => {
+  const b = lineBlock();
+  assert.equal(b.series.length, 2);
+  assert.ok(m.validChart(b), 'the fixture (both unitless) still draws');
+  const withUnits = (u0, u1) => ({ ...b, series: [{ ...b.series[0], unit: u0 }, { ...b.series[1], unit: u1 }] });
+  assert.equal(m.validChart(withUnits('EUR', 'rating (1-5)')), null, 'EUR next to a rating');
+  assert.equal(m.validChart(withUnits('EUR', null)), null, 'a unit next to none');
+  assert.ok(m.validChart(withUnits('EUR', 'EUR')), 'the same unit on every series draws');
+  const one = { ...b, series: [{ ...b.series[0], unit: 'EUR' }], points: b.points.map((p) => ({ ...p, cells: [p.cells[0]], values: [p.values[0]] })) };
+  assert.ok(m.validChart(one), 'a single series has nothing to differ from');
+});
+
+test('a value too large to scale abstains instead of drawing NaN coordinates (SR-R-24)', async () => {
+  const b = lineBlock();
+  const put = (v) => ({ ...b, points: b.points.map((p, i) => (i === 0 ? { ...p, values: [v, p.values[1]] } : p)) });
+  assert.equal(m.validChart(put(1e308)), null);
+  assert.equal(m.validChart(put(-1e308)), null);
+  assert.equal(m.validChart(put(Infinity)), null);
+  assert.equal(m.validChart(put(NaN)), null);
+  assert.ok(m.validChart(put(1e12)), 'large but sane values still draw');
+  const bar = barBlock();
+  assert.equal(m.validChart({ ...bar, points: bar.points.map((p, i) => (i === 0 ? { ...p, values: p.values.map(() => 1e308) } : p)) }), null);
+});
+
+test('every bar category is named at a 390 px card width, shortened to fit its band', async () => {
+  const real = Object.getOwnPropertyDescriptor(dom.window.HTMLElement.prototype, 'clientWidth');
+  Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 300 });
+  // The chart measures its box through a ResizeObserver; jsdom has none, so a no-op one lets the first measure run.
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  try {
+    const host = await mount(barBlock());
+    const labels = [...host.querySelectorAll('svg[role="img"] text')].filter((t) => t.getAttribute('y') === '240');
+    assert.equal(labels.length, barBlock().points.length, 'all 5 categories are labelled, not 3');
+    assert.ok(labels.every((t) => t.textContent.length <= 7), 'shortened to fit its band: ' + labels.map((t) => t.textContent).join('|'));
+  } finally {
+    delete globalThis.ResizeObserver;
+    if (real) Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', real);
+    else delete dom.window.HTMLElement.prototype.clientWidth;
+  }
+});

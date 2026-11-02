@@ -2,6 +2,8 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ChartBlock, ChartPoint, ChartSeries, inRange, isNum, isObj, isText, optText, parseCommon, uniqueIds } from '../../smartResults';
 import type { RendererProps } from './registry';
 
+const MAX_VALUE = 1e15;
+
 /** 1-4 series (unique by key) and 3-60 points, each with one cell/value per series (plan §A.3). */
 export function validChart(raw: unknown): ChartBlock | null {
   const b = parseCommon(raw, 'chart');
@@ -19,6 +21,9 @@ export function validChart(raw: unknown): ChartBlock | null {
     keys.add(s.key);
     series.push({ key: s.key, label: s.label, unit });
   }
+  // One shared Y axis means one unit: a chart whose series differ (EUR next to "rating (1-5)") would flatten
+  // the smaller one, so it abstains and the reply's own table shows instead (plan §A.3).
+  if (series.some((s) => s.unit !== series[0].unit)) return null;
   if (!inRange(b.points, 3, 60) || !uniqueIds(b.points)) return null;
   // A bar chart needs 5 or more rows (plan §A.3); a smaller table stays a comparison.
   if (b.chart_kind === 'bar' && (b.points as unknown[]).length < 5) return null;
@@ -26,7 +31,8 @@ export function validChart(raw: unknown): ChartBlock | null {
   for (const p of b.points as Record<string, unknown>[]) {
     if (!isText(p.x)) return null;
     if (!Array.isArray(p.cells) || p.cells.length !== series.length || !p.cells.every((c) => isText(c, 300, true))) return null;
-    if (!Array.isArray(p.values) || p.values.length !== series.length || !p.values.every((v) => v === null || isNum(v))) return null;
+    // Finite and within what an SVG coordinate can carry: 1e308 turns every scaled y into NaN.
+    if (!Array.isArray(p.values) || p.values.length !== series.length || !p.values.every((v) => v === null || (isNum(v) && Math.abs(v) <= MAX_VALUE))) return null;
     points.push({ id: p.id as string, x: p.x, cells: p.cells as string[], values: p.values as (number | null)[] });
   }
   const summary = optText(b.summary);
@@ -146,7 +152,10 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
   const xStep = isBar ? PLOT_W / n : n > 1 ? PLOT_W / (n - 1) : 0;
   const xPos = (i: number) => (isBar ? PAD.left + (i + 0.5) * xStep : PAD.left + (n > 1 ? i * xStep : PLOT_W / 2));
 
-  const labelEvery = Math.max(1, Math.ceil(n / (narrow ? 4 : 10)));
+  // Bars: every category is named when its band fits a shortened label (5 bars at 390 px do); lines thin out.
+  const MIN_BAND_LABEL = 46;
+  const labelEvery = isBar ? Math.max(1, Math.ceil(MIN_BAND_LABEL / xStep)) : Math.max(1, Math.ceil(n / (narrow ? 4 : 10)));
+  const labelChars = isBar ? Math.max(4, Math.floor((xStep * labelEvery - 6) / 6)) : 10;
 
   const activePoint = active ? block.points[active.pointIdx] : null;
   const activeSeries = active ? block.series[active.seriesIdx] : null;
@@ -235,7 +244,7 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
                   fontSize={11}
                   fill="#a1a1aa"
                 >
-                  {p.x.length > 10 ? `${p.x.slice(0, 9)}…` : p.x}
+                  {p.x.length > labelChars ? `${p.x.slice(0, labelChars - 1)}…` : p.x}
                 </text>
               );
             })}
