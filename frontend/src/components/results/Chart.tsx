@@ -153,9 +153,9 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
   const xPos = (i: number) => (isBar ? PAD.left + (i + 0.5) * xStep : PAD.left + (n > 1 ? i * xStep : PLOT_W / 2));
 
   // Bars: every category is named when its band fits a shortened label (5 bars at 390 px do); lines thin out.
-  const MIN_BAND_LABEL = 46;
+  const MIN_BAND_LABEL = 28;
   const labelEvery = isBar ? Math.max(1, Math.ceil(MIN_BAND_LABEL / xStep)) : Math.max(1, Math.ceil(n / (narrow ? 4 : 10)));
-  const labelChars = isBar ? Math.max(4, Math.floor((xStep * labelEvery - 6) / 6)) : 10;
+  const labelChars = isBar ? Math.max(3, Math.floor((xStep * labelEvery - 4) / 6)) : 10;
 
   const activePoint = active ? block.points[active.pointIdx] : null;
   const activeSeries = active ? block.series[active.seriesIdx] : null;
@@ -244,7 +244,14 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
                   fontSize={11}
                   fill="#a1a1aa"
                 >
-                  {p.x.length > labelChars ? `${p.x.slice(0, labelChars - 1)}…` : p.x}
+                  {p.x.length > labelChars ? (
+                    <>
+                      <title>{p.x}</title>
+                      {`${p.x.slice(0, labelChars - 1)}…`}
+                    </>
+                  ) : (
+                    p.x
+                  )}
                 </text>
               );
             })}

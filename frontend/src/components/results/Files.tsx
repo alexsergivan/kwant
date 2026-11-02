@@ -8,7 +8,7 @@ function validCut(v: Record<string, unknown>, keys: ('total_rows' | 'total_cols'
   const cut: PreviewCut = {};
   for (const k of keys) {
     if (v[k] === undefined || v[k] === null) continue;
-    if (!isIndex(v[k])) return undefined;
+    if (!isIndex(v[k]) || !Number.isSafeInteger(v[k])) return undefined;
     cut[k] = v[k] as number;
   }
   if (v.truncated !== undefined && v.truncated !== null) {
