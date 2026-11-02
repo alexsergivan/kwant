@@ -890,6 +890,9 @@ fn execute_single_turn(
     // as its own specialty (the saved message stays as the person wrote it)
     let turn_prompt = if routing.as_ref().is_some_and(|r| r["basis"] == "team") {
         format!("{prompt}\n\n{}", crate::router::team::TEAM_BUILDING_NOTE)
+    } else if let Some(ids) = routing.as_ref().and_then(|r| r["similar_requests"].as_array()) {
+        let ids: Vec<&str> = ids.iter().filter_map(serde_json::Value::as_str).collect();
+        format!("{prompt}\n\n{}", super::concierge::hire_note(&ids))
     } else {
         prompt.clone()
     };
@@ -2284,6 +2287,7 @@ async fn run_kwant_turn_inner(
                     team_id: scope.team_context.as_ref().map(|t| t.id.clone()),
                     member_ids: scope.teammates.iter().map(|k| k.id.clone()).collect(),
                     depth: scope.delegation_depth,
+                    message_id: opts.routing.as_ref().and_then(|r| r["message_id"].as_str()).map(str::to_string),
                 }),
                 cancel: Some(cancel_token.clone()),
                 turn_id: Some(tag.turn_id.clone()),
@@ -3147,7 +3151,7 @@ async fn send_chat_inner(
                 // The team router doesn't say which path it took; Laya being down means keywords did
                 let fallback = !state.router.status().is_up();
                 let basis = if basis.is_empty() { "skills".to_string() } else { basis };
-                let routing = routing_meta(&target_kwant, &reason, members.len(), fallback, &matched_terms, &basis);
+                let routing = routing_meta(&target_kwant, &reason, members.len(), fallback, &matched_terms, &basis, &saved_user_msg.id);
                 let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                     context_id: routing_context_id,
                     kwant_id: target_kwant.id.clone(),
@@ -3272,7 +3276,7 @@ async fn send_chat_inner(
         } else if let Some((asker, _)) = awaiting.clone() {
             let reason = format!("{} asked you a question here, so your reply goes back to {}", asker.name, asker.name);
             let candidates = chat_teammates.len().max(1);
-            routing = Some(routing_meta(&asker, &reason, candidates, false, &[], "asked"));
+            routing = Some(routing_meta(&asker, &reason, candidates, false, &[], "asked", &saved_user_msg.id));
             let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                 context_id: payload.channel_id.clone(),
                 kwant_id: asker.id.clone(),
@@ -3297,7 +3301,7 @@ async fn send_chat_inner(
                 let members = routing_members(&channel, &all_kwants, concierge.as_deref());
 
                 if channel.routing_mode == "auto" && members.len() > 1 {
-                    let hints = super::rerouting::hints_for(&state, &members).await;
+                    let hints = super::rerouting::hints_for(&state, &space, &members).await;
                     let context_id = payload.channel_id.clone();
                     let _ = state.event_sender.send(RuntimeEvent::RoutingStarted {
                         context_id: context_id.clone(),
@@ -3323,6 +3327,8 @@ async fn send_chat_inner(
                     // #general leans to the Concierge when nothing fits (made now, the first time,
                     // unless the person removed it); anywhere else the pick stands
                     let mut route = route;
+                    // Earlier requests like this one the Concierge answered, when it should suggest a hire
+                    let mut similar: Option<Vec<String>> = None;
                     let mut chosen = members.iter().find(|k| k.id == route.kwant_id).cloned().or(lead);
                     let removed = matches!(super::concierge::state(&state, &space, &all_kwants).await, super::concierge::State::Removed);
                     match crate::router::team::settle(&route, general, !removed) {
@@ -3334,6 +3340,7 @@ async fn send_chat_inner(
                                 );
                                 route.basis = "concierge".into();
                                 route.kwant_id = c.id.clone();
+                                similar = super::concierge::similar_requests(&state, &space, &saved_user_msg.id, &payload.prompt, &c.id).await;
                                 chosen = Some(c);
                             }
                         }
@@ -3352,9 +3359,12 @@ async fn send_chat_inner(
                         crate::router::team::Settle::Route => {}
                     }
                     if let Some(ref k) = chosen {
-                        routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms, &route.basis));
+                        routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms, &route.basis, &saved_user_msg.id));
                         if let Some(m) = routing.as_mut() {
                             m["fit"] = json!(route.fit);
+                            if let Some(ids) = similar.take() {
+                                m["similar_requests"] = json!(ids);
+                            }
                         }
                         let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                             context_id,
@@ -3428,10 +3438,12 @@ fn channel_members(channel: &crate::db::models::Channel, all_kwants: &[Kwant]) -
         .collect()
 }
 
-/// A reply's `meta.routing`: who Laya picked for a channel or team message and why.
-pub(super) fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String], basis: &str) -> serde_json::Value {
+/// The `meta.routing` a routed reply carries. `message_id` is the person's message it answers,
+/// so "Wrong bot?" corrects and resends that message, not just the latest one.
+pub(super) fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String], basis: &str, message_id: &str) -> serde_json::Value {
     json!({
         "basis": basis,
+        "message_id": message_id,
         "kwant_id": kwant.id,
         "kwant_name": kwant.name,
         "reason": reason,

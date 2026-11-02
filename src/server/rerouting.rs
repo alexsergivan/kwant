@@ -4,8 +4,8 @@
 //! - Ask: a fit from [`ASK_FROM`] up to [`ROUTE_AT`] with two candidates posts a card offering
 //!   those two bots and a general answer (the Concierge in #general, else the channel lead). The
 //!   message waits; `POST /api/route-choices/:id/resolve` (person only) runs the chosen bot's turn.
-//! - Hand-back: the `hand_back` tool, in a channel turn, sends the person's last message on to the
-//!   next best bot here, else the Concierge (or the lead). One hop per message, ever.
+//! - Hand-back: the `hand_back` tool, in a routed channel turn, sends the message that turn answers
+//!   on to the next best bot here, else the Concierge (or the lead). One hop per message, ever.
 //!
 //! Contract: /home/maus/shared/ship-software-safely/router-concierge/contract.md
 
@@ -15,7 +15,7 @@ use crate::db::models::{Kwant, MessageExtra, NewMessage};
 use crate::db::routing::RouteChoice;
 use crate::db::spaces::SpaceId;
 use crate::drivers::events::RuntimeEvent;
-use crate::router::team::{Hints, ROUTE_AT};
+use crate::router::team::{Hints, Learned, ROUTE_AT};
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -27,10 +27,19 @@ use serde_json::{json, Value};
 
 pub const HAND_BACK: &str = "hand_back";
 
-/// The space's covers/avoids lists for routing among `members`.
-pub(super) async fn hints_for(state: &AppState, members: &[Kwant]) -> Hints {
+/// The space's covers/avoids lists for routing among `members`, and what the person taught it.
+pub(super) async fn hints_for(state: &AppState, space: &SpaceId, members: &[Kwant]) -> Hints {
     let ids: Vec<String> = members.iter().map(|k| k.id.clone()).collect();
-    Hints { scopes: state.db.scopes_for(&ids).await.unwrap_or_default() }
+    let learned = state
+        .db
+        .learned_examples(space.as_str())
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| ids.contains(&e.kwant_id))
+        .map(|e| Learned::new(&e.kwant_id, &e.text))
+        .collect();
+    Hints { scopes: state.db.scopes_for(&ids).await.unwrap_or_default(), learned }
 }
 
 fn error(status: StatusCode, msg: &str) -> Response {
@@ -190,8 +199,12 @@ pub async fn resolve_route(State(state): State<AppState>, headers: HeaderMap, Pa
         let _ = state.db.set_message_meta(mid, &meta).await;
     }
     let _ = state.event_sender.send(RuntimeEvent::RouteChoiceUpdated { choice: meta });
+    // The person's pick teaches routing (a general answer says nothing about the bots)
+    if !body.general {
+        learn(&state, &space, &c.user_message_id, &kwant.id, "ask").await;
+    }
     let candidates = offered.len() + 1;
-    let mut routing = super::routes::routing_meta(&kwant, &reason, candidates, false, &[], "ask");
+    let mut routing = super::routes::routing_meta(&kwant, &reason, candidates, false, &[], "ask", &c.user_message_id);
     routing["route_choice_id"] = json!(c.id);
     let (st, k, um, ch, prompt) = (state.clone(), kwant.clone(), c.user_message_id.clone(), c.channel_id.clone(), c.prompt.clone());
     tokio::spawn(async move {
@@ -202,10 +215,52 @@ pub async fn resolve_route(State(state): State<AppState>, headers: HeaderMap, Pa
     Json(json!({"status": "dispatched", "user_message_id": c.user_message_id, "kwant": kwant.name, "kwant_id": kwant.id})).into_response()
 }
 
+/// Saves "messages like `message_id` go to `kwant_id`" for routing to learn from.
+async fn learn(state: &AppState, space: &SpaceId, message_id: &str, kwant_id: &str, source: &str) {
+    let Ok(Some(m)) = state.db.get_message(message_id).await else { return };
+    if let Err(e) = state.db.add_route_example(space.as_str(), message_id, &m.text, kwant_id, source).await {
+        tracing::warn!(error = %e, "could not save a routing example");
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CorrectionBody {
+    pub message_id: String,
+    pub kwant_id: String,
+}
+
+/// `POST /api/route-corrections` `{message_id, kwant_id}`: the person says who should have
+/// answered their channel message; similar messages go to that bot from now on (basis
+/// "learned"). Person only. It doesn't rerun the message.
+pub async fn correct_route(State(state): State<AppState>, headers: HeaderMap, Json(body): Json<CorrectionBody>) -> Response {
+    if let Err(r) = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person corrects routing").await {
+        return r;
+    }
+    let msg = match state.db.get_message(&body.message_id).await {
+        Ok(Some(m)) => m,
+        _ => return error(StatusCode::NOT_FOUND, "no such message"),
+    };
+    let (Some(channel_id), None, "user") = (msg.channel_id.as_deref(), msg.thread_id.as_deref(), msg.sender_role.as_str()) else {
+        return error(StatusCode::BAD_REQUEST, "only your own messages in a channel can be corrected");
+    };
+    let Ok(Some(channel)) = state.db.get_channel(channel_id).await else {
+        return error(StatusCode::NOT_FOUND, "the channel is gone");
+    };
+    let space = SpaceId::new(&channel.space_id);
+    let all = state.db.list_kwants(&space).await.unwrap_or_default();
+    let concierge = super::concierge::id(&state, &space, &all).await;
+    let members = super::routes::routing_members(&channel, &all, concierge.as_deref());
+    let Some(kwant) = members.iter().find(|k| k.id == body.kwant_id) else {
+        return error(StatusCode::BAD_REQUEST, "that bot doesn't answer in this channel");
+    };
+    learn(&state, &space, &msg.id, &kwant.id, "correction").await;
+    Json(json!({"status": "learned", "message_id": msg.id, "kwant_id": kwant.id, "kwant": kwant.name})).into_response()
+}
+
 pub fn tool() -> Value {
     json!({
         "name": HAND_BACK,
-        "description": "Hand the person's last message in this channel back when it is clearly not your area, so kwnt sends it \
+        "description": "Hand the person's message you were routed in this channel back when it is clearly not your area, so kwnt sends it \
             to the bot here that fits it best (or a generalist). Use it only when someone else is clearly better placed, not to \
             avoid work. It works once per message. After it succeeds, end your turn with one short line saying who takes it; \
             don't answer the request yourself.",
@@ -234,14 +289,19 @@ pub async fn tool_call(state: &AppState, scope: &SelfScope, args: &Value) -> Too
     let Some(channel_id) = origin.channel_id.clone() else {
         return ("hand_back works only for a message the person sent in a channel.".into(), true);
     };
-    match hand_back(state, &scope.kwant_id, &channel_id, &reason).await {
+    // The message this turn answers, never just the newest one: in a busy channel that can be
+    // another person's message routed to someone else
+    let Some(message_id) = origin.message_id.clone() else {
+        return ("hand_back works only for a message kwnt routed to you; this one was sent to you directly, so answer it.".into(), true);
+    };
+    match hand_back(state, &scope.kwant_id, &channel_id, &message_id, &reason).await {
         Ok(to) => (format!("Handed to {to}. End your turn now with one short line saying {to} will take it; don't answer the request."), false),
         Err(why) => (why, true),
     }
 }
 
-/// Sends the person's latest message in `channel_id` on from `from_id`; returns who takes it.
-pub(super) async fn hand_back(state: &AppState, from_id: &str, channel_id: &str, reason: &str) -> Result<String, String> {
+/// Sends the person's message `message_id` in `channel_id` on from `from_id`; returns who takes it.
+pub(super) async fn hand_back(state: &AppState, from_id: &str, channel_id: &str, message_id: &str, reason: &str) -> Result<String, String> {
     let Ok(Some(channel)) = state.db.get_channel(channel_id).await else {
         return Err("Could not find this channel.".into());
     };
@@ -249,9 +309,9 @@ pub(super) async fn hand_back(state: &AppState, from_id: &str, channel_id: &str,
         return Err("Could not find you.".into());
     };
     let space = SpaceId::new(&from.space_id);
-    let messages = state.db.list_messages(channel_id, 50).await.unwrap_or_default();
-    let Some(msg) = messages.iter().rev().find(|m| m.sender_role == "user") else {
-        return Err("There's no message from the person here to hand back.".into());
+    let msg = match state.db.get_message(message_id).await {
+        Ok(Some(m)) if m.sender_role == "user" && m.channel_id.as_deref() == Some(channel_id) => m,
+        _ => return Err("Could not find the person's message you were answering, so it can't be handed back.".into()),
     };
     if state.db.handed_back(&msg.id).await.unwrap_or(true) {
         return Err("This message was already handed back once; answer it as well as you can.".into());
@@ -269,7 +329,7 @@ pub(super) async fn hand_back(state: &AppState, from_id: &str, channel_id: &str,
         Err(_) => return Err("Could not hand it back.".into()),
     }
     let why = format!("{} handed this back (\"{reason}\"), so {} ({}) takes it", from.name, to.name, to.title);
-    let mut routing = super::routes::routing_meta(&to, &why, members.len() + 1, false, &[], "handback");
+    let mut routing = super::routes::routing_meta(&to, &why, members.len() + 1, false, &[], "handback", &msg.id);
     routing["fit"] = json!(fit);
     routing["handed_back_by"] = json!(from.id);
     let prompt = format!(
@@ -302,7 +362,7 @@ async fn next_after_handback(
     concierge: Option<&str>,
 ) -> Option<(Kwant, f32)> {
     if !members.is_empty() {
-        let hints = hints_for(state, members).await;
+        let hints = hints_for(state, space, members).await;
         let lead = if channel.lead_kwant_id == from.id { members[0].id.clone() } else { channel.lead_kwant_id.clone() };
         let route = state.router.route_channel_query_hinted(text, &channel.name, &lead, members, None, &hints).await;
         if route.fit >= ROUTE_AT {

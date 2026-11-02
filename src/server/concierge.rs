@@ -118,3 +118,92 @@ pub async fn for_no_match(app: &AppState, space: &SpaceId, channel_id: &str, all
     tracing::info!(kwant_id = %id, space = %space.as_str(), "made the Concierge for a message no specialist fits");
     app.db.get_kwant(&id).await.ok().flatten()
 }
+
+/// Similar requests the Concierge must have had (this one included) within [`SIMILAR_WINDOW_DAYS`]
+/// before it suggests a specialist.
+pub const SIMILAR_FOR_HIRE: usize = 3;
+pub const SIMILAR_WINDOW_DAYS: i64 = 14;
+
+/// Records that the Concierge answers `message_id` and, when it is the [`SIMILAR_FOR_HIRE`]th
+/// similar request in [`SIMILAR_WINDOW_DAYS`] days, returns their ids, oldest first, for one hire
+/// suggestion (see [`hire_note`]). Requests a hire was already suggested from don't count again,
+/// and nothing is suggested while a Concierge proposal is pending.
+pub async fn similar_requests(app: &AppState, space: &SpaceId, message_id: &str, text: &str, concierge_id: &str) -> Option<Vec<String>> {
+    if let Err(e) = app.db.add_route_example(space.as_str(), message_id, text, concierge_id, "concierge").await {
+        tracing::warn!(error = %e, "could not save the Concierge request");
+        return None;
+    }
+    let since = chrono::Utc::now() - chrono::Duration::days(SIMILAR_WINDOW_DAYS);
+    let recent = app.db.concierge_examples(space.as_str(), since).await.ok()?;
+    let ids = similar_ids(text, message_id, &recent);
+    if ids.len() < SIMILAR_FOR_HIRE {
+        return None;
+    }
+    let pending = app.db.list_hires(space, Some("pending")).await.unwrap_or_default();
+    if pending.iter().any(|h| h.kwant_id == concierge_id) {
+        return None;
+    }
+    let _ = app.db.mark_hire_suggested(&ids).await;
+    Some(ids)
+}
+
+/// `message_id` and the earlier requests in `recent` (newest first) that are like `text` and no
+/// hire was suggested from, oldest first.
+pub fn similar_ids(text: &str, message_id: &str, recent: &[crate::db::routing::RouteExample]) -> Vec<String> {
+    let words = crate::router::team::content_words(text);
+    let mut ids: Vec<String> = recent
+        .iter()
+        .filter(|e| e.message_id != message_id && e.hire_suggested_at.is_none())
+        .filter(|e| crate::router::team::alike(&words, &crate::router::team::content_words(&e.text)))
+        .map(|e| e.message_id.clone())
+        .collect();
+    ids.reverse();
+    ids.push(message_id.to_string());
+    ids
+}
+
+/// Added to the Concierge's turn when similar requests keep coming: answer, then suggest one
+/// specialist through the hire policy, which still refuses a role the person turned down.
+pub fn hire_note(ids: &[&str]) -> String {
+    format!(
+        "(kwnt routing note: this is request {} of a kind you have answered in the last {SIMILAR_WINDOW_DAYS} days; message \
+        ids: {}. Answer it first. Then, if one specialist bot would clearly do this kind of request better, call \
+        propose_hire once with evidence {{\"basis\": \"repeated\", \"similar_requests\": [those ids]}}. Check hire_status \
+        first and don't propose a role the person turned down. If propose_hire refuses, don't retry.)",
+        ids.len(),
+        ids.join(", ")
+    )
+}
+
+#[cfg(test)]
+mod hire_tests {
+    use super::*;
+    use crate::db::routing::RouteExample;
+
+    fn ex(id: &str, text: &str, suggested: bool) -> RouteExample {
+        RouteExample {
+            id: format!("e-{id}"),
+            space_id: "s".into(),
+            message_id: id.into(),
+            text: text.into(),
+            kwant_id: "conc".into(),
+            source: "concierge".into(),
+            hire_suggested_at: suggested.then(chrono::Utc::now),
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    /// The third similar request makes the count; unlike ones and ones already suggested from don't.
+    #[test]
+    fn the_third_similar_request_suggests_a_hire() {
+        let now = "Best street food stalls in Munich this weekend?";
+        let one = vec![ex("m1", "Where is the best street food in Munich?", false), ex("m0", "What's the weather tomorrow?", false)];
+        assert_eq!(similar_ids(now, "m3", &one), vec!["m1", "m3"]);
+        assert!(similar_ids(now, "m3", &one).len() < SIMILAR_FOR_HIRE);
+        let two = [vec![ex("m2", "Good street food markets in Munich?", false)], one.clone()].concat();
+        assert_eq!(similar_ids(now, "m3", &two), vec!["m1", "m2", "m3"]);
+        let done = [vec![ex("m2", "Good street food markets in Munich?", true)], one].concat();
+        assert_eq!(similar_ids(now, "m3", &done).len(), 2, "a request a hire was suggested from counts once");
+        assert!(hire_note(&["m1", "m2", "m3"]).contains("\"similar_requests\""));
+    }
+}
