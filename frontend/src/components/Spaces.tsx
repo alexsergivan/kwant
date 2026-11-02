@@ -13,6 +13,7 @@ import {
   spaceSummaryTitle,
   spacesApi,
 } from '../spaces';
+import { useEscapeLayer } from '../escape';
 
 const badge = (n: number) => (n > 99 ? '99+' : String(n));
 
@@ -54,6 +55,7 @@ export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, on
             <button
               type="button"
               onClick={() => onSwitch(s.id)}
+              data-rail-space={s.id}
               aria-current={active ? 'true' : undefined}
               aria-label={`${s.name}${unread ? `, ${unread} unread` : ''}`}
               title={`${s.name}${i < 9 ? ` (Ctrl/⌘ ${i + 1})` : ''}`}
@@ -87,6 +89,7 @@ export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, on
     <button
       type="button"
       onClick={onOpenAppSettings}
+      data-settings-opener
       aria-label="Settings (all spaces)"
       title="Settings (all spaces)"
       className="w-10 h-10 rounded-xl text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 flex items-center justify-center transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
@@ -192,28 +195,27 @@ export const SpaceSwitcher: React.FC<SwitcherProps> = ({ spaces, currentId, onSw
 // ---------------------------------------------------------------------------
 // Dialog frame shared by the space dialogs
 
-const Dialog: React.FC<{ title: string; subtitle?: string; labelId: string; onClose: () => void; children: React.ReactNode; wide?: boolean }> = ({
-  title,
-  subtitle,
-  labelId,
-  onClose,
-  children,
-  wide,
-}) => {
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+const Dialog: React.FC<{
+  title: string;
+  subtitle?: string;
+  labelId: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  wide?: boolean;
+  /** Changes Escape would lose: it does nothing while there are some. */
+  unsaved?: boolean;
+}> = ({ title, subtitle, labelId, onClose, children, wide, unsaved }) => {
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEscapeLayer(rootRef, true, onClose, { modal: true, unsaved });
   return (
     <div className="kw-dialog kw-dialog-bottom fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
+        ref={rootRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby={labelId}
-        className={`kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-t-2xl sm:rounded-2xl w-full ${wide ? 'sm:max-w-xl' : 'sm:max-w-md'} max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5`}
+        className={`kw-dialog-panel outline-none bg-zinc-900 border border-zinc-800 rounded-t-2xl sm:rounded-2xl w-full ${wide ? 'sm:max-w-xl' : 'sm:max-w-md'} max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5`}
       >
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -273,7 +275,7 @@ export const NewSpaceModal: React.FC<NewSpaceProps> = ({ spaces, onClose, onCrea
 
   const preview = { id: 'preview', icon, color };
   return (
-    <Dialog title="New space" subtitle="Its own bots, teams, accounts and chats. Nothing is shared with your other spaces." labelId="new-space-title" onClose={onClose}>
+    <Dialog title="New space" subtitle="Its own bots, teams, accounts and chats. Nothing is shared with your other spaces." labelId="new-space-title" onClose={onClose} unsaved={!!name.trim()}>
       <form onSubmit={submit} className="space-y-4" noValidate>
         <div className="flex items-center gap-3">
           <SpaceTile space={preview} size={48} />

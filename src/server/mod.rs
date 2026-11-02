@@ -32,6 +32,8 @@ pub mod page_source;
 pub mod connection_suggest;
 pub mod bot_actions;
 pub mod hires;
+pub mod concierge;
+pub mod rerouting;
 pub mod import_routes;
 pub mod approval_modes;
 pub mod passwords;
@@ -325,6 +327,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/bot-actions/:id/undo", post(bot_actions::undo))
         .route("/api/bot-actions/:id/confirm", post(bot_actions::confirm))
         .route("/api/bot-actions/:id/decline", post(bot_actions::decline))
+        .route("/api/route-choices/:id/resolve", post(rerouting::resolve_route))
+        .route("/api/route-corrections", post(rerouting::correct_route))
         .route("/api/hires", get(hires::list))
         .route("/api/hires/:id/accept", post(hires::accept_route))
         .route("/api/hires/:id/deny", post(hires::deny_route))

@@ -327,6 +327,9 @@ pub struct TurnOrigin {
     pub member_ids: Vec<String>,
     /// 0 in user chats, 1 in a delegation thread, …
     pub depth: i64,
+    /// The person's channel message kwnt routed to this turn (its reply's `meta.routing.message_id`);
+    /// `hand_back` hands on exactly this one. `None` for @mentions, DMs and other unrouted turns.
+    pub message_id: Option<String>,
 }
 
 /// The synthetic http MCP server a turn reaches its own tools through. The token travels as a
@@ -520,6 +523,9 @@ fn tool_list(scope: &SelfScope, board: bool) -> Value {
         list.extend(super::hires::tools());
         if scope.sandbox_target.is_some() {
             list.extend(browser_tools());
+        }
+        if scope.origin.as_ref().is_some_and(|o| o.channel_id.is_some() && o.thread_id.is_none() && o.depth == 0) {
+            list.push(super::rerouting::tool());
         }
         if scope.origin.is_some() {
             list.extend(delegation_tools());
@@ -1105,6 +1111,7 @@ async fn call_tool(
             Some(target) => call_browser_tool(state, scope, target, name, args).await,
             None => (format!("Unknown tool {name}."), true),
         },
+        super::rerouting::HAND_BACK => super::rerouting::tool_call(state, scope, args).await,
         "skill_propose" => super::skills::tool_propose(state, scope, args).await,
         super::missions::foundry::TOOL => super::missions::foundry::call(state, scope, args).await,
         "skill_get" => super::skills::tool_get(state, scope, args).await,

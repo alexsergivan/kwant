@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { ArrowDown, ArrowUp, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { ArrowDown, ArrowUp, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, Loader2 } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -45,6 +45,7 @@ import { isSystemNotice, parseInterruption, retryTargets } from '../interruption
 import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhead } from '../decideFirst';
 import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
+import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
 
 /** A swipeable chip row whose right fade edge (phones only, see .kw-scroll-row) goes away once
  *  it is scrolled to the end, or when everything already fits. */
@@ -218,6 +219,14 @@ export interface ChatViewProps {
   renderBotAction?: (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => React.ReactNode;
   /** A bot's proposal to hire a new bot (message meta kind "hire_proposal"). */
   renderHire?: (msg: ChatMessage, meta: HireMeta, flash: boolean) => React.ReactNode;
+  /** Laya's "Who should answer this?" card (message meta kind "route_choice"); `question` is the
+   *  person's message it is about, when it's loaded. */
+  renderRouteChoice?: (msg: ChatMessage, meta: RouteChoiceMeta, flash: boolean, question?: string) => React.ReactNode;
+  /** Bots a routed reply can be sent to instead ("Wrong bot? Send to…"); empty hides it. */
+  rerouteTargets?: Array<{ id: string; name: string; title: string }>;
+  /** Teaches routing that `question` should have gone to `kwantId` and asks that bot now.
+   *  Resolves to an error message on failure. */
+  onSendToOtherBot?: (question: ChatMessage, kwantId: string) => Promise<string | void>;
   /** Opens Space settings → Accounts; turns a "nothing can run" reply into a card with a button. */
   onOpenAccounts?: () => void;
   /** Whether anything can run a bot in this space now (null while unknown). */
@@ -256,28 +265,113 @@ export const renderFormattedText = (text: string): React.ReactNode => {
   });
 };
 
-/** Why Laya picked this bot. Phones show one line and open the rest on a tap. */
-const RoutingLine: React.FC<{ text: string; fallback: boolean }> = ({ text, fallback }) => {
+interface Reroute {
+  /** The reply's id, for element ids. */
+  key: string;
+  targets: Array<{ id: string; name: string; title: string }>;
+  onPick: (kwantId: string) => Promise<string | void>;
+}
+
+/** Why Laya picked this bot. Phones show one line and open the rest on a tap. With `reroute`, a
+ *  "Wrong bot?" link opens the other bots here; picking one teaches routing and asks that bot. */
+const RoutingLine: React.FC<{ text: string; fallback: boolean; reroute?: Reroute }> = ({ text, fallback, reroute }) => {
   const [open, setOpen] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sentTo, setSentTo] = useState<string | null>(null);
   const tone = fallback ? 'text-amber-300/80' : 'text-violet-300/80';
   const icon = <Sparkles size={10} className="inline -mt-0.5 mr-1" aria-hidden="true" />;
+  const panelId = reroute ? `reroute-${reroute.key}` : undefined;
+  const canReroute = !!reroute && reroute.targets.length > 0;
+
+  const pick = async (k: { id: string; name: string }) => {
+    if (!reroute || busy) return;
+    setBusy(k.id);
+    setError(null);
+    const err = await reroute.onPick(k.id);
+    setBusy(null);
+    if (err) setError(err);
+    else {
+      setSentTo(k.name);
+      setPicking(false);
+    }
+  };
+
+  const wrongBot = canReroute && !sentTo && (
+    <button
+      type="button"
+      onClick={() => setPicking((v) => !v)}
+      aria-expanded={picking}
+      aria-controls={panelId}
+      className="shrink-0 py-1 sm:py-0 text-[11px] text-zinc-500 hover:text-zinc-200 underline decoration-dotted underline-offset-2 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+    >
+      Wrong bot?
+    </button>
+  );
+
   return (
     <>
-      <p className={`hidden sm:block -mt-1 mb-1.5 text-[11px] ${tone} break-words`} data-routing-line>
-        {icon}
-        {text}
-      </p>
-      <button
-        type="button"
-        data-compact
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        title={open ? undefined : text}
-        className={`sm:hidden -mt-3.5 -mb-1.5 py-3.5 max-w-full text-left text-[11px] ${tone} ${open ? 'break-words' : 'truncate'} rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500`}
-      >
-        {icon}
-        {text}
-      </button>
+      <div className="hidden sm:flex items-baseline gap-2 -mt-1 mb-1.5 max-w-full min-w-0" data-routing-line>
+        <p className={`text-[11px] ${tone} break-words min-w-0`}>
+          {icon}
+          {text}
+        </p>
+        {wrongBot}
+      </div>
+      <div className="sm:hidden flex items-center gap-2 -mt-3.5 -mb-1.5 max-w-full min-w-0">
+        <button
+          type="button"
+          data-compact
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          title={open ? undefined : text}
+          className={`py-3.5 min-w-0 flex-1 text-left text-[11px] ${tone} ${open ? 'break-words' : 'truncate'} rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500`}
+        >
+          {icon}
+          {text}
+        </button>
+        {wrongBot}
+      </div>
+      {picking && reroute && (
+        <div id={panelId} role="group" aria-label="Send to another bot" className="mt-1 sm:mt-0 mb-2 max-w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2">
+          <p className="text-[11px] text-zinc-400 mb-1.5">Send your message to:</p>
+          <div className="flex flex-wrap gap-1.5">
+            {reroute.targets.map((k) => (
+              <button
+                key={k.id}
+                type="button"
+                disabled={busy !== null}
+                onClick={() => pick(k)}
+                title={k.title}
+                className="inline-flex items-center gap-1.5 min-h-[36px] sm:min-h-[28px] px-2.5 rounded-lg border border-zinc-700 bg-zinc-900 text-xs text-zinc-100 hover:bg-zinc-800 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+              >
+                {busy === k.id && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+                <span>{k.name}</span>
+                {k.title && <span className="hidden sm:inline text-zinc-500">· {k.title}</span>}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setPicking(false)}
+              className="min-h-[36px] sm:min-h-[28px] px-2.5 rounded-lg text-xs text-zinc-400 hover:text-zinc-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+            >
+              Cancel
+            </button>
+          </div>
+          <p className="mt-1.5 text-[11px] text-zinc-500">Messages like this will go to the bot you pick from now on.</p>
+          {error && (
+            <p role="alert" className="mt-1 text-[11px] text-rose-400 break-words">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+      {sentTo && (
+        <p role="status" className="-mt-0.5 mb-1.5 text-[11px] text-emerald-300/90">
+          Sent to {sentTo}. Messages like this will go to {sentTo} from now on.
+        </p>
+      )}
     </>
   );
 };
@@ -429,6 +523,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   renderConnectionSuggestion,
   renderBotAction,
   renderHire,
+  renderRouteChoice,
+  rerouteTargets = [],
+  onSendToOtherBot,
   onOpenAccounts,
   canRun = null,
   awaitingAnswer,
@@ -490,6 +587,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   }, [teamsProp]);
 
   const activeKwants = kwantsProp || internalKwants;
+  // Each routed reply's question: the person's latest saved message before it ("Wrong bot?").
+  const questionOf = useMemo(() => questionsOfReplies(messages), [messages]);
   const activeTeams = teamsProp || internalTeams;
 
   const mentionItems: MentionItem[] = [
@@ -847,6 +946,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (botAction && renderBotAction) return <React.Fragment key={msg.id}>{renderBotAction(msg, botAction, flashId === msg.id)}</React.Fragment>;
     const hire = msg.meta && renderHire ? parseHireMeta(msg.meta) : null;
     if (hire && renderHire) return <React.Fragment key={msg.id}>{renderHire(msg, hire, flashId === msg.id)}</React.Fragment>;
+    const routeChoice = msg.meta && renderRouteChoice ? parseRouteChoiceMeta(msg.meta) : null;
+    if (routeChoice && renderRouteChoice) {
+      const asked = messages.find((m) => m.id === routeChoice.user_message_id);
+      return <React.Fragment key={msg.id}>{renderRouteChoice(msg, routeChoice, flashId === msg.id, asked?.text)}</React.Fragment>;
+    }
     const setup = msg.meta && onOpenAccounts ? parseSetupMeta(msg.meta) : null;
     if (setup && onOpenAccounts)
       return (
@@ -973,7 +1077,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </ReplyMeta>
           )}
 
-          {routed && <RoutingLine text={routingLine(routed, spaceName ?? 'this space')} fallback={!!routed.fallback} />}
+          {routed && (
+            <RoutingLine
+              text={routingLine(routed, spaceName ?? 'this space', (id) => activeKwants.find((k) => k.id === id)?.name)}
+              fallback={!!routed.fallback}
+              reroute={
+                onSendToOtherBot && questionOf.get(msg.id)
+                  ? {
+                      key: msg.id,
+                      targets: rerouteTargets.filter((k) => k.id !== routed.kwant_id && k.name !== displayName),
+                      onPick: (kwantId) => onSendToOtherBot(questionOf.get(msg.id)!, kwantId),
+                    }
+                  : undefined
+              }
+            />
+          )}
 
           {/* Message Body Bubble */}
           {!filesOnly && (text.trim() || !files.length) && (
@@ -1483,6 +1601,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           <textarea
             ref={textareaRef}
+            data-composer
             rows={1}
             value={inputVal}
             onChange={(e) => {

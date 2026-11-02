@@ -11,8 +11,10 @@ pub mod prompts;
 pub mod scrub;
 
 use crate::db::continuity::{clean_memory_text, MAX_INSTRUCTIONS_CHARS, MAX_MEMORIES_PER_KWANT, MAX_MEMORY_CHARS};
+use crate::db::routing::{MAX_SCOPE_ENTRIES, MAX_SCOPE_ENTRY_CHARS};
 use crate::db::skills::{clean_skill_name, clean_skill_text, MAX_PENDING_PER_KWANT, MAX_SKILL_DESCRIPTION_CHARS};
 use crate::routines::Schedule;
+use crate::sandbox::site_guard;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -123,6 +125,20 @@ pub struct BotSpec {
     /// Files the bot had: "not imported, re-attach these".
     #[serde(default)]
     pub knowledge_files: Vec<String>,
+    /// Which sites the bot's browser may open (see [`crate::sandbox::site_guard`]); kept so a
+    /// bot never loses its limits on the way out and back in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_allowed_sites: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_blocked_sites: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub browser_block_private_network: bool,
+    /// What the bot is for and not for ("Good for" / "Not for"; see [`crate::db::routing::Scope`]),
+    /// kept so a copied bot is routed the same way in channels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub covers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub avoids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -485,6 +501,55 @@ pub fn suspicious(text: &str) -> Vec<&'static str> {
     found
 }
 
+/// A bot's browser site rules in words, or `None` when it has none.
+fn site_limits(bot: &BotSpec) -> Option<String> {
+    let mut parts = Vec::new();
+    if !bot.browser_allowed_sites.is_empty() {
+        parts.push(format!("only {}", bot.browser_allowed_sites.join(", ")));
+    }
+    if !bot.browser_blocked_sites.is_empty() {
+        parts.push(format!("never {}", bot.browser_blocked_sites.join(", ")));
+    }
+    if bot.browser_block_private_network {
+        parts.push("no local or private network addresses".to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// A bot's covers/avoids lists in the app's words, or `None` when both are empty.
+fn scope_words(bot: &BotSpec) -> Option<String> {
+    let mut parts = Vec::new();
+    if !bot.covers.is_empty() {
+        parts.push(format!("Good for: {}.", bot.covers.join(", ")));
+    }
+    if !bot.avoids.is_empty() {
+        parts.push(format!("Not for: {}.", bot.avoids.join(", ")));
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// A covers or avoids list as `PUT /api/kwants/:id` keeps it (trimmed, no blanks or repeats
+/// ignoring case), with hidden characters and extra spaces removed. An entry that's too long or
+/// past the cap is left out with a note instead of stopping the import: the lists only steer
+/// routing.
+fn tidy_scope(list: &[String], label: &str, who: Option<&str>, dropped: &mut Vec<Notice>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in list {
+        let entry = one_line(raw, usize::MAX);
+        if entry.is_empty() || out.iter().any(|o| o.eq_ignore_ascii_case(&entry)) {
+            continue;
+        }
+        if entry.chars().count() > MAX_SCOPE_ENTRY_CHARS {
+            dropped.push(Notice::new(who, format!("{label} entry over {MAX_SCOPE_ENTRY_CHARS} characters: {}…", cut(&entry, MAX_SCOPE_ENTRY_CHARS))));
+        } else if out.len() == MAX_SCOPE_ENTRIES {
+            dropped.push(Notice::new(who, format!("{label} entry (over the {MAX_SCOPE_ENTRIES}-entry limit): {entry}")));
+        } else {
+            out.push(entry);
+        }
+    }
+    out
+}
+
 /// Checks and tidies `bundle` for a space whose bots are called `existing` (any case). Pure: the
 /// same input always gives the same result, so apply re-runs it on what the preview returned.
 pub fn normalize(mut bundle: Bundle, existing: &[String]) -> Checked {
@@ -582,6 +647,20 @@ pub fn normalize(mut bundle: Bundle, existing: &[String]) -> Checked {
         }
         if !bot.knowledge_files.is_empty() {
             dropped.push(Notice::new(who, format!("Files aren't brought over: {}. Attach them again if the bot needs them.", bot.knowledge_files.join(", "))));
+        }
+        for (field, list) in [(site_guard::ALLOWED, &mut bot.browser_allowed_sites), (site_guard::BLOCKED, &mut bot.browser_blocked_sites)] {
+            match site_guard::normalize_sites(list, field) {
+                Ok(sites) => *list = sites,
+                Err(e) => problems.push(Notice::new(who, format!("{}'s {e}. Fix it in the file, then try the import again.", bot.name))),
+            }
+        }
+        if let Some(limits) = site_limits(bot) {
+            warnings.push(Notice::new(who, format!("Its browser is limited: {limits}. Change this in the bot's settings after importing.")));
+        }
+        bot.covers = tidy_scope(&bot.covers, "\"Good for\"", who, &mut dropped);
+        bot.avoids = tidy_scope(&bot.avoids, "\"Not for\"", who, &mut dropped);
+        if let Some(scope) = scope_words(bot) {
+            warnings.push(Notice::new(who, format!("{scope} Channels use this to pick who answers; change it in the bot's settings after importing.")));
         }
         if !bot.starters.is_empty() {
             dropped.push(Notice::new(who, format!("{} conversation starter(s): kwant has no place for them yet.", bot.starters.len())));

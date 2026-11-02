@@ -167,6 +167,10 @@ pub struct CreateKwantRequest {
     base: NewKwant,
     #[serde(flatten)]
     binding: ProfileBinding,
+    #[serde(flatten)]
+    browser: BrowserSitesUpdate,
+    #[serde(flatten)]
+    scope: ScopeUpdate,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,9 +181,34 @@ pub struct UpdateKwantRequest {
     binding: ProfileBinding,
     #[serde(flatten)]
     browser: BrowserSitesUpdate,
+    #[serde(flatten)]
+    scope: ScopeUpdate,
 }
 
 type SiteList = Option<Vec<String>>;
+type ScopeList = Option<Vec<String>>;
+
+/// What the bot is for and not for ("Good for" / "Not for" in the app). Left out: the list stays
+/// as it is. `[]` clears it.
+#[derive(Debug, Default, Deserialize)]
+pub struct ScopeUpdate {
+    covers: Option<Vec<String>>,
+    avoids: Option<Vec<String>>,
+}
+
+impl ScopeUpdate {
+    /// The lists cleaned, or the 400 naming the list that's too long.
+    #[allow(clippy::result_large_err)]
+    fn cleaned(&self) -> Result<(ScopeList, ScopeList), Response> {
+        let clean = |list: &ScopeList, field: &str| {
+            list.as_deref()
+                .map(crate::db::routing::clean_scope_list)
+                .transpose()
+                .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("{field}: {e}")))
+        };
+        Ok((clean(&self.covers, "covers")?, clean(&self.avoids, "avoids")?))
+    }
+}
 
 /// Which sites the bot's browser may open; a field left out stays as it is.
 #[derive(Debug, Default, Deserialize)]
@@ -264,6 +293,8 @@ pub async fn create_kwant(
     if let Some(msg) = crate::import::check_persona_caps(&payload.base.persona_prompt, &payload.base.soul) {
         return Err(api_error(StatusCode::BAD_REQUEST, &msg));
     }
+    let (allowed_sites, blocked_sites) = payload.browser.normalized()?;
+    let (covers, avoids) = payload.scope.cleaned()?;
     validate_kwant_name(&state, &space, &mut payload.base.name, None).await?;
     check_binding(&state, &space, &payload.binding, &payload.base.preferred_model)
         .await
@@ -271,6 +302,15 @@ pub async fn create_kwant(
     let clash = format!("a bot called {} already exists in this space", payload.base.name);
     let kwant = state.db.create_kwant(&space, &payload.base).await.map_err(|e| db_error(&e, &clash))?;
     save_binding(&state, &kwant.id, &payload.binding).await.map_err(IntoResponse::into_response)?;
+    // A new bot's site rules only narrow what it may open, so a bot creating one may set them too
+    state
+        .db
+        .set_browser_sites(&kwant.id, allowed_sites.as_deref(), blocked_sites.as_deref(), payload.browser.browser_block_private_network)
+        .await
+        .map_err(|e| db_error(&e, ""))?;
+    if covers.iter().chain(avoids.iter()).any(|list| !list.is_empty()) {
+        state.db.set_scope(&kwant.id, covers.as_deref(), avoids.as_deref()).await.map_err(|e| db_error(&e, ""))?;
+    }
     ensure_general(&state, &space, &kwant.id).await;
     kwant_view_json(&state, &kwant.id).await.map_err(IntoResponse::into_response)
 }
@@ -328,6 +368,7 @@ pub async fn update_kwant(
     check_binding(&state, &space, &payload.binding, &payload.base.preferred_model)
         .await
         .map_err(IntoResponse::into_response)?;
+    let (covers, avoids) = payload.scope.cleaned()?;
     let clash = format!("a bot called {} already exists in this space", payload.base.name);
     match state.db.update_kwant(&id, &payload.base).await {
         Ok(Some(_)) => {}
@@ -340,6 +381,9 @@ pub async fn update_kwant(
         .set_browser_sites(&id, allowed_sites.as_deref(), blocked_sites.as_deref(), payload.browser.browser_block_private_network)
         .await
         .map_err(|e| db_error(&e, ""))?;
+    if covers.is_some() || avoids.is_some() {
+        state.db.set_scope(&id, covers.as_deref(), avoids.as_deref()).await.map_err(|e| db_error(&e, ""))?;
+    }
     kwant_view_json(&state, &id).await.map_err(IntoResponse::into_response)
 }
 
@@ -374,6 +418,13 @@ pub async fn delete_kwant(State(state): State<AppState>, headers: axum::http::He
     if let Err(r) = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person deletes a bot").await {
         return r;
     }
+    remove_bot(&state, &id).await
+}
+
+/// [`delete_kwant`] once it is known the person asked for it (also their Undo of a Concierge card).
+pub(super) async fn remove_bot(state: &AppState, id: &str) -> Response {
+    let state = state.clone();
+    let id = id.to_string();
     let bot = match state.db.get_kwant(&id).await {
         Ok(Some(b)) => b,
         Ok(None) => return api_error(StatusCode::NOT_FOUND, "bot not found"),
@@ -873,6 +924,9 @@ fn execute_single_turn(
     // as its own specialty (the saved message stays as the person wrote it)
     let turn_prompt = if routing.as_ref().is_some_and(|r| r["basis"] == "team") {
         format!("{prompt}\n\n{}", crate::router::team::TEAM_BUILDING_NOTE)
+    } else if let Some(ids) = routing.as_ref().and_then(|r| r["similar_requests"].as_array()) {
+        let ids: Vec<&str> = ids.iter().filter_map(serde_json::Value::as_str).collect();
+        format!("{prompt}\n\n{}", super::concierge::hire_note(&ids))
     } else {
         prompt.clone()
     };
@@ -901,10 +955,25 @@ pub(super) async fn run_routine_turn(
     thread_id: Option<String>,
     prompt: String,
 ) -> Result<Option<String>, String> {
+    run_routed_turn(state, kwant, channel_id, thread_id, prompt, None, Vec::new()).await
+}
+
+/// [`run_routine_turn`] with the routing card for the reply (`meta.routing`) and extra stop keys
+/// (the person's message): a channel message the person routed by choosing a bot, or one a bot
+/// handed back (see [`super::rerouting`]).
+pub(super) async fn run_routed_turn(
+    state: &AppState,
+    kwant: &Kwant,
+    channel_id: Option<String>,
+    thread_id: Option<String>,
+    prompt: String,
+    routing: Option<serde_json::Value>,
+    stop_keys: Vec<String>,
+) -> Result<Option<String>, String> {
     let context_key = thread_id.clone().or_else(|| channel_id.clone()).unwrap_or_else(|| kwant.id.clone());
-    let job = state.turns.start_job([context_key.clone()]);
+    let job = state.turns.start_job(std::iter::once(context_key.clone()).chain(stop_keys));
     let scope = scope_for(state, kwant, channel_id, thread_id, &job, 0).await?;
-    let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts::default()).await;
+    let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts { routing, ..TurnOpts::default() }).await;
     let reply = continue_once_if_capped(&scope, kwant, reply, false).await;
     match reply {
         Ok(text) => {
@@ -2252,6 +2321,7 @@ async fn run_kwant_turn_inner(
                     team_id: scope.team_context.as_ref().map(|t| t.id.clone()),
                     member_ids: scope.teammates.iter().map(|k| k.id.clone()).collect(),
                     depth: scope.delegation_depth,
+                    message_id: opts.routing.as_ref().and_then(|r| r["message_id"].as_str()).map(str::to_string),
                 }),
                 cancel: Some(cancel_token.clone()),
                 turn_id: Some(tag.turn_id.clone()),
@@ -2887,7 +2957,8 @@ async fn send_chat_inner(
             // A plain "…?" reply gives way when the message clearly belongs to another bot
             if !a.card {
                 if let Ok(Some(channel)) = state.db.get_channel(cid).await {
-                    let members = channel_members(&channel, &all_kwants);
+                    let concierge = super::concierge::id(&state, &space, &all_kwants).await;
+                    let members = routing_members(&channel, &all_kwants, concierge.as_deref());
                     if channel.routing_mode == "auto" && members.len() > 1 {
                         let route = state
                             .router
@@ -3114,7 +3185,7 @@ async fn send_chat_inner(
                 // The team router doesn't say which path it took; Laya being down means keywords did
                 let fallback = !state.router.status().is_up();
                 let basis = if basis.is_empty() { "skills".to_string() } else { basis };
-                let routing = routing_meta(&target_kwant, &reason, members.len(), fallback, &matched_terms, &basis);
+                let routing = routing_meta(&target_kwant, &reason, members.len(), fallback, &matched_terms, &basis, &saved_user_msg.id);
                 let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                     context_id: routing_context_id,
                     kwant_id: target_kwant.id.clone(),
@@ -3224,6 +3295,8 @@ async fn send_chat_inner(
     } else {
         // Target single Kwant
         let mut routing = None;
+        // A close call the person settles on a card: (channel, the two bots offered, why)
+        let mut asking: Option<(crate::db::models::Channel, Vec<Kwant>, String)> = None;
         let target_kwant = if let Some(kname) = kwant_mention {
             all_kwants
                 .iter()
@@ -3237,7 +3310,7 @@ async fn send_chat_inner(
         } else if let Some((asker, _)) = awaiting.clone() {
             let reason = format!("{} asked you a question here, so your reply goes back to {}", asker.name, asker.name);
             let candidates = chat_teammates.len().max(1);
-            routing = Some(routing_meta(&asker, &reason, candidates, false, &[], "asked"));
+            routing = Some(routing_meta(&asker, &reason, candidates, false, &[], "asked", &saved_user_msg.id));
             let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                 context_id: payload.channel_id.clone(),
                 kwant_id: asker.id.clone(),
@@ -3258,9 +3331,11 @@ async fn send_chat_inner(
                     .find(|k| k.id == channel.lead_kwant_id)
                     .or_else(|| all_kwants.first())
                     .cloned();
-                let members = channel_members(&channel, &all_kwants);
+                let concierge = super::concierge::id(&state, &space, &all_kwants).await;
+                let members = routing_members(&channel, &all_kwants, concierge.as_deref());
 
                 if channel.routing_mode == "auto" && members.len() > 1 {
+                    let hints = super::rerouting::hints_for(&state, &space, &members).await;
                     let context_id = payload.channel_id.clone();
                     let _ = state.event_sender.send(RuntimeEvent::RoutingStarted {
                         context_id: context_id.clone(),
@@ -3271,19 +3346,60 @@ async fn send_chat_inner(
                         None => {
                             state
                                 .router
-                                .route_channel_query_after(
+                                .route_channel_query_hinted(
                                     &payload.prompt,
                                     &channel.name,
                                     &channel.lead_kwant_id,
                                     &members,
                                     last_speaker.as_deref(),
+                                    &hints,
                                 )
                                 .await
                         }
                     };
-                    let chosen = members.iter().find(|k| k.id == route.kwant_id).cloned().or(lead);
+                    let general = channel.name == "general";
+                    // #general leans to the Concierge when nothing fits (made now, the first time,
+                    // unless the person removed it); anywhere else the pick stands
+                    let mut route = route;
+                    // Earlier requests like this one the Concierge answered, when it should suggest a hire
+                    let mut similar: Option<Vec<String>> = None;
+                    let mut chosen = members.iter().find(|k| k.id == route.kwant_id).cloned().or(lead);
+                    let removed = matches!(super::concierge::state(&state, &space, &all_kwants).await, super::concierge::State::Removed);
+                    match crate::router::team::settle(&route, general, !removed) {
+                        crate::router::team::Settle::Concierge => {
+                            if let Some(c) = super::concierge::for_no_match(&state, &space, &channel.id, &all_kwants).await {
+                                route.reason = format!(
+                                    "Nothing in your message fits a specialist here, so {} answers it",
+                                    c.name
+                                );
+                                route.basis = "concierge".into();
+                                route.kwant_id = c.id.clone();
+                                similar = super::concierge::similar_requests(&state, &space, &saved_user_msg.id, &payload.prompt, &c.id).await;
+                                chosen = Some(c);
+                            }
+                        }
+                        crate::router::team::Settle::Ask(ids) => {
+                            let offered: Vec<Kwant> =
+                                ids.iter().filter_map(|id| members.iter().find(|k| &k.id == id).cloned()).collect();
+                            if offered.len() == 2 {
+                                route.reason = format!(
+                                    "This could be for {} or {}, so you're asked who answers",
+                                    offered[0].name, offered[1].name
+                                );
+                                route.basis = "ask".into();
+                                asking = Some((channel.clone(), offered, route.reason.clone()));
+                            }
+                        }
+                        crate::router::team::Settle::Route => {}
+                    }
                     if let Some(ref k) = chosen {
-                        routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms, &route.basis));
+                        routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms, &route.basis, &saved_user_msg.id));
+                        if let Some(m) = routing.as_mut() {
+                            m["fit"] = json!(route.fit);
+                            if let Some(ids) = similar.take() {
+                                m["similar_requests"] = json!(ids);
+                            }
+                        }
                         let _ = state.event_sender.send(RuntimeEvent::RoutingDecided {
                             context_id,
                             kwant_id: k.id.clone(),
@@ -3309,6 +3425,12 @@ async fn send_chat_inner(
         }
         .ok_or(StatusCode::BAD_REQUEST)?;
 
+        if let Some((channel, offered, reason)) = asking {
+            // No turn until the person chooses (POST /api/route-choices/:id/resolve)
+            drop(job);
+            let v = super::rerouting::ask(&state, &space, &channel, &all_kwants, &saved_user_msg.id, &payload.prompt, &offered, &reason).await?;
+            return Ok(Json(v));
+        }
         let team_keys = active_team.as_ref().map(|t| (t.id.clone(), t.name.clone()));
         execute_single_turn(
             state.clone(),
@@ -3330,6 +3452,12 @@ async fn send_chat_inner(
     }
 }
 
+/// The bots role scoring picks from in `channel`: its members without the Concierge, which only
+/// answers what no one else fits (see `super::concierge`).
+pub(super) fn routing_members(channel: &crate::db::models::Channel, all_kwants: &[Kwant], concierge: Option<&str>) -> Vec<Kwant> {
+    channel_members(channel, all_kwants).into_iter().filter(|k| Some(k.id.as_str()) != concierge).collect()
+}
+
 /// The bots a channel message can be routed to. #general is the hub for every agent, including
 /// ones created after it was seeded; channels made before the lead was always a member still
 /// count the lead.
@@ -3344,10 +3472,12 @@ fn channel_members(channel: &crate::db::models::Channel, all_kwants: &[Kwant]) -
         .collect()
 }
 
-/// A reply's `meta.routing`: who Laya picked for a channel or team message and why.
-fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String], basis: &str) -> serde_json::Value {
+/// The `meta.routing` a routed reply carries. `message_id` is the person's message it answers,
+/// so "Wrong bot?" corrects and resends that message, not just the latest one.
+pub(super) fn routing_meta(kwant: &Kwant, reason: &str, candidates: usize, fallback: bool, terms: &[String], basis: &str, message_id: &str) -> serde_json::Value {
     json!({
         "basis": basis,
+        "message_id": message_id,
         "kwant_id": kwant.id,
         "kwant_name": kwant.name,
         "reason": reason,
@@ -4729,18 +4859,10 @@ pub async fn act_sandbox_allowed(
         )),
     };
     // A page the action led to that the bot's site rules refused (a link, redirect or new tab):
-    // the request is paused just after the click, so wait a moment for it, then go back from
-    // Chrome's error page to where the bot was
-    let mut refused = ctrl.site_guard.take_refusal();
-    if ctrl.site_guard.is_running() {
-        for _ in 0..3 {
-            if refused.is_some() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            refused = ctrl.site_guard.take_refusal();
-        }
-    }
+    // the request is paused just after a click, so wait a moment for it (not after a scroll or
+    // plain typing, which can't navigate), then go back from Chrome's error page to where the bot was
+    let may_navigate = crate::sandbox::site_guard::may_navigate(&payload.action, payload.key.as_deref());
+    let mut refused = ctrl.site_guard.refusal_after(may_navigate).await;
     if refused.is_some() {
         ctrl.leave_refused_page().await;
     }
@@ -4758,6 +4880,14 @@ pub async fn act_sandbox_allowed(
         after = ctrl.snapshot().await;
         changed = diff(&after);
     }
+    // A refusal that arrived after the wait (or after an action that skipped it): leave that page too
+    if refused.is_none() {
+        refused = ctrl.site_guard.take_refusal();
+        if refused.is_some() {
+            ctrl.leave_refused_page().await;
+            after = ctrl.snapshot().await;
+        }
+    }
     let stall = ctrl.progress.lock().unwrap_or_else(|e| e.into_inner()).after(changed.is_some());
     let mut page = page_state_from(&ctrl, after, "").await;
     page["changed"] = json!(changed.as_deref().unwrap_or("Nothing on the page changed."));
@@ -4765,7 +4895,7 @@ pub async fn act_sandbox_allowed(
         Ok(done) => page["result"] = json!(done),
         Err(err) => page["error"] = json!(err),
     }
-    if let Some(refusal) = refused.or_else(|| ctrl.site_guard.take_refusal()) {
+    if let Some(refusal) = refused {
         page["error"] = json!(refusal.message);
         page["site_rule"] = json!(refusal);
     }

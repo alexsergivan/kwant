@@ -24,6 +24,7 @@ import { asSchedule, scheduleWords } from '../botActions';
 import type { Channel, Kwant } from './Sidebar';
 import { playSfx } from '../audio/chiptune';
 import { SuggestedRoutines } from './SuggestedRoutines';
+import { editorProps } from '../escape';
 
 const smallBtn =
   'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
@@ -112,7 +113,7 @@ export const RoutineForm: React.FC<{
   const base = initial ?? seed;
   const initialChannel = base?.thread_id ? IN_THREAD : base?.channel_id ?? '';
   const initialSchedule = base ? asSchedule(base.schedule) : null;
-  const [f, setF] = useState<FormState>(() => ({
+  const [start] = useState<FormState>(() => ({
     kwantId: base?.kwant_id ?? fixedKwantId ?? kwants[0]?.id ?? '',
     channelId: initialChannel,
     name: base?.name ?? '',
@@ -120,6 +121,9 @@ export const RoutineForm: React.FC<{
     enabled: initial?.enabled ?? true,
     schedule: initialSchedule ? formFromSchedule(initialSchedule) : emptyScheduleForm(),
   }));
+  const [f, setF] = useState<FormState>(start);
+  // Escape closes an untouched form and keeps one with changes (and Settings around it) open.
+  const unsaved = JSON.stringify(f) !== JSON.stringify(start);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const s = f.schedule;
@@ -161,7 +165,7 @@ export const RoutineForm: React.FC<{
   const id = (k: string) => `${uid}-${k}`;
 
   return (
-    <form onSubmit={submit} noValidate className="p-3 rounded-xl border border-sky-500/30 bg-zinc-950/70 space-y-3" aria-label={label ?? (initial ? `Edit ${initial.name}` : 'New routine')}>
+    <form onSubmit={submit} noValidate {...editorProps(unsaved, onCancel)} className="p-3 rounded-xl border border-sky-500/30 bg-zinc-950/70 space-y-3" aria-label={label ?? (initial ? `Edit ${initial.name}` : 'New routine')}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label htmlFor={id('name')} className={labelClass}>Name</label>
@@ -488,7 +492,7 @@ export const RoutineRow: React.FC<{
         <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-controls={historyId} className={quietBtn}>
           {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />} <History size={11} /> History
         </button>
-        <button type="button" onClick={onEdit} className={quietBtn}>
+        <button type="button" onClick={onEdit} className={quietBtn} data-routine-edit={routine.id}>
           <Pencil size={11} /> Edit
         </button>
         <button
@@ -571,9 +575,19 @@ export const RoutinesPanel: React.FC<{
     setEditing(null);
     reload();
   };
+  // A form that closes (Escape, Cancel, Save) gives focus back to New routine or the routine's Edit.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const wasEditing = useRef<Routine | 'new' | null>(null);
+  useEffect(() => {
+    const was = wasEditing.current;
+    wasEditing.current = editing;
+    const a = document.activeElement;
+    if (editing || !was || (a && a !== document.body && a.isConnected)) return;
+    wrapRef.current?.querySelector<HTMLElement>(was === 'new' ? '[data-routine-new]' : `[data-routine-edit="${was.id}"]`)?.focus();
+  }, [editing]);
 
   return (
-    <div className="space-y-3">
+    <div ref={wrapRef} className="space-y-3">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] text-zinc-500 leading-relaxed">
           A routine posts its instructions to the bot on a schedule, then the bot answers as usual.
@@ -583,6 +597,7 @@ export const RoutinesPanel: React.FC<{
             type="button"
             onClick={() => setEditing('new')}
             disabled={kwants.length === 0}
+            data-routine-new
             className={`${smallBtn} shrink-0 border-sky-500/50 bg-sky-600 text-white hover:bg-sky-500`}
           >
             <Plus size={11} /> New routine

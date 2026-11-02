@@ -122,8 +122,8 @@ or per visit can make a link miss later.
 
 ## Sites a bot may open
 
-Each bot has three optional settings, set by the person on `PUT /api/kwants/:id` and shown on the
-bot's read routes:
+Each bot has three optional settings, set by the person on `PUT /api/kwants/:id` (or when creating
+the bot, `POST /api/kwants`) and shown on the bot's read routes:
 
 - `browser_allowed_sites`: when not empty, the bot's browser opens only these sites.
 - `browser_blocked_sites`: never these. The block-list wins over the allow-list.
@@ -135,7 +135,12 @@ An entry is a host: `example.com` covers the site and all its subdomains, `*.exa
 subdomains, and an IP matches only itself. Entries are lowercased, a pasted URL keeps only its host,
 and international names are stored as punycode. A bad entry (empty, `*`, a wildcard inside a name
 or on an IP) refuses the whole update with a 400. There are at most 200 entries per list. A bot's
-own token can't change these settings (403); only the person can.
+own token can't change these settings (403); only the person can. A bot may set them when it
+creates another bot, since they only narrow what the new bot may open.
+
+A bot's export (`kwant.bundle/1`) carries the three settings when they are set, and importing it
+restores them, so a copied bot keeps its limits. The import preview names them in a warning, and a
+bad entry in the file stops the import as a problem naming it.
 
 With both lists empty and the setting off, nothing is checked and nothing extra runs, exactly as
 before. Otherwise every navigation the bot causes is checked: the address it opens (refused before
@@ -144,6 +149,10 @@ documents) the link it clicks, any redirect and any new tab the page opens. A re
 stopped in the browser (`ERR_BLOCKED_BY_CLIENT`). The bot's action reply carries `error` with a
 message that names the rule, and a `site_rule` with `rule`, `host`, `url`, `entry` and `message`.
 Whatever the person does in live control (`/interact`, the stream, take control) is never checked.
+
+With rules on, a bot action that can load a page (a click, or the Enter or Space key) waits up to
+0.3 s for a refusal before replying. A scroll, typing and other keys don't wait. A refusal that
+arrives later still comes back on that reply if it's there by the end, or on the bot's next action.
 
 Limits: only top-level pages are checked. Frames, images, scripts and `fetch`/XHR from an allowed
 page are not, so this sets which sites a bot visits; it is not a network firewall. The

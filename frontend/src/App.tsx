@@ -4,6 +4,7 @@ import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
 import { InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
+import { useSettingsCover } from './settingsFocus';
 import { FirstRunWelcome } from './components/FirstRunWelcome';
 import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } from './components/ChatView';
@@ -33,6 +34,8 @@ import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './m
 import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, changesBots, decisionError, hiresApi } from './botActions';
 import { BotActionCard, type BotActionDecision } from './components/BotActionCard';
 import { HireCard, type HireDecision } from './components/HireCard';
+import { RouteChoiceCard } from './components/RouteChoiceCard';
+import { RouteChoiceMeta, applyRouteChoice, correctRoute, isAskingReply, rerouteTargetsFor, resolveRouteChoice } from './routeChoice';
 import type { RoutineFocus } from './components/RoutinesPanel';
 import { AwayPage } from './components/AwayView';
 import { LooseEndsPage } from './components/LooseEndsView';
@@ -302,6 +305,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const engines = useEngines(true);
   const canRun = canRunNow(engines.engines);
   const offerClaude = canRun === false && claudeNeedsSignIn(engines.engines);
+  // The sidebar and chat under Settings: inert while it's open (the space rail stays usable).
+  const contentRef = useRef<HTMLDivElement>(null);
+  useSettingsCover(!!spaceSettingsTab, contentRef);
   const closeSpaceSettings = () => {
     setSpaceSettingsTab(null);
     setSettingsClosedCount((n) => n + 1);
@@ -628,6 +634,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Cards for changes bots made (bot_action_updated) and hire proposals (hire_updated), by id.
   const [botActions, setBotActions] = useState<Record<string, BotActionMeta>>({});
   const [hires, setHires] = useState<Record<string, HireMeta>>({});
+  // Laya's "Who should answer this?" cards, by route_choice_id (route_choice_updated).
+  const [routeChoices, setRouteChoices] = useState<Record<string, RouteChoiceMeta>>({});
 
   // Virtual Machine & Live Browser state
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
@@ -923,6 +931,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'BotActionUpdated': {
             const a = event.data?.action;
             if (a?.id) setBotActions((prev) => applyBotAction(prev, a));
+            break;
+          }
+          case 'route_choice_updated':
+          case 'RouteChoiceUpdated': {
+            const c = event.data?.choice;
+            if (c) setRouteChoices((prev) => applyRouteChoice(prev, c));
             break;
           }
           case 'hire_updated':
@@ -1358,6 +1372,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           // no JSON body
         }
         throw new Error(message);
+      }
+      const reply = await res.json().catch(() => null);
+      if (isAskingReply(reply)) {
+        // A close call: Laya posted "Who should answer this?" and nothing runs until the person picks.
+        if (turnsIn(turnsRef.current, targetId).length === 0) clearLive(targetId);
+        if (streamingContextIdRef.current === targetId) {
+          setRoutingState(null);
+          streamingContextIdRef.current = null;
+        }
       }
       return true;
     } catch (err) {
@@ -1923,6 +1946,35 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         botIds={botIds}
       />
     );
+  };
+
+  const renderRouteChoice = (msg: ChatMessage, meta: RouteChoiceMeta, flash: boolean, question?: string) => (
+    <RouteChoiceCard
+      meta={meta}
+      messageId={msg.id}
+      live={routeChoices[meta.route_choice_id]}
+      question={question}
+      flash={flash}
+      onResolve={async (id, pick) => {
+        haptic('tap');
+        const r = await resolveRouteChoice(id, pick);
+        if (r.kind === 'error') haptic('warning');
+        return r;
+      }}
+    />
+  );
+
+  /** "Wrong bot?": teach routing that this message is the other bot's, then ask that bot now. */
+  const handleSendToOtherBot = async (question: ChatMessage, kwantId: string): Promise<string | void> => {
+    haptic('tap');
+    const err = await correctRoute(question.id, kwantId);
+    if (err) {
+      haptic('warning');
+      return err;
+    }
+    const name = kwants.find((k) => k.id === kwantId)?.name;
+    if (!name) return 'That bot is gone.';
+    if (!(await handleSendMessage(`@${name} ${question.text}`))) return `Routing learned, but ${name} wasn’t asked. Send it again with @${name}.`;
   };
 
   const renderDelegation = (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => {
@@ -2985,6 +3037,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           renderConnectionSuggestion={renderConnectionSuggestion}
           renderBotAction={renderBotAction}
           renderHire={renderHire}
+          renderRouteChoice={renderRouteChoice}
+          rerouteTargets={openThreadId ? [] : rerouteTargetsFor(currentChannel, kwants)}
+          onSendToOtherBot={openThreadId ? undefined : handleSendToOtherBot}
           awaitingAnswer={awaitingHere}
           awaitingBrowser={awaitingBrowserHere}
           liveActivity={isCurrentContextStreaming ? activityHere : null}
@@ -3042,71 +3097,73 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
 
   return (
-    <div className="flex-1 min-w-0 h-full flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden" data-space={space.id}>
+    <div className="relative flex-1 min-w-0 h-full flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden" data-space={space.id}>
       {/* The open space's colour, so it's clear where a message goes */}
       <div className="h-[3px] shrink-0 opacity-60" style={{ background: spaceColor(space) }} aria-hidden="true" />
 
-      {isPhone ? (
-        <>
-          {showPhoneList || needsSetup ? (
-            <div className="flex-1 min-h-0 flex flex-col">
-              {needsSetup ? (
-                <>
-                  {sidebar('chats')}
-                  {setupChecklist}
-                </>
-              ) : (
-                sidebar(phoneTab === 'bots' ? 'bots' : 'chats')
-              )}
-            </div>
-          ) : (
-            <div className="flex-1 min-h-0 flex">{mainPane}</div>
-          )}
-          {(showPhoneList || needsSetup) && (
-            <nav aria-label={`${space.name} sections`} className="shrink-0 grid grid-cols-4 border-t border-zinc-800 bg-zinc-900/95 pb-[env(safe-area-inset-bottom)]">
-              {phoneTabs.map((t) => {
-                const active = t.id === phoneTab;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    aria-current={active ? 'page' : undefined}
-                    onClick={() => {
-                      playSfx('click');
-                      if (t.id === 'inbox') {
-                        showPage('inbox');
-                        return;
-                      }
-                      if (t.id === 'space') {
-                        // Nothing can run yet: the fix is in Accounts, so start there
-                        openSpaceSettings(canRun === false ? 'accounts' : 'general');
-                        return;
-                      }
-                      setPhoneTab(t.id);
-                    }}
-                    className={`relative flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500 ${
-                      active ? 'text-sky-300' : 'text-zinc-400 hover:text-zinc-200'
-                    }`}
-                  >
-                    {t.icon}
-                    {t.label}
-                    {!!t.badge && (
-                      <span className="absolute top-1 left-1/2 ml-2 min-w-[16px] px-1 rounded-full bg-amber-500 text-zinc-950 text-[9px] font-semibold text-center">
-                        {badgeText(t.badge)}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
-          )}
-        </>
-      ) : (
-        <div className="flex-1 min-h-0 flex overflow-hidden">
-          {sidebar('all')}
-          {mainPane}
-        </div>
-      )}
+      <div ref={contentRef} className={`flex-1 min-h-0 flex ${isPhone ? 'flex-col' : 'overflow-hidden'}`}>
+        {isPhone ? (
+          <>
+            {showPhoneList || needsSetup ? (
+              <div className="flex-1 min-h-0 flex flex-col">
+                {needsSetup ? (
+                  <>
+                    {sidebar('chats')}
+                    {setupChecklist}
+                  </>
+                ) : (
+                  sidebar(phoneTab === 'bots' ? 'bots' : 'chats')
+                )}
+              </div>
+            ) : (
+              <div className="flex-1 min-h-0 flex">{mainPane}</div>
+            )}
+            {(showPhoneList || needsSetup) && (
+              <nav aria-label={`${space.name} sections`} className="shrink-0 grid grid-cols-4 border-t border-zinc-800 bg-zinc-900/95 pb-[env(safe-area-inset-bottom)]">
+                {phoneTabs.map((t) => {
+                  const active = t.id === phoneTab;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      aria-current={active ? 'page' : undefined}
+                      onClick={() => {
+                        playSfx('click');
+                        if (t.id === 'inbox') {
+                          showPage('inbox');
+                          return;
+                        }
+                        if (t.id === 'space') {
+                          // Nothing can run yet: the fix is in Accounts, so start there
+                          openSpaceSettings(canRun === false ? 'accounts' : 'general');
+                          return;
+                        }
+                        setPhoneTab(t.id);
+                      }}
+                      className={`relative flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500 ${
+                        active ? 'text-sky-300' : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      {t.icon}
+                      {t.label}
+                      {!!t.badge && (
+                        <span className="absolute top-1 left-1/2 ml-2 min-w-[16px] px-1 rounded-full bg-amber-500 text-zinc-950 text-[9px] font-semibold text-center">
+                          {badgeText(t.badge)}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </nav>
+            )}
+          </>
+        ) : (
+          <>
+            {sidebar('all')}
+            {mainPane}
+          </>
+        )}
+      </div>
 
       {/* New bot */}
       <Suspense fallback={null}>
@@ -3229,6 +3286,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             </Suspense>
           }
           routineFocus={routineFocus}
+          isPhone={isPhone}
           onApprovalsChanged={refreshRoster}
           onImported={() => {
             // New bots, teams and their team chats.

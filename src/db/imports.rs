@@ -194,8 +194,9 @@ impl Database {
             let id = Uuid::new_v4().to_string();
             let avatar = bot.avatar_hint.as_deref().filter(|a| AVATARS.contains(a)).unwrap_or("default");
             sqlx::query(
-                "INSERT INTO kwants (id, name, title, persona_prompt, soul, avatar_sprite, driver_type, preferred_model, space_id)
-                 VALUES (?, ?, ?, ?, ?, ?, 'api', 'auto', ?)",
+                "INSERT INTO kwants (id, name, title, persona_prompt, soul, avatar_sprite, driver_type, preferred_model, space_id,
+                                     browser_allowed_sites, browser_blocked_sites, browser_block_private_network)
+                 VALUES (?, ?, ?, ?, ?, ?, 'api', 'auto', ?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(&bot.name)
@@ -204,8 +205,19 @@ impl Database {
             .bind(&bot.soul)
             .bind(avatar)
             .bind(space.as_str())
+            .bind(serde_json::to_string(&bot.browser_allowed_sites).unwrap_or_else(|_| "[]".into()))
+            .bind(serde_json::to_string(&bot.browser_blocked_sites).unwrap_or_else(|_| "[]".into()))
+            .bind(bot.browser_block_private_network)
             .execute(&mut *tx)
             .await?;
+            if !bot.covers.is_empty() || !bot.avoids.is_empty() {
+                sqlx::query("INSERT INTO kwant_scope (kwant_id, covers, avoids) VALUES (?, ?, ?)")
+                    .bind(&id)
+                    .bind(serde_json::to_string(&bot.covers)?)
+                    .bind(serde_json::to_string(&bot.avoids)?)
+                    .execute(&mut *tx)
+                    .await?;
+            }
             // No tools: opted out of every MCP server the space has now.
             sqlx::query("INSERT OR IGNORE INTO kwant_mcp_disabled (kwant_id, server_id) SELECT ?, id FROM mcp_servers WHERE space_id = ?")
                 .bind(&id)
@@ -357,6 +369,7 @@ impl Database {
                 "DELETE FROM kwant_memories WHERE kwant_id = ?",
                 "DELETE FROM kwant_mcp_disabled WHERE kwant_id = ?",
                 "DELETE FROM kwant_mcp_servers WHERE kwant_id = ?",
+                "DELETE FROM kwant_scope WHERE kwant_id = ?",
             ] {
                 sqlx::query(sql).bind(&k.id).execute(&mut *tx).await?;
             }
@@ -450,6 +463,8 @@ impl Database {
         })
         .collect();
         let tool_hints = self.list_active_mcp_servers_for_kwant(&k.id).await?.into_iter().map(|s| s.name).collect();
+        let sites = self.browser_sites(&k.id).await?;
+        let scope = self.get_scope(&k.id).await?;
         Ok(BotSpec {
             ref_: k.name.clone(),
             name: k.name.clone(),
@@ -462,6 +477,11 @@ impl Database {
             skills,
             routines,
             tool_hints,
+            browser_allowed_sites: sites.browser_allowed_sites,
+            browser_blocked_sites: sites.browser_blocked_sites,
+            browser_block_private_network: sites.browser_block_private_network,
+            covers: scope.covers,
+            avoids: scope.avoids,
             ..BotSpec::default()
         })
     }

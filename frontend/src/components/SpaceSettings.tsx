@@ -38,6 +38,7 @@ import { SpaceApprovalsSetting } from './ApprovalsSetting';
 
 import type { SettingsScope, SpaceSettingsTab } from '../nav';
 import { InstallAppButton } from './InstallAppButton';
+import { editorProps, useEscapeLayer } from '../escape';
 
 export type { SettingsScope, SpaceSettingsTab };
 
@@ -85,6 +86,8 @@ interface Props {
   onOpenTools: () => void;
   /** Set by a routine card's Edit or Pause: opens that routine in Routines. */
   routineFocus?: RoutineFocus | null;
+  /** Phones get a full-screen dialog; desktop keeps the space rail beside Settings. */
+  isPhone?: boolean;
   /** After an import or its undo: load bots, teams and chats again. */
   onImported?: () => void;
   /** After the approvals switch changes: load bots and spaces again (no event fires). */
@@ -111,24 +114,28 @@ export const SpaceSettings: React.FC<Props> = (p) => {
   // Bumped after the dialog imports or undoes, so the Import tab's list loads again.
   const [importsSeq, setImportsSeq] = useState(0);
   const tp: TabProps = { ...p, onOpenImport: () => setImportOpen(true), importsSeq };
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Escape closes Settings, but not while a dialog opened from here is open (the bot editor, Tools),
+  // and not while an editor in it holds typed text.
+  useEscapeLayer(rootRef, true, onClose, { covered: () => !!document.querySelector('[role="dialog"]:not([data-space-settings])') });
+  // Focus starts on the title (from the gear, Ctrl/⌘ 1–9 or a link), unless a tab already focused
+  // something inside, or a space was picked on the rail, which keeps focus there.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // Dialogs opened from here (bot editor, tools) close themselves first.
-      if (e.key === 'Escape' && !document.querySelector('[role="dialog"]:not([data-space-settings])')) closeRef.current();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const a = document.activeElement;
+    if (rootRef.current?.contains(a) || a?.closest('[data-rail-space]')) return;
+    rootRef.current?.querySelector<HTMLElement>('#space-settings-title')?.focus();
   }, []);
 
   return (
+    // A full-screen dialog on phones. On desktop it fills the space's area beside the space rail,
+    // which stays clickable: picking another space keeps Settings open there.
     <div
-      role="dialog"
-      aria-modal="true"
+      ref={rootRef}
+      role={p.isPhone ? 'dialog' : 'region'}
+      aria-modal={p.isPhone ? true : undefined}
       aria-labelledby="space-settings-title"
       data-space-settings
-      className="fixed inset-0 z-40 bg-zinc-950 text-zinc-100 flex flex-col md:flex-row overflow-hidden"
+      className={`${p.isPhone ? 'fixed' : 'absolute'} inset-0 z-40 bg-zinc-950 text-zinc-100 flex flex-col md:flex-row overflow-hidden`}
     >
       {/* Tab list: a column on desktop, scrolling chips on phones */}
       <div className="md:w-60 shrink-0 border-b md:border-b-0 md:border-r border-zinc-800/80 bg-zinc-900/40 flex flex-col">
@@ -136,7 +143,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
           <button type="button" onClick={onClose} aria-label="Back to chats" className="p-1.5 -ml-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800">
             <ArrowLeft size={17} />
           </button>
-          <h2 id="space-settings-title" className="text-sm font-semibold truncate">Settings</h2>
+          <h2 id="space-settings-title" tabIndex={-1} className="text-sm font-semibold truncate focus:outline-none">Settings</h2>
         </div>
         {/* Which settings: this space's, or the ones every space shares */}
         <div role="tablist" aria-label="Settings scope" className="mx-3 md:mx-2 mb-3 grid grid-cols-2 gap-1 rounded-lg bg-zinc-900 border border-zinc-800 p-0.5">
@@ -394,7 +401,7 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, onSpaceSaved, onAr
 
   return (
     <>
-      <form onSubmit={save} className={`${card} p-4 space-y-4`}>
+      <form onSubmit={save} {...editorProps(dirty)} className={`${card} p-4 space-y-4`}>
         <div className="flex items-center gap-3">
           <SpaceTile space={{ id: space.id, icon, color: color || null }} size={44} />
           <div className="flex-1 min-w-0">

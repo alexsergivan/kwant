@@ -181,6 +181,22 @@ fn system_resolve(name: &str, port: u16) -> Option<Vec<IpAddr>> {
     rx.recv_timeout(std::time::Duration::from_secs(2)).ok().flatten()
 }
 
+/// How long a bot action that may load a page waits for the guard to refuse it.
+pub const NAVIGATION_WAIT: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Whether a bot action (`act`'s `action`, and `key` for a key press) can load a page: a click,
+/// and Enter or Space (which follow a focused link or press a focused button). A scroll, plain
+/// typing and other keys can't, so they skip [`NAVIGATION_WAIT`]. A page script that navigates on
+/// some other key is still refused by the guard; the bot hears of it on the same reply if the
+/// refusal arrives in time, else on its next action.
+pub fn may_navigate(action: &str, key: Option<&str>) -> bool {
+    match action {
+        "scroll" | "type" => false,
+        "key" => matches!(key.unwrap_or("Enter"), "Enter" | " " | "Space" | "Spacebar"),
+        _ => true,
+    }
+}
+
 /// Who caused the browser's latest action: the bot (checked) or the person (never checked).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Actor {
@@ -270,6 +286,25 @@ impl SiteGuard {
     /// Whether the guard task is intercepting now.
     pub fn is_running(&self) -> bool {
         self.lock().task.as_ref().is_some_and(|t| !t.is_finished())
+    }
+
+    /// A refusal the bot's latest action caused. The guard pauses a refused request just after
+    /// the action, so one that [`may_navigate`] waits up to [`NAVIGATION_WAIT`] for it; one that
+    /// can't (a scroll, plain typing) only takes what is already there.
+    pub async fn refusal_after(&self, may_navigate: bool) -> Option<Refusal> {
+        let mut refused = self.take_refusal();
+        if !may_navigate || !self.is_running() {
+            return refused;
+        }
+        let step = NAVIGATION_WAIT / 3;
+        for _ in 0..3 {
+            if refused.is_some() {
+                break;
+            }
+            tokio::time::sleep(step).await;
+            refused = self.take_refusal();
+        }
+        refused
     }
 
     /// The bot's rules on `url`, with the name lookup off the async runtime.
@@ -462,6 +497,38 @@ async fn request(ws: &mut WsStream, id: u64, msg: Value, early: &mut Vec<Value>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_clicks_enter_and_space_may_navigate() {
+        for (action, key) in [("click", None), ("click_text", None), ("key", None), ("key", Some("Enter")), ("key", Some(" ")), ("key", Some("Space"))] {
+            assert!(may_navigate(action, key), "{action} {key:?}");
+        }
+        for (action, key) in [("scroll", None), ("type", None), ("key", Some("Tab")), ("key", Some("Escape")), ("key", Some("ArrowDown"))] {
+            assert!(!may_navigate(action, key), "{action} {key:?}");
+        }
+    }
+
+    /// With rules on (the guard task running) and nothing refused, a scroll returns at once and
+    /// a click waits for a refusal; a refusal already there comes back either way.
+    #[tokio::test]
+    async fn an_action_that_cant_navigate_skips_the_wait() {
+        let guard = SiteGuard::default();
+        guard.set_task(tokio::spawn(std::future::pending::<()>()));
+        assert!(guard.is_running());
+
+        let t = std::time::Instant::now();
+        assert!(guard.refusal_after(may_navigate("scroll", None)).await.is_none());
+        let scroll = t.elapsed();
+        let t = std::time::Instant::now();
+        assert!(guard.refusal_after(may_navigate("click", None)).await.is_none());
+        let click = t.elapsed();
+        assert!(scroll < NAVIGATION_WAIT / 3, "scroll waited {scroll:?}");
+        assert!(click >= NAVIGATION_WAIT, "click waited only {click:?}");
+
+        let refusal = Refusal { rule: ALLOWED, host: "x.com".into(), url: "https://x.com/".into(), entry: None, message: "no".into() };
+        guard.refused(refusal.clone());
+        assert_eq!(guard.refusal_after(false).await, Some(refusal));
+    }
 
     fn rules(allowed: &[&str], blocked: &[&str], block_private: bool) -> SiteRules {
         SiteRules {
