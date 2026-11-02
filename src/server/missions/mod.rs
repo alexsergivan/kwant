@@ -682,6 +682,9 @@ pub async fn mission_json(state: &AppState, m: &Mission) -> Value {
         obj.insert("reserved_tokens".into(), json!(reserved));
         obj.insert("over_budget".into(), json!(m.budget_tokens > NO_LIMIT && m.spent_tokens >= m.budget_tokens));
         obj.insert("counts".into(), Value::Object(counts));
+        // The goal this mission restores (`goal` stays the mission's own text)
+        let link = state.db.goal_link_of_mission(&m.id).await.ok().flatten();
+        obj.insert("goal_link".into(), link.map_or(Value::Null, |(id, title)| json!({"id": id, "title": title})));
     }
     v
 }

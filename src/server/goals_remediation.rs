@@ -201,7 +201,11 @@ async fn incident_of(state: &AppState, goal: &Goal) -> i64 {
 /// One pass: settle what open remediations did, answer the re-checks, tell about recoveries, then
 /// open what the caps allow.
 pub async fn tick(state: &AppState) {
-    let now = now_ms();
+    tick_at(state, now_ms()).await;
+}
+
+/// [`tick`] at a given time, so the cooldown and the day windows can be tested.
+pub async fn tick_at(state: &AppState, now: i64) {
     settle_links(state, now).await;
     settle_rechecks(state, now).await;
     recovered_notices(state, now).await;
@@ -623,7 +627,6 @@ async fn open_mission(state: &AppState, goal: &Goal, incident_at: i64, attempts:
         PlanPlace { workspace_path: goal.folder.clone(), ..PlanPlace::default() },
     )
     .await
-    .map_err(|e| tracing::warn!(goal = %goal.id, error = %e, "goal remediation: plan refused"))
     .ok()?;
     let inv = tasks.iter().find(|t| t.title.starts_with("Investigate:"))?;
     let fix = tasks.iter().find(|t| t.title.starts_with("Fix:"))?;
