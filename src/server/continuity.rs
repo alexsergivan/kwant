@@ -327,6 +327,9 @@ pub struct TurnOrigin {
     pub member_ids: Vec<String>,
     /// 0 in user chats, 1 in a delegation thread, …
     pub depth: i64,
+    /// The person's channel message kwnt routed to this turn (its reply's `meta.routing.message_id`);
+    /// `hand_back` hands on exactly this one. `None` for @mentions, DMs and other unrouted turns.
+    pub message_id: Option<String>,
 }
 
 /// The synthetic http MCP server a turn reaches its own tools through. The token travels as a
