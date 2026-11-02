@@ -11,6 +11,8 @@ use kwnt::{
     tools::ToolRunner,
 };
 use serde_json::json;
+use sqlx::sqlite::SqlitePoolOptions;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
 use tower::ServiceExt;
 
@@ -151,6 +153,50 @@ async fn test_teams_api_endpoints() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// A team made while another connection is writing waits for it instead of a 500 "database
+/// error": the create checks the name before it writes, and SQLite fails a transaction's first
+/// write at once when the lock is taken after it has read. Seen as a `delegation_test` flake,
+/// behind a delegated turn's writes.
+#[tokio::test]
+async fn creating_a_team_waits_for_another_write_instead_of_failing() {
+    let tmp = tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
+    let laya = LayaRouter::new(config.laya_url.clone());
+    let state = AppState::new(config, db.clone(), ToolRunner::new(tmp.path().join("workspace")), PermissionBroker::new(), laya);
+    let app = create_router(state);
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+
+    // Another connection holds the write lock for 300 ms
+    let other = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", tmp.path().join("kwnt.db").display()))
+        .await
+        .unwrap();
+    let tx = other.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let writer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        tx.commit().await.unwrap();
+    });
+
+    let started = Instant::now();
+    let payload = json!({"name": "night-shift", "lead_kwant_id": kwants[0].id, "member_kwants": [kwants[0].id, kwants[1].id]});
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/teams")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&bytes));
+    assert!(started.elapsed() >= Duration::from_millis(250), "the lock was held during the create");
+    writer.await.unwrap();
+    let team: Team = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(team.name, "night-shift");
 }
 
 #[tokio::test]

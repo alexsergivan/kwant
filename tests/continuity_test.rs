@@ -1182,6 +1182,34 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "token dies with the turn");
 }
 
+/// A memory added while another connection is writing waits for it instead of failing with
+/// "database is locked": the add counts the bot's memories before it writes, and SQLite fails a
+/// transaction's first write at once when the lock is taken after it has read. Seen as a flake in
+/// `self_tools_are_scoped_to_the_turn_and_kwant`, right after a refused `memory_update`.
+#[tokio::test]
+async fn adding_a_memory_waits_for_another_write_instead_of_failing() {
+    let (_app, state, tmp) = setup().await;
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+
+    // Another connection holds the write lock for 300 ms
+    let other = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", tmp.path().join("kwnt.db").display()))
+        .await
+        .unwrap();
+    let tx = other.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let writer = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        tx.commit().await.unwrap();
+    });
+
+    let started = std::time::Instant::now();
+    let m = state.db.add_memory(&kwants[0].id, "Prefers short replies", "user").await.unwrap();
+    assert!(started.elapsed() >= std::time::Duration::from_millis(250), "the lock was held during the add");
+    writer.await.unwrap();
+    assert!(state.db.list_memories(&kwants[0].id).await.unwrap().iter().any(|x| x.id == m.id));
+}
+
 #[tokio::test]
 async fn self_server_name_is_reserved() {
     let (app, _state, _tmp) = setup().await;
