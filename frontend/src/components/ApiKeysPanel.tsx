@@ -4,6 +4,7 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Globe, Key, Loader2 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
+import { editorProps } from '../escape';
 
 const DEFAULT_OLLAMA = 'http://localhost:11434/v1';
 
@@ -26,6 +27,8 @@ const input =
 export const ApiKeysPanel: React.FC<{ onSaved?: () => void; defaultOpen?: boolean }> = ({ onSaved, defaultOpen = false }) => {
   const [open, setOpen] = useState(defaultOpen);
   const [keys, setKeys] = useState<Keys | null>(null);
+  // What's saved, so Escape keeps keys typed but not saved yet.
+  const [loaded, setLoaded] = useState<Keys | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -38,14 +41,16 @@ export const ApiKeysPanel: React.FC<{ onSaved?: () => void; defaultOpen?: boolea
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then((d: Partial<Keys>) =>
-        setKeys({
+      .then((d: Partial<Keys>) => {
+        const k = {
           anthropic_api_key: d.anthropic_api_key ?? '',
           xai_api_key: d.xai_api_key ?? '',
           openai_api_key: d.openai_api_key ?? '',
           ollama_url: d.ollama_url || DEFAULT_OLLAMA,
-        }),
-      )
+        };
+        setKeys(k);
+        setLoaded(k);
+      })
       .catch(() => setLoadError('Couldn’t load your keys.'));
   };
   useEffect(load, []);
@@ -99,7 +104,7 @@ export const ApiKeysPanel: React.FC<{ onSaved?: () => void; defaultOpen?: boolea
         {open ? <ChevronDown size={15} className="text-zinc-500" aria-hidden="true" /> : <ChevronRight size={15} className="text-zinc-500" aria-hidden="true" />}
       </button>
 
-      <form id="space-api-keys" hidden={!open} onSubmit={save} className="space-y-3 px-3 pb-3">
+      <form id="space-api-keys" hidden={!open} onSubmit={save} {...editorProps(JSON.stringify(keys) !== JSON.stringify(loaded))} className="space-y-3 px-3 pb-3">
         <p className="text-[11px] text-zinc-500">
           One key per provider for the API-key engines. To keep several keys for one provider, add them as accounts above.
         </p>

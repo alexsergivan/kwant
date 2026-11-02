@@ -19,6 +19,7 @@ import {
   toolNote,
   trapFocusTarget,
 } from '../imports';
+import { useEscapeLayer } from '../escape';
 
 const btn =
   'flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 border border-zinc-700/60 bg-zinc-800/60 hover:bg-zinc-700/70 hover:text-zinc-100 transition-colors disabled:opacity-50';
@@ -395,14 +396,8 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
     importApi.prompts().then(setPrompts, setPromptsError);
   };
   useEffect(loadPrompts, []);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // Space settings underneath leaves Escape to this dialog while it's open.
-      if (e.key === 'Escape') closeRef.current();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  // Escape closes this dialog and not Settings under it, and keeps a pasted reply that isn't imported yet.
+  useEscapeLayer(dialogRef, true, () => closeRef.current(), { unsaved: reply.trim() !== '' && !applied });
   // Focus goes back to whatever opened the dialog when it closes.
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;

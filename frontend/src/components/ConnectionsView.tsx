@@ -23,6 +23,7 @@ import {
   usedByText,
 } from '../connections';
 import { inDesktopApp } from '../externalLinks';
+import { editorProps } from '../escape';
 
 const TONES: Record<Tone, string> = {
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
@@ -355,7 +356,7 @@ export const ComposioCard: React.FC<ComposioCardProps> = ({ entry, initialOpen =
       {entry.added && <ComposioAppSearch entry={entry} api={searchApi} initialApps={initialApps} />}
 
       {open && !entry.added && (
-        <form onSubmit={submit} className="space-y-3" aria-label={`Add ${entry.name}`} noValidate>
+        <form onSubmit={submit} {...editorProps(!!(url.trim() || key.trim() || enabled))} className="space-y-3" aria-label={`Add ${entry.name}`} noValidate>
           <div className="space-y-1">
             <label htmlFor={`${id}-url`} className="block text-xs font-medium text-zinc-200">
               MCP URL
@@ -448,8 +449,9 @@ export const AddConnectionMenu: React.FC<{ choices: AddChoice[]; disabled?: bool
     if (!open) return;
     wrapRef.current?.querySelector<HTMLButtonElement>('[data-add-choice]')?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      // Closes the menu only, not Settings around it.
+      e.preventDefault();
       setOpen(false);
       buttonRef.current?.focus();
     };

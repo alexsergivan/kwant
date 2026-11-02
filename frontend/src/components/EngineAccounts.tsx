@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, KeyRound, Loader2, LogIn, LogOut, Pencil, Plus, RefreshCw, Server, Star, Trash2, Wrench } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
+import { editorProps } from '../escape';
 import type { EngineInfo, Tone } from '../engines';
 import {
   CUSTOM_PRESETS,
@@ -224,12 +225,7 @@ const KeyOrLoginForm: React.FC<{
   return (
     <form
       onSubmit={submit}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation();
-          onCancel();
-        }
-      }}
+      {...editorProps(!!(name.trim() || apiKey.trim() || homeDir.trim() || isDefault), onCancel)}
       className="bg-zinc-950/60 border border-sky-500/30 rounded-lg p-3 space-y-3"
       aria-label="New account"
     >
@@ -299,6 +295,9 @@ export const CustomServerForm: React.FC<{
   const listed = c?.status === 'ready' ? c.models : [];
   const [typing, setTyping] = useState(!!c?.model && !listed.some((m) => m.id === c.model));
   const active = CUSTOM_PRESETS.find((p) => p.id === preset);
+  // Escape cancels an untouched form and keeps one with changes.
+  const unsaved =
+    !!(name.trim() || apiKey.trim() || isDefault) || protocol !== (c?.protocol ?? 'openai-chat') || baseUrl !== (c?.base_url ?? '') || model !== (c?.model ?? '');
 
   const applyPreset = (id: string) => {
     const p = CUSTOM_PRESETS.find((x) => x.id === id);
@@ -354,12 +353,7 @@ export const CustomServerForm: React.FC<{
   return (
     <form
       onSubmit={submit}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation();
-          onCancel();
-        }
-      }}
+      {...editorProps(unsaved, onCancel)}
       data-custom-form={editing ? 'edit' : 'new'}
       className="bg-zinc-950/60 border border-sky-500/30 rounded-lg p-3 space-y-3"
       aria-label={editing ? `Server for ${account!.name}` : 'New custom server'}
@@ -586,6 +580,7 @@ const AccountRow: React.FC<{
             {editingName ? (
               <form
                 className="flex items-center gap-1.5"
+                {...editorProps(name !== p.name, () => setEditingName(false))}
                 onSubmit={(e) => {
                   e.preventDefault();
                   saveName();
@@ -600,13 +595,6 @@ const AccountRow: React.FC<{
                   maxLength={60}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      e.stopPropagation();
-                      setName(p.name);
-                      setEditingName(false);
-                    }
-                  }}
                   className={`${input} py-1 w-36`}
                 />
                 <button type="submit" disabled={busy} className={quietBtn} aria-label="Save name">

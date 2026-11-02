@@ -1,8 +1,9 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
 import { CalendarClock, X } from 'lucide-react';
 import { RoutinesPanel } from './RoutinesPanel';
 import type { Channel, Kwant } from './Sidebar';
 import { playSfx } from '../audio/chiptune';
+import { useEscapeLayer } from '../escape';
 
 /** Every kwant's routines in one list. */
 export const RoutinesModal: React.FC<{ isOpen: boolean; onClose: () => void; kwants: Kwant[]; channels: Channel[]; onOpenSettings?: () => void }> = ({
@@ -12,23 +13,19 @@ export const RoutinesModal: React.FC<{ isOpen: boolean; onClose: () => void; kwa
   channels,
   onOpenSettings,
 }) => {
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeRef.current();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEscapeLayer(rootRef, isOpen, onClose, { modal: true });
 
   if (!isOpen) return null;
   return (
     <div className="kw-dialog fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
+        ref={rootRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="routines-title"
-        className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-2xl w-full max-h-[94vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
+        className="kw-dialog-panel outline-none bg-zinc-900 border border-zinc-800 rounded-2xl max-w-2xl w-full max-h-[94vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
       >
         <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
           <div className="flex items-center gap-2.5">

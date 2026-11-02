@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, Sparkles, Pencil, ChevronRight, Brain, CalendarClock, UserRound, ListChecks, Trash2, Gauge } from 'lucide-react';
 import { ModernAvatar, AVATAR_STYLES } from './ModernAvatar';
 import { AGENT_PRESETS, AgentPreset, PRESET_GROUPS, PresetGroup, uniqueAgentName } from '../agentPresets';
@@ -15,6 +15,7 @@ import { UsagePanel } from './UsagePanel';
 import type { Channel, Kwant } from './Sidebar';
 import { BotApprovalsSetting } from './ApprovalsSetting';
 import { FlightSchoolPanel } from './FlightSchoolPanel';
+import { useEscapeLayer } from '../escape';
 
 export type EditTab = 'profile' | 'memory' | 'skills' | 'routines' | 'usage';
 const EDIT_TABS: Array<{ id: EditTab; label: string; Icon: typeof Brain }> = [
@@ -79,6 +80,8 @@ interface NewAgentModalProps {
   approvalsOff?: boolean;
 }
 
+type ProfileFields = { name: string; title: string; roleStyle: string; model: string; prompt: string; soul: string; profileId: string | null; failover: boolean };
+
 export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   isOpen,
   onClose,
@@ -127,8 +130,33 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const engine = engineOfModel(model);
   const engineProfiles = profilesForEngine(profiles, engine);
 
+  // The profile as it opened (or as a preset filled it in): Escape keeps the editor open while it differs.
+  const [base, setBase] = useState<ProfileFields | null>(null);
+  const current: ProfileFields = { name, title, roleStyle, model, prompt, soul, profileId, failover };
+  const unsaved = !!base && (Object.keys(base) as (keyof ProfileFields)[]).some((k) => base[k] !== current[k]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEscapeLayer(rootRef, isOpen, onClose, {
+    modal: true,
+    unsaved,
+    // Opened from a menu that has gone: back to the bot in the sidebar, or the composer.
+    fallback: () =>
+      [kwantId ? `[data-bot-row="${kwantId}"]` : '', '[data-composer]']
+        .map((sel) => (sel ? document.querySelector<HTMLElement>(sel) : null))
+        .find((el) => el && !el.closest('[inert]')),
+  });
+
   useEffect(() => {
     if (!isOpen) return;
+    setBase({
+      name: initial?.name ?? '',
+      title: initial?.title ?? '',
+      roleStyle: initial?.avatar_sprite || 'architect',
+      model: initial?.preferred_model || 'auto',
+      prompt: initial?.persona_prompt ?? '',
+      soul: initial?.soul ?? '',
+      profileId: initial?.profile_id ?? null,
+      failover: initial?.profile_failover ?? true,
+    });
     setName(initial?.name ?? '');
     setTitle(initial?.title ?? '');
     setRoleStyle(initial?.avatar_sprite || 'architect');
@@ -166,12 +194,21 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     playSfx('click');
     setPresetId(preset?.id ?? null);
     setError(null);
-    setName(preset ? uniqueAgentName(preset.name, takenNames) : '');
-    setTitle(preset?.title ?? '');
-    setRoleStyle(preset?.avatar_sprite ?? 'architect');
-    setModel(preset?.preferred_model ?? 'auto');
-    setPrompt(preset?.persona_prompt ?? '');
-    setSoul(preset?.soul ?? '');
+    const filled = {
+      name: preset ? uniqueAgentName(preset.name, takenNames) : '',
+      title: preset?.title ?? '',
+      roleStyle: preset?.avatar_sprite ?? 'architect',
+      model: preset?.preferred_model ?? 'auto',
+      prompt: preset?.persona_prompt ?? '',
+      soul: preset?.soul ?? '',
+    };
+    setName(filled.name);
+    setTitle(filled.title);
+    setRoleStyle(filled.roleStyle);
+    setModel(filled.model);
+    setPrompt(filled.prompt);
+    setSoul(filled.soul);
+    setBase((b) => (b ? { ...b, ...filled } : b));
   };
 
   if (!isOpen) return null;
@@ -214,10 +251,12 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   return (
     <div className="kw-dialog fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
       <div
+        ref={rootRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="agent-modal-title"
-        className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
+        className="kw-dialog-panel outline-none bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
       >
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-2">
@@ -344,8 +383,9 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
           )}
 
           <div>
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Name</label>
+            <label htmlFor="agent-name" className="block text-xs font-medium text-zinc-400 mb-1">Name</label>
             <input
+              id="agent-name"
               type="text"
               required
               value={name}

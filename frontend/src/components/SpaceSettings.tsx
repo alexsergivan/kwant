@@ -38,6 +38,7 @@ import { SpaceApprovalsSetting } from './ApprovalsSetting';
 
 import type { SettingsScope, SpaceSettingsTab } from '../nav';
 import { InstallAppButton } from './InstallAppButton';
+import { editorProps, useEscapeLayer } from '../escape';
 
 export type { SettingsScope, SpaceSettingsTab };
 
@@ -113,19 +114,12 @@ export const SpaceSettings: React.FC<Props> = (p) => {
   // Bumped after the dialog imports or undoes, so the Import tab's list loads again.
   const [importsSeq, setImportsSeq] = useState(0);
   const tp: TabProps = { ...p, onOpenImport: () => setImportOpen(true), importsSeq };
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // Dialogs opened from here (bot editor, tools) close themselves first.
-      if (e.key === 'Escape' && !document.querySelector('[role="dialog"]:not([data-space-settings])')) closeRef.current();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Escape closes Settings, but not while a dialog opened from here is open (the bot editor, Tools),
+  // and not while an editor in it holds typed text.
+  useEscapeLayer(rootRef, true, onClose, { covered: () => !!document.querySelector('[role="dialog"]:not([data-space-settings])') });
   // Focus starts on the title (from the gear, Ctrl/⌘ 1–9 or a link), unless a tab already focused
   // something inside, or a space was picked on the rail, which keeps focus there.
-  const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const a = document.activeElement;
     if (rootRef.current?.contains(a) || a?.closest('[data-rail-space]')) return;
@@ -407,7 +401,7 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, onSpaceSaved, onAr
 
   return (
     <>
-      <form onSubmit={save} className={`${card} p-4 space-y-4`}>
+      <form onSubmit={save} {...editorProps(dirty)} className={`${card} p-4 space-y-4`}>
         <div className="flex items-center gap-3">
           <SpaceTile space={{ id: space.id, icon, color: color || null }} size={44} />
           <div className="flex-1 min-w-0">

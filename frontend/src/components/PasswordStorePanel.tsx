@@ -17,6 +17,7 @@ import {
   storeApi,
   unlockProblemText,
 } from '../passwordStore';
+import { useEscapeLayer } from '../escape';
 
 export interface PasswordStoreState {
   status: StoreStatus | null;
@@ -314,14 +315,11 @@ export const BitwardenLoginForm: React.FC<{
 /** The unlock form in a dialog, from the "Locked" state of the list or the store bar. */
 export const UnlockDialog: React.FC<{ status: StoreStatus | null; onClose: () => void; onUnlocked: (s: StoreStatus) => void }> = ({ status, onClose, onUnlocked }) => {
   const id = useId();
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEscapeLayer(rootRef, true, onClose, { modal: true });
   return (
     <div className="kw-dialog kw-dialog-bottom fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-labelledby={`${id}-h`} className="kw-dialog-panel relative w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-2xl" data-unlock-dialog>
+      <div ref={rootRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={`${id}-h`} className="kw-dialog-panel outline-none relative w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900 p-4 shadow-2xl" data-unlock-dialog>
         <h2 id={`${id}-h`} className="sr-only">
           Unlock Bitwarden
         </h2>

@@ -58,6 +58,7 @@ import {
   isBlankRequired,
 } from '../mcp';
 import { inDesktopApp, leaveForSignIn, pollUntil, signInChanged } from '../externalLinks';
+import { useEscapeLayer } from '../escape';
 
 interface McpServersModalProps {
   isOpen: boolean;
@@ -372,6 +373,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   // Form view: null = list, 'new' = adding, otherwise the id being edited.
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<McpFormState>(emptyMcpForm());
+  const [formStart, setFormStart] = useState<McpFormState | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Catalog step before the form when adding, its search, and the preset the form came from.
@@ -491,17 +493,10 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
 
   useEffect(() => stopWatchingPopup, [stopWatchingPopup]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      if (editing) setEditing(null);
-      else if (picking) setPicking(false);
-      else onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, editing, picking, onClose]);
+  // Escape steps back (form or catalog to the list), then closes; it keeps a form with changes.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const formDirty = editing !== null && JSON.stringify(form) !== JSON.stringify(formStart);
+  useEscapeLayer(rootRef, isOpen, () => (editing ? setEditing(null) : picking ? setPicking(false) : onClose()), { modal: true, unsaved: formDirty });
 
   if (!isOpen) return null;
 
@@ -606,14 +601,11 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     setFormError(null);
     setPicking(false);
     setPresetId(preset?.id ?? null);
-    if (target === 'new') {
-      setEditing('new');
-      const f = preset?.form;
-      setForm(f ? { ...f, env: f.env.map((r) => ({ ...r })), headers: f.headers.map((r) => ({ ...r })) } : emptyMcpForm());
-    } else {
-      setEditing(target.id);
-      setForm(serverToForm(target));
-    }
+    const f = preset?.form;
+    const start = target !== 'new' ? serverToForm(target) : f ? { ...f, env: f.env.map((r) => ({ ...r })), headers: f.headers.map((r) => ({ ...r })) } : emptyMcpForm();
+    setEditing(target === 'new' ? 'new' : target.id);
+    setForm(start);
+    setFormStart(start);
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -1157,10 +1149,12 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   return (
     <div className="kw-dialog fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div
+        ref={rootRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="mcp-title"
-        className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-2xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
+        className="kw-dialog-panel outline-none bg-zinc-900 border border-zinc-800 rounded-2xl max-w-2xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
       >
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-4">
           <div className="flex items-center gap-2.5 min-w-0">
