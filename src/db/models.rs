@@ -122,6 +122,11 @@ pub struct Message {
     #[serde(default)]
     #[sqlx(default)]
     pub meta: Option<String>,
+    /// Smart Results: the reply's block set (`crate::server::smart_results::ResultSet`), or
+    /// `null`. Stored in `message_results`, not in this row.
+    #[serde(default)]
+    #[sqlx(skip)]
+    pub results: Option<serde_json::Value>,
 }
 
 /// Where a message goes besides [`NewMessage`]'s channel or direct chat.

@@ -36,6 +36,7 @@ pub mod foundry;
 pub mod automation;
 pub mod truth_ledger;
 pub mod routing;
+pub mod smart_results;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -176,6 +177,7 @@ impl Database {
         db.migrate_checkpoints().await?;
         db.migrate_autofix().await?;
         db.migrate_routing().await?;
+        db.migrate_smart_results().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;
@@ -1118,10 +1120,12 @@ pub(crate) async fn insert_message_on(
     .execute(&mut *conn)
     .await?;
 
-    Ok(sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?")
+    let mut msg = sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?")
         .bind(&id)
         .fetch_one(&mut *conn)
-        .await?)
+        .await?;
+    msg.results = smart_results::store_on(conn, input, extra, &id).await;
+    Ok(msg)
 }
 
 /// Renames chat `chat`, now called `chat_name` (`team-<name>`), to `archived-team-<name>`, or

@@ -1,0 +1,1083 @@
+//! The selector: the first comparison table, else the first steps list, of a reply.
+//!
+//! A line-by-line reading of CommonMark + GFM that is exact for the shapes bots write (top-level
+//! pipe tables and numbered lists, fenced code) and abstains on the rest. `index` must name the
+//! same table or list the chat's remark-gfm renders, so anything that could make the count
+//! uncertain (a table or numbered list inside a quote or a bullet item, a list nested in a list,
+//! raw HTML, tabs, a table run straight into a paragraph or another block) marks the reply
+//! uncertain from that line on, and no block is offered at or after it.
+
+use std::collections::HashSet;
+
+use super::validate::has_html;
+use super::{Block, Column, Comparison, Provenance, Row, Source, Step, Steps, MAX_REPLY, PICK_REASON};
+
+/// Every block `text` could show, in priority order and unchecked (see [`super::compute`]): each
+/// qualifying table as a comparison, then each qualifying numbered list as steps, earliest first.
+pub fn candidates(text: &str) -> Vec<Block> {
+    if text.len() > MAX_REPLY {
+        return Vec::new();
+    }
+    let doc = parse(text);
+    let tables = doc.tables.iter().filter(|t| t.start < doc.tables_unsure_at).filter_map(|t| comparison(t, &doc.prose));
+    let lists = doc.lists.iter().filter(|l| l.start < doc.lists_unsure_at).filter_map(steps);
+    tables.map(Block::Comparison).chain(lists.map(Block::Steps)).collect()
+}
+
+// Reading the markdown
+
+struct Table<'a> {
+    index: usize,
+    start: usize,
+    clean: bool,
+    header: Vec<&'a str>,
+    rows: Vec<Vec<&'a str>>,
+}
+
+struct List<'a> {
+    index: usize,
+    start: usize,
+    clean: bool,
+    delim: u8,
+    number: u64,
+    items: Vec<&'a str>,
+    /// The non-blank line just before the list, and the latest heading above it.
+    intro: Option<&'a str>,
+    heading: Option<&'a str>,
+}
+
+#[derive(Default)]
+struct Doc<'a> {
+    tables: Vec<Table<'a>>,
+    lists: Vec<List<'a>>,
+    /// Lines outside code, HTML and tables, where a pick can be named.
+    prose: Vec<&'a str>,
+    /// The first line from which table (list) counts may differ from the chat's.
+    tables_unsure_at: usize,
+    lists_unsure_at: usize,
+}
+
+impl Doc<'_> {
+    fn unsure_tables(&mut self, line: usize) {
+        self.tables_unsure_at = self.tables_unsure_at.min(line);
+    }
+    fn unsure_lists(&mut self, line: usize) {
+        self.lists_unsure_at = self.lists_unsure_at.min(line);
+    }
+    fn unsure(&mut self, line: usize) {
+        self.unsure_tables(line);
+        self.unsure_lists(line);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum State {
+    None,
+    Para,
+    Table(usize),
+    /// A top-level ordered list; `offset` is the current item's content column.
+    List { list: usize, offset: usize, blank: bool },
+    /// A bullet list, read only as far as it can hide tables and numbered lists.
+    Bullet { offset: usize, blank: bool },
+    Quote,
+    Html,
+    Code,
+}
+
+struct Fence {
+    ch: u8,
+    len: usize,
+    /// The content column of the list item holding it; `None` at the top level.
+    inside: Option<usize>,
+}
+
+fn parse(text: &str) -> Doc<'_> {
+    let lines: Vec<&str> = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l)).collect();
+    let mut doc = Doc { tables_unsure_at: usize::MAX, lists_unsure_at: usize::MAX, ..Doc::default() };
+    let mut state = State::None;
+    let mut fence: Option<Fence> = None;
+    let mut heading: Option<&str> = None;
+    let mut prev: Option<&str> = None;
+    let mut delimiter_row: Option<usize> = None;
+    for (i, &line) in lines.iter().enumerate() {
+        let (indent, rest) = lead(line);
+        let blank = rest.trim().is_empty();
+        if let Some(f) = &fence {
+            match f.inside {
+                Some(offset) if !blank && indent < offset => {
+                    // The item ends and closes the fence with it; whether the chat agrees is
+                    // more than this reader knows.
+                    doc.unsure(i);
+                    fence = None;
+                }
+                Some(_) => {
+                    if fence_closes(rest, f) {
+                        fence = None;
+                    }
+                    if !blank {
+                        prev = Some(line);
+                    }
+                    continue;
+                }
+                None => {
+                    if indent <= 3 && fence_closes(rest, f) {
+                        fence = None;
+                    }
+                    if !blank {
+                        prev = Some(line);
+                    }
+                    continue;
+                }
+            }
+        }
+        if delimiter_row == Some(i) {
+            delimiter_row = None;
+            prev = Some(line);
+            continue;
+        }
+        if line.contains('\t') {
+            doc.unsure(i);
+        }
+        let mut prose = !blank;
+        let mut in_table = false;
+        let mut code = false;
+        loop {
+            match state {
+                State::Table(t) => {
+                    if blank {
+                        state = State::None;
+                    } else if indent >= 4 || block_start(rest) {
+                        // GFM ends the table here, or takes the line as a row: not sure which
+                        doc.unsure(i);
+                        doc.tables[t].clean = false;
+                        state = State::None;
+                        continue;
+                    } else {
+                        let cells = split_cells(rest);
+                        let table = &mut doc.tables[t];
+                        if !has_pipe(rest) || cells.len() != table.header.len() {
+                            table.clean = false;
+                        }
+                        table.rows.push(cells);
+                        prose = false;
+                        in_table = true;
+                    }
+                }
+                State::List { list, offset, blank: after_blank } => {
+                    if blank {
+                        state = State::List { list, offset, blank: true };
+                        break;
+                    }
+                    if indent >= offset {
+                        // More of the current item: a second paragraph, nested blocks or code
+                        doc.lists[list].clean = false;
+                        let inner = after_cols(line, offset);
+                        if has_ordered_marker(inner) {
+                            doc.unsure_lists(i);
+                        }
+                        if let Some((ch, len)) = fence_open(inner.trim_start()) {
+                            fence = Some(Fence { ch, len, inside: Some(offset) });
+                        }
+                        state = State::List { list, offset, blank: false };
+                        break;
+                    }
+                    if indent <= 3 {
+                        if let Some(m) = ordered_marker(rest, indent) {
+                            if m.delim == doc.lists[list].delim {
+                                let l = &mut doc.lists[list];
+                                l.items.push(m.content);
+                                if m.content.is_empty() {
+                                    l.clean = false;
+                                }
+                                if has_ordered_marker(m.content) {
+                                    doc.unsure_lists(i);
+                                }
+                                state = State::List { list, offset: m.offset, blank: false };
+                                break;
+                            }
+                            // `1.` then `1)`: a new list
+                            state = State::None;
+                            continue;
+                        }
+                        if thematic_break(rest)
+                            || bullet_marker(rest, indent).is_some()
+                            || atx_heading(rest).is_some()
+                            || fence_open(rest).is_some()
+                            || rest.starts_with('>')
+                            || html_start(rest)
+                        {
+                            state = State::None;
+                            continue;
+                        }
+                    }
+                    if after_blank {
+                        state = State::None;
+                        continue;
+                    }
+                    // A lazy continuation line of the item's paragraph
+                    doc.lists[list].clean = false;
+                    if has_ordered_marker(rest) {
+                        doc.unsure_lists(i);
+                    }
+                    state = State::List { list, offset, blank: false };
+                }
+                State::Bullet { offset, blank: after_blank } => {
+                    if blank {
+                        state = State::Bullet { offset, blank: true };
+                        break;
+                    }
+                    if indent >= offset {
+                        let inner = after_cols(line, offset);
+                        if has_ordered_marker(inner) {
+                            doc.unsure_lists(i);
+                        }
+                        if let Some((ch, len)) = fence_open(inner.trim_start()) {
+                            fence = Some(Fence { ch, len, inside: Some(offset) });
+                        }
+                        state = State::Bullet { offset, blank: false };
+                        break;
+                    }
+                    if indent <= 3 {
+                        if thematic_break(rest) {
+                            state = State::None;
+                            continue;
+                        }
+                        if let Some(b) = bullet_marker(rest, indent) {
+                            if has_ordered_marker(b.content) {
+                                doc.unsure_lists(i);
+                            }
+                            state = State::Bullet { offset: b.offset, blank: false };
+                            break;
+                        }
+                        if let Some(m) = ordered_marker(rest, indent) {
+                            if after_blank || (m.number == 1 && !m.content.is_empty()) {
+                                state = State::None;
+                                continue;
+                            }
+                            // Lazy text, or a new list: CommonMark readers differ
+                            doc.unsure_lists(i);
+                            state = State::Bullet { offset, blank: false };
+                            break;
+                        }
+                        if atx_heading(rest).is_some() || fence_open(rest).is_some() || rest.starts_with('>') || html_start(rest) {
+                            state = State::None;
+                            continue;
+                        }
+                    }
+                    if after_blank {
+                        state = State::None;
+                        continue;
+                    }
+                    state = State::Bullet { offset, blank: false };
+                }
+                State::Quote => {
+                    if blank {
+                        state = State::None;
+                    } else if indent <= 3 && rest.starts_with('>') {
+                        if has_ordered_marker(rest) {
+                            doc.unsure_lists(i);
+                        }
+                    } else if indent <= 3 && block_start(rest) {
+                        if let Some(m) = ordered_marker(rest, indent) {
+                            if m.number != 1 || m.content.is_empty() {
+                                doc.unsure_lists(i);
+                                break;
+                            }
+                        }
+                        state = State::None;
+                        continue;
+                    }
+                }
+                State::Html => {
+                    prose = false;
+                    if blank {
+                        state = State::None;
+                    }
+                }
+                State::Code => {
+                    if blank {
+                        break;
+                    }
+                    if indent < 4 {
+                        state = State::None;
+                        continue;
+                    }
+                    prose = false;
+                    code = true;
+                    if has_ordered_marker(rest) {
+                        doc.unsure_lists(i);
+                    }
+                }
+                State::Para => {
+                    if blank {
+                        state = State::None;
+                        break;
+                    }
+                    if indent <= 3 {
+                        if setext_underline(rest) {
+                            if rest.contains('-') && prev.is_some_and(has_pipe) {
+                                // `| a |` over `---`: a one-column table or a heading
+                                doc.unsure_tables(i);
+                            }
+                            heading = prev.map(str::trim);
+                            state = State::None;
+                            break;
+                        }
+                        if let Some(m) = ordered_marker(rest, indent) {
+                            if m.number == 1 && !m.content.is_empty() {
+                                state = State::None;
+                                continue;
+                            }
+                            // Anything else continues the paragraph
+                            break;
+                        }
+                        if thematic_break(rest) || atx_heading(rest).is_some() || fence_open(rest).is_some() || rest.starts_with('>') {
+                            state = State::None;
+                            continue;
+                        }
+                        if bullet_marker(rest, indent).is_some_and(|b| !b.content.is_empty()) {
+                            state = State::None;
+                            continue;
+                        }
+                        if html_start(rest) {
+                            doc.unsure(i);
+                            state = State::None;
+                            continue;
+                        }
+                        if table_start(&lines, i).is_some() {
+                            // A table straight after a paragraph line: GFM readers differ
+                            doc.unsure(i);
+                            state = State::None;
+                            continue;
+                        }
+                    }
+                }
+                State::None => {
+                    if blank {
+                        break;
+                    }
+                    if indent >= 4 {
+                        state = State::Code;
+                        prose = false;
+                        code = true;
+                        if has_ordered_marker(rest) || fence_open(rest).is_some() {
+                            doc.unsure_lists(i);
+                        }
+                        break;
+                    }
+                    if let Some((ch, len)) = fence_open(rest) {
+                        fence = Some(Fence { ch, len, inside: None });
+                        prose = false;
+                        break;
+                    }
+                    if let Some(h) = atx_heading(rest) {
+                        heading = Some(h);
+                        break;
+                    }
+                    if thematic_break(rest) {
+                        break;
+                    }
+                    if rest.starts_with('>') {
+                        if has_ordered_marker(rest) {
+                            doc.unsure_lists(i);
+                        }
+                        state = State::Quote;
+                        break;
+                    }
+                    if html_start(rest) {
+                        doc.unsure(i);
+                        prose = false;
+                        state = State::Html;
+                        break;
+                    }
+                    if let Some(m) = ordered_marker(rest, indent) {
+                        let index = doc.lists.len();
+                        if has_ordered_marker(m.content) {
+                            doc.unsure_lists(i);
+                        }
+                        doc.lists.push(List {
+                            index,
+                            start: i,
+                            clean: !m.content.is_empty(),
+                            delim: m.delim,
+                            number: m.number,
+                            items: vec![m.content],
+                            intro: prev,
+                            heading,
+                        });
+                        state = State::List { list: index, offset: m.offset, blank: false };
+                        break;
+                    }
+                    if let Some(b) = bullet_marker(rest, indent) {
+                        if has_ordered_marker(b.content) {
+                            doc.unsure_lists(i);
+                        }
+                        state = State::Bullet { offset: b.offset, blank: false };
+                        break;
+                    }
+                    if let Some(header) = table_start(&lines, i) {
+                        let index = doc.tables.len();
+                        doc.tables.push(Table { index, start: i, clean: true, header, rows: Vec::new() });
+                        delimiter_row = Some(i + 1);
+                        state = State::Table(index);
+                        prose = false;
+                        in_table = true;
+                        break;
+                    }
+                    state = State::Para;
+                }
+            }
+            break;
+        }
+        if !in_table && !code && delimiter_like(line) {
+            // A table this reader didn't take as top-level (in a quote or an item, or orphaned)
+            doc.unsure_tables(i);
+        }
+        if prose && !has_pipe(line) {
+            doc.prose.push(line);
+        }
+        if !blank {
+            prev = Some(line);
+        }
+    }
+    doc
+}
+
+/// The indentation in columns (a tab counts to the next multiple of 4) and the rest of the line.
+fn lead(line: &str) -> (usize, &str) {
+    let mut cols = 0;
+    for (i, c) in line.char_indices() {
+        match c {
+            ' ' => cols += 1,
+            '\t' => cols += 4 - cols % 4,
+            _ => return (cols, &line[i..]),
+        }
+    }
+    (cols, "")
+}
+
+/// `line` after its first `cols` columns of indentation.
+fn after_cols(line: &str, cols: usize) -> &str {
+    let mut seen = 0;
+    for (i, c) in line.char_indices() {
+        if seen >= cols {
+            return &line[i..];
+        }
+        match c {
+            ' ' => seen += 1,
+            '\t' => seen += 4 - seen % 4,
+            _ => return &line[i..],
+        }
+    }
+    ""
+}
+
+/// A line that starts a block of another kind (given indentation of at most 3).
+fn block_start(rest: &str) -> bool {
+    rest.starts_with('>')
+        || atx_heading(rest).is_some()
+        || fence_open(rest).is_some()
+        || thematic_break(rest)
+        || bullet_marker(rest, 0).is_some()
+        || ordered_marker(rest, 0).is_some()
+        || html_start(rest)
+}
+
+fn atx_heading(rest: &str) -> Option<&str> {
+    let hashes = rest.bytes().take_while(|b| *b == b'#').count();
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+    let after = &rest[hashes..];
+    if !after.is_empty() && !after.starts_with([' ', '\t']) {
+        return None;
+    }
+    Some(after.trim().trim_end_matches('#').trim_end())
+}
+
+fn thematic_break(rest: &str) -> bool {
+    let mut marks = rest.chars().filter(|c| !matches!(c, ' ' | '\t'));
+    let Some(first) = marks.next() else { return false };
+    if !matches!(first, '-' | '*' | '_') {
+        return false;
+    }
+    let mut n = 1;
+    for c in marks {
+        if c != first {
+            return false;
+        }
+        n += 1;
+    }
+    n >= 3
+}
+
+fn setext_underline(rest: &str) -> bool {
+    let t = rest.trim_end();
+    !t.is_empty() && (t.bytes().all(|b| b == b'=') || t.bytes().all(|b| b == b'-'))
+}
+
+fn fence_open(rest: &str) -> Option<(u8, usize)> {
+    let ch = *rest.as_bytes().first()?;
+    if ch != b'`' && ch != b'~' {
+        return None;
+    }
+    let len = rest.bytes().take_while(|b| *b == ch).count();
+    if len < 3 || (ch == b'`' && rest[len..].contains('`')) {
+        return None;
+    }
+    Some((ch, len))
+}
+
+fn fence_closes(rest: &str, fence: &Fence) -> bool {
+    let len = rest.bytes().take_while(|b| *b == fence.ch).count();
+    len >= fence.len && rest[len..].trim().is_empty()
+}
+
+fn html_start(rest: &str) -> bool {
+    let mut chars = rest.chars();
+    chars.next() == Some('<') && chars.next().is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '/' | '!' | '?'))
+}
+
+struct Ordered<'a> {
+    number: u64,
+    delim: u8,
+    /// The item's first line, trimmed; empty for an empty item.
+    content: &'a str,
+    /// The column its content starts at.
+    offset: usize,
+}
+
+fn ordered_marker(rest: &str, indent: usize) -> Option<Ordered<'_>> {
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 || digits > 9 {
+        return None;
+    }
+    let delim = *rest.as_bytes().get(digits)?;
+    if delim != b'.' && delim != b')' {
+        return None;
+    }
+    let after = &rest[digits + 1..];
+    let number = rest[..digits].parse().ok()?;
+    let marker = digits + 1;
+    if after.trim().is_empty() {
+        return Some(Ordered { number, delim, content: "", offset: indent + marker + 1 });
+    }
+    if !after.starts_with(' ') {
+        return None;
+    }
+    let spaces = after.bytes().take_while(|b| *b == b' ').count();
+    let offset = if spaces >= 5 { indent + marker + 1 } else { indent + marker + spaces };
+    Some(Ordered { number, delim, content: after.trim(), offset })
+}
+
+struct Bullet<'a> {
+    content: &'a str,
+    offset: usize,
+}
+
+fn bullet_marker(rest: &str, indent: usize) -> Option<Bullet<'_>> {
+    if !rest.starts_with(['-', '+', '*']) {
+        return None;
+    }
+    let after = &rest[1..];
+    if after.trim().is_empty() {
+        return Some(Bullet { content: "", offset: indent + 2 });
+    }
+    if !after.starts_with(' ') {
+        return None;
+    }
+    let spaces = after.bytes().take_while(|b| *b == b' ').count();
+    let offset = if spaces >= 5 { indent + 2 } else { indent + 1 + spaces };
+    Some(Bullet { content: after.trim(), offset })
+}
+
+/// Whether a numbered list starts in `s`, after any quote and bullet markers: one this reader
+/// doesn't count, so the chat's count may differ from here on.
+fn has_ordered_marker(s: &str) -> bool {
+    let mut s = s.trim_start();
+    for _ in 0..32 {
+        if let Some(r) = s.strip_prefix('>') {
+            s = r.trim_start();
+        } else if let Some(b) = bullet_marker(s, 0).filter(|b| !b.content.is_empty()) {
+            s = b.content;
+        } else {
+            return ordered_marker(s, 0).is_some();
+        }
+    }
+    true
+}
+
+fn has_pipe(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'|' => return true,
+            _ => i += 1,
+        }
+    }
+    false
+}
+
+/// The cells of a table row: split on unescaped pipes, outer pipes dropped, each trimmed. Cells
+/// are verbatim markdown (an escaped `\|` stays escaped).
+fn split_cells(line: &str) -> Vec<&str> {
+    let s = line.trim();
+    let s = s.strip_prefix('|').unwrap_or(s);
+    let s = match s.strip_suffix('|') {
+        Some(inner) if !inner.ends_with('\\') => inner,
+        _ => s,
+    };
+    let bytes = s.as_bytes();
+    let mut cells = Vec::new();
+    let (mut start, mut i) = (0, 0);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'|' => {
+                cells.push(s[start..i].trim());
+                i += 1;
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    cells.push(s[start.min(s.len())..].trim());
+    cells
+}
+
+/// A GFM delimiter row (`| --- | :-: |`): its cell count.
+fn delimiter_cells(line: &str) -> Option<usize> {
+    if !has_pipe(line) {
+        return None;
+    }
+    let cells = split_cells(line);
+    let ok = cells.iter().all(|c| {
+        let c = c.strip_prefix(':').unwrap_or(c);
+        let c = c.strip_suffix(':').unwrap_or(c);
+        !c.is_empty() && c.bytes().all(|b| b == b'-')
+    });
+    ok.then_some(cells.len())
+}
+
+/// A line that looks like a delimiter row once indentation and quote or list markers are gone.
+fn delimiter_like(line: &str) -> bool {
+    let mut s = line.trim_start();
+    for _ in 0..32 {
+        if let Some(r) = s.strip_prefix('>') {
+            s = r.trim_start();
+        } else if let Some(r) = s.strip_prefix("- ").or_else(|| s.strip_prefix("* ")).or_else(|| s.strip_prefix("+ ")) {
+            s = r.trim_start();
+        } else if let Some(m) = ordered_marker(s, 0).filter(|m| !m.content.is_empty()) {
+            s = m.content;
+        } else {
+            break;
+        }
+    }
+    s.contains('|') && s.contains('-') && s.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
+}
+
+/// The header cells when lines `i` and `i + 1` open a GFM table.
+fn table_start<'a>(lines: &[&'a str], i: usize) -> Option<Vec<&'a str>> {
+    let header = lines[i];
+    let delimiter = *lines.get(i + 1)?;
+    let (h_indent, h_rest) = lead(header);
+    let (d_indent, _) = lead(delimiter);
+    if h_indent > 3 || d_indent > 3 || !has_pipe(h_rest) {
+        return None;
+    }
+    let cells = split_cells(h_rest);
+    (delimiter_cells(delimiter)? == cells.len()).then_some(cells)
+}
+
+// Comparison
+
+fn comparison(t: &Table, prose: &[&str]) -> Option<Comparison> {
+    let cols = t.header.len();
+    if !t.clean || !(2..=8).contains(&cols) || !(3..=50).contains(&t.rows.len()) {
+        return None;
+    }
+    if t.header.iter().any(|h| h.is_empty() || h.chars().count() > 200) {
+        return None;
+    }
+    if t.rows.iter().any(|r| r.len() != cols || r.iter().any(|c| c.chars().count() > 200)) {
+        return None;
+    }
+    // Cells are shown as text, so a table with HTML in it stays markdown
+    if t.header.iter().chain(t.rows.iter().flatten()).any(|c| has_html(c)) {
+        return None;
+    }
+    let mut seen = HashSet::new();
+    for row in &t.rows {
+        let key: String = plain(row[0]).trim().chars().map(fold).collect();
+        if key.is_empty() || !seen.insert(key) {
+            return None;
+        }
+    }
+    let columns = (0..cols)
+        .map(|c| {
+            let (numeric, unit) = numeric_column(t.rows.iter().map(|r| r[c]));
+            Column { key: format!("c{c}"), label: t.header[c].to_string(), numeric, unit }
+        })
+        .collect();
+    let rows = t
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| Row { id: format!("r{i}"), cells: r.iter().map(|c| c.to_string()).collect() })
+        .collect();
+    let labels: Vec<&str> = t.rows.iter().map(|r| r[0]).collect();
+    let pick = pick(&labels, prose);
+    Some(Comparison {
+        id: "b0".into(),
+        source: Source { kind: "markdown_table".into(), index: t.index },
+        columns,
+        rows,
+        highlight_row: pick.map(|r| format!("r{r}")),
+        highlight_reason: pick.map(|_| PICK_REASON.to_string()),
+        provenance: Provenance { kind: "reply_text".into() },
+    })
+}
+
+/// Numeric when at least 80% of the cells are a number with the same prefix or suffix (that
+/// affix is the unit; none counts as an affix too).
+fn numeric_column<'a>(cells: impl Iterator<Item = &'a str>) -> (bool, Option<String>) {
+    let mut counts: Vec<(Option<&str>, usize)> = Vec::new();
+    let mut total = 0;
+    for cell in cells {
+        total += 1;
+        let Some(affix) = number_affix(cell) else { continue };
+        match counts.iter_mut().find(|(a, _)| *a == affix) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((affix, 1)),
+        }
+    }
+    let mut best: Option<(Option<&str>, usize)> = None;
+    for (affix, n) in counts {
+        if best.is_none_or(|(_, b)| n > b) {
+            best = Some((affix, n));
+        }
+    }
+    match best {
+        Some((affix, n)) if total > 0 && n * 5 >= total * 4 => (true, affix.map(str::to_string)),
+        _ => (false, None),
+    }
+}
+
+/// `Some(affix)` when `cell` is a number with at most one affix: a prefix of up to 4 letters or
+/// currency signs (`EUR 12`, `$12`) or a suffix of up to 10 (`12 EUR`, `-4%`, `4.5/5`).
+fn number_affix(cell: &str) -> Option<Option<&str>> {
+    let mut s = cell.trim();
+    loop {
+        let before = s;
+        for wrap in ["**", "__", "*", "_", "`"] {
+            if s.len() > 2 * wrap.len() && s.starts_with(wrap) && s.ends_with(wrap) {
+                s = s[wrap.len()..s.len() - wrap.len()].trim();
+            }
+        }
+        if s == before {
+            break;
+        }
+    }
+    let start = s.char_indices().find_map(|(i, c)| {
+        let signed = matches!(c, '+' | '-' | '−') && s[i + c.len_utf8()..].starts_with(|d: char| d.is_ascii_digit());
+        (c.is_ascii_digit() || signed).then_some(i)
+    })?;
+    let mut end = start + s[start..].chars().next()?.len_utf8();
+    end += s[end..].bytes().take_while(|b| b.is_ascii_digit() || *b == b'.' || *b == b',').count();
+    let number = s[start..end].trim_end_matches(['.', ',']);
+    let end = start + number.len();
+    if !is_number(number) {
+        return None;
+    }
+    let (before, after) = (&s[..start], &s[end..]);
+    let prefix = before.trim_end();
+    let suffix = after.trim_start();
+    if before.len() - prefix.len() > 1 || after.len() - suffix.len() > 1 {
+        return None;
+    }
+    match (prefix.is_empty(), suffix.is_empty()) {
+        (true, true) => Some(None),
+        (false, true) => {
+            let ok = prefix.chars().count() <= 4
+                && prefix.chars().all(|c| c.is_alphabetic() || currency(c) || c == '.')
+                && prefix.chars().any(|c| c != '.');
+            ok.then_some(Some(prefix))
+        }
+        (true, false) => {
+            let out_of = suffix.strip_prefix('/').is_some_and(|d| (1..=3).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_digit()));
+            let unit = suffix.chars().all(|c| c.is_alphabetic() || currency(c) || "%‰°/²³µ'\".".contains(c))
+                && suffix.chars().any(|c| c != '.');
+            (suffix.chars().count() <= 10 && (out_of || unit)).then_some(Some(suffix))
+        }
+        (false, false) => None,
+    }
+}
+
+fn currency(c: char) -> bool {
+    matches!(c, '$' | '¢' | '£' | '¤' | '¥' | '֏' | '؋' | '৳' | '฿' | '៛' | '﷼') || ('\u{20A0}'..='\u{20CF}').contains(&c)
+}
+
+/// `1299`, `12.5`, `12,5`, `1,299.00` or `1.299,00`, with an optional sign; at most 15 digits.
+fn is_number(n: &str) -> bool {
+    let n = n.strip_prefix(['+', '-', '−']).unwrap_or(n);
+    let digits = n.bytes().filter(u8::is_ascii_digit).count();
+    if digits == 0 || digits > 15 {
+        return false;
+    }
+    let all_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let grouped = |group: char, decimal: char| {
+        let (int, frac) = match n.split_once(decimal) {
+            Some((int, frac)) => (int, Some(frac)),
+            None => (n, None),
+        };
+        let mut parts = int.split(group);
+        let first = parts.next().unwrap_or("");
+        let rest: Vec<&str> = parts.collect();
+        frac.is_none_or(all_digits)
+            && (1..=3).contains(&first.len())
+            && all_digits(first)
+            && !rest.is_empty()
+            && rest.iter().all(|p| p.len() == 3 && all_digits(p))
+    };
+    let simple = match n.split_once(['.', ',']) {
+        Some((int, frac)) => all_digits(int) && all_digits(frac),
+        None => all_digits(n),
+    };
+    simple || grouped(',', '.') || grouped('.', ',')
+}
+
+// The pick
+
+const PICK_WORDS: [&str; 6] = ["best", "pick", "picks", "picked", "choose", "winner"];
+/// Words that make a sentence too hedged or negative to name a pick.
+const HEDGES: [&str; 23] = [
+    "not", "never", "avoid", "no", "nor", "none", "without", "unless", "instead", "rather", "except", "skip", "worst",
+    "worse", "if", "otherwise", "depends", "depending", "cannot", "second", "runner", "alternatively", "but",
+];
+
+/// Recommending sentences longer than this (in characters), or more label matches than
+/// [`MAX_MATCHES`] in a reply, and no row is highlighted: it keeps the search cheap and the pick
+/// plain.
+const MAX_SENTENCE: usize = 1_000;
+const MAX_MATCHES: usize = 1_000;
+
+/// The one row whose first-column label a recommending sentence outside the table names; `None`
+/// when no row or more than one is named.
+fn pick(labels: &[&str], prose: &[&str]) -> Option<usize> {
+    // Short labels match case exactly, longer ones ignore case
+    let labels: Vec<(usize, String, bool)> = labels
+        .iter()
+        .enumerate()
+        .filter_map(|(r, l)| {
+            let l = plain(l);
+            let l = l.trim();
+            let folded: String = l.chars().map(fold).collect();
+            let usable = l.chars().any(char::is_alphabetic)
+                && !PICK_WORDS.contains(&folded.as_str())
+                && !folded.starts_with("recommend")
+                && folded != "go with";
+            let exact = l.chars().count() < 4;
+            usable.then(|| (r, if exact { l.to_string() } else { folded }, exact))
+        })
+        .collect();
+    let mut named = HashSet::new();
+    let mut matches = 0;
+    for line in prose {
+        let line = plain(line);
+        for sentence in sentences(&line) {
+            if !recommends(sentence) {
+                continue;
+            }
+            if sentence.chars().count() > MAX_SENTENCE {
+                return None;
+            }
+            let folded: String = sentence.chars().map(fold).collect();
+            let (at, folded_at) = (char_positions(sentence), char_positions(&folded));
+            let mut found: Vec<(usize, usize, usize)> = Vec::new();
+            for (r, label, exact) in &labels {
+                let (h, pos) = if *exact { (sentence, &at) } else { (folded.as_str(), &folded_at) };
+                for (start, end) in occurrences(h, label, *exact) {
+                    found.push((pos[start], pos[end], *r));
+                }
+                if matches + found.len() > MAX_MATCHES {
+                    return None;
+                }
+            }
+            matches += found.len();
+            // `Pro` inside `Pro Max` names `Pro Max`
+            for &(start, end, r) in &found {
+                let inside = found.iter().any(|&(s2, e2, _)| s2 <= start && end <= e2 && e2 - s2 > end - start);
+                if !inside {
+                    named.insert(r);
+                }
+            }
+        }
+    }
+    (named.len() == 1).then(|| named.into_iter().next()).flatten()
+}
+
+/// The character index of each character's first byte in `s`, and of its end.
+fn char_positions(s: &str) -> Vec<usize> {
+    let mut out = vec![0; s.len() + 1];
+    let mut n = 0;
+    for (i, _) in s.char_indices() {
+        out[i] = n;
+        n += 1;
+    }
+    out[s.len()] = n;
+    out
+}
+
+fn sentences(line: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut chars = line.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if matches!(c, '.' | '!' | '?') && chars.peek().is_none_or(|(_, n)| n.is_whitespace()) {
+            let end = i + c.len_utf8();
+            out.push(&line[start..end]);
+            start = end;
+        }
+    }
+    out.push(&line[start..]);
+    out.into_iter().map(str::trim).filter(|s| !s.is_empty()).collect()
+}
+
+/// A sentence that recommends something, and isn't a question or hedged.
+fn recommends(sentence: &str) -> bool {
+    if sentence.ends_with('?') {
+        return false;
+    }
+    let lower: String = sentence.chars().map(fold).collect();
+    let words: Vec<&str> = lower.split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '’')).filter(|w| !w.is_empty()).collect();
+    if words.iter().any(|w| HEDGES.contains(w) || w.ends_with("n't") || w.ends_with("n’t")) {
+        return false;
+    }
+    words.iter().any(|w| PICK_WORDS.contains(w) || w.starts_with("recommend")) || words.windows(2).any(|w| w == ["go", "with"])
+}
+
+/// Where `label` appears in `h` as a whole name, as byte ranges: neighbours may not be letters,
+/// digits or `_ + # -`, and a following `.` must end the sentence (so `Node` doesn't match
+/// `Node.js`). With `exact` (a short label matched case for case), a lone `A` or `I` opening the
+/// sentence is the word, not the label.
+fn occurrences(h: &str, label: &str, exact: bool) -> Vec<(usize, usize)> {
+    let joins = |c: char| c.is_alphanumeric() || matches!(c, '_' | '+' | '#' | '-');
+    let mut out = Vec::new();
+    if label.is_empty() {
+        return out;
+    }
+    let mut from = 0;
+    while let Some(at) = h[from..].find(label) {
+        let start = from + at;
+        let end = start + label.len();
+        from = start + h[start..].chars().next().map_or(1, char::len_utf8);
+        if h[..start].chars().next_back().is_some_and(joins) {
+            continue;
+        }
+        let mut after = h[end..].chars();
+        if let Some(next) = after.next() {
+            if joins(next) || (next == '.' && after.next().is_some_and(|c| !c.is_whitespace())) {
+                continue;
+            }
+        }
+        if exact && matches!(label, "A" | "I") && h[..start].chars().all(|c| !c.is_alphanumeric()) {
+            continue;
+        }
+        out.push((start, end));
+    }
+    out
+}
+
+/// Text without emphasis or code marks, links reduced to their text: for matching only.
+fn plain(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    // Once no `)` follows, none will: don't look again (keeps this linear)
+    let mut closes = true;
+    while i < chars.len() {
+        let c = chars[i];
+        if closes && c == ']' && chars.get(i + 1) == Some(&'(') {
+            match chars[i + 2..].iter().position(|&x| x == ')') {
+                Some(close) => {
+                    i += close + 3;
+                    continue;
+                }
+                None => closes = false,
+            }
+        }
+        if !matches!(c, '*' | '`' | '[' | ']') {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// One lowercase character for one character, so positions line up.
+fn fold(c: char) -> char {
+    c.to_lowercase().next().unwrap_or(c)
+}
+
+// Steps
+
+const STEP_HINTS: [&str; 5] = ["step", "steps", "checklist", "plan", "todo"];
+/// Intro words that make a numbered list something other than steps to follow.
+const NOT_STEPS: [&str; 24] = [
+    "reason", "reasons", "why", "benefit", "benefits", "advantage", "advantages", "tip", "tips", "example", "examples",
+    "idea", "ideas", "pros", "cons", "option", "options", "comparison", "compare", "pricing", "price", "prices", "tier",
+    "tiers",
+];
+
+fn steps(l: &List) -> Option<Steps> {
+    if !l.clean || l.number != 1 || !(3..=15).contains(&l.items.len()) {
+        return None;
+    }
+    if l.items.iter().any(|t| t.is_empty() || t.chars().count() > 300 || is_task(t) || has_html(t)) {
+        return None;
+    }
+    let numbered = l.items.iter().all(|t| starts_step_n(t));
+    let intro = l.intro.map(words).unwrap_or_default();
+    let heading = l.heading.map(words).unwrap_or_default();
+    let hinted = |w: &[String]| {
+        w.iter().any(|x| STEP_HINTS.contains(&x.as_str()))
+            || w.windows(2).any(|p| p == ["how", "to"] || p == ["to", "do"])
+    };
+    let hedged = |w: &[String]| w.iter().any(|x| NOT_STEPS.contains(&x.as_str()));
+    let introduced = !hedged(&intro) && (hinted(&intro) || (hinted(&heading) && !hedged(&heading)));
+    if !(numbered || introduced) {
+        return None;
+    }
+    Some(Steps {
+        id: "b0".into(),
+        source: Source { kind: "markdown_list".into(), index: l.index },
+        items: l.items.iter().enumerate().map(|(i, t)| Step { id: format!("s{i}"), text: t.to_string() }).collect(),
+        provenance: Provenance { kind: "reply_text".into() },
+    })
+}
+
+fn words(s: &str) -> Vec<String> {
+    let lower: String = s.chars().map(fold).collect();
+    lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+}
+
+fn is_task(item: &str) -> bool {
+    ["[ ]", "[x]", "[X]"].iter().any(|t| item.strip_prefix(t).is_some_and(|r| r.is_empty() || r.starts_with(' ')))
+}
+
+/// "Step 1", "**Step 2:**" and the like.
+fn starts_step_n(item: &str) -> bool {
+    let s = item.trim_start_matches(['*', '_', ' ']);
+    let Some(head) = s.get(..4) else { return false };
+    if !head.eq_ignore_ascii_case("step") {
+        return false;
+    }
+    let digits = s[4..].trim_start();
+    digits.starts_with(|c: char| c.is_ascii_digit())
+}
+
+#[cfg(test)]
+#[path = "selector_tests.rs"]
+mod tests;

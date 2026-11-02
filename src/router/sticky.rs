@@ -199,6 +199,7 @@ mod tests {
             created_at: Some(t(at)),
             thread_id: None,
             meta: None,
+            results: None,
         }
     }
 

@@ -1635,6 +1635,7 @@ mod tests {
                     created_at: None,
                     thread_id: None,
                     meta: None,
+                    results: None,
                 },
                 Message {
                     id: "m2".into(),
@@ -1649,6 +1650,7 @@ mod tests {
                     created_at: None,
                     thread_id: None,
                     meta: None,
+                    results: None,
                 },
                 Message {
                     id: "m3".into(),
@@ -1663,6 +1665,7 @@ mod tests {
                     created_at: None,
                     thread_id: None,
                     meta: None,
+                    results: None,
                 },
             ],
             model_override: None,

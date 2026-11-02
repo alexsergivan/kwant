@@ -767,6 +767,7 @@ pub(crate) mod tests {
             created_at: None,
             thread_id: None,
             meta: None,
+            results: None,
         }
     }
 
