@@ -3,7 +3,7 @@
 // override this with `markdown` / `csv` in its registry entry.
 
 import type { SmartBlock } from '../../smartResults';
-import { comparisonCsv, csvCell, plainText, stepsMarkdown } from '../../smartResults';
+import { comparisonCsv, csvCell, plainText, previewNote, stepsMarkdown } from '../../smartResults';
 
 type Row = Record<string, unknown>;
 
@@ -29,7 +29,11 @@ export function blockRows(block: SmartBlock): Row[] {
     case 'cards':
       return block.items.map(({ title, url, description, meta }) => ({ title, url, description, meta: meta.join(' · ') }));
     case 'files':
-      return block.items.map(({ name, mime, size_bytes }) => ({ name, type: mime, bytes: size_bytes }));
+      // A cut preview says so in its own row, so pasted data never passes a partial preview off as the file.
+      return block.items.map(({ name, mime, size_bytes, preview }) => {
+        const note = previewNote(preview);
+        return { name, type: mime, bytes: size_bytes, ...(note ? { preview: `${note}; Copy data copies the preview only` } : {}) };
+      });
     case 'steps':
       return block.items.map(({ text, done, when, owner }) => ({ ...(when != null ? { when } : {}), step: text, ...(owner != null ? { owner } : {}), ...(done != null ? { done } : {}) }));
     default:

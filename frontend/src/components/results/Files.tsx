@@ -1,7 +1,22 @@
 import React from 'react';
 import { File as FileIcon, Image as ImageIcon } from 'lucide-react';
-import { FileItem, FilePreview, FilesBlock, inRange, isIndex, isObj, isText, parseCommon, uniqueIds } from '../../smartResults';
+import { FileItem, FilePreview, FilesBlock, PreviewCut, inRange, isIndex, isObj, isText, parseCommon, previewNote, uniqueIds } from '../../smartResults';
 import type { RendererProps } from './registry';
+
+/** The optional cut fields: each a non-negative integer (`truncated` only ever `true`); anything else is invalid. */
+function validCut(v: Record<string, unknown>, keys: ('total_rows' | 'total_cols' | 'total_lines')[]): PreviewCut | undefined {
+  const cut: PreviewCut = {};
+  for (const k of keys) {
+    if (v[k] === undefined || v[k] === null) continue;
+    if (!isIndex(v[k])) return undefined;
+    cut[k] = v[k] as number;
+  }
+  if (v.truncated !== undefined && v.truncated !== null) {
+    if (v.truncated !== true) return undefined;
+    cut.truncated = true;
+  }
+  return cut;
+}
 
 function validPreview(v: unknown): FilePreview | undefined {
   if (v === null || v === undefined) return null;
@@ -11,11 +26,15 @@ function validPreview(v: unknown): FilePreview | undefined {
     const columns = v.columns as string[];
     if (!Array.isArray(v.rows) || !v.rows.every((r) => Array.isArray(r) && r.length === columns.length && r.every((c) => isText(c, 300, true))))
       return undefined;
-    return { kind: 'table', columns, rows: v.rows as string[][] };
+    const cut = validCut(v, ['total_rows', 'total_cols']);
+    if (!cut) return undefined;
+    return { kind: 'table', columns, rows: v.rows as string[][], ...cut };
   }
   if (v.kind === 'text') {
     if (!isText(v.excerpt, 2000, true)) return undefined;
-    return { kind: 'text', excerpt: v.excerpt };
+    const cut = validCut(v, ['total_lines']);
+    if (!cut) return undefined;
+    return { kind: 'text', excerpt: v.excerpt, ...cut };
   }
   if (v.kind === 'image') return { kind: 'image' };
   return undefined;
@@ -75,15 +94,34 @@ const TablePreview: React.FC<{ columns: string[]; rows: string[][] }> = ({ colum
   </div>
 );
 
+/** The muted line that says a preview was cut; nothing for a complete one. */
+const CutNote: React.FC<{ preview: FilePreview }> = ({ preview }) => {
+  const note = previewNote(preview);
+  return note ? (
+    <p className="mt-1 text-[11px] text-zinc-500" data-preview-note>
+      {note}
+    </p>
+  ) : null;
+};
+
 const FilePreviewView: React.FC<{ item: FileItem }> = ({ item }) => {
   const preview = item.preview;
   if (!preview) return null;
-  if (preview.kind === 'table') return <TablePreview columns={preview.columns} rows={preview.rows} />;
+  if (preview.kind === 'table')
+    return (
+      <>
+        <TablePreview columns={preview.columns} rows={preview.rows} />
+        <CutNote preview={preview} />
+      </>
+    );
   if (preview.kind === 'text') {
     return (
-      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 font-mono text-[11px] leading-relaxed text-zinc-300">
-        {preview.excerpt}
-      </pre>
+      <>
+        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 font-mono text-[11px] leading-relaxed text-zinc-300">
+          {preview.excerpt}
+        </pre>
+        <CutNote preview={preview} />
+      </>
     );
   }
   // image previews have no renderable source in this contract yet; show a labelled placeholder

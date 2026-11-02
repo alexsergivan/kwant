@@ -90,3 +90,11 @@ test('files: name, type and size are shown; a table and a text preview render, a
   assert.match(m.html.files, /Image preview not available yet/);
   assert.doesNotMatch(m.html.files, /<img/, 'never renders an <img> from unverified attachment data');
 });
+
+test('files: a cut preview gets a muted note, a complete one gets none', () => {
+  assert.match(m.html.files, /Showing 2 of 143 rows/);
+  assert.match(m.html.files, /Showing 3 of 512 lines/);
+  assert.match(m.html.files, /Preview, file is longer/);
+  // 3 cut previews in the fixture; the complete csv, the markdown notes and the image carry no note.
+  assert.equal((m.html.files.match(/data-preview-note/g) ?? []).length, 3);
+});

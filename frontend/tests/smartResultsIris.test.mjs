@@ -14,6 +14,8 @@ const m = await loadBundled(`
   export { validFindings } from './src/components/results/Findings';
   export { validVerification } from './src/components/results/Verification';
   export { validFiles } from './src/components/results/Files';
+  export { blockRows, blockCsv } from './src/components/results/exporters';
+  export { previewNote } from './src/smartResults';
 `);
 
 const block = (name) => m.FIXTURES[name].results.blocks[0];
@@ -111,4 +113,42 @@ test('files: size is a non-negative integer, preview kinds are checked, source i
   );
   const noPreview = m.validFiles({ ...b, items: [{ ...b.items[0], preview: null }] });
   assert.ok(noPreview, 'a file may have no preview');
+});
+
+test('files: cut-preview fields are optional, non-negative integers, and truncated is only ever true', () => {
+  const b = block('files');
+  const table = (extra) => ({ ...b, items: [{ ...b.items[0], preview: { kind: 'table', columns: ['a'], rows: [['x']], ...extra } }] });
+  const text = (extra) => ({ ...b, items: [{ ...b.items[0], preview: { kind: 'text', excerpt: 'x', ...extra } }] });
+  assert.ok(m.validFiles(table({})), 'a complete preview needs none of them');
+  assert.equal(m.validFiles(table({ total_rows: 143, total_cols: 9 })).items[0].preview.total_rows, 143);
+  assert.equal(m.validFiles(text({ total_lines: 512 })).items[0].preview.total_lines, 512);
+  assert.equal(m.validFiles(text({ truncated: true })).items[0].preview.truncated, true);
+  assert.equal(m.validFiles(table({ total_rows: -1 })), null, 'negative total');
+  assert.equal(m.validFiles(table({ total_rows: 1.5 })), null, 'fractional total');
+  assert.equal(m.validFiles(table({ total_cols: '9' })), null, 'string total');
+  assert.equal(m.validFiles(text({ total_lines: NaN })), null, 'NaN total');
+  assert.equal(m.validFiles(text({ truncated: false })), null, 'truncated is only ever true');
+  assert.equal(m.validFiles(text({ truncated: 'yes' })), null, 'truncated is a boolean');
+});
+
+test('files: Copy data on a cut preview says it copies the preview only; complete previews are unchanged', () => {
+  const rows = m.blockRows(block('files'));
+  const by = (n) => rows.find((r) => r.name === n);
+  assert.deepEqual(Object.keys(by('redirects.csv')), ['name', 'type', 'bytes'], 'complete preview: no extra column');
+  assert.deepEqual(Object.keys(by('dns.png')), ['name', 'type', 'bytes']);
+  assert.match(by('urls-all.csv').preview, /^Showing 2 of 143 rows; Copy data copies the preview only$/);
+  assert.match(by('crawl.log').preview, /Showing 3 of 512 lines/);
+  assert.match(by('dump.txt').preview, /Preview, file is longer/);
+  assert.match(m.blockCsv(block('files')), /copies the preview only/);
+});
+
+test('previewNote: counts the rows and lines drawn, and says nothing when the totals do not exceed them', () => {
+  const t = (extra) => ({ kind: 'table', columns: ['a', 'b', 'c'], rows: [['1', '2', '3']], ...extra });
+  assert.equal(m.previewNote(t({ total_rows: 20, total_cols: 12 })), 'Showing 1 of 20 rows, 3 of 12 columns');
+  assert.equal(m.previewNote(t({ total_cols: 12 })), 'Showing 3 of 12 columns');
+  assert.equal(m.previewNote(t({ total_rows: 1 })), 'Preview, file is longer', 'a total that is not larger than the rows drawn still marks a cut');
+  assert.equal(m.previewNote(t({})), null);
+  assert.equal(m.previewNote({ kind: 'text', excerpt: 'a\nb\n', total_lines: 9 }), 'Showing 2 of 9 lines', 'a trailing newline is not a line');
+  assert.equal(m.previewNote({ kind: 'image' }), null);
+  assert.equal(m.previewNote(null), null);
 });

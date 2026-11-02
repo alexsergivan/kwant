@@ -168,9 +168,19 @@ export interface VerificationBlock extends BlockCommon<'verification'> {
   summary: string;
 }
 
+/**
+ * Set only when the server cut the preview: totals of the whole file (rows and columns for a table,
+ * lines for text), or `truncated: true` when it knows the preview is partial but not the totals.
+ */
+export interface PreviewCut {
+  total_rows?: number;
+  total_cols?: number;
+  total_lines?: number;
+  truncated?: true;
+}
 export type FilePreview =
-  | { kind: 'table'; columns: string[]; rows: string[][] }
-  | { kind: 'text'; excerpt: string }
+  | ({ kind: 'table'; columns: string[]; rows: string[][] } & PreviewCut)
+  | ({ kind: 'text'; excerpt: string } & PreviewCut)
   | { kind: 'image' }
   | null;
 export interface FileItem {
@@ -181,6 +191,25 @@ export interface FileItem {
   size_bytes: number;
   preview: FilePreview;
 }
+/**
+ * The muted line under a cut preview: "Showing 20 of 143 rows", "Showing 20 of 512 lines", or
+ * "Preview, file is longer" when only `truncated` is known. Null for a complete preview. The shown
+ * counts are the rows and lines actually drawn; the totals are the server's.
+ */
+export function previewNote(preview: FilePreview): string | null {
+  if (!preview || preview.kind === 'image') return null;
+  const parts: string[] = [];
+  if (preview.kind === 'table') {
+    if (preview.total_rows !== undefined && preview.total_rows > preview.rows.length) parts.push(`${preview.rows.length} of ${preview.total_rows} rows`);
+    if (preview.total_cols !== undefined && preview.total_cols > preview.columns.length) parts.push(`${preview.columns.length} of ${preview.total_cols} columns`);
+  } else if (preview.total_lines !== undefined) {
+    const shown = preview.excerpt.replace(/\n$/, '').split('\n').length;
+    if (preview.total_lines > shown) parts.push(`${shown} of ${preview.total_lines} lines`);
+  }
+  if (parts.length) return `Showing ${parts.join(', ')}`;
+  return preview.truncated || preview.total_rows !== undefined || preview.total_cols !== undefined || preview.total_lines !== undefined ? 'Preview, file is longer' : null;
+}
+
 /** 1–10 files; source is always slot. */
 export interface FilesBlock extends BlockCommon<'files'> {
   items: FileItem[];
