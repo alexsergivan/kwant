@@ -977,6 +977,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'FactDispute':
             if (event.data?.dispute?.id) emitMission({ type: 'fact_dispute', data: { dispute: event.data.dispute } });
             break;
+          // Goals (0.6.5): the board's Goals strip reads the goal again.
+          case 'goal_updated':
+          case 'GoalUpdated': {
+            const id = event.data?.id ?? event.data?.goal?.id;
+            if (typeof id === 'string' && id) emitMission({ type: 'goal_updated', data: { id, status: event.data?.status ?? event.data?.goal?.status ?? null } });
+            break;
+          }
           case 'routine_run':
           case 'RoutineRun':
             emitContinuity({ type: 'routine_run', data: event.data });

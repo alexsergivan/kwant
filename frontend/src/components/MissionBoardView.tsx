@@ -36,6 +36,8 @@ import { ModernAvatar } from './ModernAvatar';
 import { PerformancePanel } from './PerformancePanel';
 import { TierRequests } from './TierProposals';
 import { FactNeedsYouAction, FactsLedger } from './FactsLedger';
+import { GoalChip, GoalsStrip, KeepTrueBox } from './GoalsStrip';
+import { OPEN_GOAL_EVENT, missionGoalLink } from '../goals';
 import { isFactNeedsYou } from '../truthLedger';
 import { RisksSection } from './RisksSection';
 import { AuditWaiting, Risk, RiskResolution, TaskRisks, auditCardPlace, auditLive, auditWaiting, openRiskCounts, riskBadgeText, riskResolvedText } from '../auditor';
@@ -535,6 +537,8 @@ export const MissionSummary: React.FC<{
   onSetBudget?: (budget: number) => void;
 }> = ({ mission: m, busy, onApprove, onCancel, onSetBudget }) => {
   const st = missionStatusLabel(m.status);
+  // A mission made to fix a goal (0.6.5) links back to it.
+  const goalLink = missionGoalLink(m);
   const total = Object.entries(m.counts)
     .filter(([k]) => k !== 'cancelled')
     .reduce((n, [, v]) => n + v, 0);
@@ -544,7 +548,12 @@ export const MissionSummary: React.FC<{
         <Target size={16} className="mt-0.5 shrink-0 text-sky-400" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold text-zinc-100 break-words">{m.title}</h3>
-          {m.goal && <p className="mt-0.5 text-xs text-zinc-400 break-words">{m.goal}</p>}
+          {typeof m.goal === 'string' && m.goal && <p className="mt-0.5 text-xs text-zinc-400 break-words">{m.goal}</p>}
+          {goalLink && (
+            <div className="mt-1">
+              <GoalChip goal={goalLink} />
+            </div>
+          )}
         </div>
         <Badge tone={st.tone}>{st.label}</Badge>
         {m.over_budget && <Badge tone="rose">Over its limit</Badge>}
@@ -2105,6 +2114,7 @@ export const TaskDetailBody: React.FC<{
             </div>
           </form>
         )}
+        {t.state === 'verified' && !forking && <KeepTrueBox task={t} checks={detail.checks} names={names} />}
       </div>
 
       {flags.length > 0 && (
@@ -2535,6 +2545,10 @@ export interface MissionBoardViewProps {
   onMission: (id: string | null) => void;
   onColumn: (c: Column) => void;
   onOpenTask: (t: Task) => void;
+  /** Open any task by id, listed or not (a goal's fix task); falls back to the listed tasks. */
+  onOpenTaskId?: (id: string) => void;
+  /** The board's space, for a goal drafted from a sentence. */
+  spaceId?: string;
   onApproveMission: (m: Mission) => void;
   onCancelMission: (m: Mission) => void;
   /** Set or remove a mission's token limit (0 = none). */
@@ -2594,6 +2608,8 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
   onMission,
   onColumn,
   onOpenTask,
+  onOpenTaskId,
+  spaceId,
   onApproveMission,
   onCancelMission,
   onSetMissionBudget,
@@ -2725,6 +2741,16 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
               <FactsLedger names={names} taskTitles={taskTitles} onOpenTask={openTaskById} now={now} />
 
               <TierRequests names={names} now={now} />
+
+              {/* Goals (0.6.5) on "All work". In a mission's own view only its drawer stays, so a "Goal:" chip opens it. */}
+              <GoalsStrip
+                names={names}
+                now={now}
+                spaceId={spaceId ?? null}
+                hidden={!!missionId}
+                onOpenTask={onOpenTaskId ?? openTaskById}
+                onOpenMission={(id) => onMission(id)}
+              />
 
               {visibleMissions.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2">
@@ -3096,6 +3122,15 @@ export const MissionBoardPage: React.FC<{
     setOpenId(null);
     setDetail(null);
   };
+  // "Open goal" from a task's "Keep this true": the goal drawer takes the task panel's place.
+  useEffect(() => {
+    const onGoal = () => {
+      setOpenId(null);
+      setDetail(null);
+    };
+    window.addEventListener(OPEN_GOAL_EVENT, onGoal);
+    return () => window.removeEventListener(OPEN_GOAL_EVENT, onGoal);
+  }, []);
 
   const act = async (a: TaskAction, reason?: string) => {
     if (!openId) return;
@@ -3535,6 +3570,15 @@ export const MissionBoardPage: React.FC<{
         onMission={setMissionId}
         onColumn={setColumn}
         onOpenTask={(t) => openTask(t.id)}
+        spaceId={spaceId}
+        onOpenTaskId={(id) => {
+          const t = tasksById[id];
+          if (t) {
+            const c = columnOfTask(t);
+            if (c) setColumn(c);
+          }
+          openTask(id);
+        }}
         onApproveMission={(m) => missionAction(m, true)}
         onCancelMission={(m) => missionAction(m, false)}
         onSetMissionBudget={setMissionBudget}

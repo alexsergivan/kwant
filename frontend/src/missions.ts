@@ -41,6 +41,8 @@ export interface Mission {
   updated_at: string;
   finished_at: string | null;
   counts: StateCounts;
+  /** Goals (0.6.5): the goal this mission was opened to fix. Older servers leave it out. */
+  goal_link?: { id: string; title: string } | null;
 }
 
 export interface NeedsYouItem {
@@ -1605,7 +1607,9 @@ export type MissionEvent =
   /** Flight School C4: a bot asked for a tier, or a proposal was granted, declined or went stale. */
   | { type: 'capability_changed'; data: { capability: CapabilityChangedEvent } }
   | { type: 'fact_changed'; data: { fact: FactChangedEvent } }
-  | { type: 'fact_dispute'; data: { dispute: FactDisputeEvent } };
+  | { type: 'fact_dispute'; data: { dispute: FactDisputeEvent } }
+  /** Goals (0.6.5): a goal changed status or was checked, edited, approved or deleted. */
+  | { type: 'goal_updated'; data: { id: string; status: string | null } };
 
 const bus = typeof EventTarget !== 'undefined' ? new EventTarget() : null;
 
