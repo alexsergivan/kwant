@@ -46,7 +46,7 @@ pub fn parse_mentions_with_lookup(
             let is_boundary = i == 0
                 || (!chars[i - 1].is_ascii_alphanumeric() && chars[i - 1] != '_' && chars[i - 1] != '-');
 
-            if is_boundary {
+            if is_boundary && !in_link(&chars, i) {
                 i += 1;
                 let start = i;
                 while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '-') {
@@ -84,6 +84,24 @@ pub fn parse_mentions_with_lookup(
     }
 
     mentions
+}
+
+/// Whether the `@` at `at` is part of a link, where it names an account on that site, not a
+/// teammate: a URL (`https://www.tiktok.com/@munichspots/video/…`, `tiktok.com/@munichspots`) or a
+/// markdown link's text (`[@munichspots](https://…)`). `@Growth/@Security` is still two mentions.
+fn in_link(chars: &[char], at: usize) -> bool {
+    let start = chars[..at].iter().rposition(|c| c.is_whitespace()).map_or(0, |i| i + 1);
+    let word: String = chars[start..at].iter().collect();
+    let host = word.split('/').next().unwrap_or_default();
+    if word.contains("://") || (word.contains('/') && host.contains('.')) {
+        return true;
+    }
+    let open = chars[..at].iter().rposition(|&c| c == '[' || c == ']' || c == '\n');
+    if open.is_none_or(|o| chars[o] != '[') {
+        return false;
+    }
+    let close = chars[at..].iter().position(|&c| c == ']' || c == '[' || c == '\n').map(|j| at + j);
+    close.is_some_and(|c| chars[c] == ']' && chars.get(c + 1) == Some(&'('))
 }
 
 fn is_team_mention(token: &str) -> bool {
@@ -370,6 +388,24 @@ mod tests {
         assert_eq!(handoff_targets("Over to @Analyst.", &names), vec![1]);
         assert_eq!(handoff_targets("@Community... then @Analyst", &names), vec![0, 1]);
         assert!(parse_mentions("follow @mr.absurdia on TikTok").is_empty());
+    }
+
+    /// QA on 0.6.4 (2026-11-02): the Concierge linked a TikTok video and got "Not sent to
+    /// munichspots: no teammate has that name here". A handle in a link names an account, not a bot.
+    #[test]
+    fn a_handle_in_a_link_is_not_a_mention() {
+        let names = ["Community", "Analyst", "Growth", "Security"];
+        let reply = "Try https://www.tiktok.com/@munichspots/video/7273068214848982304 and @Analyst, check it";
+        let m = handoff_mentions(reply, &names);
+        assert_eq!((m.targets, m.unknown), (vec![1], vec![]));
+        let m = handoff_mentions("See tiktok.com/@munichspots, (https://medium.com/@awriter) and @Community", &names);
+        assert_eq!((m.targets, m.unknown), (vec![0], vec![]));
+        let m = handoff_mentions("[@munichspots](https://www.tiktok.com/@munichspots) for @Analyst", &names);
+        assert_eq!((m.targets, m.unknown), (vec![1], vec![]));
+        assert!(parse_mentions("https://www.tiktok.com/@munichspots/video/7273068214848982304").is_empty());
+        // Mentions next to a slash, or in brackets that aren't a link, still count
+        assert_eq!(handoff_targets("@Growth/@Security, please", &names), vec![2, 3]);
+        assert_eq!(handoff_targets("[@Analyst] and/or @Community", &names), vec![1, 0]);
     }
 
     /// Oleks's screenshot (2026-10-24): "Handing off now: @Social revise …, @Writer draft Pillar 1 …"

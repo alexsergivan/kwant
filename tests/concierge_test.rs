@@ -396,6 +396,19 @@ async fn a_hand_back_passes_on_the_message_it_answers_not_the_newest() {
     assert!(err && text.contains("already handed back"), "{text}");
 }
 
+/// A TikTok link in the person's message names an account, not a teammate: "@munichspots" in it
+/// made the send fail with 400, as an @mention of a bot that isn't here.
+#[tokio::test]
+async fn a_message_with_a_handle_in_a_link_is_routed() {
+    let (app, state, _tmp) = setup().await;
+    let script = ok(&app, "POST", "/api/kwants", Some(specialist("Scriptwriter", "TikTok Scriptwriter", "Scripts and hooks for book videos."))).await["id"].as_str().unwrap().to_string();
+    let atlas = ok(&app, "POST", "/api/kwants", Some(specialist("Atlas", "Technical SEO", "Crawl errors and sitemaps."))).await["id"].as_str().unwrap().to_string();
+    only(&app, &state, &[&script, &atlas]).await;
+    let general = state.db.general_channel(&SpaceId::default_space()).await.unwrap().expect("#general").id;
+    let (to, _) = routed_to(&app, &state, &general, "Write a TikTok hook like https://www.tiktok.com/@munichspots/video/7273068214848982304").await;
+    assert_eq!(to, script);
+}
+
 /// The bot routes read and update covers/avoids; left out, a list stays as it is.
 #[tokio::test]
 async fn covers_and_avoids_are_read_and_updated() {
