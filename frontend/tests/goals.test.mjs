@@ -23,7 +23,7 @@ const b = await loadBundled(`
   import { GoalsStrip, GoalRow, GoalDetailBody } from './src/components/GoalsStrip';
   export { default as React } from 'react';
   export { createRoot } from 'react-dom/client';
-  export { GoalsStrip, GoalRow, GoalDetailBody, GoalForm, GoalStatusPill, GoalTimeline } from './src/components/GoalsStrip';
+  export { GoalsStrip, GoalRow, GoalDetailBody, GoalForm, GoalStatusPill, GoalTimeline, KeepTrueBox, declinedText } from './src/components/GoalsStrip';
   export * from './src/goals';
   export { emitMission } from './src/missions';
   export const stripHtml = (p) => renderToStaticMarkup(React.createElement(GoalsStrip, p));
@@ -548,4 +548,205 @@ test('the board shows Goals on All work only, and there is no setting', () => {
   assert.doesNotMatch(settings, /goals/i, 'Settings has no Goals switch');
   assert.equal(typeof b.parseGoalsSetting, 'undefined');
   assert.equal(typeof b.GOALS_SETTING_EVENT, 'undefined');
+});
+
+// ---------------------------------------------------------------------------
+// Plan v2 quiet deltas D1-D9 (smart-results-goals/goals-ui-quiet-deltas.md; Rigel's G-U-16..24, G-Q-27, G-Q-28).
+
+const failedCheck = () => check({ latest: { status: 'failed', verdict: 'not_met', excerpt: 'HTTP 502', observed_at: minsAgo(10) } });
+/** A failing goal with an open remediation: `held` is the Fix's run task, `report` the diagnosis, `opened` how long ago. */
+const incident = ({ held = 't_run', report = true, opened = 20, id = 'g1', mode = 'suggest', ...over } = {}) =>
+  goal({
+    id, status: 'not_met', mode, checks: [failedCheck()],
+    open_mission: { id: 'm1', title: 'Restore: The site stays up', status: 'active', attempt: 1, opened_at: minsAgo(opened), run_task_id: held, ...(report ? { cause: 'The disk is full.', proposed_fix: 'Delete old logs.' } : {}) },
+    ...over,
+  });
+const incidentApi = (list, over = {}) => ({
+  ...fakeApi(list),
+  notNow: async (id, key) => (incidentApi.calls.push(['notNow', id, key]), goal({ id, status: 'needs_you', status_reason: 'declined', mode: 'suggest', checks: [failedCheck()], open_mission: list[0].open_mission })),
+  alwaysFix: async (id, key) => (incidentApi.calls.push(['alwaysFix', id, key]), goal({ id, status: 'not_met', mode: 'fix', checks: [failedCheck()], open_mission: null })),
+  runFix: async (task, key) => (incidentApi.calls.push(['runFix', task, key]), true),
+  ...over,
+});
+incidentApi.calls = [];
+const used = () => (localStorage.removeItem('kwnt.goals.notnow'), incidentApi.calls.splice(0));
+
+test('D5: no Fix it, Not now or Always fix before there is a diagnosis; they come with the report, or after a failed look', async () => {
+  const looking = incident({ report: false, opened: 5 });
+  const row = b.rowHtml({ goal: looking, names, now: NOW, onAction() {}, decision: b.goalDecision(looking, [], NOW, null) });
+  assert.match(text(row), /Cody is looking into it/);
+  assert.doesNotMatch(row, /data-goal-fix|data-goal-not-now|data-goal-always/, 'no buttons while it looks');
+  assert.equal(b.displayStatus(looking, [], NOW), 'not_met', 'Failing while the bot looks: nobody is asked yet');
+
+  const ready = incident();
+  assert.equal(b.diagnosisPhase(ready, [], NOW), 'ready');
+  assert.equal(b.displayStatus(ready, [], NOW), 'needs_you');
+  const full = b.detailHtml({ detail: b.parseGoalDetail({ goal: ready, checks: ready.checks, events: [], fix_tasks: [], missions: [] }), names, now: NOW });
+  assert.match(text(full), /Likely cause: The disk is full\. Proposed fix: Delete old logs\./);
+  for (const a of ['data-goal-fix', 'data-goal-not-now', 'data-goal-always']) assert.match(full, new RegExp(a), a);
+  assert.match(text(full), /Fix it Not now Always fix this goal/);
+
+  // Thirty minutes with no report: it couldn't finish; the person still gets the choice.
+  const stuck = incident({ report: false, opened: 31 });
+  assert.equal(b.diagnosisPhase(stuck, [], NOW), 'failed');
+  const t = text(b.detailHtml({ detail: b.parseGoalDetail({ goal: stuck, checks: stuck.checks, events: [], fix_tasks: [], missions: [] }), names, now: NOW }));
+  assert.match(t, /Cody couldn’t finish looking into it\. The fix waits for you\./);
+  assert.match(t, /Fix it Not now/);
+  // An investigated event is a report too (D4), and one that says failed is a failed look.
+  const ev = (detail) => [{ id: 'e1', kind: 'investigated', actor: 'kwant', detail, created_at: minsAgo(3) }];
+  assert.equal(b.diagnosisPhase(looking, ev({ cause: 'Disk full' }), NOW), 'ready');
+  assert.equal(b.diagnosisPhase(looking, ev({ failed: true }), NOW), 'failed');
+});
+
+test('D1/D3: Not now calls the route once, silently; the goal then reads Failing, never Needs you, and keeps a quiet Fix it', async () => {
+  used();
+  const g1 = incident();
+  const api = incidentApi([g1]);
+  const m = await mount(b.GoalsStrip, { names, now: NOW, api, initial: { goals: [g1] } });
+  assert.equal(m.q('[data-goal="g1"]').dataset.status, 'needs_you');
+  await m.click('[data-goal-not-now]');
+  await settle();
+  const calls = used();
+  assert.deepEqual(calls.map((c) => [c[0], c[1]]), [['notNow', 'g1']], 'one call, nothing else');
+  assert.ok(calls[0][2], 'sends an Idempotency-Key');
+  // `declined` reads Failing, and nobody is asked again: no amber, no needs-you count (G-Q-27/28).
+  assert.equal(m.q('[data-goal="g1"]').dataset.status, 'not_met');
+  assert.doesNotMatch(m.q('[data-goal-counts]').textContent, /need/);
+  assert.ok(!m.q('[data-goal-not-now]') && !m.q('[data-goal-always]'), 'no more asking');
+  assert.match(m.q('[data-goal-line="declined"]').textContent, /You chose Not now/);
+  assert.ok(m.q('[data-goal-fix-quiet]'), 'a quiet Fix it stays');
+  assert.ok(!m.q('[data-goals-notice]'), 'silent: no notice, no toast');
+  assert.ok(!m.q('[role="alert"]'));
+  m.done();
+  // The text reads the same from another device: the server's `declined`.
+  const server = goal({ id: 'g1', status: 'needs_you', status_reason: 'declined', checks: [failedCheck()], open_mission: incident().open_mission });
+  assert.equal(b.displayStatus(server, [], NOW), 'not_met');
+  assert.equal(b.goalDecision(server, [], NOW).kind, 'declined');
+  assert.equal(b.declinedText(minsAgo(0), NOW), 'You chose Not now at ' + new Date(NOW).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '. The fix waits; it’s dropped if this recovers.');
+  assert.match(b.declinedText(null, NOW), /^Not now\./);
+});
+
+test('D1: on a server without the route, Not now only hides it here; any other error undoes the hide and says so', async () => {
+  used();
+  const g1 = incident();
+  for (const status of [404, 405, 0]) {
+    used();
+    const api = incidentApi([g1], { notNow: async () => { throw new b.GoalError('nope', status); } });
+    const m = await mount(b.GoalsStrip, { names, now: NOW, api, initial: { goals: [g1] } });
+    await m.click('[data-goal-not-now]');
+    await settle();
+    assert.ok(m.q('[data-goal-line="declined"]'), `${status}: hidden locally`);
+    assert.ok(!m.q('[data-goal-not-now]'));
+    assert.ok(!m.q('[data-goal="g1"] [data-goal-error]'), `${status}: no error shown`);
+    m.done();
+  }
+  used();
+  const api = incidentApi([g1], { notNow: async () => { throw new b.GoalError('Only you can change goals.', 403); } });
+  const m = await mount(b.GoalsStrip, { names, now: NOW, api, initial: { goals: [g1] } });
+  await m.click('[data-goal-not-now]');
+  await settle();
+  assert.ok(m.q('[data-goal-not-now]'), 'the decision is back');
+  assert.equal(m.q('[data-goal="g1"] [data-goal-error]').textContent, 'Only you can change goals.');
+  m.done();
+});
+
+test('D2: Always fix this goal calls the route, then runs the held fix; on a server without it, it sets fix mode instead', async () => {
+  used();
+  const g1 = incident();
+  const api = incidentApi([g1], { get: async (id) => b.parseGoalDetail({ goal: g1, checks: g1.checks, events: [], fix_tasks: [], missions: [] }) });
+  const m = await mount(b.GoalsStrip, { names, now: NOW, api, initial: { goals: [g1] } });
+  await m.click('[data-goal-always]');
+  await settle();
+  assert.deepEqual(used().map((c) => [c[0], c[1]]), [['alwaysFix', 'g1'], ['runFix', 't_run']], 'the route, then the held fix runs');
+  assert.match(m.q('[data-goals-notice]').textContent, /./);
+  m.done();
+
+  const old = incidentApi([g1], {
+    alwaysFix: async () => { throw new b.GoalError('missing', 404); },
+    update: async (id, patch) => (incidentApi.calls.push(['update', id, patch]), goal({ id, mode: 'fix', status: 'not_met', checks: [failedCheck()], open_mission: null })),
+  });
+  const m2 = await mount(b.GoalsStrip, { names, now: NOW, api: old, initial: { goals: [g1] } });
+  await m2.click('[data-goal-always]');
+  await settle();
+  const c = used();
+  assert.deepEqual(c.map((x) => x[0]), ['update', 'runFix']);
+  assert.deepEqual(c[0].slice(1), ['g1', { mode: 'fix' }]);
+  m2.done();
+
+  // Fix it alone runs the held task and does not change the mode.
+  const api3 = incidentApi([g1]);
+  const m3 = await mount(b.GoalsStrip, { names, now: NOW, api: api3, initial: { goals: [g1] } });
+  await m3.click('[data-goal-fix]');
+  await settle();
+  assert.deepEqual(used().map((x) => [x[0], x[1]]), [['runFix', 't_run']]);
+  m3.done();
+});
+
+test('D6: the pill says Failing, Needs you or Fixing only when that is true', () => {
+  const st = (g, ev = []) => b.displayStatus(g, ev, NOW);
+  assert.equal(st(incident({ report: false, opened: 2 })), 'not_met', 'looking: Failing');
+  assert.equal(st(incident()), 'needs_you', 'report ready, Fix held: Needs you');
+  assert.equal(st(incident({ held: null, mode: 'fix' }), []), 'not_met', 'fix mode, nothing running yet reads the server word');
+  // The Fix was released (no held task, a report in): it runs, so Fixing.
+  const running = goal({ status: 'fixing', mode: 'suggest', checks: [failedCheck()], open_mission: { id: 'm1', title: 'Restore', status: 'active', attempt: 1, opened_at: minsAgo(20), run_task_id: null, cause: 'x' } });
+  assert.equal(st(running), 'fixing');
+  // Fixing while the Fix is still held is not true: it's a decision.
+  const held = goal({ status: 'fixing', mode: 'suggest', checks: [failedCheck()], open_mission: { id: 'm1', title: 'Restore', status: 'active', attempt: 1, opened_at: minsAgo(20), run_task_id: 't_run', cause: 'x' } });
+  assert.equal(st(held), 'needs_you');
+  assert.equal(st(goal()), 'met');
+  assert.equal(b.goalStatusLook('met').label, 'OK');
+  assert.equal(b.goalStatusLook('not_met').label, 'Failing');
+  assert.equal(b.goalStatusLook('needs_you').label, 'Needs you');
+  assert.equal(b.goalStatusLook('fixing').label, 'Fixing');
+});
+
+test('D7: a waiting goal says what it waits for from status_reason, without a read of its own', () => {
+  const w = goal({ status: 'waiting', status_reason: 'Restore: kwant.si is up' });
+  assert.equal(w.waiting_for, 'Restore: kwant.si is up');
+  assert.equal(goal({ status: 'waiting', waiting_for: 'g2', status_reason: 'x' }).waiting_for, 'g2', 'an explicit waiting_for wins');
+  assert.equal(goal({ status: 'met', status_reason: 'x' }).waiting_for, null, 'only a waiting goal reads it');
+  assert.match(text(b.rowHtml({ goal: w, names, now: NOW })), /Waiting/);
+});
+
+test('D8: the list is enough; a goal that wants a look and carries no mission info gets at most three detail reads', async () => {
+  const bare = (id) => b.parseGoal({ id, space_id: 's1', title: `T${id}`, kwant_id: 'k_cody', status: 'not_met', mode: 'suggest', interval_minutes: 60, created_at: minsAgo(60), updated_at: minsAgo(5), checks: [failedCheck()] });
+  assert.equal(bare('a').has_mission_info, false);
+  assert.equal(goal().has_mission_info, true, 'a list row with open_mission (even null) needs no read');
+  const list = ['a', 'b', 'c', 'd', 'e'].map(bare);
+  const api = fakeApi([], { list: async () => (api.calls.push(['list']), list), get: async (id) => (api.calls.push(['get', id]), b.parseGoalDetail({ goal: { ...list.find((x) => x.id === id), open_mission: incident().open_mission }, checks: [failedCheck()], events: [], fix_tasks: [], missions: [] })) });
+  const m = await mount(b.GoalsStrip, { names, now: NOW, api });
+  await settle(50);
+  assert.ok(api.calls.filter((c) => c[0] === 'get').length <= 3, 'at most three reads per list load');
+  m.done();
+  const met = fakeApi([goal()]);
+  const m2 = await mount(b.GoalsStrip, { names, now: NOW, api: met, initial: { goals: [goal()] } });
+  await settle(20);
+  assert.equal(met.calls.filter((c) => c[0] === 'get').length, 0, 'OK goals are never read');
+  m2.done();
+});
+
+test('D9: Keep this true shows once per task; a repeat says Already kept true, and a goal’s own fix task has no button', async () => {
+  const passing = { id: 'ck1', kind: 'command', command: 'npm test', status: 'passed', required: true, label: 'Tests', spec: { command: 'npm test' } };
+  const task = { id: 't1', title: 'Add tests', state: 'verified', owner_kwant_id: 'k_cody' };
+  const fresh = (over) => goal({ id: 'gk', title: 'Add tests', status: 'checking', created_at: new Date().toISOString(), ...over });
+  const run = async (made) => {
+    const calls = [];
+    const m = await mount(b.KeepTrueBox, { task, checks: [passing], names, api: { fromTask: async (id) => (calls.push(id), made), approve: async (id) => (calls.push(['approve', id]), made) }, onOpenGoal() {} });
+    await m.click('[data-keep-true]');
+    await m.click('[data-keep-true-yes]');
+    await settle();
+    const t = m.q('[data-keep-true-done]').textContent.trim();
+    m.done();
+    return { t, calls };
+  };
+  const first = await run(fresh());
+  assert.match(first.t, /^Goal added: “Add tests”\. It’s checked every 1 hour\./);
+  assert.deepEqual(first.calls, ['t1']);
+  const again = await run(fresh({ created_at: minsAgo(30) }));
+  assert.match(again.t, /^Already kept true: “Add tests”\./);
+  assert.doesNotMatch(again.t, /Goal added/);
+
+  const board = readFileSync(new URL('../src/components/MissionBoardView.tsx', import.meta.url), 'utf8');
+  assert.match(board, /!inGoalMission && <KeepTrueBox/, 'no Keep this true on a task inside a goal’s remediation mission');
+  assert.match(board, /inGoalMission=\{!!missionGoalLink\(/);
 });

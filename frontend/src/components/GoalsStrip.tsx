@@ -1444,6 +1444,8 @@ export const GoalsStrip: React.FC<{
   // Detail reads for list rows that don't carry their incident (D8): the strip can show the decision without the drawer.
   const [reads, setReads] = useState<Record<string, GoalDetail>>({});
   const reading = useRef<Set<string>>(new Set());
+  // How many of those reads this list load has used; a fresh list gets three again.
+  const readsUsed = useRef(0);
   const keys = useRef<Record<string, string>>({});
   // A double press sends once: state updates land after the second click's handler has run.
   const busyRef = useRef(false);
@@ -1465,6 +1467,7 @@ export const GoalsStrip: React.FC<{
         if (!alive.current) return;
         setGoals(list);
         setReads({});
+        readsUsed.current = 0;
         setUnsupported(false);
         setLoadError(null);
         setReloading(false);
@@ -1511,7 +1514,8 @@ export const GoalsStrip: React.FC<{
     if (!goals) return;
     const want = goals
       .filter((g) => g.mode !== 'watch' && ['not_met', 'fixing', 'needs_you'].includes(g.status) && !g.has_mission_info && !reads[g.id] && !reading.current.has(g.id))
-      .slice(0, 3);
+      .slice(0, Math.max(0, 3 - readsUsed.current));
+    readsUsed.current += want.length;
     for (const g of want) {
       reading.current.add(g.id);
       api.get(g.id).then(
