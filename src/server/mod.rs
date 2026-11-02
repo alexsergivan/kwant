@@ -371,6 +371,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/messages/:message_id/decisions/:index/change", post(decide::change))
         .route("/api/work-ahead/run", post(work_ahead::run_now))
         .route("/api/goals", get(goals::routes::list_goals).post(goals::routes::create_goal))
+        .route("/api/goals/draft", post(goals_remediation::draft))
         .route("/api/goals/:id", get(goals::routes::get_goal).patch(goals::routes::patch_goal).delete(goals::routes::delete_goal))
         .route("/api/goals/:id/approve", post(goals::routes::approve_goal))
         .route("/api/goals/:id/check", post(goals::routes::check_goal))

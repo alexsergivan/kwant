@@ -876,7 +876,7 @@ impl Database {
     /// met (so a recovery is worth a notice).
     pub async fn told_broken(&self, goal_id: &str) -> Result<bool, DbError> {
         let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM goal_events WHERE goal_id = ? AND kind = 'notified' AND json_extract(detail, '$.kind') IN ('broken', 'cant_check')
+            "SELECT 1 FROM goal_events WHERE goal_id = ? AND kind = 'notified' AND json_extract(detail, '$.kind') IN ('broken', 'cant_check', 'decision', 'needs_you')
              AND id > COALESCE((SELECT MAX(id) FROM goal_events WHERE goal_id = ? AND kind = 'met'), 0) LIMIT 1",
         )
         .bind(goal_id)

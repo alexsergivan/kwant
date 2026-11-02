@@ -27,14 +27,6 @@ const TABLES: &[&str] = &[
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_mission_links_open ON goal_mission_links(goal_id) WHERE closed_at IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_goal_mission_links_goal ON goal_mission_links(goal_id, id)",
     "CREATE INDEX IF NOT EXISTS idx_goal_mission_links_mission ON goal_mission_links(mission_id)",
-    "CREATE TABLE IF NOT EXISTS goal_notices (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        goal_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        sent INTEGER NOT NULL DEFAULT 1,
-        created_at INTEGER NOT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS idx_goal_notices_goal ON goal_notices(goal_id, created_at)",
     "CREATE TABLE IF NOT EXISTS goal_rechecks (
         goal_id TEXT NOT NULL,
         after_goal_id TEXT NOT NULL,
@@ -177,46 +169,10 @@ impl Database {
         Ok(n)
     }
 
-    /// Notes that a notification of `kind` was sent about the goal.
-    pub async fn add_goal_notice(&self, goal_id: &str, kind: &str, now: i64) -> Result<(), DbError> {
-        sqlx::query("INSERT INTO goal_notices (goal_id, kind, sent, created_at) VALUES (?, ?, 1, ?)").bind(goal_id).bind(kind).bind(now).execute(&self.pool).await?;
-        Ok(())
-    }
-
-    /// Notes that a notice of `kind` was due but not sent (the cap was reached): it is settled, so
-    /// it never goes out late, and it doesn't count toward the cap.
-    pub async fn add_goal_silence(&self, goal_id: &str, kind: &str, now: i64) -> Result<(), DbError> {
-        sqlx::query("INSERT INTO goal_notices (goal_id, kind, sent, created_at) VALUES (?, ?, 0, ?)").bind(goal_id).bind(kind).bind(now).execute(&self.pool).await?;
-        Ok(())
-    }
-
-    /// Notifications sent about the goal since `since` (the cap counts a rolling 24 hours).
-    pub async fn goal_notices_since(&self, goal_id: &str, since: i64) -> Result<i64, DbError> {
-        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM goal_notices WHERE goal_id = ? AND created_at >= ? AND sent = 1").bind(goal_id).bind(since).fetch_one(&self.pool).await?;
-        Ok(n)
-    }
-
     /// Clears a Not now (the person ran the fix after all, or chose Always fix).
     pub async fn clear_goal_decline(&self, id: i64) -> Result<bool, DbError> {
         let r = sqlx::query("UPDATE goal_mission_links SET declined_at = NULL WHERE id = ? AND declined_at IS NOT NULL").bind(id).execute(&self.pool).await?;
         Ok(r.rows_affected() == 1)
-    }
-
-    /// The kind of the goal's newest notice, sent or settled silently.
-    pub async fn last_goal_notice_kind(&self, goal_id: &str) -> Result<Option<String>, DbError> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT kind FROM goal_notices WHERE goal_id = ? ORDER BY id DESC LIMIT 1").bind(goal_id).fetch_optional(&self.pool).await?;
-        Ok(row.map(|r| r.0))
-    }
-
-    /// Met goals whose newest notice said they were broken, so a "recovered" notice is due.
-    pub async fn goals_to_recover(&self) -> Result<Vec<String>, DbError> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT g.id FROM goals g WHERE g.status = 'met' AND (SELECT n.kind FROM goal_notices n WHERE n.goal_id = g.id ORDER BY n.id DESC LIMIT 1)
-             IN ('broken', 'decision', 'needs_you') ORDER BY g.id",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
     /// Records that the person chose Not now for the goal's open remediation.
@@ -253,12 +209,6 @@ impl Database {
         Ok(r.rows_affected() == 1)
     }
 
-    /// Approved watch-mode goals that are failing: they get one notice per incident, no mission.
-    pub async fn goals_failing_in_watch(&self) -> Result<Vec<String>, DbError> {
-        let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM goals WHERE status = 'not_met' AND mode = 'watch' AND approved_at IS NOT NULL AND paused_at IS NULL ORDER BY id").fetch_all(&self.pool).await?;
-        Ok(rows.into_iter().map(|r| r.0).collect())
-    }
-
     /// Active "Restore: …" missions kwant made that no goal link points at, older than `before`
     /// (milliseconds): left by a crash between the plan and the link.
     pub async fn unlinked_restore_missions(&self, before: i64) -> Result<Vec<super::missions::Mission>, DbError> {
@@ -271,15 +221,14 @@ impl Database {
         .await?)
     }
 
-    /// Approved goals of one folder of a space.
-    pub async fn goals_in_folder(&self, space_id: &str, folder: &str) -> Result<Vec<super::goals::Goal>, DbError> {
-        Ok(self.list_goals(space_id).await?.into_iter().filter(|g| g.folder == folder && g.approved_at.is_some()).collect())
-    }
-
-    /// Whether a notice of one of `kinds` was sent about the goal since `since`.
+    /// Whether the goal was told something of one of `kinds` since `since`, by a notice that went
+    /// out or one the daily cap held back (a held-back notice is settled: it never goes out late).
+    /// Reads goal-loop events, the one place notices are recorded.
     pub async fn goal_told_since(&self, goal_id: &str, kinds: &[&str], since: i64) -> Result<bool, DbError> {
         let marks = vec!["?"; kinds.len()].join(", ");
-        let sql = format!("SELECT 1 FROM goal_notices WHERE goal_id = ? AND created_at >= ? AND kind IN ({marks}) LIMIT 1");
+        let sql = format!(
+            "SELECT 1 FROM goal_events WHERE goal_id = ? AND created_at >= ? AND kind IN ('notified', 'notice_capped') AND json_extract(detail, '$.kind') IN ({marks}) LIMIT 1"
+        );
         let mut q = sqlx::query_as::<_, (i64,)>(&sql).bind(goal_id).bind(since);
         for k in kinds {
             q = q.bind(*k);
@@ -354,7 +303,7 @@ impl Database {
     /// Removes a goal's remediation rows (its missions stay on the board). Called with the goal's
     /// own delete.
     pub async fn delete_goal_remediation(&self, goal_id: &str) -> Result<(), DbError> {
-        for table in ["goal_mission_links", "goal_notices", "goal_from_tasks"] {
+        for table in ["goal_mission_links", "goal_from_tasks"] {
             sqlx::query(&format!("DELETE FROM {table} WHERE goal_id = ?")).bind(goal_id).execute(&self.pool).await?;
         }
         sqlx::query("DELETE FROM goal_rechecks WHERE goal_id = ? OR after_goal_id = ?").bind(goal_id).bind(goal_id).execute(&self.pool).await?;
@@ -465,17 +414,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn notices_are_counted_in_a_rolling_window() {
+    async fn told_reads_sent_and_held_back_notices() {
         let (db, _t) = db().await;
-        for (kind, at) in [("broken", 100), ("needs_you", 200), ("fixed", 900)] {
-            db.add_goal_notice("g1", kind, at).await.unwrap();
-        }
-        assert_eq!(db.goal_notices_since("g1", 0).await.unwrap(), 3);
-        assert_eq!(db.goal_notices_since("g1", 150).await.unwrap(), 2);
-        assert_eq!(db.goal_notices_since("g2", 0).await.unwrap(), 0);
-        assert!(db.goal_told_since("g1", &["broken", "needs_you"], 50).await.unwrap());
-        assert!(!db.goal_told_since("g1", &["broken", "needs_you"], 300).await.unwrap(), "the old notices are out of the window");
+        db.add_goal_event("g1", "notified", "kwant", &serde_json::json!({"kind": "broken"})).await.unwrap();
+        db.add_goal_event("g1", "notice_capped", "kwant", &serde_json::json!({"kind": "needs_you"})).await.unwrap();
+        assert!(db.goal_told_since("g1", &["broken"], 0).await.unwrap());
+        assert!(db.goal_told_since("g1", &["decision", "needs_you"], 0).await.unwrap(), "a held-back notice is settled too");
         assert!(!db.goal_told_since("g1", &["recovered"], 0).await.unwrap());
+        assert!(!db.goal_told_since("g2", &["broken"], 0).await.unwrap());
+        assert!(!db.goal_told_since("g1", &["broken"], i64::MAX).await.unwrap(), "an old notice is out of the window");
     }
 
     #[tokio::test]
@@ -487,11 +434,9 @@ mod tests {
         db.clear_goal_rechecks("b").await.unwrap();
         assert_eq!(db.goal_recheck_after("b", 0).await.unwrap(), None);
         db.add_goal_recheck("b", "a", 500).await.unwrap();
-        db.add_goal_notice("a", "broken", 1).await.unwrap();
         db.open_goal_link(&link("a", "m1", 1), 1).await.unwrap().unwrap();
         db.delete_goal_remediation("a").await.unwrap();
         assert_eq!(db.goal_recheck_after("b", 0).await.unwrap(), None);
         assert_eq!(db.goal_links("a", 10).await.unwrap().len(), 0);
-        assert_eq!(db.goal_notices_since("a", 0).await.unwrap(), 0);
     }
 }

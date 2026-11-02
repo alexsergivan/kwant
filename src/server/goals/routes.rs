@@ -63,14 +63,15 @@ pub async fn list_goals(State(state): State<AppState>, Scope(space): Scope) -> R
     Json(json!({ "goals": out })).into_response()
 }
 
-async fn page(state: &AppState, g: &Goal) -> Value {
+pub async fn page(state: &AppState, g: &Goal) -> Value {
     let events = state.db.goal_events(&g.id, PAGE_EVENTS).await.unwrap_or_default();
     let fixes = state.db.goal_fix_links(&g.id).await.unwrap_or_default();
-    let spent: i64 = fixes.iter().filter_map(|f| f.spent_tokens).sum();
+    let spent: i64 = fixes.iter().filter_map(|f| f.spent_tokens).sum::<i64>() + state.db.goal_spent_tokens(&g.id).await.unwrap_or(0);
     json!({
         "goal": goal_json(state, g, PAGE_EXCERPT).await,
         "events": events.iter().map(event_json).collect::<Vec<_>>(),
         "fix_tasks": fixes.iter().map(|f| json!({ "task_id": f.task_id, "state": f.state, "spent_tokens": f.spent_tokens, "created_at": f.created_at })).collect::<Vec<_>>(),
+        "missions": crate::server::goals_remediation::missions_of(state, g).await,
         "spent_tokens": spent,
     })
 }
@@ -84,8 +85,11 @@ pub async fn get_goal(State(state): State<AppState>, RawQuery(q): RawQuery, Path
 
 /// The person's goal: active at once, its first check due now.
 pub async fn create_goal(State(state): State<AppState>, Scope(space): Scope, headers: HeaderMap, Json(p): Json<GoalInput>) -> Response {
-    if p.from_task.is_some() {
-        return err(StatusCode::UNPROCESSABLE_ENTITY, "making a goal from a task isn't available yet");
+    if let Some(task_id) = p.from_task.as_deref().map(str::trim) {
+        if task_id.is_empty() {
+            return bad("from_task needs a task id");
+        }
+        return crate::server::goals_remediation::from_task_route(&state, &space, &headers, task_id).await;
     }
     let route = format!("POST /api/goals?space={}", space.as_str());
     crate::server::missions::graph::idempotent(&state, &headers, route, || async {

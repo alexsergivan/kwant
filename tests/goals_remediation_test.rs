@@ -19,6 +19,7 @@ use kwnt::{
     router::LayaRouter,
     server::{
         create_router,
+        goals::on_change,
         goals_remediation::tick_at,
         missions::{transition, Actor},
         AppState,
@@ -104,12 +105,29 @@ async fn status(e: &Env, id: &str) -> (String, String) {
     (g.status, g.status_reason)
 }
 
+/// The goal fails its checks as the loop sees it: the status changes and the loop's own notice
+/// goes out (`on_change`), exactly once for the change.
 async fn break_goal(e: &Env, id: &str) {
-    e.state.db.set_goal_status(id, "not_met", "a check failed", &[], None).await.unwrap();
+    let before = e.state.db.get_goal(id).await.unwrap().unwrap().status;
+    let after = e.state.db.set_goal_status(id, "not_met", "failing", &[], None).await.unwrap().unwrap();
+    on_change(&e.state, &before, &after, &["a check".to_string()], false).await;
+}
+
+/// The goal fails but nobody is told (the notice is not part of this case).
+async fn break_quiet(e: &Env, id: &str) {
+    e.state.db.set_goal_status(id, "not_met", "failing", &[], None).await.unwrap();
 }
 
 async fn mend_goal(e: &Env, id: &str) {
-    e.state.db.set_goal_status(id, "met", "", &[], None).await.unwrap();
+    let before = e.state.db.get_goal(id).await.unwrap().unwrap().status;
+    let owed = e.state.db.told_broken(id).await.unwrap();
+    let after = e.state.db.set_goal_status(id, "met", "", &[], None).await.unwrap().unwrap();
+    on_change(&e.state, &before, &after, &[], owed).await;
+}
+
+/// The kind of the newest notice sent about the goal.
+async fn last_notice(e: &Env, id: &str) -> Option<String> {
+    e.state.db.goal_events(id, 100).await.unwrap().into_iter().find(|ev| ev.kind == "notified").and_then(|ev| ev.detail_value()["kind"].as_str().map(str::to_string))
 }
 
 async fn kinds(e: &Env, id: &str) -> Vec<String> {
@@ -222,9 +240,9 @@ async fn g_r_04_diagnosis_ready_asks_once_and_the_fix_stays_held() {
         tick_at(&e.state, now()).await;
     }
     assert_eq!(status(&e, &g.id).await.0, "needs_you");
-    assert_eq!(sent(&e, &g.id).await, 1, "one decision notice, however many ticks");
+    assert_eq!(sent(&e, &g.id).await, 2, "one broken notice and one decision, however many ticks");
     assert!(task(&e, &l.fix_task_id).await.held_at.is_some());
-    assert_eq!(e.state.db.last_goal_notice_kind(&g.id).await.unwrap().as_deref(), Some("decision"));
+    assert_eq!(last_notice(&e, &g.id).await.as_deref(), Some("decision"));
     let (_, v) = send(&e, "GET", &format!("/api/goals/{}/remediation", g.id), None, None, None).await;
     assert_eq!(v["open_mission"]["run_task_id"], json!(l.fix_task_id));
     assert_eq!(v["diagnosis"], json!("The deploy copied the wrong folder."));
@@ -328,7 +346,7 @@ async fn g_r_11_recovery_withdraws_the_held_fix_and_says_so_once() {
     let e = setup().await;
     let g = goal(&e, "Site is up", "suggest").await;
     let l = diagnosed(&e, &g).await;
-    assert_eq!(sent(&e, &g.id).await, 1);
+    assert_eq!(sent(&e, &g.id).await, 2, "broken, then the decision");
     mend_goal(&e, &g.id).await;
     for _ in 0..2 {
         tick_at(&e.state, now()).await;
@@ -338,15 +356,15 @@ async fn g_r_11_recovery_withdraws_the_held_fix_and_says_so_once() {
     assert_eq!(task(&e, &l.fix_task_id).await.state, "cancelled");
     assert_ne!(e.state.db.get_mission(&l.mission_id).await.unwrap().unwrap().status, "active", "the mission is closed, not left running");
     assert!(kinds(&e, &g.id).await.contains(&"withdrawn".to_string()));
-    assert_eq!(sent(&e, &g.id).await, 2, "the decision, then one recovered");
-    assert_eq!(e.state.db.last_goal_notice_kind(&g.id).await.unwrap().as_deref(), Some("recovered"));
+    assert_eq!(sent(&e, &g.id).await, 3, "broken, the decision, then one recovered");
+    assert_eq!(last_notice(&e, &g.id).await.as_deref(), Some("recovered"));
 }
 
 #[tokio::test]
 async fn g_r_12_a_goal_that_recovers_before_anyone_was_told_is_silent() {
     let e = setup().await;
     let g = goal(&e, "Site is up", "suggest").await;
-    break_goal(&e, &g.id).await;
+    break_quiet(&e, &g.id).await;
     tick_at(&e.state, now()).await;
     mend_goal(&e, &g.id).await;
     tick_at(&e.state, now()).await;
@@ -542,14 +560,14 @@ async fn g_k_01_keep_this_true_makes_one_active_goal_per_task() {
     let id = verified_task(&e).await;
     let (s, g1) = send(&e, "POST", "/api/goals", None, Some(json!({"from_task": id})), None).await;
     assert_eq!(s, StatusCode::CREATED, "{g1}");
-    assert_eq!(g1["title"], json!("Publish the site"));
-    assert!(g1["approved_at"].is_number(), "active, not a draft: {g1}");
-    assert_ne!(g1["status"], json!("draft"));
-    assert_eq!(g1["mode"], json!("suggest"));
+    assert_eq!(g1["goal"]["title"], json!("Publish the site"));
+    assert!(g1["goal"]["approved_at"].is_number(), "active, not a draft: {g1}");
+    assert_ne!(g1["goal"]["status"], json!("draft"));
+    assert_eq!(g1["goal"]["mode"], json!("suggest"));
     let (s, g2) = send(&e, "POST", "/api/goals", None, Some(json!({"from_task": id})), None).await;
     assert_eq!(s, StatusCode::OK, "{g2}");
-    assert_eq!(g2["id"], g1["id"], "a repeat is the same goal");
-    let checks = e.state.db.goal_checks(g1["id"].as_str().unwrap()).await.unwrap();
+    assert_eq!(g2["goal"]["id"], g1["goal"]["id"], "a repeat is the same goal");
+    let checks = e.state.db.goal_checks(g1["goal"]["id"].as_str().unwrap()).await.unwrap();
     assert_eq!(checks.len(), 1);
     assert_eq!(checks[0].kind, "file_exists");
 }
