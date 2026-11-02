@@ -319,7 +319,7 @@ impl Database {
 
     /// A task event outside a state change (`restored`).
     pub async fn task_event(&self, task_id: &str, mission_id: Option<&str>, kind: &str, actor: &str, detail: &Value) -> Result<(), DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         insert_event(&mut tx, task_id, mission_id, kind, actor, None, None, detail).await?;
         tx.commit().await?;
         Ok(())

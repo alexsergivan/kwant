@@ -73,7 +73,7 @@ impl Database {
     /// for a plain ask, an earlier one of this bot in this chat still waiting (it keeps its time,
     /// so asking again doesn't bring a second reminder).
     pub async fn add_waiting(&self, w: &NewWaitingItem) -> Result<Option<WaitingItem>, DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let existing: Option<(String,)> = match &w.question_id {
             Some(q) => sqlx::query_as("SELECT id FROM waiting_on_person WHERE question_id = ?").bind(q).fetch_optional(&mut *tx).await?,
             None => {
@@ -89,6 +89,7 @@ impl Database {
             }
         };
         if existing.is_some() {
+            tx.rollback().await?;
             return Ok(None);
         }
         let row = sqlx::query_as::<_, WaitingItem>(

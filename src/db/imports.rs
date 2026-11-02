@@ -177,7 +177,7 @@ impl Database {
     pub async fn apply_import(&self, space: &SpaceId, bundle: &Bundle) -> Result<ImportRecord, DbError> {
         let mut created = Created::default();
         let now = Utc::now();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let mut ids: HashMap<&str, String> = HashMap::new();
         // Known up front so the ledger can say which import each memory came from
         let import_id = Uuid::new_v4().to_string();
@@ -189,6 +189,7 @@ impl Database {
                 .fetch_one(&mut *tx)
                 .await?;
             if taken > 0 {
+                tx.rollback().await?;
                 return Err(DbError::Conflict(format!("a bot called {} already exists in this space; preview again", bot.name)));
             }
             let id = Uuid::new_v4().to_string();

@@ -222,6 +222,31 @@ async fn apply_creates_bots_without_tools_pending_skills_and_paused_routines_the
 }
 
 #[tokio::test]
+async fn applying_waits_for_another_write_instead_of_failing() {
+    use std::time::{Duration, Instant};
+    let e = setup().await;
+    let (_, preview) = preview_file(&e.app, "kwant-bundle.json", &dflt()).await;
+
+    // Another connection holds the write lock for 300 ms
+    let other = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", e.tmp.path().join("kwnt.db").display()))
+        .await
+        .unwrap();
+    let tx = other.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let writer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        tx.commit().await.unwrap();
+    });
+
+    let started = Instant::now();
+    let (status, applied) = apply(&e.app, &dflt(), &preview["bundle"], &[]).await;
+    assert_eq!(status, StatusCode::CREATED, "{applied}");
+    assert!(started.elapsed() >= Duration::from_millis(250), "the lock was held during the import");
+    writer.await.unwrap();
+}
+
+#[tokio::test]
 async fn name_clash_renames_and_never_overwrites() {
     let e = setup().await;
     let existing = e.state.db.list_kwants(&SpaceId::default_space()).await.unwrap()[0].clone();

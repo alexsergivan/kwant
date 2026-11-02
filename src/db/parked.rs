@@ -67,7 +67,7 @@ impl Database {
     /// Parks a turn; `None` when one is already waiting for that bot in that chat (it keeps its
     /// time, so a chat gets at most one retry however many messages hit the limit).
     pub async fn park_turn(&self, t: &NewParkedTurn) -> Result<Option<ParkedTurn>, DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let waiting: Option<(String,)> = sqlx::query_as(&format!("SELECT id FROM parked_turns WHERE status = 'pending' AND {SAME_CHAT}"))
             .bind(&t.kwant_id)
             .bind(t.channel_id.as_deref().unwrap_or(""))
@@ -76,6 +76,7 @@ impl Database {
             .fetch_optional(&mut *tx)
             .await?;
         if waiting.is_some() {
+            tx.rollback().await?;
             return Ok(None);
         }
         let row = sqlx::query_as::<_, ParkedTurn>(

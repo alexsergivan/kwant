@@ -736,7 +736,7 @@ impl Database {
             return Ok(None);
         }
         let (a, b) = if a < b { (a, b) } else { (b, a) };
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let (live,): (i64,) = sqlx::query_as(&format!(
             "SELECT COUNT(DISTINCT f.space_id) * 10 + COUNT(*) FROM knowledge_facts f WHERE f.id IN (?, ?) AND {IN_FORCE}"
         ))
@@ -746,6 +746,7 @@ impl Database {
         .await?;
         // Both in force (2) and in one space (10)
         if live != 12 {
+            tx.rollback().await?;
             return Ok(None);
         }
         let id = format!("fd_{}", uuid::Uuid::new_v4().simple());
@@ -761,6 +762,7 @@ impl Database {
         .execute(&mut *tx)
         .await?;
         if res.rows_affected() == 0 {
+            tx.rollback().await?;
             return Ok(None);
         }
         for side in [a, b] {

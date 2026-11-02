@@ -615,6 +615,37 @@ async fn rollback_moves_one_lineage_back_in_one_step() {
 }
 
 #[tokio::test]
+async fn rolling_back_waits_for_another_write_instead_of_failing() {
+    use std::time::Instant;
+    let e = setup().await;
+    let a = bot(&e, "A").await;
+    let ex = verified(&e, &a, "release", 3).await;
+    let (v1, _) = stored_draft(&e, &a, "release", "Version one.", &ex[..2]).await;
+    person(&e, "POST", &format!("/api/skills/{}/approve", v1.id), Some(json!({}))).await;
+    let (v2, _) = stored_draft(&e, &a, "release", "Version two.", &ex[..2]).await;
+    person(&e, "POST", &format!("/api/skills/{}/approve", v2.id), Some(json!({}))).await;
+
+    // Another connection holds the write lock for 300 ms
+    let other = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", e.state.config.data_dir.join("kwnt.db").display()))
+        .await
+        .unwrap();
+    let tx = other.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let writer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        tx.commit().await.unwrap();
+    });
+
+    let started = Instant::now();
+    let (status, v) = call(&e.app, "POST", &format!("/api/skills/{}/rollback", v1.id), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "enabled", "{v}");
+    assert!(started.elapsed() >= Duration::from_millis(250), "the lock was held during the rollback");
+    writer.await.unwrap();
+}
+
+#[tokio::test]
 async fn reads_of_the_review_queue_are_person_only() {
     let e = setup().await;
     let a = bot(&e, "A").await;

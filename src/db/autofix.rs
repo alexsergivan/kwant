@@ -322,7 +322,7 @@ impl Database {
 
     /// Finishes the task's running attempt (if any) as `status`.
     pub async fn finish_running_attempt(&self, task_id: &str, status: &str) -> Result<(), DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         finish_running(&mut tx, task_id, status, Utc::now()).await?;
         tx.commit().await?;
         Ok(())

@@ -221,11 +221,15 @@ impl Database {
     /// Sets a task's class and records a `class_changed` task event. Callers validate the slug and
     /// who may set it (the lead or the person, never the task's own bot).
     pub async fn set_task_class(&self, task_id: &str, class: &str, actor: &str) -> Result<bool, DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let row: Option<(String, Option<String>)> =
             sqlx::query_as("SELECT task_class, mission_id FROM tasks WHERE id = ?").bind(task_id).fetch_optional(&mut *tx).await?;
-        let Some((old, mission)) = row else { return Ok(false) };
+        let Some((old, mission)) = row else {
+            tx.rollback().await?;
+            return Ok(false);
+        };
         if old == class {
+            tx.rollback().await?;
             return Ok(true);
         }
         sqlx::query("UPDATE tasks SET task_class = ?, updated_at = ? WHERE id = ?").bind(class).bind(Utc::now()).bind(task_id).execute(&mut *tx).await?;

@@ -389,9 +389,10 @@ impl Database {
 
     /// Removes a channel nobody has written in yet; `false` when it has messages or is #general.
     pub async fn delete_empty_channel(&self, id: &str) -> Result<bool, DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE channel_id = ?").bind(id).fetch_one(&mut *tx).await?;
         if n > 0 {
+            tx.rollback().await?;
             return Ok(false);
         }
         let done = sqlx::query("DELETE FROM channels WHERE id = ? AND name != 'general'").bind(id).execute(&mut *tx).await?;

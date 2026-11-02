@@ -453,12 +453,13 @@ impl Database {
     /// version: same lineage, and approving it supersedes the live one.
     pub async fn insert_foundry_draft(&self, space_id: &str, d: &NewDraft, run_id: &str) -> Result<(Skill, SkillMeta), SkillError> {
         let now = Utc::now();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let (pending,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM skills WHERE status = 'pending' AND kwant_id = ?")
             .bind(&d.kwant_id)
             .fetch_one(&mut *tx)
             .await?;
         if pending >= MAX_PENDING_PER_KWANT {
+            tx.rollback().await?;
             return Err(SkillError::TooManyPending);
         }
         let waiting: Option<(String,)> = sqlx::query_as(
@@ -469,6 +470,7 @@ impl Database {
         .fetch_optional(&mut *tx)
         .await?;
         if waiting.is_some() {
+            tx.rollback().await?;
             return Err(SkillError::Conflict("a Foundry draft for this class is already waiting for review".into()));
         }
         let live: Option<(String, String)> = sqlx::query_as(
@@ -543,13 +545,18 @@ impl Database {
     /// name blocks it.
     pub async fn rollback_skill(&self, target_id: &str, actor: &str) -> Result<Skill, SkillError> {
         let now = Utc::now();
-        let mut tx = self.pool.begin().await?;
-        let target = sqlx::query_as::<_, Skill>("SELECT * FROM skills WHERE id = ?").bind(target_id).fetch_optional(&mut *tx).await?.ok_or(SkillError::NotFound)?;
+        let mut tx = self.begin_write().await?;
+        let Some(target) = sqlx::query_as::<_, Skill>("SELECT * FROM skills WHERE id = ?").bind(target_id).fetch_optional(&mut *tx).await? else {
+            tx.rollback().await?;
+            return Err(SkillError::NotFound);
+        };
         let meta: Option<(String,)> = sqlx::query_as("SELECT lineage_id FROM skill_meta WHERE skill_id = ?").bind(target_id).fetch_optional(&mut *tx).await?;
         let Some((lineage,)) = meta else {
+            tx.rollback().await?;
             return Err(SkillError::Conflict("only a Foundry skill version can be rolled back to".into()));
         };
         if target.status != "superseded" {
+            tx.rollback().await?;
             return Err(SkillError::Conflict(format!("only an earlier (superseded) version can be rolled back to; this one is {}", target.status)));
         }
         let current: Vec<(String,)> = sqlx::query_as(
@@ -571,6 +578,7 @@ impl Database {
         .fetch_optional(&mut *tx)
         .await?;
         if clash.is_some() {
+            tx.rollback().await?;
             return Err(SkillError::Conflict(format!("another skill called {} is live; rename or disable it first", target.name)));
         }
         sqlx::query("UPDATE skills SET status = 'enabled', updated_at = ?, reviewed_at = ? WHERE id = ?")

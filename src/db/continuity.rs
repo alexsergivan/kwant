@@ -978,7 +978,7 @@ impl Database {
 
     /// Takes every turn a previous run of kwnt left running (it stopped mid-reply).
     pub async fn take_running_turns(&self) -> Result<Vec<RunningTurn>, DbError> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let turns = sqlx::query_as::<_, RunningTurn>("SELECT * FROM running_turns ORDER BY started_at")
             .fetch_all(&mut *tx)
             .await?;
