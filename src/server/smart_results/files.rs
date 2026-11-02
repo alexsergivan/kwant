@@ -197,7 +197,7 @@ fn table(text: &str, delim: u8, capped: bool) -> Option<FilePreview> {
     Some(FilePreview::Table {
         columns,
         total_rows: exact.then(|| (rows.len() + more_rows) as u64),
-        total_cols: exact.then(|| header.len() as u64),
+        total_cols: exact.then_some(header.len() as u64),
         rows,
         truncated,
     })
