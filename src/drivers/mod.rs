@@ -508,7 +508,10 @@ impl TurnInput {
             head: base,
             date,
             team: team_block,
-            tail: format!("{teammates_block}{sandbox_rules}"),
+            tail: format!(
+                "{teammates_block}\n\n[Results]\n{}{sandbox_rules}",
+                crate::server::smart_results::PROMPT_LINE
+            ),
         }
     }
 }
@@ -867,6 +870,18 @@ pub(crate) mod tests {
             let with_tools = access == BrowserAccess::Tools;
             assert_eq!(prompt.contains("`routine_create`"), with_tools, "{access:?}");
             assert_eq!(prompt.contains("Routines in kwant's sidebar"), !with_tools, "{access:?}");
+        }
+    }
+
+    /// Plan §A.4: one line asks for structure the Smart Results selectors can read, once per turn.
+    #[test]
+    fn every_turn_asks_for_structure_once() {
+        let line = crate::server::smart_results::PROMPT_LINE;
+        for access in [BrowserAccess::Tools, BrowserAccess::Shell, BrowserAccess::Unavailable] {
+            let prompt = input().format_system_prompt_with(access);
+            assert_eq!(prompt.matches(line).count(), 1, "{access:?}");
+            // In the part that stays the same between turns, so it doesn't break the cache
+            assert!(input().system_prompt_parts(access).tail.contains(line), "{access:?}");
         }
     }
 

@@ -1232,3 +1232,7 @@ fn starts_step_n(item: &str) -> bool {
 #[cfg(test)]
 #[path = "selector_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "block_tests.rs"]
+mod block_tests;
