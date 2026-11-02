@@ -35,6 +35,7 @@ pub mod auditor;
 pub mod foundry;
 pub mod automation;
 pub mod truth_ledger;
+pub mod goals;
 pub mod routing;
 
 /// What a space's #general says about itself.
@@ -202,6 +203,8 @@ impl Database {
         db.migrate_foundry().await?;
         // Phase D4: routines carry class, acceptance and checks; suggestion storage (add-only)
         db.migrate_automation_discovery().await?;
+        // 0.6.5: Goals, their checks, observations, timeline and fix-task links (add-only)
+        db.migrate_goals().await?;
         // Phase C1: the Truth Ledger mirrors memory (add-only). Last, so no later step rebuilds
         // a table its triggers or lookups depend on
         db.migrate_truth_ledger().await?;

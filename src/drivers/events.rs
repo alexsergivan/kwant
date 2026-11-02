@@ -271,6 +271,9 @@ pub enum RuntimeEvent {
     /// A mission changed (status, budget, counts). `mission` carries `space_id`.
     #[serde(rename = "mission_updated", alias = "MissionUpdated")]
     MissionUpdated { mission: Value },
+    /// A goal changed (status, checks, schedule, its fix task); `GET /api/goals/:id` has the rest.
+    #[serde(rename = "goal_updated", alias = "GoalUpdated")]
+    GoalUpdated { id: String, status: String, space_id: String },
     /// Something the user asked to be told about. `kind` is one of `continuity::NOTIFY_KINDS`
     /// ("turn_finished", "approval_needed", "human_step", …). `body` never holds chat text, tool arguments or secrets.
     #[serde(rename = "notify", alias = "Notify")]
