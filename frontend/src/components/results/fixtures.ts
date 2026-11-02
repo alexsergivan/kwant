@@ -75,6 +75,7 @@ const barRows = [
   ['Newsletter', '1,980'],
   ['Social', '1,310'],
   ['Referral', '640'],
+  ['Direct', '520'],
 ];
 const chartBar: Fixture = {
   reply: `Where October's visits came from:\n\n${table(['Channel', 'Visits'], barRows)}`,
@@ -268,6 +269,16 @@ const files: Fixture = {
         preview: { kind: 'table', columns: ['from', 'to'], rows: [['/guide', '/docs/guide'], ['/faq', '/docs/faq']] },
       },
       { id: 'a1', attachment_id: 'att-notes', name: 'move-notes.md', mime: 'text/markdown', size_bytes: 840, preview: { kind: 'text', excerpt: '# Move notes\nFreeze content on Monday.' } },
+      {
+        id: 'a3',
+        attachment_id: 'att-big',
+        name: 'urls-all.csv',
+        mime: 'text/csv',
+        size_bytes: 91200,
+        preview: { kind: 'table', columns: ['url', 'status'], rows: [['/a', '200'], ['/b', '301']], total_rows: 143, total_cols: 2 },
+      },
+      { id: 'a4', attachment_id: 'att-log', name: 'crawl.log', mime: 'text/plain', size_bytes: 40960, preview: { kind: 'text', excerpt: 'start\nfetch /a\nfetch /b', total_lines: 512 } },
+      { id: 'a5', attachment_id: 'att-dump', name: 'dump.txt', mime: 'text/plain', size_bytes: 3145728, preview: { kind: 'text', excerpt: 'header', truncated: true } },
       { id: 'a2', attachment_id: 'att-shot', name: 'dns.png', mime: 'image/png', size_bytes: 48200, preview: { kind: 'image' } },
     ],
   }),
