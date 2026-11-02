@@ -206,4 +206,13 @@ mod hire_tests {
         assert_eq!(similar_ids(now, "m3", &done).len(), 2, "a request a hire was suggested from counts once");
         assert!(hire_note(&["m1", "m2", "m3"]).contains("\"similar_requests\""));
     }
+
+    /// Requests that share only short filler words ("is", "it", "ok", "to", "a") aren't one kind
+    /// of request, so they never add up to a hire suggestion.
+    #[test]
+    fn requests_alike_only_in_filler_dont_count() {
+        let now = "Is it ok to freeze a cake?";
+        let recent = vec![ex("m2", "Is it ok to swim in a lake?", false), ex("m1", "Is it ok to deploy on a Friday?", false)];
+        assert_eq!(similar_ids(now, "m3", &recent), vec!["m3"]);
+    }
 }

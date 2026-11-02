@@ -644,13 +644,20 @@ pub fn alike(a: &[String], b: &[String]) -> bool {
 /// Share of words a message must have in common with a learned one to route like it.
 pub const LEARNED_AT: f32 = 0.6;
 
-/// A message's words for comparing it with another: no filler, plurals folded, each once.
+/// A message's words for comparing it with another: no filler, plurals folded, each once. Words
+/// under three letters ("a", "in", "is", "to") and [`NOT_CONTENT`] say nothing about what a message
+/// is for, so "Is it ok to deploy on a Friday?" and "Is it ok to freeze a cake?" share none.
 pub fn content_words(text: &str) -> Vec<String> {
-    let mut w = scope_words(text);
+    let mut w: Vec<String> =
+        scope_words(text).into_iter().filter(|w| w.chars().count() >= 3 && !NOT_CONTENT.contains(&w.as_str())).collect();
     w.sort();
     w.dedup();
     w
 }
+
+/// Words of three letters or more that [`content_words`] leaves out as well: "Where can I get a
+/// haircut in Munich?" isn't like "Can I get corn dogs in Munich?".
+const NOT_CONTENT: &[&str] = &["get", "let", "may"];
 
 impl Hints {
     /// The entries of `kwant`'s covers list that the message has every word of.
@@ -1864,5 +1871,26 @@ mod fit_tests {
         let without = [members[0].clone(), members[2].clone()];
         let p = pick_member_hinted(prompt, "k-lead", &without, None, "channel lead", None, &learned).unwrap();
         assert_ne!(p.basis, "learned");
+    }
+
+    /// Short filler words ("a", "in", "is", "to") don't make two messages alike: in QA one correction
+    /// about brioche sent an unrelated gift question to the corrected bot. A real rephrase still is.
+    #[test]
+    fn filler_words_dont_make_messages_alike() {
+        let like = |a: &str, b: &str| alike(&content_words(a), &content_words(b));
+        assert!(!like("Can you suggest a vegan substitute for eggs in brioche please?", "Can you suggest a gift in Rome?"));
+        assert!(!like("Is it ok to deploy on a Friday?", "Is it ok to freeze a cake?"));
+        assert!(!like("Write a post about our new sourdough", "Write a post about our espresso bar"));
+        assert_eq!(content_words("Is it ok to get a cake?"), ["cake"]);
+        assert!(like("What is the best way to temper chocolate for bonbons please?", "What is the best way to temper chocolate for bonbons?"));
+        assert!(like("Best place to eat corn dogs in Munich tomorrow?", "Where can I get corn dogs in Munich?"));
+        assert!(like("Plan a prep list for Saturday brunch", "Plan a prep list for Sunday brunch"));
+
+        let members = general();
+        let learned = Hints { learned: vec![Learned::new("k-script", "Can you suggest a vegan substitute for eggs in brioche please?")], ..Hints::default() };
+        let p = pick_member_hinted("Can you suggest a gift in Rome?", "k-lead", &members, None, "channel lead", None, &learned).unwrap();
+        assert_ne!(p.basis, "learned", "{p:?}");
+        let p = pick_member_hinted("Suggest a vegan substitute for eggs in brioche", "k-lead", &members, None, "channel lead", None, &learned).unwrap();
+        assert_eq!((p.kwant.id.as_str(), p.basis), ("k-script", "learned"), "{p:?}");
     }
 }
