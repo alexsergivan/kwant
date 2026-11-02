@@ -30,6 +30,9 @@ use tower::ServiceExt;
 /// for a lead's results follow-up with "FOLLOWUP:<name>"; several names go as "<a>+<b>". A
 /// follow-up with "CREDIT:<name>" adds "As @<name> found, it's done." (a mention that asks nothing);
 /// a "LONGTASK:<file>" prompt waits (up to 60 s) for that file first, and a "FAILTASK" prompt fails.
+/// "HOLDTURN:<file>" waits the same way, but only in the request itself (not the chat history
+/// before it, nor the person's words a delegated task quotes after it), and fails then with
+/// "HOLDFAIL": it keeps the lead's own turn running while its hand-offs and results turns run.
 /// "LINES:<name>:<n>" adds n lines "@<name>, please build part <i>." to a reply that isn't a
 /// delegated task or a results follow-up. Every prompt is saved under `$KWNT_TEST_PROMPTS`.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
@@ -43,6 +46,14 @@ release=$(printf '%s\n' "$last" | sed -n 's/.*LONGTASK:\([^ ]*\).*/\1/p' | head 
 if [ -n "$release" ]; then
   i=0
   while [ ! -f "$release" ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
+fi
+request=$(printf '%s\n' "$last" | sed -n '/^### Current User Request:/,$p' | sed '/^\[What the person asked in the chat this task came from\]/,$d')
+[ -n "$request" ] || request="$last"
+turn=$(printf '%s\n' "$request" | sed -n 's/.*HOLDTURN:\([^ ]*\).*/\1/p' | head -n 1)
+if [ -n "$turn" ]; then
+  i=0
+  while [ ! -f "$turn" ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
+  case "$request" in *HOLDFAIL*) echo "boom" >&2; exit 1 ;; esac
 fi
 tag=$(printf '%s\n' "$last" | sed -n 's/.*REPLYTAG:\([A-Za-z0-9_]*\).*/\1/p' | tail -n 1)
 mention=$(printf '%s\n' "$last" | sed -n 's/.*MENTION:\([A-Za-z0-9_+]*\).*/\1/p' | head -n 1)
@@ -1592,4 +1603,221 @@ async fn lines_past_the_per_teammate_cap_wait_for_continue_and_are_sent_once() {
     let ds = handoffs_from(&env, &channel).await;
     assert_eq!(ds.len(), 5, "Continue sends only the line that waited: {:?}", ds.iter().map(|d| &d.title).collect::<Vec<_>>());
     assert!(ds[4].title.to_lowercase().contains("build part 5."), "{}", ds[4].title);
+}
+
+/// A call to kwnt's own tools as the agent turn that holds `token`, as its CLI makes it.
+async fn self_tool(env: &Env, token: &str, name: &str, args: Value) -> (String, bool) {
+    let resp = env
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/mcp/self")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args}}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let v: Value = serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
+    (v["result"]["content"][0]["text"].as_str().unwrap_or("").to_string(), v["result"]["isError"] == true)
+}
+
+/// The person asks the lead in its own chat; the lead's turn runs until `release` exists (and then
+/// fails, with `fail`). Returns that turn's id and the token its CLI calls kwnt's tools with.
+async fn lead_turn(env: &Env, release: &std::path::Path, fail: bool) -> (String, String) {
+    let prompt = format!("Plan the launch HOLDTURN:{}{}", release.display(), if fail { " HOLDFAIL" } else { "" });
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"kwant_id": env.lead, "prompt": prompt, "sender_id": "user"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    for _ in 0..300 {
+        let turn = env.state.turns.active_turns().into_iter().find(|t| t.kwant_id == env.lead && t.context_id == env.lead && t.state == "running");
+        if let Some(t) = turn {
+            let token = env.state.self_tools.lock().await.iter().find(|(_, s)| s.turn_id.as_deref() == Some(t.turn_id.as_str())).map(|(k, _)| k.clone());
+            if let Some(token) = token {
+                return (t.turn_id, token);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the lead's turn didn't start");
+}
+
+/// The lead's turns that report the results of the tasks titled "<marker> …".
+fn resumes(marker: &str) -> Vec<String> {
+    prompts_with(marker)
+        .into_iter()
+        .filter(|p| ["finished the task you delegated", "tasks you delegated have ended", "ended without a result"].iter().any(|o| p.contains(o)))
+        .collect()
+}
+
+/// In one turn the lead hands part A to its first teammate and, `gap` later, part B to `second`;
+/// returns their delegation ids once both completed.
+async fn delegate_twice(env: &Env, token: &str, second: &str, marker: &str, gap: u64, b_task: &str) -> (String, String) {
+    let (first, second) = (name(env, &env.specialist).await, name(env, second).await);
+    let (text, err) = self_tool(env, token, "delegate", json!({"to": first, "task": "Part one REPLYTAG:mcA", "title": format!("{marker} part A")})).await;
+    assert!(!err, "{text}");
+    // The lead's model takes a moment before its next tool call
+    tokio::time::sleep(Duration::from_millis(gap)).await;
+    let (text, err) = self_tool(env, token, "delegate", json!({"to": second, "task": b_task, "title": format!("{marker} part B")})).await;
+    assert!(!err, "{text}");
+    let ids = env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap();
+    let id = |part: &str| ids.iter().find(|d| d.title == format!("{marker} part {part}")).map(|d| d.id.clone()).expect("delegated");
+    (id("A"), id("B"))
+}
+
+/// Waits for the lead's one turn with both parts' results, then makes sure no second one follows.
+async fn assert_resumed_once(marker: &str) {
+    wait_for("the lead's turn with both results", || async { resumes(marker).iter().any(|p| p.contains("answer mcB")) }).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let resumes = resumes(marker);
+    let openings: Vec<&str> = resumes.iter().map(|p| p.lines().next().unwrap_or("")).collect();
+    assert_eq!(resumes.len(), 1, "resumed once with both results: {openings:?}");
+    assert!(resumes[0].contains("answer mcA") && resumes[0].contains("answer mcB"), "{}", resumes[0]);
+}
+
+/// 2026-11-02: a lead that called `delegate` twice in one turn was resumed twice when the first
+/// task ended before the second began (10 runs in 10 with 300 ms or more between the calls), and
+/// answered the person twice. The turn now holds what its hand-offs report until it ends: the
+/// lead is resumed once, after that turn, with both results. `KWNT_MC_GAP_MS` runs one gap only.
+#[tokio::test]
+async fn a_lead_that_delegates_twice_in_one_turn_is_resumed_once() {
+    let gaps: Vec<u64> = match std::env::var("KWNT_MC_GAP_MS").ok().and_then(|v| v.parse().ok()) {
+        Some(gap) => vec![gap],
+        None => vec![0, 100, 300, 700],
+    };
+    for gap in gaps {
+        let env = setup().await;
+        let second = add_bot(&env, "Second").await;
+        let marker = format!("HOLDMC{gap}");
+        let release = env.release_file("lead-turn");
+        let (turn_id, token) = lead_turn(&env, &release, false).await;
+        let (a, b) = delegate_twice(&env, &token, &second, &marker, gap, "Part two REPLYTAG:mcB").await;
+        wait_for("both parts to complete", || async { delegation_status(&env, &a).await == "completed" && delegation_status(&env, &b).await == "completed" }).await;
+        let d = env.state.db.get_delegation(&a).await.unwrap().unwrap();
+        assert_eq!(d.lead_turn_id.as_deref(), Some(turn_id.as_str()));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(resumes(&marker).is_empty(), "the lead isn't resumed while its turn runs (gap {gap} ms)");
+        std::fs::write(&release, "").unwrap();
+        assert_resumed_once(&marker).await;
+    }
+}
+
+/// The lead's turn that handed out the work fails, or the person stops it: the lead is still
+/// resumed, once, with every result.
+#[tokio::test]
+async fn a_lead_turn_that_fails_or_is_stopped_still_reports_its_hand_offs_once() {
+    // Fails after the hand-offs ended
+    let env = setup().await;
+    let second = add_bot(&env, "Second").await;
+    let release = env.release_file("lead-turn");
+    let (_, token) = lead_turn(&env, &release, true).await;
+    let (a, b) = delegate_twice(&env, &token, &second, "HOLDERR", 300, "Part two REPLYTAG:mcB").await;
+    wait_for("both parts to complete", || async { delegation_status(&env, &a).await == "completed" && delegation_status(&env, &b).await == "completed" }).await;
+    assert!(resumes("HOLDERR").is_empty());
+    std::fs::write(&release, "").unwrap();
+    assert_resumed_once("HOLDERR").await;
+
+    // Stopped by the person
+    let env = setup().await;
+    let second = add_bot(&env, "Second").await;
+    let release = env.release_file("lead-turn");
+    let (turn_id, token) = lead_turn(&env, &release, false).await;
+    let (a, b) = delegate_twice(&env, &token, &second, "HOLDSTOP", 300, "Part two REPLYTAG:mcB").await;
+    wait_for("both parts to complete", || async { delegation_status(&env, &a).await == "completed" && delegation_status(&env, &b).await == "completed" }).await;
+    assert!(resumes("HOLDSTOP").is_empty());
+    let (s, v) = call(&env.app, "POST", "/api/chat/cancel", Some(json!({"turn_id": turn_id}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_resumed_once("HOLDSTOP").await;
+    std::fs::write(&release, "").unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(resumes("HOLDSTOP").len(), 1);
+}
+
+/// The lead's turn waits on a question to the person: what its hand-offs report waits too, at most
+/// until `ask_user` gives up and the turn ends.
+#[tokio::test]
+async fn a_lead_turn_waiting_on_a_question_reports_its_hand_offs_when_it_ends() {
+    let env = setup().await;
+    env.state.questions.set_wait(Duration::from_millis(1500));
+    let second = add_bot(&env, "Second").await;
+    let release = env.release_file("lead-turn");
+    let (_, token) = lead_turn(&env, &release, false).await;
+    let (a, b) = delegate_twice(&env, &token, &second, "HOLDASK", 300, "Part two REPLYTAG:mcB").await;
+    wait_for("both parts to complete", || async { delegation_status(&env, &a).await == "completed" && delegation_status(&env, &b).await == "completed" }).await;
+    let ask = json!({"question": "Which launch date?", "choices": ["Monday", "Friday"], "why_you": "missing_after_research", "checked": "The brief names no date."});
+    let (text, err) = self_tool(&env, &token, "ask_user", ask).await;
+    assert!(!err && text.contains("hasn't answered"), "{text}");
+    assert!(resumes("HOLDASK").is_empty(), "nothing while the question waits");
+    // The lead ends its turn, as the tool told it to
+    std::fs::write(&release, "").unwrap();
+    assert_resumed_once("HOLDASK").await;
+}
+
+/// A lead's turn that runs past the hold limit: what its hand-offs reported goes to the lead
+/// anyway, once, and the turn's end adds nothing.
+#[tokio::test]
+async fn a_lead_turn_past_the_hold_limit_reports_its_hand_offs_while_it_runs() {
+    let env = setup().await;
+    env.state.turns.set_hold_limit(Duration::from_secs(3));
+    let second = add_bot(&env, "Second").await;
+    let release = env.release_file("lead-turn");
+    let (turn_id, token) = lead_turn(&env, &release, false).await;
+    delegate_twice(&env, &token, &second, "HOLDLIMIT", 300, "Part two REPLYTAG:mcB").await;
+    wait_for("the lead's turn with both results", || async { resumes("HOLDLIMIT").iter().any(|p| p.contains("answer mcB")) }).await;
+    assert!(env.state.turns.active_turns().iter().any(|t| t.turn_id == turn_id), "the turn still runs");
+    std::fs::write(&release, "").unwrap();
+    assert_resumed_once("HOLDLIMIT").await;
+}
+
+/// A hand-off still running when the lead's turn ends reports as before: the lead is resumed once,
+/// when it ends, with the one held for the turn.
+#[tokio::test]
+async fn a_hand_off_still_running_when_the_lead_turn_ends_joins_the_held_one() {
+    let env = setup().await;
+    let second = add_bot(&env, "Second").await;
+    let release = env.release_file("lead-turn");
+    let slow = env.release_file("part-b");
+    let (_, token) = lead_turn(&env, &release, false).await;
+    let (a, b) = delegate_twice(&env, &token, &second, "HOLDLATE", 300, &format!("Part two LONGTASK:{} REPLYTAG:mcB", slow.display())).await;
+    wait_for("part A to complete", || async { delegation_status(&env, &a).await == "completed" }).await;
+    std::fs::write(&release, "").unwrap();
+    wait_for("the lead's turn to end", || async { !env.state.turns.active_turns().iter().any(|t| t.kwant_id == env.lead && t.context_id == env.lead) }).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(resumes("HOLDLATE").is_empty(), "part B still runs");
+    assert_eq!(delegation_status(&env, &b).await, "running");
+    std::fs::write(&slow, "").unwrap();
+    assert_resumed_once("HOLDLATE").await;
+}
+
+/// kwnt restarts while the lead's turn that handed out the work runs: the restarted kwnt resumes
+/// the lead with what its hand-offs reported, once.
+#[tokio::test]
+async fn a_restart_mid_turn_still_reports_the_held_hand_offs() {
+    let env = setup().await;
+    let second = add_bot(&env, "Second").await;
+    let release = env.release_file("lead-turn");
+    let (_, token) = lead_turn(&env, &release, false).await;
+    let (a, b) = delegate_twice(&env, &token, &second, "HOLDRESTART", 300, "Part two REPLYTAG:mcB").await;
+    wait_for("both parts to complete", || async { delegation_status(&env, &a).await == "completed" && delegation_status(&env, &b).await == "completed" }).await;
+    assert!(resumes("HOLDRESTART").is_empty());
+
+    // A new kwnt on the same data, as at startup
+    let data = env.tmp.path().join("data");
+    let config = Config { data_dir: data.clone(), laya_url: "http://127.0.0.1:9".into(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
+    let restarted = AppState::new(
+        config.clone(),
+        Database::init(&data).await.unwrap(),
+        ToolRunner::new(data.join("workspace")),
+        PermissionBroker::new(),
+        LayaRouter::new(config.laya_url.clone()),
+    );
+    assert!(kwnt::server::routes::interrupt_running_turns(&restarted).await >= 1, "the lead's turn was cut short");
+    delegation::interrupt_open(&restarted).await;
+    assert_resumed_once("HOLDRESTART").await;
+    // (In a real restart the old turn is gone; here its end must not report the batch again)
+    std::fs::write(&release, "").unwrap();
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(resumes("HOLDRESTART").len(), 1);
 }

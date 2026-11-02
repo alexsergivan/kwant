@@ -63,6 +63,11 @@ pub struct Delegation {
     /// The lead hears both results in one batch (see `finished_batch`).
     #[sqlx(default)]
     pub relayed_from_delegation_id: Option<String>,
+    /// The lead's turn that started it with the `delegate` tool, while that turn held its
+    /// hand-offs' reports: the lead hears every hand-off of that turn in one batch (see
+    /// `finished_batch`).
+    #[sqlx(default)]
+    pub lead_turn_id: Option<String>,
 }
 
 impl Delegation {
@@ -160,6 +165,9 @@ impl Database {
             .execute(&self.pool)
             .await;
         let _ = sqlx::query("ALTER TABLE delegations ADD COLUMN relayed_from_delegation_id TEXT;")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE delegations ADD COLUMN lead_turn_id TEXT;")
             .execute(&self.pool)
             .await;
         Ok(())
@@ -300,6 +308,7 @@ impl Database {
             retries: 0,
             after_delegation_id: None,
             relayed_from_delegation_id: None,
+            lead_turn_id: None,
         };
         sqlx::query(
             "INSERT INTO delegations (id, thread_id, lead_kwant_id, specialist_kwant_id, origin_channel_id, origin_kwant_id, \
@@ -470,6 +479,16 @@ impl Database {
     pub async fn set_delegation_relayed_from(&self, id: &str, from: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE delegations SET relayed_from_delegation_id = ? WHERE id = ?")
             .bind(from)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Marks `id` as started by the lead's turn `turn_id` (see [`Delegation::lead_turn_id`]).
+    pub async fn set_delegation_lead_turn(&self, id: &str, turn_id: &str) -> Result<(), DbError> {
+        sqlx::query("UPDATE delegations SET lead_turn_id = ? WHERE id = ?")
+            .bind(turn_id)
             .bind(id)
             .execute(&self.pool)
             .await?;

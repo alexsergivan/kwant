@@ -1531,6 +1531,7 @@ pub(super) async fn delegate_mentions(
             allowed: Some(allowed.clone()),
             after,
             relayed_from: relay.map(|r| r.source.id.clone()),
+            lead_turn: None,
         };
         match super::delegation::create(&scope.state, req).await {
             Ok(c) => {
@@ -1869,6 +1870,7 @@ pub(super) async fn turn_once(
     // Sends turn_ended even if this future is dropped, queued or mid-turn
     let mut ended = TurnEndedGuard {
         sender: scope.state.event_sender.clone(),
+        state: scope.state.clone(),
         turns: turns.clone(),
         tag: tag.clone(),
         outcome: "cancelled",
@@ -1966,6 +1968,8 @@ pub async fn interrupt_running_turns(state: &AppState) -> usize {
     if !turns.is_empty() {
         tracing::info!(count = turns.len(), "marked chat replies cut short by a restart as interrupted");
     }
+    // Their hand-offs waited for them to end, and they won't now
+    super::delegation::release_cut_short(state, &turns).await;
     turns.len()
 }
 
@@ -1994,6 +1998,8 @@ fn scrub_urls(text: &str) -> String {
 
 struct TurnEndedGuard {
     sender: tokio::sync::broadcast::Sender<RuntimeEvent>,
+    /// Reports the hand-offs the turn held when it ends (see [`super::turns::TurnRegistry::hold`]).
+    state: AppState,
     turns: super::turns::TurnRegistry,
     tag: crate::drivers::events::TurnTag,
     outcome: &'static str,
@@ -2004,6 +2010,8 @@ struct TurnEndedGuard {
 impl Drop for TurnEndedGuard {
     fn drop(&mut self) {
         self.turns.end_turn(&self.tag.turn_id);
+        // However it ended (reply, error, stop, panic), the lead hears the hand-offs this turn started
+        super::delegation::release_held(&self.state, &self.tag.turn_id, self.turns.end_hold(&self.tag.turn_id));
         if let (Some(db), Ok(rt)) = (self.running_row.take(), tokio::runtime::Handle::try_current()) {
             let turn_id = self.tag.turn_id.clone();
             rt.spawn(async move {

@@ -154,6 +154,9 @@ pub struct StartRequest {
     /// The ended delegation whose result @mentioned this teammate (see
     /// [`Delegation::relayed_from_delegation_id`]).
     pub relayed_from: Option<String>,
+    /// The lead's turn that holds this hand-off's report until it ends (see
+    /// [`super::turns::TurnRegistry::hold`]).
+    pub lead_turn: Option<String>,
 }
 
 /// Checks a request, creates the thread and the delegation, and starts the specialist's turn
@@ -309,6 +312,14 @@ pub(super) async fn create(state: &AppState, req: StartRequest) -> Result<Create
     let d = match &req.relayed_from {
         Some(from) => {
             let _ = state.db.set_delegation_relayed_from(&d.id, from).await;
+            state.db.get_delegation(&d.id).await.ok().flatten().unwrap_or(d)
+        }
+        None => d,
+    };
+    // Also before it runs: the lead hears it with the turn's other hand-offs (see `finished_batch`)
+    let d = match &req.lead_turn {
+        Some(turn) => {
+            let _ = state.db.set_delegation_lead_turn(&d.id, turn).await;
             state.db.get_delegation(&d.id).await.ok().flatten().unwrap_or(d)
         }
         None => d,
@@ -806,6 +817,11 @@ async fn report_to_lead(state: &AppState, d: &Delegation, opening: Option<String
     if !d.continue_lead {
         return;
     }
+    // The lead's turn that started it still runs: it reports when that turn ends (see `release_held`)
+    if d.lead_turn_id.as_deref().is_some_and(|t| state.turns.defer(t, &d.id)) {
+        tracing::info!(delegation = %d.id, turn_id = ?d.lead_turn_id, "hand-off ended while its lead's turn runs: reporting when that turn ends");
+        return;
+    }
     if let Some(batch) = finished_batch(state, d).await {
         continue_lead(state, d, &batch, opening).await;
     }
@@ -815,6 +831,61 @@ async fn report_to_lead(state: &AppState, d: &Delegation, opening: Option<String
 fn spawn_report_to_lead(state: &AppState, d: Delegation) {
     let state = state.clone();
     tokio::spawn(async move { report_to_lead(&state, &d, None).await });
+}
+
+/// Reports the hand-offs a lead's turn held (see [`super::turns::TurnRegistry::hold`]) now that
+/// it ended or ran past the limit: the lead gets one turn with every hand-off of that turn once
+/// all of them ended; one still running reports when it ends. Called from the turn's end, so it
+/// only spawns.
+pub(super) fn release_held(state: &AppState, turn_id: &str, held: Vec<String>) {
+    if held.is_empty() {
+        return;
+    }
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        return tracing::warn!(turn_id, held = held.len(), "a lead's turn ended outside the runtime: its held hand-offs weren't reported");
+    };
+    tracing::info!(turn_id, held = held.len(), "the lead's turn ended: reporting the hand-offs it held");
+    let state = state.clone();
+    rt.spawn(async move {
+        for id in held {
+            if let Ok(Some(d)) = state.db.get_delegation(&id).await {
+                spawn_report_to_lead(&state, d);
+            }
+        }
+    });
+}
+
+/// Past the hold limit the held hand-offs go to the lead even though the turn that started them
+/// still runs: at worst the lead hears that turn's hand-offs in two turns, as before the hold,
+/// never in none (2026-10-24).
+fn spawn_hold_limit(state: &AppState, turn_id: String) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(state.turns.hold_limit()).await;
+        if let Some(held) = state.turns.expire_hold(&turn_id) {
+            tracing::warn!(turn_id, held = held.len(), "a lead's turn held its hand-offs past the limit: reporting them while it runs");
+            release_held(&state, &turn_id, held);
+        }
+    });
+}
+
+/// After a restart: the hand-offs of turns it cut short waited for those turns to end, which
+/// they never will now. Each such turn's batch goes to its lead (one still open reports when
+/// it ends, as usual).
+pub async fn release_cut_short(state: &AppState, turns: &[crate::db::continuity::RunningTurn]) {
+    for t in turns {
+        let held = state
+            .db
+            .list_delegations(Some(&t.kwant_id), None, 50)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|d| d.lead_turn_id.as_deref() == Some(t.turn_id.as_str()) && !d.is_open());
+        if let Some(d) = held {
+            tracing::info!(turn_id = %t.turn_id, delegation = %d.id, "a restart cut short the lead's turn: reporting the hand-offs it held");
+            spawn_report_to_lead(state, d);
+        }
+    }
 }
 
 /// A question the specialist asked in the delegation's thread that the person hasn't answered.
@@ -906,13 +977,16 @@ async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegati
         return None;
     }
     let end = |s: &Delegation| s.ended_at.unwrap_or(s.created_at);
-    // Grow from `d` to every delegation whose run overlaps the batch's span, and to the results
-    // that relayed work to a batch member or were relayed from one (they ran one after the other)
+    // Grow from `d` to every delegation whose run overlaps the batch's span, to the results
+    // that relayed work to a batch member or were relayed from one (they ran one after the other),
+    // and to the hand-offs the same lead turn started (one may have ended before the next began)
     let mut batch = vec![siblings.iter().find(|s| s.id == d.id)?.clone()];
     let (mut lo, mut hi) = (d.created_at, end(d));
     let linked = |s: &Delegation, batch: &[Delegation]| {
         batch.iter().any(|b| {
-            s.relayed_from_delegation_id.as_deref() == Some(b.id.as_str()) || b.relayed_from_delegation_id.as_deref() == Some(s.id.as_str())
+            s.relayed_from_delegation_id.as_deref() == Some(b.id.as_str())
+                || b.relayed_from_delegation_id.as_deref() == Some(s.id.as_str())
+                || (s.lead_turn_id.is_some() && s.lead_turn_id == b.lead_turn_id)
         })
     };
     loop {
@@ -933,6 +1007,11 @@ async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegati
     // A batch the person stopped entirely stays stopped; anything else (a result, a failure, a
     // restart cutting it short) is the lead's to report
     if batch.iter().all(|b| b.status == "cancelled") {
+        return None;
+    }
+    // One of them ended while the lead's turn that started it runs: that turn reports the batch
+    // when it ends (see `release_held`)
+    if batch.iter().any(|b| b.lead_turn_id.as_deref().is_some_and(|t| state.turns.holding(t))) {
         return None;
     }
     let mut ids: Vec<&str> = batch.iter().map(|b| b.id.as_str()).collect();
@@ -1062,9 +1141,13 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     }
 }
 
-/// Whether another hand-off of `d`'s batch (same lead and chat, reporting back) is still open:
-/// the lead then hears about `d` with the whole batch, so nothing asks it about `d` alone.
+/// Whether another hand-off of `d`'s batch (same lead and chat, reporting back) is still open, or
+/// the lead's turn that started `d` still holds its report: the lead then hears about `d` with the
+/// whole batch, so nothing asks it about `d` alone.
 pub async fn batch_running(state: &AppState, d: &Delegation) -> bool {
+    if d.lead_turn_id.as_deref().is_some_and(|t| state.turns.holding(t)) {
+        return true;
+    }
     state
         .db
         .list_delegations(Some(&d.lead_kwant_id), None, 50)
@@ -1567,6 +1650,7 @@ pub async fn create_delegation(State(state): State<AppState>, Json(p): Json<Dele
         allowed: None,
         after: None,
         relayed_from: None,
+        lead_turn: None,
     };
     match start(&state, req).await {
         Ok(d) => (StatusCode::ACCEPTED, Json(d)).into_response(),
@@ -1631,6 +1715,14 @@ pub async fn tool_delegate(state: &AppState, scope: &super::continuity::SelfScop
         let names: Vec<&str> = pool.iter().map(|k| k.name.as_str()).collect();
         return (format!("No bot named '{to}'. You can delegate to: {}.", names.join(", ")), true);
     };
+    // Held before it starts: one that ends while this turn hands out the next one doesn't
+    // resume the lead on its own (see `TurnRegistry::hold`)
+    let lead_turn = scope.turn_id.as_ref().and_then(|t| {
+        if state.turns.hold(t)? {
+            spawn_hold_limit(state, t.clone());
+        }
+        Some(t.clone())
+    });
     let req = StartRequest {
         lead,
         specialist,
@@ -1646,6 +1738,7 @@ pub async fn tool_delegate(state: &AppState, scope: &super::continuity::SelfScop
         allowed: (!origin.member_ids.is_empty()).then(|| origin.member_ids.clone()),
         after: None,
         relayed_from: None,
+        lead_turn,
     };
     match start(state, req).await {
         Ok(d) => (

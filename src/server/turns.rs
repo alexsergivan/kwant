@@ -12,6 +12,7 @@ use crate::drivers::events::RuntimeEvent;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::{broadcast, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -54,6 +55,23 @@ struct Inner {
     turns: HashMap<String, ActiveTurn>,
     /// Usage the engine reported so far in a running turn, by turn id (see [`TurnRegistry::book_usage`]).
     meters: HashMap<String, Meter>,
+    /// Lead turns that hold their hand-offs' reports, by turn id (see [`TurnRegistry::hold`]).
+    holds: HashMap<String, Hold>,
+    /// [`HOLD_LIMIT`] unless a test shortened it.
+    hold_limit: Option<Duration>,
+}
+
+/// How long a lead's turn holds its hand-offs' reports at most (see [`TurnRegistry::hold`]):
+/// past it they go to the lead anyway. kwnt sets no limit on a turn's length; one waiting on the
+/// person's answer ends within 5 minutes.
+pub const HOLD_LIMIT: Duration = Duration::from_secs(600);
+
+/// A lead's turn that started hand-offs with the `delegate` tool.
+enum Hold {
+    /// Running: the hand-offs that ended meanwhile wait for it, by delegation id.
+    Open(Vec<String>),
+    /// Past [`HOLD_LIMIT`]: what waited was reported, and the turn holds nothing more.
+    Expired,
 }
 
 /// One turn's fresh tokens: reported by the engine so far, and already booked onto a task.
@@ -172,6 +190,73 @@ impl TurnRegistry {
         let mut inner = self.lock();
         inner.turns.remove(turn_id);
         inner.meters.remove(turn_id);
+    }
+
+    /// Holds the reports of the hand-offs that `turn_id`, a running lead turn, starts until it
+    /// ends, so the lead hears them all in one turn: one that ended while the lead was still
+    /// handing out the next resumed it on its own, and the next one resumed it again (10 runs in
+    /// 10 with a 300 ms gap between two `delegate` calls, 2026-11-02). `Some(true)` when this
+    /// opened the hold, `Some(false)` when it was open; `None` when the turn isn't running or
+    /// is past [`HOLD_LIMIT`].
+    pub fn hold(&self, turn_id: &str) -> Option<bool> {
+        let mut inner = self.lock();
+        if !inner.turns.contains_key(turn_id) {
+            return None;
+        }
+        match inner.holds.get(turn_id) {
+            Some(Hold::Open(_)) => Some(false),
+            Some(Hold::Expired) => None,
+            None => {
+                inner.holds.insert(turn_id.to_string(), Hold::Open(Vec::new()));
+                Some(true)
+            }
+        }
+    }
+
+    /// Keeps the report of `delegation_id`, which ended, until `turn_id` ends; `false` when that
+    /// turn holds nothing.
+    pub fn defer(&self, turn_id: &str, delegation_id: &str) -> bool {
+        match self.lock().holds.get_mut(turn_id) {
+            Some(Hold::Open(held)) => {
+                held.push(delegation_id.to_string());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `turn_id` holds its hand-offs' reports.
+    pub fn holding(&self, turn_id: &str) -> bool {
+        matches!(self.lock().holds.get(turn_id), Some(Hold::Open(_)))
+    }
+
+    /// Ends `turn_id`'s hold as the turn ends: the hand-offs whose reports waited for it.
+    pub fn end_hold(&self, turn_id: &str) -> Vec<String> {
+        match self.lock().holds.remove(turn_id) {
+            Some(Hold::Open(held)) => held,
+            _ => Vec::new(),
+        }
+    }
+
+    /// Ends `turn_id`'s hold at its limit while the turn still runs: what waited goes to the
+    /// lead now, and the hand-offs it starts from here on aren't held. `None` once the turn ended.
+    pub fn expire_hold(&self, turn_id: &str) -> Option<Vec<String>> {
+        let mut inner = self.lock();
+        let hold = inner.holds.get_mut(turn_id)?;
+        match std::mem::replace(hold, Hold::Expired) {
+            Hold::Open(held) => Some(held),
+            Hold::Expired => None,
+        }
+    }
+
+    /// The hold limit (see [`HOLD_LIMIT`]).
+    pub fn hold_limit(&self) -> Duration {
+        self.lock().hold_limit.unwrap_or(HOLD_LIMIT)
+    }
+
+    /// Shortens the hold limit (tests).
+    pub fn set_hold_limit(&self, limit: Duration) {
+        self.lock().hold_limit = Some(limit);
     }
 
     /// Notes the fresh tokens a running turn used so far, as its engine reports them.
@@ -446,6 +531,38 @@ mod tests {
         reg.saw_usage("u", 10);
         reg.end_turn("u");
         assert_eq!(reg.book_usage("u"), 0, "an ended turn keeps no meter");
+    }
+
+    #[test]
+    fn a_hold_keeps_what_ended_until_the_turn_ends_or_passes_its_limit() {
+        let reg = TurnRegistry::default();
+        assert_eq!(reg.hold("t"), None, "a turn that isn't running holds nothing");
+        reg.set_turn(ActiveTurn {
+            turn_id: "t".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+            state: "running".into(),
+            since: chrono::Utc::now(),
+            purpose: None,
+        });
+        assert!(!reg.defer("t", "d1"), "nothing waits before the turn's first hand-off");
+        assert_eq!(reg.hold("t"), Some(true));
+        assert_eq!(reg.hold("t"), Some(false), "opened once");
+        assert!(reg.defer("t", "d1") && reg.holding("t"));
+        assert_eq!(reg.end_hold("t"), ["d1"]);
+        assert!(!reg.holding("t") && reg.end_hold("t").is_empty(), "reported once");
+        // Past the limit: what waited goes out once, and nothing the turn starts after it waits
+        assert_eq!(reg.hold("t"), Some(true));
+        assert!(reg.defer("t", "d2"));
+        assert_eq!(reg.expire_hold("t"), Some(vec!["d2".to_string()]));
+        assert_eq!(reg.expire_hold("t"), None);
+        assert_eq!(reg.hold("t"), None, "an expired hold doesn't open again");
+        assert!(!reg.defer("t", "d3") && !reg.holding("t"));
+        reg.end_turn("t");
+        assert!(reg.end_hold("t").is_empty());
+        assert_eq!(reg.hold("t"), None, "nor once the turn ended");
+        assert_eq!(reg.expire_hold("t"), None, "a limit that fires after the turn ended finds nothing");
     }
 
     use super::*;
