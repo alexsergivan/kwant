@@ -41,10 +41,12 @@ pub(super) fn routed_note(routing: &Value, team_channel: bool) -> Option<String>
     if team_channel || named || !PICKED_FROM_WORDS.contains(&basis) || routing["message_id"].as_str().is_none() {
         return None;
     }
+    // Not "if another bot would do it better": a bot that sees no better teammate (the Concierge is
+    // made when needed) answers what isn't its area instead of handing it back
     Some(format!(
-        "(kwant routing note: kwnt picked you for this message from its words; the person didn't choose you. If it is \
-        clearly not your area and another bot here would do it better, call {HAND_BACK} with a one-line reason instead \
-        of answering. Otherwise answer it.)"
+        "(kwant routing note: kwnt picked you for this message from its words; the person didn't choose you. If it isn't \
+        your area, call {HAND_BACK} with a one-line reason instead of answering: kwnt passes it to a better fit or a \
+        generalist, even one you can't see here, and tells you if there's no one. If it is your area, answer it.)"
     ))
 }
 
@@ -281,10 +283,10 @@ pub async fn correct_route(State(state): State<AppState>, headers: HeaderMap, Js
 pub fn tool() -> Value {
     json!({
         "name": HAND_BACK,
-        "description": "Hand the person's message you were routed in this channel back when it is clearly not your area, so kwnt sends it \
-            to the bot here that fits it best (or a generalist). Use it only when someone else is clearly better placed, not to \
-            avoid work. It works once per message. After it succeeds, end your turn with one short line saying who takes it; \
-            don't answer the request yourself.",
+        "description": "Hand the person's message you were routed in this channel back when it is clearly not your area. kwnt sends it \
+            to the bot here that fits it best, or to a generalist even if you can't see one; if there's no one, it tells you to \
+            answer. Don't use it to avoid work in your own area. It works once per message. After it succeeds, end your turn \
+            with one short line saying who takes it; don't answer the request yourself.",
         "inputSchema": {
             "type": "object",
             "properties": {
