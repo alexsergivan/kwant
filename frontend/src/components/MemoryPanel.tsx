@@ -4,6 +4,7 @@ import { UndoNotice } from './UndoNotice';
 import { Bot, Check, Loader2, Pencil, Pin, PinOff, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
 import { MAX_MEMORIES, MAX_MEMORY, MAX_PINNED, Memory, continuityApi, formatWhen, memoriesForDisplay, onContinuity } from '../continuity';
 import { playSfx } from '../audio/chiptune';
+import { editorProps } from '../escape';
 
 const smallBtn =
   'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
@@ -117,7 +118,7 @@ export const MemoryRow: React.FC<{
         </span>
       </div>
       {editing ? (
-        <div className="space-y-1.5">
+        <div className="space-y-1.5" {...editorProps(text !== memory.text, () => setEditing(false))}>
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -125,10 +126,6 @@ export const MemoryRow: React.FC<{
             autoFocus
             aria-label="Memory text"
             onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                e.stopPropagation();
-                setEditing(false);
-              }
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save();
             }}
             className={inputClass}
@@ -137,7 +134,14 @@ export const MemoryRow: React.FC<{
             <span className={`text-[10px] font-mono ${text.length > MAX_MEMORY ? 'text-rose-400' : 'text-zinc-500'}`}>
               {text.length}/{MAX_MEMORY}
             </span>
-            <button type="button" onClick={() => setEditing(false)} className={`${quietBtn} ml-auto`}>
+            <button
+              type="button"
+              onClick={() => {
+                setText(memory.text);
+                setEditing(false);
+              }}
+              className={`${quietBtn} ml-auto`}
+            >
               <X size={11} /> Cancel
             </button>
             <button
@@ -223,7 +227,7 @@ export const MemoryPanel: React.FC<{ kwantId: string; kwantName: string }> = ({ 
         list gets long, the newest of the rest are shown and {kwantName} can search the others.
       </p>
 
-      <form onSubmit={add} className="space-y-1.5">
+      <form onSubmit={add} {...editorProps(!!draft.trim())} className="space-y-1.5">
         <label htmlFor="memory-new" className="block text-xs font-medium text-zinc-400">
           Add a memory
         </label>

@@ -1715,10 +1715,15 @@ export const RestoreSection: React.FC<{
     setUndoId(null);
   }, [task.id]);
 
+  const taskId = useRef(task.id);
+  taskId.current = task.id;
   const load = async () => {
     setErr(null);
+    const id = task.id;
     try {
-      setList(await api.checkpoints(task.id));
+      const cps = await api.checkpoints(id);
+      // Another task opened meanwhile: its own list loads instead.
+      if (taskId.current === id) setList(cps);
     } catch (e) {
       setErr(restoreErrorText(e));
       onError?.(e);
@@ -1747,7 +1752,9 @@ export const RestoreSection: React.FC<{
       setUndoId(r.before_restore_checkpoint_id);
       setPicked(null);
       setPreview(null);
+      // The list now has the checkpoint taken before the restore, for "Undo this restore".
       setList(null);
+      void load();
       onRestored?.(r, opts.rerun);
     } catch (e) {
       setErr(restoreErrorText(e));

@@ -79,6 +79,14 @@ export function sameView(a: SpaceView | null | undefined, b: SpaceView | null | 
   return viewSegment(a) === viewSegment(b);
 }
 
+/**
+ * The view to open in a space picked from the rail or with Ctrl/⌘ 1–9. Settings stays open
+ * (This space then shows the new space, All spaces stays as is); anything else opens a chat.
+ */
+export function viewAfterSpaceSwitch(view: SpaceView | null | undefined): SpaceView | null {
+  return view?.kind === 'settings' ? view : null;
+}
+
 const INSTALL_TIP_KEY = 'kwnt.installTip.dismissed';
 
 /** The desktop "Install app" tip shows until it is dismissed or the app is installed. */

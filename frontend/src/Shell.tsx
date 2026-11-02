@@ -4,7 +4,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { SpaceApp, SpaceTarget } from './App';
-import { SpaceView, sameView } from './nav';
+import { SpaceView, sameView, viewAfterSpaceSwitch } from './nav';
 import { ArchivedSpacesModal, NewSpaceModal, SpaceRail } from './components/Spaces';
 import { Toasts, Toast } from './components/Toasts';
 import { InstallHint } from './components/InstallHint';
@@ -138,7 +138,8 @@ export const App: React.FC = () => {
     (id: string, to?: SpaceTarget | null) => {
       if (id === currentRef.current && !to) return;
       playSfx('click');
-      open(id, to);
+      // A plain switch (rail, Ctrl/⌘ 1–9) keeps Settings open; a link to a chat opens that chat.
+      open(id, to, false, to ? null : viewAfterSpaceSwitch(viewRef.current));
       reload();
     },
     [open, reload],

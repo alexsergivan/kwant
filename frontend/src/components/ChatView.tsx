@@ -1483,6 +1483,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           <textarea
             ref={textareaRef}
+            data-composer
             rows={1}
             value={inputVal}
             onChange={(e) => {
