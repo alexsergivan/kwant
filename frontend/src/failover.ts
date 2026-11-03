@@ -86,11 +86,13 @@ export function moveAccount(order: Profile[], from: number, to: number): Profile
 
 export const PRIORITY_STEP = 10;
 
-/** The priority updates that make `order` the failover order: ranks 10, 20, 30…, only for accounts
- * whose number changes. Uses the existing PATCH /api/profiles/:id `priority` field (0 to 10000). */
-export function priorityUpdates(order: Profile[]): Array<{ id: string; priority: number }> {
+/** The priority updates that make `order` the failover order: the whole list numbered 10, 20, 30…, with
+ * `rest` (the accounts outside the ranked list, in their current relative order) after it, so one that
+ * becomes ready later joins at the bottom, never above what the person ordered. Only accounts whose number
+ * changes are returned. Uses the existing PATCH /api/profiles/:id `priority` field (0 to 10000). */
+export function priorityUpdates(order: Profile[], rest: Profile[] = []): Array<{ id: string; priority: number }> {
   const out: Array<{ id: string; priority: number }> = [];
-  order.forEach((p, i) => {
+  [...order, ...rest].forEach((p, i) => {
     const priority = Math.min(10_000, (i + 1) * PRIORITY_STEP);
     if (p.priority !== priority) out.push({ id: p.id, priority });
   });

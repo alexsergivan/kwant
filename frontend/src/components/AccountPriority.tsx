@@ -40,7 +40,7 @@ export const AccountPriority: React.FC<{
 
   const engineOf = (p: Profile) => engines?.find((e) => e.id === cardOf(p));
   // Accounts that aren't installed or aren't signed in can't take a turn: they are listed apart, unranked
-  // and not movable. Their saved priority is never touched.
+  // and not movable. A move numbers them after the ranked ones, so they join at the bottom later.
   const { ranked: servedRanked, unranked } = useMemo(
     () => splitRanked(failoverOrder(profiles), (p) => engines?.find((e) => e.id === cardOf(p)), now),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -57,7 +57,7 @@ export const AccountPriority: React.FC<{
   }, [focusKey, order]);
 
   const save = async (next: Profile[], moved: Profile, to: number) => {
-    const updates = priorityUpdates(next);
+    const updates = priorityUpdates(next, unranked);
     if (updates.length === 0) return;
     setError(null);
     // Show the new order at once, with the numbers it will have, so a late reload can't flip it back.

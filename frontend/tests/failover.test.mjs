@@ -176,13 +176,31 @@ test('a not-installed engine is not ranked, a signed-out one is not ranked, an o
   assert.equal(off.ranked.length, 1, 'switched off stays ranked');
 });
 
-test('ranks are written for the ranked list only: an unranked account keeps its saved priority', () => {
-  const { ranked, unranked } = m.splitRanked(m.failoverOrder(sysList), engineOf, NOW);
-  const next = m.moveAccount(ranked, 1, 0);
-  const updates = m.priorityUpdates(next);
-  assert.deepEqual(updates, [{ id: 's-codex', priority: 10 }, { id: 's-claude', priority: 20 }]);
-  assert.ok(!updates.some((u) => unranked.some((p) => p.id === u.id)), 'no update for Grok');
-  assert.equal(unranked[0].priority, 30);
+test('a move numbers the whole order: ranked first, then the unranked ones in their current order', () => {
+  // Fresh install: all three system accounts at 0, Grok not installed.
+  const fresh = [sys('s-claude', 'claude', 0), sys('s-codex', 'codex', 0), sys('s-grok', 'grok', 0)];
+  const { ranked, unranked } = m.splitRanked(m.failoverOrder(fresh), engineOf, NOW);
+  assert.deepEqual(ranked.map((p) => p.id), ['s-claude', 's-codex']);
+  const next = m.moveAccount(ranked, 0, 1);
+  const updates = m.priorityUpdates(next, unranked);
+  assert.deepEqual(updates, [{ id: 's-codex', priority: 10 }, { id: 's-claude', priority: 20 }, { id: 's-grok', priority: 30 }]);
+  // Once Grok is installed, it sorts after both.
+  const after = fresh.map((p) => ({ ...p, priority: updates.find((u) => u.id === p.id)?.priority ?? p.priority }));
+  assert.deepEqual(m.failoverOrder(after).map((p) => p.id), ['s-codex', 's-claude', 's-grok']);
+  // Without the unranked list, only the ranked ones are numbered.
+  assert.deepEqual(m.priorityUpdates(next), [{ id: 's-codex', priority: 10 }, { id: 's-claude', priority: 20 }]);
+});
+
+test('a signed-out account between ranked ones ends up after all of them once anything moves', () => {
+  const three = [profile({ id: 'a', priority: 10 }), profile({ id: 'b', engine: 'codex', priority: 20 }), profile({ id: 'c', engine: 'grok', priority: 30 })];
+  const next = m.moveAccount([three[0], three[2]], 0, 1); // c, a
+  const updates = m.priorityUpdates(next, [three[1]]);
+  assert.deepEqual(updates, [{ id: 'c', priority: 10 }, { id: 'a', priority: 20 }, { id: 'b', priority: 30 }]);
+  const after = three.map((p) => ({ ...p, priority: updates.find((u) => u.id === p.id)?.priority ?? p.priority }));
+  assert.deepEqual(m.failoverOrder(after).map((p) => p.id), ['c', 'a', 'b']);
+  // Only numbers that change are sent, capped at 10000.
+  const many = Array.from({ length: 1100 }, (_, i) => profile({ id: `p${i}`, priority: 0 }));
+  assert.equal(m.priorityUpdates(many.slice(0, 1000), many.slice(1000)).at(-1).priority, 10_000);
 });
 
 test('the list shows Grok under the ranked rows, with its status, no number and no arrows', () => {
