@@ -1,7 +1,7 @@
 # Router eval
 
-47 messages with the expected routing, across 3 fixture spaces (`kitchen` mirrors the corn-dog screenshot,
-`software`, `duo`). 15 expect `concierge`, 2 expect `ask`. The runner is `tests/router_eval_test.rs`.
+48 messages with the expected routing, across 3 fixture spaces (`kitchen` mirrors the corn-dog screenshot,
+`software`, `duo`). 16 expect `concierge`, 2 expect `ask`. The runner is `tests/router_eval_test.rs`.
 
     cargo test --test router_eval_test router_eval -- --ignored --nocapture
 

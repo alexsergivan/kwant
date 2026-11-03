@@ -183,7 +183,7 @@ fn router_eval() {
 /// Cases the router must get right, checked in CI: every no-match case (to the Concierge in
 /// #general), the specialist questions and the go-ahead that main already routed right and the
 /// first fit score broke (#12, #13, #16, #17, #40), and #35, where "go" made Backend a runner-up.
-const MUST_PASS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 16, 17, 20, 35, 36, 40, 44, 45];
+const MUST_PASS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 16, 17, 20, 35, 36, 40, 44, 45, 48];
 
 #[test]
 fn router_eval_must_pass() {
