@@ -8,16 +8,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.5] - 2026-11-03
+
+### Added
+- **Smart Results.** When a bot's reply holds a table, a numbered list or a set of figures, kwant draws it as a card
+  under the text: a comparison, a chart, metric tiles, facts, cards, findings, steps, a checklist or a timeline, a
+  task's checks, or a preview of a shared file. Each card has Evidence (where the data came from), Show as text and
+  Copy data, and "Ask about this" puts a row into your message. The reply text is never changed, and anything kwant
+  can't draw cleanly stays as the original text.
+- **Goals.** Above the Mission board, say what should stay true (a page answers, a command succeeds, a file exists)
+  and kwant keeps checking it. One quiet line shows while everything is OK. When a goal fails, kwant opens one
+  "Restore" mission, investigates on its own and offers a fix: Fix it, Not now, or Always fix this goal. Nothing runs
+  until you create or approve a goal.
+- **Automatic model failover.** A bot that hits a usage or session limit moves to the next account that still works,
+  across Claude, Codex, Grok and Custom API, in the order you set in Settings › This space › Accounts › Order to use.
+  The chat shows one quiet line per outage, and the bot goes back to its own account after the reset. When every
+  account is out, your message waits and is answered at the earliest reset. A bot with failover off stays on its own
+  account.
+
 ### Changed
-- **Everything is on for a fresh install.** AutoFix, the Swarm Auditor, Flight School, Skill Foundry, Automation
-  Discovery and the Truth Ledger now start on (the Ledger in full, not shadow). Nothing you saved changes: if you
-  switched one off, or picked "suggest" or "shadow", it stays that way. The caps are the same as before (AutoFix
-  25% recovery budget, 5 audits a day, the Foundry and Discovery daily caps), and token and task limits stay off.
-- **Flight School starts every bot at Act.** New bots no longer start in Sandbox, so turning Flight School on adds
-  no approval cards: it keeps scorecards and proposes tiers, and only you lower or raise a bot. You can still pick a
+- **Everything is on by default.** AutoFix, the Swarm Auditor, Flight School, Skill Foundry, Automation Discovery and
+  the Truth Ledger now start on (the Ledger in full, not shadow), on a fresh install and on an existing one where you
+  never changed them. Nothing you saved changes: if you switched one off, or picked "suggest" or "shadow", it stays
+  that way. The caps are the same as before (AutoFix 25% recovery budget, 5 audits a day, the Foundry and Discovery
+  daily caps), and token and task limits stay off.
+- **Flight School starts every bot at Act.** New bots no longer start in Sandbox, so turning Flight School on adds no
+  approval cards: it keeps scorecards and proposes tiers, and only you lower or raise a bot. You can still pick a
   lower start for new bots in Settings.
 
 ### Fixed
+- **A limit message is never shown as the bot's reply.** "You've hit your session limit · resets 3am (Europe/Berlin)"
+  and other clock-style resets are now read as a limit, with the reset time in its own time zone.
 - **No task tool without the task board.** With the Truth Ledger on and the board switched off, bots were still
   offered `task_cite_fact`; it is now offered (and accepted) only while the board is on.
 
