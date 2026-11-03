@@ -21,7 +21,7 @@ import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { FailoverNote, ReplyMeta } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
-import { savedFailoverNotice } from '../failover';
+import { savedFailoverHandoff, savedFailoverNotice } from '../failover';
 import { SuggestionMeta, parseSuggestionMeta } from '../mcpSuggestions';
 import { BotActionMeta, HireMeta, parseBotActionMeta, parseHireMeta } from '../botActions';
 import {
@@ -988,11 +988,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
       >
         {/* Phones show the avatar inside the name line instead, so the bubble gets the full width */}
         <span className="hidden sm:contents">
-          <ModernAvatar
-            role={isUser ? 'user' : title}
-            name={displayName}
-            size={36}
-          />
+          {/* Laya hand-off: a reply she just routed brings the chosen bot's avatar up into the header */}
+          <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'contents'}>
+            <ModernAvatar
+              role={isUser ? 'user' : title}
+              name={displayName}
+              size={36}
+            />
+          </span>
         </span>
 
         <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-[85%] sm:max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
@@ -1005,12 +1008,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <ReplyMeta
               name={displayName}
               at={msg.created_at}
-              avatar={<ModernAvatar role={title} name={displayName} size={20} />}
+              avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={20} /></span>}
               ranOn={ranOn}
               account={account}
               tokens={tokens}
               failed={!!savedActivity?.steps.some((s) => s.status === 'failed')}
               note={savedFailoverNotice(msg.meta) ?? switchNoteFor.get(msg.id)}
+              handoff={savedFailoverHandoff(msg.meta)}
               route={
                 routed
                   ? {

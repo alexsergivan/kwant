@@ -192,3 +192,16 @@ export function savedFailoverNotice(meta: unknown, now = Date.now()): string | n
   const last = list[list.length - 1];
   return failoverNotice({ ...first, to_name: last.to_name, to_engine: last.to_engine, to_model: last.to_model, to_model_label: last.to_model_label }, now);
 }
+
+/** The engines a saved reply moved between ("Claude" to "Codex") and the notice line, for the engine chip. Null when none. */
+export function savedFailoverHandoff(meta: unknown, now = Date.now()): { from: string; to: string; why: string } | null {
+  const m = parseMetaObject(meta);
+  const raw = m?.failover;
+  const list = (Array.isArray(raw) ? raw : raw ? [raw] : []).map(savedSwitch).filter((s): s is FailoverEvent => !!s);
+  if (list.length === 0) return null;
+  const first = list[0];
+  const last = list[list.length - 1];
+  const why = savedFailoverNotice(meta, now);
+  if (!why) return null;
+  return { from: engineName(first.from_engine, first.from_name), to: engineName(last.to_engine, last.to_name), why };
+}

@@ -2,6 +2,7 @@ import React, { useId, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { localClock } from '../clock';
 import { RouteInfo, useRouteChip } from './RouteChip';
+import { EngineChip } from './Signature';
 
 export interface ReplyFacts {
   /** "Claude · Opus 5.5": the engine and model the reply ran on. */
@@ -22,6 +23,8 @@ export interface ReplyMetaProps extends ReplyFacts {
   note?: string | null;
   /** Why this bot answered: a chip beside the name that opens the full reason (and "Wrong bot?"). */
   route?: RouteInfo | null;
+  /** Set after a failover: the engines the reply moved between, with the reason on hover. */
+  handoff?: { from: string; to: string; why: string } | null;
   now?: number;
   /** Steps and the reasoning item; shown with the facts when Details is open. */
   children?: React.ReactNode;
@@ -37,7 +40,7 @@ export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (
 const hasContent = (n: React.ReactNode) => React.Children.toArray(n).length > 0;
 
 /** A bot reply's header: one line, "Name · 3:42 PM", and a Details toggle holding the rest. */
-export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, tokens, failed = false, note, route, now, children }) => {
+export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, tokens, failed = false, note, route, handoff, now, children }) => {
   const [open, setOpen] = useState(false);
   const why = useRouteChip(route);
   const panelId = useId();
@@ -53,6 +56,7 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
         {avatar && <span className="sm:hidden shrink-0 inline-flex">{avatar}</span>}
         <span className="shrink-0 text-[13px] font-semibold text-zinc-50">{name}</span>
         {why.chip}
+        {(ranOn || handoff) && <EngineChip label={ranOn ?? ''} handoff={handoff} />}
         {time && (
           <span className="min-w-0 truncate text-zinc-400" data-reply-time="">
             <span aria-hidden="true" className="sm:hidden">· </span>

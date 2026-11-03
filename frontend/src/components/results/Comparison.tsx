@@ -1,7 +1,8 @@
 import React, { useId, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronsUpDown, MessageSquare, Minus, Plus } from 'lucide-react';
+import { Award, ArrowDown, ArrowUp, ChevronsUpDown, MessageSquare, Minus, Plus } from 'lucide-react';
 import { ColumnRole, ComparisonBlock, Sort, nextSort, plainText, sortRows } from '../../smartResults';
 import type { RendererProps } from './registry';
+import { Sticker } from '../Sticker';
 
 // Pros and cons cells: split on ";", "•", "·" or a line break, else on commas when every part is short.
 export function shortList(text: string): string[] | null {
@@ -16,9 +17,13 @@ export function shortList(text: string): string[] | null {
 
 const ROLE_TINT: Partial<Record<ColumnRole, string>> = { pros: 'text-emerald-300', cons: 'text-rose-300' };
 
+// In the table the label keeps the streamed table's exact size, so it carries the holographic finish as
+// a flat tint (kws-holo-mini) instead of a sticker; the stacked cards below carry the sticker itself.
+const HOLO_MINI = 'kws-holo-mini rounded border px-1 py-px align-[1px] text-[10px] font-semibold leading-none';
+
 const PickLabel: React.FC<{ reason: string | null; inline?: boolean; className?: string }> = ({ reason, inline, className = '' }) => (
   <span
-    className={`${className} ${inline ? 'ml-1.5 ' : ''}rounded border border-sky-500/30 bg-sky-500/10 px-1 py-px align-[1px] text-[10px] font-medium leading-none text-sky-300 [box-decoration-break:clone]`}
+    className={`${className} ${inline ? 'ml-1.5 ' : ''}${HOLO_MINI} [box-decoration-break:clone]`}
     title={reason ?? undefined}
   >
     Pick in this reply
@@ -144,7 +149,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                               <span
                                 aria-hidden="true"
                                 title={block.highlight_reason ? `Pick in this reply: ${block.highlight_reason}` : 'Pick in this reply'}
-                                className="smart-pick-short ml-1.5 rounded border border-sky-500/30 bg-sky-500/10 px-1 py-px align-[1px] text-[10px] font-medium leading-none text-sky-300">
+                                className={`smart-pick-short ml-1.5 ${HOLO_MINI}`}>
                                 Pick
                               </span>
                             </span>
@@ -198,11 +203,15 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
               <li
                 key={row.id}
                 data-pick={picked ? '' : undefined}
-                className={`rounded-xl border px-3 py-2.5 text-xs ${picked ? 'border-sky-500/40 bg-sky-500/[0.07]' : 'border-zinc-800 bg-zinc-900/60'}`}
+                className={`relative rounded-xl border px-3 py-2.5 text-xs ${picked ? 'border-sky-500/40 bg-sky-500/[0.07]' : 'border-zinc-800 bg-zinc-900/60'}`}
               >
-                <div className="text-[13px] font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere]">
+                {picked && (
+                  <Sticker tone="holo" icon={<Award size={12} aria-hidden="true" />} title={block.highlight_reason ?? 'Pick in this reply'} className="absolute -top-2 right-2">
+                    Pick<span className="sr-only"> in this reply{block.highlight_reason ? `: ${block.highlight_reason}` : ''}</span>
+                  </Sticker>
+                )}
+                <div className={`text-[13px] font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere] ${picked ? 'pr-16' : ''}`}>
                   {body[i][0]}
-                  {picked && <PickLabel reason={block.highlight_reason} inline />}
                 </div>
                 <dl className="mt-1.5 grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 gap-y-1">
                   {block.columns.slice(1).map((col, k) => (

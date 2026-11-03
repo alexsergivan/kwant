@@ -86,3 +86,61 @@
   .kws-skel { opacity: 0.55; }
   .kws-burst { display: none; }
 }
+
+/* ---- Earned moments (the sticker itself is Pixel's .kw-sticker). ---- */
+/* Presses in once when it appears: transform and opacity, 160 ms. */
+.kws-stamp {
+  animation: kws-stamp 160ms ease-out both;
+}
+@keyframes kws-stamp {
+  from { opacity: 0; transform: scale(1.08); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* Laya hand-off: the answering bot's avatar rises into the reply header. */
+.kws-handoff {
+  animation: kws-handoff 200ms ease-out both;
+}
+@keyframes kws-handoff {
+  from { opacity: 0; transform: translateY(28px) scale(0.85); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* First-time confetti: square "pixels" that fly out and fade, 200 ms. */
+.kws-confetti {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.kws-confetti-px {
+  position: absolute;
+  left: -2px;
+  top: -2px;
+  width: 4px;
+  height: 4px;
+  background: var(--kws-c);
+  animation: kws-confetti 200ms ease-out both;
+}
+@keyframes kws-confetti {
+  from { opacity: 1; transform: rotate(var(--kws-a)) translateY(-4px); }
+  to { opacity: 0; transform: rotate(var(--kws-a)) translateY(var(--kws-d)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kws-stamp,
+  .kws-handoff,
+  .kws-confetti-px {
+    animation: none;
+  }
+  .kws-confetti { display: none; }
+}
+
+/* The table's flat holographic "Pick": same box as before (no layout change), dark ink on a light plate. */
+.kws-holo-mini {
+  border-color: rgb(255 255 255 / 0.6);
+  background: linear-gradient(115deg, #f9c6ff 0%, #c4d4ff 28%, #b9fbe6 52%, #fff1b8 76%, #ffc2d9 100%);
+  color: #1b1033;
+}

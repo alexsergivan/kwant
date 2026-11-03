@@ -9,6 +9,10 @@
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, CircleHelp, FilePen, Hourglass, Loader2, LucideIcon, Pause, Play, Plus, RefreshCw, Target, Trash2, Wrench, X, XCircle } from 'lucide-react';
+import { GoalHeartbeat } from './Signature';
+import { Sticker } from './Sticker';
+import { FirstMomentLine, useFirstMoment } from './FirstMoment';
+import { firstHolder, heartbeatDots, type HeartDot } from '../signature';
 import { Check, MissionError, Task, Tone, ago, checkKindLabel, checkTarget, newIdempotencyKey, onMission, stateLabel, missionStatusLabel } from '../missions';
 import {
   CheckFormRow,
@@ -386,11 +390,14 @@ export const GoalRow: React.FC<{
   decision?: Extract<GoalDecision, { kind: 'run' | 'declined' }> | null;
   /** Past the first three on a phone, until "Show all". */
   hideOnPhone?: boolean;
+  /** The last few checks, once the goal's history is loaded. */
+  heartbeat?: HeartDot[];
   onOpen: (g: Goal) => void;
   onOpenTask?: (id: string) => void;
   onAction?: (a: GoalAction) => void;
-}> = ({ goal: g, names, titles = {}, now = Date.now(), error = null, busy = false, decision = null, hideOnPhone = false, onOpen, onOpenTask, onAction }) => {
+}> = ({ goal: g, names, titles = {}, now = Date.now(), error = null, busy = false, decision = null, hideOnPhone = false, heartbeat = [], onOpen, onOpenTask, onAction }) => {
   const id = useId();
+  const firstKept = g.status === 'met' && firstHolder('goal_met', g.space_id ?? '') === g.id;
   const draft = g.status === 'draft';
   const proposer = g.created_by && g.created_by !== 'person' ? names[g.created_by] ?? null : null;
   const work = currentWorkText(g, titles);
@@ -421,6 +428,14 @@ export const GoalRow: React.FC<{
           </button>
           <GoalStatusPill status={g.status} />
         </div>
+        {(heartbeat.length > 1 || firstKept) && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            {heartbeat.length > 1 && <GoalHeartbeat dots={heartbeat} />}
+            {firstKept && (
+              <Sticker tone="holo" icon={<Target size={12} aria-hidden="true" />} title="The first goal kept in this space" className="pointer-events-none">First goal kept</Sticker>
+            )}
+          </div>
+        )}
         {wide ? null : draft ? (
           <p className="mt-0.5 truncate text-[11px] text-zinc-400" data-goal-line="draft">
             {proposer ? `${proposer} proposed this.` : 'A bot proposed this.'} Nothing runs until you approve it.
@@ -1112,6 +1127,7 @@ export const GoalDetailBody: React.FC<{
       <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-2">
           <GoalStatusPill status={g.status} />
+          <GoalHeartbeat dots={heartbeatDots(d.events)} />
           {/* A draft's hint already says nothing runs yet. */}
           {!draft && <span className="text-[11px] text-zinc-500">{scheduleText(g, now)}</span>}
         </div>
@@ -1805,6 +1821,8 @@ export const GoalsStrip: React.FC<{
   });
   const eventsOf = (id: string) => reads[id]?.events ?? (detail && detail.goal.id === id ? detail.events : []);
   const sorted = sortGoals(merged.map((g) => ({ ...g, raw_status: g.status, status: displayStatus(g, eventsOf(g.id), now, notNow[g.id] ?? null) })));
+  const firstMet = useFirstMoment('goal_met', spaceId ?? '', goals ? sorted.map((g) => ({ id: g.id, reached: g.status === 'met' })) : null);
+  const [firstDone, setFirstDone] = useState(false);
   const drafts = sorted.filter((g) => g.status === 'draft').length;
   const panelTitle =
     panel?.kind === 'new'
@@ -1953,6 +1971,7 @@ export const GoalsStrip: React.FC<{
         </p>
       )}
       {draftingLine}
+      {firstMet && !firstDone && <FirstMomentLine kind="goal_met" onDone={() => setFirstDone(true)} />}
       {notice && (
         <p role="status" className={`text-[11px] text-emerald-300 ${wrap}`} data-goals-notice>
           {notice}
@@ -1974,6 +1993,7 @@ export const GoalsStrip: React.FC<{
                 error={errors[g.id] ?? null}
                 decision={decision}
                 hideOnPhone={i >= cap}
+                heartbeat={heartbeatDots(eventsOf(g.id))}
                 onOpen={(x) => setPanel({ kind: 'goal', id: x.id })}
                 onOpenTask={openTask}
                 onAction={(a) => void act(g, a)}
