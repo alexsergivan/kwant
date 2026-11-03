@@ -8,6 +8,7 @@
 use super::browser_input::{self as bi, KeyEvent, KeyKind, MouseButton, RateLimit};
 use super::{routes::get_or_create_browser_controller, AppState};
 use crate::sandbox::browser::{BrowserController, BrowserError, HeldPointer, FOCUSED_EDITABLE_JS, MOUSE_BUTTON_BITS};
+use crate::sandbox::browser_history::HistoryDirection;
 use axum::{extract::{Path, State, WebSocketUpgrade, ws::{Message, WebSocket}}, http::{HeaderMap, StatusCode}, response::Response};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -91,6 +92,8 @@ pub enum BrowserInput {
     Dialog { accept: bool, prompt_text: Option<String> },
     /// The page's selected text, sent back as `clipboard`.
     Copy,
+    /// Back, forward or reload in the tab's own history, acked like `navigate`.
+    History { direction: HistoryDirection },
 }
 
 impl BrowserInput {
@@ -181,6 +184,7 @@ impl BrowserController {
                 if !matches!(parsed.scheme(), "http"|"https") { return Err(protocol("Use an HTTP or HTTPS URL")); }
                 self.navigate_unlocked(&url).await?;
             }
+            BrowserInput::History { direction } => self.navigate_history(direction).await?,
             _ => return Err(protocol("This action needs the live view")),
         }
         Ok(())
@@ -436,10 +440,21 @@ impl Worker {
                 self.ctrl.navigate_unlocked(&url).await?;
                 let _ = self.client.send(ack(id, json!({})));
             }
+            BrowserInput::History { direction } => {
+                self.close_select();
+                self.ctrl.navigate_history(direction).await?;
+                let _ = self.client.send(ack(id, json!({})));
+            }
             BrowserInput::PointerDown { x, y } => {
                 let (x, y) = self.shared.point(x, y)?;
                 // A second press without a release (lost pointerup) lets go of the first one
                 self.release_held().await;
+                // a phone tap-and-drag on a select shows kwant's list; nothing is held, so the
+                // pointer_up that follows does nothing
+                if self.offer_select(x, y).await {
+                    let _ = self.client.send(ack(id, json!({})));
+                    return Ok(());
+                }
                 let reply = self.mouse(json!({"type":"mousePressed","x":x,"y":y,"button":"left","buttons":1,"clickCount":1}));
                 self.set_held(Some(HeldPointer { x, y, buttons: 1 }));
                 self.finish(id.clone(), vec![reply], false);
@@ -899,6 +914,19 @@ mod tests {
         assert!(matches!(BrowserInput::parse(&json!({"action":"select_option","index":2})).unwrap(), BrowserInput::SelectOption { index: Some(2), indexes: None }));
         assert!(matches!(BrowserInput::parse(&json!({"action":"dialog","accept":true,"prompt_text":"x"})).unwrap(), BrowserInput::Dialog { accept: true, .. }));
         assert!(matches!(BrowserInput::parse(&json!({"action":"copy","id":3})).unwrap(), BrowserInput::Copy));
+    }
+
+    #[test]
+    fn history_parses_each_direction_and_refuses_others() {
+        for (wire, direction) in [("back", HistoryDirection::Back), ("forward", HistoryDirection::Forward), ("reload", HistoryDirection::Reload)] {
+            match BrowserInput::parse(&json!({"action":"history","direction":wire,"id":3})).unwrap() {
+                BrowserInput::History { direction: got } => assert_eq!(got, direction, "{wire}"),
+                other => panic!("{other:?}"),
+            }
+        }
+        for bad in [json!({"action":"history","direction":"sideways"}), json!({"action":"history"})] {
+            assert_eq!(BrowserInput::parse(&bad).unwrap_err().to_string(), BrowserError::Protocol("Invalid browser input".into()).to_string(), "{bad}");
+        }
     }
 
     #[test]
