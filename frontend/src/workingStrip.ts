@@ -1,5 +1,5 @@
 // The slim "Bot is <step> · 0:42" strip above the composer. Pure helpers; the component only draws them.
-import { ActivityStep, LiveActivity, isOpenStep, plainTitle } from './activity';
+import { ActivityStep, LiveActivity, formatClock, isOpenStep, plainTitle } from './activity';
 
 export interface WorkingState {
   live?: LiveActivity | null;
@@ -25,14 +25,8 @@ export function workingLabel(s: WorkingState): string {
   return 'getting started';
 }
 
-/** "0:42", "12:05", "1:02:09". Negative or non-finite input reads 0:00. */
-export function formatElapsed(ms: number): string {
-  const total = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : 0;
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const sec = String(total % 60).padStart(2, '0');
-  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
-}
+/** The strip's clock; the saved card header uses the same one. */
+export const formatElapsed = formatClock;
 
 /** When the turn began: the earliest step start, else the moment the strip appeared. */
 export function turnStart(live: LiveActivity | null | undefined, mountedAt: number): number {

@@ -113,16 +113,6 @@
   }
 }
 
-/* The table's flat holographic "Pick": same box as before (no layout change), dark ink on a light plate.
-   Mira's holo stops (spec §1) laid over the #f4f1ff plate at 0.75, so ink stays >= 7.19:1. */
-.kws-holo-mini {
-  border-color: #ffffff;
-  background:
-    linear-gradient(rgb(244 241 255 / 0.25), rgb(244 241 255 / 0.25)),
-    linear-gradient(115deg, #ff6ec7 0%, #ffd36e 25%, #7dffb0 50%, #5ee0ff 75%, #9b7bff 100%);
-  color: #1b1033;
-}
-
 /* ---- Chips (spec §4): 20 px tall, 0 8 px, full radius, 500 12/16, 12 px icon, gap 4 px. Information, never holo. ---- */
 .kws-chip {
   display: inline-flex;

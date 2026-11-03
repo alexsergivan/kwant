@@ -124,7 +124,7 @@ const steps = (over = {}) => ({
   ...over,
 });
 
-const bodyRows = (host) => [...host.querySelectorAll('[data-smart-result="comparison"] tbody tr')].map((tr) => tr.querySelector('td').textContent.replace(/Pick in this reply(Pick)?$/, ''));
+const bodyRows = (host) => [...host.querySelectorAll('[data-smart-result="comparison"] tbody tr')].map((tr) => tr.querySelector('td').textContent.replace(/Pick in this reply(: .*)?$/, ''));
 const header = (host, label) => [...host.querySelectorAll('th')].find((th) => th.textContent.includes(label));
 
 // ---------------------------------------------------------------------------
@@ -165,8 +165,10 @@ test('the highlighted row carries one “Pick in this reply” label per view', 
   const picked = [...v.host.querySelectorAll('tr[data-pick]')];
   assert.equal(picked.length, 1);
   assert.match(picked[0].textContent, /^B\s*Pick in this reply/);
-  assert.equal(picked[0].querySelectorAll('.smart-pick-full').length, 1, 'one label a screen reader reads, however narrow');
-  assert.equal(picked[0].querySelector('.smart-pick-short')?.getAttribute('aria-hidden'), 'true');
+  // S2 on desktop too: the small holo sticker, never clipped, with the reason as its hover text.
+  const sticker = picked[0].querySelectorAll('.kw-sticker.kw-sticker-sm');
+  assert.equal(sticker.length, 1, 'one sticker in the picked row');
+  assert.equal(picked[0].querySelectorAll('.kw-sticker-hit').length, 0, 'not interactive');
   const cards = [...v.host.querySelectorAll('li[data-pick]')];
   assert.equal(cards.length, 1, 'the narrow view marks the same row');
   assert.equal(v.host.querySelectorAll('tr:not([data-pick])').length, 3, 'header + two plain rows');

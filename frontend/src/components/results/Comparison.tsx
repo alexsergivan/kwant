@@ -17,17 +17,11 @@ export function shortList(text: string): string[] | null {
 
 const ROLE_TINT: Partial<Record<ColumnRole, string>> = { pros: 'text-emerald-300', cons: 'text-rose-300' };
 
-// In the table the label keeps the streamed table's exact size, so it carries the holographic finish as
-// a flat tint (kws-holo-mini) instead of a sticker; the stacked cards below carry the sticker itself.
-const HOLO_MINI = 'kws-holo-mini rounded border px-1 py-px align-[1px] text-[10px] font-semibold leading-none';
-
-const PickLabel: React.FC<{ reason: string | null; inline?: boolean; className?: string }> = ({ reason, inline, className = '' }) => (
-  <span
-    className={`${className} ${inline ? 'ml-1.5 ' : ''}${HOLO_MINI} [box-decoration-break:clone]`}
-    title={reason ?? undefined}
-  >
-    Pick in this reply
-  </span>
+/** S2: the small holo Pick sticker (spec §1, tilt +3), the same in the table and on the phone card. Not interactive. */
+const PickSticker: React.FC<{ reason: string | null }> = ({ reason }) => (
+  <Sticker tone="holo" tilt={3} icon={<Award size={10} aria-hidden="true" />} title={reason ?? 'Pick in this reply'} className="kw-sticker-sm pointer-events-none">
+    Pick<span className="sr-only"> in this reply{reason ? `: ${reason}` : ''}</span>
+  </Sticker>
 );
 
 /** A pros or cons cell in a stacked card: a short list with + or −, else the reply's cell. */
@@ -140,18 +134,12 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                           </button>
                         )}
                         {picked && j === 0 ? (
-                          // The label only takes room left on the cell's first line, so the table keeps the
-                          // streamed reply's exact size (see .smart-pick in modern.css).
-                          <div className="flex items-baseline">
-                            <span>{body[i][j]}</span>
-                            <span className="smart-pick min-w-0 flex-1">
-                              <PickLabel reason={block.highlight_reason} inline className="smart-pick-full" />
-                              <span
-                                aria-hidden="true"
-                                title={block.highlight_reason ? `Pick in this reply: ${block.highlight_reason}` : 'Pick in this reply'}
-                                className={`smart-pick-short ml-1.5 ${HOLO_MINI}`}>
-                                Pick
-                              </span>
+                          // 6 px after the name, centred on its line; in a narrow column it wraps under the name.
+                          // Inside the cell padding, so it never touches the table border or the sky bar.
+                          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                            <span className="min-w-0">{body[i][j]}</span>
+                            <span className="inline-flex shrink-0">
+                              <PickSticker reason={block.highlight_reason} />
                             </span>
                           </div>
                         ) : (
@@ -208,9 +196,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                 {picked && (
                   // The wrapper places it (spec S2: top -8, right -6); .kw-sticker keeps its own position: relative.
                   <span className="absolute -top-2 -right-1.5 z-10 flex">
-                    <Sticker tone="holo" tilt={3} icon={<Award size={10} aria-hidden="true" />} title={block.highlight_reason ?? 'Pick in this reply'} className="kw-sticker-sm">
-                      Pick<span className="sr-only"> in this reply{block.highlight_reason ? `: ${block.highlight_reason}` : ''}</span>
-                    </Sticker>
+                    <PickSticker reason={block.highlight_reason} />
                   </span>
                 )}
                 <div className={`text-[13px] font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere] ${picked ? 'pr-16' : ''}`}>

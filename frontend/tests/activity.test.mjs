@@ -63,8 +63,8 @@ test('durations and the summary line', () => {
     step({ id: 'b', status: 'failed', started_at: '2026-10-22T10:00:10Z', ended_at: '2026-10-22T10:00:41Z' }),
     step({ id: 'n', kind: 'note', status: 'ok', title: 'This engine doesn’t share its thinking.' }),
   ];
-  assert.equal(a.activitySummary({ steps, dropped: 10 }), '12 steps · 41s · 1 failed');
-  assert.equal(a.activitySummary({ steps: [steps[0]], dropped: 0 }), '1 step · 10s');
+  assert.equal(a.activitySummary({ steps, dropped: 10 }), 'Worked 0:41 · 12 steps · 1 failed');
+  assert.equal(a.activitySummary({ steps: [steps[0]], dropped: 0 }), 'Worked 0:10 · 1 step');
   assert.equal(a.plainTitle('Running `ls`'), 'Running ls');
   assert.equal(a.statusLabel(step({ kind: 'approval', status: 'declined' })), 'Denied');
 });

@@ -1267,17 +1267,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </button>
           )}
 
-          {isStreaming && !discussionState?.inProgress && onCancelDiscussion && (
-            <button
-              type="button"
-              onClick={onCancelDiscussion}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 transition-colors shadow-sm cursor-pointer"
-              title="Stop generation"
-            >
-              <Square size={10} fill="currentColor" />
-              <span>Stop</span>
-            </button>
-          )}
+          {/* No header Stop while the working strip shows (always, when a reply runs): the composer's stop square is the one Stop. */}
           {/* Sandbox VM & Live Browser Toggle Button */}
           <button
             type="button"
@@ -1438,12 +1428,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
                     {awaitingBrowser ? 'Waiting for you in the browser' : 'Waiting for your answer'}
                   </span>
-                ) : (
+                ) : discussionState?.inProgress ? (
                   <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
                     <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping motion-reduce:animate-none" aria-hidden="true" />
-                    {discussionState?.inProgress ? 'Speaking...' : 'Generating...'}
+                    Speaking...
                   </span>
-                )}
+                ) : null /* "Generating" would repeat the working strip */}
               </div>
 
               {liveNote && <FailoverNote text={liveNote} />}
@@ -1523,7 +1513,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
         awaitingAnswer={!!awaitingAnswer}
         awaitingBrowser={!!awaitingBrowser}
         writing={!!streamingText}
-        onStop={onCancelDiscussion}
       />
 
       {/* Modern Composer Input Bar */}
@@ -1717,8 +1706,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               type="button"
               onClick={onCancelDiscussion}
               className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-colors flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-400/30 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
-              title={discussionState?.inProgress ? 'Stop Discussion' : 'Stop generation'}
-              aria-label={discussionState?.inProgress ? 'Stop discussion' : 'Stop the reply'}
+              title={discussionState?.inProgress ? 'Stop Discussion' : 'Stop'}
+              aria-label={discussionState?.inProgress ? 'Stop discussion' : 'Stop'}
             >
               <Square size={12} fill="currentColor" aria-hidden="true" />
             </button>

@@ -45,15 +45,17 @@ test('heartbeat squares keep the check time for their hover', () => {
   assert.equal(d.at, '2026-11-03T10:00:00Z');
 });
 
-test('heartbeat word: the newest square decides, two flips between ok and failing is flapping', () => {
+test('heartbeat word follows the badge: never Flapping, never at odds with OK or Failing', () => {
   const run = (...v) => s.heartbeatDots(v.map((x) => (x === 'fix' ? ev('fix_opened') : ev('checked', x ? { verdict: x } : {}))));
-  assert.equal(s.heartbeatWord([]), null);
-  assert.equal(s.heartbeatWord(run('met', 'met', 'met')), 'Steady');
-  assert.equal(s.heartbeatWord(run('met', 'not_met', 'met', 'not_met')), 'Flapping');
-  assert.equal(s.heartbeatWord(run('met', 'met', 'not_met')), 'Failing');
-  assert.equal(s.heartbeatWord(run('met', 'not_met', 'fix')), 'Fixing');
-  assert.equal(s.heartbeatWord(run('met', 'met', null)), 'Can’t check');
-  assert.equal(s.heartbeatWord(run('not_met', 'met')), 'Back to ok');
+  assert.equal(s.heartbeatWord('met', []), null);
+  assert.equal(s.heartbeatWord('met', run('not_met', 'met', 'met', 'met')), 'Steady');
+  assert.equal(s.heartbeatWord('met', run('met', 'not_met', 'met', 'not_met', 'met')), 'Back to ok');
+  assert.equal(s.heartbeatWord('met', run('met', 'met', 'not_met', 'met')), 'Back to ok');
+  assert.equal(s.heartbeatWord('not_met', run('met', 'not_met', 'met', 'not_met')), 'Failing');
+  assert.equal(s.heartbeatWord('not_met', run('met', 'met', 'not_met'), true), 'Fixing');
+  assert.equal(s.heartbeatWord('not_met', run('met', 'not_met', 'fix')), 'Fixing');
+  assert.equal(s.heartbeatWord('unknown', run('met', 'met', null)), 'Can’t check');
+  for (const st of ['needs_you', 'draft', 'paused', 'checking']) assert.equal(s.heartbeatWord(st, run('met', 'met')), null, st);
 });
 
 test('lessons chip: the count comes from the lessons_shown keys; none, no chip', () => {

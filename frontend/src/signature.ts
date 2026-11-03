@@ -71,20 +71,26 @@ export function heartbeatCount(dots: HeartDot[]): string {
   return `${dots.filter((d) => d.tone === 'ok').length}/${dots.length} ok`;
 }
 
-export type HeartWord = 'Steady' | 'Flapping' | 'Failing' | 'Fixing' | 'Can’t check' | 'Back to ok';
+export type HeartWord = 'Steady' | 'Back to ok' | 'Fixing' | 'Failing' | 'Can’t check';
 
-/** One word for the run of squares: the newest decides, except a run that flips between ok and failing twice or more. */
-export function heartbeatWord(dots: HeartDot[]): HeartWord | null {
+/**
+ * The heartbeat's word comes from the goal's badge, so it never argues with it (review of #266, fix 4);
+ * the squares already show the history, so there is no "Flapping".
+ * OK: Steady when the last 3 checks are ok, else Back to ok. Failing: Fixing while a bot works on it, else
+ * Failing. Can't check: Can’t check. Any other badge (needs you, draft, checking, paused, waiting, fixing): none.
+ */
+export function heartbeatWord(status: string, dots: HeartDot[], fixing = false): HeartWord | null {
   if (!dots.length) return null;
-  const newest = dots[dots.length - 1].tone;
-  if (newest === 'unknown') return 'Can’t check';
-  const settled = dots.filter((d) => d.tone === 'ok' || d.tone === 'failing');
-  let flips = 0;
-  for (let i = 1; i < settled.length; i++) if (settled[i].tone !== settled[i - 1].tone) flips++;
-  if (flips >= 2) return 'Flapping';
-  if (newest === 'failing') return 'Failing';
-  if (newest === 'fixing') return 'Fixing';
-  return dots.every((d) => d.tone === 'ok') ? 'Steady' : 'Back to ok';
+  switch (status) {
+    case 'met':
+      return dots.slice(-3).every((d) => d.tone === 'ok') ? 'Steady' : 'Back to ok';
+    case 'not_met':
+      return fixing || dots[dots.length - 1].tone === 'fixing' ? 'Fixing' : 'Failing';
+    case 'unknown':
+      return 'Can’t check';
+    default:
+      return null;
+  }
 }
 
 // ---- Once per space ----

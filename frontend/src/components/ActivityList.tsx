@@ -4,7 +4,6 @@ import {
   ActivityStep,
   LiveActivity,
   SavedActivity,
-  activitySpan,
   activitySummary,
   formatDuration,
   isOpenStep,
@@ -197,15 +196,14 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string }> 
   if (steps.length === 0) return null;
   const work = steps.filter((s) => s.kind !== 'note').length;
   const current = [...steps].reverse().find(isOpenStep);
-  const span = activitySpan(steps);
   return (
     <section aria-label="What the bot is doing" className="mb-2 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden shadow-[var(--kws-shadow)]">
       <p className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
         <ListTree size={11} className="text-sky-400/80" aria-hidden="true" />
         Working
         <span className="normal-case tracking-normal font-normal">
+          {/* No time while running: the working strip shows the whole turn's, the open step its own. */}
           · {work} {work === 1 ? 'step' : 'steps'}
-          {span !== null && span >= 1000 ? ` · ${formatDuration(span)}` : ''}
         </span>
       </p>
       {/* Only waits are announced; a stream of tool names would be noise. */}
@@ -219,7 +217,7 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string }> 
   );
 };
 
-/** On a saved reply: "12 steps · 41s", opening to the list. `children` go under the steps. */
+/** On a saved reply: "Worked 0:41 · 12 steps", opening to the list. `children` go under the steps. */
 export const SavedActivityList: React.FC<{ activity: SavedActivity; idBase: string; children?: React.ReactNode }> = ({ activity, idBase, children }) => {
   const [open, setOpen] = useState(false);
   const listId = `${idBase}-steps`;

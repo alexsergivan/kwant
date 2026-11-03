@@ -12,7 +12,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, CircleHelp, FilePen, Hourglas
 import { GoalHeartbeat } from './Signature';
 import { Sticker } from './Sticker';
 import { FirstMomentLine, useFirstMoment } from './FirstMoment';
-import { firstHolder, heartbeatDots, type HeartDot } from '../signature';
+import { firstHolder, heartbeatDots, heartbeatWord, type HeartDot } from '../signature';
 import { Check, MissionError, Task, Tone, ago, checkKindLabel, checkTarget, newIdempotencyKey, onMission, stateLabel, missionStatusLabel } from '../missions';
 import {
   CheckFormRow,
@@ -397,7 +397,9 @@ export const GoalRow: React.FC<{
   onAction?: (a: GoalAction) => void;
 }> = ({ goal: g, names, titles = {}, now = Date.now(), error = null, busy = false, decision = null, hideOnPhone = false, heartbeat = [], onOpen, onOpenTask, onAction }) => {
   const id = useId();
-  const firstKept = g.status === 'met' && firstHolder('goal_met', g.space_id ?? '') === g.id;
+  const fixing = !!(g.open_fix_task || g.open_mission);
+  // Only beside a Steady OK: never next to Back to ok, Failing, Fixing or Can’t check.
+  const firstKept = g.status === 'met' && heartbeatWord(g.status, heartbeat, fixing) === 'Steady' && firstHolder('goal_met', g.space_id ?? '') === g.id;
   const draft = g.status === 'draft';
   const proposer = g.created_by && g.created_by !== 'person' ? names[g.created_by] ?? null : null;
   const work = currentWorkText(g, titles);
@@ -430,7 +432,7 @@ export const GoalRow: React.FC<{
         </div>
         {(heartbeat.length > 1 || firstKept) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            {heartbeat.length > 1 && <GoalHeartbeat dots={heartbeat} className="min-w-0 flex-1" />}
+            {heartbeat.length > 1 && <GoalHeartbeat dots={heartbeat} status={g.status} fixing={fixing} className="min-w-0 flex-1" />}
             {firstKept && (
               <Sticker tone="holo" tilt={-3} icon={<Target size={12} aria-hidden="true" />} title="The first goal kept in this space" className="pointer-events-none">First goal kept</Sticker>
             )}
@@ -1127,7 +1129,7 @@ export const GoalDetailBody: React.FC<{
       <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-2">
           <GoalStatusPill status={g.status} />
-          <GoalHeartbeat dots={heartbeatDots(d.events)} />
+          <GoalHeartbeat dots={heartbeatDots(d.events)} status={g.status} fixing={!!(g.open_fix_task || g.open_mission)} />
           {/* A draft's hint already says nothing runs yet. */}
           {!draft && <span className="text-[11px] text-zinc-500">{scheduleText(g, now)}</span>}
         </div>

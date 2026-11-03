@@ -17,7 +17,7 @@ interface WorkingStripProps {
   onStop?: () => void;
 }
 
-/** Summary and Stop for the running turn, kept in view above the composer; the card in the stream holds the step details. */
+/** Summary of the running turn (the composer holds the one Stop; onStop is unused there), kept in view above the composer; the card in the stream holds the step details. */
 export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title, live, queued, awaitingAnswer, awaitingBrowser, writing, onStop }) => {
   const mountedAt = useRef(Date.now());
   const [now, setNow] = useState(() => Date.now());
@@ -41,14 +41,16 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
         </span>
         <p className="min-w-0 flex-1 truncate text-xs text-zinc-300" role="status" aria-live="polite">
           <span className="font-semibold text-zinc-100">{name}</span> is {label}
-          <span className="text-zinc-400" aria-hidden="true"> · </span>
-          <span className="tabular-nums text-zinc-400" aria-hidden="true" data-working-elapsed="">{elapsed}</span>
         </p>
+        {/* Own box, so a long step name never cuts the time off at 390 px. */}
+        <span className="shrink-0 tabular-nums text-meta text-zinc-400" aria-hidden="true" data-working-elapsed="">
+          {elapsed}
+        </span>
         {onStop && (
           <button
             type="button"
             onClick={onStop}
-            title="Stop generation"
+            title="Stop"
             className="shrink-0 inline-flex items-center gap-1.5 min-h-8 rounded-lg border border-zinc-600/70 px-2.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 hover:text-zinc-50 active:scale-[0.97] motion-reduce:active:scale-100 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
           >
             <Square size={12} className="fill-current" aria-hidden="true" />

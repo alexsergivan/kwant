@@ -47,7 +47,6 @@ export const LessonsChip: React.FC<{ text: string; title: string }> = ({ text, t
 const WORD_TONE: Record<HeartWord, string> = {
   Steady: 'text-ok',
   'Back to ok': 'text-ok',
-  Flapping: 'text-warn',
   Fixing: 'text-warn',
   Failing: 'text-bad',
   'Can’t check': 'text-muted',
@@ -64,10 +63,10 @@ const when = (at?: string): string | undefined => {
  * Phones show the last 5; with under 64 px free (or under 360 px wide) only the newest square and its
  * "1/5 ok". One picture for screen readers; nothing at all when there is no check history.
  */
-export const GoalHeartbeat: React.FC<{ dots: HeartDot[]; className?: string }> = ({ dots, className = '' }) => {
+export const GoalHeartbeat: React.FC<{ dots: HeartDot[]; status: string; fixing?: boolean; className?: string }> = ({ dots, status, fixing = false, className = '' }) => {
   if (!dots.length) return null;
   const phone = dots.slice(-5);
-  const word = heartbeatWord(dots);
+  const word = heartbeatWord(status, dots, fixing);
   const square = (d: HeartDot, i: number, newest: boolean, extra = '') => (
     <span key={i} className={`kws-beat kws-beat-${d.tone} ${newest ? 'kws-beat-newest' : ''} ${extra}`} title={[d.label, when(d.at)].filter(Boolean).join(' · ')} data-dot={d.tone} />
   );

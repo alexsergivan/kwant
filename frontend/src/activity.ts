@@ -132,12 +132,21 @@ export function formatDuration(msTotal: number): string {
 /** Steps that count in the summary: notes explain a limit and aren't work. */
 const counted = (steps: ActivityStep[]) => steps.filter((s) => s.kind !== 'note');
 
-/** "12 steps · 41s", "1 step", plus "· 2 failed" when any failed. */
+/** "0:42", "12:05", "1:02:09": the working strip's clock. Negative or non-finite input reads 0:00. */
+export function formatClock(ms: number): string {
+  const total = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : 0;
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = String(total % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+/** "Worked 0:41 · 12 steps" (the strip's last time, same start), "1 step", plus "· 2 failed" when any failed. */
 export function activitySummary(a: SavedActivity): string {
   const n = counted(a.steps).length + a.dropped;
-  const parts = [`${n} ${n === 1 ? 'step' : 'steps'}`];
+  const steps = `${n} ${n === 1 ? 'step' : 'steps'}`;
   const span = activitySpan(a.steps);
-  if (span !== null && span >= 1000) parts.push(formatDuration(span));
+  const parts = span !== null && span >= 1000 ? [`Worked ${formatClock(span)}`, steps] : [steps];
   const failed = a.steps.filter((s) => s.status === 'failed').length;
   if (failed) parts.push(`${failed} failed`);
   return parts.join(' · ');
