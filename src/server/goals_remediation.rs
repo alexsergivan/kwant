@@ -266,6 +266,19 @@ async fn cancel_mission(state: &AppState, link: &GoalLink) {
     missions::emit_mission(state, &link.mission_id).await;
 }
 
+/// The goal is being deleted: its open restore mission and that mission's unfinished tasks are
+/// cancelled, so deleting a goal to stop the noise leaves nothing running or waiting. Nothing is
+/// removed: the mission, its tasks and their history stay on the board, as cancelled. A mission
+/// another open goal still shares is left for that goal. Call before the goal's rows go.
+pub async fn withdraw_for_delete(state: &AppState, goal_id: &str) {
+    for link in state.db.goal_links(goal_id, 50).await.unwrap_or_default().into_iter().filter(|l| l.closed_at.is_none()) {
+        let shared = state.db.links_of_mission(&link.mission_id).await.unwrap_or_default().into_iter().any(|l| l.goal_id != goal_id && l.closed_at.is_none());
+        if !shared {
+            cancel_mission(state, &link).await;
+        }
+    }
+}
+
 /// Reads the Investigate report, if the bot wrote one inside the goal's folder.
 async fn read_report(folder: &str, rel: &str) -> Option<String> {
     let base = std::fs::canonicalize(folder).ok()?;

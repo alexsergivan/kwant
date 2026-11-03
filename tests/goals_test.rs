@@ -207,6 +207,7 @@ async fn an_error_between_failures_is_unknown_and_never_confirms() {
     // The edit doesn't touch the streak: only runs do
     assert_eq!(edited.fail_streak, 1);
     let after = run_now(&e, &g.id).await;
+    // An error right after a failure shows unknown (a blip is held only after a pass) and breaks the run of failures
     assert_eq!((after.status.as_str(), after.fail_streak, after.error_runs), ("unknown", 0, 1));
     assert!(after.unknown_since.is_some());
     e.state.db.edit_goal(&g.id, &e.space, "person", now_ms(), swap(flaky)).await.unwrap().unwrap().unwrap();
@@ -432,4 +433,202 @@ async fn a_fresh_install_runs_nothing() {
     assert!(runner::tick(&e.state).await.is_empty());
     let (status, v) = call(&e.app, "GET", "/api/goals", None, None).await;
     assert_eq!((status, v["goals"].as_array().map(Vec::len)), (StatusCode::OK, Some(0)));
+}
+
+// Post-0.6.5 api-M7: one transport blip doesn't turn a met goal into "can't check"
+#[tokio::test]
+async fn one_dropped_connection_keeps_a_met_goal_met_and_two_in_a_row_do_not() {
+    let e = setup().await;
+    let up = server(vec![200]).await;
+    let g = create(&e, &new_goal(&e, &up, 2)).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    point(&e, &g.id, &closed_port()).await;
+    let blip = run_now(&e, &g.id).await;
+    assert_eq!((blip.status.as_str(), blip.status_reason.as_str(), blip.error_runs), ("met", "", 1));
+    assert!(!kinds(&e, &g.id).await.contains(&"unknown".to_string()), "no timeline entry for a blip");
+    // The run's own record still says it couldn't check
+    assert_eq!(e.state.db.recent_observations(&g.id, 1).await.unwrap()[0].verdict, "unknown");
+    // A good run in between starts the count again
+    point(&e, &g.id, &up).await;
+    let back = run_now(&e, &g.id).await;
+    assert_eq!((back.status.as_str(), back.error_runs), ("met", 0));
+    point(&e, &g.id, &closed_port()).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "met", "a second blip, but not in a row");
+    // Two in a row: now it can't say
+    let two = run_now(&e, &g.id).await;
+    assert_eq!((two.status.as_str(), two.status_reason.as_str(), two.error_runs), ("unknown", "cant_check", 2));
+    assert!(two.unknown_since.is_some());
+    assert_eq!(kinds(&e, &g.id).await.iter().filter(|k| *k == "unknown").count(), 1);
+    assert!(notices(&e, &g.id).await.is_empty(), "never news before a day");
+}
+
+/// Points the goal's one check at `url`, leaving everything else as it is.
+async fn point(e: &Env, id: &str, url: &str) {
+    let url = url.to_string();
+    e.state
+        .db
+        .edit_goal(id, &e.space, "person", now_ms(), move |_g: &mut Goal| {
+            Ok(Edit {
+                checks: Some(vec![NewGoalCheck {
+                    label: "up".into(),
+                    kind: "http".into(),
+                    spec: json!({ "url": url }),
+                    metric: Some("status".into()),
+                    operator: Some("eq".into()),
+                    target: Some("200".into()),
+                    severity: "required".into(),
+                    freshness_minutes: 120,
+                }]),
+                events: vec![],
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+// Post-0.6.5 api-M6: a notice that wasn't sent is neither recorded nor counted
+#[tokio::test]
+async fn a_notice_the_person_turned_off_is_not_recorded_or_counted() {
+    let e = setup().await;
+    let g = create(&e, &new_goal(&e, "https://example.com/", 1)).await;
+    // goal_alert off in Settings (known, so not read as a new kind)
+    e.state.db.set_setting("notify_on", r#"["turn_finished"]"#).await.unwrap();
+    e.state.db.set_setting("notify_known", r#"["turn_finished","goal_alert"]"#).await.unwrap();
+    for _ in 0..5 {
+        assert!(!goals::notice(&e.state, &g, "broken", "t".into(), "b".into()).await);
+    }
+    assert!(notices(&e, &g.id).await.is_empty(), "nothing recorded as sent");
+    assert!(!kinds(&e, &g.id).await.contains(&"notice_capped".to_string()), "and not as capped either");
+    assert_eq!(e.state.db.goal_notices_since(&g.id, 0).await.unwrap(), 0);
+    // Turned back on, all three still go out
+    e.state.db.set_setting("notify_on", r#"["turn_finished","goal_alert"]"#).await.unwrap();
+    for _ in 0..3 {
+        assert!(goals::notice(&e.state, &g, "broken", "t".into(), "b".into()).await);
+    }
+    assert!(!goals::notice(&e.state, &g, "recovered", "t".into(), "b".into()).await);
+    assert_eq!(notices(&e, &g.id).await, ["broken", "broken", "broken"]);
+}
+
+// A "can't check" notice with goal_alert off sends nothing and records nothing, and runs still update the status
+#[tokio::test]
+async fn cant_check_with_alerts_off_sends_nothing_and_the_status_still_moves() {
+    let e = setup().await;
+    let up = server(vec![200]).await;
+    let g = create(&e, &new_goal(&e, &closed_port(), 2)).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "unknown");
+    e.state.db.set_setting("notify_on", r#"["turn_finished"]"#).await.unwrap();
+    e.state.db.set_setting("notify_known", r#"["turn_finished","goal_alert"]"#).await.unwrap();
+    let stuck = e.state.db.goals_unknown_since(now_ms() + goals::UNKNOWN_NOTICE_MS).await.unwrap().into_iter().find(|x| x.id == g.id).unwrap();
+    for _ in 0..3 {
+        assert!(!goals::notice(&e.state, &stuck, "cant_check", "t".into(), "b".into()).await);
+        runner::tick(&e.state).await;
+    }
+    assert!(notices(&e, &g.id).await.is_empty());
+    assert!(!kinds(&e, &g.id).await.contains(&"notice_capped".to_string()));
+    // Still unknown, and the next good run moves it to met all the same
+    assert_eq!(e.state.db.get_goal(&g.id).await.unwrap().unwrap().status, "unknown");
+    point(&e, &g.id, &up).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    assert!(notices(&e, &g.id).await.is_empty());
+}
+
+/// A server for one path answering with `status`, `headers` and `body`.
+async fn page(status: u16, headers: Vec<(&'static str, String)>, body: Vec<u8>) -> String {
+    use axum::routing::get;
+    let app = Router::new().route(
+        "/",
+        get(move || {
+            let (headers, body) = (headers.clone(), body.clone());
+            async move {
+                let mut r = axum::response::Response::new(Body::from(body));
+                *r.status_mut() = StatusCode::from_u16(status).unwrap();
+                for (k, v) in headers {
+                    r.headers_mut().insert(k, v.parse().unwrap());
+                }
+                r
+            }
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    format!("http://{addr}/")
+}
+
+fn body_goal(e: &Env, url: &str, metric: &str, target: &str) -> NewGoal {
+    let mut g = new_goal(e, url, 1);
+    g.checks[0].metric = Some(metric.into());
+    g.checks[0].operator = None;
+    g.checks[0].target = Some(target.into());
+    g
+}
+
+// Post-0.6.5 api-M3: a page past 5 MB is "can't check", never a false not_met
+#[tokio::test]
+async fn a_page_over_5_mb_is_cant_check_not_broken() {
+    let e = setup().await;
+    let mut body = vec![b'x'; 5 * 1024 * 1024 + 4096];
+    body.extend_from_slice(b"needle");
+    body[..5].copy_from_slice(b"early");
+    let url = page(200, vec![], body).await;
+    // The needle is past the cap
+    let g = create(&e, &body_goal(&e, &url, "body_contains", "needle")).await;
+    let after = run_now(&e, &g.id).await;
+    assert_eq!(after.status, "unknown", "not broken");
+    assert!(!kinds(&e, &g.id).await.contains(&"not_met".to_string()));
+    let obs = e.state.db.recent_observations(&g.id, 1).await.unwrap().remove(0);
+    assert_eq!(obs.verdict, "unknown");
+    assert_eq!(obs.observed_value.as_deref(), Some("The page is larger than 5 MB, so I can't check it"));
+    assert!(obs.excerpt.contains("larger than 5 MB"), "{}", obs.excerpt);
+    // One in the part that was read is still found
+    let g2 = create(&e, &body_goal(&e, &url, "body_contains", "early")).await;
+    assert_eq!(run_now(&e, &g2.id).await.status, "met");
+    // A short page without the needle is still not met
+    let short = page(200, vec![], b"hello".to_vec()).await;
+    let g3 = create(&e, &body_goal(&e, &short, "body_contains", "needle")).await;
+    assert_eq!(run_now(&e, &g3.id).await.status, "not_met");
+}
+
+// Post-0.6.5 api-M4: a redirect is not followed; the reason names where it goes
+#[tokio::test]
+async fn a_redirect_is_not_followed_and_says_where_it_goes() {
+    let e = setup().await;
+    let url = page(301, vec![("location", "https://www.example.org/start?token=abc123".into())], vec![]).await;
+    let g = create(&e, &new_goal(&e, &url, 1)).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "not_met");
+    let obs = e.state.db.recent_observations(&g.id, 1).await.unwrap().remove(0);
+    let seen = obs.observed_value.unwrap();
+    assert!(seen.starts_with("301: it redirects to www.example.org"), "{seen}");
+    assert!(seen.contains("use the final address"), "{seen}");
+    assert!(!seen.contains("token") && !obs.excerpt.contains("token"), "only the host is shown, never the path or query");
+    assert!(obs.excerpt.contains("redirects to www.example.org"), "{}", obs.excerpt);
+    // A relative Location stays on the same site
+    let rel = page(302, vec![("location", "/login".into())], vec![]).await;
+    let g2 = create(&e, &new_goal(&e, &rel, 1)).await;
+    run_now(&e, &g2.id).await;
+    let seen = e.state.db.recent_observations(&g2.id, 1).await.unwrap().remove(0).observed_value.unwrap();
+    assert!(seen.contains("another address on the same site"), "{seen}");
+    // The redirect target was never fetched: a plain 200 has no such note
+    let ok = page(200, vec![], vec![]).await;
+    let g3 = create(&e, &new_goal(&e, &ok, 1)).await;
+    assert_eq!(run_now(&e, &g3.id).await.status, "met");
+}
+
+// Post-0.6.5 api-M5: the goal's own record shows both hashes
+#[tokio::test]
+async fn a_changed_file_shows_its_expected_and_actual_hash() {
+    let e = setup().await;
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("release.bin"), "hello").unwrap();
+    let mut ng = new_goal(&e, "https://example.com/", 1);
+    ng.folder = dir.path().to_string_lossy().into_owned();
+    let expected = "b".repeat(64);
+    ng.checks = vec![NewGoalCheck { label: "unchanged".into(), kind: "file_sha256".into(), spec: json!({"path": "release.bin", "sha256": expected}), metric: None, operator: None, target: None, severity: "required".into(), freshness_minutes: 120 }];
+    let g = create(&e, &ng).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "not_met");
+    let obs = e.state.db.recent_observations(&g.id, 1).await.unwrap().remove(0);
+    assert!(obs.excerpt.contains(&format!("expected {expected}")), "{}", obs.excerpt);
+    assert!(obs.excerpt.contains("actual   2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"), "{}", obs.excerpt);
 }

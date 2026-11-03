@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- **Goals: clearer checks and fewer false alarms.** A page over 5 MB is "can't check", not "not met". A redirect is
+  still not followed, and the reason names where it points. A changed file shows both the expected and the actual
+  hash. One dropped connection no longer flips a met goal that passed last time; two in a row do, and an error right after a failure shows "can't check" at once. A notice you turned off isn't counted
+  against the daily cap. Deleting a goal closes its open "Restore" mission and cancels its tasks, keeping the history.
+  The goal tool's schema now matches what it accepts (`json_value` needs a `pointer`; `contains` is listed).
+
 ## [Mac 0.6.6] - 2026-11-03
 
 ### Changed

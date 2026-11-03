@@ -891,3 +891,45 @@ async fn g_d_03_no_draft_turn_when_three_drafts_already_wait() {
     let (s, _) = send(&e, "POST", "/api/goals/draft", None, Some(json!({"space_id": space, "kwant_id": e.bot, "text": "the site answers"})), None).await;
     assert_eq!(s, StatusCode::CONFLICT);
 }
+
+// Post-0.6.5 (Rigel's remediation Minor 1): deleting a goal closes its open Restore mission
+
+#[tokio::test]
+async fn g_r_25_deleting_a_goal_cancels_its_open_restore_mission_and_keeps_the_history() {
+    let e = setup().await;
+    let g = goal(&e, "Site is up", "suggest").await;
+    break_goal(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    let l = open_link(&e, &g.id).await;
+    assert_eq!(task(&e, &l.fix_task_id).await.state, "backlog", "the held Fix");
+    assert_ne!(task(&e, &l.investigate_task_id).await.state, "cancelled");
+    let (s, _) = send(&e, "DELETE", &format!("/api/goals/{}", g.id), None, None, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(e.state.db.get_goal(&g.id).await.unwrap().is_none());
+    // The mission and its tasks are still there, cancelled
+    let m = e.state.db.get_mission(&l.mission_id).await.unwrap().expect("the mission stays on the board");
+    assert_eq!(m.status, "cancelled");
+    assert!(m.finished_at.is_some());
+    assert_eq!(task(&e, &l.investigate_task_id).await.state, "cancelled");
+    assert_eq!(task(&e, &l.fix_task_id).await.state, "cancelled");
+    assert!(!e.state.db.task_events(&l.fix_task_id, 50).await.unwrap().is_empty(), "the task keeps its history");
+    // Nothing reopens it
+    tick_at(&e.state, now() + 30 * MIN).await;
+    assert_eq!(e.state.db.get_mission(&l.mission_id).await.unwrap().unwrap().status, "cancelled");
+}
+
+#[tokio::test]
+async fn g_r_26_deleting_a_goal_with_no_remediation_changes_no_mission() {
+    let e = setup().await;
+    let a = goal(&e, "Site is up", "suggest").await;
+    let folder2 = e.folder.parent().unwrap().join("other");
+    std::fs::create_dir_all(&folder2).unwrap();
+    let b = goal_in(&e, "Other site is up", &folder2, "suggest", 2).await;
+    break_goal(&e, &b.id).await;
+    tick_at(&e.state, now()).await;
+    let lb = open_link(&e, &b.id).await;
+    let (s, _) = send(&e, "DELETE", &format!("/api/goals/{}", a.id), None, None, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(e.state.db.get_mission(&lb.mission_id).await.unwrap().unwrap().status, "active", "another goal's mission is untouched");
+    assert_ne!(task(&e, &lb.investigate_task_id).await.state, "cancelled");
+}
