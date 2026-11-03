@@ -2,7 +2,7 @@
 //! ledger and labelled, the deterministic contradiction scan opens disputes ("4 GB" vs "12 GB";
 //! not paraphrases), a dispute is settled by the person or by a passing kwant-run check, tasks
 //! that rely on a disputed fact land in Needs you, and `off`/`shadow` stay byte-identical to main
-//! (fixtures/truth_ledger_off_prompt_895a96c.txt).
+//! (fixtures/truth_ledger_off_prompt.txt).
 //! Contract: docs/mission-control.md §21.
 
 use axum::{
@@ -247,10 +247,12 @@ async fn off_and_shadow_prompts_are_byte_identical_and_switching_off_restores_th
     tool(&e, &token, "memory_add", json!({"text": "Read on a web page"})).await;
 
     let off = prompt(&e, &a).await;
-    // Off is main's prompt, not just this build's: the fixture is this exact setup's prompt on
-    // main 895a96c (before C2), with ids as {id}
-    let golden = include_str!("fixtures/truth_ledger_off_prompt_895a96c.txt");
-    assert_eq!(without_ids(&off), golden, "off differs from main's prompt");
+    // Off is today's prompt, not just this build's: the fixture is this exact setup's prompt (with
+    // ids as {id}), first taken on main 895a96c before C2 and updated only when the prompt itself
+    // changes on main. It last changed for the chat-correction sentence (0.6.8, after c9d5cd7).
+    // The off == shadow == fixture check proves the ledger setting adds nothing to the prompt.
+    let golden = include_str!("fixtures/truth_ledger_off_prompt.txt");
+    assert_eq!(without_ids(&off), golden, "off differs from today's prompt");
     ledger(&e, "shadow").await;
     assert_eq!(prompt(&e, &a).await, off, "shadow is today's prompt");
     // Off and shadow: no dispute is opened, no fact tool offered

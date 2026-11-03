@@ -355,3 +355,66 @@ async fn insights_counts_verified_tasks_per_week_and_cost_per_verified_outcome()
     // The old fields are unchanged
     assert_eq!(v["verified_7d"], 2);
 }
+
+/// One model call of the bot, `fresh` + 100 output tokens, in chat `context`.
+async fn call_in(e: &Env, context: &str, model: &str, fresh: i64, cost: f64) {
+    e.state
+        .db
+        .record_usage(&NewUsage {
+            kwant_id: e.bot.id.clone(),
+            context_id: context.into(),
+            purpose: kwnt::db::usage::PURPOSE_REPLY,
+            model: model.into(),
+            fresh_input: fresh,
+            output: 100,
+            reported: true,
+            cost_usd: Some(cost),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+}
+
+/// A task the bot takes in `context` (`None`: a claim that doesn't know its chat), then fails.
+async fn run_task(e: &Env, title: &str, context: Option<&str>, calls: impl std::future::Future<Output = ()>) -> kwnt::db::performance::Observation {
+    let tid = id(&person(e, "POST", "/api/tasks", Some(json!({"title": title, "owner_kwant_id": e.bot.id}))).await);
+    let claimed = e.state.db.claim_task(&tid, &e.bot.id, None, context, 600_000, false, "kwant").await.unwrap();
+    assert!(claimed.is_ok(), "{:?}", claimed.err());
+    tokio::time::sleep(Duration::from_millis(1100)).await; // the stored time has a second's grain
+    calls.await;
+    missions::transition(&e.state, &tid, "working", "failed", missions::Actor::Kwant, "kwant", TaskChange::default()).await.unwrap();
+    observed(e, &tid, "failed").await
+}
+
+#[tokio::test]
+async fn a_chat_turn_during_the_claim_is_not_billed_to_the_task() {
+    let e = setup().await;
+    // The task runs in its own context; the same bot also answers in #general during the claim
+    let o = run_task(&e, "Own context", Some("mission-ctx"), async {
+        call_in(&e, "mission-ctx", "claude-opus-5-5", 900, 0.25).await;
+        call_in(&e, &e.general, "grok-4", 5000, 9.0).await;
+        call_in(&e, "mission-ctx", "claude-opus-5-5", 400, 0.10).await;
+    })
+    .await;
+    assert_eq!(o.model, "claude-opus-5-5", "the chat's model must not win: {o:?}");
+    assert_eq!(o.cost_usd.map(|c| (c * 100.0).round() as i64), Some(35), "only the task's calls cost: {o:?}");
+}
+
+#[tokio::test]
+async fn a_claim_with_no_context_or_no_matching_call_uses_the_whole_window() {
+    let e = setup().await;
+    // No context on the claim (the task_claim tool has none): the window decides, as before
+    let o = run_task(&e, "No context", None, async {
+        call_in(&e, "chat-a", "claude-opus-5-5", 900, 0.25).await;
+        call_in(&e, "chat-b", "claude-opus-5-5", 100, 0.05).await;
+    })
+    .await;
+    assert_eq!(o.cost_usd.map(|c| (c * 100.0).round() as i64), Some(30), "{o:?}");
+
+    // A context that no call carries (a turn recorded under another id): the window decides too
+    let o = run_task(&e, "Unmatched context", Some("never-used"), async {
+        call_in(&e, "chat-a", "claude-opus-5-5", 900, 0.25).await;
+    })
+    .await;
+    assert_eq!(o.cost_usd.map(|c| (c * 100.0).round() as i64), Some(25), "{o:?}");
+}

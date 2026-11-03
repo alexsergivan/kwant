@@ -13,7 +13,7 @@ use std::collections::HashMap;
 const BACKFILL_DONE: &str = "performance_backfill_v1";
 
 /// One model call of the owner: model, fresh input, output, cost, when.
-type UsageRow = (String, i64, i64, Option<f64>, DateTime<Utc>);
+type UsageRow = (i64, String, String, i64, i64, Option<f64>, DateTime<Utc>);
 
 #[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
 pub struct Observation {
@@ -170,39 +170,50 @@ impl Database {
             return Ok(None);
         };
         // Claims: the windows a bot held the task (an open one ends at the settle)
-        let claims: Vec<(i64, Option<i64>)> =
-            sqlx::query_as("SELECT claimed_at, released_at FROM agent_claims WHERE task_id = ? ORDER BY claimed_at").bind(&t.id).fetch_all(&self.pool).await?;
+        let claims: Vec<(i64, Option<i64>, Option<String>)> =
+            sqlx::query_as("SELECT claimed_at, released_at, context_id FROM agent_claims WHERE task_id = ? ORDER BY claimed_at").bind(&t.id).fetch_all(&self.pool).await?;
         if claims.is_empty() && result == "unverified" {
             return Ok(None);
         }
         let end_ms = finished_at.timestamp_millis();
-        let windows: Vec<(i64, i64)> = claims.iter().map(|&(a, b)| (a, b.unwrap_or(end_ms).max(a))).collect();
+        let windows: Vec<(i64, i64)> = claims.iter().map(|(a, b, _)| (*a, b.unwrap_or(end_ms).max(*a))).collect();
         let latency_ms = windows.iter().map(|(a, b)| b - a).sum();
         let started_at = windows.first().and_then(|(a, _)| DateTime::<Utc>::from_timestamp_millis(*a));
 
-        // Model and cost: the owner's model calls inside the claim windows
+        // Model and cost: the owner's model calls inside the claim windows. In a window whose claim
+        // knows its chat (`context_id`), only that chat's calls count when there are any: another
+        // chat turn of the same bot, or a second running mission, is not this task's spend. A claim
+        // with no context, or whose context has no call in the window, falls back to the whole window.
         let (mut by_model, mut cost, mut any_cost) = (HashMap::<String, i64>::new(), 0.0, false);
         if let (Some(first), Some(last)) = (windows.iter().map(|w| w.0).min(), windows.iter().map(|w| w.1).max()) {
             // A second of slack on each side for the stored time format; the windows decide below
             let from = DateTime::<Utc>::from_timestamp_millis(first - 1000).unwrap_or(finished_at);
             let to = DateTime::<Utc>::from_timestamp_millis(last + 1000).unwrap_or(finished_at);
             let calls: Vec<UsageRow> = sqlx::query_as(
-                "SELECT model, fresh_input, output, cost_usd, created_at FROM model_usage WHERE kwant_id = ? AND created_at >= ? AND created_at <= ?",
+                "SELECT id, context_id, model, fresh_input, output, cost_usd, created_at FROM model_usage WHERE kwant_id = ? AND created_at >= ? AND created_at <= ?",
             )
             .bind(&kwant_id)
             .bind(from)
             .bind(to)
             .fetch_all(&self.pool)
             .await?;
-            for (model, fresh, output, c, at) in calls {
-                let ms = at.timestamp_millis();
-                if !windows.iter().any(|(a, b)| ms >= *a && ms <= *b) {
-                    continue;
-                }
-                *by_model.entry(model).or_default() += fresh + output;
-                if let Some(c) = c {
-                    cost += c;
-                    any_cost = true;
+            let mut counted = std::collections::HashSet::new();
+            for ((a, b), (_, _, claim_context)) in windows.iter().zip(&claims) {
+                let inside: Vec<&UsageRow> = calls.iter().filter(|c| (*a..=*b).contains(&c.6.timestamp_millis())).collect();
+                let own: Vec<&UsageRow> = match claim_context {
+                    Some(ctx) => inside.iter().copied().filter(|c| &c.1 == ctx).collect(),
+                    None => vec![],
+                };
+                // A call inside two windows (a system claim over a bot's own) counts once
+                for (id, _, model, fresh, output, c, _) in if own.is_empty() { inside } else { own } {
+                    if !counted.insert(*id) {
+                        continue;
+                    }
+                    *by_model.entry(model.clone()).or_default() += fresh + output;
+                    if let Some(c) = c {
+                        cost += c;
+                        any_cost = true;
+                    }
                 }
             }
         }
