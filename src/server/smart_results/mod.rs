@@ -43,8 +43,13 @@ pub const MAX_REPLY: usize = 128 * 1024;
 pub const PICK_REASON: &str = "named as the pick in this reply";
 /// The one line of the bot system prompt that asks for structure the selectors can read (plan
 /// §A.4). It is in every bot's system prompt once (`drivers::TurnInput::system_prompt_parts`).
-pub const PROMPT_LINE: &str = "When you compare 3 or more options use a table, for steps use a numbered list, and for key \
-    numbers use '**Label:** value' lines; kwant shows them as cards and charts.";
+///
+/// Two options count too: "Aldi vs Lidl" came back as bullets when the line said "3 or more", and
+/// the transposed shape (options as columns, a row per point) is what [`selector`] reads as a
+/// comparison. Every header cell must be filled, or the table stays text.
+pub const PROMPT_LINE: &str = "When you compare options use a table with every header cell filled (one row per option; for \
+    just two, a column each and a row per point), for steps use a numbered list, and for key numbers use '**Label:** value' \
+    lines; kwant shows them as cards and charts.";
 
 /// The checked block set for a reply: the first candidate, in priority order ([`rank`]), whose
 /// type is enabled and that passes [`validate`]; `None` when there isn't one. A selector bug must never

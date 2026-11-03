@@ -43,6 +43,25 @@ fn a_pipe_table_is_a_comparison_with_cells_copied_verbatim() {
     assert_eq!((c.highlight_row, c.highlight_reason), (None, None));
 }
 
+/// The prompt line asks for this shape when a reply compares just two options ("Compare Aldi with
+/// Lidl" came back as bullets and stayed text): the options as columns, a row per point.
+#[test]
+fn a_two_option_table_with_a_row_per_point_is_a_comparison() {
+    let text = "They're close on price; it depends on what you buy.\n\n\
+        | Point | Aldi Süd | Lidl |\n|---|---|---|\n\
+        | Prices | Basket €42.07, about 4% less | Basket €44.02 |\n\
+        | Deals | Tighter range | More non-food deals each week |\n\
+        | App | Nothing comparable | Lidl Plus coupons |\n\
+        | Store feel | Quicker to shop | Bigger, more variety |\n\n\
+        If you mostly buy staples, Aldi Süd is the slightly cheaper default.\n";
+    let c = comparison_of(text);
+    let labels: Vec<&str> = c.columns.iter().map(|k| k.label.as_str()).collect();
+    assert_eq!(labels, ["Point", "Aldi Süd", "Lidl"]);
+    let points: Vec<&str> = c.rows.iter().map(|r| r.cells[0].as_str()).collect();
+    assert_eq!(points, ["Prices", "Deals", "App", "Store feel"]);
+    assert_eq!(c.rows[0].cells, ["Prices", "Basket €42.07, about 4% less", "Basket €44.02"]);
+}
+
 #[test]
 fn small_ragged_wide_or_repeated_tables_stay_text() {
     let two_rows = "| Plan | Price |\n|---|---|\n| Basic | 12 |\n| Team | 18 |\n";
