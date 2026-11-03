@@ -93,8 +93,8 @@
   animation: kws-stamp 160ms ease-out both;
 }
 @keyframes kws-stamp {
-  from { opacity: 0; transform: scale(1.08); }
-  to { opacity: 1; transform: scale(1); }
+  from { transform: scale(1.08); }
+  to { transform: scale(1); }
 }
 
 /* Laya hand-off: the answering bot's avatar rises into the reply header. */
@@ -201,25 +201,6 @@
   .kws-heartbeat-tight { display: inline-flex; }
 }
 
-/* Interim: a clickable sticker sits in a 44x44 button (spec §1, decisions 5). Pixel owns .kw-sticker-hit;
-   delete this block once modern.css on pixel-ui-refresh defines it. */
-.kw-sticker-hit {
-  display: inline-grid;
-  place-items: center;
-  min-width: 44px;
-  min-height: 44px;
-  margin: -10px -4px;
-  border-radius: 12px;
-  background: transparent;
-  cursor: pointer;
-}
-.kw-sticker-hit:focus-visible { outline: none; }
-.kw-sticker-hit > .kw-sticker { transition: transform 160ms var(--kw-ease), box-shadow 160ms var(--kw-ease); }
-.kw-sticker-hit:hover > .kw-sticker { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 8px 16px rgb(0 0 0 / 0.4); }
-.kw-sticker-hit:focus-visible > .kw-sticker { outline: 2px solid #b8adff; outline-offset: 3px; }
-
 @media (prefers-reduced-motion: reduce) {
   .kws-tip::after { transition: none; transform: none; }
-  .kw-sticker-hit > .kw-sticker { transition: none; }
-  .kw-sticker-hit:hover > .kw-sticker { transform: rotate(var(--kw-tilt)); }
 }

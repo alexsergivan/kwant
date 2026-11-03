@@ -7,8 +7,7 @@ import { CheckBurst } from './CheckBurst';
 
 /**
  * "Verified · 3/3" (or "First verified") as Pixel's holo sticker, tilted −2° (S1) or −3° for the
- * first-time sticker (S3), pressing in once when it appears. When it opens the receipt it sits inside a
- * 44×44 `.kw-sticker-hit` button (spec §1), so the small sticker still meets the touch-target rule.
+ * first-time sticker (S3), pressing in once when it appears (the wrapper scales, so the tilt stays).
  */
 export const VerifiedStamp: React.FC<{ text: string; label: string; first?: boolean; press?: boolean; burst?: number; onOpen?: () => void; className?: string }> = ({
   text,
@@ -19,20 +18,19 @@ export const VerifiedStamp: React.FC<{ text: string; label: string; first?: bool
   onOpen,
   className = '',
 }) => {
-  const sticker = (
-    <Sticker tone="holo" tilt={first ? -3 : -2} icon={<ShieldCheck size={12} aria-hidden="true" />} title={onOpen ? undefined : label}>
-      {first ? 'First verified' : text}
-    </Sticker>
-  );
+  // Clickable: Pixel's Sticker puts it in its 44x44 .kw-sticker-hit button (spec §1).
   return (
     <span className={`relative inline-flex ${press ? 'kws-stamp' : ''} ${className}`} data-verified-stamp="">
-      {onOpen ? (
-        <button type="button" className="kw-sticker-hit" onClick={() => onOpen()} title="Open receipt" aria-label={first ? `First verified task. ${label}` : label}>
-          {sticker}
-        </button>
-      ) : (
-        sticker
-      )}
+      <Sticker
+        tone="holo"
+        tilt={first ? -3 : -2}
+        icon={<ShieldCheck size={12} aria-hidden="true" />}
+        title={onOpen ? 'Open receipt' : label}
+        ariaLabel={onOpen ? (first ? `First verified task. ${label}` : label) : undefined}
+        onClick={onOpen ? () => onOpen() : undefined}
+      >
+        {first ? 'First verified' : text}
+      </Sticker>
       <CheckBurst n={burst} />
     </span>
   );
