@@ -192,6 +192,10 @@ export interface ChatViewProps {
   vmApprovalsOff?: boolean;
   /** The CAPTCHA the open bot's browser waits on, and a counter that opens it to solve. */
   vmCaptchaStep?: HumanStep | null;
+  /** The newest open step (any kind) holding this browser. */
+  vmHumanStep?: HumanStep | null;
+  /** Answers that step as done from the browser; resolves to an error message on failure. */
+  onVmStepDone?: (id: string) => Promise<string | void> | void;
   vmSolveRequest?: number;
   /** Pinned team/channel instructions, shown collapsed above the messages. */
   pinned?: PinnedItem[];
@@ -514,6 +518,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onNavigateVm,
   vmApprovalsOff,
   vmCaptchaStep,
+  vmHumanStep,
+  onVmStepDone,
   vmSolveRequest,
   pinned = [],
   onEditInstructions,
@@ -1757,6 +1763,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       onNavigate={onNavigateVm}
       approvalsOff={vmApprovalsOff}
       captchaStep={vmCaptchaStep}
+      humanStep={vmHumanStep}
+      onStepDone={onVmStepDone}
       solveRequest={vmSolveRequest}
     />
   </div>

@@ -35,6 +35,11 @@ export default {
           900: '#3a2f7c',
           950: '#231b4d',
         },
+        // "You have the wheel" in a bot's browser (Mira's stage spec §1): never sky-* (violet here), never amber
+        control: {
+          DEFAULT: '#7cc4ff',
+          ink: '#071629',
+        },
         brand: {
           50: '#f0f9ff',
           100: '#e0f2fe',

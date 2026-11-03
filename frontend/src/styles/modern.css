@@ -268,3 +268,16 @@
     display: inline-block;
   }
 }
+
+/* Browser takeover stage (Mira's spec §2, §4, §5): enters with a fade and a slight scale; nothing loops */
+@keyframes kw-stage-in { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes kw-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kw-pop-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.kw-stage-in { animation: kw-stage-in 160ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.kw-scrim-in { animation: kw-scrim-in 160ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.kw-pop-in { animation: kw-pop-in 120ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.kw-veil-in { transition: opacity 120ms cubic-bezier(0.2, 0.7, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .kw-stage-in, .kw-scrim-in, .kw-pop-in { animation: none; }
+  .kw-veil-in { transition: none; }
+}
