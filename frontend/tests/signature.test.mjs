@@ -31,11 +31,29 @@ test('heartbeat dots: met is green, not_met red, a fix amber, anything else grey
   assert.deepEqual(s.heartbeatDots([]), []);
 });
 
-test('heartbeat text counts each tone and never claims more than the dots show', () => {
+test('heartbeat text counts each tone and never claims more than the squares show (spec §3)', () => {
   assert.equal(s.heartbeatText([]), 'No checks yet');
   const dots = s.heartbeatDots([ev('checked', { verdict: 'met' }), ev('checked', { verdict: 'met' }), ev('checked', { verdict: 'not_met' }), ev('fix_opened')]);
-  assert.equal(s.heartbeatText(dots), 'Last 4 checks, oldest first: 2 OK, 1 failing, 1 fix underway');
-  assert.match(s.heartbeatText(s.heartbeatDots([ev('checked', { verdict: 'met' })])), /^Last 1 check,/);
+  assert.equal(s.heartbeatText(dots), 'Last 4 checks: 2 ok, 1 fixing, 1 failing');
+  assert.equal(s.heartbeatCount(dots), '2/4 ok');
+  assert.match(s.heartbeatText(s.heartbeatDots([ev('checked', { verdict: 'met' })])), /^Last 1 check:/);
+  assert.equal(s.heartbeatText(s.heartbeatDots([ev('checked', {})])), 'Last 1 check: 1 can’t check');
+});
+
+test('heartbeat squares keep the check time for their hover', () => {
+  const [d] = s.heartbeatDots([{ kind: 'checked', detail: { verdict: 'met' }, created_at: '2026-11-03T10:00:00Z' }]);
+  assert.equal(d.at, '2026-11-03T10:00:00Z');
+});
+
+test('heartbeat word: the newest square decides, two flips between ok and failing is flapping', () => {
+  const run = (...v) => s.heartbeatDots(v.map((x) => (x === 'fix' ? ev('fix_opened') : ev('checked', x ? { verdict: x } : {}))));
+  assert.equal(s.heartbeatWord([]), null);
+  assert.equal(s.heartbeatWord(run('met', 'met', 'met')), 'Steady');
+  assert.equal(s.heartbeatWord(run('met', 'not_met', 'met', 'not_met')), 'Flapping');
+  assert.equal(s.heartbeatWord(run('met', 'met', 'not_met')), 'Failing');
+  assert.equal(s.heartbeatWord(run('met', 'not_met', 'fix')), 'Fixing');
+  assert.equal(s.heartbeatWord(run('met', 'met', null)), 'Can’t check');
+  assert.equal(s.heartbeatWord(run('not_met', 'met')), 'Back to ok');
 });
 
 test('lessons chip: the count comes from the lessons_shown keys; none, no chip', () => {
@@ -44,11 +62,14 @@ test('lessons chip: the count comes from the lessons_shown keys; none, no chip',
   assert.equal(s.lessonsChip([ev('lessons_shown', { keys: [] })]), null);
   assert.equal(s.lessonsChip([ev('lessons_shown', {})]), null);
   const one = s.lessonsChip([ev('lessons_shown', { keys: ['a'] })]);
-  assert.equal(one.text, 'Learned from 1 earlier task');
-  assert.equal(one.title, 'It started with 1 lesson from earlier work');
+  assert.equal(one.text, 'Learned from 1');
+  assert.equal(one.title, 'From 1 earlier task', 'no titles on the event: the count only');
+  const titled = s.lessonsChip([ev('lessons_shown', { keys: ['a', 'b'], titles: ['Check the flyer date', ' ', 7] })]);
+  assert.equal(titled.title, 'From earlier tasks: Check the flyer date', 'titles only when the event has them');
   const three = s.lessonsChip([ev('lessons_shown', { keys: ['a', 'b'] }), ev('lessons_shown', { keys: ['a', 'b', 'c'] })]);
   assert.equal(three.count, 3, 'the latest event wins');
-  assert.equal(three.text, 'Learned from 3 earlier tasks');
+  assert.equal(three.text, 'Learned from 3');
+  assert.equal(three.title, 'From 3 earlier tasks');
 });
 
 test('verified stamp: a count only when every check passed, else just "Verified"', () => {

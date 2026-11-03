@@ -430,9 +430,9 @@ export const GoalRow: React.FC<{
         </div>
         {(heartbeat.length > 1 || firstKept) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            {heartbeat.length > 1 && <GoalHeartbeat dots={heartbeat} />}
+            {heartbeat.length > 1 && <GoalHeartbeat dots={heartbeat} className="min-w-0 flex-1" />}
             {firstKept && (
-              <Sticker tone="holo" icon={<Target size={12} aria-hidden="true" />} title="The first goal kept in this space" className="pointer-events-none">First goal kept</Sticker>
+              <Sticker tone="holo" tilt={-3} icon={<Target size={12} aria-hidden="true" />} title="The first goal kept in this space" className="pointer-events-none">First goal kept</Sticker>
             )}
           </div>
         )}

@@ -44,7 +44,7 @@ test('quotaLine: "Out of quota until …" while the limit lasts, the server word
   assert.equal(m.quotaLine(null, undefined, NOW), null);
 });
 
-test('reply meta is one line, name · engine chip · time, with account and tokens behind Details', () => {
+test('reply meta is one line, name · engine chip (engine + account, spec §4) · time, with tokens behind Details', () => {
   const html = m.meta({
     name: 'Architect',
     at: '2026-11-02T11:42:00Z',
@@ -57,9 +57,9 @@ test('reply meta is one line, name · engine chip · time, with account and toke
   assert.match(html, /data-reply-time/);
   assert.match(html, /aria-expanded="false"/);
   assert.match(html, />Details</);
-  // The engine is a chip on the line; folded, the account and tokens stay hidden.
-  assert.match(html, /data-engine-chip[^>]*>.*Claude · Opus 5\.5/);
-  assert.doesNotMatch(html, /Personal|1\.2k tokens/);
+  // The engine chip reads "engine · account" (Mira's spec §4); folded, the tokens stay hidden. No cost, no duration.
+  assert.match(html, /data-engine-chip[^>]*>.*Claude · Opus 5\.5 · Personal/);
+  assert.doesNotMatch(html, /1\.2k tokens/);
 });
 
 test('reply meta: a failed step shows on the folded toggle; no toggle without details', () => {

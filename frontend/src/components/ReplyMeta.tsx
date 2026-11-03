@@ -56,7 +56,7 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
         {avatar && <span className="sm:hidden shrink-0 inline-flex">{avatar}</span>}
         <span className="shrink-0 text-[13px] font-semibold text-zinc-50">{name}</span>
         {why.chip}
-        {(ranOn || handoff) && <EngineChip label={ranOn ?? ''} handoff={handoff} />}
+        {(ranOn || handoff) && <EngineChip label={[ranOn, account].filter(Boolean).join(' · ')} handoff={handoff} />}
         {time && (
           <span className="min-w-0 truncate text-zinc-400" data-reply-time="">
             <span aria-hidden="true" className="sm:hidden">· </span>

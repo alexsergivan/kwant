@@ -977,6 +977,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const text = shownDecisions ? shownDecisions.text : msg.text;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
+    // Whose mood the reply header shows (Pixel's AvatarMood, drawn by ModernAvatar given a kwantId):
+    // Laya's pick, else this bot chat's bot, else the team member with that name. Unknown: no mood.
+    const replyKwantId = isUser
+      ? undefined
+      : routed?.kwant_id ?? (home?.kind === 'bot' ? home.bot?.id : undefined) ?? activeKwants.find((k) => k.name === displayName)?.id;
 
     return (
       <div
@@ -994,6 +999,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               role={isUser ? 'user' : title}
               name={displayName}
               size={36}
+              kwantId={replyKwantId}
             />
           </span>
         </span>
@@ -1008,7 +1014,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <ReplyMeta
               name={displayName}
               at={msg.created_at}
-              avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={20} /></span>}
+              avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={20} kwantId={replyKwantId} /></span>}
               ranOn={ranOn}
               account={account}
               tokens={tokens}

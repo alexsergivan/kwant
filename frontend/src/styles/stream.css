@@ -1,14 +1,14 @@
 /* Conversation stream (reply header, working strip, decision cards, action row, results).
    Everything here moves with transform and opacity only, lasts 120-200 ms, and is off under
-   prefers-reduced-motion. Colours are Tailwind's; the --kws-* variables are the only tokens. */
+   prefers-reduced-motion. The --kws-* variables alias Pixel's --kw-* tokens (modern.css). */
 :root {
   --kws-accent: theme('colors.sky.400');
-  --kws-accent-soft: theme('colors.sky.500 / 14%');
-  --kws-ok: theme('colors.emerald.400');
-  --kws-warn: theme('colors.amber.300');
-  --kws-hairline: theme('colors.zinc.700 / 70%');
-  --kws-raised: theme('colors.zinc.900 / 70%');
-  --kws-shadow: 0 1px 2px rgb(0 0 0 / 0.28), 0 4px 14px -6px rgb(0 0 0 / 0.5);
+  --kws-accent-soft: rgb(122 98 240 / 0.16);
+  --kws-ok: var(--kw-ok);
+  --kws-warn: var(--kw-warn);
+  --kws-hairline: var(--kw-hairline-strong);
+  --kws-raised: var(--kw-surface-raised);
+  --kws-shadow: theme('boxShadow.raised');
 }
 
 /* New replies fade and slide in. */
@@ -106,41 +106,116 @@
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* First-time confetti: square "pixels" that fly out and fade, 200 ms. */
-.kws-confetti {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 0;
-  height: 0;
-  pointer-events: none;
-}
-.kws-confetti-px {
-  position: absolute;
-  left: -2px;
-  top: -2px;
-  width: 4px;
-  height: 4px;
-  background: var(--kws-c);
-  animation: kws-confetti 200ms ease-out both;
-}
-@keyframes kws-confetti {
-  from { opacity: 1; transform: rotate(var(--kws-a)) translateY(-4px); }
-  to { opacity: 0; transform: rotate(var(--kws-a)) translateY(var(--kws-d)); }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .kws-stamp,
-  .kws-handoff,
-  .kws-confetti-px {
+  .kws-handoff {
     animation: none;
   }
-  .kws-confetti { display: none; }
 }
 
-/* The table's flat holographic "Pick": same box as before (no layout change), dark ink on a light plate. */
+/* The table's flat holographic "Pick": same box as before (no layout change), dark ink on a light plate.
+   Mira's holo stops (spec §1) laid over the #f4f1ff plate at 0.75, so ink stays >= 7.19:1. */
 .kws-holo-mini {
-  border-color: rgb(255 255 255 / 0.6);
-  background: linear-gradient(115deg, #f9c6ff 0%, #c4d4ff 28%, #b9fbe6 52%, #fff1b8 76%, #ffc2d9 100%);
+  border-color: #ffffff;
+  background:
+    linear-gradient(rgb(244 241 255 / 0.25), rgb(244 241 255 / 0.25)),
+    linear-gradient(115deg, #ff6ec7 0%, #ffd36e 25%, #7dffb0 50%, #5ee0ff 75%, #9b7bff 100%);
   color: #1b1033;
+}
+
+/* ---- Chips (spec §4): 20 px tall, 0 8 px, full radius, 500 12/16, 12 px icon, gap 4 px. Information, never holo. ---- */
+.kws-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 9999px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.kws-chip:focus-visible { outline: 2px solid #b8adff; outline-offset: 2px; }
+.kws-chip-engine { background: #231d4b; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.07); color: #d9d6f0; }
+.kws-chip-failover { background: #2b2360; box-shadow: inset 0 0 0 1px #46379a; color: #e8e4ff; }
+.kws-chip-learned { background: #231d4b; color: #d3ccff; }
+
+/* A styled tooltip from data-tip, on hover and keyboard focus (spec §4). The aria-label carries the same words. */
+.kws-tip { position: relative; }
+.kws-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  width: max-content;
+  max-width: min(280px, 80vw);
+  padding: 4px 8px;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: 8px;
+  background: #2c2552;
+  color: #ecebfa;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 400;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 120ms var(--kw-ease), transform 120ms var(--kw-ease);
+}
+.kws-tip:hover::after,
+.kws-tip:focus-visible::after { opacity: 1; transform: translateY(0); }
+
+/* ---- Goal heartbeat (spec §3) ---- */
+.kws-heartbeat { container-type: inline-size; display: block; min-width: 0; }
+.kws-heartbeat-full,
+.kws-heartbeat-tight { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.kws-heartbeat-tight { display: none; }
+.kws-beats { display: inline-flex; align-items: center; gap: 3px; }
+.kws-beat { width: 6px; height: 6px; border-radius: 1px; flex: none; }
+.kws-beat-ok { background: #5eead4; }
+.kws-beat-fixing { background: #fcd34d; }
+.kws-beat-failing { background: #fb7185; }
+.kws-beat-unknown { box-shadow: inset 0 0 0 1.5px #8f88bb; }
+.kws-beat-newest { outline: 1px solid rgb(255 255 255 / 0.55); outline-offset: 1px; }
+.kws-beat-count { font-size: 12px; line-height: 16px; color: #d9d6f0; font-variant-numeric: tabular-nums; }
+.kws-beat-word { font-size: 12px; line-height: 16px; font-weight: 600; }
+/* Phones: the last 5 squares and the word. */
+@media (max-width: 639px) {
+  .kws-beat-desk,
+  .kws-beat-count-desk { display: none; }
+}
+/* Under 64 px free, or under 360 px wide: only the newest square and "1/5 ok". */
+@container (max-width: 63px) {
+  .kws-heartbeat-full { display: none; }
+  .kws-heartbeat-tight { display: inline-flex; }
+}
+@media (max-width: 359px) {
+  .kws-heartbeat-full { display: none; }
+  .kws-heartbeat-tight { display: inline-flex; }
+}
+
+/* Interim: a clickable sticker sits in a 44x44 button (spec §1, decisions 5). Pixel owns .kw-sticker-hit;
+   delete this block once modern.css on pixel-ui-refresh defines it. */
+.kw-sticker-hit {
+  display: inline-grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  margin: -10px -4px;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+}
+.kw-sticker-hit:focus-visible { outline: none; }
+.kw-sticker-hit > .kw-sticker { transition: transform 160ms var(--kw-ease), box-shadow 160ms var(--kw-ease); }
+.kw-sticker-hit:hover > .kw-sticker { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 8px 16px rgb(0 0 0 / 0.4); }
+.kw-sticker-hit:focus-visible > .kw-sticker { outline: 2px solid #b8adff; outline-offset: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .kws-tip::after { transition: none; transform: none; }
+  .kw-sticker-hit > .kw-sticker { transition: none; }
+  .kw-sticker-hit:hover > .kw-sticker { transform: rotate(var(--kw-tilt)); }
 }

@@ -206,7 +206,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                 className={`relative rounded-xl border px-3 py-2.5 text-xs ${picked ? 'border-sky-500/40 bg-sky-500/[0.07]' : 'border-zinc-800 bg-zinc-900/60'}`}
               >
                 {picked && (
-                  <Sticker tone="holo" icon={<Award size={12} aria-hidden="true" />} title={block.highlight_reason ?? 'Pick in this reply'} className="absolute -top-2 right-2">
+                  <Sticker tone="holo" tilt={3} icon={<Award size={10} aria-hidden="true" />} title={block.highlight_reason ?? 'Pick in this reply'} className="kw-sticker-sm absolute -top-2 -right-1.5">
                     Pick<span className="sr-only"> in this reply{block.highlight_reason ? `: ${block.highlight_reason}` : ''}</span>
                   </Sticker>
                 )}
