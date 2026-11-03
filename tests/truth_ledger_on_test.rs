@@ -236,6 +236,8 @@ fn the_scan_catches_numbers_negation_and_subjects_but_not_paraphrases() {
 #[tokio::test]
 async fn off_and_shadow_prompts_are_byte_identical_and_switching_off_restores_them() {
     let e = setup().await;
+    // A saved off (on is the default) is main's prompt, byte for byte
+    ledger(&e, "off").await;
     let a = bot(&e, "Ana").await;
     let (turn_id, token) = turn(&e, &a).await;
     e.state.db.add_memory(&a.id, "Person wrote this", "user").await.unwrap();
@@ -508,7 +510,8 @@ async fn a_bot_token_gets_403_on_every_new_facts_route_and_off_is_409() {
     }
     let (status, _) = call(&e.app, "POST", "/api/settings", Some(&token), None, Some(json!({"fact_dispute_scan": false}))).await;
     assert!(status.is_client_error());
-    // With the ledger off the writes are 409 and the list is empty
+    // With the ledger saved off the writes are 409 and the list is empty
+    ledger(&e, "off").await;
     let (status, _) = call(&e.app, "POST", "/api/facts", None, None, Some(json!({"statement": "x", "scope": "space"}))).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(person(&e, "GET", "/api/facts/disputes", None).await["disputes"], json!([]));

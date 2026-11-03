@@ -1048,6 +1048,11 @@ async fn self_tools_are_scoped_to_the_turn_and_kwant() {
             "profile_delete",
             "propose_hire",
             "hire_status",
+            // The Truth Ledger is on by default; with the board off it offers no task_cite_fact
+            "fact_propose",
+            "fact_get",
+            "fact_search",
+            "fact_dispute",
         ]
     );
 

@@ -165,10 +165,10 @@ async fn proposed_fact(e: &Env) -> String {
 }
 
 #[tokio::test]
-async fn the_setting_is_off_by_default_person_only_and_validated() {
+async fn the_setting_is_on_by_default_person_only_and_validated() {
     let e = setup().await;
     let s = person(&e, "GET", "/api/settings", None).await;
-    assert_eq!(s["truth_ledger"], "off");
+    assert_eq!(s["truth_ledger"], "on", "a fresh install has the ledger in full");
     let (status, _) = call(&e.app, "POST", "/api/settings", None, None, Some(json!({"truth_ledger": "loud"}))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     for m in ["shadow", "on", "off"] {
@@ -387,6 +387,8 @@ async fn a_bot_token_gets_403_on_every_facts_route() {
 #[tokio::test]
 async fn the_person_reads_and_decides_facts() {
     let e = setup().await;
+    // Saved off (on is the default): the mirror still records, but there is nothing to decide
+    ledger(&e, "off").await;
     let fid = proposed_fact(&e).await;
     let (status, _) = call(&e.app, "POST", &format!("/api/facts/{fid}/accept"), None, None, None).await;
     assert_eq!(status, StatusCode::CONFLICT, "nothing to decide with the ledger off");

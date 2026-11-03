@@ -121,7 +121,8 @@ async fn setup() -> Env {
         assert_eq!(s, StatusCode::OK, "{v}");
         ids.push(id);
     }
-    let (s, v) = call(&app, "POST", "/api/settings", Some(json!({"mission_board": true}))).await;
+    // The lead's review is what these tests cover; the Swarm Auditor (on by default) holds review during an audit
+    let (s, v) = call(&app, "POST", "/api/settings", Some(json!({"mission_board": true, "auditor": "off"}))).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     // The board follows hand-offs on the event bus, as the scheduler starts it in kwnt
     missions::listener::spawn(state.clone(), tokio_util::sync::CancellationToken::new());

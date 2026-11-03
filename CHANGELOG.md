@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   no approval cards: it keeps scorecards and proposes tiers, and only you lower or raise a bot. You can still pick a
   lower start for new bots in Settings.
 
+### Fixed
+- **No task tool without the task board.** With the Truth Ledger on and the board switched off, bots were still
+  offered `task_cite_fact`; it is now offered (and accepted) only while the board is on.
+
 ## [Mac 0.6.4] - 2026-11-02
 
 ### Added

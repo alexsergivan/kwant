@@ -515,10 +515,12 @@ async fn only_the_person_changes_tiers_and_task_classes() {
 async fn a_codex_bot_below_act_blocks_its_task_instead_of_running_it() {
     let e = setup().await;
     flight_school(&e, true).await;
+    // New bots start at act by default; the person chose a lower start
+    person(&e, "POST", "/api/settings", json!({"flight_school_new_bot_tier": "sandbox"})).await;
     let bot = json!({"name": "Cody", "title": "Codex bot", "persona_prompt": "p", "avatar_sprite": "s",
                      "driver_type": "cli", "preferred_model": "codex"});
     let cody = id(&person(&e, "POST", "/api/kwants", bot).await);
-    // Hired while Flight School is on: starts at sandbox
+    // Hired while Flight School is on: starts at the chosen sandbox
     let caps = person(&e, "GET", &format!("/api/capabilities?kwant_id={cody}"), json!(null)).await;
     assert_eq!(caps["default_tier"], "sandbox", "{caps}");
     let body = json!({"title": "Ship it", "goal": "g", "lead_kwant_id": cody, "budget_tokens": 900_000,
@@ -599,6 +601,8 @@ async fn a_card_answered_in_time_lets_the_bot_hand_in() {
 #[tokio::test]
 async fn a_turn_that_ends_with_its_card_answered_releases_the_task() {
     let e = setup().await;
+    // With AutoFix on (the default) a stalled turn parks the task for a retry; this is the plain release
+    person(&e, "POST", "/api/settings", json!({"autofix": "off"})).await;
     set_approvals(&e, "off").await;
     flight_school(&e, true).await;
     set_tier(&e, "*", "sandbox").await;
