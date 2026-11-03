@@ -62,6 +62,50 @@ pub fn candidates(text: &str) -> Vec<Block> {
     found.into_iter().map(|(_, b)| b).collect()
 }
 
+/// A table of the reply as the chat counts it: its `index`, header and rows, verbatim.
+pub struct ReplyTable {
+    pub index: usize,
+    pub header: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+/// An ordered list of the reply as the chat counts it: its `index` and item texts, verbatim.
+pub struct ReplyList {
+    pub index: usize,
+    pub items: Vec<String>,
+}
+
+/// Every table whose index is certain (none at or after the first line that could make the count
+/// differ from the chat's), for checking a `present_result` call's `source` against the reply.
+pub fn tables_of(text: &str) -> Vec<ReplyTable> {
+    if text.len() > MAX_REPLY {
+        return Vec::new();
+    }
+    let doc = parse(text);
+    doc.tables
+        .iter()
+        .filter(|t| t.clean && t.start < doc.tables_unsure_at)
+        .map(|t| ReplyTable {
+            index: t.index,
+            header: t.header.iter().map(|c| c.to_string()).collect(),
+            rows: t.rows.iter().map(|r| r.iter().map(|c| c.to_string()).collect()).collect(),
+        })
+        .collect()
+}
+
+/// Every ordered list whose index is certain; see [`tables_of`].
+pub fn lists_of(text: &str) -> Vec<ReplyList> {
+    if text.len() > MAX_REPLY {
+        return Vec::new();
+    }
+    let doc = parse(text);
+    doc.lists
+        .iter()
+        .filter(|l| l.ordered && l.clean && l.start < doc.ol_unsure_at)
+        .map(|l| ReplyList { index: l.index, items: l.items.iter().map(|c| c.to_string()).collect() })
+        .collect()
+}
+
 /// A table as the one type it reads as: a line chart, a bar chart, metrics, else a comparison.
 fn table_block<'s>(t: &Table, said: &impl Fn() -> Option<&'s [String]>) -> Option<Block> {
     if let Some(c) = chart::line(t) {

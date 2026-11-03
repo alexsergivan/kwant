@@ -15,7 +15,7 @@ Code: `src/server/smart_results/` (contract types, selectors, checks) and
 
 ## When a reply gets a block
 
-- **Which messages qualify:** every bot reply, meaning `sender_role` is `"kwant"` and there is no
+- **Which messages qualify:** two kinds of card (task reports and shared files, below), and every bot reply, meaning `sender_role` is `"kwant"` and there is no
   `meta.kind`, or the kind is `delegation_result` (a teammate's hand-off result: its reply, drawn
   as markdown inside the hand-off card). Other cards and kwant's own posts have a `meta.kind` and
   never get a block. A reply's own meta (`ran_on`, usage, routing, `decide_first`) doesn't stop it
@@ -63,7 +63,10 @@ Code: `src/server/smart_results/` (contract types, selectors, checks) and
 type ResultSet = { version: 1, blocks: [Block] }     // exactly one block when there is a row
 type Source = { kind: "markdown_table" | "markdown_list" | "slot", index: number | null,
                 ordered: boolean | null }  // lists: ordered or bullet; slot: no index
-type Provenance = { kind: "reply_text" }
+type Provenance =
+  | { kind: "reply_text" }
+  | { kind: "bot_declared", tool_call_id: string }          // present_result, grounded in the reply
+  | { kind: "kwant_data", ref: "task:<id>" | "attachment:<id>" }  // verification, files
 
 type Comparison = {
   id: "b0", type: "comparison", source: Source /* markdown_table */, provenance: Provenance,
@@ -178,6 +181,65 @@ a literal "Owner: X" or "(owner: X)".
 
 The client checks every block again: the labels, the row and item counts, and the cells
 (letters and digits only). On any mismatch it shows the markdown.
+
+## Typed blocks (smart-results-typed)
+
+Three more sources feed the same one-block-per-message rule. All of them go through `validate()`
+and the `ENABLED_TYPES` gate (`compose.rs` orders them).
+
+**`verification`** is attached to a task's report line (`meta` `{"kind": "mission", "task_id"}`),
+read from the task's stored outcome checks on the same connection as the insert, never from the
+text. One to 20 checks (none, or more than 20, gives no block). Each check has `label` (its kind
+and main field), `kind`, `status` (`passed`, `failed`, `error`, or `pending` for anything not yet
+finished), a redacted and cut `excerpt`, and `checked_at`. The `summary` ("2 of 5 checks passed")
+counts the rows, so a pending check is never a pass. It is a snapshot taken when the report is
+posted. Provenance `kwant_data` with `ref` `task:<id>`.
+
+**`files`** is attached to the agent "Shared a file" card (`meta.kind` "file"). Each listed
+attachment must be a row of this bot's own share (`source` "agent", `kwant_id` = sender, same
+channel, direct chat and thread, not yet tied to a message) or the whole block is dropped. At most
+10 files. Previews: CSV/TSV up to 1 MB as a table (8 columns by 20 rows, quote-aware), text and
+markdown up to 20 lines, inline images as `image`; anything else is a row with no preview. A file
+over 1 MB is previewed from its first megabyte (up to the last whole line); one with no whole line
+in that megabyte has no preview.
+
+A cut preview says so, so a 20-row preview is never read as the whole file. Three optional fields
+sit on the preview object (`kind` `table` or `text`) and are left out of the JSON when the preview
+is complete, so old fixtures stay valid:
+
+  | field | on | meaning |
+  |---|---|---|
+  | `truncated: true` | table, text | the file has more rows, columns or lines than the preview shows, or was cut at the 1 MB read cap |
+  | `total_rows`, `total_cols` | table | records after the header, and header width, counted exactly |
+  | `total_lines` | text | lines in the file, counted exactly |
+
+Totals come with `truncated` and only when counted exactly: a file cut at the 1 MB cap has
+`truncated: true` and no totals (the renderer shows "Showing first 20 rows" without a count), and
+so does a table with a row over 1,000 fields or a cell over 100 KB. A total is never below what the
+preview shows. Per-cell and per-line cuts (300 characters) do not set `truncated`. Example:
+`{"kind":"table","columns":[...],"rows":[...20 rows],"truncated":true,"total_rows":143,"total_cols":5}`
+shows as "Showing 20 of 143 rows". Bytes
+are read only through `attachments::blob_path` (a sha256 hex string under the attachments
+directory). A message of only inline images gets no block, since the chat draws them already. The
+block carries ids and previews only; downloads go through the existing authorized attachment
+routes.
+
+**`present_result`** is a self tool (offered in `tool_list`, dispatched in `call_tool`). A bot
+calls it once before its final reply to say which table or list it wants drawn: `type`
+(`comparison` or `steps`), `source` (`markdown_table` or `markdown_list` and the `index`), `data`.
+Nothing is trusted at call time. When the message is saved, the last call that was valid (status
+`ok` or `allowed`) is held to the final reply: the comparison's column labels are in the table's
+header, every declared row matches one row of that table cell by cell (a value moved under another
+row is refused), numbers compare by value ("1800" is "1,800"), URLs must be links in the reply
+(no plain-text URL, no login in the URL, no `javascript:`/`data:`/`file:`), steps quote items of
+the named list. Any failure drops the call (logged) and the normal selectors run on the reply. A
+call without `source` is refused for a comparison (and for steps). A bot cannot declare
+`verification` or `files`, and cannot set provenance: kwant writes `bot_declared` with the call's id.
+Calls over 64 KB are refused.
+
+Not yet declarable: `chart`, `metrics`, `facts`, `cards`, `findings`. They arrive with
+`smart-results-more`; for metrics the plan's rule applies then (each label and its value must be on
+the same line of the reply).
 
 ## Adding a block type
 

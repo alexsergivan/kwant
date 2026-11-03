@@ -27,9 +27,19 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
             texts.push(title);
         }
         check_source(block)?;
-        if block.provenance().kind != "reply_text" {
+        // `present_result` may declare a comparison or steps block itself (`bot_declared`, grounded
+        // against the reply by its call); the typed task and file blocks come from kwant's data.
+        let prov = block.provenance().kind.as_str();
+        let prov_ok = match block {
+            Block::Comparison(_) | Block::Steps(_) => matches!(prov, "reply_text" | "bot_declared"),
+            Block::Verification(_) | Block::Files(_) => prov == "kwant_data",
+            _ => prov == "reply_text",
+        };
+        if !prov_ok {
             return Err(format!("{} provenance", block.kind()));
         }
+        // Only text copied from the reply is checked against it.
+        let strict = prov == "reply_text";
         match block {
             Block::Comparison(c) => {
                 if !(2..=8).contains(&c.columns.len()) {
@@ -40,12 +50,16 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                         return Err(format!("column key {:?}", col.key));
                     }
                     check_text(&col.label, 200, "column label")?;
-                    texts.push(&col.label);
+                    if strict {
+                        texts.push(&col.label);
+                    }
                     match &col.unit {
                         Some(_) if !col.numeric => return Err("a unit on a text column".into()),
                         Some(unit) => {
                             check_text(unit, 10, "unit")?;
-                            texts.push(unit);
+                            if strict {
+                                texts.push(unit);
+                            }
                         }
                         None => {}
                     }
@@ -70,7 +84,9 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     }
                     for cell in &row.cells {
                         check_cell(cell)?;
-                        texts.push(cell);
+                        if strict {
+                            texts.push(cell);
+                        }
                     }
                 }
                 match (&c.highlight_row, &c.highlight_reason) {
@@ -189,7 +205,9 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                         return Err(format!("step id {:?}", item.id));
                     }
                     check_text(&item.text, 300, "step")?;
-                    texts.push(&item.text);
+                    if strict {
+                        texts.push(&item.text);
+                    }
                     let shape = match s.variant {
                         Variant::Steps => item.done.is_none() && item.when.is_none(),
                         Variant::Checklist => item.done.is_some() && item.when.is_none(),
@@ -200,7 +218,9 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     }
                     for extra in [&item.when, &item.owner].into_iter().flatten() {
                         check_text(extra, 60, "step label")?;
-                        texts.push(extra);
+                        if strict {
+                            texts.push(extra);
+                        }
                     }
                 }
             }
@@ -262,6 +282,103 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     }
                 }
             }
+            Block::Verification(v) => {
+                let task = v.provenance.reference.as_deref().and_then(|r| r.strip_prefix("task:"));
+                if v.provenance.kind != "kwant_data" || task.is_none_or(|t| t.is_empty() || t != v.target.id) {
+                    return Err("verification provenance".into());
+                }
+                if v.target.kind != "task" {
+                    return Err("verification target".into());
+                }
+                check_text(&v.target.id, 200, "verification target id")?;
+                check_text(&v.target.title, 300, "verification target title")?;
+                check_text(&v.summary, 300, "verification summary")?;
+                if let Some(title) = &v.title {
+                    check_text(title, 300, "verification title")?;
+                }
+                if v.checks.is_empty() || v.checks.len() > 20 {
+                    return Err(format!("{} checks", v.checks.len()));
+                }
+                for check in &v.checks {
+                    if !matches!(check.status.as_str(), "passed" | "failed" | "error" | "pending") {
+                        return Err(format!("check status {:?}", check.status));
+                    }
+                    check_text(&check.id, 200, "check id")?;
+                    check_text(&check.label, 300, "check label")?;
+                    check_text(&check.kind, 100, "check kind")?;
+                    if let Some(excerpt) = &check.excerpt {
+                        check_text(excerpt, 300, "check excerpt")?;
+                    }
+                    if let Some(at) = &check.checked_at {
+                        check_text(at, 100, "check time")?;
+                    }
+                }
+            }
+            Block::Files(files) => {
+                if files.provenance.kind != "kwant_data"
+                    || files.provenance.reference.as_deref().is_none_or(|r| !r.starts_with("attachment:") || r.len() > 200)
+                {
+                    return Err("files provenance".into());
+                }
+                if let Some(title) = &files.title {
+                    check_text(title, 300, "files title")?;
+                }
+                if files.items.is_empty() || files.items.len() > 10 {
+                    return Err(format!("{} files", files.items.len()));
+                }
+                for item in &files.items {
+                    check_text(&item.id, 200, "file id")?;
+                    check_text(&item.attachment_id, 200, "attachment id")?;
+                    check_text(&item.name, 300, "file name")?;
+                    check_text(&item.mime, 200, "file type")?;
+                    if item.size_bytes < 0 {
+                        return Err("a negative file size".into());
+                    }
+                    match &item.preview {
+                        None | Some(super::FilePreview::Image) => {}
+                        Some(super::FilePreview::Table { columns, rows, truncated, total_rows, total_cols }) => {
+                            // A total only exists on a cut preview and is never below what is shown
+                            if (total_rows.is_some() || total_cols.is_some()) && !*truncated {
+                                return Err("file totals on a complete preview".into());
+                            }
+                            if total_rows.is_some_and(|n| n < rows.len() as u64) || total_cols.is_some_and(|n| n < columns.len() as u64) {
+                                return Err("a file total below the preview".into());
+                            }
+                            if columns.is_empty() || columns.len() > 8 {
+                                return Err(format!("{} file columns", columns.len()));
+                            }
+                            if rows.len() > 20 {
+                                return Err(format!("{} file rows", rows.len()));
+                            }
+                            for c in columns {
+                                if c.chars().count() > 300 || has_html(c) {
+                                    return Err("a file column label".into());
+                                }
+                            }
+                            for row in rows {
+                                if row.len() != columns.len() {
+                                    return Err("file row width".into());
+                                }
+                                for cell in row {
+                                    if cell.chars().count() > 300 || has_html(cell) {
+                                        return Err("a file cell".into());
+                                    }
+                                }
+                            }
+                        }
+                        Some(super::FilePreview::Text { excerpt, truncated, total_lines }) => {
+                            if let Some(n) = total_lines {
+                                if !*truncated || *n < excerpt.lines().count() as u64 {
+                                    return Err("a file line total".into());
+                                }
+                            }
+                            if excerpt.chars().count() > 4000 || has_html(excerpt) {
+                                return Err("a file excerpt".into());
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     if let Some(reply) = reply {
@@ -286,6 +403,7 @@ fn check_source(block: &Block) -> Result<(), String> {
     let ok = match s.kind.as_str() {
         "markdown_table" => table_ok && s.ordered.is_none() && s.index.is_some_and(|i| i <= 10_000),
         "markdown_list" => list_ok && s.index.is_some_and(|i| i <= 10_000),
+        "slot" => matches!(kind, "verification" | "files") && s.index.is_none() && s.ordered.is_none(),
         _ => false,
     };
     if ok {
