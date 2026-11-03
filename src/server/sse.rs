@@ -221,7 +221,7 @@ mod tests {
             E::ApprovalWithdrawn { id: s("a") },
             E::TurnComplete { tokens: 1, duration_ms: 1, kwant_id: Some(s("k")), profile_id: None },
             E::TurnStarted { kwant_id: s("k"), context_id: Some(s("c")), turn_id: None, thread_id: None },
-            E::TurnEnded { kwant_id: s("k"), context_id: None, outcome: s("completed"), turn_id: None, thread_id: None },
+            E::TurnEnded { kwant_id: s("k"), context_id: None, outcome: s("completed"), turn_id: None, thread_id: None, quiet: false },
             E::TurnQueued { turn_id: s("x"), kwant_id: s("k"), context_id: None, thread_id: None, position: 1, reason: s("x") },
             E::ThreadUpdated { thread: json!({"id": "th", "kwant_id": "k"}) },
             E::DelegationUpdated { delegation: json!({"id": "d", "lead_kwant_id": "k", "thread_id": "th"}) },

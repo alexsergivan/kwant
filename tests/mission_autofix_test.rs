@@ -18,9 +18,10 @@ use kwnt::{
     broker::PermissionBroker,
     config::Config,
     db::{autofix::NewAttempt, continuity::NewRoutine, models::Kwant, spaces::SpaceId, Database},
+    drivers::events::RuntimeEvent,
     router::LayaRouter,
     server::{
-        continuity::{SelfScope, TurnOrigin},
+        continuity::{self, SelfScope, TurnOrigin},
         create_router, mcp_runtime,
         missions::{autofix::classify, listener, runner},
         AppState,
@@ -374,6 +375,83 @@ async fn a_failing_check_is_retried_with_its_diagnostics_until_the_attempts_run_
     );
     let err = e.state.db.exec_raw_for_test(&sql).await.unwrap_err().to_string();
     assert!(err.contains("within the task's attempts"), "{err}");
+}
+
+/// The notifier, and the `turn_finished` notifications of `bot` it sends, collected as they come
+/// (the event bus holds only 128 events, so they can't be read afterwards).
+fn finished_notes(state: &AppState, bot: &str) -> (tokio::task::JoinHandle<()>, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let notes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (mut rx, seen, bot) = (state.event_sender.subscribe(), notes.clone(), bot.to_string());
+    let notifier = continuity::spawn_notifier(state.clone());
+    let collector = tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(RuntimeEvent::Notify { kind, kwant_id, body, .. }) if kind == "turn_finished" && kwant_id == bot => seen.lock().unwrap().push(body),
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => return,
+            }
+        }
+    });
+    let both = tokio::spawn(async move {
+        let _ = collector.await;
+        notifier.abort();
+    });
+    (both, notes)
+}
+
+// M1 of the 0.6.5 defaults-on QA: AutoFix is on by default, and its retries are background turns
+#[tokio::test]
+async fn a_failing_task_notifies_once_for_its_outcome_and_a_passing_one_still_notifies() {
+    let e = setup().await;
+    autofix(&e, "on", 25).await;
+    let (mid, tid) = cli_mission(&e, 50_000).await;
+    let ann = e.state.db.get_mission(&mid).await.unwrap().unwrap().lead_kwant_id;
+    let (watch, notes) = finished_notes(&e.state, &ann);
+    person(&e, "POST", &format!("/api/missions/{mid}/run"), Some(json!({"max_tasks": 1}))).await;
+    // Three runs: the first, then two AutoFix retries; the last one has no attempt left
+    for _ in 0..600 {
+        let t = task(&e, &tid).await;
+        if t["state"] == "failed" && t["attempts"] == 3 && attempts(&e, &tid).await.iter().any(|a| a.status == "skipped") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    runner_idle(&e.state, &mid).await;
+    assert_eq!(prompts(&tid).len(), 3, "three runner turns ran");
+    for _ in 0..40 {
+        if !notes.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Late ones would show up here
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let got = notes.lock().unwrap().clone();
+    assert_eq!(got.len(), 1, "one notification for the task's final outcome, not one per attempt: {got:?}");
+    assert!(got[0].contains("#general"), "{got:?}");
+
+    // A task that passes on its first run still notifies, once
+    let body = json!({"title": "Ship more", "goal": "another release", "lead_kwant_id": ann, "budget_tokens": 900_000,
+                      "channel_id": e.general, "tasks": [{"title": "B", "owner": ann, "budget_tokens": 50_000,
+                      "checks": [{"kind": "command", "spec": {"command": "echo fine"}}]}]});
+    let m2 = id(&person(&e, "POST", "/api/missions", Some(body)).await);
+    let t2 = id(&person(&e, "GET", &format!("/api/missions/{m2}"), None).await["tasks"][0]);
+    let row = e.state.db.get_mission(&m2).await.unwrap().unwrap();
+    std::fs::create_dir_all(&row.workspace_path).unwrap();
+    person(&e, "POST", &format!("/api/missions/{m2}/run"), Some(json!({"max_tasks": 1}))).await;
+    wait_state(&e, &t2, "verified").await;
+    runner_idle(&e.state, &m2).await;
+    for _ in 0..40 {
+        if notes.lock().unwrap().len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let got = notes.lock().unwrap().clone();
+    assert_eq!(got.len(), 2, "the passing task's turn notified once: {got:?}");
+    assert!(attempts(&e, &t2).await.is_empty(), "no AutoFix attempt for a passing task");
+    watch.abort();
 }
 
 // 3

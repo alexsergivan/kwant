@@ -64,6 +64,10 @@ pub enum RuntimeEvent {
         turn_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,
+        /// No `turn_finished` notification for this turn: a mission runner turn, whose runner
+        /// notifies once for the task's outcome instead (an AutoFix retry stays silent).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        quiet: bool,
     },
     /// A turn is waiting for a free slot: its agent already runs as many turns as allowed
     /// (`reason` "agent_busy") or the whole server does ("server_busy"). It starts on its own,

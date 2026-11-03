@@ -1764,6 +1764,20 @@ async fn place(state: &AppState, context_id: Option<&str>) -> (Option<String>, S
     }
 }
 
+/// "<bot> finished replying in <place>", for a turn of `kwant_id` in `context_id`.
+pub async fn turn_finished(state: &AppState, kwant_id: &str, context_id: Option<&str>) -> Notification {
+    let name = kwant_name(state, kwant_id).await;
+    let (channel_id, where_) = place(state, context_id).await;
+    Notification {
+        kind: "turn_finished",
+        kwant_id: kwant_id.to_string(),
+        title: format!("{name} replied"),
+        body: format!("{name} finished replying in {where_}."),
+        kwant_name: name,
+        channel_id,
+    }
+}
+
 async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Notification> {
     match event.unscoped() {
         RuntimeEvent::TurnEnded {
@@ -1771,24 +1785,16 @@ async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Noti
             context_id,
             outcome,
             thread_id,
+            quiet,
             ..
-        } if outcome == "completed" => {
+        } if outcome == "completed" && !quiet => {
             // A delegated task reports with delegation_finished instead
             if let Some(t) = thread_id {
                 if state.db.delegation_for_thread(t).await.ok().flatten().is_some() {
                     return None;
                 }
             }
-            let name = kwant_name(state, kwant_id).await;
-            let (channel_id, where_) = place(state, context_id.as_deref()).await;
-            Some(Notification {
-                kind: "turn_finished",
-                kwant_id: kwant_id.clone(),
-                title: format!("{name} replied"),
-                body: format!("{name} finished replying in {where_}."),
-                kwant_name: name,
-                channel_id,
-            })
+            Some(turn_finished(state, kwant_id, context_id.as_deref()).await)
         }
         RuntimeEvent::ApprovalRequired {
             tool_name, details, ..

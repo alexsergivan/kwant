@@ -133,30 +133,44 @@ async fn ask_tool(e: &Env, bot: &Kwant, tool: &str, input: Value, always_ask: bo
     let path = format!("/api/mcp/permission/{token}");
     let mut prompt = tokio::spawn(async move { call(&app, "POST", &path, None, Some(ask)).await });
 
-    let answered = tokio::time::timeout(Duration::from_millis(1500), &mut prompt).await;
-    let carded = loop {
-        match events.try_recv() {
-            Ok(RuntimeEvent::ApprovalRequired { id, .. }) => break Some(id),
-            Ok(_) => continue,
-            Err(_) => break None,
-        }
-    };
+    // Polled, not one fixed wait: under load the answer or the card can take seconds to come
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut carded = card_in(&mut events);
+    while carded.is_none() && !prompt.is_finished() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        carded = card_in(&mut events);
+    }
+    // An answer without a card must not have raised one on its way either
+    let answered = prompt.is_finished();
+    let carded = carded.or_else(|| card_in(&mut events));
     let outcome = match (answered, carded) {
-        (Ok(done), None) => {
-            let (status, v) = done.unwrap();
+        (true, None) => {
+            let (status, v) = (&mut prompt).await.unwrap();
             assert_eq!(status, StatusCode::OK, "{v}");
             Some(v["result"]["content"][0]["text"].as_str().unwrap().contains(r#""behavior":"allow""#))
         }
-        (Err(_), Some(id)) => {
+        (false, Some(id)) => {
             assert!(e.state.broker.resolve(&id, ApprovalDecision::Deny).await);
             prompt.await.unwrap();
             None
         }
-        (answered, carded) => panic!("answered {} with card {carded:?}", answered.is_ok()),
+        (answered, carded) => panic!("answered {answered} with card {carded:?} (15 s)"),
     };
     mcp_runtime::finish_turn(&e.state, &token).await;
     e.state.turns.end_turn(&turn_id);
     outcome
+}
+
+/// The id of an approval card among the events received so far, if one was shown.
+fn card_in(events: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>) -> Option<String> {
+    use tokio::sync::broadcast::error::TryRecvError;
+    loop {
+        match events.try_recv() {
+            Ok(RuntimeEvent::ApprovalRequired { id, .. }) => return Some(id),
+            Ok(_) | Err(TryRecvError::Lagged(_)) => continue,
+            Err(_) => return None,
+        }
+    }
 }
 
 async fn self_tool(e: &Env, token: &str, name: &str, args: Value) -> (String, bool) {
