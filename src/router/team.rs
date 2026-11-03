@@ -1156,10 +1156,17 @@ fn is_code_request(prompt: &str) -> bool {
     words.iter().take(3).any(|w| VERBS.contains(&w.as_str()))
 }
 
+/// The words a route shows as "matched". A route no one's words won (`lead`, `last`) or the
+/// Concierge took shows none: a step-5 tie keeps its words only so [`settle`] asks, and
+/// "No one's role matched this · matched 'macro', 'bread'" read wrong.
+pub fn shown_terms(basis: &str, terms: Vec<String>) -> Vec<String> {
+    if matches!(basis, "lead" | "last" | "concierge") { Vec::new() } else { terms }
+}
+
 /// A Direct decision from a pick. A message nobody can take goes to the lead.
 fn direct(pick: Option<Pick<'_>>, team: &Team) -> TeamDecision {
     match pick {
-        Some(p) => TeamDecision::Direct { kwant_id: p.kwant.id.clone(), reason: p.reason, basis: p.basis.into(), matched_terms: p.terms },
+        Some(p) => TeamDecision::Direct { kwant_id: p.kwant.id.clone(), reason: p.reason, basis: p.basis.into(), matched_terms: shown_terms(p.basis, p.terms) },
         None => TeamDecision::Direct {
             kwant_id: team.lead_kwant_id.clone(),
             reason: "No team members available; routed to team lead".into(),
@@ -1440,7 +1447,7 @@ fn generate_discussion_plan(speakers: &[String], members: &[Kwant]) -> Vec<Strin
 mod tests {
     use super::*;
 
-    fn make_test_fixture() -> (Team, Vec<Kwant>) {
+    pub(super) fn make_test_fixture() -> (Team, Vec<Kwant>) {
         let team = Team {
             space_id: crate::db::spaces::DEFAULT_SPACE_ID.into(),
             id: "team-1".into(),
@@ -1777,6 +1784,21 @@ mod fit_tests {
             bot("k-comm", "Community", "Community Manager", "Answers followers and moderates the community"),
             bot("k-data", "Analyst", "Data Analyst", "Analyses sales, churn and retention numbers"),
         ]
+    }
+
+    /// A step-5 word tie asks in #general, but routed on to the lead it shows no matched words.
+    #[test]
+    fn a_route_no_words_won_shows_no_matched_words() {
+        let members = kitchen();
+        let p = pick_member_after("bread macros", "k-tl", &members, None, "channel lead", None).unwrap();
+        assert!(matches!(p.basis, "lead" | "last"), "{p:?}");
+        assert!(!p.terms.is_empty(), "{p:?}");
+        assert!(matches!(settle(&route_of(&p), true, true), Settle::Ask(_)), "{p:?}");
+        let team = Team { lead_kwant_id: "k-tl".into(), ..super::tests::make_test_fixture().0 };
+        let TeamDecision::Direct { matched_terms, basis, .. } = direct(Some(p), &team) else { panic!("not direct") };
+        assert!(matched_terms.is_empty(), "{basis}: {matched_terms:?}");
+        assert_eq!(shown_terms("skills", vec!["dough".into()]), vec!["dough".to_string()]);
+        assert!(shown_terms("concierge", vec!["dough".into()]).is_empty());
     }
 
     /// The first fit score sent a specialist question with one word only its bot has, and no
