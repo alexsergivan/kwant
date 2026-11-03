@@ -590,7 +590,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     draggable={false}
                     className="w-full h-full object-contain"
                   />
-                  {!needsYou && !waitingForBot && (
+                  {!needsYou && !waitingForBot && !waitBot?.gaveUp && (
                     <span className="absolute top-2 left-2 h-[22px] px-2 inline-flex items-center gap-1 rounded-full bg-[rgb(14_10_33/0.88)] text-[11px] text-zinc-200 pointer-events-none group-hover:opacity-0 group-focus-within:opacity-0 kw-veil-in">
                       <Eye size={12} aria-hidden="true" /> Watching
                     </span>
@@ -605,7 +605,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                       className={`absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-300 rounded-xl kw-veil-in ${
                         waitingForBot
                           ? 'bg-[rgb(10_7_25/0.8)] cursor-default'
-                          : needsYou
+                          : needsYou || waitBot?.gaveUp
                             ? 'bg-[rgb(10_7_25/0.84)] cursor-pointer'
                             : 'bg-[rgb(10_7_25/0.8)] opacity-0 hover:opacity-100 focus-visible:opacity-100 cursor-pointer'
                       }`}
@@ -628,7 +628,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                           </>
                         )}
                       </span>
-                      {!needsYou && !waitingForBot && <span className="text-xs text-zinc-200">Click anywhere to take over. @{teamName} pauses.</span>}
+                      {!needsYou && !waitingForBot && !waitBot?.gaveUp && <span className="text-xs text-zinc-200">Click anywhere to take over. @{teamName} pauses.</span>}
                     </button>
                   )}
                 </>

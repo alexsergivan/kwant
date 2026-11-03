@@ -121,7 +121,7 @@ function ZoomStage({
       ref={stageRef}
       data-browser-stage
       aria-label={label}
-      className="relative flex-1 min-h-0 overflow-hidden bg-black select-none"
+      className="relative flex-1 min-h-0 overflow-hidden bg-[#0a0719] select-none"
       style={{ touchAction: 'none' }}
       onPointerDown={(e) => {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -285,6 +285,19 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
 
   const domain = domainOf(pageUrl) || pageUrl || 'Browser';
   const pageInput = useCallback((input: PageInput) => sendPageInput(send, input), [send]);
+  // A page dialog dims the page only: Hand back and Done stay usable above it
+  const barRef = useRef<HTMLDivElement>(null);
+  const [barHeight, setBarHeight] = useState(48);
+  useLayoutEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    const measure = () => setBarHeight(el.getBoundingClientRect().height);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   return createPortal(
     <div
@@ -292,10 +305,10 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
       aria-modal="true"
       aria-label={`${botName}'s browser`}
       data-browser-fullscreen
-      className="fixed inset-0 z-[70] flex flex-col bg-black text-zinc-100"
+      className="fixed inset-0 z-[70] flex flex-col bg-[#0a0719] text-zinc-100"
       style={{ paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }}
     >
-      <div className="shrink-0 bg-[#0e0a21] border-b border-white/[0.07]" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+      <div ref={barRef} className="shrink-0 bg-[#0e0a21] border-b border-white/[0.07]" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <div className="h-12 px-2 flex items-center gap-2">
           <span className={`shrink-0 w-2 h-2 rounded-full bg-control ${busy ? 'animate-pulse motion-reduce:animate-none' : ''}`} aria-hidden="true" />
           <span className="flex-1 min-w-0 truncate font-mono text-xs text-zinc-300" title={pageUrl}>
@@ -316,7 +329,10 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
               haptic('tap');
               onHandBack();
             }}
-            className="shrink-0 inline-flex items-center gap-1.5 h-11 px-3 rounded-[10px] bg-[#6c58e0] hover:bg-[#5845bd] text-white text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+            data-primary={step ? undefined : true}
+            className={`shrink-0 inline-flex items-center gap-1.5 h-11 px-3 rounded-[10px] text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 ${
+              step ? 'bg-[rgb(44_37_82/0.8)] border border-[#3f3868] text-[#ecebfa] hover:bg-[#2c2552]' : 'bg-[#6c58e0] hover:bg-[#5845bd] text-white'
+            }`}
           >
             <Hand size={15} aria-hidden="true" /> Hand back
           </button>
@@ -338,7 +354,7 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
             )}
           </p>
         ) : step ? (
-          <div className="h-11 pl-3 pr-1 flex items-center gap-2 text-xs">
+          <div className="min-h-[52px] pl-3 pr-2 pb-2 flex items-center gap-2 text-xs">
             <span role="status" aria-live="polite" className="flex-1 min-w-0 truncate font-semibold text-[#fcd34d]">
               @{botName} {step.need}
             </span>
@@ -346,7 +362,8 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
               type="button"
               onClick={answerStep}
               disabled={stepBusy}
-              className="shrink-0 inline-flex items-center gap-1.5 h-11 px-2 text-sm font-semibold text-sky-200 disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 rounded-lg"
+              data-primary
+              className="shrink-0 inline-flex items-center gap-1.5 h-11 px-[14px] rounded-xl bg-[#6c58e0] hover:bg-[#5845bd] text-white text-[15px] font-semibold disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
             >
               {stepBusy ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
               {step.doneLabel}
@@ -377,15 +394,18 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
         />
       )}
       {stream?.dialog && (
-        <PageDialogModal
-          key={`${stream.dialog.kind}:${stream.dialog.message}`}
-          dialog={stream.dialog}
-          host={domain}
-          onAnswer={(accept, text) => {
-            send(text !== undefined ? { action: 'dialog', accept, prompt_text: text } : { action: 'dialog', accept }, true);
-            stream.clearDialog();
-          }}
-        />
+        <div className="absolute inset-x-0 bottom-0 z-50" style={{ top: barHeight }} data-dialog-area>
+          <PageDialogModal
+            key={`${stream.dialog.kind}:${stream.dialog.message}`}
+            dialog={stream.dialog}
+            host={domain}
+            compact
+            onAnswer={(accept, text) => {
+              send(text !== undefined ? { action: 'dialog', accept, prompt_text: text } : { action: 'dialog', accept }, true);
+              stream.clearDialog();
+            }}
+          />
+        </div>
       )}
 
       <div className="shrink-0" style={{ height: 'env(safe-area-inset-bottom)' }} />

@@ -236,7 +236,7 @@ function SheetBody({ title, onClose, children }: { title: string; onClose: () =>
 }
 
 /** A page's alert, confirm, prompt or "leave this page?", answered here; the page waits on it. */
-export function PageDialogModal({ dialog, host, onAnswer }: { dialog: PageDialog; host: string; onAnswer: (accept: boolean, text?: string) => void }) {
+export function PageDialogModal({ dialog, host, onAnswer, compact = false }: { dialog: PageDialog; host: string; onAnswer: (accept: boolean, text?: string) => void; /** Phone: the page area is short, so the card sits 16 px down, not 96 */ compact?: boolean }) {
   const [text, setText] = useState(dialog.default_prompt);
   const okRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -254,7 +254,7 @@ export function PageDialogModal({ dialog, host, onAnswer }: { dialog: PageDialog
 
   return (
     <div
-      className="absolute inset-0 z-50 flex justify-center items-start px-4 sm:px-0 pt-24 bg-[rgb(10_7_25/0.6)]"
+      className={`absolute inset-0 z-50 flex justify-center items-start px-4 sm:px-0 ${compact ? 'pt-4' : 'pt-24'} bg-[rgb(10_7_25/0.6)]`}
       data-browser-popup
       onPointerDown={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
