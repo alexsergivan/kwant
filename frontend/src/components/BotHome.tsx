@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowRight, AtSign, Clock, Lightbulb, ListChecks, MessageSquareText, Sparkles, Wand2 } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
+import { useKwantMood } from './AvatarMood';
 import { NewTag } from './NewTag';
 import { markNewSeen } from '../whatsNew';
 import { ChatHome, ago, goodAt, starterCards } from '../botHome';
@@ -29,12 +30,18 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, spaceName, team = [], pr
   const chips = bot ? goodAt(bot) : [];
   const shown = team.slice(0, 8);
   const extra = team.length - shown.length;
+  // Breathing is the working signal: only a working bot's glow moves (violet, like its dot).
+  const working = useKwantMood(bot?.id) === 'working';
 
   return (
     <section className="kw-home mx-auto flex w-full max-w-3xl flex-col items-center px-1 pb-6 pt-4 text-center sm:pt-10" aria-label={bot ? `${bot.name}, home` : 'Start a conversation'} data-bot-home={home.kind}>
-      {/* The hero: a soft accent glow that breathes behind the avatar, which floats */}
+      {/* The hero: a soft glow behind the floating avatar. Static at .35; it breathes in violet only while the bot works. */}
       <div className="relative mb-4 flex h-36 w-36 items-center justify-center sm:h-44 sm:w-44">
-        <span className="kw-glow absolute inset-0 rounded-full bg-accent-gradient opacity-60 blur-2xl" aria-hidden="true" />
+        <span
+          className={`absolute inset-0 rounded-full blur-2xl ${working ? 'kw-glow bg-[#9d8fff] opacity-60 motion-reduce:opacity-50' : 'bg-accent-gradient opacity-35'}`}
+          data-glow={working ? 'working' : 'still'}
+          aria-hidden="true"
+        />
         {bot ? (
           // 96 px with 4 px mood cells (spec.md §2); the mood badge is cut out of the main surface
           <span className="kw-float relative" style={{ '--kw-avatar-cut': 'var(--kw-surface-main, #120e26)' } as React.CSSProperties}>

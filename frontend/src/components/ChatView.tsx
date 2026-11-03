@@ -670,6 +670,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => {
     setSelectedIndex(0);
   }, [mentionQuery]);
+  // The picker opening by any route (typing "@" or the button) counts as using the new mention: "New" goes.
+  useEffect(() => {
+    if (isMentionOpen) markNewSeen('mention');
+  }, [isMentionOpen]);
 
   const handleSelectMention = (item: MentionItem) => {
     if (mentionStartIndex < 0) return;
@@ -1744,7 +1748,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             disabled={uploadSlotsLeft(uploads) === 0}
             title={uploadSlotsLeft(uploads) === 0 ? `Up to ${MAX_ATTACHMENTS} files per message` : 'Attach files (or drop / paste them here). Max 20 MB each.'}
             aria-label="Attach files"
-            className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+            className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
           >
             <Paperclip size={17} aria-hidden="true" />
           </button>
@@ -1756,17 +1760,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
             }}
             title="Mention a bot: it answers instead of the default"
             aria-label="Mention a bot"
-            className="relative w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+            className="relative w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
           >
             <AtSign size={17} aria-hidden="true" />
           </button>
           {/* "New" sits just above the field's top edge, over the "@" button: never on or inside the border.
-              Each button after "@" (stop, send) is 36px + a 6px gap; 9px is the form's border + padding. */}
+              Each button after "@" (stop, send) is 44px on phones / 36px from sm, plus a 6px gap; 9px is the
+              form's border + padding. Hidden while the mention picker is open, so it never peeks under it. */}
           <NewTag
             id="mention"
-            className="absolute bottom-full mb-1.5"
+            className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''}`}
             style={{
-              right: 9 + 42 * ((isStreaming ? 1 : 0) + (isStreaming && (discussionState?.inProgress || !canSend) ? 0 : 1)) + 2,
+              right: `calc(11px + var(--kw-cbtn-step) * ${(isStreaming ? 1 : 0) + (isStreaming && (discussionState?.inProgress || !canSend) ? 0 : 1)})`,
             }}
           />
 
@@ -1774,7 +1779,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="button"
               onClick={onCancelDiscussion}
-              className="w-9 h-9 rounded-xl flex items-center justify-center transition-colors flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-400/30 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
+              className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-colors flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-400/30 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
               title={discussionState?.inProgress ? 'Stop Discussion' : 'Stop generation'}
               aria-label={discussionState?.inProgress ? 'Stop discussion' : 'Stop the reply'}
             >
@@ -1788,7 +1793,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               title={stillUploading ? 'Waiting for uploads to finish' : undefined}
               disabled={!canSend}
               data-send-ready={canSend ? 'true' : 'false'}
-              className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-[transform,filter,box-shadow,background-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300 ${
+              className={`w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-[transform,filter,box-shadow,background-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300 ${
                 canSend
                   ? 'bg-accent-gradient text-white shadow-glow hover:brightness-110 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
                   : 'bg-surface-overlay text-zinc-400 cursor-not-allowed'

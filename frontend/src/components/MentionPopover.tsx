@@ -45,7 +45,7 @@ export const MentionPopover: React.FC<MentionPopoverProps> = ({
       role="listbox"
       aria-label="Mention a bot"
       id="kw-mention-list"
-      className="kw-fade-in absolute bottom-full left-0 mb-2 bg-surface-overlay border border-hairline-strong rounded-xl shadow-raised p-1.5 min-w-[260px] w-[min(22rem,calc(100vw-2rem))] max-h-72 overflow-y-auto z-50"
+      className="kw-fade-in absolute bottom-full left-0 right-0 sm:right-auto mb-2 bg-surface-overlay border border-hairline-strong rounded-xl shadow-raised p-1.5 min-w-[260px] sm:w-[min(22rem,calc(100vw-2rem))] max-h-72 overflow-y-auto z-50"
       style={
         position
           ? { top: `${position.top}px`, left: `${position.left}px`, bottom: 'auto' }

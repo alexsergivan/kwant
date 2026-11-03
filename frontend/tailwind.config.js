@@ -57,7 +57,7 @@ export default {
         hairline: 'var(--kw-hairline)',
         'hairline-strong': 'var(--kw-hairline-strong)',
       },
-      // Status colours, one meaning each: ok = working/healthy, warn = needs you, bad = failed, info = neutral news.
+      // Status colours, one meaning each: ok = healthy/kept; working = #9d8fff, warn = needs you, bad = failed, info = neutral news.
       textColor: {
         ok: 'var(--kw-ok)',
         warn: 'var(--kw-warn)',

@@ -452,20 +452,24 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
   position: absolute;
   pointer-events: none;
 }
-/* The foil: a 200%-wide hue sweep; calc(25% + mx/2) puts its centre under the pointer. */
+/* The foil (review-pr264 §2, v2): a 105deg two-cycle linear sweep, 200% wide, slid with transform only,
+   so a flat pill always shows the full rainbow. --my is no longer read; the pointer code still sets it. */
 .kw-sticker-holo::before {
   inset: 0 -50%;
   z-index: 0;
-  background: conic-gradient(from 200deg at calc(25% + var(--mx) / 2) var(--my), #ff6ec7, #ffd36e, #7dffb0, #5ee0ff, #9b7bff, #ff6ec7);
+  background: linear-gradient(105deg,
+    #ff6ec7 0%, #ffd36e 10%, #7dffb0 20%, #5ee0ff 30%, #9b7bff 40%,
+    #ff6ec7 50%, #ffd36e 60%, #7dffb0 70%, #5ee0ff 80%, #9b7bff 90%, #ff6ec7 100%);
   mix-blend-mode: multiply;
-  opacity: 0.75;
+  opacity: 0.8;
+  transform: translateX(calc((50% - var(--mx)) / 4));
 }
-/* Glint that tracks the pointer, plus a fine foil grain. Soft-light white only lightens. */
+/* A glint band that follows --mx, plus a fine foil grain. Soft-light white only lightens. */
 .kw-sticker-holo::after {
   inset: 0;
   z-index: 1;
   background:
-    radial-gradient(circle at var(--mx) var(--my), rgb(255 255 255 / 0.85), transparent 55%),
+    linear-gradient(105deg, transparent calc(var(--mx) - 14%), rgb(255 255 255 / 0.7) var(--mx), transparent calc(var(--mx) + 14%)),
     repeating-linear-gradient(115deg, transparent 0 3px, rgb(255 255 255 / 0.22) 3px 4px);
   mix-blend-mode: soft-light;
 }
@@ -474,8 +478,8 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .kw-new-tag { transition: opacity 160ms linear; }
 .kw-new-tag[data-leaving] { opacity: 0; }
 @keyframes kw-sticker-drift {
-  from { transform: translateX(-16%); }
-  to { transform: translateX(0); }
+  from { transform: translateX(calc((50% - var(--mx)) / 4 - 8%)); }
+  to { transform: translateX(calc((50% - var(--mx)) / 4)); }
 }
 @keyframes kw-sticker-press {
   from { transform: rotate(var(--kw-tilt)) scale(1.08); }
@@ -485,7 +489,7 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .kw-sticker-press { animation: kw-sticker-press 160ms cubic-bezier(.2,.7,.2,1) 1 both; }
 /* No pointer on a phone: the sheen drifts once when the sticker appears. */
 @media (pointer: coarse) {
-  .kw-sticker-holo::before { animation: kw-sticker-drift 200ms cubic-bezier(.2,.7,.2,1) 1 both; }
+  .kw-sticker-holo::before { animation: kw-sticker-drift 160ms cubic-bezier(.2,.7,.2,1) 1 both; }
 }
 @media (prefers-reduced-motion: reduce) {
   .kw-sticker { --mx: 30% !important; --my: 20% !important; transition: none; }

@@ -233,3 +233,51 @@ test('bot home: name, role, good-at chips and starter cards', () => {
   assert.match(html, /Nutrition/);
   assert.match(html, /Plan my week/);
 });
+
+// ---- Mira's review of PR #264 (design/review-pr264.md)
+import { readFileSync } from 'node:fs';
+const css = readFileSync(new URL('../src/styles/modern.css', import.meta.url), 'utf8');
+const src = (f) => readFileSync(new URL(`../src/components/${f}`, import.meta.url), 'utf8');
+
+test('holo v2: a two-cycle 105deg linear foil at .8 slid by transform, a glint band on --mx; no conic', () => {
+  const before = [...css.matchAll(/\.kw-sticker-holo::before \{[^}]*\}/g)].map((x) => x[0]).find((b) => b.includes('background'));
+  assert.match(before, /linear-gradient\(105deg/);
+  assert.match(before, /opacity: 0\.8;/);
+  assert.match(before, /transform: translateX\(calc\(\(50% - var\(--mx\)\) \/ 4\)\)/);
+  assert.doesNotMatch(css, /conic-gradient/);
+  assert.match([...css.matchAll(/\.kw-sticker-holo::after \{[^}]*\}/g)].at(-1)[0], /rgb\(255 255 255 \/ 0\.7\) var\(--mx\)/);
+  assert.match(css, /@keyframes kw-sticker-drift \{\s*from \{ transform: translateX\(calc\(\(50% - var\(--mx\)\) \/ 4 - 8%\)\); \}/);
+});
+
+test('bot home glow: still at .35 when idle, breathes in violet only while working', () => {
+  const idle = m.botHome({ home: { kind: 'bot', bot: { id: 'glow-idle', name: 'Ann', title: 'Writer', avatar_sprite: 'x' } }, prompts: [], onPick: () => {} });
+  assert.match(idle, /data-glow="still"/);
+  assert.doesNotMatch(idle, /kw-glow/);
+  assert.match(idle, /opacity-35/);
+  m.turnStarted('glow-busy', 't1');
+  m.moodTurnStarted('glow-busy');
+  m.moodOutput('glow-busy');
+  const busy = m.botHome({ home: { kind: 'bot', bot: { id: 'glow-busy', name: 'Bo', title: 'Writer', avatar_sprite: 'x' } }, prompts: [], onPick: () => {} });
+  assert.match(busy, /kw-glow bg-\[#9d8fff\]/);
+  assert.match(busy, /motion-reduce:opacity-50/);
+  m.clearAllTurns();
+  m.clearMoods();
+});
+
+test('sidebar heads say "+ Team" / "+ Bot" / "+ Channel" with the full phrase as the label, and never wrap', () => {
+  const s = src('Sidebar.tsx');
+  for (const [w, l] of [['Team', 'New team'], ['Bot', 'New bot'], ['Channel', 'New channel']]) assert.ok(s.includes(`headButton('${w}', '${l}'`), w);
+  assert.match(s, /className="shrink-0 whitespace-nowrap flex items-center gap-1 text-2xs/);
+  assert.match(s, /min-h-11 px-3 shrink-0 whitespace-nowrap/);
+  assert.match(s, /whitespace-nowrap shrink-0">Bots \(/);
+  // Working in the busy line is violet, like the avatar dot; never teal
+  assert.match(s, /'text-\[#b8adff\]'/);
+  assert.match(s, /'bg-\[#9d8fff\] kw-pulse'/);
+});
+
+test('composer: 44 px buttons on phones; "New" on @ clears when the picker opens and hides under it', () => {
+  const c = src('ChatView.tsx');
+  assert.equal((c.match(/w-11 h-11 sm:w-9 sm:h-9/g) || []).length, 4);
+  assert.match(c, /if \(isMentionOpen\) markNewSeen\('mention'\)/);
+  assert.match(c, /\$\{isMentionOpen \? 'hidden' : ''\}/);
+});

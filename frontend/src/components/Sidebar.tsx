@@ -337,19 +337,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const offLine = spaceOffLine(space.approvals, kwants);
   // Phones: section titles stay pinned while their list scrolls, so they are never cut off
-  const sectionHead = `px-2 py-1 flex items-center justify-between text-2xs font-semibold text-zinc-400 uppercase tracking-wider${
+  const sectionHead = `px-2 py-1 min-w-0 flex items-center justify-between gap-2 text-2xs font-semibold text-zinc-400 uppercase tracking-wider${
     phone ? ' kw-sticky-head sticky top-0 z-10' : ''
   }`;
-  // Phones: "New …" is a plain + icon (44px to tap) instead of a boxed button
-  const phoneAdd = (label: string, onClick: () => void) => (
+  // Phones: "+ Team" / "+ Bot" as plain text buttons, at least 44x44 to tap
+  const phoneAdd = (word: string, label: string, onClick: () => void) => (
     <button
       type="button"
       onClick={onClick}
       aria-label={label}
       title={label}
-      className="-mr-1 rounded-full text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 active:bg-sky-500/15 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+      className="-mr-1 min-h-11 px-3 shrink-0 whitespace-nowrap inline-flex items-center gap-1 rounded-full text-meta font-medium normal-case tracking-normal text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 active:bg-sky-500/15 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
     >
-      <Plus size={18} aria-hidden="true" />
+      <Plus size={14} aria-hidden="true" />
+      <span>{word}</span>
     </button>
   );
 
@@ -447,8 +448,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </div>
           {busyKwants[k.id] ? (
-            <p className={`flex items-center gap-1.5 text-meta truncate ${status === 'needs_you' ? 'text-warn' : status === 'queued' ? 'text-zinc-300' : 'text-ok'}`} title={busyKwants[k.id]} data-bot-busy>
-              <span className={`kw-status-dot !h-1.5 !w-1.5 ${status === 'needs_you' ? 'kw-status-warn' : status === 'queued' ? 'kw-status-idle' : 'kw-status-ok kw-pulse'}`} aria-hidden="true" />
+            <p className={`flex items-center gap-1.5 text-meta truncate ${status === 'needs_you' ? 'text-warn' : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'}`} title={busyKwants[k.id]} data-bot-busy>
+              <span className={`kw-status-dot !h-1.5 !w-1.5 ${status === 'needs_you' ? 'kw-status-warn' : status === 'queued' ? 'kw-status-idle' : 'bg-[#9d8fff] kw-pulse'}`} aria-hidden="true" />
               <span className="truncate">{busyKwants[k.id]}</span>
             </p>
           ) : (
@@ -612,18 +613,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const groups = botGroups(teams, kwants);
-  const headButton = (label: string, title: string, onClick: () => void) =>
+  // "+ Team", "+ Bot", "+ Channel": the + says new and the heading says what kind; the full phrase is the label.
+  const headButton = (word: string, label: string, title: string, onClick: () => void) =>
     phone ? (
-      phoneAdd(title, onClick)
+      phoneAdd(word, label, onClick)
     ) : (
       <button
         type="button"
         onClick={onClick}
-        className="flex items-center gap-1 text-2xs font-medium text-sky-300 hover:text-sky-200 hover:bg-sky-500/10 px-2 py-0.5 rounded-full border border-sky-400/25 transition-all normal-case tracking-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+        aria-label={label}
+        className="shrink-0 whitespace-nowrap flex items-center gap-1 text-2xs font-medium text-sky-300 hover:text-sky-200 hover:bg-sky-500/10 px-2 py-0.5 rounded-full border border-sky-400/25 transition-all normal-case tracking-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
         title={title}
       >
-        <Plus size={11} />
-        <span>{label}</span>
+        <Plus size={11} aria-hidden="true" />
+        <span>{word}</span>
       </button>
     );
 
@@ -748,8 +751,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {showChats && (
         <div>
           <div className={sectionHead}>
-            <span>Channels</span>
-            {onCreateChannel && kwants.length > 0 && headButton('New channel', `New channel in ${space.name}`, onCreateChannel)}
+            <span className="whitespace-nowrap shrink-0">Channels</span>
+            {onCreateChannel && kwants.length > 0 && headButton('Channel', 'New channel', `New channel in ${space.name}`, onCreateChannel)}
           </div>
           <div className="mt-1 space-y-0.5">
             {displayChannels.map((c) => {
@@ -796,10 +799,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {showBots && (
         <div data-bot-list>
           <div className={sectionHead}>
-            <h2>Bots ({kwants.length})</h2>
-            <span className="flex items-center gap-1">
-              {headButton('New team', `New team in ${space.name}`, onCreateTeam)}
-              {headButton('New bot', `New bot in ${space.name}`, () => onSummonKwant())}
+            <h2 className="whitespace-nowrap shrink-0">Bots ({kwants.length})</h2>
+            <span className="flex items-center gap-1 shrink-0">
+              {headButton('Team', 'New team', `New team in ${space.name}`, onCreateTeam)}
+              {headButton('Bot', 'New bot', `New bot in ${space.name}`, () => onSummonKwant())}
             </span>
           </div>
           <div className="mt-1 space-y-2">
