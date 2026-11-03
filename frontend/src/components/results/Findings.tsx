@@ -12,7 +12,8 @@ export function validFindings(raw: unknown): FindingsBlock | null {
   const items: FindingItem[] = [];
   for (const it of b.items as Record<string, unknown>[]) {
     if (!SEVERITIES.includes(it.severity as Severity) || !isText(it.severity_text, 40)) return null;
-    if (!isText(it.title) || !isText(it.detail, 2000)) return null;
+    // The server sends detail "" for a bullet with no " — detail" part (its own check allows that), so blank is valid here; title stays required.
+    if (!isText(it.title) || !(it.detail === undefined || it.detail === null || isText(it.detail, 2000, true))) return null;
     if (!Array.isArray(it.refs)) return null;
     const refs: FindingRef[] = [];
     for (const r of it.refs) {
@@ -20,7 +21,7 @@ export function validFindings(raw: unknown): FindingsBlock | null {
       if (r.line !== null && r.line !== undefined && !isIndex(r.line)) return null;
       refs.push({ path: r.path, line: r.line === undefined ? null : (r.line as number | null) });
     }
-    items.push({ id: it.id as string, severity: it.severity as Severity, severity_text: it.severity_text, title: it.title, detail: it.detail, refs });
+    items.push({ id: it.id as string, severity: it.severity as Severity, severity_text: it.severity_text, title: it.title, detail: typeof it.detail === 'string' ? it.detail : '', refs });
   }
   return { id: b.id, type: 'findings', title: b.title, source: b.source, provenance: b.provenance, items };
 }
@@ -60,7 +61,7 @@ export const Findings: React.FC<RendererProps<FindingsBlock>> = ({ block }) => {
             {g.items.map((item) => (
               <li key={item.id} className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 text-xs shadow-sm">
                 <div className="font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere]">{item.title}</div>
-                <p className="mt-1 leading-relaxed text-zinc-400 [overflow-wrap:anywhere]">{item.detail}</p>
+                {item.detail.trim() !== '' && <p className="mt-1 leading-relaxed text-zinc-400 [overflow-wrap:anywhere]">{item.detail}</p>}
                 {item.refs.length > 0 && (
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {item.refs.map((r, i) => (

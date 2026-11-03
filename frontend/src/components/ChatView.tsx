@@ -48,6 +48,7 @@ import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
 import { SmartActionsSlot } from './results/SmartActions';
 import { COMPOSE_PREFILL_EVENT } from './results/SmartResult';
+import { FilesPreviewOnly } from './results/Files';
 
 /** A swipeable chip row whose right fade edge (phones only, see .kw-scroll-row) goes away once
  *  it is scrolled to the end, or when everything already fits. */
@@ -1138,6 +1139,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
           )}
           {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} />}
+          {/* A shared-file card has no bubble, so the files block (the table or text preview) is mounted here, after the tiles. */}
+          {filesOnly && !isUser && msg.results != null && (
+            <FilesPreviewOnly.Provider value={true}>
+              <MarkdownRenderer content="" results={msg.results} messageId={msg.id} />
+            </FilesPreviewOnly.Provider>
+          )}
 
           {decisions.length > 0 && (
             <DecisionChips
