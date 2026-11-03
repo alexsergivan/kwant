@@ -2465,7 +2465,7 @@ async fn run_kwant_turn_inner(
         let attempts = if rehearse_blocked { Vec::new() } else { attempts };
         // Every account is known to be out: nothing is tried, the turn waits for the earliest reset
         if let (Some(until), false) = (global.all_out_until, rehearse_blocked) {
-            let at = super::profile_turn::clock_text(until);
+            let at = super::profile_turn::clock_text(state, until).await;
             let mut text = super::profile_turn::all_out_line(&at);
             let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), Some(until)).await;
             if parked.is_none() {
@@ -2587,7 +2587,10 @@ async fn run_kwant_turn_inner(
                 let notice = match (profile.as_ref(), &from.failure) {
                     (Some(to), Some(failure)) if same_engine => Some(super::profile_turn::switch_notice(&from.profile, to, failure)),
                     (Some(to), _) if !same_engine => {
-                        let until = from.until.map(super::profile_turn::clock_text);
+                        let until = match from.until {
+                            Some(t) => Some(super::profile_turn::clock_text(state, t).await),
+                            None => None,
+                        };
                         super::profile_turn::announce_once(&chat_key, &from.profile.id, from.until)
                             .then(|| super::profile_turn::cross_engine_notice(&from.profile, until.as_deref(), &target_kwant.name, to, model_label.as_deref()))
                     }
@@ -2787,7 +2790,7 @@ async fn run_kwant_turn_inner(
                 if failure.class == crate::profiles::classify::FailClass::Quota && !side_effects && !rehearse_blocked && opts.rehearse.is_none() {
                     let again = super::profile_turn::plan_global(state, engine, &target_kwant.id).await;
                     if let Some(until) = again.all_out_until {
-                        let at = super::profile_turn::clock_text(until);
+                        let at = super::profile_turn::clock_text(state, until).await;
                         let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), Some(until)).await;
                         let text = if parked.is_some() { super::profile_turn::all_out_line(&at) } else { format!("Every model is out until {at}.") };
                         event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));

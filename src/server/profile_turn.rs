@@ -512,11 +512,16 @@ pub fn engine_label(p: &LlmProfile) -> String {
     }
 }
 
-/// `at` as a clock time that names its zone: "03:00 UTC". The server's own zone (and the person's
-/// saved one) is never guessed at in text the server writes, so it cannot disagree with the
-/// reader's clock; the client localises the structured `retry_at` (see `rfc3339`) for itself.
-pub fn clock_text(at: chrono::DateTime<chrono::Utc>) -> String {
-    format!("{} UTC", at.format("%H:%M"))
+/// `at` as a clock time in the person's zone that names it: "09:00 CET". The zone is the saved one,
+/// else this computer's, else UTC (`zombie::settings::local_tz`).
+pub async fn clock_text(state: &AppState, at: chrono::DateTime<chrono::Utc>) -> String {
+    clock_text_in(&crate::zombie::settings::local_tz(&state.db).await, at)
+}
+
+/// [`clock_text`] in `tz`. A zone that cannot be read, or has no abbreviation, gives the time
+/// converted to UTC and labelled "UTC", never a local time under the wrong label.
+pub fn clock_text_in(tz: &str, at: chrono::DateTime<chrono::Utc>) -> String {
+    crate::routines::clock_with_zone(tz, at).unwrap_or_else(|_| format!("{} UTC", at.format("%H:%M")))
 }
 
 /// `at` as RFC 3339 with an explicit offset ("2026-11-03T08:00:00+00:00"), for `meta.failover`.
@@ -612,13 +617,24 @@ mod tests {
 
     #[test]
     fn out_until_text_names_its_zone() {
-        let at = Utc.with_ymd_and_hms(2026, 11, 3, 8, 0, 0).unwrap();
-        assert_eq!(clock_text(at), "08:00 UTC");
-        assert_eq!(all_out_line(&clock_text(at)), "Every model is out until 08:00 UTC; I'll answer then.");
+        let winter = Utc.with_ymd_and_hms(2026, 11, 3, 8, 0, 0).unwrap();
+        let summer = Utc.with_ymd_and_hms(2026, 7, 3, 8, 0, 0).unwrap();
+        // The person's zone, with its abbreviation at that instant
+        assert_eq!(clock_text_in("Europe/Ljubljana", winter), "09:00 CET");
+        assert_eq!(clock_text_in("Europe/Ljubljana", summer), "10:00 CEST");
+        assert_eq!(clock_text_in("America/New_York", winter), "03:00 EST");
+        assert_eq!(clock_text_in("Europe/Istanbul", winter), "11:00 +03");
+        assert_eq!(clock_text_in("UTC", winter), "08:00 UTC");
+        // Unreadable zones are converted to UTC, not labelled local
+        for bad in ["Not/AZone", "", "../etc/passwd", "Europe/Ljubljana/../x"] {
+            assert_eq!(clock_text_in(bad, winter), "08:00 UTC", "{bad:?}");
+        }
+        let line = all_out_line(&clock_text_in("Europe/Ljubljana", winter));
+        assert_eq!(line, "Every model is out until 09:00 CET; I'll answer then.");
         let claude = profile("c", "This machine", "system", 0, false);
         let codex = profile("x", "Codex", "system", 1, false);
-        let line = cross_engine_notice(&claude, Some(&clock_text(at)), "Ann", &codex, Some("gpt-6.1"));
-        assert!(line.contains("is out until 08:00 UTC · Ann is answering on"), "{line}");
+        let line = cross_engine_notice(&claude, Some(&clock_text_in("Europe/Ljubljana", winter)), "Ann", &codex, Some("gpt-6.1"));
+        assert!(line.contains("is out until 09:00 CET · Ann is answering on"), "{line}");
         let line = cross_engine_notice(&claude, None, "Ann", &codex, None);
         assert!(line.contains("is unavailable") && !line.contains("until"), "{line}");
     }

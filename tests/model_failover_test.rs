@@ -127,6 +127,23 @@ async fn last_reply(state: &AppState, kwant_id: &str) -> (String, Value) {
     (m.text.clone(), m.meta.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or(Value::Null))
 }
 
+/// "03:00 CET" / "04:00 CEST": `at` on a Europe/Ljubljana wall clock, with the zone's abbreviation.
+/// Written from the EU rule (summer time runs 01:00 UTC on the last Sunday of March to the same
+/// moment in October), not from the code under test.
+fn ljubljana(at: chrono::DateTime<Utc>) -> String {
+    use chrono::{Datelike, NaiveDate, TimeZone, Weekday};
+    let last_sunday = |month: u32| {
+        let mut d = NaiveDate::from_ymd_opt(at.year(), month, 31).unwrap();
+        while d.weekday() != Weekday::Sun {
+            d = d.pred_opt().unwrap();
+        }
+        Utc.from_utc_datetime(&d.and_hms_opt(1, 0, 0).unwrap())
+    };
+    let summer = at >= last_sunday(3) && at < last_sunday(10);
+    let (hours, name) = if summer { (2, "CEST") } else { (1, "CET") };
+    format!("{} {name}", (at + Span::hours(hours)).format("%H:%M"))
+}
+
 #[tokio::test]
 async fn a_session_limit_moves_the_bot_to_the_next_engine_and_back() {
     let tmp = tempfile::tempdir().unwrap();
@@ -160,6 +177,8 @@ async fn a_session_limit_moves_the_bot_to_the_next_engine_and_back() {
         PermissionBroker::new(),
         LayaRouter::new(config.laya_url.clone()),
     );
+    // The person's saved zone: server text reads in it and names it
+    state.db.set_setting("timezone", "Europe/Ljubljana").await.unwrap();
     let app = create_router(state.clone());
     let (s, v) = call(&app, "POST", "/api/engines/recheck", None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
@@ -210,7 +229,7 @@ async fn a_session_limit_moves_the_bot_to_the_next_engine_and_back() {
     let stamp = ps["retry_at"].as_str().unwrap();
     let parsed = chrono::DateTime::parse_from_rfc3339(stamp).unwrap_or_else(|e| panic!("retry_at {stamp:?}: {e}"));
     assert!(stamp.ends_with("+00:00") && stamp.contains('T'), "{stamp}");
-    assert!(ps["notice"].as_str().unwrap().contains(&format!("is out until {} UTC", parsed.format("%H:%M"))), "{ps}");
+    assert!(ps["notice"].as_str().unwrap().contains(&format!("is out until {}", ljubljana(parsed.with_timezone(&Utc)))), "{ps}");
     let saved = state.db.list_messages(&kid, 50).await.unwrap();
     assert!(!saved.iter().any(|m| m.sender_role == "kwant" && m.text.contains("session limit")), "{saved:?}");
 
@@ -261,9 +280,9 @@ async fn a_session_limit_moves_the_bot_to_the_next_engine_and_back() {
     let events = run_turn(&app, &state, &kid).await;
     let text = text_of(&events);
     assert!(text.contains("Every model is out until") && text.contains("I'll answer then."), "{text}");
-    // Named zone, and the earliest reset (Codex's, in two hours) as written in that zone
+    // The person's zone, named, and the earliest reset (Codex's, in two hours) as written in it
     let wait = Utc::now() + Span::hours(2);
-    let near = [wait, wait - Span::minutes(1), wait + Span::minutes(1)].map(|t| format!("Every model is out until {} UTC", t.format("%H:%M")));
+    let near = [wait, wait - Span::minutes(1), wait + Span::minutes(1)].map(|t| format!("Every model is out until {}", ljubljana(t)));
     assert!(near.iter().any(|n| text.contains(n)), "{text}");
     assert_eq!((runs(tmp.path(), "claude"), runs(tmp.path(), "codex")), (2, 2), "nothing was attempted");
     let parked = state.db.list_parked().await.unwrap();
@@ -274,7 +293,7 @@ async fn a_session_limit_moves_the_bot_to_the_next_engine_and_back() {
     // A second message while everything is out is parked with the same line, never a setup card
     let events = run_turn(&app, &state, &kid).await;
     let text = text_of(&events);
-    assert!(text.contains("Every model is out until") && text.contains(" UTC") && !text.contains("No account can run bots"), "{text}");
+    assert!(text.contains("Every model is out until") && (text.contains(" CET") || text.contains(" CEST")) && !text.contains("No account can run bots"), "{text}");
     let (reply, meta) = last_reply(&state, &kid).await;
     assert!(!reply.contains("Settings") && meta.get("kind") != Some(&json!("setup_needed")), "{reply} {meta}");
     assert_eq!((runs(tmp.path(), "claude"), runs(tmp.path(), "codex")), (2, 2), "nothing was attempted");

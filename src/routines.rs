@@ -217,6 +217,23 @@ pub fn now_in(tz: &str, now: DateTime<Utc>) -> Result<DateTime<chrono::FixedOffs
     Ok(now.with_timezone(&offset))
 }
 
+/// `at` as "09:00 CET": the wall-clock time in `tz` and that zone's abbreviation at that instant
+/// ("CEST" in summer, "+03" where the database only has a number). `Err` for an unknown zone or
+/// one with no abbreviation for `at`, so the caller can say it in UTC instead.
+pub fn clock_with_zone(tz: &str, at: DateTime<Utc>) -> Result<String, String> {
+    let zone = parse_tz(tz)?;
+    let local = zone
+        .0
+        .find_local_time_type(at.timestamp())
+        .map_err(|_| format!("time zone '{tz}' has no offset for that time"))?;
+    let name = local.time_zone_designation();
+    if name.is_empty() {
+        return Err(format!("time zone '{tz}' has no abbreviation for that time"));
+    }
+    let offset = chrono::FixedOffset::east_opt(local.ut_offset()).ok_or_else(|| format!("time zone '{tz}' has an odd offset"))?;
+    Ok(format!("{} {name}", at.with_timezone(&offset).format("%H:%M")))
+}
+
 /// `date` at wall-clock `time` in `tz` (see [`resolve_local`] for DST gaps), for reminders that
 /// are not routines. `Err` for an unknown zone.
 pub fn local_instant(tz: &str, date: NaiveDate, time: NaiveTime) -> Result<Option<DateTime<Utc>>, String> {
