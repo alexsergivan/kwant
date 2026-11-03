@@ -3575,6 +3575,8 @@ async fn send_chat_inner(
                         }
                         crate::router::team::Settle::Route => {}
                     }
+                    // Words only `settle` needed (a step-5 tie routed on) aren't shown as matched
+                    route.matched_terms = crate::router::team::shown_terms(&route.basis, std::mem::take(&mut route.matched_terms));
                     if let Some(ref k) = chosen {
                         routing = Some(routing_meta(k, &route.reason, members.len(), route.fallback, &route.matched_terms, &route.basis, &saved_user_msg.id));
                         if let Some(m) = routing.as_mut() {
