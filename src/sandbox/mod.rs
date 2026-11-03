@@ -1,6 +1,7 @@
 pub mod bitwarden;
 pub mod browser;
 pub mod browser_history;
+pub mod browser_select;
 pub mod computer;
 pub mod credentials;
 pub mod manager;

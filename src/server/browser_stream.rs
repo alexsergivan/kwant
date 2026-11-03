@@ -1,5 +1,6 @@
 use super::{routes::get_or_create_browser_controller, AppState};
 use crate::sandbox::browser::{BrowserController, BrowserError};
+use crate::sandbox::browser_history::HistoryDirection;
 use axum::{extract::{Path, State, WebSocketUpgrade, ws::{Message, WebSocket}}, http::{HeaderMap, StatusCode}, response::Response};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -21,6 +22,17 @@ pub enum BrowserInput {
     PointerDown { x: f64, y: f64 },
     PointerMove { x: f64, y: f64 },
     PointerUp { x: f64, y: f64 },
+    /// Back, forward or reload in the tab's own history.
+    History { direction: HistoryDirection },
+}
+
+/// Where an old-style tap (`click`) or drag start (`pointer_down`) presses, so a press on a
+/// native select can show kwant's list instead (phones still send these).
+fn press_point(input: &BrowserInput) -> Option<(f64, f64)> {
+    match input {
+        BrowserInput::Click { x, y } | BrowserInput::PointerDown { x, y } => Some((*x, *y)),
+        _ => None,
+    }
 }
 
 impl BrowserController {
@@ -81,6 +93,7 @@ impl BrowserController {
                 if !matches!(parsed.scheme(), "http"|"https") { return Err(BrowserError::Protocol("Use an HTTP or HTTPS URL".into())); }
                 self.navigate_unlocked(&url).await?;
             }
+            BrowserInput::History { direction } => self.navigate_history(direction).await?,
         }
         Ok(())
     }
@@ -212,6 +225,16 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
                                 Ok(input) => {
                                     // The person's own input: never held to a bot's site rules
                                     ctrl.site_guard.set_actor(crate::sandbox::site_guard::Actor::Person);
+                                    // A press on a native select shows kwant's list, not the invisible native one
+                                    let select = match press_point(&input) {
+                                        Some((x, y)) => ctrl.select_at(x, y).await,
+                                        None => None,
+                                    };
+                                    if let Some(select) = select {
+                                        send(&mut socket, select.message()).await?;
+                                        send(&mut socket, json!({"type":"ack","id":value["id"]})).await?;
+                                        continue;
+                                    }
                                     ctrl.dispatch_input(input).await
                                 }
                                 Err(_) => Err(BrowserError::Protocol("Invalid browser input".into())),
@@ -245,4 +268,30 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
 async fn send(socket: &mut WebSocket, value: Value) -> Result<(), BrowserError> {
     timeout(Duration::from_secs(5), socket.send(Message::Text(value.to_string()))).await
         .map_err(|_| BrowserError::Timeout)?.map_err(|e| BrowserError::Ws(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(value: Value) -> Option<BrowserInput> { serde_json::from_value(value).ok() }
+
+    #[test]
+    fn history_parses_each_direction_and_refuses_others() {
+        for wire in ["back", "forward", "reload"] {
+            assert!(matches!(parse(json!({"action":"history","direction":wire,"id":3})), Some(BrowserInput::History { .. })), "{wire}");
+        }
+        assert!(parse(json!({"action":"history","direction":"sideways"})).is_none());
+        assert!(parse(json!({"action":"history"})).is_none());
+    }
+
+    #[test]
+    fn old_taps_and_drag_starts_are_checked_for_a_select() {
+        assert_eq!(press_point(&parse(json!({"action":"click","x":5.0,"y":6.0})).unwrap()), Some((5.0, 6.0)));
+        assert_eq!(press_point(&parse(json!({"action":"pointer_down","x":7.0,"y":8.0})).unwrap()), Some((7.0, 8.0)));
+        for other in [json!({"action":"pointer_move","x":1.0,"y":1.0}), json!({"action":"pointer_up","x":1.0,"y":1.0}),
+                      json!({"action":"scroll","x":1.0,"y":1.0,"delta_x":0.0,"delta_y":1.0}), json!({"action":"type","text":"a"})] {
+            assert_eq!(press_point(&parse(other.clone()).unwrap()), None, "{other}");
+        }
+    }
 }
