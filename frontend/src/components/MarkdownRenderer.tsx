@@ -6,6 +6,7 @@ import { playSfx } from '../audio/chiptune';
 import { HastNode, blockAt, hastText, rehypeSmartIndex, resultBlocks } from '../smartResults';
 import type { ReplyPart, ReplySource } from './results/registry';
 import { SmartResult } from './results/SmartResult';
+import { ReplyText } from './results/ReplyText';
 
 interface CodeBlockProps {
   language?: string;
@@ -172,6 +173,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   };
 
   return (
+    <ReplyText.Provider value={content}>
     <div className={`markdown-content text-sm leading-relaxed text-zinc-200 ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
@@ -359,5 +361,6 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
         <span className="inline-block w-1.5 h-4 ml-0.5 align-middle bg-sky-400 animate-pulse rounded-sm" />
       )}
     </div>
+    </ReplyText.Provider>
   );
 };

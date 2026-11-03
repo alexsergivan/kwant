@@ -67,6 +67,28 @@ function humanSize(bytes: number): string {
   return `${v >= 10 ? Math.round(v) : Math.round(v * 10) / 10} ${units[i]}`;
 }
 
+/** A cell longer than this is drawn on one line with an ellipsis; its whole text is on hover and on focus. */
+export const LONG_CELL = 48;
+
+/**
+ * One table cell. A long one (the server already cuts a cell at 300 characters and ends it with an
+ * ellipsis) is clipped to a short width with CSS ellipsis so it cannot stretch the table, takes focus,
+ * and shows its whole text on hover (title) and on focus (it wraps open). The full text stays in the DOM.
+ */
+export const Cell: React.FC<{ text: string }> = ({ text }) =>
+  text.length > LONG_CELL ? (
+    <span
+      tabIndex={0}
+      title={text}
+      data-long-cell=""
+      className="block max-w-[14rem] truncate rounded-sm focus:overflow-visible focus:whitespace-normal focus:break-words focus:outline-none focus:ring-1 focus:ring-sky-500/70"
+    >
+      {text}
+    </span>
+  ) : (
+    <>{text}</>
+  );
+
 const TablePreview: React.FC<{ columns: string[]; rows: string[][] }> = ({ columns, rows }) => (
   <div className="mt-2 min-w-0 max-w-full overflow-x-auto rounded-lg border border-zinc-800">
     <table className="w-full min-w-max border-collapse text-left text-[11px]">
@@ -84,7 +106,7 @@ const TablePreview: React.FC<{ columns: string[]; rows: string[][] }> = ({ colum
           <tr key={ri} className="border-b border-zinc-900 last:border-0">
             {r.map((c, ci) => (
               <td key={ci} className="whitespace-nowrap px-2 py-1.5 text-zinc-300">
-                {c}
+                <Cell text={c} />
               </td>
             ))}
           </tr>

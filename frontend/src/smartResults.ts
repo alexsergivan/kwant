@@ -259,12 +259,16 @@ export const isNum = (v: unknown): v is number => typeof v === 'number' && Numbe
 export const inRange = (a: unknown, min: number, max: number): a is unknown[] => Array.isArray(a) && a.length >= min && a.length <= max;
 export const uniqueIds = (items: unknown[]) =>
   items.every((x) => isObj(x) && typeof x.id === 'string' && x.id !== '') && new Set(items.map((x) => (x as { id: string }).id)).size === items.length;
-/** An http(s) URL, or null. Anything else (javascript:, data:, relative) is not a link a block may show. */
+/**
+ * An http(s) URL, or null. Anything else (javascript:, data:, relative) is not a link a block may show,
+ * and neither is one that carries a username or password (https://user:pw@host/): a link must not leak
+ * a credential into the page, the history or a copy, and "user@" in front of a host is a spoofing trick.
+ */
 export const isHttpUrl = (v: unknown): v is string => {
   if (typeof v !== 'string' || v.length > 2048) return false;
   try {
     const u = new URL(v);
-    return u.protocol === 'https:' || u.protocol === 'http:';
+    return (u.protocol === 'https:' || u.protocol === 'http:') && u.username === '' && u.password === '';
   } catch {
     return false;
   }
@@ -405,6 +409,17 @@ export function plainText(md: string): string {
 
 /** Letters and digits only, so the rendered table and the block can be compared loosely. */
 export const matchKey = (s: string) => plainText(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+
+/**
+ * Does `caption` say what the reply's own text already says? A chart's summary that the reply's closing
+ * sentence repeats ("October had 2,260 signups and 455 paid.") is not shown a second time under the chart.
+ * Compared loosely, on letters and digits only, and only for a caption long enough to be a sentence.
+ */
+export function repeatsReply(caption: string | null | undefined, replyText: string | null | undefined): boolean {
+  if (!caption || !replyText) return false;
+  const key = matchKey(caption);
+  return key.length >= 8 && matchKey(replyText).includes(key);
+}
 
 /**
  * The number in a numeric cell: "EUR 1,200", "12 GB", "$9.50", "-3%", "1 200". NaN when there isn't one.
