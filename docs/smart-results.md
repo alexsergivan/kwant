@@ -216,7 +216,9 @@ is complete, so old fixtures stay valid:
 Totals come with `truncated` and only when counted exactly: a file cut at the 1 MB cap has
 `truncated: true` and no totals (the renderer shows "Showing first 20 rows" without a count), and
 so does a table with a row over 1,000 fields or a cell over 100 KB. A total is never below what the
-preview shows. Per-cell and per-line cuts (300 characters) do not set `truncated`. Example:
+preview shows. Per-cell and per-line cuts (300 characters) do not set `truncated`. Lines are counted
+as a reader counts them: a final newline or trailing blank lines add none, so a 20-line file is
+complete and never reports 22 lines. Example:
 `{"kind":"table","columns":[...],"rows":[...20 rows],"truncated":true,"total_rows":143,"total_cols":5}`
 shows as "Showing 20 of 143 rows". Bytes
 are read only through `attachments::blob_path` (a sha256 hex string under the attachments
