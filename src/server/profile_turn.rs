@@ -512,17 +512,20 @@ pub fn engine_label(p: &LlmProfile) -> String {
     }
 }
 
-/// `at` as a wall-clock time in the person's zone ("03:00"), else the server's, else "03:00 UTC".
-pub async fn clock_text(state: &AppState, at: chrono::DateTime<chrono::Utc>) -> String {
-    let tz = crate::zombie::settings::local_tz(&state.db).await;
-    match crate::routines::now_in(&tz, at) {
-        Ok(local) => local.format("%H:%M").to_string(),
-        Err(_) => format!("{} UTC", at.format("%H:%M")),
-    }
+/// `at` as a clock time that names its zone: "03:00 UTC". The server's own zone (and the person's
+/// saved one) is never guessed at in text the server writes, so it cannot disagree with the
+/// reader's clock; the client localises the structured `retry_at` (see `rfc3339`) for itself.
+pub fn clock_text(at: chrono::DateTime<chrono::Utc>) -> String {
+    format!("{} UTC", at.format("%H:%M"))
+}
+
+/// `at` as RFC 3339 with an explicit offset ("2026-11-03T08:00:00+00:00"), for `meta.failover`.
+pub fn rfc3339(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
 
 /// The quiet line when a turn runs on another engine because its own is out:
-/// "Claude is out until 03:00 · Architect is answering on Codex (gpt-6.1)".
+/// "Claude is out until 03:00 UTC · Architect is answering on Codex (gpt-6.1)".
 pub fn cross_engine_notice(
     from: &LlmProfile,
     until_text: Option<&str>,
@@ -605,6 +608,26 @@ mod tests {
         let wrong_key = give_up_notice("Ann", &p, &auth, 1);
         assert!(wrong_key.contains("Settings › This space › Accounts"), "{wrong_key}");
         assert!(give_up_notice("Ann", &p, &quota, 1).contains("Settings › This space › Accounts"));
+    }
+
+    #[test]
+    fn out_until_text_names_its_zone() {
+        let at = Utc.with_ymd_and_hms(2026, 11, 3, 8, 0, 0).unwrap();
+        assert_eq!(clock_text(at), "08:00 UTC");
+        assert_eq!(all_out_line(&clock_text(at)), "Every model is out until 08:00 UTC; I'll answer then.");
+        let claude = profile("c", "This machine", "system", 0, false);
+        let codex = profile("x", "Codex", "system", 1, false);
+        let line = cross_engine_notice(&claude, Some(&clock_text(at)), "Ann", &codex, Some("gpt-6.1"));
+        assert!(line.contains("is out until 08:00 UTC · Ann is answering on"), "{line}");
+        let line = cross_engine_notice(&claude, None, "Ann", &codex, None);
+        assert!(line.contains("is unavailable") && !line.contains("until"), "{line}");
+    }
+
+    #[test]
+    fn retry_at_is_rfc3339_with_an_offset() {
+        let at = Utc.with_ymd_and_hms(2026, 11, 3, 8, 0, 5).unwrap();
+        assert_eq!(rfc3339(at), "2026-11-03T08:00:05+00:00");
+        assert_eq!(DateTime::parse_from_rfc3339(&rfc3339(at)).unwrap().with_timezone(&Utc), at);
     }
 
     fn report(id: EngineId, enabled: bool, status: EngineStatus) -> EngineReport {

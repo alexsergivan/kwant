@@ -205,6 +205,12 @@ async fn a_session_limit_moves_the_bot_to_the_next_engine_and_back() {
     let ps = &meta["failover"][0];
     assert_eq!((ps["from_engine"].clone(), ps["to_engine"].clone()), (json!("claude"), json!("codex")), "{meta}");
     assert!(ps["to_model"].is_string() && ps["from_profile_id"] == "prf_system_claude" && ps["retry_at"].is_string(), "{meta}");
+    // retry_at is RFC 3339 with an offset (so the client localises it) and the notice text names
+    // its zone, never the server's or the person's own clock unlabelled
+    let stamp = ps["retry_at"].as_str().unwrap();
+    let parsed = chrono::DateTime::parse_from_rfc3339(stamp).unwrap_or_else(|e| panic!("retry_at {stamp:?}: {e}"));
+    assert!(stamp.ends_with("+00:00") && stamp.contains('T'), "{stamp}");
+    assert!(ps["notice"].as_str().unwrap().contains(&format!("is out until {} UTC", parsed.format("%H:%M"))), "{ps}");
     let saved = state.db.list_messages(&kid, 50).await.unwrap();
     assert!(!saved.iter().any(|m| m.sender_role == "kwant" && m.text.contains("session limit")), "{saved:?}");
 
@@ -255,6 +261,10 @@ async fn a_session_limit_moves_the_bot_to_the_next_engine_and_back() {
     let events = run_turn(&app, &state, &kid).await;
     let text = text_of(&events);
     assert!(text.contains("Every model is out until") && text.contains("I'll answer then."), "{text}");
+    // Named zone, and the earliest reset (Codex's, in two hours) as written in that zone
+    let wait = Utc::now() + Span::hours(2);
+    let near = [wait, wait - Span::minutes(1), wait + Span::minutes(1)].map(|t| format!("Every model is out until {} UTC", t.format("%H:%M")));
+    assert!(near.iter().any(|n| text.contains(n)), "{text}");
     assert_eq!((runs(tmp.path(), "claude"), runs(tmp.path(), "codex")), (2, 2), "nothing was attempted");
     let parked = state.db.list_parked().await.unwrap();
     assert_eq!(parked.len(), 1, "{parked:?}");
@@ -264,7 +274,7 @@ async fn a_session_limit_moves_the_bot_to_the_next_engine_and_back() {
     // A second message while everything is out is parked with the same line, never a setup card
     let events = run_turn(&app, &state, &kid).await;
     let text = text_of(&events);
-    assert!(text.contains("Every model is out until") && !text.contains("No account can run bots"), "{text}");
+    assert!(text.contains("Every model is out until") && text.contains(" UTC") && !text.contains("No account can run bots"), "{text}");
     let (reply, meta) = last_reply(&state, &kid).await;
     assert!(!reply.contains("Settings") && meta.get("kind") != Some(&json!("setup_needed")), "{reply} {meta}");
     assert_eq!((runs(tmp.path(), "claude"), runs(tmp.path(), "codex")), (2, 2), "nothing was attempted");
