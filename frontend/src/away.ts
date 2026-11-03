@@ -105,6 +105,14 @@ export function itemLabel(item: Pick<AwayItem, 'kind' | 'status'>): { label: str
   return { label: item.status, tone: 'zinc' };
 }
 
+/** A provider's own limit message ("You've hit your session limit · resets 3am"): never a result. The server
+ * keeps these out of replies and summaries; this is the second guard on the card. */
+const LIMIT_LINE = /\b(?:hit|reached|exceeded)\s+your\b[^.\n]{0,24}\blimit\b|\b(?:session|weekly|usage|opus)\s+limit\b|\blimit\b[^.\n]{0,12}\bresets?\b/i;
+export const isLimitLine = (text: string | null | undefined): boolean => !!text && LIMIT_LINE.test(text);
+
+/** The summary line a card shows: empty for a limit message, so the card shows its title alone. */
+export const awaySummary = (item: Pick<AwayItem, 'summary' | 'title'>): string => (isLimitLine(item.summary) ? '' : item.summary);
+
 /** Sidebar badge text: nothing at 0, "99+" past 99. */
 export const badgeText = (n: number): string => (n <= 0 ? '' : n > 99 ? '99+' : String(n));
 

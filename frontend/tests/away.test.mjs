@@ -162,3 +162,22 @@ test('sidebar entry shows the unseen badge only when there is something new', ()
   assert.doesNotMatch(ui.sidebar({ ...base, inboxCount: 0 }), /sr-only"> new/);
   assert.match(ui.sidebar({ ...base, inboxCount: 3, inboxActive: true }), /aria-current="page"/);
 });
+
+test('a limit message is never shown as a card summary', () => {
+  for (const line of [
+    "You've hit your session limit · resets 3am (Europe/Berlin)",
+    'You have hit your weekly limit',
+    'Claude usage limit reached',
+    "You've reached your Opus limit · resets 5pm",
+    '5-hour limit reached · resets 02:00',
+  ]) {
+    assert.equal(a.isLimitLine(line), true, line);
+    const html = view({ data: resp({ failed: [item({ id: 'd9', status: 'failed', title: 'Review PR', summary: line })] }) });
+    assert.match(html, /Review PR/);
+    assert.doesNotMatch(html, /limit/i, `"${line}" must not reach the card`);
+  }
+  // Ordinary summaries, including ones that mention limits, stay.
+  for (const ok of ['Brief', 'Finished', 'Raised the rate-limit config to 100', 'Failed']) assert.equal(a.isLimitLine(ok), false, ok);
+  assert.equal(a.awaySummary({ title: 't', summary: 'Brief' }), 'Brief');
+  assert.equal(a.awaySummary({ title: 't', summary: "You've hit your session limit · resets 3am" }), '');
+});

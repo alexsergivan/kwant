@@ -17,15 +17,24 @@ export interface ReplyMetaProps extends ReplyFacts {
   avatar?: React.ReactNode;
   /** Whether a step failed: the Details toggle says so while it's folded. */
   failed?: boolean;
+  /** One muted line under the name, e.g. "Claude is out until 03:00 · answered on Codex (GPT-6.1)". */
+  note?: string | null;
   now?: number;
   /** Steps and the reasoning item; shown with the facts when Details is open. */
   children?: React.ReactNode;
 }
 
+/** The quiet line for a reply that ran on another account. It wraps rather than clips, so it fits at 390 px. */
+export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (
+  <p data-failover-note="" className="-mt-0.5 mb-1.5 max-w-full text-[11px] leading-snug text-zinc-500 break-words">
+    {text}
+  </p>
+);
+
 const hasContent = (n: React.ReactNode) => React.Children.toArray(n).length > 0;
 
 /** A bot reply's header: one line, "Name · 3:42 PM", and a Details toggle holding the rest. */
-export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, tokens, failed = false, now, children }) => {
+export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, tokens, failed = false, note, now, children }) => {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const time = localClock(at, now);
@@ -60,6 +69,7 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
           </button>
         )}
       </div>
+      {note && <FailoverNote text={note} />}
       {open && hasDetails && (
         <div id={panelId} className="mb-2 w-full max-w-2xl">
           {facts.length > 0 && (
