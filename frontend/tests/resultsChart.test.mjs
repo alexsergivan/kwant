@@ -152,19 +152,25 @@ test('a value too large to scale abstains instead of drawing NaN coordinates (SR
   assert.equal(m.validChart({ ...bar, points: bar.points.map((p, i) => (i === 0 ? { ...p, values: p.values.map(() => 1e308) } : p)) }), null);
 });
 
-test('every bar category is named at a 390 px card width, shortened to fit its band', async () => {
-  const real = Object.getOwnPropertyDescriptor(dom.window.HTMLElement.prototype, 'clientWidth');
-  Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 300 });
-  // The chart measures its box through a ResizeObserver; jsdom has none, so a no-op one lets the first measure run.
-  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
-  try {
-    const host = await mount(barBlock());
-    const labels = [...host.querySelectorAll('svg[role="img"] text')].filter((t) => t.getAttribute('y') === '240');
-    assert.equal(labels.length, barBlock().points.length, 'all 5 categories are labelled, not 3');
-    assert.ok(labels.every((t) => t.textContent.length <= 7), 'shortened to fit its band: ' + labels.map((t) => t.textContent).join('|'));
-  } finally {
-    delete globalThis.ResizeObserver;
-    if (real) Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', real);
-    else delete dom.window.HTMLElement.prototype.clientWidth;
-  }
-});
+for (const width of [300, 270]) {
+  test(`every bar category is named at a ${width} px chart width (390 and 360 px phones), shortened to fit its band`, async () => {
+    const real = Object.getOwnPropertyDescriptor(dom.window.HTMLElement.prototype, 'clientWidth');
+    Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width });
+    // The chart measures its box through a ResizeObserver; jsdom has none, so a no-op one lets the first measure run.
+    globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+    try {
+      const host = await mount(barBlock());
+      const labels = [...host.querySelectorAll('svg[role="img"] text')].filter((t) => t.getAttribute('y') === '240');
+      assert.equal(labels.length, barBlock().points.length, 'all 5 categories are labelled, not 3');
+      // A shortened label keeps its full name in a <title> (hover); the drawn text is the last node.
+      const drawn = labels.map((t) => t.lastChild.textContent);
+      assert.ok(drawn.every((t) => t.length <= 7), 'shortened to fit its band: ' + drawn.join('|'));
+      const cut = labels.filter((t) => t.querySelector('title'));
+      assert.ok(cut.length > 0 && cut.every((t) => t.querySelector('title').textContent.length > t.lastChild.textContent.length), 'a shortened label keeps its full name');
+    } finally {
+      delete globalThis.ResizeObserver;
+      if (real) Object.defineProperty(dom.window.HTMLElement.prototype, 'clientWidth', real);
+      else delete dom.window.HTMLElement.prototype.clientWidth;
+    }
+  });
+}

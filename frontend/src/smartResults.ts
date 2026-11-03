@@ -196,18 +196,26 @@ export interface FileItem {
  * "Preview, file is longer" when only `truncated` is known. Null for a complete preview. The shown
  * counts are the rows and lines actually drawn; the totals are the server's.
  */
+const TOTAL_FULL = new Intl.NumberFormat('en');
+const TOTAL_COMPACT = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+/** A count from the server, written with Intl: "143", "12,345", "1.2M". Never exponent notation. */
+export function formatTotal(n: number): string {
+  return n >= 1_000_000 ? TOTAL_COMPACT.format(n) : TOTAL_FULL.format(n);
+}
+
 export function previewNote(preview: FilePreview): string | null {
   if (!preview || preview.kind === 'image') return null;
   const parts: string[] = [];
   if (preview.kind === 'table') {
-    if (preview.total_rows !== undefined && preview.total_rows > preview.rows.length) parts.push(`${preview.rows.length} of ${preview.total_rows} rows`);
-    if (preview.total_cols !== undefined && preview.total_cols > preview.columns.length) parts.push(`${preview.columns.length} of ${preview.total_cols} columns`);
+    if (preview.total_rows !== undefined && preview.total_rows > preview.rows.length) parts.push(`${preview.rows.length} of ${formatTotal(preview.total_rows)} rows`);
+    if (preview.total_cols !== undefined && preview.total_cols > preview.columns.length) parts.push(`${preview.columns.length} of ${formatTotal(preview.total_cols)} columns`);
   } else if (preview.total_lines !== undefined) {
     const shown = preview.excerpt.replace(/\n$/, '').split('\n').length;
-    if (preview.total_lines > shown) parts.push(`${shown} of ${preview.total_lines} lines`);
+    if (preview.total_lines > shown) parts.push(`${shown} of ${formatTotal(preview.total_lines)} lines`);
   }
   if (parts.length) return `Showing ${parts.join(', ')}`;
-  return preview.truncated || preview.total_rows !== undefined || preview.total_cols !== undefined || preview.total_lines !== undefined ? 'Preview, file is longer' : null;
+  // A total that is not larger than what is drawn (the server may send totals for every file) is not a cut.
+  return preview.truncated ? 'Preview, file is longer' : null;
 }
 
 /** 1–10 files; source is always slot. */

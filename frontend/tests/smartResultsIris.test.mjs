@@ -142,11 +142,31 @@ test('files: Copy data on a cut preview says it copies the preview only; complet
   assert.match(m.blockCsv(block('files')), /copies the preview only/);
 });
 
+test('previewNote: totals are written with Intl, never as exponents; unsafe integers make the block fall back', () => {
+  const t = (extra) => ({ kind: 'table', columns: ['a'], rows: [['1']], ...extra });
+  assert.equal(m.previewNote(t({ total_rows: 143 })), 'Showing 1 of 143 rows');
+  assert.equal(m.previewNote(t({ total_rows: 12345 })), 'Showing 1 of 12,345 rows');
+  assert.equal(m.previewNote(t({ total_rows: 1_200_000 })), 'Showing 1 of 1.2M rows');
+  assert.doesNotMatch(m.previewNote(t({ total_rows: 9_007_199_254_740_991 })), /e\+/i);
+  const b = block('files');
+  const mk = (extra) => ({ ...b, items: [{ ...b.items[0], preview: { kind: 'table', columns: ['a'], rows: [['x']], ...extra } }] });
+  assert.equal(m.validFiles(mk({ total_rows: 1e308 })), null, '1e308 is not a count');
+  assert.equal(m.validFiles(mk({ total_rows: 9_007_199_254_740_993 })), null, 'beyond the safe integers');
+  assert.ok(m.validFiles(mk({ total_rows: 9_007_199_254_740_991 })));
+});
+
 test('previewNote: counts the rows and lines drawn, and says nothing when the totals do not exceed them', () => {
   const t = (extra) => ({ kind: 'table', columns: ['a', 'b', 'c'], rows: [['1', '2', '3']], ...extra });
   assert.equal(m.previewNote(t({ total_rows: 20, total_cols: 12 })), 'Showing 1 of 20 rows, 3 of 12 columns');
   assert.equal(m.previewNote(t({ total_cols: 12 })), 'Showing 3 of 12 columns');
-  assert.equal(m.previewNote(t({ total_rows: 1 })), 'Preview, file is longer', 'a total that is not larger than the rows drawn still marks a cut');
+  assert.equal(m.previewNote(t({ total_rows: 1 })), null, 'a total equal to the rows drawn is not a cut');
+  assert.equal(m.previewNote(t({ total_rows: 1, total_cols: 3 })), null, 'totals on a complete file say nothing');
+  assert.equal(m.previewNote(t({ total_rows: 0, total_cols: 1 })), null, 'a total below what is drawn says nothing');
+  assert.equal(m.previewNote(t({ total_rows: 20, total_cols: 3 })), 'Showing 1 of 20 rows', 'a rows-only cut does not claim columns were cut');
+  assert.equal(m.previewNote(t({ total_rows: 1, total_cols: 12 })), 'Showing 3 of 12 columns', 'a columns-only cut names columns only');
+  assert.equal(m.previewNote(t({ truncated: true })), 'Preview, file is longer');
+  assert.equal(m.previewNote(t({ total_rows: 1, truncated: true })), 'Preview, file is longer', 'truncated with no larger total');
+  assert.equal(m.previewNote({ kind: 'text', excerpt: 'a\nb', total_lines: 2 }), null);
   assert.equal(m.previewNote(t({})), null);
   assert.equal(m.previewNote({ kind: 'text', excerpt: 'a\nb\n', total_lines: 9 }), 'Showing 2 of 9 lines', 'a trailing newline is not a line');
   assert.equal(m.previewNote({ kind: 'image' }), null);
