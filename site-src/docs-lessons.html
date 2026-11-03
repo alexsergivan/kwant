@@ -1,0 +1,42 @@
+title: Lessons: AI agents that learn from their earlier tasks
+description: In kwant, a bot's failed checks, stalled turns, your send-backs and goals that stopped holding become short lessons it sees before similar work. They come from kwant's own records, so a bot can't write its own.
+card_title: Lessons
+path: docs/lessons.html
+nav: lessons
+card: Each bot sees what went wrong on its last 30 days of work before it starts the next task.
+card_art: avatar:research
+---
+<p class="kicker">Docs</p>
+<h1>Lessons: bots learn from their earlier tasks</h1>
+<p class="intro">Send a task back once with "the summary lists PRs that were reverted", and the bot sees that line before its next task. Lessons are new in 0.6.8 and on by default. There is nothing to set up: kwant builds them from what already happened to each bot's work in the last 30 days.</p>
+
+<h2 id="what">What becomes a lesson</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>What happened</th><th>The lesson says</th></tr></thead>
+  <tbody>
+    <tr><td>You sent a task back, or blocked it, with a reason</td><td>Your reason, in your words, and how the task ended</td></tr>
+    <tr><td>A check failed after the bot handed the task in</td><td>Which kind of check failed, its command or file when that is safe to show, and the start of its output</td></tr>
+    <tr><td>A turn stalled, ran out of time or ended on a denied action</td><td>That it ended without a hand-in, and how the task ended</td></tr>
+    <tr><td>A <a href="goals.html">goal</a> made from the bot's finished task stopped holding</td><td>That the goal is not met, until it holds again</td></tr>
+  </tbody>
+</table></div>
+<p>A usage limit, a sign-in problem, a budget stop or a network hiccup is not the bot's doing and never becomes a lesson. The same check or alike reasons are one lesson with <strong>×N</strong> for how many tasks it happened on; AutoFix's retries of one task count once.</p>
+
+<h2 id="where">Where a bot sees them</h2>
+<ul>
+  <li><strong>In a task brief.</strong> Up to 8 short lines, most repeated first, under "Lessons from earlier tasks".</li>
+  <li><strong>In chats, routines and hand-offs.</strong> A shorter list of up to 5.</li>
+  <li><strong>A check before hand-in.</strong> A task with an approved check asks its bot to run the checks itself and fix what fails before moving it to review. The task's activity says "It ran its checks before hand-in" when it did.</li>
+</ul>
+<p>To see what a bot carries, open its <strong>Memory</strong> tab: <strong>Lessons from earlier work</strong> lists the same lines, with <strong>View task</strong> when the <a href="mission-board.html">Mission board</a> is on. The list updates on its own; there is nothing to edit or approve.</p>
+
+<h2 id="safe">Why a bot can't game it</h2>
+<ul>
+  <li><strong>From kwant's records, not the bot's.</strong> Lessons come from failed checks, task states and your send-backs. A bot can't add, edit or remove one.</li>
+  <li><strong>Fixed sentences.</strong> Each line is a template filled from known fields. Your words and check output are cut to one short line, and dropped if they hold a link, a file path, a backtick or a word like approve, payment, token or password.</li>
+  <li><strong>Only for that bot.</strong> A bot sees its own lessons in its own space, never another bot's.</li>
+</ul>
+
+<h2 id="measure">Does it help?</h2>
+<p>1 task in 5 starts without lessons, so their effect can be compared with the tasks that had them. The task's activity says "It started with N lessons from earlier work" when it had them.</p>
+<div class="note"><strong>Turn it off</strong> in Settings with <strong>Learn from earlier work</strong>. Off means no lessons anywhere and nothing logged; turning it back on uses the same 30 days of history.</div>

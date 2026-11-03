@@ -8,16 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.8] - 2026-11-03
+
 ### Added
-- **Bots learn from their earlier tasks.** A bot's next task brief lists what went wrong on its tasks in the last 30
-  days: a check that failed after hand-in, a turn that stalled or was denied, and every time you sent a task back with
-  a reason. They come from kwant's own records, so a bot can't write its own. Chats get a shorter list. 1 task in 5
-  goes without, so you can see whether it helps. Turn it off with the `lessons` setting; see what a bot carries at
-  `GET /api/kwants/:id/lessons`.
+- **Bots learn from their earlier tasks.** Before similar work, each bot sees what went wrong on its tasks in the last
+  30 days: a check that failed after hand-in, a turn that stalled or was denied, and every time you sent a task back
+  with a reason. Task briefs get up to 8 lines, chats, routines and hand-offs up to 5. The lines come from kwant's own
+  records, so a bot can't write its own, and a check's command shows only when it has no link, path or access word.
+  1 task in 5 goes without, so the effect can be compared. On by default; turn it off in Settings with
+  **Learn from earlier work**. A bot's **Memory** tab lists its lessons, with ×N for repeats and **View task**.
 - **Goals that stopped holding are lessons too.** When a "Keep this true" goal made from a bot's finished task is
   confirmed not met, that bot's briefs and chats say so until the goal holds again.
 - **Bots check their work before hand-in.** A task with an approved check asks its bot to run the checks itself and
-  fix what fails before moving it to review.
+  fix what fails before moving it to review. The task's activity shows "It ran its checks before hand-in".
+- **Bots keep your corrections.** When you correct how a bot did something in a way that would apply again ("use a
+  table", "always cc Sam"), it saves that as a memory without asking and applies it later.
+
+### Fixed
+- **"Compare Lidl and Edeka" in #general no longer asks who should answer.** A close call with no matching words goes
+  to the Concierge, and a message nobody's role matched no longer shows "matched" words.
+- **A task's cost and model count only its own calls.** A chat with the same bot while it worked on a task is no
+  longer billed to the task.
 
 ## [Mac 0.6.7] - 2026-11-03
 
