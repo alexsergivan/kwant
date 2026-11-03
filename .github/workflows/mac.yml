@@ -1,6 +1,7 @@
 name: mac
 
-# Builds kwant for Mac: a universal (Apple silicon + Intel), ad-hoc-signed .dmg.
+# Builds kwant for Mac (a universal, ad-hoc-signed .dmg) and publishes the release with the Linux
+# packages from linux.yml.
 # On pull requests and manual runs it is only a workflow artifact, proving the app builds and starts.
 # Pushing a mac-v* tag (mac-v0.1.0, or mac-v0.2.0-rc.1 for a prerelease) also publishes a GitHub
 # release with the .dmg as kwant_universal.dmg, which the site's "Download for Mac" links to via
@@ -404,7 +405,11 @@ jobs:
             assets+=(latest.json)
           fi
           cat > notes.md <<NOTES
-          kwant for Mac $VERSION: one universal app for Apple silicon and Intel Macs (macOS 11 or later).
+          kwant $VERSION for Mac and Linux.
+
+          ### Mac
+
+          One universal app for Apple silicon and Intel Macs (macOS 11 or later).
 
           **Install:** open \`kwant_universal.dmg\` and drag kwant to Applications.
 
@@ -419,7 +424,9 @@ jobs:
 
           SHA-256: \`$(cut -d' ' -f1 kwant_universal.dmg.sha256)\`
 
-          **Linux (beta, x86_64):** \`kwant_amd64.deb\` for Ubuntu 22.04 or later and Debian 12 (\`sudo apt install ./kwant_amd64.deb\`), or \`kwant_x86_64.AppImage\` for other distros with a GTK desktop (\`chmod +x\` it and run it). Both update themselves in the app.
+          ### Linux (beta, x86_64)
+
+          \`kwant_amd64.deb\` for Ubuntu 22.04 or later and Debian 12 (\`sudo apt install ./kwant_amd64.deb\`), or \`kwant_x86_64.AppImage\` for other distros with a GTK desktop (\`chmod +x\` it and run it). Both update themselves in the app.
 
           SHA-256: \`$(cut -d' ' -f1 kwant_amd64.deb.sha256)\` (.deb), \`$(cut -d' ' -f1 kwant_x86_64.AppImage.sha256)\` (AppImage)
           NOTES
@@ -427,5 +434,5 @@ jobs:
           flags=()
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); else flags+=(--latest); fi
           gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag \
-            --title "kwant for Mac $VERSION" --notes-file notes.md "${flags[@]}" \
+            --title "kwant $VERSION for Mac and Linux" --notes-file notes.md "${flags[@]}" \
             "${assets[@]}"
