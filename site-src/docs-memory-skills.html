@@ -19,7 +19,7 @@ card_art: avatar:research
   <li>Up to 100 memories per bot, each up to 500 characters.</li>
   <li>They go into every turn under <em>What you remember</em>, up to 6 KB.</li>
 </ul>
-<p>With the <a href="truth-ledger.html">Truth Ledger</a> on (new in 0.6, off by default), bots also read the facts you've accepted for their team and space, notes from outside text are labelled Unconfirmed until you confirm them, and notes that conflict are flagged for you to settle.</p>
+<p>With the <a href="truth-ledger.html">Truth Ledger</a> on (new in 0.6, on from 0.6.5), bots also read the facts you've accepted for their team and space, notes from outside text are labelled Unconfirmed until you confirm them, and notes that conflict are flagged for you to settle.</p>
 
 <h2 id="skills">Skills</h2>
 <p>A skill is a written procedure, like "how we write a release checklist". It's plain text: a skill never gives a bot new tools.</p>
@@ -35,14 +35,14 @@ card_art: avatar:research
 </ul>
 
 <h3 id="foundry">Skill Foundry</h3>
-<p>The Skill Foundry turns work a bot has done well into a skill draft for you to review. It's off by default, and it needs the <a href="mission-board.html">Mission board</a>, because it learns from verified tasks.</p>
+<p>The Skill Foundry turns work a bot has done well into a skill draft for you to review. It's on from 0.6.5, and it needs the <a href="mission-board.html">Mission board</a>, because it learns from verified tasks.</p>
 <ul>
   <li><strong>When it drafts:</strong> a bot with 3 or more verified tasks of one kind of work in the last 60 days, 70% of them verified, writes down the steps, the inputs, checks that judge the result, the example tasks and the tools it used. At most 2 drafts a day by default.</li>
   <li><strong>Dry-run replays:</strong> each draft is tried on up to 3 of its example tasks, in a scratch copy of their folder. File changes inside that copy run; anything else, like commands, other folders or the browser, is refused and listed as what the bot would have done. Replays run on Claude bots only.</li>
   <li><strong>You decide:</strong> the draft waits in the bot's Skills tab like any proposed skill: Approve, Edit then approve, or Reject. The tools it lists are shown, never granted. The replay report is in the API for now (<code>GET /api/skills/&lt;id&gt;/foundry</code>), not yet on screen.</li>
   <li><strong>Versions:</strong> a new draft for the same kind of work becomes the skill's next version, and an older version can be rolled back.</li>
 </ul>
-<p>There's no switch for it in the app yet. Turn it on through kwant's API with the <code>skill_foundry</code> setting (<code>POST /api/settings</code> with <code>{"skill_foundry": "on"}</code>).</p>
+<p>There's no switch for it in the app yet. To turn it off, use kwant's API with the <code>skill_foundry</code> setting (<code>POST /api/settings</code> with <code>{"skill_foundry": "off"}</code>). A choice you saved before 0.6.5 is kept.</p>
 
 <h2 id="search">Search</h2>
 <p>Press <code>Ctrl K</code> (<code>⌘K</code> on a Mac) to search every channel and direct chat in the space you have open. Use the arrow keys and <code>Enter</code> to jump to a result.</p>

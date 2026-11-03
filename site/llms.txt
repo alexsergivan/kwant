@@ -15,6 +15,10 @@ Key facts:
   Cloudflare's cookie-free Web Analytics.
 - Optional Mission board: a task counts as Verified only when a check passes, and the bot that handed out work reviews
   the result. No token limits by default; hand-off caps (4 per bot, 16 per request, with Continue) stop loops.
+- Smart Results draw a bot's table or list as a sortable comparison, chart or checklist, copied word for word from the
+  reply. Goals check that a page, command or file stays OK and offer one fix when one breaks.
+- Automatic model failover: when an account runs out of usage, bots move to the next account in your order, across
+  Claude, Codex, Grok and Custom API, and go back after the reset.
 - Bots cite web facts with links that open the page at the exact quote; kwant checks the quote is on the page word for
   word and refuses made-up ones. Browser steps report what changed, and checkouts always ask before paying.
 - Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.
@@ -22,7 +26,7 @@ Key facts:
 
 ## Site
 - [kwant (kwnt): self-hosted AI agent team in one binary](https://kwant.si/): Open-source, self-hosted AI agents that share chats, hand off work and run on a schedule. One Rust binary (kwnt) for your laptop or a VPS.
-- [Features: self-hosted AI agent orchestration](https://kwant.si/features): Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.
+- [Features: self-hosted AI agent orchestration](https://kwant.si/features): Teams and @mention handoffs, Smart Results, Goals, automatic model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.
 - [Self-Hosted AI Agent Team: Run One Yourself](https://kwant.si/self-hosted-ai-agents): What a self-hosted AI agent team is, what it takes to run one, and what stays on your machine. How kwant does it: one binary, your own logins.
 
 ## Docs
@@ -30,14 +34,16 @@ Key facts:
 - [Install kwnt: self-host AI agents on a VPS or Docker](https://kwant.si/docs/install): Build the kwnt binary and run your AI bots on your laptop, on a VPS with systemd, or with Docker Compose behind an HTTPS reverse proxy.
 - [Spaces: separate AI agents for work and home](https://kwant.si/docs/spaces): Keep work, side projects and home apart. Each space has its own bots, teams, channels, routines, skills, tool servers, accounts and approval rules.
 - [AI agent teams: bots, leads & handoffs](https://kwant.si/docs/bots-and-teams): Create bots from persona presets, give each a soul and a model, group them into teams with a lead, and let them hand work to each other with @mentions.
-- [Multiple Claude, Codex & Grok accounts](https://kwant.si/docs/accounts): Add several logins or API keys per engine, plus OpenAI- or Anthropic-compatible servers, with a priority order and failover when one runs out of usage.
+- [Multiple Claude, Codex & Grok accounts](https://kwant.si/docs/accounts): Add several logins or API keys per engine, plus OpenAI- or Anthropic-compatible servers, in one order to use, with automatic failover across engines when one runs out of usage.
 - [Models & routing: Claude, Codex, Grok, Ollama](https://kwant.si/docs/models): Run bots on the Claude, Codex or Grok CLIs, API keys, local Ollama or any OpenAI-compatible server. The Laya router picks who answers, and which model.
 - [Human approval for AI agent actions](https://kwant.si/docs/approvals): kwant asks before bots run commands or edit outside their folder. Three approval modes per space or bot, plus saved passwords in a vault or Bitwarden.
 - [Flight School: earned freedom for AI agents](https://kwant.si/docs/flight-school): Set each bot's tier per kind of work: Observe, Sandbox or Act. Bots earn a step up with a scorecard, only you grant it, payments always ask, and you can revoke a tier in a click.
+- [Smart Results: AI agent replies as tables, charts and checklists](https://kwant.si/docs/smart-results): kwant draws a bot's table or list as a sortable comparison, a chart, key numbers, findings or a checklist, copied from the reply word for word. The reply text never changes.
 - [Mission board: AI agent tasks with proof](https://kwant.si/docs/mission-board): One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Insights shows verified results and their cost.
+- [Goals: keep a site, a service or a file working with AI agents](https://kwant.si/docs/goals): A kwant goal checks that a page answers, a command succeeds or a file exists. When it breaks, a bot looks into it and offers one fix. Nothing runs until you create or approve a goal.
 - [Scheduled AI agents: routines & cron](https://kwant.si/docs/routines): Schedule bot work with routines, cron rules and follow-ups that run on your own machine, with an Undo on every change bots make.
 - [AI agent memory, skills & chat search](https://kwant.si/docs/memory-skills): What kwant bots remember and how you edit it, skills bots propose and you approve, and search across every chat in a space. Local and editable.
-- [Truth Ledger: shared facts your AI agents agree on](https://kwant.si/docs/truth-ledger): With the Truth Ledger on, kwant bots read their notes from one list of facts. Conflicting facts are flagged until you settle them, and notes from outside text wait for you. Off by default.
+- [Truth Ledger: shared facts your AI agents agree on](https://kwant.si/docs/truth-ledger): With the Truth Ledger on, kwant bots read their notes from one list of facts. Conflicting facts are flagged until you settle them, and notes from outside text wait for you. On from 0.6.5.
 - [Loose ends: AI that finds unfinished follow-ups](https://kwant.si/docs/loose-ends): kwant finds threads you never finished in chats, email and GitHub, and reads letters you photograph. It drafts the next step and never sends anything.
 - [Parallel Universe: compare deployment options](https://kwant.si/docs/parallel-universe): Load-test up to three ways to deploy an app in sealed Docker containers, next to a dated price estimate. No cloud account and no spending.
 - [MCP tools for AI agents: a self-hosted client](https://kwant.si/docs/mcp): Connect Model Context Protocol servers to your kwant bots, with per-bot access, masked secrets, OAuth sign-in and approval before risky tool calls.

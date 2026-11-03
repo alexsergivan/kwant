@@ -1,0 +1,52 @@
+title: Smart Results: AI agent replies as tables, charts and checklists
+description: kwant draws a bot's table or list as a sortable comparison, a chart, key numbers, findings or a checklist, copied from the reply word for word. The reply text never changes.
+card_title: Smart Results
+path: docs/smart-results.html
+nav: smart-results
+card: Tables, charts and checklists from a bot's own reply, with where each value came from.
+card_art: avatar:designer
+---
+<p class="kicker">Docs</p>
+<h1>Smart Results: replies you can sort, chart and copy</h1>
+<p class="intro">When a bot's reply has a table or a list, kwant draws it as a card: a comparison you can sort, a chart, key numbers, findings or a checklist. Every value comes from the reply as written. The reply's text never changes, and anything kwant can't draw stays as text.</p>
+<figure>
+  <div class="frame">{{shot:v65-smart-results|A reply in #general comparing three hosts as a sortable table with Host, Price per month, Build minutes, Pros and Cons columns, the picked row highlighted, and under it Copy markdown, From this reply, Show as text and Copy data. The next reply shows where a move stands as a checklist with two items done.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A comparison and a checklist, both copied from the bots' replies. There's nothing to switch on.</figcaption>
+</figure>
+
+<h2 id="cards">What gets a card</h2>
+<p>Smart Results is new in 0.6.5 and always on. Each reply gets at most one card, worked out once when the reply is saved, without a model call. A reply over 128 KB stays text.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Card</th><th>Made from</th></tr></thead>
+  <tbody>
+    <tr><td>Comparison</td><td>A table of options, with columns you can sort</td></tr>
+    <tr><td>Chart</td><td>A table of numbers, as a line or bar chart</td></tr>
+    <tr><td>Key numbers</td><td>A short set of figures, shown as tiles</td></tr>
+    <tr><td>Facts</td><td>Lines like <strong>Owner:</strong> Sam</td></tr>
+    <tr><td>Links</td><td>A list of links or titled items, shown as cards</td></tr>
+    <tr><td>Findings</td><td>A list where each item starts with a severity, such as a review's results</td></tr>
+    <tr><td>Steps, checklist, timeline</td><td>Numbered steps, a list with ticks, or dated events</td></tr>
+    <tr><td>Checks</td><td>A task's checks, on its report card</td></tr>
+    <tr><td>Files</td><td>A preview of files a bot shared</td></tr>
+  </tbody>
+</table></div>
+<p>Bots are asked to write tables, numbered steps and <strong>Label:</strong> value lines, so most replies need nothing extra. A bot can also point at the table or list it wants drawn, and kwant holds it to the reply: every row must match the reply's table, cell by cell. Checks and Files cards come from kwant's own records, never from a bot.</p>
+
+<h2 id="trust">Copied, never worked out</h2>
+<ul>
+  <li><strong>Word for word.</strong> Every value is copied from the reply. Nothing is added up, averaged or rounded, and a chart never puts different units on one axis.</li>
+  <li><strong>Where it came from.</strong> Under each card a line says <strong>From this reply</strong>, <strong>From task checks</strong> or which attachment it came from.</li>
+  <li><strong>The text is still there.</strong> <strong>Show as text</strong> swaps the card for the reply's own words, and <strong>Copy markdown</strong> copies the reply as it was written.</li>
+  <li><strong>When in doubt, text.</strong> A card that fails a check, or can't be drawn, shows the reply's text instead. Editing a reply removes its card, since the card was copied from the old text.</li>
+</ul>
+
+<h2 id="copy">Copy data and Ask about this</h2>
+<p><strong>Copy data</strong> copies a card's values as Markdown, CSV or JSON, ready for a sheet or another tool.</p>
+<p>On a comparison row, <strong>Ask about this</strong> puts a line such as "About Northdeck in your Host table:" into your message box, so you can ask a follow-up about that row. Nothing is sent until you send it.</p>
+<figure>
+  <div class="frame">{{shot:v65-ask-about-this|The same comparison with the Northdeck row hovered and its Ask about this button showing. The message box at the bottom reads "About Northdeck in your Host table:".|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Ask about this fills in the message box. You finish the question.</figcaption>
+</figure>
+
+<h2 id="where">Where cards show</h2>
+<p>Cards show on bot replies in channels and direct chats, on hand-off results from a teammate, on a task's report card and on shared files. Replies from before 0.6.5 stay as they were.</p>

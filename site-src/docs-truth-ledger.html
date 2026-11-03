@@ -1,21 +1,21 @@
 title: Truth Ledger: shared facts your AI agents agree on
-description: With the Truth Ledger on, kwant bots read their notes from one list of facts. Conflicting facts are flagged until you settle them, and notes from outside text wait for you. Off by default.
+description: With the Truth Ledger on, kwant bots read their notes from one list of facts. Conflicting facts are flagged until you settle them, and notes from outside text wait for you. On from 0.6.5.
 card_title: Truth Ledger
 path: docs/truth-ledger.html
 nav: truth-ledger
-card: Conflicting facts are flagged until you settle them. Off by default.
+card: Conflicting facts are flagged until you settle them. On from 0.6.5.
 card_art: avatar:research
 ---
 <p class="kicker">Docs</p>
 <h1>Truth Ledger: one list of facts, and you settle the conflicts</h1>
 <p class="intro">Bots remember things: a server's size, where the release checklist lives, which branch deploys. When two of those notes disagree, a bot can't know which one is right. With the Truth Ledger on, kwant notices the conflict, labels both sides, and asks you to decide.</p>
 
-<h2 id="on">Turn it on</h2>
-<p>The Truth Ledger is new in 0.6 and off by default. With it off, bots see exactly what 0.5.1 showed them, byte for byte. There's no switch in Settings yet: turn it on from the computer kwant runs on, with the address and port you use for kwant:</p>
+<h2 id="on">On, or off</h2>
+<p>The Truth Ledger is new in 0.6 and on from 0.6.5, also on installs that never changed it. A choice you saved is kept. With it off, bots see exactly what 0.5.1 showed them, byte for byte. There's no switch in Settings yet: change it from the computer kwant runs on, with the address and port you use for kwant:</p>
 <pre><code>curl -X POST http://127.0.0.1:8799/api/settings \
   -H 'content-type: application/json' \
   -d '{"truth_ledger": "on"}'</code></pre>
-<p>From another machine, or with Docker, also send your token: add <code>-H "Authorization: Bearer YOUR_TOKEN"</code>, where <code>kwnt token --raw</code> on the kwant computer prints the token. Only you can change it: a bot is refused. Send <code>"off"</code> to switch it off again. Facts and open conflicts are kept for when you turn it back on.</p>
+<p>From another machine, or with Docker, also send your token: add <code>-H "Authorization: Bearer YOUR_TOKEN"</code>, where <code>kwnt token --raw</code> on the kwant computer prints the token. Only you can change it: a bot is refused. Send <code>"off"</code> to switch it off. Facts and open conflicts are kept for when you turn it back on.</p>
 <p>The facts list and conflicts show on the <a href="mission-board.html">Mission board</a>, so switch that on too.</p>
 
 <h2 id="facts">What bots read</h2>

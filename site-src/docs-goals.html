@@ -1,0 +1,65 @@
+title: Goals: keep a site, a service or a file working with AI agents
+description: A kwant goal checks that a page answers, a command succeeds or a file exists. When it breaks, a bot looks into it and offers one fix. Nothing runs until you create or approve a goal.
+card_title: Goals
+path: docs/goals.html
+nav: goals
+card: Say what should stay true. kwant checks it, and offers one fix when it breaks.
+card_art: avatar:devops
+---
+<p class="kicker">Docs</p>
+<h1>Goals: what should stay true</h1>
+<p class="intro">A goal is something that should stay true: the site answers, the nightly backup ran, the sign-up page loads. kwant checks it on a schedule, without a bot. While everything is fine you see one quiet line. When a goal breaks, a bot looks into it and you get one decision with what it found and the fix it proposes.</p>
+<figure>
+  <div class="frame">{{shot:v65-goals|The Goals strip above the Mission board: 1 needs you, 1 draft to approve, 1 can't check, 3 OK. "The site stays up" needs you: the site answers check has failed since 10:03 PM, the likely cause is a full disk so nginx returns 502, and the proposed fix is to delete logs older than 14 days and rotate them weekly, with Fix it, Not now and Always fix this goal buttons. Below, a drafted goal waiting for review and goals that are OK.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Goals sit above the <a href="mission-board.html">Mission board</a>. A broken goal brings one decision.</figcaption>
+</figure>
+
+<h2 id="new">Make a goal</h2>
+<p>Goals are new in 0.6.5. Open the Mission board and pick <strong>New goal</strong>. Say what should stay true in a sentence, and the bot you pick drafts the checks. You review the draft before anything runs. Prefer to write them yourself? Pick <strong>Add checks myself</strong>.</p>
+<p>You can also make a goal from finished work: on a verified task whose checks passed, <strong>Keep this true</strong> turns those checks into a goal.</p>
+<p>A bot never starts a goal by itself. It drafts one only when you ask, a draft does nothing until you approve it, at most 3 drafts wait per space, and a draft you don't approve is removed after a week.</p>
+
+<h2 id="checks">Checks</h2>
+<p>Checks run on their own, without a bot or a model. A goal is OK when every required check passes.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Check</th><th>What it looks at</th></tr></thead>
+  <tbody>
+    <tr><td>A page</td><td>HTTP status, response time, whether the page shows some text, or a value in its JSON</td></tr>
+    <tr><td>A command</td><td>Its exit code, whether its output shows some text, or a number in its output</td></tr>
+    <tr><td>A file</td><td>That it exists, that it contains some text, or that its checksum matches</td></tr>
+  </tbody>
+</table></div>
+<ul>
+  <li><strong>Plain matching.</strong> "Shows" looks for the exact text you give. There are no patterns to get wrong.</li>
+  <li><strong>Required or advisory.</strong> An advisory check shows on the card but doesn't decide OK.</li>
+  <li><strong>How often.</strong> Every 15 minutes to once a day, every hour unless you change it. A goal counts as broken after 2 failed checks in a row by default.</li>
+  <li><strong>Can't check is not Failing.</strong> When a check can't run at all, the goal says <strong>Can't check</strong>, not Failing.</li>
+</ul>
+
+<h2 id="breaks">When it breaks</h2>
+<p>Each goal says what happens when it breaks:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Setting</th><th>What happens</th></tr></thead>
+  <tbody>
+    <tr><td>Just tell me</td><td>You hear about it. Nothing else runs.</td></tr>
+    <tr><td>Suggest a fix</td><td>The default. A bot looks into it and plans a fix, which waits for you.</td></tr>
+    <tr><td>Fix it</td><td>The bot looks into it and fixes it, and the goal's checks confirm the fix.</td></tr>
+  </tbody>
+</table></div>
+<p>A broken goal gets one <strong>Restore</strong> mission on the board. First the bot looks into it, without changing anything. With Suggest a fix, you then get one decision with the likely cause and the proposed fix, marked as the bot's report, not instructions:</p>
+<ul>
+  <li><strong>Fix it</strong> runs the fix now.</li>
+  <li><strong>Not now</strong> keeps the fix waiting. It's dropped if the goal recovers on its own.</li>
+  <li><strong>Always fix this goal</strong> fixes it now, and next time without asking.</li>
+</ul>
+
+<h2 id="limits">Limits that keep it calm</h2>
+<ul>
+  <li>One line while everything is OK, for example "3 goals OK · checked 4 min ago".</li>
+  <li>At most 3 notices per goal a day, and only when its state changes.</li>
+  <li>Goals in the same folder that break within 10 minutes share one Restore mission, and one fix runs per folder at a time.</li>
+  <li>At most 2 fix attempts per break and 3 fixes a day per goal, with an optional token limit for fixes. Past that, the goal says <strong>Needs you</strong>.</li>
+  <li>After a fix, the folder's other goals are checked again. If one of them broke, that comes to you.</li>
+  <li>A fix runs with the bot's usual approvals and <a href="flight-school.html">Flight School</a> tier. A goal never gives a bot more freedom.</li>
+</ul>
+<div class="note"><strong>Nothing to switch on.</strong> Goals show with the Mission board. Upgrading to 0.6.5 starts no checks and no background work: nothing runs until you create or approve a goal.</div>

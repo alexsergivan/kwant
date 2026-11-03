@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Features: self-hosted AI agent orchestration · kwant</title>
-<meta name="description" content="Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.">
+<meta name="description" content="Teams and @mention handoffs, Smart Results, Goals, automatic model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.">
 <meta name="theme-color" content="#f4f1ff">
 <meta name="color-scheme" content="light">
 <link rel="canonical" href="https://kwant.si/features">
@@ -12,7 +12,7 @@
 <meta property="og:site_name" content="kwant">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="Features: self-hosted AI agent orchestration · kwant">
-<meta property="og:description" content="Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.">
+<meta property="og:description" content="Teams and @mention handoffs, Smart Results, Goals, automatic model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.">
 <meta property="og:url" content="https://kwant.si/features">
 <meta property="og:image" content="https://kwant.si/assets/og/features.png?v=6c9323bb00">
 <meta property="og:image:type" content="image/png">
@@ -21,7 +21,7 @@
 <meta property="og:image:alt" content="Features: Teams, spaces, routines, approvals, memory and more, in one binary.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Features: self-hosted AI agent orchestration · kwant">
-<meta name="twitter:description" content="Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.">
+<meta name="twitter:description" content="Teams and @mention handoffs, Smart Results, Goals, automatic model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.">
 <meta name="twitter:image" content="https://kwant.si/assets/og/features.png?v=6c9323bb00">
 <meta name="twitter:image:alt" content="Features: Teams, spaces, routines, approvals, memory and more, in one binary.">
 <link rel="icon" href="favicon.svg?v=0abbeedab4" type="image/svg+xml">
@@ -58,6 +58,7 @@
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-065">New in 0.6.5</a></li>
         <li><a href="#new-064">New in 0.6.4</a></li>
         <li><a href="#new-06">New in 0.6</a></li>
         <li><a href="#new-05">New in 0.5</a></li>
@@ -80,6 +81,42 @@
     </div>
   </div>
 </nav>
+
+<section id="new-065" class="fgroup alt">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.6.5</p>
+      <h2>Replies you can sort, goals that stay true, models that cover for each other</h2>
+      <p>A table or list in a reply becomes a card, goals keep what matters working, and when one account runs out the next one answers. It's all on from the start, and so is everything that used to wait for a switch.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="smart-results">
+        <span class="shot"><a class="zoom" href="assets/media/v65-smart-results-2880.webp?v=20967600b5" data-caption="A reply in #general comparing three hosts as a sortable table with Host, Price per month, Build minutes, Pros and Cons columns, and under it Copy markdown, From this reply, Show as text and Copy data. The next reply shows where a move stands as a checklist with two items done."><img src="assets/media/v65-smart-results-1440.webp?v=03a07ace89" srcset="assets/media/v65-smart-results-1440.webp?v=03a07ace89 1440w, assets/media/v65-smart-results-2880.webp?v=20967600b5 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="A reply in #general comparing three hosts as a sortable table with Host, Price per month, Build minutes, Pros and Cons columns, and under it Copy markdown, From this reply, Show as text and Copy data. The next reply shows where a move stands as a checklist with two items done."></a></span>
+        <div class="card-body"><h3>Smart Results: replies you can sort and copy</h3><p>A table or list in a bot's reply shows as a comparison, chart, key numbers, findings or a checklist. Every value is copied from the reply, never worked out, and the line under it says where it came from. Show as text brings back the words, and Copy data gives Markdown, CSV or JSON.</p></div>
+      </article>
+      <article class="card" id="ask-about-this">
+        <span class="shot"><a class="zoom" href="assets/media/v65-ask-about-this-2880.webp?v=0a329f47fa" data-caption="The same comparison with the Northdeck row hovered and its Ask about this button showing. The message box at the bottom reads &quot;About Northdeck in your Host table:&quot;."><img src="assets/media/v65-ask-about-this-1440.webp?v=cea998f873" srcset="assets/media/v65-ask-about-this-1440.webp?v=cea998f873 1440w, assets/media/v65-ask-about-this-2880.webp?v=0a329f47fa 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The same comparison with the Northdeck row hovered and its Ask about this button showing. The message box at the bottom reads &quot;About Northdeck in your Host table:&quot;."></a></span>
+        <div class="card-body"><h3>Ask about one row</h3><p>On a comparison, Ask about this puts a line about that row into your message box, and nothing is sent until you send it. Cards are worked out once, without a model call, and anything kwant can't draw stays as text.</p></div>
+      </article>
+      <article class="card" id="goals">
+        <span class="shot"><a class="zoom" href="assets/media/v65-goals-2880.webp?v=3ab42d1883" data-caption="The Goals strip above the Mission board: &quot;The site stays up&quot; needs you, with the likely cause, a full disk, the proposed fix, deleting old logs, and Fix it, Not now and Always fix this goal buttons. Below, a drafted goal waiting for review, one that can&#x27;t be checked and goals that are OK."><img src="assets/media/v65-goals-1440.webp?v=140809768e" srcset="assets/media/v65-goals-1440.webp?v=140809768e 1440w, assets/media/v65-goals-2880.webp?v=3ab42d1883 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Goals strip above the Mission board: &quot;The site stays up&quot; needs you, with the likely cause, a full disk, the proposed fix, deleting old logs, and Fix it, Not now and Always fix this goal buttons. Below, a drafted goal waiting for review, one that can&#x27;t be checked and goals that are OK."></a></span>
+        <div class="card-body"><h3>Goals: what should stay true</h3><p>Say it in a sentence and a bot drafts the checks: a page answers, a command succeeds, a file exists. One quiet line while all is OK. When a goal breaks, a bot looks into it and you get one decision: Fix it, Not now or Always fix this goal. Nothing runs until you create or approve a goal.</p></div>
+      </article>
+      <article class="card" id="failover">
+        <span class="shot"><a class="zoom" href="assets/media/v65-order-to-use-2880.webp?v=3ab3c501a5" data-caption="Settings, This space, Accounts: the Order to use list. &quot;When one runs out, kwant bots move to the next that still works, in this order.&quot; Two Claude logins, Work out until 03:00 and Personal ready, then Codex, an Anthropic key, Grok, signed out, and a Custom API account, each with up and down buttons."><img src="assets/media/v65-order-to-use-1440.webp?v=ac01bb03d1" srcset="assets/media/v65-order-to-use-1440.webp?v=ac01bb03d1 1440w, assets/media/v65-order-to-use-2880.webp?v=3ab3c501a5 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings, This space, Accounts: the Order to use list. &quot;When one runs out, kwant bots move to the next that still works, in this order.&quot; Two Claude logins, Work out until 03:00 and Personal ready, then Codex, an Anthropic key, Grok, signed out, and a Custom API account, each with up and down buttons."></a></span>
+        <div class="card-body"><h3>Automatic model failover</h3><p>Put every account in one order under Settings → This space → Accounts → Order to use: Claude, Codex, Grok and Custom API. When one runs out, bots move to the next that still works, the chat says so in one quiet line, and they go back after the reset.</p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li id="on-by-default"><h3>On from the start</h3><p>AutoFix, the Auditor, Flight School, Skill Foundry, suggested routines and the Truth Ledger now run without setup, also on installs that never changed them. A choice you saved is kept, and the caps stay: a 25% recovery budget for AutoFix, 5 audits and 2 routine suggestions a day.</p></li>
+      <li id="act-start"><h3>New bots start at Act</h3><p>Flight School keeps a scorecard for every bot, and Act adds no approval cards of its own. Pick a lower start for new bots, or a lower tier for one bot, in Settings. Payments always ask.</p></li>
+      <li id="limit-line"><h3>A limit message is never the reply</h3><p>A line like "You've hit your session limit · resets 3am" is no longer saved as a bot's answer. kwant reads the reset time and moves the turn to the next account.</p></li>
+      <li id="all-out"><h3>When every account is out</h3><p>The message waits for the earliest reset, and the chat says "Every model is out until 03:00; I'll answer then." A bot with failover off stays on its own account.</p></li>
+      <li id="same-tier"><h3>The same kind of model</h3><p>On another engine, the turn uses that engine's model of the same tier. Rate limits and overloads are retried, not failed over, and a turn never switches after a bot has shown or done something.</p></li>
+    </ul>
+    <p class="section-foot"><a class="more-link" href="/docs/smart-results">Smart Results docs →</a> <a class="more-link" href="/docs/goals">Goals docs →</a> <a class="more-link" href="/docs/accounts#order">Order to use docs →</a></p>
+  </div>
+</section>
 
 <section id="new-064" class="fgroup">
   <div class="wrap">
@@ -120,7 +157,7 @@
     <div class="section-head">
       <p class="kicker">New in 0.6 · Mission Control</p>
       <h2>Freedom bots earn, facts they agree on, results you can count</h2>
-      <p>Bots ask for more freedom when their record earns it, conflicting facts wait for you, and the board counts verified results and what each one cost. Flight School and the Truth Ledger are off by default.</p>
+      <p>Bots ask for more freedom when their record earns it, conflicting facts wait for you, and the board counts verified results and what each one cost. Since 0.6.5, Flight School and the Truth Ledger are on from the start.</p>
     </div>
     <div class="grid two">
       <article class="card" id="tier-requests">
@@ -133,7 +170,7 @@
       </article>
       <article class="card" id="truth-ledger-on">
         <span class="shot"><a class="zoom" href="assets/media/v6-truth-ledger-2880.webp?v=b6b85d2f4d" data-caption="The Mission board&#x27;s Facts section: &quot;Needs you: one dispute to settle&quot;. Two facts disagree: &quot;The production server has 16 GB of RAM.&quot; and &quot;The production server has 4 GB of RAM.&quot;, each with a Keep this one button, and a Not a conflict button. Below, the facts list with In force, Unconfirmed and Disputed filters."><img src="assets/media/v6-truth-ledger-1440.webp?v=eea3506558" srcset="assets/media/v6-truth-ledger-1440.webp?v=eea3506558 1440w, assets/media/v6-truth-ledger-2880.webp?v=b6b85d2f4d 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Mission board&#x27;s Facts section: &quot;Needs you: one dispute to settle&quot;. Two facts disagree: &quot;The production server has 16 GB of RAM.&quot; and &quot;The production server has 4 GB of RAM.&quot;, each with a Keep this one button, and a Not a conflict button. Below, the facts list with In force, Unconfirmed and Disputed filters."></a></span>
-        <div class="card-body"><h3>Truth Ledger: conflicts wait for you</h3><p>When two facts disagree, both are flagged Disputed until you pick Keep this one or Not a conflict. Facts show their evidence and the tasks that rely on them. Off by default, and with it off bots see exactly what they saw in 0.5.</p></div>
+        <div class="card-body"><h3>Truth Ledger: conflicts wait for you</h3><p>When two facts disagree, both are flagged Disputed until you pick Keep this one or Not a conflict. Facts show their evidence and the tasks that rely on them. On from 0.6.5, and with it off bots see exactly what they saw in 0.5.</p></div>
       </article>
       <article class="card" id="insights-06">
         <span class="shot"><a class="zoom" href="assets/media/v6-board-2880.webp?v=4651681f4c" data-caption="The top of the Mission board: the week&#x27;s numbers (8 verified, 0 false successes), then verified per active week, 5.8 on average over the last 8 weeks, as a bar chart, and cost per verified result, $0.23, from $1.36 over 8 settled tasks this week, failed runs included, with a note that it is based on 6 verified results that reported a cost and 2 runs reported none. Below, a fact dispute and a bot&#x27;s request for a higher Flight School tier."><img src="assets/media/v6-board-1440.webp?v=b16dec0e00" srcset="assets/media/v6-board-1440.webp?v=b16dec0e00 1440w, assets/media/v6-board-2880.webp?v=4651681f4c 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The top of the Mission board: the week&#x27;s numbers (8 verified, 0 false successes), then verified per active week, 5.8 on average over the last 8 weeks, as a bar chart, and cost per verified result, $0.23, from $1.36 over 8 settled tasks this week, failed runs included, with a note that it is based on 6 verified results that reported a cost and 2 runs reported none. Below, a fact dispute and a bot&#x27;s request for a higher Flight School tier."></a></span>
@@ -168,13 +205,13 @@
     <div class="section-head">
       <p class="kicker">New in 0.5 · Automation Discovery</p>
       <h2>Routines that suggest themselves</h2>
-      <p>kwant notices tasks you ask for on a rhythm and offers a routine for them. Nothing is made until you press Accept. Off by default.</p>
+      <p>kwant notices tasks you ask for on a rhythm and offers a routine for them. Nothing is made until you press Accept. On from 0.6.5.</p>
     </div>
     <ul class="flist">
-      <li id="suggested"><h3>Suggested routines (off by default)</h3><p>Turn on "Suggest routines from repeated tasks" in Settings → All spaces → Mission board. kwant looks at the board tasks you made over the last 120 days and finds ones you ask for daily, on weekdays, weekly or monthly. At most 2 new suggestions a day, each with its schedule, first run, checks and the tasks it came from.</p></li>
+      <li id="suggested"><h3>Suggested routines</h3><p>On from 0.6.5, under "Suggest routines from repeated tasks" in Settings → All spaces → Mission board. kwant looks at the board tasks you made over the last 120 days and finds ones you ask for daily, on weekdays, weekly or monthly. At most 2 new suggestions a day, each with its schedule, first run, checks and the tasks it came from.</p></li>
       <li id="accept"><h3>Accept or dismiss</h3><p>Accept opens the routine form so you can change it first. Dismiss hides a suggestion for 30 days. Routines made this way carry a "Suggested for you" badge.</p></li>
       <li id="good-run"><h3>Routines know what a good run is</h3><p>A routine can carry a Flight School class, a description of a good result and checks. A run that passes its checks is verified on its own. Only you set the class and the checks.</p></li>
-      <li id="truth-ledger"><h3>Truth Ledger (off by default)</h3><p>A preview in 0.5. Since 0.6, when you turn it on, bots read their notes from the shared list of facts. Notes a bot wrote after reading a web page, a file or another tool stay Unconfirmed until you confirm them, and conflicting facts wait for you. <a href="/docs/truth-ledger">Truth Ledger docs</a>.</p></li>
+      <li id="truth-ledger"><h3>Truth Ledger</h3><p>A preview in 0.5. Since 0.6, with it on, and it's on from 0.6.5, bots read their notes from the shared list of facts. Notes a bot wrote after reading a web page, a file or another tool stay Unconfirmed until you confirm them, and conflicting facts wait for you. <a href="/docs/truth-ledger">Truth Ledger docs</a>.</p></li>
       <li id="star"><h3>A star, asked once</h3><p>After real use, a small card asks for a GitHub star, with Maybe later and Don't ask again. It never shows on first run or while a bot needs you, and nothing is sent anywhere.</p></li>
     </ul>
     <p class="section-foot"><a class="more-link" href="/docs/routines#suggested">Suggested routines docs →</a></p>
@@ -205,7 +242,7 @@
     <div class="section-head">
       <p class="kicker">Performance &amp; audits</p>
       <h2>Learn from the work that's already done</h2>
-      <p>See which bot and model does each kind of work well, have a second bot challenge important work, and turn work done well into skills. All of it needs the Mission board, and the Auditor and Skill Foundry are off by default.</p>
+      <p>See which bot and model does each kind of work well, have a second bot challenge important work, and turn work done well into skills. All of it needs the Mission board, and since 0.6.5 the Auditor and Skill Foundry are on from the start.</p>
     </div>
     <div class="grid two">
       <article class="card">
@@ -219,9 +256,9 @@
     </div>
     <ul class="flist">
       <li><h3>Performance (report-only)</h3><p>Under the board, per kind of work and bot or model: tasks finished, the verified rate with its likely range, median time and tokens, cost per task and how often you stepped in. Groups with fewer than 5 tasks say "few tasks". It never changes who gets work.</p></li>
-      <li><h3>Swarm Auditor (off by default)</h3><p>An important task, or one no outside check will judge, gets one challenge when it reaches review: a teammate from outside the lead's loop lists risks with evidence, and the owner answers once. An audit never verifies, fails or moves a task. Up to 5 a day by default, on a fast, cheap model unless you pick another.</p></li>
+      <li><h3>Swarm Auditor</h3><p>An important task, or one no outside check will judge, gets one challenge when it reaches review: a teammate from outside the lead's loop lists risks with evidence, and the owner answers once. An audit never verifies, fails or moves a task. Up to 5 a day by default, on a fast, cheap model unless you pick another.</p></li>
       <li><h3>Open risks</h3><p>What an audit leaves unresolved is listed on the task, with its evidence and the owner's answer, until you Resolve or Dismiss it. Board cards count the open risks.</p></li>
-      <li><h3>Skill Foundry (off by default)</h3><p>When a bot has 3 or more verified tasks of one kind of work in 60 days, 70% of them verified, it drafts a skill from them. Each draft is replayed as a dry run on up to 3 of those tasks in a scratch copy, and waits in the Skills tab for you to approve, edit or reject. Versions can be rolled back. It's switched on through the API for now.</p></li>
+      <li><h3>Skill Foundry</h3><p>When a bot has 3 or more verified tasks of one kind of work in 60 days, 70% of them verified, it drafts a skill from them. Each draft is replayed as a dry run on up to 3 of those tasks in a scratch copy, and waits in the Skills tab for you to approve, edit or reject. Versions can be rolled back. On from 0.6.5, and switched off through the API.</p></li>
     </ul>
     <p class="section-foot"><a class="more-link" href="/docs/mission-board#performance">Performance &amp; Auditor docs →</a> <a class="more-link" href="/docs/memory-skills#foundry">Skill Foundry docs →</a></p>
   </div>
@@ -293,8 +330,8 @@
         <div class="card-body"><h3>Tiers per bot and per kind of work</h3><p>Sandbox for everything, Observe for deploys, Act for release notes. Revoke lowers a tier in one click, from the bot's next action.</p></div>
       </article>
       <article class="card" id="flight-settings">
-        <span class="shot"><a class="zoom" href="assets/media/v3-flight-settings-2880.webp?v=64d9872749" data-caption="Settings with Flight School switched on. Bots you already have stay at Act, and bots you add from now on start at Sandbox."><img src="assets/media/v3-flight-settings-1440.webp?v=e7a7c07637" srcset="assets/media/v3-flight-settings-1440.webp?v=e7a7c07637 1440w, assets/media/v3-flight-settings-2880.webp?v=64d9872749 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings with Flight School switched on. Bots you already have stay at Act, and bots you add from now on start at Sandbox."></a></span>
-        <div class="card-body"><h3>Off until you want it</h3><p>Switch it on in Settings. Bots you have stay at Act, new bots start at Sandbox, and nothing changes on screen while it's off.</p></div>
+        <span class="shot"><a class="zoom" href="assets/media/v3-flight-settings-2880.webp?v=64d9872749" data-caption="Settings with Flight School switched on. Bots you already have stay at Act, and Sandbox is picked as the start for bots added from now on."><img src="assets/media/v3-flight-settings-1440.webp?v=e7a7c07637" srcset="assets/media/v3-flight-settings-1440.webp?v=e7a7c07637 1440w, assets/media/v3-flight-settings-2880.webp?v=64d9872749 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings with Flight School switched on. Bots you already have stay at Act, and Sandbox is picked as the start for bots added from now on."></a></span>
+        <div class="card-body"><h3>On from the start, at Act</h3><p>Since 0.6.5 Flight School is on and every bot starts at Act, so nothing new asks: it keeps scorecards and proposes tiers. Want new bots to start lower? Pick Sandbox or Observe in Settings.</p></div>
       </article>
       <article class="card" id="payments">
         <span class="shot"><a class="zoom" href="assets/media/v3-payment-card-2880.webp?v=10036809e9" data-caption="An approval card for a command that posts a payment to Stripe. It says this looks like a payment and why, with only Deny and Allow Once."><img src="assets/media/v3-payment-card-1440.webp?v=a462ca73d3" srcset="assets/media/v3-payment-card-1440.webp?v=a462ca73d3 1440w, assets/media/v3-payment-card-2880.webp?v=10036809e9 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="An approval card for a command that posts a payment to Stripe. It says this looks like a payment and why, with only Deny and Allow Once."></a></span>
@@ -650,7 +687,7 @@
 </footer>
 <script src="assets/js/site.js?v=c490c973ba" defer></script>
 <script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, spaces, several accounts per engine with failover, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-02","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Smart Results, Goals, automatic model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-03","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>
